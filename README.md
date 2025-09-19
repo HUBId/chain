@@ -1,6 +1,8 @@
-# RPP Chain
+# Blockchain Network
 
-A production-focused implementation of an RPP (Recursive Pruning Proof) blockchain node. The node integrates:
+A production-focused implementation of an blockchain with fixed size. 
+
+It integrates:
 
 - **Stwo** for Blake2-based hashing and Merkle root construction.
 - **Malachite** for high precision arithmetic in stake-weighted consensus.
@@ -69,4 +71,4 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 - The RocksDB build may take a few minutes the first time. Subsequent builds reuse the compiled artifacts.
 - Consensus selection and Merkle commitments are unit test friendly and live in `src/consensus.rs` and `src/ledger.rs` respectively.
 
-Enjoy experimenting with the RPP Chain node!
+Enjoy experimenting with the blockchain network!
