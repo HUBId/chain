@@ -5,6 +5,8 @@ use std::str::FromStr;
 use malachite::Natural;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::reputation::ReputationProfile;
+
 use super::Address;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,15 +99,18 @@ pub struct Account {
     pub balance: u128,
     pub nonce: u64,
     pub stake: Stake,
+    pub reputation: ReputationProfile,
 }
 
 impl Account {
     pub fn new(address: Address, balance: u128, stake: Stake) -> Self {
+        let reputation = ReputationProfile::new(address.as_str());
         Self {
             address,
             balance,
             nonce: 0,
             stake,
+            reputation,
         }
     }
 

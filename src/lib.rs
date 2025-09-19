@@ -5,5 +5,6 @@ pub mod crypto;
 pub mod errors;
 pub mod ledger;
 pub mod node;
+pub mod reputation;
 pub mod storage;
 pub mod types;
