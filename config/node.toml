@@ -1,0 +1,16 @@
+# Default RPP Chain configuration
+
+data_dir = "./data"
+key_path = "./keys/node.toml"
+rpc_listen = "127.0.0.1:7070"
+block_time_ms = 5000
+max_block_transactions = 512
+mempool_limit = 8192
+
+[genesis]
+chain_id = "rpp-local"
+
+[[genesis.accounts]]
+address = "GENESIS_ADDRESS_PLACEHOLDER"
+balance = 1000000000
+stake = "1000"
