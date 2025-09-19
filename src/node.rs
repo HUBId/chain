@@ -3,15 +3,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ed25519_dalek::Keypair;
+use malachite::Natural;
 use parking_lot::RwLock;
 use tokio::time;
 use tracing::{info, warn};
 
 use crate::config::{GenesisAccount, NodeConfig};
-use crate::consensus::{aggregate_total_stake, select_proposer};
+use crate::consensus::{
+    ConsensusCertificate, ConsensusRound, aggregate_total_stake, classify_participants,
+    evaluate_vrf,
+};
 use crate::crypto::{address_from_public_key, load_or_generate_keypair, sign_message};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{Ledger, compute_merkle_root};
+use crate::reputation::Tier;
 use crate::storage::Storage;
 use crate::types::{
     Account, Address, Block, BlockHeader, PruningProof, RecursiveProof, SignedTransaction,
@@ -74,24 +79,29 @@ impl Node {
             let state_root_hex = hex::encode(state_root);
             let stakes = ledger.stake_snapshot();
             let total_stake = aggregate_total_stake(&stakes);
+            let genesis_seed = [0u8; 32];
+            let vrf = evaluate_vrf(&genesis_seed, 0, &address);
             let header = BlockHeader::new(
                 0,
                 hex::encode([0u8; 32]),
                 hex::encode(tx_root),
                 state_root_hex.clone(),
                 total_stake.to_string(),
-                "0".to_string(),
+                vrf.randomness.to_string(),
+                vrf.proof.clone(),
                 address.clone(),
             );
             let pruning_proof = PruningProof::genesis(&state_root_hex);
             let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
             let signature = sign_message(&keypair, &header.canonical_bytes());
+            let consensus_certificate = ConsensusCertificate::genesis();
             let genesis_block = Block::new(
                 header,
                 Vec::new(),
                 pruning_proof,
                 recursive_proof,
                 signature,
+                consensus_certificate,
             );
             genesis_block.verify(None)?;
             storage.store_block(&genesis_block)?;
@@ -208,17 +218,27 @@ impl NodeInner {
             return Ok(());
         }
         let tip_snapshot = *self.chain_tip.read();
-        let stakes = self.ledger.stake_snapshot();
-        let selection =
-            match select_proposer(&stakes, &tip_snapshot.last_hash, tip_snapshot.height + 1) {
-                Some(selection) => selection,
-                None => {
-                    warn!("no proposer could be selected");
-                    return Ok(());
-                }
-            };
+        let accounts_snapshot = self.ledger.accounts_snapshot();
+        let (validators, observers) = classify_participants(&accounts_snapshot);
+        let mut round = ConsensusRound::new(
+            tip_snapshot.height + 1,
+            tip_snapshot.last_hash,
+            validators,
+            observers,
+        );
+        let selection = match round.select_proposer() {
+            Some(selection) => selection,
+            None => {
+                warn!("no proposer could be selected");
+                return Ok(());
+            }
+        };
         if selection.proposer != self.address {
             info!(proposer = %selection.proposer, "not elected proposer for this round");
+            return Ok(());
+        }
+        if round.total_power().clone() == Natural::from(0u32) {
+            warn!("validator set has no voting power");
             return Ok(());
         }
 
@@ -250,8 +270,9 @@ impl NodeInner {
             hex::encode(tip_snapshot.last_hash),
             hex::encode(tx_root),
             hex::encode(state_root),
-            selection.total_stake.to_string(),
+            selection.total_voting_power.to_string(),
             selection.randomness.to_string(),
+            selection.proof.proof.clone(),
             self.address.clone(),
         );
         let previous_block = self.storage.read_block(tip_snapshot.height)?;
@@ -261,7 +282,30 @@ impl NodeInner {
             None => RecursiveProof::genesis(&header, &pruning_proof),
         };
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
-        let block = Block::new(header, accepted, pruning_proof, recursive_proof, signature);
+        let validator_addresses = round
+            .validators()
+            .iter()
+            .map(|validator| validator.address.clone())
+            .collect::<Vec<_>>();
+        for address in &validator_addresses {
+            round.register_prevote(address);
+        }
+        for address in &validator_addresses {
+            round.register_precommit(address);
+        }
+        if !round.commit_reached() {
+            warn!("quorum not reached for commit");
+            return Ok(());
+        }
+        let consensus_certificate = round.certificate();
+        let block = Block::new(
+            header,
+            accepted,
+            pruning_proof,
+            recursive_proof,
+            signature,
+            consensus_certificate,
+        );
         block.verify(previous_block.as_ref())?;
         self.storage.store_block(&block)?;
         self.persist_accounts()?;
@@ -304,7 +348,10 @@ fn build_genesis_accounts(entries: Vec<GenesisAccount>) -> ChainResult<Vec<Accou
         .into_iter()
         .map(|entry| {
             let stake = entry.stake_value()?;
-            Ok(Account::new(entry.address, entry.balance, stake))
+            let mut account = Account::new(entry.address, entry.balance, stake);
+            account.reputation.tier = Tier::Tl3;
+            account.reputation.score = 1.0;
+            Ok(account)
         })
         .collect()
 }

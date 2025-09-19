@@ -1,9 +1,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::str::FromStr;
+
 use ed25519_dalek::{PublicKey, Signature};
+use malachite::Natural;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
+use crate::consensus::{ConsensusCertificate, VrfProof, verify_vrf};
 use crate::crypto::{signature_from_hex, signature_to_hex, verify_signature};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::compute_merkle_root;
@@ -21,6 +25,7 @@ pub struct BlockHeader {
     pub state_root: String,
     pub total_stake: String,
     pub randomness: String,
+    pub vrf_proof: String,
     pub timestamp: u64,
     pub proposer: Address,
 }
@@ -33,6 +38,7 @@ impl BlockHeader {
         state_root: String,
         total_stake: String,
         randomness: String,
+        vrf_proof: String,
         proposer: Address,
     ) -> Self {
         Self {
@@ -42,6 +48,7 @@ impl BlockHeader {
             state_root,
             total_stake,
             randomness,
+            vrf_proof,
             proposer,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -322,6 +329,7 @@ pub struct Block {
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
     pub signature: String,
+    pub consensus: ConsensusCertificate,
     pub hash: String,
 }
 
@@ -332,6 +340,7 @@ impl Block {
         pruning_proof: PruningProof,
         recursive_proof: RecursiveProof,
         signature: Signature,
+        consensus: ConsensusCertificate,
     ) -> Self {
         let hash = header.hash();
         Self {
@@ -340,6 +349,7 @@ impl Block {
             pruning_proof,
             recursive_proof,
             signature: signature_to_hex(&signature),
+            consensus,
             hash: hex::encode(hash),
         }
     }
@@ -379,8 +389,63 @@ impl Block {
         let previous_proof = previous.map(|block| &block.recursive_proof);
         self.recursive_proof
             .verify(&self.header, &self.pruning_proof, previous_proof)?;
+
+        self.verify_consensus(previous)?;
         Ok(())
     }
+
+    fn verify_consensus(&self, previous: Option<&Block>) -> ChainResult<()> {
+        let seed_bytes = if let Some(prev) = previous {
+            hex::decode(&prev.hash).map_err(|err| {
+                ChainError::Crypto(format!("invalid previous hash encoding: {err}"))
+            })?
+        } else {
+            vec![0u8; 32]
+        };
+        if seed_bytes.len() != 32 {
+            return Err(ChainError::Crypto("invalid VRF seed length".into()));
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(&seed_bytes);
+        let randomness = parse_natural(&self.header.randomness)?;
+        let proof = VrfProof {
+            randomness,
+            proof: self.header.vrf_proof.clone(),
+        };
+        if !verify_vrf(&seed, self.header.height, &self.header.proposer, &proof) {
+            return Err(ChainError::Crypto("invalid VRF proof".into()));
+        }
+
+        let total = parse_natural(&self.consensus.total_power)?;
+        let quorum = parse_natural(&self.consensus.quorum_threshold)?;
+        let prevote = parse_natural(&self.consensus.pre_vote_power)?;
+        let precommit = parse_natural(&self.consensus.pre_commit_power)?;
+        let commit = parse_natural(&self.consensus.commit_power)?;
+
+        if prevote < quorum {
+            return Err(ChainError::Crypto(
+                "insufficient pre-vote power for quorum".into(),
+            ));
+        }
+        if precommit < quorum {
+            return Err(ChainError::Crypto(
+                "insufficient pre-commit power for quorum".into(),
+            ));
+        }
+        if commit < quorum {
+            return Err(ChainError::Crypto(
+                "insufficient commit power for quorum".into(),
+            ));
+        }
+        if total < quorum {
+            return Err(ChainError::Crypto("invalid quorum configuration".into()));
+        }
+        Ok(())
+    }
+}
+
+fn parse_natural(value: &str) -> ChainResult<Natural> {
+    Natural::from_str(value).map_err(|_| ChainError::Crypto("invalid natural encoding".into()))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
