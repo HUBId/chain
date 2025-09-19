@@ -73,13 +73,12 @@ impl Ledger {
 
         let recipient = accounts
             .entry(tx.payload.to.clone())
-            .or_insert_with(|| Account {
-                address: tx.payload.to.clone(),
-                balance: 0,
-                nonce: 0,
-                stake: Stake::default(),
-            });
+            .or_insert_with(|| Account::new(tx.payload.to.clone(), 0, Stake::default()));
         recipient.balance = recipient.balance.saturating_add(tx.payload.amount);
+        let weights = crate::reputation::ReputationWeights::default();
+        let now = crate::reputation::current_timestamp();
+        recipient.reputation.recompute_score(&weights, now);
+        recipient.reputation.update_decay_reference(now);
 
         Ok(tx.payload.fee)
     }
@@ -88,13 +87,13 @@ impl Ledger {
         let mut accounts = self.accounts.write();
         let account = accounts
             .entry(address.to_string())
-            .or_insert_with(|| Account {
-                address: address.to_string(),
-                balance: 0,
-                nonce: 0,
-                stake: Stake::default(),
-            });
+            .or_insert_with(|| Account::new(address.to_string(), 0, Stake::default()));
         account.balance = account.balance.saturating_add(reward as u128);
+        account.reputation.record_consensus_success();
+        let weights = crate::reputation::ReputationWeights::default();
+        let now = crate::reputation::current_timestamp();
+        account.reputation.recompute_score(&weights, now);
+        account.reputation.update_decay_reference(now);
     }
 
     pub fn state_root(&self) -> [u8; 32] {

@@ -13,7 +13,9 @@ use crate::crypto::{address_from_public_key, load_or_generate_keypair, sign_mess
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{Ledger, compute_merkle_root};
 use crate::storage::Storage;
-use crate::types::{Account, Address, Block, BlockHeader, SignedTransaction};
+use crate::types::{
+    Account, Address, Block, BlockHeader, PruningProof, RecursiveProof, SignedTransaction,
+};
 
 const BASE_BLOCK_REWARD: u64 = 5;
 
@@ -51,9 +53,7 @@ impl Node {
         let db_path = config.data_dir.join("db");
         let storage = Storage::open(&db_path)?;
         let mut accounts = storage.load_accounts()?;
-        let mut blocks = storage.load_blockchain()?;
-
-        if blocks.is_empty() {
+        if storage.tip()?.is_none() {
             let genesis_accounts = if config.genesis.accounts.is_empty() {
                 vec![GenesisAccount {
                     address: address.clone(),
@@ -71,36 +71,37 @@ impl Node {
             let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
             let tx_root = compute_merkle_root(&mut tx_hashes);
             let state_root = ledger.state_root();
+            let state_root_hex = hex::encode(state_root);
             let stakes = ledger.stake_snapshot();
             let total_stake = aggregate_total_stake(&stakes);
             let header = BlockHeader::new(
                 0,
                 hex::encode([0u8; 32]),
                 hex::encode(tx_root),
-                hex::encode(state_root),
+                state_root_hex.clone(),
                 total_stake.to_string(),
                 "0".to_string(),
                 address.clone(),
             );
+            let pruning_proof = PruningProof::genesis(&state_root_hex);
+            let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
             let signature = sign_message(&keypair, &header.canonical_bytes());
-            let genesis_block = Block::new(header, Vec::new(), signature);
+            let genesis_block = Block::new(
+                header,
+                Vec::new(),
+                pruning_proof,
+                recursive_proof,
+                signature,
+            );
+            genesis_block.verify(None)?;
             storage.store_block(&genesis_block)?;
-            blocks.push(genesis_block);
+        }
+
+        if accounts.is_empty() {
+            accounts = storage.load_accounts()?;
         }
 
         let ledger = Ledger::load(accounts);
-        let last_block = blocks.last().cloned();
-        let tip = if let Some(block) = last_block {
-            ChainTip {
-                height: block.header.height,
-                last_hash: block.block_hash(),
-            }
-        } else {
-            ChainTip {
-                height: 0,
-                last_hash: [0u8; 32],
-            }
-        };
 
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
@@ -110,8 +111,12 @@ impl Node {
             storage,
             ledger,
             mempool: RwLock::new(VecDeque::new()),
-            chain_tip: RwLock::new(tip),
+            chain_tip: RwLock::new(ChainTip {
+                height: 0,
+                last_hash: [0u8; 32],
+            }),
         });
+        inner.bootstrap()?;
         Ok(Self { inner })
     }
 
@@ -249,8 +254,15 @@ impl NodeInner {
             selection.randomness.to_string(),
             self.address.clone(),
         );
+        let previous_block = self.storage.read_block(tip_snapshot.height)?;
+        let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
+        let recursive_proof = match previous_block.as_ref() {
+            Some(block) => RecursiveProof::extend(&block.recursive_proof, &header, &pruning_proof),
+            None => RecursiveProof::genesis(&header, &pruning_proof),
+        };
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
-        let block = Block::new(header, accepted, signature);
+        let block = Block::new(header, accepted, pruning_proof, recursive_proof, signature);
+        block.verify(previous_block.as_ref())?;
         self.storage.store_block(&block)?;
         self.persist_accounts()?;
         let mut tip = self.chain_tip.write();
@@ -264,6 +276,24 @@ impl NodeInner {
         let accounts = self.ledger.accounts_snapshot();
         for account in accounts {
             self.storage.persist_account(&account)?;
+        }
+        Ok(())
+    }
+
+    fn bootstrap(&self) -> ChainResult<()> {
+        if let Some(metadata) = self.storage.tip()? {
+            let block = self
+                .storage
+                .read_block(metadata.height)?
+                .ok_or_else(|| ChainError::Config("tip metadata missing block".into()))?;
+            block.verify(None)?;
+            let mut tip = self.chain_tip.write();
+            tip.height = block.header.height;
+            tip.last_hash = block.block_hash();
+        } else {
+            let mut tip = self.chain_tip.write();
+            tip.height = 0;
+            tip.last_hash = [0u8; 32];
         }
         Ok(())
     }
