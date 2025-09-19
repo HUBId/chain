@@ -1,6 +1,6 @@
 # RPP Chain
 
-A production-focused implementation of an RPP (Random Participation Proof) blockchain node. The node integrates:
+A production-focused implementation of an RPP (Recursive Pruning Proof) blockchain node. The node integrates:
 
 - **Stwo** for Blake2-based hashing and Merkle root construction.
 - **Malachite** for high precision arithmetic in stake-weighted consensus.
