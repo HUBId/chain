@@ -8,3 +8,4 @@ pub mod node;
 pub mod reputation;
 pub mod storage;
 pub mod types;
+pub mod wallet;
