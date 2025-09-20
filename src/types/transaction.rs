@@ -10,7 +10,7 @@ use crate::errors::{ChainError, ChainResult};
 
 use super::Address;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Transaction {
     pub from: Address,
     pub to: Address,
@@ -54,7 +54,7 @@ impl Transaction {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SignedTransaction {
     pub id: Uuid,
     pub payload: Transaction,
@@ -86,7 +86,7 @@ impl SignedTransaction {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransactionEnvelope {
     pub tx: SignedTransaction,
     pub hash: String,

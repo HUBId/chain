@@ -8,9 +8,10 @@ use crate::crypto::{address_from_public_key, sign_message};
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::storage::Storage;
-use crate::types::{Address, SignedTransaction, Transaction};
+use crate::stwo::prover::{StarkProver, WalletProver};
+use crate::types::{Address, SignedTransaction, Transaction, TransactionProofBundle};
 
-use super::proofs::{ProofGenerator, TxProof, UptimeProof};
+use super::proofs::{ProofGenerator, UptimeProof};
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
 #[derive(Clone)]
@@ -41,6 +42,10 @@ impl Wallet {
             address,
             proof_generator,
         }
+    }
+
+    fn stark_prover(&self) -> WalletProver<'_> {
+        WalletProver::new(&self.storage)
     }
 
     pub fn address(&self) -> &Address {
@@ -122,8 +127,11 @@ impl Wallet {
         SignedTransaction::new(tx, signature, &self.keypair.public)
     }
 
-    pub fn prove_transaction(&self, tx: &SignedTransaction) -> TxProof {
-        self.proof_generator.generate_tx_proof(tx)
+    pub fn prove_transaction(&self, tx: &SignedTransaction) -> ChainResult<TransactionProofBundle> {
+        let prover = self.stark_prover();
+        let witness = prover.build_transaction_witness(tx)?;
+        let proof = prover.prove_transaction(witness)?;
+        Ok(TransactionProofBundle::new(tx.clone(), proof))
     }
 
     pub fn generate_uptime_proof(&self) -> UptimeProof {

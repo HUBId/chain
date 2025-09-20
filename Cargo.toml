@@ -23,3 +23,6 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 uuid = { version = "1.7", features = ["v4", "serde"] }
+num-bigint = { version = "0.4", features = ["serde"] }
+num-traits = "0.2"
+blake2 = "0.10"

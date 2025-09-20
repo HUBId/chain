@@ -18,8 +18,12 @@ use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{Ledger, compute_merkle_root};
 use crate::reputation::Tier;
 use crate::storage::Storage;
+use crate::stwo::proof::{ProofPayload, StarkProof};
+use crate::stwo::prover::{StarkProver, WalletProver};
+use crate::stwo::verifier::{NodeVerifier, StarkVerifier};
 use crate::types::{
-    Account, Address, Block, BlockHeader, PruningProof, RecursiveProof, SignedTransaction,
+    Account, Address, Block, BlockHeader, BlockStarkProofs, PruningProof, RecursiveProof,
+    SignedTransaction, TransactionProofBundle,
 };
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -40,7 +44,7 @@ struct NodeInner {
     address: Address,
     storage: Storage,
     ledger: Ledger,
-    mempool: RwLock<VecDeque<SignedTransaction>>,
+    mempool: RwLock<VecDeque<TransactionProofBundle>>,
     chain_tip: RwLock<ChainTip>,
     block_interval: Duration,
 }
@@ -93,6 +97,32 @@ impl Node {
             );
             let pruning_proof = PruningProof::genesis(&state_root_hex);
             let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
+            let prover = WalletProver::new(&storage);
+            let transactions: Vec<SignedTransaction> = Vec::new();
+            let transaction_proofs: Vec<StarkProof> = Vec::new();
+            let state_witness = prover.build_state_witness(
+                &pruning_proof.previous_state_root,
+                &header.state_root,
+                &transactions,
+            )?;
+            let state_proof = prover.prove_state_transition(state_witness)?;
+            let pruning_witness =
+                prover.build_pruning_witness(&transactions, &pruning_proof, Vec::new());
+            let pruning_stark = prover.prove_pruning(pruning_witness)?;
+            let recursive_witness = prover.build_recursive_witness(
+                None,
+                &transaction_proofs,
+                &state_proof,
+                &pruning_stark,
+                header.height,
+            )?;
+            let recursive_stark = prover.prove_recursive(recursive_witness)?;
+            let stark_bundle = BlockStarkProofs::new(
+                transaction_proofs,
+                state_proof,
+                pruning_stark,
+                recursive_stark,
+            );
             let signature = sign_message(&keypair, &header.canonical_bytes());
             let consensus_certificate = ConsensusCertificate::genesis();
             let genesis_block = Block::new(
@@ -100,6 +130,7 @@ impl Node {
                 Vec::new(),
                 pruning_proof,
                 recursive_proof,
+                stark_bundle,
                 signature,
                 consensus_certificate,
             );
@@ -142,8 +173,8 @@ impl Node {
 }
 
 impl NodeHandle {
-    pub fn submit_transaction(&self, tx: SignedTransaction) -> ChainResult<String> {
-        self.inner.submit_transaction(tx)
+    pub fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
+        self.inner.submit_transaction(bundle)
     }
 
     pub fn get_block(&self, height: u64) -> ChainResult<Option<Block>> {
@@ -175,17 +206,35 @@ impl NodeInner {
         }
     }
 
-    fn submit_transaction(&self, tx: SignedTransaction) -> ChainResult<String> {
-        tx.verify()?;
+    fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
+        bundle.transaction.verify()?;
+        let verifier = NodeVerifier::new();
+        verifier.verify_transaction(&bundle.proof)?;
+        let witness_tx = match &bundle.proof.payload {
+            ProofPayload::Transaction(witness) => &witness.signed_tx,
+            _ => {
+                return Err(ChainError::Crypto(
+                    "transaction proof payload mismatch".into(),
+                ));
+            }
+        };
+        if witness_tx != &bundle.transaction {
+            return Err(ChainError::Crypto(
+                "transaction proof does not match submitted transaction".into(),
+            ));
+        }
         let mut mempool = self.mempool.write();
         if mempool.len() >= self.config.mempool_limit {
             return Err(ChainError::Transaction("mempool full".into()));
         }
-        let tx_hash = hex::encode(tx.hash());
-        if mempool.iter().any(|existing| existing.id == tx.id) {
+        let tx_hash = bundle.hash();
+        if mempool
+            .iter()
+            .any(|existing| existing.transaction.id == bundle.transaction.id)
+        {
             return Err(ChainError::Transaction("transaction already queued".into()));
         }
-        mempool.push_back(tx);
+        mempool.push_back(bundle);
         Ok(tx_hash)
     }
 
@@ -203,7 +252,7 @@ impl NodeInner {
     }
 
     fn produce_block(&self) -> ChainResult<()> {
-        let mut pending = Vec::new();
+        let mut pending: Vec<TransactionProofBundle> = Vec::new();
         {
             let mut mempool = self.mempool.write();
             while pending.len() < self.config.max_block_transactions {
@@ -242,13 +291,13 @@ impl NodeInner {
             return Ok(());
         }
 
-        let mut accepted = Vec::new();
+        let mut accepted: Vec<TransactionProofBundle> = Vec::new();
         let mut total_fees: u64 = 0;
-        for tx in pending {
-            match self.ledger.apply_transaction(&tx) {
+        for bundle in pending {
+            match self.ledger.apply_transaction(&bundle.transaction) {
                 Ok(fee) => {
                     total_fees = total_fees.saturating_add(fee);
-                    accepted.push(tx);
+                    accepted.push(bundle);
                 }
                 Err(err) => warn!(?err, "dropping invalid transaction"),
             }
@@ -261,7 +310,12 @@ impl NodeInner {
         let block_reward = BASE_BLOCK_REWARD.saturating_add(total_fees);
         self.ledger.reward_proposer(&self.address, block_reward);
 
-        let mut tx_hashes = accepted.iter().map(|tx| tx.hash()).collect::<Vec<_>>();
+        let (transactions, transaction_proofs): (Vec<SignedTransaction>, Vec<_>) = accepted
+            .into_iter()
+            .map(|bundle| (bundle.transaction, bundle.proof))
+            .unzip();
+
+        let mut tx_hashes = transactions.iter().map(|tx| tx.hash()).collect::<Vec<_>>();
         let tx_root = compute_merkle_root(&mut tx_hashes);
         let state_root = self.ledger.state_root();
         let height = tip_snapshot.height + 1;
@@ -281,6 +335,42 @@ impl NodeInner {
             Some(block) => RecursiveProof::extend(&block.recursive_proof, &header, &pruning_proof),
             None => RecursiveProof::genesis(&header, &pruning_proof),
         };
+
+        let prover = WalletProver::new(&self.storage);
+        let state_witness = prover.build_state_witness(
+            &pruning_proof.previous_state_root,
+            &header.state_root,
+            &transactions,
+        )?;
+        let state_proof = prover.prove_state_transition(state_witness)?;
+
+        let previous_transactions = previous_block
+            .as_ref()
+            .map(|block| block.transactions.clone())
+            .unwrap_or_default();
+        let pruning_witness =
+            prover.build_pruning_witness(&previous_transactions, &pruning_proof, Vec::new());
+        let pruning_stark = prover.prove_pruning(pruning_witness)?;
+
+        let previous_recursive_stark = previous_block
+            .as_ref()
+            .map(|block| &block.stark.recursive_proof);
+        let recursive_witness = prover.build_recursive_witness(
+            previous_recursive_stark,
+            &transaction_proofs,
+            &state_proof,
+            &pruning_stark,
+            header.height,
+        )?;
+        let recursive_stark = prover.prove_recursive(recursive_witness)?;
+
+        let stark_bundle = BlockStarkProofs::new(
+            transaction_proofs,
+            state_proof,
+            pruning_stark,
+            recursive_stark,
+        );
+
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
         let validator_addresses = round
             .validators()
@@ -300,9 +390,10 @@ impl NodeInner {
         let consensus_certificate = round.certificate();
         let block = Block::new(
             header,
-            accepted,
+            transactions,
             pruning_proof,
             recursive_proof,
+            stark_bundle,
             signature,
             consensus_certificate,
         );

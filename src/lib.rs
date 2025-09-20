@@ -7,5 +7,6 @@ pub mod ledger;
 pub mod node;
 pub mod reputation;
 pub mod storage;
+pub mod stwo;
 pub mod types;
 pub mod wallet;
