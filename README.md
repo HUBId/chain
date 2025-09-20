@@ -1,4 +1,4 @@
-# Blockchain Network
+# Digital Value Network
 
 A production-focused implementation of an blockchain with fixed size (RPP Recursive Pruning Proof) and reputation system (ZSI Zero-Knowledge Sovereign Identity)
 
@@ -71,4 +71,4 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 - The RocksDB build may take a few minutes the first time. Subsequent builds reuse the compiled artifacts.
 - Consensus selection and Merkle commitments are unit test friendly and live in `src/consensus.rs` and `src/ledger.rs` respectively.
 
-Enjoy experimenting with the blockchain network!
+Enjoy experimenting with the Digital Value Network!
