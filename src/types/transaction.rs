@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use uuid::Uuid;
 
-use crate::crypto::{signature_from_hex, signature_to_hex, verify_signature};
+use crate::crypto::{
+    address_from_public_key, signature_from_hex, signature_to_hex, verify_signature,
+};
 use crate::errors::{ChainError, ChainResult};
 
 use super::Address;
@@ -82,7 +84,14 @@ impl SignedTransaction {
             ChainError::Transaction(format!("invalid public key encoding: {err}"))
         })?)
         .map_err(|err| ChainError::Transaction(format!("invalid public key: {err}")))?;
-        verify_signature(&public_key, &self.payload.canonical_bytes(), &signature)
+        verify_signature(&public_key, &self.payload.canonical_bytes(), &signature)?;
+        let derived = address_from_public_key(&public_key);
+        if derived != self.payload.from {
+            return Err(ChainError::Transaction(
+                "public key does not match transaction sender".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

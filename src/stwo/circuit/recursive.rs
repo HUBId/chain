@@ -10,6 +10,7 @@ use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_
 pub struct RecursiveWitness {
     pub previous_commitment: Option<String>,
     pub aggregated_commitment: String,
+    pub identity_commitments: Vec<String>,
     pub tx_commitments: Vec<String>,
     pub state_commitment: String,
     pub pruning_commitment: String,
@@ -60,7 +61,9 @@ impl RecursiveCircuit {
             pruning_element,
             params.element_from_u64(self.witness.block_height),
         ]);
-        let tx_digest = Self::fold_commitments(&hasher, params, &self.witness.tx_commitments)?;
+        let mut commitments = self.witness.identity_commitments.clone();
+        commitments.extend(self.witness.tx_commitments.clone());
+        let tx_digest = Self::fold_commitments(&hasher, params, &commitments)?;
         let final_inputs = vec![previous, state_pruning_digest, tx_digest];
         Ok(hasher.hash(&final_inputs))
     }
@@ -72,9 +75,9 @@ impl StarkCircuit for RecursiveCircuit {
     }
 
     fn evaluate_constraints(&self) -> Result<(), CircuitError> {
-        if self.witness.tx_commitments.is_empty() {
+        if self.witness.identity_commitments.is_empty() && self.witness.tx_commitments.is_empty() {
             return Err(CircuitError::ConstraintViolation(
-                "recursive witness missing transaction commitments".into(),
+                "recursive witness missing aggregated commitments".into(),
             ));
         }
         let params = StarkParameters::blueprint_default();
@@ -93,7 +96,9 @@ impl StarkCircuit for RecursiveCircuit {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = zero.clone();
         let mut fold_rows = Vec::new();
-        for commitment in &self.witness.tx_commitments {
+        let mut commitments = self.witness.identity_commitments.clone();
+        commitments.extend(self.witness.tx_commitments.clone());
+        for commitment in commitments.iter() {
             let commitment_element = Self::decode_field(parameters, commitment)?;
             let next = hasher.hash(&[
                 accumulator.clone(),

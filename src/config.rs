@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{ChainError, ChainResult};
+use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::types::Stake;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -14,8 +15,20 @@ pub struct NodeConfig {
     pub rpc_listen: SocketAddr,
     pub block_time_ms: u64,
     pub max_block_transactions: usize,
+    #[serde(default = "default_max_block_identity_registrations")]
+    pub max_block_identity_registrations: usize,
     pub mempool_limit: usize,
+    #[serde(default = "default_epoch_length")]
+    pub epoch_length: u64,
     pub genesis: GenesisConfig,
+}
+
+fn default_max_block_identity_registrations() -> usize {
+    32
+}
+
+fn default_epoch_length() -> u64 {
+    DEFAULT_EPOCH_LENGTH
 }
 
 impl NodeConfig {
@@ -51,7 +64,9 @@ impl Default for NodeConfig {
             rpc_listen: "127.0.0.1:7070".parse().expect("valid socket addr"),
             block_time_ms: 5_000,
             max_block_transactions: 512,
+            max_block_identity_registrations: default_max_block_identity_registrations(),
             mempool_limit: 8_192,
+            epoch_length: default_epoch_length(),
             genesis: GenesisConfig::default(),
         }
     }

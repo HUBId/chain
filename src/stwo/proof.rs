@@ -38,6 +38,7 @@ pub enum ProofKind {
     State,
     Pruning,
     Recursive,
+    Identity,
 }
 
 /// Serialized witness payloads embedded in placeholder proofs. In a production
@@ -50,6 +51,7 @@ pub enum ProofPayload {
     State(super::circuit::state::StateWitness),
     Pruning(super::circuit::pruning::PruningWitness),
     Recursive(super::circuit::recursive::RecursiveWitness),
+    Identity(super::circuit::identity::IdentityWitness),
 }
 
 /// High-level container describing a STARK-style proof.

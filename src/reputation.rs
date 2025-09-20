@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hex;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
@@ -108,9 +109,8 @@ pub struct ZsiIdentity {
 
 impl ZsiIdentity {
     pub fn new(public_key_hint: &str) -> Self {
-        let commitment = Blake2sHasher::hash(public_key_hint.as_bytes());
         Self {
-            public_key_commitment: hex::encode::<[u8; 32]>(commitment.into()),
+            public_key_commitment: Self::commitment_from_hint(public_key_hint),
             validated: false,
             reputation_proof: None,
         }
@@ -124,6 +124,17 @@ impl ZsiIdentity {
     pub fn invalidate(&mut self) {
         self.validated = false;
         self.reputation_proof = None;
+    }
+
+    pub fn commitment_from_hint(hint: &str) -> String {
+        match hex::decode(hint) {
+            Ok(bytes) => Self::commitment_from_bytes(&bytes),
+            Err(_) => Self::commitment_from_bytes(hint.as_bytes()),
+        }
+    }
+
+    fn commitment_from_bytes(bytes: &[u8]) -> String {
+        hex::encode::<[u8; 32]>(Blake2sHasher::hash(bytes).into())
     }
 }
 
@@ -171,6 +182,20 @@ impl ReputationProfile {
             score: 0.0,
             tier: Tier::default(),
         }
+    }
+
+    /// Marks the profile as having a validated genesis identity while keeping
+    /// the reputation state at its neutral origin. This ensures reputation is
+    /// always anchored to the genesis proof before any further activity-based
+    /// adjustments are accumulated.
+    pub fn bind_genesis_identity(&mut self, proof: &str) {
+        self.zsi.validate(proof);
+        self.timetokes = TimetokeBalance::default();
+        self.consensus_success = 0;
+        self.peer_feedback = 0;
+        self.score = 0.0;
+        self.tier = Tier::Tl0;
+        self.last_decay_timestamp = current_timestamp();
     }
 
     pub fn record_online_proof(&mut self, timestamp: u64) {

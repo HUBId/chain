@@ -6,7 +6,7 @@ use crate::ledger::compute_merkle_root;
 use crate::reputation::{ReputationWeights, Tier, current_timestamp};
 use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
 use crate::stwo::params::StarkParameters;
-use crate::types::{Account, SignedTransaction, Stake};
+use crate::types::{Account, IdentityDeclaration, SignedTransaction, Stake};
 use serde_json::to_vec;
 
 use super::{
@@ -19,6 +19,7 @@ use super::{
 pub struct StateWitness {
     pub prev_state_root: String,
     pub new_state_root: String,
+    pub identities: Vec<IdentityDeclaration>,
     pub transactions: Vec<SignedTransaction>,
     pub accounts_before: Vec<Account>,
     pub accounts_after: Vec<Account>,
@@ -82,6 +83,31 @@ impl StateCircuit {
             .map(|account| (account.address.clone(), account))
             .collect();
 
+        let now = current_timestamp();
+
+        for declaration in &self.witness.identities {
+            let genesis = &declaration.genesis;
+            if state.contains_key(&genesis.wallet_addr) {
+                return Err(CircuitError::ConstraintViolation(
+                    "identity wallet already exists before replay".into(),
+                ));
+            }
+            let mut account = Account::new(genesis.wallet_addr.clone(), 0, Stake::default());
+            account.reputation = crate::reputation::ReputationProfile::new(&genesis.wallet_pk);
+            account
+                .ensure_wallet_binding(&genesis.wallet_pk)
+                .map_err(|err| CircuitError::ConstraintViolation(err.to_string()))?;
+            account
+                .reputation
+                .zsi
+                .validate(&declaration.proof.commitment);
+            account
+                .reputation
+                .recompute_score(&self.witness.reputation_weights, now);
+            account.reputation.update_decay_reference(now);
+            state.insert(genesis.wallet_addr.clone(), account);
+        }
+
         for tx in &self.witness.transactions {
             let sender = state.get(&tx.payload.from).cloned().ok_or_else(|| {
                 CircuitError::ConstraintViolation("sender account missing".into())
@@ -118,7 +144,7 @@ impl StateCircuit {
             recipient.balance = recipient.balance.saturating_add(tx.payload.amount);
             recipient
                 .reputation
-                .recompute_score(&self.witness.reputation_weights, current_timestamp());
+                .recompute_score(&self.witness.reputation_weights, now);
         }
 
         let mut accounts: Vec<Account> = state.into_values().collect();
@@ -179,6 +205,30 @@ impl StarkCircuit for StateCircuit {
             .map(|account| (account.address.clone(), account))
             .collect();
 
+        let now = current_timestamp();
+        for declaration in &self.witness.identities {
+            let genesis = &declaration.genesis;
+            if state.contains_key(&genesis.wallet_addr) {
+                return Err(CircuitError::ConstraintViolation(
+                    "identity wallet already exists during trace generation".into(),
+                ));
+            }
+            let mut account = Account::new(genesis.wallet_addr.clone(), 0, Stake::default());
+            account.reputation = crate::reputation::ReputationProfile::new(&genesis.wallet_pk);
+            account
+                .ensure_wallet_binding(&genesis.wallet_pk)
+                .map_err(|err| CircuitError::ConstraintViolation(err.to_string()))?;
+            account
+                .reputation
+                .zsi
+                .validate(&declaration.proof.commitment);
+            account
+                .reputation
+                .recompute_score(&self.witness.reputation_weights, now);
+            account.reputation.update_decay_reference(now);
+            state.insert(genesis.wallet_addr.clone(), account);
+        }
+
         let mut transition_rows = Vec::new();
         for tx in &self.witness.transactions {
             let sender = state.get(&tx.payload.from).cloned().ok_or_else(|| {
@@ -212,7 +262,7 @@ impl StarkCircuit for StateCircuit {
             recipient_entry.balance = receiver_balance_after;
             recipient_entry
                 .reputation
-                .recompute_score(&self.witness.reputation_weights, current_timestamp());
+                .recompute_score(&self.witness.reputation_weights, now);
 
             let row = vec![
                 string_to_field(parameters, &tx.payload.from),

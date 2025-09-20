@@ -5,6 +5,10 @@ use malachite::base::num::arithmetic::traits::DivRem;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
+use crate::crypto::{
+    address_from_public_key, public_key_from_hex, signature_from_hex, verify_signature,
+};
+use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::types::{Account, Address, Stake};
 
@@ -23,10 +27,73 @@ pub struct ProposerSelection {
     pub quorum_threshold: Natural,
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BftVoteKind {
+    PreVote,
+    PreCommit,
+}
+
+impl BftVoteKind {
+    fn as_byte(self) -> u8 {
+        match self {
+            BftVoteKind::PreVote => 0,
+            BftVoteKind::PreCommit => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BftVote {
+    pub round: u64,
+    pub height: u64,
+    pub block_hash: String,
+    pub voter: Address,
+    pub kind: BftVoteKind,
+}
+
+impl BftVote {
+    pub fn message_bytes(&self) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"rpp-bft-vote");
+        data.extend_from_slice(&self.round.to_le_bytes());
+        data.extend_from_slice(&self.height.to_le_bytes());
+        data.extend_from_slice(self.block_hash.as_bytes());
+        data.extend_from_slice(self.voter.as_bytes());
+        data.push(self.kind.as_byte());
+        data
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SignedBftVote {
+    pub vote: BftVote,
+    pub public_key: String,
+    pub signature: String,
+}
+
+impl SignedBftVote {
+    pub fn verify(&self) -> ChainResult<()> {
+        let public_key = public_key_from_hex(&self.public_key)?;
+        let derived = address_from_public_key(&public_key);
+        if derived != self.vote.voter {
+            return Err(ChainError::Crypto(
+                "vote public key does not match voter address".into(),
+            ));
+        }
+        let signature = signature_from_hex(&self.signature)?;
+        verify_signature(&public_key, &self.vote.message_bytes(), &signature)?;
+        Ok(())
+    }
+
+    pub fn hash(&self) -> String {
+        hex::encode::<[u8; 32]>(Blake2sHasher::hash(&self.vote.message_bytes()).into())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VoteRecord {
-    pub voter: Address,
-    pub weight: Natural,
+    pub vote: SignedBftVote,
+    pub weight: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -169,6 +236,7 @@ pub struct ConsensusRound {
     commit_weight: Natural,
     prevote_voters: HashSet<Address>,
     precommit_voters: HashSet<Address>,
+    block_hash: Option<String>,
 }
 
 impl ConsensusRound {
@@ -202,6 +270,7 @@ impl ConsensusRound {
             commit_weight: Natural::from(0u32),
             prevote_voters: HashSet::new(),
             precommit_voters: HashSet::new(),
+            block_hash: None,
         }
     }
 
@@ -227,6 +296,10 @@ impl ConsensusRound {
 
     pub fn quorum_threshold(&self) -> &Natural {
         &self.quorum
+    }
+
+    pub fn set_block_hash(&mut self, block_hash: String) {
+        self.block_hash = Some(block_hash);
     }
 
     pub fn select_proposer(&mut self) -> Option<ProposerSelection> {
@@ -274,35 +347,87 @@ impl ConsensusRound {
         Some(selection)
     }
 
-    pub fn register_prevote(&mut self, voter: &Address) {
-        if self.prevote_voters.contains(voter) {
-            return;
-        }
-        if let Some(weight) = self.voting_power.get(voter) {
-            self.prevote_voters.insert(voter.clone());
-            self.pre_vote_weight += weight.clone();
-            self.pre_votes.push(VoteRecord {
-                voter: voter.clone(),
-                weight: weight.clone(),
-            });
-        }
+    fn expected_block_hash(&self) -> ChainResult<&String> {
+        self.block_hash
+            .as_ref()
+            .ok_or_else(|| ChainError::Crypto("consensus round missing block hash context".into()))
     }
 
-    pub fn register_precommit(&mut self, voter: &Address) {
-        if self.precommit_voters.contains(voter) {
-            return;
+    fn voting_power_for(&self, address: &Address) -> ChainResult<Natural> {
+        self.voting_power
+            .get(address)
+            .cloned()
+            .ok_or_else(|| ChainError::Crypto("vote submitted by non-validator".into()))
+    }
+
+    fn ensure_vote_context(&self, vote: &SignedBftVote) -> ChainResult<()> {
+        if vote.vote.round != self.round {
+            return Err(ChainError::Crypto(
+                "vote references incorrect consensus round".into(),
+            ));
         }
-        if let Some(weight) = self.voting_power.get(voter) {
-            self.precommit_voters.insert(voter.clone());
-            self.pre_commit_weight += weight.clone();
-            self.pre_commits.push(VoteRecord {
-                voter: voter.clone(),
-                weight: weight.clone(),
-            });
-            if self.pre_commit_weight >= self.quorum {
-                self.commit_weight = self.pre_commit_weight.clone();
-            }
+        if vote.vote.height != self.round {
+            return Err(ChainError::Crypto(
+                "vote references incorrect block height".into(),
+            ));
         }
+        let expected = self.expected_block_hash()?;
+        if &vote.vote.block_hash != expected {
+            return Err(ChainError::Crypto(
+                "vote references unexpected block hash".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn register_prevote(&mut self, vote: &SignedBftVote) -> ChainResult<()> {
+        vote.verify()?;
+        self.ensure_vote_context(vote)?;
+        if vote.vote.kind != BftVoteKind::PreVote {
+            return Err(ChainError::Crypto(
+                "attempted to register non-prevote in prevote stage".into(),
+            ));
+        }
+        if self.prevote_voters.contains(&vote.vote.voter) {
+            return Ok(());
+        }
+        let weight = self.voting_power_for(&vote.vote.voter)?;
+        self.prevote_voters.insert(vote.vote.voter.clone());
+        self.pre_vote_weight += weight.clone();
+        self.pre_votes.push(VoteRecord {
+            vote: vote.clone(),
+            weight: weight.to_string(),
+        });
+        Ok(())
+    }
+
+    pub fn register_precommit(&mut self, vote: &SignedBftVote) -> ChainResult<()> {
+        vote.verify()?;
+        self.ensure_vote_context(vote)?;
+        if vote.vote.kind != BftVoteKind::PreCommit {
+            return Err(ChainError::Crypto(
+                "attempted to register non-precommit in precommit stage".into(),
+            ));
+        }
+        if self.precommit_voters.contains(&vote.vote.voter) {
+            return Ok(());
+        }
+        if !self.prevote_voters.contains(&vote.vote.voter) {
+            return Err(ChainError::Crypto(
+                "validator submitted precommit without prevote".into(),
+            ));
+        }
+        let weight = self.voting_power_for(&vote.vote.voter)?;
+        self.precommit_voters.insert(vote.vote.voter.clone());
+        self.pre_commit_weight += weight.clone();
+        self.pre_commits.push(VoteRecord {
+            vote: vote.clone(),
+            weight: weight.to_string(),
+        });
+        if self.pre_commit_weight >= self.quorum {
+            self.commit_weight = self.pre_commit_weight.clone();
+        }
+        Ok(())
     }
 
     pub fn commit_reached(&self) -> bool {
@@ -328,4 +453,85 @@ pub fn aggregate_total_stake(entries: &[(Address, Stake)]) -> Natural {
     entries.iter().fold(Natural::from(0u32), |acc, (_, stake)| {
         acc + stake.as_natural().clone()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::address_from_public_key;
+    use crate::reputation::Tier;
+    use crate::types::{Account, Stake};
+    use ed25519_dalek::{Keypair, Signer};
+    use rand::rngs::OsRng;
+
+    fn validator_round() -> (ConsensusRound, Keypair, Address, String) {
+        let mut rng = OsRng;
+        let keypair = Keypair::generate(&mut rng);
+        let address = address_from_public_key(&keypair.public);
+        let mut account = Account::new(address.clone(), 0, Stake::from_u128(1_000));
+        account.reputation.tier = Tier::Tl3;
+        account.reputation.score = 1.0;
+        let (validators, observers) = classify_participants(&[account]);
+        let mut round = ConsensusRound::new(1, [0u8; 32], validators, observers);
+        let block_hash = hex::encode([5u8; 32]);
+        round.set_block_hash(block_hash.clone());
+        (round, keypair, address, block_hash)
+    }
+
+    #[test]
+    fn consensus_round_accepts_signed_votes() {
+        let (mut round, keypair, address, block_hash) = validator_round();
+        let prevote = BftVote {
+            round: round.round(),
+            height: round.round(),
+            block_hash: block_hash.clone(),
+            voter: address.clone(),
+            kind: BftVoteKind::PreVote,
+        };
+        let prevote_sig = keypair.sign(&prevote.message_bytes());
+        let signed_prevote = SignedBftVote {
+            vote: prevote.clone(),
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(prevote_sig.to_bytes()),
+        };
+        round.register_prevote(&signed_prevote).unwrap();
+
+        let precommit_vote = BftVote {
+            kind: BftVoteKind::PreCommit,
+            ..prevote
+        };
+        let precommit_sig = keypair.sign(&precommit_vote.message_bytes());
+        let signed_precommit = SignedBftVote {
+            vote: precommit_vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(precommit_sig.to_bytes()),
+        };
+        round.register_precommit(&signed_precommit).unwrap();
+        assert!(round.commit_reached());
+        let certificate = round.certificate();
+        assert_eq!(certificate.pre_votes.len(), 1);
+        assert_eq!(certificate.pre_commits.len(), 1);
+    }
+
+    #[test]
+    fn consensus_round_rejects_mismatched_vote() {
+        let (mut round, keypair, address, block_hash) = validator_round();
+        let mismatched_vote = BftVote {
+            round: round.round(),
+            height: round.round(),
+            block_hash: block_hash,
+            voter: address.clone(),
+            kind: BftVoteKind::PreVote,
+        };
+        let mut tampered = mismatched_vote.clone();
+        tampered.block_hash = hex::encode([9u8; 32]);
+        let signature = keypair.sign(&tampered.message_bytes());
+        let signed = SignedBftVote {
+            vote: tampered,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        };
+        let err = round.register_prevote(&signed).unwrap_err();
+        assert!(matches!(err, ChainError::Crypto(_)));
+    }
 }
