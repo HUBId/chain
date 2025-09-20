@@ -7,7 +7,12 @@ mod uptime;
 
 pub use crate::identity_tree::IdentityCommitmentProof;
 pub use account::{Account, IdentityBinding, Stake, WalletBindingChange};
-pub use block::{Block, BlockHeader, BlockMetadata, ProofSystem, PruningProof, RecursiveProof};
+pub use block::BlockPayload;
+pub(crate) use block::StoredBlock;
+pub use block::{
+    Block, BlockHeader, BlockMetadata, ProofSystem, PruningProof, RecursiveProof, ReputationUpdate,
+    TimetokeUpdate,
+};
 pub use identity::{IdentityDeclaration, IdentityGenesis, IdentityProof};
 pub use stwo::{BlockStarkProofs, TransactionProofBundle};
 pub use transaction::{SignedTransaction, Transaction, TransactionEnvelope};

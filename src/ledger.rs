@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{HashSet, hash_map::Entry};
+use std::mem;
 
 use parking_lot::RwLock;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
@@ -6,6 +7,14 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
 use crate::reputation::{self, Tier};
+use crate::rpp::{
+    AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
+    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
+    TimetokeWitness, TransactionWitness, UtxoRecord, ZsiRecord, ZsiWitness,
+};
+use crate::state::{
+    GlobalState, ProofRegistry, ReputationState, TimetokeState, UtxoState, ZsiRegistry,
+};
 use crate::types::{
     Account, Address, IdentityDeclaration, SignedTransaction, Stake, UptimeProof,
     WalletBindingChange,
@@ -52,7 +61,13 @@ impl SlashingReason {
 }
 
 pub struct Ledger {
-    accounts: RwLock<HashMap<Address, Account>>,
+    global_state: GlobalState,
+    utxo_state: UtxoState,
+    reputation_state: ReputationState,
+    timetoke_state: TimetokeState,
+    zsi_registry: ZsiRegistry,
+    proof_registry: ProofRegistry,
+    module_witnesses: RwLock<ModuleWitnessBook>,
     identity_tree: RwLock<IdentityCommitmentTree>,
     epoch_length: u64,
     epoch_state: RwLock<EpochState>,
@@ -92,7 +107,13 @@ pub struct EpochInfo {
 impl Ledger {
     pub fn new(epoch_length: u64) -> Self {
         let ledger = Self {
-            accounts: RwLock::new(HashMap::new()),
+            global_state: GlobalState::new(),
+            utxo_state: UtxoState::new(),
+            reputation_state: ReputationState::new(),
+            timetoke_state: TimetokeState::new(),
+            zsi_registry: ZsiRegistry::new(),
+            proof_registry: ProofRegistry::new(),
+            module_witnesses: RwLock::new(ModuleWitnessBook::default()),
             identity_tree: RwLock::new(IdentityCommitmentTree::new(IDENTITY_TREE_DEPTH)),
             epoch_length: epoch_length.max(1),
             epoch_state: RwLock::new(EpochState::new(u64::MAX, [0u8; 32])),
@@ -104,7 +125,6 @@ impl Ledger {
 
     pub fn load(initial: Vec<Account>, epoch_length: u64) -> Self {
         let ledger = Ledger::new(epoch_length);
-        let mut accounts = ledger.accounts.write();
         let mut tree = ledger.identity_tree.write();
         for account in initial {
             tree.force_insert(
@@ -112,9 +132,9 @@ impl Ledger {
                 &account.reputation.zsi.public_key_commitment,
             )
             .expect("genesis identity commitment");
-            accounts.insert(account.address.clone(), account);
+            ledger.global_state.upsert(account.clone());
+            ledger.index_account_modules(&account);
         }
-        drop(accounts);
         drop(tree);
         ledger.sync_epoch_for_height(0);
         ledger
@@ -123,12 +143,11 @@ impl Ledger {
     pub fn upsert_account(&self, account: Account) -> ChainResult<()> {
         let new_commitment = account.reputation.zsi.public_key_commitment.clone();
         let address = account.address.clone();
-        let previous_commitment = {
-            let mut accounts = self.accounts.write();
-            accounts
-                .insert(address.clone(), account)
-                .map(|existing| existing.reputation.zsi.public_key_commitment)
-        };
+        let previous_commitment = self
+            .global_state
+            .upsert(account.clone())
+            .map(|existing| existing.reputation.zsi.public_key_commitment);
+        self.index_account_modules(&account);
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(&address, previous_commitment.as_deref(), &new_commitment)?;
         Ok(())
@@ -139,21 +158,25 @@ impl Ledger {
     }
 
     pub fn get_account(&self, address: &str) -> Option<Account> {
-        self.accounts.read().get(address).cloned()
+        self.global_state.get(address)
     }
 
     pub fn accounts_snapshot(&self) -> Vec<Account> {
-        let mut accounts = self.accounts.read().values().cloned().collect::<Vec<_>>();
-        accounts.sort_by(|a, b| a.address.cmp(&b.address));
-        accounts
+        self.global_state.accounts_snapshot()
+    }
+
+    fn module_records(&self, address: &str) -> ModuleRecordSnapshots {
+        let address = address.to_string();
+        ModuleRecordSnapshots {
+            utxo: self.utxo_state.get_for_account(&address),
+            reputation: self.reputation_state.get(&address),
+            timetoke: self.timetoke_state.get(&address),
+            zsi: self.zsi_registry.get(&address),
+        }
     }
 
     pub fn stake_snapshot(&self) -> Vec<(Address, Stake)> {
-        self.accounts
-            .read()
-            .values()
-            .map(|account| (account.address.clone(), account.stake.clone()))
-            .collect()
+        self.global_state.stake_snapshot()
     }
 
     pub fn ensure_node_binding(
@@ -161,35 +184,40 @@ impl Ledger {
         address: &str,
         wallet_public_key_hex: &str,
     ) -> ChainResult<()> {
-        let binding_change = {
-            let mut accounts = self.accounts.write();
+        let (binding_change, updated_account) = {
+            let mut accounts = self.global_state.write_accounts();
             let account = accounts.get_mut(address).ok_or_else(|| {
                 ChainError::Config("node account missing for identity binding".into())
             })?;
             let change = account.ensure_wallet_binding(wallet_public_key_hex)?;
             account.bind_node_identity()?;
-            change
+            (change, account.clone())
         };
         let WalletBindingChange { previous, current } = binding_change;
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(address, previous.as_deref(), &current)?;
+        self.index_account_modules(&updated_account);
         Ok(())
     }
 
     pub fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
-        let mut accounts = self.accounts.write();
-        let account = accounts.get_mut(address).ok_or_else(|| {
-            ChainError::Transaction("validator account missing for slashing".into())
-        })?;
-        account.stake.slash_percent(reason.penalty_percent());
-        account.reputation.zsi.invalidate();
-        account.reputation.tier = Tier::Tl0;
-        account.reputation.score = 0.0;
-        account.reputation.consensus_success = 0;
-        account.reputation.peer_feedback = 0;
-        account.reputation.timetokes = reputation::TimetokeBalance::default();
-        account.reputation.last_decay_timestamp = reputation::current_timestamp();
-        let timestamp = account.reputation.last_decay_timestamp;
+        let module_before = self.module_records(address);
+        let (timestamp, updated_account) = {
+            let mut accounts = self.global_state.write_accounts();
+            let account = accounts.get_mut(address).ok_or_else(|| {
+                ChainError::Transaction("validator account missing for slashing".into())
+            })?;
+            account.stake.slash_percent(reason.penalty_percent());
+            account.reputation.zsi.invalidate();
+            account.reputation.tier = Tier::Tl0;
+            account.reputation.score = 0.0;
+            account.reputation.consensus_success = 0;
+            account.reputation.peer_feedback = 0;
+            account.reputation.timetokes = reputation::TimetokeBalance::default();
+            account.reputation.last_decay_timestamp = reputation::current_timestamp();
+            let timestamp = account.reputation.last_decay_timestamp;
+            (timestamp, account.clone())
+        };
         let mut log = self.slashing_log.write();
         log.push(SlashingEvent {
             address: address.to_string(),
@@ -197,6 +225,17 @@ impl Ledger {
             penalty_percent: reason.penalty_percent(),
             timestamp,
         });
+        self.index_account_modules(&updated_account);
+        let module_after = self.module_records(address);
+        if let Some(reputation_after) = module_after.reputation.clone() {
+            let mut book = self.module_witnesses.write();
+            book.record_reputation(ReputationWitness::new(
+                updated_account.address.clone(),
+                ReputationEventKind::Slashing,
+                module_before.reputation,
+                reputation_after,
+            ));
+        }
         Ok(())
     }
 
@@ -248,7 +287,7 @@ impl Ledger {
             }
         }
         {
-            let accounts = self.accounts.read();
+            let accounts = self.global_state.read_accounts();
             if accounts.contains_key(&genesis.wallet_addr) {
                 return Err(ChainError::Transaction(
                     "wallet address already associated with an identity".into(),
@@ -314,7 +353,27 @@ impl Ledger {
                 ));
             }
         }
-        self.upsert_account(account)?;
+        let module_before = self.module_records(&genesis.wallet_addr);
+        self.upsert_account(account.clone())?;
+        let module_after = self.module_records(&genesis.wallet_addr);
+        {
+            let mut book = self.module_witnesses.write();
+            if let Some(zsi_after) = module_after.zsi.clone() {
+                book.record_zsi(ZsiWitness::new(
+                    account.address.clone(),
+                    module_before.zsi.clone(),
+                    zsi_after,
+                ));
+            }
+            if let Some(reputation_after) = module_after.reputation.clone() {
+                book.record_reputation(ReputationWitness::new(
+                    account.address.clone(),
+                    ReputationEventKind::IdentityOnboarding,
+                    module_before.reputation,
+                    reputation_after,
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -338,103 +397,273 @@ impl Ledger {
                 "uptime proof commitment mismatch".into(),
             ));
         }
-        let mut accounts = self.accounts.write();
-        let account = accounts.get_mut(&proof.wallet_address).ok_or_else(|| {
-            ChainError::Transaction("uptime proof references unknown account".into())
-        })?;
-        if !account.reputation.zsi.validated {
-            return Err(ChainError::Transaction(
-                "uptime proof requires a validated genesis identity".into(),
-            ));
-        }
-        if !account
-            .reputation
-            .record_online_proof(proof.window_start, proof.window_end)
+        let module_before = self.module_records(&proof.wallet_address);
+        let (credited_hours, updated_account) = {
+            let mut accounts = self.global_state.write_accounts();
+            let account = accounts.get_mut(&proof.wallet_address).ok_or_else(|| {
+                ChainError::Transaction("uptime proof references unknown account".into())
+            })?;
+            if !account.reputation.zsi.validated {
+                return Err(ChainError::Transaction(
+                    "uptime proof requires a validated genesis identity".into(),
+                ));
+            }
+            if !account
+                .reputation
+                .record_online_proof(proof.window_start, proof.window_end)
+            {
+                return Err(ChainError::Transaction(
+                    "uptime proof does not extend the recorded online window".into(),
+                ));
+            }
+            let weights = crate::reputation::ReputationWeights::default();
+            let now = crate::reputation::current_timestamp();
+            account.reputation.recompute_score(&weights, now);
+            account.reputation.update_decay_reference(now);
+            (account.reputation.timetokes.hours_online, account.clone())
+        };
+        self.index_account_modules(&updated_account);
+        let module_after = self.module_records(&proof.wallet_address);
         {
-            return Err(ChainError::Transaction(
-                "uptime proof does not extend the recorded online window".into(),
-            ));
+            let mut book = self.module_witnesses.write();
+            if let Some(timetoke_after) = module_after.timetoke.clone() {
+                book.record_timetoke(TimetokeWitness::new(
+                    proof.wallet_address.clone(),
+                    module_before.timetoke.clone(),
+                    timetoke_after,
+                    proof.window_start,
+                    proof.window_end,
+                    credited_hours,
+                ));
+            }
+            if let Some(reputation_after) = module_after.reputation.clone() {
+                book.record_reputation(ReputationWitness::new(
+                    proof.wallet_address.clone(),
+                    ReputationEventKind::TimetokeAccrual,
+                    module_before.reputation,
+                    reputation_after,
+                ));
+            }
         }
-        let weights = crate::reputation::ReputationWeights::default();
-        let now = crate::reputation::current_timestamp();
-        account.reputation.recompute_score(&weights, now);
-        account.reputation.update_decay_reference(now);
-        Ok(account.reputation.timetokes.hours_online)
+        Ok(credited_hours)
     }
 
     pub fn apply_transaction(&self, tx: &SignedTransaction) -> ChainResult<u64> {
         tx.verify()?;
-        let binding_change;
-        {
-            let mut accounts = self.accounts.write();
-            let sender = accounts
-                .get_mut(&tx.payload.from)
-                .ok_or_else(|| ChainError::Transaction("sender account not found".into()))?;
-            binding_change = sender.ensure_wallet_binding(&tx.public_key)?;
-            if sender.nonce + 1 != tx.payload.nonce {
-                return Err(ChainError::Transaction("invalid nonce".into()));
-            }
-            let total = tx
-                .payload
-                .amount
-                .checked_add(tx.payload.fee as u128)
-                .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
-            if sender.balance < total {
-                return Err(ChainError::Transaction("insufficient balance".into()));
-            }
-            sender.balance -= total;
-            sender.nonce += 1;
+        let module_sender_before = self.module_records(&tx.payload.from);
+        let module_recipient_before = self.module_records(&tx.payload.to);
+        let weights = crate::reputation::ReputationWeights::default();
+        let now = crate::reputation::current_timestamp();
+        let (binding_change, sender_before, sender_after, recipient_before, recipient_after) = {
+            let mut accounts = self.global_state.write_accounts();
+            let (binding_change, sender_before, sender_after) = {
+                let sender = accounts
+                    .get_mut(&tx.payload.from)
+                    .ok_or_else(|| ChainError::Transaction("sender account not found".into()))?;
+                let binding_change = sender.ensure_wallet_binding(&tx.public_key)?;
+                if sender.nonce + 1 != tx.payload.nonce {
+                    return Err(ChainError::Transaction("invalid nonce".into()));
+                }
+                let total = tx
+                    .payload
+                    .amount
+                    .checked_add(tx.payload.fee as u128)
+                    .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
+                if sender.balance < total {
+                    return Err(ChainError::Transaction("insufficient balance".into()));
+                }
+                let before = sender.clone();
+                sender.balance -= total;
+                sender.nonce += 1;
+                let after = sender.clone();
+                (binding_change, before, after)
+            };
 
-            let weights = crate::reputation::ReputationWeights::default();
-            let now = crate::reputation::current_timestamp();
-            match accounts.entry(tx.payload.to.clone()) {
+            let (recipient_before, recipient_after) = match accounts.entry(tx.payload.to.clone()) {
                 Entry::Occupied(mut existing) => {
                     let recipient = existing.get_mut();
+                    let before = recipient.clone();
                     recipient.balance = recipient.balance.saturating_add(tx.payload.amount);
                     recipient.reputation.recompute_score(&weights, now);
                     recipient.reputation.update_decay_reference(now);
+                    (Some(before), recipient.clone())
                 }
                 Entry::Vacant(entry) => {
                     let mut account = Account::new(tx.payload.to.clone(), 0, Stake::default());
                     account.balance = tx.payload.amount;
                     account.reputation.recompute_score(&weights, now);
                     account.reputation.update_decay_reference(now);
-                    entry.insert(account);
+                    let inserted = entry.insert(account);
+                    (None, inserted.clone())
                 }
-            }
-        }
+            };
+            (
+                binding_change,
+                sender_before,
+                sender_after,
+                recipient_before,
+                recipient_after,
+            )
+        };
         let WalletBindingChange { previous, current } = binding_change;
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(&tx.payload.from, previous.as_deref(), &current)?;
+        drop(tree);
+        self.index_account_modules(&sender_after);
+        self.index_account_modules(&recipient_after);
+        let sender_modules_after = self.module_records(&tx.payload.from);
+        let recipient_modules_after = self.module_records(&tx.payload.to);
+
+        let sender_before_witness = AccountBalanceWitness::new(
+            sender_before.address.clone(),
+            sender_before.balance,
+            sender_before.nonce,
+        );
+        let sender_after_witness = AccountBalanceWitness::new(
+            sender_after.address.clone(),
+            sender_after.balance,
+            sender_after.nonce,
+        );
+        let recipient_before_witness = recipient_before.as_ref().map(|account| {
+            AccountBalanceWitness::new(account.address.clone(), account.balance, account.nonce)
+        });
+        let recipient_after_witness = AccountBalanceWitness::new(
+            recipient_after.address.clone(),
+            recipient_after.balance,
+            recipient_after.nonce,
+        );
+        let tx_witness = TransactionWitness::new(
+            tx.hash(),
+            tx.payload.fee,
+            sender_before_witness,
+            sender_after_witness,
+            recipient_before_witness,
+            recipient_after_witness,
+            module_sender_before.utxo.clone(),
+            sender_modules_after.utxo.clone(),
+            module_recipient_before.utxo.clone(),
+            recipient_modules_after.utxo.clone(),
+        );
+
+        let sender_reputation_witness = sender_modules_after.reputation.clone().map(|after| {
+            ReputationWitness::new(
+                sender_after.address.clone(),
+                ReputationEventKind::TransferDebit,
+                module_sender_before.reputation,
+                after,
+            )
+        });
+        let recipient_reputation_witness =
+            recipient_modules_after.reputation.clone().map(|after| {
+                ReputationWitness::new(
+                    recipient_after.address.clone(),
+                    ReputationEventKind::TransferCredit,
+                    module_recipient_before.reputation,
+                    after,
+                )
+            });
+
+        {
+            let mut book = self.module_witnesses.write();
+            book.record_transaction(tx_witness);
+            if let Some(witness) = sender_reputation_witness {
+                book.record_reputation(witness);
+            }
+            if let Some(witness) = recipient_reputation_witness {
+                book.record_reputation(witness);
+            }
+        }
+
         Ok(tx.payload.fee)
     }
 
     pub fn reward_proposer(&self, address: &str, reward: u64) -> ChainResult<()> {
-        let mut accounts = self.accounts.write();
-        let account = accounts
-            .entry(address.to_string())
-            .or_insert_with(|| Account::new(address.to_string(), 0, Stake::default()));
-        account.bind_node_identity()?;
-        account.balance = account.balance.saturating_add(reward as u128);
-        account.reputation.record_consensus_success();
-        let weights = crate::reputation::ReputationWeights::default();
-        let now = crate::reputation::current_timestamp();
-        account.reputation.recompute_score(&weights, now);
-        account.reputation.update_decay_reference(now);
+        let module_before = self.module_records(address);
+        let updated_account = {
+            let mut accounts = self.global_state.write_accounts();
+            match accounts.entry(address.to_string()) {
+                Entry::Occupied(mut entry) => {
+                    let account = entry.get_mut();
+                    account.bind_node_identity()?;
+                    account.balance = account.balance.saturating_add(reward as u128);
+                    account.reputation.record_consensus_success();
+                    let weights = crate::reputation::ReputationWeights::default();
+                    let now = crate::reputation::current_timestamp();
+                    account.reputation.recompute_score(&weights, now);
+                    account.reputation.update_decay_reference(now);
+                    account.clone()
+                }
+                Entry::Vacant(entry) => {
+                    let mut account = Account::new(address.to_string(), 0, Stake::default());
+                    account.bind_node_identity()?;
+                    account.balance = account.balance.saturating_add(reward as u128);
+                    account.reputation.record_consensus_success();
+                    let weights = crate::reputation::ReputationWeights::default();
+                    let now = crate::reputation::current_timestamp();
+                    account.reputation.recompute_score(&weights, now);
+                    account.reputation.update_decay_reference(now);
+                    let inserted = entry.insert(account);
+                    inserted.clone()
+                }
+            }
+        };
+        self.index_account_modules(&updated_account);
+        let module_after = self.module_records(address);
+        if let Some(reputation_after) = module_after.reputation.clone() {
+            let mut book = self.module_witnesses.write();
+            book.record_reputation(ReputationWitness::new(
+                updated_account.address.clone(),
+                ReputationEventKind::ConsensusReward,
+                module_before.reputation,
+                reputation_after,
+            ));
+        }
         Ok(())
     }
 
-    pub fn state_root(&self) -> [u8; 32] {
-        let mut accounts = self.accounts.read().values().cloned().collect::<Vec<_>>();
-        accounts.sort_by(|a, b| a.address.cmp(&b.address));
-        let mut leaves = accounts
-            .iter()
-            .map(|account| {
-                let bytes = serde_json::to_vec(account).expect("serialize account");
-                <[u8; 32]>::from(Blake2sHasher::hash(bytes.as_slice()))
+    pub fn global_commitments(&self) -> GlobalStateCommitments {
+        GlobalStateCommitments {
+            global_state_root: self.state_root(),
+            utxo_root: self.utxo_state.commitment(),
+            reputation_root: self.reputation_state.commitment(),
+            timetoke_root: self.timetoke_state.commitment(),
+            zsi_root: self.zsi_registry.commitment(),
+            proof_root: self.proof_registry.commitment(),
+        }
+    }
+
+    pub fn drain_module_witnesses(&self) -> ModuleWitnessBundle {
+        self.module_witnesses.write().drain()
+    }
+
+    pub fn stage_module_witnesses(
+        &self,
+        bundle: &ModuleWitnessBundle,
+    ) -> ChainResult<Vec<ProofArtifact>> {
+        let artifacts = bundle
+            .expected_artifacts()?
+            .into_iter()
+            .map(|(module, commitment, payload)| ProofArtifact {
+                module,
+                commitment,
+                proof: payload,
+                verification_key: None,
             })
             .collect::<Vec<_>>();
-        compute_merkle_root(&mut leaves)
+        for artifact in &artifacts {
+            self.proof_registry.register(artifact.clone());
+        }
+        Ok(artifacts)
+    }
+
+    pub fn record_consensus_witness(&self, height: u64, round: u64, participants: Vec<Address>) {
+        let witness = ConsensusWitness::new(height, round, participants);
+        let mut book = self.module_witnesses.write();
+        book.record_consensus(witness);
+    }
+
+    pub fn state_root(&self) -> [u8; 32] {
+        self.global_state.state_root()
     }
 
     pub fn slashing_events(&self, limit: usize) -> Vec<SlashingEvent> {
@@ -444,7 +673,7 @@ impl Ledger {
     }
 
     pub fn reputation_audit(&self, address: &str) -> ChainResult<Option<ReputationAudit>> {
-        let accounts = self.accounts.read();
+        let accounts = self.global_state.read_accounts();
         Ok(accounts.get(address).map(|account| ReputationAudit {
             address: account.address.clone(),
             balance: account.balance,
@@ -460,6 +689,68 @@ impl Ledger {
             zsi_reputation_proof: account.reputation.zsi.reputation_proof.clone(),
         }))
     }
+
+    fn index_account_modules(&self, account: &Account) {
+        self.reputation_state.upsert_from_account(account);
+        self.timetoke_state.upsert_from_account(account);
+        self.zsi_registry.upsert_from_account(account);
+        self.utxo_state.upsert_from_account(account);
+    }
+}
+
+#[derive(Default, Clone)]
+struct ModuleRecordSnapshots {
+    utxo: Option<UtxoRecord>,
+    reputation: Option<ReputationRecord>,
+    timetoke: Option<TimetokeRecord>,
+    zsi: Option<ZsiRecord>,
+}
+
+impl ModuleRecordSnapshots {
+    fn empty() -> Self {
+        Self::default()
+    }
+}
+
+#[derive(Default)]
+struct ModuleWitnessBook {
+    transactions: Vec<TransactionWitness>,
+    timetoke: Vec<TimetokeWitness>,
+    reputation: Vec<ReputationWitness>,
+    zsi: Vec<ZsiWitness>,
+    consensus: Vec<ConsensusWitness>,
+}
+
+impl ModuleWitnessBook {
+    fn record_transaction(&mut self, witness: TransactionWitness) {
+        self.transactions.push(witness);
+    }
+
+    fn record_timetoke(&mut self, witness: TimetokeWitness) {
+        self.timetoke.push(witness);
+    }
+
+    fn record_reputation(&mut self, witness: ReputationWitness) {
+        self.reputation.push(witness);
+    }
+
+    fn record_zsi(&mut self, witness: ZsiWitness) {
+        self.zsi.push(witness);
+    }
+
+    fn record_consensus(&mut self, witness: ConsensusWitness) {
+        self.consensus.push(witness);
+    }
+
+    fn drain(&mut self) -> ModuleWitnessBundle {
+        ModuleWitnessBundle {
+            transactions: mem::take(&mut self.transactions),
+            timetoke: mem::take(&mut self.timetoke),
+            reputation: mem::take(&mut self.reputation),
+            zsi: mem::take(&mut self.zsi),
+            consensus: mem::take(&mut self.consensus),
+        }
+    }
 }
 
 fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
@@ -470,30 +761,16 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
     Blake2sHasher::hash(&data).into()
 }
 
-pub fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
-    if leaves.is_empty() {
-        return Blake2sHasher::hash(b"rpp-empty").into();
-    }
-    while leaves.len() > 1 {
-        let mut next = Vec::with_capacity((leaves.len() + 1) / 2);
-        for chunk in leaves.chunks(2) {
-            let left = chunk[0];
-            let right = if chunk.len() == 2 { chunk[1] } else { chunk[0] };
-            let mut data = Vec::with_capacity(64);
-            data.extend_from_slice(&left);
-            data.extend_from_slice(&right);
-            next.push(Blake2sHasher::hash(&data).into());
-        }
-        *leaves = next;
-    }
-    leaves[0]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::consensus::evaluate_vrf;
     use crate::crypto::address_from_public_key;
+    use crate::rpp::{
+        AccountBalanceWitness, ConsensusWitness, ModuleWitnessBundle, ProofModule,
+        ReputationEventKind, ReputationRecord, ReputationWitness, TierDescriptor, TimetokeRecord,
+        TimetokeWitness, TransactionWitness, ZsiRecord, ZsiWitness,
+    };
     use crate::stwo::circuit::StarkCircuit;
     use crate::stwo::circuit::identity::{IdentityCircuit, IdentityWitness};
     use crate::stwo::circuit::string_to_field;
@@ -505,6 +782,7 @@ mod tests {
         UptimeProof,
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
+    use std::collections::{HashMap, HashSet};
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
     fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
@@ -817,5 +1095,135 @@ mod tests {
         assert_eq!(total_hours, 3);
         let account = ledger.get_account(&address).unwrap();
         assert_eq!(account.reputation.timetokes.hours_online, 3);
+    }
+
+    fn sample_witness_bundle() -> ModuleWitnessBundle {
+        let mut bundle = ModuleWitnessBundle::default();
+
+        let sender_before = AccountBalanceWitness::new("alice".into(), 1_000, 1);
+        let sender_after = AccountBalanceWitness::new("alice".into(), 900, 2);
+        let recipient_before = AccountBalanceWitness::new("bob".into(), 500, 0);
+        let recipient_after = AccountBalanceWitness::new("bob".into(), 600, 0);
+        let tx_witness = TransactionWitness::new(
+            [0x11; 32],
+            10,
+            sender_before,
+            sender_after,
+            Some(recipient_before),
+            recipient_after,
+            None,
+            None,
+            None,
+            None,
+        );
+        bundle.record_transaction(tx_witness);
+
+        let previous_timetoke = TimetokeRecord {
+            identity: "alice".into(),
+            balance: 10,
+            epoch_accrual: 1,
+            decay_rate: 0.0,
+            last_update: 100,
+        };
+        let updated_timetoke = TimetokeRecord {
+            identity: "alice".into(),
+            balance: 12,
+            epoch_accrual: 3,
+            decay_rate: 0.0,
+            last_update: 200,
+        };
+        bundle.record_timetoke(TimetokeWitness::new(
+            "alice".into(),
+            Some(previous_timetoke),
+            updated_timetoke,
+            0,
+            3_600,
+            2,
+        ));
+
+        let previous_reputation = ReputationRecord {
+            identity: "alice".into(),
+            score: 1.0,
+            tier: TierDescriptor::Candidate,
+            uptime_hours: 1,
+            consensus_success: 1,
+            peer_feedback: 0,
+            zsi_validated: true,
+        };
+        let updated_reputation = ReputationRecord {
+            identity: "alice".into(),
+            score: 2.5,
+            tier: TierDescriptor::Validator,
+            uptime_hours: 3,
+            consensus_success: 2,
+            peer_feedback: 1,
+            zsi_validated: true,
+        };
+        bundle.record_reputation(ReputationWitness::new(
+            "alice".into(),
+            ReputationEventKind::ConsensusReward,
+            Some(previous_reputation),
+            updated_reputation,
+        ));
+
+        let zsi_updated = ZsiRecord {
+            identity: "alice".into(),
+            genesis_id: "genesis".into(),
+            attestation_digest: [0x22; 32],
+            approvals: Vec::new(),
+        };
+        bundle.record_zsi(ZsiWitness::new("alice".into(), None, zsi_updated));
+
+        bundle.record_consensus(ConsensusWitness::new(
+            42,
+            3,
+            vec!["alice".into(), "bob".into()],
+        ));
+
+        bundle
+    }
+
+    #[test]
+    fn staging_module_witnesses_updates_proof_root() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let initial_root = ledger.global_commitments().proof_root;
+
+        let bundle = sample_witness_bundle();
+        let expected = bundle.expected_artifacts().expect("expected artifacts");
+        let staged = ledger
+            .stage_module_witnesses(&bundle)
+            .expect("stage witnesses");
+
+        assert_eq!(staged.len(), expected.len());
+        let mut expected_map = HashMap::new();
+        for (module, digest, payload) in expected {
+            expected_map.insert(module, (digest, payload));
+        }
+        for artifact in &staged {
+            let (digest, payload) = expected_map
+                .get(&artifact.module)
+                .expect("artifact present");
+            assert_eq!(&artifact.commitment, digest);
+            assert_eq!(&artifact.proof, payload);
+        }
+
+        let updated_root = ledger.global_commitments().proof_root;
+        assert_ne!(updated_root, initial_root);
+        assert_ne!(updated_root, [0u8; 32]);
+
+        let modules = staged
+            .iter()
+            .map(|artifact| artifact.module)
+            .collect::<HashSet<_>>();
+        for required in [
+            ProofModule::UtxoWitness,
+            ProofModule::TimetokeWitness,
+            ProofModule::ReputationWitness,
+            ProofModule::ZsiWitness,
+            ProofModule::BlockWitness,
+            ProofModule::ConsensusWitness,
+        ] {
+            assert!(modules.contains(&required));
+        }
     }
 }

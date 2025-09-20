@@ -290,6 +290,12 @@ impl ConsensusRound {
         &self.validators
     }
 
+    pub fn commit_participants(&self) -> Vec<Address> {
+        let mut participants: Vec<Address> = self.precommit_voters.iter().cloned().collect();
+        participants.sort();
+        participants
+    }
+
     pub fn total_power(&self) -> &Natural {
         &self.total_power
     }
@@ -508,6 +514,7 @@ mod tests {
         };
         round.register_precommit(&signed_precommit).unwrap();
         assert!(round.commit_reached());
+        assert_eq!(round.commit_participants(), vec![address.clone()]);
         let certificate = round.certificate();
         assert_eq!(certificate.pre_votes.len(), 1);
         assert_eq!(certificate.pre_commits.len(), 1);

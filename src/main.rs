@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use tokio::signal;
 use tokio::task::JoinError;
@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 use rpp_chain::api;
 use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::{generate_keypair, save_keypair};
+use rpp_chain::migration;
 use rpp_chain::node::Node;
 
 #[derive(Parser)]
@@ -36,6 +37,13 @@ enum Commands {
         #[arg(short, long, default_value = "keys/node.toml")]
         path: PathBuf,
     },
+    /// Upgrade the on-disk storage schema to the latest format
+    Migrate {
+        #[arg(short, long, default_value = "config/node.toml")]
+        config: PathBuf,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -49,6 +57,7 @@ async fn main() -> Result<()> {
         Commands::Start { config } => start_node(config).await?,
         Commands::GenerateConfig { path } => generate_config(path)?,
         Commands::Keygen { path } => keygen(path)?,
+        Commands::Migrate { config, dry_run } => migrate_storage(config, dry_run)?,
     }
 
     Ok(())
@@ -94,6 +103,49 @@ fn keygen(path: PathBuf) -> Result<()> {
     let keypair = generate_keypair();
     save_keypair(&path, &keypair)?;
     info!(?path, "generated node keypair");
+    Ok(())
+}
+
+fn migrate_storage(config_path: PathBuf, dry_run: bool) -> Result<()> {
+    let config = if config_path.exists() {
+        NodeConfig::load(&config_path)?
+    } else {
+        NodeConfig::default()
+    };
+    let db_path = config.data_dir.join("db");
+    if !db_path.exists() {
+        return Err(anyhow!(
+            "storage directory {:?} does not exist; nothing to migrate",
+            db_path
+        ));
+    }
+
+    let report = migration::migrate_storage(&db_path, dry_run)?;
+
+    if report.is_noop() {
+        info!(
+            ?db_path,
+            version = report.from_version,
+            "storage schema already up to date"
+        );
+    } else if dry_run {
+        info!(
+            ?db_path,
+            upgraded = report.upgraded_blocks,
+            from = report.from_version,
+            to = report.to_version,
+            "dry run completed; re-run without --dry-run to persist changes"
+        );
+    } else {
+        info!(
+            ?db_path,
+            upgraded = report.upgraded_blocks,
+            from = report.from_version,
+            to = report.to_version,
+            "storage migration completed"
+        );
+    }
+
     Ok(())
 }
 

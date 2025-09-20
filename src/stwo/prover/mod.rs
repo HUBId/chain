@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::compute_merkle_root;
 use crate::reputation::{ReputationWeights, Tier};
+use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
 use crate::types::{Account, IdentityDeclaration, PruningProof, SignedTransaction, Stake};
 

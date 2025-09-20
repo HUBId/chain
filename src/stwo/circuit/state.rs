@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use crate::ledger::compute_merkle_root;
 use crate::reputation::{ReputationWeights, Tier, current_timestamp};
+use crate::state::merkle::compute_merkle_root;
 use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
 use crate::stwo::params::StarkParameters;
 use crate::types::{Account, IdentityDeclaration, SignedTransaction, Stake};

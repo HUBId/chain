@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::ledger::compute_merkle_root;
+use crate::state::merkle::compute_merkle_root;
 use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
 use crate::stwo::params::StarkParameters;
 
