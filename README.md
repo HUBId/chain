@@ -1,4 +1,4 @@
-# DIVAN Digital Value Network
+# DVN Digital Value Network
 
 A production-focused implementation of an blockchain with fixed size (RPP Recursive Pruning Proof) and reputation system (ZSI Zero-Knowledge Sovereign Identity)
 
