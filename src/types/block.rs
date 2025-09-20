@@ -11,8 +11,9 @@ use crate::consensus::{ConsensusCertificate, VrfProof, verify_vrf};
 use crate::crypto::{signature_from_hex, signature_to_hex, verify_signature};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::compute_merkle_root;
+use crate::stwo::verifier::NodeVerifier;
 
-use super::{Address, SignedTransaction};
+use super::{Address, BlockStarkProofs, SignedTransaction};
 
 const PRUNING_WITNESS_DOMAIN: &[u8] = b"rpp-pruning-proof";
 const RECURSIVE_ANCHOR_SEED: &[u8] = b"rpp-recursive-anchor";
@@ -328,6 +329,7 @@ pub struct Block {
     pub transactions: Vec<SignedTransaction>,
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
+    pub stark: BlockStarkProofs,
     pub signature: String,
     pub consensus: ConsensusCertificate,
     pub hash: String,
@@ -339,6 +341,7 @@ impl Block {
         transactions: Vec<SignedTransaction>,
         pruning_proof: PruningProof,
         recursive_proof: RecursiveProof,
+        stark: BlockStarkProofs,
         signature: Signature,
         consensus: ConsensusCertificate,
     ) -> Self {
@@ -348,6 +351,7 @@ impl Block {
             transactions,
             pruning_proof,
             recursive_proof,
+            stark,
             signature: signature_to_hex(&signature),
             consensus,
             hash: hex::encode(hash),
@@ -389,6 +393,39 @@ impl Block {
         let previous_proof = previous.map(|block| &block.recursive_proof);
         self.recursive_proof
             .verify(&self.header, &self.pruning_proof, previous_proof)?;
+
+        let verifier = NodeVerifier::new();
+        let expected_previous_commitment =
+            previous.map(|block| block.stark.recursive_proof.commitment.as_str());
+        verifier.verify_bundle(
+            &self.stark.transaction_proofs,
+            &self.stark.state_proof,
+            &self.stark.pruning_proof,
+            &self.stark.recursive_proof,
+            expected_previous_commitment,
+        )?;
+
+        if self.transactions.len() != self.stark.transaction_proofs.len() {
+            return Err(ChainError::Crypto(
+                "transaction/proof count mismatch in block".into(),
+            ));
+        }
+
+        for (tx, proof) in self
+            .transactions
+            .iter()
+            .zip(self.stark.transaction_proofs.iter())
+        {
+            match &proof.payload {
+                crate::stwo::proof::ProofPayload::Transaction(witness)
+                    if &witness.signed_tx == tx => {}
+                _ => {
+                    return Err(ChainError::Crypto(
+                        "transaction proof payload does not match transaction".into(),
+                    ));
+                }
+            }
+        }
 
         self.verify_consensus(previous)?;
         Ok(())

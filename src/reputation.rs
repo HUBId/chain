@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70,6 +71,31 @@ impl fmt::Display for Tier {
 impl Default for Tier {
     fn default() -> Self {
         Tier::Tl0
+    }
+}
+
+impl Ord for Tier {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.rank().cmp(&other.rank())
+    }
+}
+
+impl PartialOrd for Tier {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Tier {
+    fn rank(&self) -> u8 {
+        match self {
+            Tier::Tl0 => 0,
+            Tier::Tl1 => 1,
+            Tier::Tl2 => 2,
+            Tier::Tl3 => 3,
+            Tier::Tl4 => 4,
+            Tier::Tl5 => 5,
+        }
     }
 }
 

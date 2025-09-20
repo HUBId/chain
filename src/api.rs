@@ -10,7 +10,7 @@ use tracing::info;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::node::NodeHandle;
-use crate::types::{Account, Block, SignedTransaction};
+use crate::types::{Account, Block, TransactionProofBundle};
 
 #[derive(Clone)]
 struct AppState {
@@ -59,11 +59,11 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
 
 async fn submit_transaction(
     State(state): State<AppState>,
-    Json(tx): Json<SignedTransaction>,
+    Json(bundle): Json<TransactionProofBundle>,
 ) -> Result<Json<SubmitResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
         .node
-        .submit_transaction(tx)
+        .submit_transaction(bundle)
         .map(|hash| Json(SubmitResponse { hash }))
         .map_err(to_http_error)
 }
