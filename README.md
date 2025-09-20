@@ -15,6 +15,7 @@ It integrates:
 - Ed25519 transaction signing and verification with Stwo hashing for all payload commitments.
 - HTTP/JSON API powered by Axum for transaction submission and state inspection.
 - Configurable block cadence, mempool sizing, and genesis allocation via TOML configuration.
+- Iterative rollout controls with feature gates and telemetry sampling for staged deployments.
 
 ## Getting Started
 
@@ -36,6 +37,16 @@ cargo run -- generate-config --path config/node.toml
 
 # Generate a new Ed25519 keypair for the node
 cargo run -- keygen --path keys/node.toml
+```
+
+### Run storage migrations
+
+```bash
+# Preview the changes without writing to disk
+cargo run -- migrate --config config/node.toml --dry-run
+
+# Apply the migrations and write the upgraded schema
+cargo run -- migrate --config config/node.toml
 ```
 
 ### Launch the node
@@ -60,12 +71,25 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 
 - `data_dir`: persistent storage directory (RocksDB is stored in `data_dir/db`).
 - `key_path`: location of the node's Ed25519 keypair file.
+- `snapshot_dir`: directory where reconstructed state snapshots are materialized.
+- `proof_cache_dir`: location for cached recursive/STARK proof blobs.
 - `rpc_listen`: HTTP API address.
 - `block_time_ms`: block production interval in milliseconds.
 - `max_block_transactions` / `mempool_limit`: throughput tuning knobs.
+- `max_proof_size_bytes`: upper bound accepted for proof artifacts during deployment.
+- `rollout.release_channel`: deployment channel (`development`, `testnet`, `canary`, `mainnet`) reflected in node status.
+- `rollout.feature_gates`: toggles for pruning, recursive proofs, reconstruction, and consensus enforcement.
+- `rollout.telemetry`: enable periodic telemetry snapshots and configure the sampling cadence.
 - `genesis.accounts`: initial allocations with balances and stakes.
 
+### Rollout & Telemetry
+
+- `GET /status/rollout` – Inspect the current rollout channel, enabled feature gates, and telemetry runtime state.
+- When telemetry is enabled, the node periodically emits JSON snapshots with node, consensus, and mempool metrics to the log (and tags the configured endpoint for external scrapers).
+
 ## Development Notes
+
+- Run `cargo run -- migrate` when deploying a new binary against an existing data directory to ensure the RocksDB schema is upgraded in-place.
 
 - Run `cargo fmt` to keep formatting consistent.
 - The RocksDB build may take a few minutes the first time. Subsequent builds reuse the compiled artifacts.

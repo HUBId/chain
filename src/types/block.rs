@@ -3,18 +3,23 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::str::FromStr;
 
+use hex;
+
 use ed25519_dalek::{PublicKey, Signature};
 use malachite::Natural;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
-use crate::consensus::{BftVoteKind, ConsensusCertificate, VrfProof, verify_vrf};
+use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, VrfProof, verify_vrf};
 use crate::crypto::{signature_from_hex, signature_to_hex, verify_signature};
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::compute_merkle_root;
+use crate::ledger::ReputationAudit;
+use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
+use crate::state::merkle::compute_merkle_root;
+use crate::stwo::proof::ProofPayload;
 use crate::stwo::verifier::{NodeVerifier, StarkVerifier};
 
-use super::{Address, BlockStarkProofs, IdentityDeclaration, SignedTransaction};
+use super::{Address, BlockStarkProofs, IdentityDeclaration, SignedTransaction, UptimeProof};
 
 const PRUNING_WITNESS_DOMAIN: &[u8] = b"rpp-pruning-proof";
 const RECURSIVE_ANCHOR_SEED: &[u8] = b"rpp-recursive-anchor";
@@ -25,6 +30,11 @@ pub struct BlockHeader {
     pub previous_hash: String,
     pub tx_root: String,
     pub state_root: String,
+    pub utxo_root: String,
+    pub reputation_root: String,
+    pub timetoke_root: String,
+    pub zsi_root: String,
+    pub proof_root: String,
     pub total_stake: String,
     pub randomness: String,
     pub vrf_proof: String,
@@ -38,6 +48,11 @@ impl BlockHeader {
         previous_hash: String,
         tx_root: String,
         state_root: String,
+        utxo_root: String,
+        reputation_root: String,
+        timetoke_root: String,
+        zsi_root: String,
+        proof_root: String,
         total_stake: String,
         randomness: String,
         vrf_proof: String,
@@ -48,6 +63,11 @@ impl BlockHeader {
             previous_hash,
             tx_root,
             state_root,
+            utxo_root,
+            reputation_root,
+            timetoke_root,
+            zsi_root,
+            proof_root,
             total_stake,
             randomness,
             vrf_proof,
@@ -66,6 +86,39 @@ impl BlockHeader {
     pub fn hash(&self) -> [u8; 32] {
         let bytes = self.canonical_bytes();
         Blake2sHasher::hash(bytes.as_slice()).into()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TimetokeUpdate {
+    pub identity: Address,
+    pub window_start: u64,
+    pub window_end: u64,
+    pub credited_hours: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReputationUpdate {
+    pub identity: Address,
+    pub new_score: f64,
+    pub new_tier: String,
+    pub uptime_hours: u64,
+    pub consensus_success: u64,
+    pub peer_feedback: i64,
+    pub zsi_validated: bool,
+}
+
+impl From<ReputationAudit> for ReputationUpdate {
+    fn from(audit: ReputationAudit) -> Self {
+        Self {
+            identity: audit.address,
+            new_score: audit.score,
+            new_tier: audit.tier.to_string(),
+            uptime_hours: audit.uptime_hours,
+            consensus_success: audit.consensus_success,
+            peer_feedback: audit.peer_feedback,
+            zsi_validated: audit.zsi_validated,
+        }
     }
 }
 
@@ -329,12 +382,26 @@ pub struct Block {
     pub header: BlockHeader,
     pub identities: Vec<IdentityDeclaration>,
     pub transactions: Vec<SignedTransaction>,
+    pub uptime_proofs: Vec<UptimeProof>,
+    pub timetoke_updates: Vec<TimetokeUpdate>,
+    pub reputation_updates: Vec<ReputationUpdate>,
+    pub bft_votes: Vec<SignedBftVote>,
+    pub module_witnesses: ModuleWitnessBundle,
+    pub proof_artifacts: Vec<ProofArtifact>,
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
     pub stark: BlockStarkProofs,
     pub signature: String,
     pub consensus: ConsensusCertificate,
     pub hash: String,
+    #[serde(default)]
+    pub pruned: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerifyMode {
+    Full,
+    WithoutStark,
 }
 
 impl Block {
@@ -342,6 +409,12 @@ impl Block {
         header: BlockHeader,
         identities: Vec<IdentityDeclaration>,
         transactions: Vec<SignedTransaction>,
+        uptime_proofs: Vec<UptimeProof>,
+        timetoke_updates: Vec<TimetokeUpdate>,
+        reputation_updates: Vec<ReputationUpdate>,
+        bft_votes: Vec<SignedBftVote>,
+        module_witnesses: ModuleWitnessBundle,
+        proof_artifacts: Vec<ProofArtifact>,
         pruning_proof: PruningProof,
         recursive_proof: RecursiveProof,
         stark: BlockStarkProofs,
@@ -353,12 +426,19 @@ impl Block {
             header,
             identities,
             transactions,
+            uptime_proofs,
+            timetoke_updates,
+            reputation_updates,
+            bft_votes,
+            module_witnesses,
+            proof_artifacts,
             pruning_proof,
             recursive_proof,
             stark,
             signature: signature_to_hex(&signature),
             consensus,
             hash: hex::encode(hash),
+            pruned: false,
         }
     }
 
@@ -372,27 +452,21 @@ impl Block {
     }
 
     pub fn verify(&self, previous: Option<&Block>) -> ChainResult<()> {
-        for identity in &self.identities {
-            identity.verify()?;
-        }
-        let verifier = NodeVerifier::new();
-        for identity in &self.identities {
-            verifier.verify_identity(&identity.proof.zk_proof)?;
+        self.verify_internal(previous, VerifyMode::Full)
+    }
+
+    pub fn verify_without_stark(&self, previous: Option<&Block>) -> ChainResult<()> {
+        self.verify_internal(previous, VerifyMode::WithoutStark)
+    }
+
+    fn verify_internal(&self, previous: Option<&Block>, mode: VerifyMode) -> ChainResult<()> {
+        if self.pruned {
+            self.verify_pruned_payload()?;
+        } else {
+            self.verify_full_payload(mode == VerifyMode::Full)?;
         }
 
-        let mut operation_hashes =
-            Vec::with_capacity(self.identities.len() + self.transactions.len());
-        for declaration in &self.identities {
-            operation_hashes.push(declaration.hash()?);
-        }
-        for tx in &self.transactions {
-            tx.verify()?;
-            operation_hashes.push(tx.hash());
-        }
-        let computed_root = compute_merkle_root(&mut operation_hashes);
-        if hex::encode(computed_root) != self.header.tx_root {
-            return Err(ChainError::Crypto("transaction root mismatch".into()));
-        }
+        self.verify_header_commitments()?;
 
         if let Some(prev_block) = previous {
             if self.header.height != prev_block.header.height + 1 {
@@ -410,39 +484,150 @@ impl Block {
         self.recursive_proof
             .verify(&self.header, &self.pruning_proof, previous_proof)?;
 
-        let expected_previous_commitment =
-            previous.map(|block| block.stark.recursive_proof.commitment.as_str());
-        verifier.verify_bundle(
-            &self.stark.transaction_proofs,
-            &self.stark.state_proof,
-            &self.stark.pruning_proof,
-            &self.stark.recursive_proof,
-            expected_previous_commitment,
-        )?;
+        if mode == VerifyMode::Full {
+            let verifier = NodeVerifier::new();
+            let expected_previous_commitment =
+                previous.map(|block| block.stark.recursive_proof.commitment.as_str());
+            verifier.verify_bundle(
+                &self.stark.transaction_proofs,
+                &self.stark.state_proof,
+                &self.stark.pruning_proof,
+                &self.stark.recursive_proof,
+                expected_previous_commitment,
+            )?;
+        }
 
-        if self.transactions.len() != self.stark.transaction_proofs.len() {
+        self.verify_transaction_proofs()?;
+
+        for (module, commitment, payload) in self.module_witnesses.expected_artifacts()? {
+            let artifact = self
+                .proof_artifacts
+                .iter()
+                .find(|artifact| artifact.module == module && artifact.commitment == commitment)
+                .ok_or_else(|| {
+                    ChainError::Crypto(format!("missing module witness artifact for {:?}", module))
+                })?;
+            if artifact.proof != payload {
+                return Err(ChainError::Crypto(format!(
+                    "module witness payload mismatch for {:?}",
+                    module
+                )));
+            }
+        }
+
+        match mode {
+            VerifyMode::Full => self.verify_consensus(previous)?,
+            VerifyMode::WithoutStark => self.verify_consensus_light()?,
+        }
+
+        Ok(())
+    }
+
+    fn verify_header_commitments(&self) -> ChainResult<()> {
+        ensure_digest("state root", &self.header.state_root)?;
+        ensure_digest("utxo root", &self.header.utxo_root)?;
+        ensure_digest("reputation root", &self.header.reputation_root)?;
+        ensure_digest("timetoke root", &self.header.timetoke_root)?;
+        ensure_digest("zsi root", &self.header.zsi_root)?;
+        ensure_digest("proof root", &self.header.proof_root)?;
+        Ok(())
+    }
+
+    fn verify_full_payload(&self, verify_stark: bool) -> ChainResult<()> {
+        for identity in &self.identities {
+            identity.verify()?;
+        }
+        if verify_stark {
+            let verifier = NodeVerifier::new();
+            for identity in &self.identities {
+                verifier.verify_identity(&identity.proof.zk_proof)?;
+            }
+        }
+
+        for proof in &self.uptime_proofs {
+            if !proof.verify_commitment() {
+                return Err(ChainError::Crypto(
+                    "uptime proof commitment mismatch".into(),
+                ));
+            }
+        }
+
+        for vote in &self.bft_votes {
+            vote.verify()?;
+        }
+
+        let mut operation_hashes =
+            Vec::with_capacity(self.identities.len() + self.transactions.len());
+        for declaration in &self.identities {
+            operation_hashes.push(declaration.hash()?);
+        }
+        for tx in &self.transactions {
+            tx.verify()?;
+            operation_hashes.push(tx.hash());
+        }
+        let computed_root = compute_merkle_root(&mut operation_hashes);
+        if hex::encode(computed_root) != self.header.tx_root {
+            return Err(ChainError::Crypto("transaction root mismatch".into()));
+        }
+        Ok(())
+    }
+
+    fn verify_pruned_payload(&self) -> ChainResult<()> {
+        if !(self.identities.is_empty()
+            && self.transactions.is_empty()
+            && self.uptime_proofs.is_empty()
+            && self.timetoke_updates.is_empty()
+            && self.reputation_updates.is_empty()
+            && self.bft_votes.is_empty())
+        {
+            return Err(ChainError::Crypto(
+                "pruned block retains payload data".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_transaction_proofs(&self) -> ChainResult<()> {
+        let expected_count = if self.pruned {
+            self.module_witnesses.transactions.len()
+        } else {
+            self.transactions.len()
+        };
+        if expected_count != self.stark.transaction_proofs.len() {
             return Err(ChainError::Crypto(
                 "transaction/proof count mismatch in block".into(),
             ));
         }
 
-        for (tx, proof) in self
-            .transactions
-            .iter()
-            .zip(self.stark.transaction_proofs.iter())
-        {
-            match &proof.payload {
-                crate::stwo::proof::ProofPayload::Transaction(witness)
-                    if &witness.signed_tx == tx => {}
-                _ => {
-                    return Err(ChainError::Crypto(
-                        "transaction proof payload does not match transaction".into(),
-                    ));
+        if self.pruned {
+            for proof in &self.stark.transaction_proofs {
+                match &proof.payload {
+                    ProofPayload::Transaction(witness) => {
+                        witness.signed_tx.verify()?;
+                    }
+                    _ => {
+                        return Err(ChainError::Crypto(
+                            "transaction proof payload does not match transaction".into(),
+                        ));
+                    }
+                }
+            }
+        } else {
+            for (tx, proof) in self
+                .transactions
+                .iter()
+                .zip(self.stark.transaction_proofs.iter())
+            {
+                match &proof.payload {
+                    ProofPayload::Transaction(witness) if &witness.signed_tx == tx => {}
+                    _ => {
+                        return Err(ChainError::Crypto(
+                            "transaction proof payload does not match transaction".into(),
+                        ));
+                    }
                 }
             }
         }
-
-        self.verify_consensus(previous)?;
         Ok(())
     }
 
@@ -587,12 +772,486 @@ impl Block {
         if total < quorum {
             return Err(ChainError::Crypto("invalid quorum configuration".into()));
         }
+
+        let mut commit_participants: Vec<_> = precommit_voters.into_iter().collect();
+        commit_participants.sort();
+        let mut witnesses = self.module_witnesses.consensus.iter().filter(|witness| {
+            witness.height == self.header.height && witness.round == self.consensus.round
+        });
+        let witness = witnesses.next().ok_or_else(|| {
+            ChainError::Crypto("missing consensus witness for committed round".into())
+        })?;
+        if witnesses.next().is_some() {
+            return Err(ChainError::Crypto(
+                "multiple consensus witnesses recorded for committed round".into(),
+            ));
+        }
+        let mut recorded_participants = witness.participants.clone();
+        recorded_participants.sort();
+        if recorded_participants != commit_participants {
+            return Err(ChainError::Crypto(
+                "consensus witness participants do not match commit set".into(),
+            ));
+        }
         Ok(())
+    }
+
+    fn verify_consensus_light(&self) -> ChainResult<()> {
+        if self.consensus.round != self.header.height {
+            return Err(ChainError::Crypto(
+                "consensus certificate references incorrect round".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BlockPayload {
+    pub identities: Vec<IdentityDeclaration>,
+    pub transactions: Vec<SignedTransaction>,
+    pub uptime_proofs: Vec<UptimeProof>,
+    pub timetoke_updates: Vec<TimetokeUpdate>,
+    pub reputation_updates: Vec<ReputationUpdate>,
+    pub bft_votes: Vec<SignedBftVote>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct BlockEnvelope {
+    pub header: BlockHeader,
+    pub module_witnesses: ModuleWitnessBundle,
+    pub proof_artifacts: Vec<ProofArtifact>,
+    pub pruning_proof: PruningProof,
+    pub recursive_proof: RecursiveProof,
+    pub stark: BlockStarkProofs,
+    pub signature: String,
+    pub consensus: ConsensusCertificate,
+    pub hash: String,
+    #[serde(default)]
+    pub pruned: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct StoredBlock {
+    pub envelope: BlockEnvelope,
+    pub payload: Option<BlockPayload>,
+}
+
+impl BlockPayload {
+    pub fn from_block(block: &Block) -> Self {
+        Self {
+            identities: block.identities.clone(),
+            transactions: block.transactions.clone(),
+            uptime_proofs: block.uptime_proofs.clone(),
+            timetoke_updates: block.timetoke_updates.clone(),
+            reputation_updates: block.reputation_updates.clone(),
+            bft_votes: block.bft_votes.clone(),
+        }
+    }
+}
+
+impl BlockEnvelope {
+    pub fn from_block(block: &Block) -> Self {
+        Self {
+            header: block.header.clone(),
+            module_witnesses: block.module_witnesses.clone(),
+            proof_artifacts: block.proof_artifacts.clone(),
+            pruning_proof: block.pruning_proof.clone(),
+            recursive_proof: block.recursive_proof.clone(),
+            stark: block.stark.clone(),
+            signature: block.signature.clone(),
+            consensus: block.consensus.clone(),
+            hash: block.hash.clone(),
+            pruned: block.pruned,
+        }
+    }
+}
+
+impl StoredBlock {
+    pub fn from_block(block: &Block) -> Self {
+        Self {
+            envelope: BlockEnvelope::from_block(block),
+            payload: Some(BlockPayload::from_block(block)),
+        }
+    }
+
+    pub fn into_block(self) -> Block {
+        let StoredBlock { envelope, payload } = self;
+        let was_pruned = payload.is_none();
+        let payload = payload.unwrap_or_default();
+        let BlockPayload {
+            identities,
+            transactions,
+            uptime_proofs,
+            timetoke_updates,
+            reputation_updates,
+            bft_votes,
+        } = payload;
+        Block {
+            header: envelope.header,
+            identities,
+            transactions,
+            uptime_proofs,
+            timetoke_updates,
+            reputation_updates,
+            bft_votes,
+            module_witnesses: envelope.module_witnesses,
+            proof_artifacts: envelope.proof_artifacts,
+            pruning_proof: envelope.pruning_proof,
+            recursive_proof: envelope.recursive_proof,
+            stark: envelope.stark,
+            signature: envelope.signature,
+            consensus: envelope.consensus,
+            hash: envelope.hash,
+            pruned: envelope.pruned || was_pruned,
+        }
+    }
+
+    pub fn into_block_with_payload(mut self, payload: BlockPayload) -> Block {
+        self.payload = Some(payload);
+        self.envelope.pruned = false;
+        self.into_block()
+    }
+
+    pub fn prune_payload(&mut self) {
+        self.payload = None;
+        self.envelope.pruned = true;
+    }
+
+    pub fn is_pruned(&self) -> bool {
+        self.payload.is_none() || self.envelope.pruned
+    }
+
+    pub fn height(&self) -> u64 {
+        self.envelope.header.height
+    }
+
+    pub fn hash(&self) -> &str {
+        &self.envelope.hash
+    }
+
+    pub fn pruning_commitment(&self) -> &str {
+        &self.envelope.pruning_proof.witness_commitment
+    }
+
+    pub fn aggregated_commitment(&self) -> ChainResult<String> {
+        match &self.envelope.stark.recursive_proof.payload {
+            ProofPayload::Recursive(witness) => Ok(witness.aggregated_commitment.clone()),
+            _ => Err(ChainError::Config(
+                "stored recursive proof missing recursive witness payload".into(),
+            )),
+        }
+    }
+
+    pub fn previous_recursive_commitment(&self) -> ChainResult<Option<String>> {
+        match &self.envelope.stark.recursive_proof.payload {
+            ProofPayload::Recursive(witness) => Ok(witness.previous_commitment.clone()),
+            _ => Err(ChainError::Config(
+                "stored recursive proof missing recursive witness payload".into(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consensus::{
+        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
+    };
+    use crate::crypto::address_from_public_key;
+    use crate::reputation::{ReputationWeights, Tier};
+    use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
+    use crate::stwo::circuit::ExecutionTrace;
+    use crate::stwo::circuit::{
+        pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness,
+    };
+    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use ed25519_dalek::{Keypair, Signature, Signer};
+    use rand::rngs::OsRng;
+
+    fn dummy_proof(kind: ProofKind) -> StarkProof {
+        let payload = match kind {
+            ProofKind::State => ProofPayload::State(StateWitness {
+                prev_state_root: "11".repeat(32),
+                new_state_root: "22".repeat(32),
+                identities: Vec::new(),
+                transactions: Vec::new(),
+                accounts_before: Vec::new(),
+                accounts_after: Vec::new(),
+                required_tier: Tier::Tl0,
+                reputation_weights: ReputationWeights::default(),
+            }),
+            ProofKind::Pruning => ProofPayload::Pruning(PruningWitness {
+                previous_tx_root: "33".repeat(32),
+                pruned_tx_root: "44".repeat(32),
+                original_transactions: vec!["55".repeat(32)],
+                removed_transactions: vec!["55".repeat(32)],
+            }),
+            ProofKind::Recursive => ProofPayload::Recursive(RecursiveWitness {
+                previous_commitment: Some("66".repeat(32)),
+                aggregated_commitment: "77".repeat(32),
+                identity_commitments: vec!["88".repeat(32)],
+                tx_commitments: vec!["99".repeat(32)],
+                state_commitment: "aa".repeat(32),
+                pruning_commitment: "bb".repeat(32),
+                block_height: 0,
+            }),
+            ProofKind::Transaction | ProofKind::Identity => {
+                // These variants are not used in the conversion tests.
+                ProofPayload::Pruning(PruningWitness {
+                    previous_tx_root: "cc".repeat(32),
+                    pruned_tx_root: "dd".repeat(32),
+                    original_transactions: Vec::new(),
+                    removed_transactions: Vec::new(),
+                })
+            }
+        };
+        StarkProof {
+            kind,
+            commitment: "ee".repeat(32),
+            public_inputs: Vec::new(),
+            payload,
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            fri_proof: FriProof {
+                commitments: Vec::new(),
+                challenges: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn consensus_witness_must_reflect_commit_participants() {
+        let mut rng = OsRng;
+        let keypair = Keypair::generate(&mut rng);
+        let address = address_from_public_key(&keypair.public);
+
+        let state_root = "aa".repeat(32);
+        let prev_header = BlockHeader::new(
+            0,
+            hex::encode([0u8; 32]),
+            "bb".repeat(32),
+            state_root.clone(),
+            "cc".repeat(32),
+            "dd".repeat(32),
+            "ee".repeat(32),
+            "ff".repeat(32),
+            "11".repeat(32),
+            "0".to_string(),
+            "0".to_string(),
+            "12".repeat(32),
+            "13".repeat(32),
+        );
+        let prev_pruning = PruningProof::genesis(&state_root);
+        let prev_recursive = RecursiveProof::genesis(&prev_header, &prev_pruning);
+        let prev_stark = BlockStarkProofs::new(
+            Vec::new(),
+            dummy_proof(ProofKind::State),
+            dummy_proof(ProofKind::Pruning),
+            dummy_proof(ProofKind::Recursive),
+        );
+        let prev_block = Block::new(
+            prev_header,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ModuleWitnessBundle::default(),
+            Vec::new(),
+            prev_pruning,
+            prev_recursive,
+            prev_stark,
+            Signature::from_bytes(&[0u8; 64]).expect("signature"),
+            ConsensusCertificate::genesis(),
+        );
+
+        let vrf = evaluate_vrf(&prev_block.block_hash(), 1, &address);
+        let header = BlockHeader::new(
+            1,
+            prev_block.hash.clone(),
+            "21".repeat(32),
+            state_root,
+            "22".repeat(32),
+            "23".repeat(32),
+            "24".repeat(32),
+            "25".repeat(32),
+            "26".repeat(32),
+            "1000".to_string(),
+            vrf.randomness.to_string(),
+            vrf.proof.clone(),
+            address.clone(),
+        );
+        let block_hash_hex = hex::encode(header.hash());
+        let prevote = BftVote {
+            round: 1,
+            height: 1,
+            block_hash: block_hash_hex.clone(),
+            voter: address.clone(),
+            kind: BftVoteKind::PreVote,
+        };
+        let prevote_sig = keypair.sign(&prevote.message_bytes());
+        let signed_prevote = SignedBftVote {
+            vote: prevote.clone(),
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(prevote_sig.to_bytes()),
+        };
+        let precommit_vote = BftVote {
+            kind: BftVoteKind::PreCommit,
+            ..prevote
+        };
+        let precommit_sig = keypair.sign(&precommit_vote.message_bytes());
+        let signed_precommit = SignedBftVote {
+            vote: precommit_vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(precommit_sig.to_bytes()),
+        };
+        let certificate = ConsensusCertificate {
+            round: 1,
+            total_power: "1000".to_string(),
+            quorum_threshold: "1000".to_string(),
+            pre_vote_power: "1000".to_string(),
+            pre_commit_power: "1000".to_string(),
+            commit_power: "1000".to_string(),
+            observers: 0,
+            pre_votes: vec![VoteRecord {
+                vote: signed_prevote,
+                weight: "1000".to_string(),
+            }],
+            pre_commits: vec![VoteRecord {
+                vote: signed_precommit,
+                weight: "1000".to_string(),
+            }],
+        };
+
+        let pruning_proof = PruningProof::from_previous(Some(&prev_block), &header);
+        let recursive_proof =
+            RecursiveProof::extend(&prev_block.recursive_proof, &header, &pruning_proof);
+        let stark_bundle = BlockStarkProofs::new(
+            Vec::new(),
+            dummy_proof(ProofKind::State),
+            dummy_proof(ProofKind::Pruning),
+            dummy_proof(ProofKind::Recursive),
+        );
+        let mut witnesses = ModuleWitnessBundle::default();
+        witnesses.record_consensus(ConsensusWitness::new(1, 1, vec![address.clone()]));
+        let block = Block::new(
+            header.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            witnesses.clone(),
+            Vec::new(),
+            pruning_proof.clone(),
+            recursive_proof.clone(),
+            stark_bundle.clone(),
+            Signature::from_bytes(&[0u8; 64]).expect("signature"),
+            certificate.clone(),
+        );
+        block.verify_consensus(Some(&prev_block)).unwrap();
+
+        let mut missing_witness_block = block.clone();
+        missing_witness_block.module_witnesses = ModuleWitnessBundle::default();
+        assert!(
+            missing_witness_block
+                .verify_consensus(Some(&prev_block))
+                .is_err()
+        );
+
+        let mut mismatched_witness_block = block.clone();
+        let mut mismatched_bundle = ModuleWitnessBundle::default();
+        mismatched_bundle.record_consensus(ConsensusWitness::new(1, 1, vec!["cafebabe".repeat(4)]));
+        mismatched_witness_block.module_witnesses = mismatched_bundle;
+        assert!(
+            mismatched_witness_block
+                .verify_consensus(Some(&prev_block))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn stored_block_roundtrip_preserves_pruning_state() {
+        let state_root = "11".repeat(32);
+        let header = BlockHeader::new(
+            0,
+            hex::encode([0u8; 32]),
+            "22".repeat(32),
+            state_root.clone(),
+            "33".repeat(32),
+            "44".repeat(32),
+            "55".repeat(32),
+            "66".repeat(32),
+            "77".repeat(32),
+            "0".to_string(),
+            "0".to_string(),
+            "88".repeat(32),
+            "99".repeat(32),
+        );
+        let pruning_proof = PruningProof::genesis(&state_root);
+        let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
+        let stark_bundle = BlockStarkProofs::new(
+            Vec::new(),
+            dummy_proof(ProofKind::State),
+            dummy_proof(ProofKind::Pruning),
+            dummy_proof(ProofKind::Recursive),
+        );
+        let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
+        let consensus = ConsensusCertificate::genesis();
+
+        let block = Block::new(
+            header,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ModuleWitnessBundle::default(),
+            Vec::new(),
+            pruning_proof,
+            recursive_proof,
+            stark_bundle,
+            signature,
+            consensus,
+        );
+
+        let stored = StoredBlock::from_block(&block);
+        let hydrated = stored.clone().into_block();
+        assert!(!hydrated.pruned);
+        assert_eq!(hydrated.header.height, block.header.height);
+        assert_eq!(hydrated.hash, block.hash);
+
+        let mut pruned = stored;
+        pruned.prune_payload();
+        let pruned_block = pruned.into_block();
+        assert!(pruned_block.pruned);
+        assert!(pruned_block.transactions.is_empty());
+        assert_eq!(
+            pruned_block.module_witnesses.transactions.len(),
+            block.module_witnesses.transactions.len()
+        );
     }
 }
 
 fn parse_natural(value: &str) -> ChainResult<Natural> {
     Natural::from_str(value).map_err(|_| ChainError::Crypto("invalid natural encoding".into()))
+}
+
+fn ensure_digest(label: &str, value: &str) -> ChainResult<()> {
+    let bytes = hex::decode(value)
+        .map_err(|err| ChainError::Crypto(format!("{label} is not valid hex encoding: {err}")))?;
+    if bytes.len() != 32 {
+        return Err(ChainError::Crypto(format!(
+            "{label} must encode exactly 32 bytes"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

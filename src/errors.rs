@@ -10,6 +10,10 @@ pub enum ChainError {
     Serialization(#[from] bincode::Error),
     #[error("configuration error: {0}")]
     Config(String),
+    #[error(
+        "storage schema is outdated (found version {found}, requires {required}); run `cargo run -- migrate` to upgrade"
+    )]
+    MigrationRequired { found: u32, required: u32 },
     #[error("cryptography error: {0}")]
     Crypto(String),
     #[error("transaction rejected: {0}")]

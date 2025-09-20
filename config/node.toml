@@ -2,10 +2,28 @@
 
 data_dir = "./data"
 key_path = "./keys/node.toml"
+snapshot_dir = "./data/snapshots"
+proof_cache_dir = "./data/proofs"
 rpc_listen = "127.0.0.1:7070"
 block_time_ms = 5000
 max_block_transactions = 512
+max_block_identity_registrations = 32
 mempool_limit = 8192
+epoch_length = 1440
+max_proof_size_bytes = 4194304
+
+[rollout]
+release_channel = "development"
+
+[rollout.feature_gates]
+pruning = true
+recursive_proofs = true
+reconstruction = true
+consensus_enforcement = true
+
+[rollout.telemetry]
+enabled = false
+sample_interval_secs = 30
 
 [genesis]
 chain_id = "rpp-local"

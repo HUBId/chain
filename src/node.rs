@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,8 +11,9 @@ use tracing::{info, warn};
 
 use hex;
 use serde::Serialize;
+use serde_json;
 
-use crate::config::{GenesisAccount, NodeConfig};
+use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
 use crate::consensus::{
     BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, SignedBftVote,
     aggregate_total_stake, classify_participants, evaluate_vrf,
@@ -21,17 +22,20 @@ use crate::crypto::{
     address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::{
-    EpochInfo, Ledger, ReputationAudit, SlashingEvent, SlashingReason, compute_merkle_root,
-};
+use crate::ledger::{EpochInfo, Ledger, ReputationAudit, SlashingEvent, SlashingReason};
+use crate::rpp::{ProofArtifact, ProofModule};
+use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
 use crate::stwo::proof::{ProofPayload, StarkProof};
 use crate::stwo::prover::{StarkProver, WalletProver};
 use crate::stwo::verifier::{NodeVerifier, StarkVerifier};
+use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
     Account, Address, Block, BlockHeader, BlockMetadata, BlockStarkProofs, IdentityDeclaration,
-    PruningProof, RecursiveProof, SignedTransaction, Stake, TransactionProofBundle, UptimeProof,
+    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
+    TransactionProofBundle, UptimeProof,
 };
+use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 
@@ -51,6 +55,7 @@ pub struct NodeStatus {
     pub pending_transactions: usize,
     pub pending_identities: usize,
     pub pending_votes: usize,
+    pub pending_uptime_proofs: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -88,6 +93,15 @@ pub struct MempoolStatus {
     pub transactions: Vec<PendingTransactionSummary>,
     pub identities: Vec<PendingIdentitySummary>,
     pub votes: Vec<PendingVoteSummary>,
+    pub uptime_proofs: Vec<PendingUptimeSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PendingUptimeSummary {
+    pub identity: Address,
+    pub window_start: u64,
+    pub window_end: u64,
+    pub credited_hours: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -116,6 +130,30 @@ pub struct VrfStatus {
     pub proof: crate::consensus::VrfProof,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct TelemetryRuntimeStatus {
+    pub enabled: bool,
+    pub endpoint: Option<String>,
+    pub sample_interval_secs: u64,
+    pub last_observed_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RolloutStatus {
+    pub release_channel: ReleaseChannel,
+    pub feature_gates: FeatureGates,
+    pub telemetry: TelemetryRuntimeStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct TelemetrySnapshot {
+    release_channel: ReleaseChannel,
+    feature_gates: FeatureGates,
+    node: NodeStatus,
+    consensus: ConsensusStatus,
+    mempool: MempoolStatus,
+}
+
 pub struct Node {
     inner: Arc<NodeInner>,
 }
@@ -128,14 +166,22 @@ struct NodeInner {
     ledger: Ledger,
     mempool: RwLock<VecDeque<TransactionProofBundle>>,
     identity_mempool: RwLock<VecDeque<IdentityDeclaration>>,
+    uptime_mempool: RwLock<VecDeque<RecordedUptimeProof>>,
     chain_tip: RwLock<ChainTip>,
     block_interval: Duration,
     vote_mempool: RwLock<VecDeque<SignedBftVote>>,
+    telemetry_last_height: RwLock<Option<u64>>,
 }
 
 #[derive(Clone)]
 pub struct NodeHandle {
     inner: Arc<NodeInner>,
+}
+
+#[derive(Clone)]
+struct RecordedUptimeProof {
+    proof: UptimeProof,
+    credited_hours: u64,
 }
 
 impl Node {
@@ -162,10 +208,12 @@ impl Node {
                 storage.persist_account(account)?;
             }
             let ledger = Ledger::load(accounts.clone(), config.epoch_length);
+            let module_witnesses = ledger.drain_module_witnesses();
+            let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
             let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
             let tx_root = compute_merkle_root(&mut tx_hashes);
-            let state_root = ledger.state_root();
-            let state_root_hex = hex::encode(state_root);
+            let commitments = ledger.global_commitments();
+            let state_root_hex = hex::encode(commitments.global_state_root);
             let stakes = ledger.stake_snapshot();
             let total_stake = aggregate_total_stake(&stakes);
             let genesis_seed = [0u8; 32];
@@ -175,6 +223,11 @@ impl Node {
                 hex::encode([0u8; 32]),
                 hex::encode(tx_root),
                 state_root_hex.clone(),
+                hex::encode(commitments.utxo_root),
+                hex::encode(commitments.reputation_root),
+                hex::encode(commitments.timetoke_root),
+                hex::encode(commitments.zsi_root),
+                hex::encode(commitments.proof_root),
                 total_stake.to_string(),
                 vrf.randomness.to_string(),
                 vrf.proof.clone(),
@@ -215,12 +268,21 @@ impl Node {
                 pruning_stark,
                 recursive_stark,
             );
+            let mut proof_artifacts =
+                NodeInner::collect_proof_artifacts(&stark_bundle, config.max_proof_size_bytes)?;
+            proof_artifacts.extend(module_artifacts);
             let signature = sign_message(&keypair, &header.canonical_bytes());
             let consensus_certificate = ConsensusCertificate::genesis();
             let genesis_block = Block::new(
                 header,
                 Vec::new(),
                 Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                module_witnesses,
+                proof_artifacts,
                 pruning_proof,
                 recursive_proof,
                 stark_bundle,
@@ -261,11 +323,13 @@ impl Node {
             ledger,
             mempool: RwLock::new(VecDeque::new()),
             identity_mempool: RwLock::new(VecDeque::new()),
+            uptime_mempool: RwLock::new(VecDeque::new()),
             chain_tip: RwLock::new(ChainTip {
                 height: 0,
                 last_hash: [0u8; 32],
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
+            telemetry_last_height: RwLock::new(None),
         });
         inner.bootstrap()?;
         Ok(Self { inner })
@@ -319,6 +383,10 @@ impl NodeHandle {
         self.inner.mempool_status()
     }
 
+    pub fn rollout_status(&self) -> RolloutStatus {
+        self.inner.rollout_status()
+    }
+
     pub fn consensus_status(&self) -> ChainResult<ConsensusStatus> {
         self.inner.consensus_status()
     }
@@ -338,11 +406,58 @@ impl NodeHandle {
     pub fn address(&self) -> &str {
         &self.inner.address
     }
+
+    pub fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
+        self.inner.reconstruction_plan(start_height)
+    }
+
+    pub fn verify_proof_chain(&self) -> ChainResult<()> {
+        self.inner.verify_proof_chain()
+    }
+
+    pub fn reconstruct_block<P: PayloadProvider>(
+        &self,
+        height: u64,
+        provider: &P,
+    ) -> ChainResult<Block> {
+        self.inner.reconstruct_block(height, provider)
+    }
+
+    pub fn reconstruct_range<P: PayloadProvider>(
+        &self,
+        start_height: u64,
+        end_height: u64,
+        provider: &P,
+    ) -> ChainResult<Vec<Block>> {
+        self.inner
+            .reconstruct_range(start_height, end_height, provider)
+    }
+
+    pub fn execute_reconstruction_plan<P: PayloadProvider>(
+        &self,
+        plan: &ReconstructionPlan,
+        provider: &P,
+    ) -> ChainResult<Vec<Block>> {
+        self.inner.execute_reconstruction_plan(plan, provider)
+    }
 }
 
 impl NodeInner {
     async fn run(self: Arc<Self>) -> ChainResult<()> {
-        info!(address = %self.address, "starting node");
+        info!(
+            address = %self.address,
+            channel = ?self.config.rollout.release_channel,
+            ?self.config.rollout.feature_gates,
+            telemetry_enabled = self.config.rollout.telemetry.enabled,
+            "starting node"
+        );
+        if self.config.rollout.telemetry.enabled {
+            let config = self.config.rollout.telemetry.clone();
+            let worker = self.clone();
+            tokio::spawn(async move {
+                worker.telemetry_loop(config).await;
+            });
+        }
         let mut ticker = time::interval(self.block_interval);
         loop {
             ticker.tick().await;
@@ -352,22 +467,137 @@ impl NodeInner {
         }
     }
 
+    async fn telemetry_loop(self: Arc<Self>, config: TelemetryConfig) {
+        let interval = Duration::from_secs(config.sample_interval_secs.max(1));
+        let mut ticker = time::interval(interval);
+        loop {
+            ticker.tick().await;
+            if let Err(err) = self.emit_telemetry(&config) {
+                warn!(?err, "failed to emit telemetry snapshot");
+            }
+        }
+    }
+
+    fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
+        let node = self.node_status()?;
+        let consensus = self.consensus_status()?;
+        let mempool = self.mempool_status()?;
+        let snapshot = TelemetrySnapshot {
+            release_channel: self.config.rollout.release_channel,
+            feature_gates: self.config.rollout.feature_gates.clone(),
+            node,
+            consensus,
+            mempool,
+        };
+        let encoded = serde_json::to_string(&snapshot).map_err(|err| {
+            ChainError::Config(format!("unable to encode telemetry snapshot: {err}"))
+        })?;
+        if let Some(endpoint) = &config.endpoint {
+            if endpoint.is_empty() {
+                info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
+            } else {
+                info!(
+                    target = "telemetry",
+                    ?endpoint,
+                    payload = %encoded,
+                    "telemetry snapshot dispatched"
+                );
+            }
+        } else {
+            info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
+        }
+        *self.telemetry_last_height.write() = Some(snapshot.node.height);
+        Ok(())
+    }
+
+    fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
+        let plan = engine.plan_from_height(start_height)?;
+        if let Some(path) = engine.persist_plan(&plan)? {
+            info!(?path, "persisted reconstruction plan snapshot");
+        }
+        Ok(plan)
+    }
+
+    fn verify_proof_chain(&self) -> ChainResult<()> {
+        if !self.config.rollout.feature_gates.recursive_proofs {
+            return Err(ChainError::Config(
+                "recursive proof verification disabled by rollout".into(),
+            ));
+        }
+        let engine = ReconstructionEngine::new(self.storage.clone());
+        engine.verify_proof_chain()
+    }
+
+    fn reconstruct_block<P: PayloadProvider>(
+        &self,
+        height: u64,
+        provider: &P,
+    ) -> ChainResult<Block> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let engine = ReconstructionEngine::new(self.storage.clone());
+        engine.reconstruct_block(height, provider)
+    }
+
+    fn reconstruct_range<P: PayloadProvider>(
+        &self,
+        start_height: u64,
+        end_height: u64,
+        provider: &P,
+    ) -> ChainResult<Vec<Block>> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let engine = ReconstructionEngine::new(self.storage.clone());
+        engine.reconstruct_range(start_height, end_height, provider)
+    }
+
+    fn execute_reconstruction_plan<P: PayloadProvider>(
+        &self,
+        plan: &ReconstructionPlan,
+        provider: &P,
+    ) -> ChainResult<Vec<Block>> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let engine = ReconstructionEngine::new(self.storage.clone());
+        engine.execute_plan(plan, provider)
+    }
+
     fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
         bundle.transaction.verify()?;
-        let verifier = NodeVerifier::new();
-        verifier.verify_transaction(&bundle.proof)?;
-        let witness_tx = match &bundle.proof.payload {
-            ProofPayload::Transaction(witness) => &witness.signed_tx,
-            _ => {
+        if self.config.rollout.feature_gates.recursive_proofs {
+            let verifier = NodeVerifier::new();
+            verifier.verify_transaction(&bundle.proof)?;
+            let witness_tx = match &bundle.proof.payload {
+                ProofPayload::Transaction(witness) => &witness.signed_tx,
+                _ => {
+                    return Err(ChainError::Crypto(
+                        "transaction proof payload mismatch".into(),
+                    ));
+                }
+            };
+            if witness_tx != &bundle.transaction {
                 return Err(ChainError::Crypto(
-                    "transaction proof payload mismatch".into(),
+                    "transaction proof does not match submitted transaction".into(),
                 ));
             }
-        };
-        if witness_tx != &bundle.transaction {
-            return Err(ChainError::Crypto(
-                "transaction proof does not match submitted transaction".into(),
-            ));
         }
         let mut mempool = self.mempool.write();
         if mempool.len() >= self.config.mempool_limit {
@@ -387,8 +617,10 @@ impl NodeInner {
     fn submit_identity(&self, declaration: IdentityDeclaration) -> ChainResult<String> {
         let next_height = self.chain_tip.read().height.saturating_add(1);
         self.ledger.sync_epoch_for_height(next_height);
-        let verifier = NodeVerifier::new();
-        verifier.verify_identity(&declaration.proof.zk_proof)?;
+        if self.config.rollout.feature_gates.recursive_proofs {
+            let verifier = NodeVerifier::new();
+            verifier.verify_identity(&declaration.proof.zk_proof)?;
+        }
         declaration.verify()?;
 
         let expected_epoch_nonce = hex::encode(self.ledger.current_epoch_nonce());
@@ -429,7 +661,9 @@ impl NodeInner {
     }
 
     fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
-        vote.verify()?;
+        if self.config.rollout.feature_gates.consensus_enforcement {
+            vote.verify()?;
+        }
         let next_height = self.chain_tip.read().height.saturating_add(1);
         if vote.vote.height < next_height {
             return Err(ChainError::Transaction(
@@ -449,11 +683,18 @@ impl NodeInner {
     }
 
     fn submit_uptime_proof(&self, proof: UptimeProof) -> ChainResult<u64> {
-        let total_hours = self.ledger.apply_uptime_proof(&proof)?;
+        let credited = self.ledger.apply_uptime_proof(&proof)?;
         if let Some(account) = self.ledger.get_account(&proof.wallet_address) {
             self.storage.persist_account(&account)?;
         }
-        Ok(total_hours)
+        {
+            let mut queue = self.uptime_mempool.write();
+            queue.push_back(RecordedUptimeProof {
+                proof: proof.clone(),
+                credited_hours: credited,
+            });
+        }
+        Ok(credited)
     }
 
     fn get_block(&self, height: u64) -> ChainResult<Option<Block>> {
@@ -481,6 +722,7 @@ impl NodeInner {
             pending_transactions: self.mempool.read().len(),
             pending_identities: self.identity_mempool.read().len(),
             pending_votes: self.vote_mempool.read().len(),
+            pending_uptime_proofs: self.uptime_mempool.read().len(),
         })
     }
 
@@ -524,11 +766,36 @@ impl NodeInner {
                 kind: vote.vote.kind,
             })
             .collect();
+        let uptime_proofs = self
+            .uptime_mempool
+            .read()
+            .iter()
+            .map(|record| PendingUptimeSummary {
+                identity: record.proof.wallet_address.clone(),
+                window_start: record.proof.window_start,
+                window_end: record.proof.window_end,
+                credited_hours: record.credited_hours,
+            })
+            .collect();
         Ok(MempoolStatus {
             transactions,
             identities,
             votes,
+            uptime_proofs,
         })
+    }
+
+    fn rollout_status(&self) -> RolloutStatus {
+        RolloutStatus {
+            release_channel: self.config.rollout.release_channel,
+            feature_gates: self.config.rollout.feature_gates.clone(),
+            telemetry: TelemetryRuntimeStatus {
+                enabled: self.config.rollout.telemetry.enabled,
+                endpoint: self.config.rollout.telemetry.endpoint.clone(),
+                sample_interval_secs: self.config.rollout.telemetry.sample_interval_secs,
+                last_observed_height: *self.telemetry_last_height.read(),
+            },
+        }
     }
 
     fn consensus_status(&self) -> ChainResult<ConsensusStatus> {
@@ -655,6 +922,69 @@ impl NodeInner {
         matched
     }
 
+    fn collect_proof_artifacts(
+        bundle: &BlockStarkProofs,
+        max_bytes: usize,
+    ) -> ChainResult<Vec<ProofArtifact>> {
+        let mut artifacts = Vec::new();
+        for proof in &bundle.transaction_proofs {
+            if let Some(artifact) = Self::proof_artifact(ProofModule::Utxo, proof, max_bytes)? {
+                artifacts.push(artifact);
+            }
+        }
+        if let Some(artifact) =
+            Self::proof_artifact(ProofModule::BlockTransition, &bundle.state_proof, max_bytes)?
+        {
+            artifacts.push(artifact);
+        }
+        if let Some(artifact) =
+            Self::proof_artifact(ProofModule::Consensus, &bundle.pruning_proof, max_bytes)?
+        {
+            artifacts.push(artifact);
+        }
+        if let Some(artifact) =
+            Self::proof_artifact(ProofModule::Consensus, &bundle.recursive_proof, max_bytes)?
+        {
+            artifacts.push(artifact);
+        }
+        Ok(artifacts)
+    }
+
+    fn proof_artifact(
+        module: ProofModule,
+        proof: &StarkProof,
+        max_bytes: usize,
+    ) -> ChainResult<Option<ProofArtifact>> {
+        let bytes = match hex::decode(&proof.commitment) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(None),
+        };
+        let mut commitment = [0u8; 32];
+        if bytes.len() >= 32 {
+            commitment.copy_from_slice(&bytes[..32]);
+        } else {
+            commitment[..bytes.len()].copy_from_slice(&bytes);
+        }
+        let encoded = serde_json::to_vec(proof).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to encode {:?} proof artifact: {err}",
+                module
+            ))
+        })?;
+        if encoded.len() > max_bytes {
+            return Err(ChainError::Config(format!(
+                "proof artifact for {:?} exceeds max_proof_size_bytes ({max_bytes})",
+                module
+            )));
+        }
+        Ok(Some(ProofArtifact {
+            module,
+            commitment,
+            proof: encoded,
+            verification_key: None,
+        }))
+    }
+
     fn produce_block(&self) -> ChainResult<()> {
         let mut identity_pending: Vec<IdentityDeclaration> = Vec::new();
         {
@@ -679,8 +1009,16 @@ impl NodeInner {
                 }
             }
         }
-        if pending.is_empty() && identity_pending.is_empty() {
+        let has_uptime = !self.uptime_mempool.read().is_empty();
+        if pending.is_empty() && identity_pending.is_empty() && !has_uptime {
             return Ok(());
+        }
+        let mut uptime_pending: Vec<RecordedUptimeProof> = Vec::new();
+        {
+            let mut mempool = self.uptime_mempool.write();
+            while let Some(record) = mempool.pop_front() {
+                uptime_pending.push(record);
+            }
         }
         let tip_snapshot = *self.chain_tip.read();
         let height = tip_snapshot.height + 1;
@@ -710,11 +1048,13 @@ impl NodeInner {
                 Ok(_) => accepted_identities.push(declaration),
                 Err(err) => {
                     warn!(?err, "dropping invalid identity declaration");
-                    if let Err(slash_err) = self
-                        .ledger
-                        .slash_validator(&self.address, SlashingReason::InvalidIdentity)
-                    {
-                        warn!(?slash_err, "failed to slash proposer for invalid identity");
+                    if self.config.rollout.feature_gates.consensus_enforcement {
+                        if let Err(slash_err) = self
+                            .ledger
+                            .slash_validator(&self.address, SlashingReason::InvalidIdentity)
+                        {
+                            warn!(?slash_err, "failed to slash proposer for invalid identity");
+                        }
                     }
                 }
             }
@@ -732,7 +1072,7 @@ impl NodeInner {
             }
         }
 
-        if accepted.is_empty() && accepted_identities.is_empty() {
+        if accepted.is_empty() && accepted_identities.is_empty() && uptime_pending.is_empty() {
             return Ok(());
         }
 
@@ -749,6 +1089,42 @@ impl NodeInner {
             .map(|declaration| declaration.proof.zk_proof.clone())
             .collect();
 
+        let mut uptime_proofs = Vec::new();
+        let mut timetoke_updates = Vec::new();
+        for record in uptime_pending {
+            let RecordedUptimeProof {
+                proof,
+                credited_hours,
+            } = record;
+            timetoke_updates.push(TimetokeUpdate {
+                identity: proof.wallet_address.clone(),
+                window_start: proof.window_start,
+                window_end: proof.window_end,
+                credited_hours,
+            });
+            uptime_proofs.push(proof);
+        }
+
+        let mut touched_identities: HashSet<Address> = HashSet::new();
+        for tx in &transactions {
+            touched_identities.insert(tx.payload.from.clone());
+            touched_identities.insert(tx.payload.to.clone());
+        }
+        for declaration in &accepted_identities {
+            touched_identities.insert(declaration.genesis.wallet_addr.clone());
+        }
+        for update in &timetoke_updates {
+            touched_identities.insert(update.identity.clone());
+        }
+
+        let mut reputation_updates = Vec::new();
+        for identity in touched_identities {
+            if let Some(audit) = self.ledger.reputation_audit(&identity)? {
+                reputation_updates.push(ReputationUpdate::from(audit));
+            }
+        }
+        reputation_updates.sort_by(|a, b| a.identity.cmp(&b.identity));
+
         let mut operation_hashes = Vec::new();
         for declaration in &accepted_identities {
             operation_hashes.push(declaration.hash()?);
@@ -756,13 +1132,30 @@ impl NodeInner {
         for tx in &transactions {
             operation_hashes.push(tx.hash());
         }
+        for proof in &uptime_proofs {
+            let encoded = serde_json::to_vec(proof).expect("serialize uptime proof");
+            operation_hashes.push(Blake2sHasher::hash(&encoded).into());
+        }
+        for update in &timetoke_updates {
+            let encoded = serde_json::to_vec(update).expect("serialize timetoke update");
+            operation_hashes.push(Blake2sHasher::hash(&encoded).into());
+        }
+        for update in &reputation_updates {
+            let encoded = serde_json::to_vec(update).expect("serialize reputation update");
+            operation_hashes.push(Blake2sHasher::hash(&encoded).into());
+        }
         let tx_root = compute_merkle_root(&mut operation_hashes);
-        let state_root = self.ledger.state_root();
+        let commitments = self.ledger.global_commitments();
         let header = BlockHeader::new(
             height,
             hex::encode(tip_snapshot.last_hash),
             hex::encode(tx_root),
-            hex::encode(state_root),
+            hex::encode(commitments.global_state_root),
+            hex::encode(commitments.utxo_root),
+            hex::encode(commitments.reputation_root),
+            hex::encode(commitments.timetoke_root),
+            hex::encode(commitments.zsi_root),
+            hex::encode(commitments.proof_root),
             selection.total_voting_power.to_string(),
             selection.randomness.to_string(),
             selection.proof.proof.clone(),
@@ -783,25 +1176,30 @@ impl NodeInner {
         round.register_precommit(&local_precommit)?;
 
         let external_votes = self.drain_votes_for(height, &block_hash_hex);
-        for vote in external_votes {
+        for vote in &external_votes {
             let result = match vote.vote.kind {
-                BftVoteKind::PreVote => round.register_prevote(&vote),
-                BftVoteKind::PreCommit => round.register_precommit(&vote),
+                BftVoteKind::PreVote => round.register_prevote(vote),
+                BftVoteKind::PreCommit => round.register_precommit(vote),
             };
             if let Err(err) = result {
                 warn!(?err, voter = %vote.vote.voter, "rejecting invalid consensus vote");
-                if let Err(slash_err) = self
-                    .ledger
-                    .slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
-                {
-                    warn!(
-                        ?slash_err,
-                        voter = %vote.vote.voter,
-                        "failed to slash validator for invalid vote"
-                    );
+                if self.config.rollout.feature_gates.consensus_enforcement {
+                    if let Err(slash_err) = self
+                        .ledger
+                        .slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
+                    {
+                        warn!(
+                            ?slash_err,
+                            voter = %vote.vote.voter,
+                            "failed to slash validator for invalid vote"
+                        );
+                    }
                 }
             }
         }
+
+        let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
+        recorded_votes.extend(external_votes.clone());
 
         let previous_block = self.storage.read_block(tip_snapshot.height)?;
         let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
@@ -860,11 +1258,25 @@ impl NodeInner {
             warn!("quorum not reached for commit");
             return Ok(());
         }
+        let participants = round.commit_participants();
+        self.ledger
+            .record_consensus_witness(height, round.round(), participants);
+        let module_witnesses = self.ledger.drain_module_witnesses();
+        let module_artifacts = self.ledger.stage_module_witnesses(&module_witnesses)?;
         let consensus_certificate = round.certificate();
+        let mut proof_artifacts =
+            Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;
+        proof_artifacts.extend(module_artifacts);
         let block = Block::new(
             header,
             accepted_identities,
             transactions,
+            uptime_proofs,
+            timetoke_updates,
+            reputation_updates,
+            recorded_votes,
+            module_witnesses,
+            proof_artifacts,
             pruning_proof,
             recursive_proof,
             stark_bundle,
@@ -873,6 +1285,9 @@ impl NodeInner {
         );
         block.verify(previous_block.as_ref())?;
         self.storage.store_block(&block)?;
+        if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
+            let _ = self.storage.prune_block_payload(block.header.height - 1)?;
+        }
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
         self.persist_accounts()?;
         let mut tip = self.chain_tip.write();
@@ -900,6 +1315,11 @@ impl NodeInner {
             let mut tip = self.chain_tip.write();
             tip.height = block.header.height;
             tip.last_hash = block.block_hash();
+            if self.config.rollout.feature_gates.pruning {
+                for height in 0..block.header.height {
+                    let _ = self.storage.prune_block_payload(height)?;
+                }
+            }
         } else {
             let mut tip = self.chain_tip.write();
             tip.height = 0;

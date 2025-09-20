@@ -11,7 +11,9 @@ use tracing::info;
 use crate::consensus::SignedBftVote;
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{ReputationAudit, SlashingEvent};
-use crate::node::{ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, VrfStatus};
+use crate::node::{
+    ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, RolloutStatus, VrfStatus,
+};
 use crate::types::{Account, Block, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 #[derive(Clone)]
@@ -52,6 +54,7 @@ pub async fn serve(node: NodeHandle, addr: SocketAddr) -> ChainResult<()> {
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
         .route("/status/consensus", get(consensus_status))
+        .route("/status/rollout", get(rollout_status))
         .route("/consensus/vrf/:address", get(vrf_status))
         .route("/transactions", post(submit_transaction))
         .route("/identities", post(submit_identity))
@@ -170,6 +173,10 @@ async fn consensus_status(
         .consensus_status()
         .map(Json)
         .map_err(to_http_error)
+}
+
+async fn rollout_status(State(state): State<AppState>) -> Json<RolloutStatus> {
+    Json(state.node.rollout_status())
 }
 
 async fn vrf_status(
