@@ -145,11 +145,29 @@ pub struct TimetokeBalance {
 }
 
 impl TimetokeBalance {
-    pub fn record_proof(&mut self, timestamp: u64) {
-        if timestamp > self.last_proof_timestamp {
-            self.hours_online = self.hours_online.saturating_add(1);
-            self.last_proof_timestamp = timestamp;
+    pub fn record_proof(&mut self, window_start: u64, window_end: u64) -> bool {
+        if window_end <= window_start {
+            return false;
         }
+        if window_end <= self.last_proof_timestamp {
+            return false;
+        }
+        let effective_start = if self.last_proof_timestamp == 0 {
+            window_start
+        } else {
+            window_start.max(self.last_proof_timestamp)
+        };
+        let duration = window_end.saturating_sub(effective_start);
+        if duration < 3_600 {
+            return false;
+        }
+        let earned_hours = duration / 3_600;
+        if earned_hours == 0 {
+            return false;
+        }
+        self.hours_online = self.hours_online.saturating_add(earned_hours);
+        self.last_proof_timestamp = window_end;
+        true
     }
 }
 
@@ -198,8 +216,8 @@ impl ReputationProfile {
         self.last_decay_timestamp = current_timestamp();
     }
 
-    pub fn record_online_proof(&mut self, timestamp: u64) {
-        self.timetokes.record_proof(timestamp);
+    pub fn record_online_proof(&mut self, window_start: u64, window_end: u64) -> bool {
+        self.timetokes.record_proof(window_start, window_end)
     }
 
     pub fn record_consensus_success(&mut self) {

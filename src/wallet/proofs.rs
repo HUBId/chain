@@ -3,20 +3,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
-use crate::types::{Address, SignedTransaction};
+use crate::types::{Address, SignedTransaction, UptimeProof};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct TxProof {
     pub wallet_address: Address,
     pub tx_hash: String,
-    pub proof_commitment: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct UptimeProof {
-    pub wallet_address: Address,
-    pub window_start: u64,
-    pub window_end: u64,
     pub proof_commitment: String,
 }
 
@@ -48,11 +40,7 @@ impl ProofGenerator {
             .unwrap_or_default()
             .as_secs();
         let window_start = now.saturating_sub(3600);
-        let mut data = Vec::new();
-        data.extend_from_slice(self.wallet_address.as_bytes());
-        data.extend_from_slice(&window_start.to_be_bytes());
-        data.extend_from_slice(&now.to_be_bytes());
-        let commitment: [u8; 32] = Blake2sHasher::hash(&data).into();
+        let commitment = UptimeProof::commitment_bytes(&self.wallet_address, window_start, now);
         UptimeProof {
             wallet_address: self.wallet_address.clone(),
             window_start,

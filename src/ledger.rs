@@ -7,7 +7,8 @@ use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
 use crate::reputation::{self, Tier};
 use crate::types::{
-    Account, Address, IdentityDeclaration, SignedTransaction, Stake, WalletBindingChange,
+    Account, Address, IdentityDeclaration, SignedTransaction, Stake, UptimeProof,
+    WalletBindingChange,
 };
 use hex;
 use serde::{Deserialize, Serialize};
@@ -321,6 +322,46 @@ impl Ledger {
         self.identity_tree.read().root()
     }
 
+    pub fn apply_uptime_proof(&self, proof: &UptimeProof) -> ChainResult<u64> {
+        if proof.window_end <= proof.window_start {
+            return Err(ChainError::Transaction(
+                "uptime proof window end must be greater than start".into(),
+            ));
+        }
+        if proof.window_end.saturating_sub(proof.window_start) < 3_600 {
+            return Err(ChainError::Transaction(
+                "uptime proof must cover at least one hour".into(),
+            ));
+        }
+        if !proof.verify_commitment() {
+            return Err(ChainError::Transaction(
+                "uptime proof commitment mismatch".into(),
+            ));
+        }
+        let mut accounts = self.accounts.write();
+        let account = accounts.get_mut(&proof.wallet_address).ok_or_else(|| {
+            ChainError::Transaction("uptime proof references unknown account".into())
+        })?;
+        if !account.reputation.zsi.validated {
+            return Err(ChainError::Transaction(
+                "uptime proof requires a validated genesis identity".into(),
+            ));
+        }
+        if !account
+            .reputation
+            .record_online_proof(proof.window_start, proof.window_end)
+        {
+            return Err(ChainError::Transaction(
+                "uptime proof does not extend the recorded online window".into(),
+            ));
+        }
+        let weights = crate::reputation::ReputationWeights::default();
+        let now = crate::reputation::current_timestamp();
+        account.reputation.recompute_score(&weights, now);
+        account.reputation.update_decay_reference(now);
+        Ok(account.reputation.timetokes.hours_online)
+    }
+
     pub fn apply_transaction(&self, tx: &SignedTransaction) -> ChainResult<u64> {
         tx.verify()?;
         let binding_change;
@@ -461,6 +502,7 @@ mod tests {
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
     use crate::types::{
         IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction, Transaction,
+        UptimeProof,
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
@@ -679,5 +721,101 @@ mod tests {
             audit.zsi_reputation_proof,
             account.reputation.zsi.reputation_proof
         );
+    }
+
+    #[test]
+    fn apply_uptime_proof_updates_timetokes() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "cafebabe".repeat(4);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("genesis-proof");
+        ledger.upsert_account(account).unwrap();
+
+        let window_start = 3_600;
+        let window_end = 10_800;
+        let commitment = UptimeProof::commitment_bytes(&address, window_start, window_end);
+        let proof = UptimeProof {
+            wallet_address: address.clone(),
+            window_start,
+            window_end,
+            proof_commitment: hex::encode(commitment),
+        };
+
+        let total_hours = ledger.apply_uptime_proof(&proof).unwrap();
+        assert_eq!(total_hours, 2);
+        let account = ledger.get_account(&address).unwrap();
+        assert_eq!(account.reputation.timetokes.hours_online, 2);
+        assert_eq!(
+            account.reputation.timetokes.last_proof_timestamp,
+            window_end
+        );
+    }
+
+    #[test]
+    fn reject_duplicate_uptime_proofs() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "feedface".repeat(4);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("genesis-proof");
+        ledger.upsert_account(account).unwrap();
+
+        let first_start = 1_000;
+        let first_end = first_start + 3_600;
+        let commitment = UptimeProof::commitment_bytes(&address, first_start, first_end);
+        let proof = UptimeProof {
+            wallet_address: address.clone(),
+            window_start: first_start,
+            window_end: first_end,
+            proof_commitment: hex::encode(commitment),
+        };
+
+        ledger.apply_uptime_proof(&proof).unwrap();
+
+        let duplicate = UptimeProof {
+            wallet_address: address.clone(),
+            window_start: first_start,
+            window_end: first_end,
+            proof_commitment: proof.proof_commitment.clone(),
+        };
+
+        let err = ledger.apply_uptime_proof(&duplicate).unwrap_err();
+        assert!(matches!(err, ChainError::Transaction(_)));
+    }
+
+    #[test]
+    fn uptime_proof_only_counts_new_hours() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "decafbad".repeat(4);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("genesis-proof");
+        ledger.upsert_account(account).unwrap();
+
+        let first_start = 0;
+        let first_end = 3_600;
+        let first_commitment = UptimeProof::commitment_bytes(&address, first_start, first_end);
+        let first_proof = UptimeProof {
+            wallet_address: address.clone(),
+            window_start: first_start,
+            window_end: first_end,
+            proof_commitment: hex::encode(first_commitment),
+        };
+
+        ledger.apply_uptime_proof(&first_proof).unwrap();
+
+        // Second proof overlaps the first hour but extends for two additional hours.
+        let second_start = 1_800; // overlaps with the already credited hour
+        let second_end = 10_800; // extends two new hours beyond the first proof
+        let second_commitment = UptimeProof::commitment_bytes(&address, second_start, second_end);
+        let second_proof = UptimeProof {
+            wallet_address: address.clone(),
+            window_start: second_start,
+            window_end: second_end,
+            proof_commitment: hex::encode(second_commitment),
+        };
+
+        let total_hours = ledger.apply_uptime_proof(&second_proof).unwrap();
+        assert_eq!(total_hours, 3);
+        let account = ledger.get_account(&address).unwrap();
+        assert_eq!(account.reputation.timetokes.hours_online, 3);
     }
 }
