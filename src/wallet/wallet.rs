@@ -14,10 +14,12 @@ use crate::reputation::Tier;
 use crate::storage::Storage;
 use crate::stwo::circuit::identity::IdentityWitness;
 use crate::stwo::prover::{StarkProver, WalletProver};
-use crate::types::{Address, SignedTransaction, Transaction, TransactionProofBundle};
-use crate::types::{IdentityDeclaration, IdentityGenesis, IdentityProof};
+use crate::types::{
+    Address, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction, Transaction,
+    TransactionProofBundle, UptimeProof,
+};
 
-use super::proofs::{ProofGenerator, UptimeProof};
+use super::proofs::ProofGenerator;
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
 #[derive(Clone)]

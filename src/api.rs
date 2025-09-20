@@ -12,7 +12,7 @@ use crate::consensus::SignedBftVote;
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, VrfStatus};
-use crate::types::{Account, Block, IdentityDeclaration, TransactionProofBundle};
+use crate::types::{Account, Block, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 #[derive(Clone)]
 struct AppState {
@@ -27,6 +27,11 @@ struct ErrorResponse {
 #[derive(Serialize)]
 struct SubmitResponse {
     hash: String,
+}
+
+#[derive(Serialize)]
+struct UptimeResponse {
+    total_hours: u64,
 }
 
 #[derive(Serialize)]
@@ -51,6 +56,7 @@ pub async fn serve(node: NodeHandle, addr: SocketAddr) -> ChainResult<()> {
         .route("/transactions", post(submit_transaction))
         .route("/identities", post(submit_identity))
         .route("/consensus/votes", post(submit_vote))
+        .route("/uptime/proofs", post(submit_uptime_proof))
         .route("/ledger/slashing", get(slashing_events))
         .route("/ledger/reputation/:address", get(reputation_audit))
         .route("/blocks/latest", get(latest_block))
@@ -102,6 +108,17 @@ async fn submit_vote(
         .node
         .submit_vote(vote)
         .map(|hash| Json(SubmitResponse { hash }))
+        .map_err(to_http_error)
+}
+
+async fn submit_uptime_proof(
+    State(state): State<AppState>,
+    Json(proof): Json<UptimeProof>,
+) -> Result<Json<UptimeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .submit_uptime_proof(proof)
+        .map(|total_hours| Json(UptimeResponse { total_hours }))
         .map_err(to_http_error)
 }
 

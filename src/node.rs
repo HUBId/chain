@@ -30,7 +30,7 @@ use crate::stwo::prover::{StarkProver, WalletProver};
 use crate::stwo::verifier::{NodeVerifier, StarkVerifier};
 use crate::types::{
     Account, Address, Block, BlockHeader, BlockMetadata, BlockStarkProofs, IdentityDeclaration,
-    PruningProof, RecursiveProof, SignedTransaction, Stake, TransactionProofBundle,
+    PruningProof, RecursiveProof, SignedTransaction, Stake, TransactionProofBundle, UptimeProof,
 };
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -295,6 +295,10 @@ impl NodeHandle {
         self.inner.submit_vote(vote)
     }
 
+    pub fn submit_uptime_proof(&self, proof: UptimeProof) -> ChainResult<u64> {
+        self.inner.submit_uptime_proof(proof)
+    }
+
     pub fn get_block(&self, height: u64) -> ChainResult<Option<Block>> {
         self.inner.get_block(height)
     }
@@ -442,6 +446,14 @@ impl NodeInner {
         }
         mempool.push_back(vote);
         Ok(vote_hash)
+    }
+
+    fn submit_uptime_proof(&self, proof: UptimeProof) -> ChainResult<u64> {
+        let total_hours = self.ledger.apply_uptime_proof(&proof)?;
+        if let Some(account) = self.ledger.get_account(&proof.wallet_address) {
+            self.storage.persist_account(&account)?;
+        }
+        Ok(total_hours)
     }
 
     fn get_block(&self, height: u64) -> ChainResult<Option<Block>> {
