@@ -151,9 +151,10 @@ impl<'a> FriProver<'a> {
         sponge.absorb_bytes(&[label.as_bytes().to_vec()]);
         sponge.finish_absorbing();
         let modulus = BigUint::from(domain_size);
+        let unique_target = domain_size.min(self.query_count);
         let mut indices = Vec::with_capacity(self.query_count);
         let mut seen = HashSet::new();
-        while indices.len() < self.query_count {
+        while seen.len() < unique_target {
             let element = sponge.squeeze();
             let value = element.value() % &modulus;
             let index = value
@@ -162,6 +163,14 @@ impl<'a> FriProver<'a> {
             if seen.insert(index) {
                 indices.push(index);
             }
+        }
+        if indices.is_empty() {
+            indices.push(0);
+        }
+        let unique_count = indices.len();
+        while indices.len() < self.query_count {
+            let next = indices[indices.len() % unique_count];
+            indices.push(next);
         }
         indices.sort_unstable();
         indices

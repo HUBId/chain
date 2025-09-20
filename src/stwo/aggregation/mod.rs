@@ -39,6 +39,7 @@ fn fold_commitments(
 fn compute_recursive_commitment(
     parameters: &StarkParameters,
     previous_commitment: Option<&str>,
+    identity_commitments: &[String],
     tx_commitments: &[String],
     state_commitment: &str,
     pruning_commitment: &str,
@@ -49,7 +50,9 @@ fn compute_recursive_commitment(
         .map(|value| string_to_field(parameters, value))
         .unwrap_or_else(|| FieldElement::zero(parameters.modulus()));
 
-    let tx_digest = fold_commitments(&hasher, parameters, tx_commitments);
+    let mut all_commitments = identity_commitments.to_vec();
+    all_commitments.extend_from_slice(tx_commitments);
+    let tx_digest = fold_commitments(&hasher, parameters, &all_commitments);
     let state_element = string_to_field(parameters, state_commitment);
     let pruning_element = string_to_field(parameters, pruning_commitment);
     let state_pruning_digest = hasher.hash(&[
@@ -97,18 +100,19 @@ impl RecursiveAggregator {
     pub fn build_witness(
         &self,
         previous_recursive: Option<&StarkProof>,
+        identity_proofs: &[StarkProof],
         tx_proofs: &[StarkProof],
         state_proof: &StarkProof,
         pruning_proof: &StarkProof,
         block_height: u64,
     ) -> ChainResult<RecursiveWitness> {
-        if tx_proofs.is_empty() && previous_recursive.is_some() {
-            return Err(ChainError::Crypto(
-                "recursive aggregation requires at least one transaction proof".into(),
-            ));
-        }
-
         let previous_commitment = extract_previous_commitment(previous_recursive)?;
+
+        let mut identity_commitments = Vec::with_capacity(identity_proofs.len());
+        for proof in identity_proofs {
+            ensure_kind(proof, ProofKind::Identity)?;
+            identity_commitments.push(proof.commitment.clone());
+        }
 
         let mut tx_commitments = Vec::with_capacity(tx_proofs.len());
         for proof in tx_proofs {
@@ -122,6 +126,7 @@ impl RecursiveAggregator {
         let aggregated = compute_recursive_commitment(
             &self.parameters,
             previous_commitment.as_deref(),
+            &identity_commitments,
             &tx_commitments,
             &state_proof.commitment,
             &pruning_proof.commitment,
@@ -131,6 +136,7 @@ impl RecursiveAggregator {
         Ok(RecursiveWitness {
             previous_commitment,
             aggregated_commitment: aggregated.to_hex(),
+            identity_commitments,
             tx_commitments,
             state_commitment: state_proof.commitment.clone(),
             pruning_commitment: pruning_proof.commitment.clone(),
@@ -142,6 +148,7 @@ impl RecursiveAggregator {
     pub fn aggregate_commitment(
         &self,
         previous_commitment: Option<&str>,
+        identity_commitments: &[String],
         tx_commitments: &[String],
         state_commitment: &str,
         pruning_commitment: &str,
@@ -150,6 +157,7 @@ impl RecursiveAggregator {
         compute_recursive_commitment(
             &self.parameters,
             previous_commitment,
+            identity_commitments,
             tx_commitments,
             state_commitment,
             pruning_commitment,
@@ -161,8 +169,8 @@ impl RecursiveAggregator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::ChainError;
     use crate::reputation::{ReputationWeights, Tier};
+    use crate::stwo::circuit::identity::IdentityWitness;
     use crate::stwo::circuit::pruning::PruningWitness;
     use crate::stwo::circuit::recursive::RecursiveWitness as CircuitRecursiveWitness;
     use crate::stwo::circuit::state::StateWitness;
@@ -250,6 +258,7 @@ mod tests {
         let witness = StateWitness {
             prev_state_root: "00".repeat(32),
             new_state_root: "11".repeat(32),
+            identities: Vec::new(),
             transactions: vec![signed_tx],
             accounts_before,
             accounts_after: vec![sender_account, receiver_account],
@@ -260,6 +269,27 @@ mod tests {
             parameters,
             ProofKind::State,
             ProofPayload::State(witness),
+            commitment,
+        )
+    }
+
+    fn dummy_identity_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
+        let witness = IdentityWitness {
+            wallet_pk: "00".repeat(32),
+            wallet_addr: "11".repeat(32),
+            vrf_tag: "22".repeat(32),
+            epoch_nonce: "33".repeat(32),
+            state_root: "44".repeat(32),
+            identity_root: "55".repeat(32),
+            initial_reputation: 0,
+            commitment: commitment.clone(),
+            identity_leaf: "66".repeat(32),
+            identity_path: Vec::new(),
+        };
+        make_proof(
+            parameters,
+            ProofKind::Identity,
+            ProofPayload::Identity(witness),
             commitment,
         )
     }
@@ -284,15 +314,19 @@ mod tests {
         parameters: &StarkParameters,
         aggregated_commitment: String,
         previous_commitment: Option<String>,
+        identity_commitments: Option<Vec<String>>,
         tx_commitments: Option<Vec<String>>,
         state_commitment: String,
         pruning_commitment: String,
         block_height: u64,
     ) -> StarkProof {
-        let commitments = tx_commitments.unwrap_or_else(|| vec![aggregated_commitment.clone()]);
+        let identities =
+            identity_commitments.unwrap_or_else(|| vec![aggregated_commitment.clone()]);
+        let commitments = tx_commitments.unwrap_or_default();
         let witness = CircuitRecursiveWitness {
             previous_commitment,
             aggregated_commitment: aggregated_commitment.clone(),
+            identity_commitments: identities,
             tx_commitments: commitments,
             state_commitment,
             pruning_commitment,
@@ -313,6 +347,13 @@ mod tests {
         let hasher = params.poseidon_hasher();
         let zero = FieldElement::zero(params.modulus());
 
+        let identity_commitments: Vec<String> = (10..=11)
+            .map(|idx| {
+                hasher
+                    .hash(&[params.element_from_u64(idx), zero.clone(), zero.clone()])
+                    .to_hex()
+            })
+            .collect();
         let tx_commitments: Vec<String> = (1..=2)
             .map(|idx| {
                 hasher
@@ -327,6 +368,11 @@ mod tests {
             .hash(&[params.element_from_u64(77), zero.clone(), zero.clone()])
             .to_hex();
 
+        let previous_identity_commitments = vec![
+            hasher
+                .hash(&[params.element_from_u64(8), zero.clone(), zero.clone()])
+                .to_hex(),
+        ];
         let previous_tx_commitments = vec![
             hasher
                 .hash(&[params.element_from_u64(5), zero.clone(), zero.clone()])
@@ -340,6 +386,7 @@ mod tests {
             .to_hex();
         let previous_field = aggregator.aggregate_commitment(
             None,
+            &previous_identity_commitments,
             &previous_tx_commitments,
             &previous_state_commitment,
             &previous_pruning_commitment,
@@ -350,12 +397,18 @@ mod tests {
             &params,
             previous_commitment_hex.clone(),
             None,
+            Some(previous_identity_commitments.clone()),
             Some(previous_tx_commitments.clone()),
             previous_state_commitment.clone(),
             previous_pruning_commitment.clone(),
             1,
         );
 
+        let identity_proofs: Vec<StarkProof> = identity_commitments
+            .iter()
+            .cloned()
+            .map(|commitment| dummy_identity_proof(&params, commitment))
+            .collect();
         let tx_proofs: Vec<StarkProof> = tx_commitments
             .iter()
             .cloned()
@@ -367,6 +420,7 @@ mod tests {
         let witness = aggregator
             .build_witness(
                 Some(&previous_proof),
+                &identity_proofs,
                 &tx_proofs,
                 &state_proof,
                 &pruning_proof,
@@ -380,19 +434,21 @@ mod tests {
         );
         let expected = aggregator.aggregate_commitment(
             Some(previous_commitment_hex.as_str()),
+            &identity_commitments,
             &tx_commitments,
             &state_commitment,
             &pruning_commitment,
             2,
         );
         assert_eq!(witness.aggregated_commitment, expected.to_hex());
+        assert_eq!(witness.identity_commitments, identity_commitments);
         assert_eq!(witness.tx_commitments, tx_commitments);
         assert_eq!(witness.state_commitment, state_commitment);
         assert_eq!(witness.pruning_commitment, pruning_commitment);
     }
 
     #[test]
-    fn aggregator_rejects_missing_transaction_proofs_when_previous_exists() {
+    fn aggregator_accepts_identity_only_blocks() {
         let aggregator = RecursiveAggregator::with_blueprint();
         let params = StarkParameters::blueprint_default();
         let hasher = params.poseidon_hasher();
@@ -404,22 +460,29 @@ mod tests {
         let pruning_commitment = hasher
             .hash(&[params.element_from_u64(16), zero.clone(), zero.clone()])
             .to_hex();
+        let identity_commitment = hasher
+            .hash(&[params.element_from_u64(25), zero.clone(), zero.clone()])
+            .to_hex();
         let previous_tx_commitments = vec![
             hasher
                 .hash(&[params.element_from_u64(3), zero.clone(), zero.clone()])
                 .to_hex(),
         ];
+        let previous_identity_commitments = vec![identity_commitment.clone()];
         let previous_aggregate = aggregator.aggregate_commitment(
             None,
+            &previous_identity_commitments,
             &previous_tx_commitments,
             &state_commitment,
             &pruning_commitment,
             1,
         );
+        let previous_hex = previous_aggregate.to_hex();
         let previous = dummy_recursive_proof(
             &params,
-            previous_aggregate.to_hex(),
+            previous_hex.clone(),
             None,
+            Some(previous_identity_commitments.clone()),
             Some(previous_tx_commitments),
             state_commitment.clone(),
             pruning_commitment.clone(),
@@ -428,15 +491,33 @@ mod tests {
 
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
         let pruning_proof = dummy_pruning_proof(&params, pruning_commitment.clone());
+        let identity_proof = dummy_identity_proof(&params, identity_commitment.clone());
 
-        let result =
-            aggregator.build_witness(Some(&previous), &[], &state_proof, &pruning_proof, 2);
+        let witness = aggregator
+            .build_witness(
+                Some(&previous),
+                &[identity_proof],
+                &[],
+                &state_proof,
+                &pruning_proof,
+                2,
+            )
+            .expect("recursive witness with identity commitments");
 
-        match result {
-            Err(ChainError::Crypto(message)) => {
-                assert!(message.contains("requires at least one transaction proof"));
-            }
-            other => panic!("unexpected result: {:?}", other),
-        }
+        assert_eq!(witness.previous_commitment, Some(previous_hex.clone()));
+        assert_eq!(
+            witness.identity_commitments,
+            vec![identity_commitment.clone()]
+        );
+        assert!(witness.tx_commitments.is_empty());
+        let expected = aggregator.aggregate_commitment(
+            Some(previous_hex.as_str()),
+            &[identity_commitment],
+            &[],
+            &state_commitment,
+            &pruning_commitment,
+            2,
+        );
+        assert_eq!(witness.aggregated_commitment, expected.to_hex());
     }
 }

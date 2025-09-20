@@ -1,16 +1,18 @@
 use std::net::SocketAddr;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tracing::info;
 
+use crate::consensus::SignedBftVote;
 use crate::errors::{ChainError, ChainResult};
-use crate::node::NodeHandle;
-use crate::types::{Account, Block, TransactionProofBundle};
+use crate::ledger::{ReputationAudit, SlashingEvent};
+use crate::node::{ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, VrfStatus};
+use crate::types::{Account, Block, IdentityDeclaration, TransactionProofBundle};
 
 #[derive(Clone)]
 struct AppState {
@@ -33,11 +35,24 @@ struct HealthResponse {
     address: String,
 }
 
+#[derive(Deserialize)]
+struct SlashingQuery {
+    limit: Option<usize>,
+}
+
 pub async fn serve(node: NodeHandle, addr: SocketAddr) -> ChainResult<()> {
     let state = AppState { node: node.clone() };
     let router = Router::new()
         .route("/health", get(health))
+        .route("/status/node", get(node_status))
+        .route("/status/mempool", get(mempool_status))
+        .route("/status/consensus", get(consensus_status))
+        .route("/consensus/vrf/:address", get(vrf_status))
         .route("/transactions", post(submit_transaction))
+        .route("/identities", post(submit_identity))
+        .route("/consensus/votes", post(submit_vote))
+        .route("/ledger/slashing", get(slashing_events))
+        .route("/ledger/reputation/:address", get(reputation_audit))
         .route("/blocks/latest", get(latest_block))
         .route("/blocks/:height", get(block_by_height))
         .route("/accounts/:address", get(account_info))
@@ -68,6 +83,28 @@ async fn submit_transaction(
         .map_err(to_http_error)
 }
 
+async fn submit_identity(
+    State(state): State<AppState>,
+    Json(declaration): Json<IdentityDeclaration>,
+) -> Result<Json<SubmitResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .submit_identity(declaration)
+        .map(|hash| Json(SubmitResponse { hash }))
+        .map_err(to_http_error)
+}
+
+async fn submit_vote(
+    State(state): State<AppState>,
+    Json(vote): Json<SignedBftVote>,
+) -> Result<Json<SubmitResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .submit_vote(vote)
+        .map(|hash| Json(SubmitResponse { hash }))
+        .map_err(to_http_error)
+}
+
 async fn latest_block(
     State(state): State<AppState>,
 ) -> Result<Json<Option<Block>>, (StatusCode, Json<ErrorResponse>)> {
@@ -92,6 +129,62 @@ async fn account_info(
     state
         .node
         .get_account(&address)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn node_status(
+    State(state): State<AppState>,
+) -> Result<Json<NodeStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state.node.node_status().map(Json).map_err(to_http_error)
+}
+
+async fn mempool_status(
+    State(state): State<AppState>,
+) -> Result<Json<MempoolStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state.node.mempool_status().map(Json).map_err(to_http_error)
+}
+
+async fn consensus_status(
+    State(state): State<AppState>,
+) -> Result<Json<ConsensusStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .consensus_status()
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn vrf_status(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> Result<Json<VrfStatus>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .vrf_status(&address)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn slashing_events(
+    State(state): State<AppState>,
+    Query(query): Query<SlashingQuery>,
+) -> Result<Json<Vec<SlashingEvent>>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(50).min(500);
+    state
+        .node
+        .slashing_events(limit)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn reputation_audit(
+    State(state): State<AppState>,
+    Path(address): Path<String>,
+) -> Result<Json<Option<ReputationAudit>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .reputation_audit(&address)
         .map(Json)
         .map_err(to_http_error)
 }

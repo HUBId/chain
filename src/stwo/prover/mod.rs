@@ -6,11 +6,12 @@ use crate::errors::{ChainError, ChainResult};
 use crate::ledger::compute_merkle_root;
 use crate::reputation::{ReputationWeights, Tier};
 use crate::storage::Storage;
-use crate::types::{Account, PruningProof, SignedTransaction, Stake};
+use crate::types::{Account, IdentityDeclaration, PruningProof, SignedTransaction, Stake};
 
 use super::aggregation::RecursiveAggregator;
 use super::circuit::{
     CircuitError, StarkCircuit,
+    identity::{IdentityCircuit, IdentityWitness},
     pruning::{PruningCircuit, PruningWitness},
     recursive::{RecursiveCircuit, RecursiveWitness},
     state::{StateCircuit, StateWitness},
@@ -24,6 +25,9 @@ use super::proof::{ProofKind, ProofPayload, StarkProof};
 pub trait StarkProver {
     /// Generates the transaction-level proof for ownership, balance and nonce checks.
     fn prove_transaction(&self, witness: TransactionWitness) -> ChainResult<StarkProof>;
+
+    /// Generates the identity-level proof anchoring a ZSI declaration.
+    fn prove_identity(&self, witness: IdentityWitness) -> ChainResult<StarkProof>;
 
     /// Generates a batched state transition proof for a sequence of transactions.
     fn prove_state_transition(&self, witness: StateWitness) -> ChainResult<StarkProof>;
@@ -76,6 +80,13 @@ impl<'a> WalletProver<'a> {
         self.parameters.poseidon_hasher()
     }
 
+    pub fn build_identity_witness(
+        &self,
+        declaration: &crate::types::IdentityDeclaration,
+    ) -> ChainResult<IdentityWitness> {
+        declaration.witness()
+    }
+
     pub fn build_transaction_witness(
         &self,
         tx: &SignedTransaction,
@@ -98,6 +109,7 @@ impl<'a> WalletProver<'a> {
         &self,
         prev_state_root: &str,
         new_state_root: &str,
+        identities: &[IdentityDeclaration],
         transactions: &[SignedTransaction],
     ) -> ChainResult<StateWitness> {
         let accounts_before = self.storage.load_accounts()?;
@@ -106,6 +118,28 @@ impl<'a> WalletProver<'a> {
             .cloned()
             .map(|account| (account.address.clone(), account))
             .collect();
+        let now = crate::reputation::current_timestamp();
+
+        for declaration in identities {
+            let genesis = &declaration.genesis;
+            if state.contains_key(&genesis.wallet_addr) {
+                return Err(ChainError::Transaction(
+                    "identity wallet already exists in state".into(),
+                ));
+            }
+            let mut account = Account::new(genesis.wallet_addr.clone(), 0, Stake::default());
+            account.reputation = crate::reputation::ReputationProfile::new(&genesis.wallet_pk);
+            account.ensure_wallet_binding(&genesis.wallet_pk)?;
+            account
+                .reputation
+                .zsi
+                .validate(&declaration.proof.commitment);
+            account
+                .reputation
+                .recompute_score(&self.reputation_weights, now);
+            account.reputation.update_decay_reference(now);
+            state.insert(genesis.wallet_addr.clone(), account);
+        }
         for tx in transactions {
             let sender = state
                 .get_mut(&tx.payload.from)
@@ -124,15 +158,15 @@ impl<'a> WalletProver<'a> {
                 .entry(tx.payload.to.clone())
                 .or_insert_with(|| Account::new(tx.payload.to.clone(), 0, Stake::default()));
             recipient.balance = recipient.balance.saturating_add(tx.payload.amount);
-            recipient.reputation.recompute_score(
-                &self.reputation_weights,
-                crate::reputation::current_timestamp(),
-            );
+            recipient
+                .reputation
+                .recompute_score(&self.reputation_weights, now);
         }
         let accounts_after = state.into_values().collect();
         Ok(StateWitness {
             prev_state_root: prev_state_root.to_string(),
             new_state_root: new_state_root.to_string(),
+            identities: identities.to_vec(),
             transactions: transactions.to_vec(),
             accounts_before,
             accounts_after,
@@ -143,27 +177,37 @@ impl<'a> WalletProver<'a> {
 
     pub fn build_pruning_witness(
         &self,
+        previous_identities: &[IdentityDeclaration],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
         removed: Vec<String>,
-    ) -> PruningWitness {
-        let mut leaves = previous_txs.iter().map(|tx| tx.hash()).collect::<Vec<_>>();
+    ) -> ChainResult<PruningWitness> {
+        let mut leaves = Vec::with_capacity(previous_identities.len() + previous_txs.len());
+        let mut original_transactions =
+            Vec::with_capacity(previous_identities.len() + previous_txs.len());
+        for declaration in previous_identities {
+            let hash = declaration.hash()?;
+            leaves.push(hash);
+            original_transactions.push(hex::encode(hash));
+        }
+        for tx in previous_txs {
+            let hash = tx.hash();
+            leaves.push(hash);
+            original_transactions.push(hex::encode(hash));
+        }
         let previous_tx_root = hex::encode(compute_merkle_root(&mut leaves));
-        let original_transactions = previous_txs
-            .iter()
-            .map(|tx| hex::encode(tx.hash()))
-            .collect();
-        PruningWitness {
+        Ok(PruningWitness {
             previous_tx_root,
             pruned_tx_root: pruning.pruned_tx_root.clone(),
             original_transactions,
             removed_transactions: removed,
-        }
+        })
     }
 
     pub fn build_recursive_witness(
         &self,
         previous_recursive: Option<&StarkProof>,
+        identity_proofs: &[StarkProof],
         tx_proofs: &[StarkProof],
         state_proof: &StarkProof,
         pruning_proof: &StarkProof,
@@ -172,6 +216,7 @@ impl<'a> WalletProver<'a> {
         let aggregator = RecursiveAggregator::new(self.parameters.clone());
         aggregator.build_witness(
             previous_recursive,
+            identity_proofs,
             tx_proofs,
             state_proof,
             pruning_proof,
@@ -204,6 +249,34 @@ impl<'a> StarkProver for WalletProver<'a> {
         Ok(StarkProof::new(
             ProofKind::Transaction,
             ProofPayload::Transaction(witness),
+            inputs,
+            trace,
+            fri_proof,
+            &hasher,
+        ))
+    }
+
+    fn prove_identity(&self, witness: IdentityWitness) -> ChainResult<StarkProof> {
+        let circuit = IdentityCircuit::new(witness.clone());
+        circuit.evaluate_constraints().map_err(map_circuit_error)?;
+        let trace = circuit
+            .generate_trace(&self.parameters)
+            .map_err(map_circuit_error)?;
+        circuit
+            .verify_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
+        let inputs = vec![
+            string_to_field(&self.parameters, &witness.wallet_addr),
+            string_to_field(&self.parameters, &witness.vrf_tag),
+            string_to_field(&self.parameters, &witness.identity_root),
+            string_to_field(&self.parameters, &witness.state_root),
+        ];
+        let hasher = self.hasher();
+        let fri_prover = FriProver::new(&self.parameters);
+        let fri_proof = fri_prover.prove(&trace, &inputs);
+        Ok(StarkProof::new(
+            ProofKind::Identity,
+            ProofPayload::Identity(witness),
             inputs,
             trace,
             fri_proof,

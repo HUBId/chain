@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use std::str::FromStr;
@@ -7,13 +8,13 @@ use malachite::Natural;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
-use crate::consensus::{ConsensusCertificate, VrfProof, verify_vrf};
+use crate::consensus::{BftVoteKind, ConsensusCertificate, VrfProof, verify_vrf};
 use crate::crypto::{signature_from_hex, signature_to_hex, verify_signature};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::compute_merkle_root;
-use crate::stwo::verifier::NodeVerifier;
+use crate::stwo::verifier::{NodeVerifier, StarkVerifier};
 
-use super::{Address, BlockStarkProofs, SignedTransaction};
+use super::{Address, BlockStarkProofs, IdentityDeclaration, SignedTransaction};
 
 const PRUNING_WITNESS_DOMAIN: &[u8] = b"rpp-pruning-proof";
 const RECURSIVE_ANCHOR_SEED: &[u8] = b"rpp-recursive-anchor";
@@ -326,6 +327,7 @@ impl RecursiveProof {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
+    pub identities: Vec<IdentityDeclaration>,
     pub transactions: Vec<SignedTransaction>,
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
@@ -338,6 +340,7 @@ pub struct Block {
 impl Block {
     pub fn new(
         header: BlockHeader,
+        identities: Vec<IdentityDeclaration>,
         transactions: Vec<SignedTransaction>,
         pruning_proof: PruningProof,
         recursive_proof: RecursiveProof,
@@ -348,6 +351,7 @@ impl Block {
         let hash = header.hash();
         Self {
             header,
+            identities,
             transactions,
             pruning_proof,
             recursive_proof,
@@ -368,12 +372,24 @@ impl Block {
     }
 
     pub fn verify(&self, previous: Option<&Block>) -> ChainResult<()> {
-        let mut tx_hashes = Vec::with_capacity(self.transactions.len());
+        for identity in &self.identities {
+            identity.verify()?;
+        }
+        let verifier = NodeVerifier::new();
+        for identity in &self.identities {
+            verifier.verify_identity(&identity.proof.zk_proof)?;
+        }
+
+        let mut operation_hashes =
+            Vec::with_capacity(self.identities.len() + self.transactions.len());
+        for declaration in &self.identities {
+            operation_hashes.push(declaration.hash()?);
+        }
         for tx in &self.transactions {
             tx.verify()?;
-            tx_hashes.push(tx.hash());
+            operation_hashes.push(tx.hash());
         }
-        let computed_root = compute_merkle_root(&mut tx_hashes);
+        let computed_root = compute_merkle_root(&mut operation_hashes);
         if hex::encode(computed_root) != self.header.tx_root {
             return Err(ChainError::Crypto("transaction root mismatch".into()));
         }
@@ -394,7 +410,6 @@ impl Block {
         self.recursive_proof
             .verify(&self.header, &self.pruning_proof, previous_proof)?;
 
-        let verifier = NodeVerifier::new();
         let expected_previous_commitment =
             previous.map(|block| block.stark.recursive_proof.commitment.as_str());
         verifier.verify_bundle(
@@ -453,27 +468,122 @@ impl Block {
             return Err(ChainError::Crypto("invalid VRF proof".into()));
         }
 
+        if self.consensus.round != self.header.height {
+            return Err(ChainError::Crypto(
+                "consensus certificate references incorrect round".into(),
+            ));
+        }
+
+        let expected_block_hash = hex::encode(self.block_hash());
+        let mut prevote_voters = HashSet::new();
+        let mut computed_prevote = Natural::from(0u32);
+        for record in &self.consensus.pre_votes {
+            record.vote.verify()?;
+            let vote = &record.vote.vote;
+            if vote.kind != BftVoteKind::PreVote {
+                return Err(ChainError::Crypto(
+                    "consensus certificate contains non-prevote in prevote set".into(),
+                ));
+            }
+            if vote.round != self.consensus.round {
+                return Err(ChainError::Crypto(
+                    "prevote references incorrect consensus round".into(),
+                ));
+            }
+            if vote.height != self.header.height {
+                return Err(ChainError::Crypto(
+                    "prevote references incorrect block height".into(),
+                ));
+            }
+            if vote.block_hash != expected_block_hash {
+                return Err(ChainError::Crypto(
+                    "prevote references unexpected block hash".into(),
+                ));
+            }
+            if !prevote_voters.insert(vote.voter.clone()) {
+                return Err(ChainError::Crypto("duplicate prevote detected".into()));
+            }
+            let weight = parse_natural(&record.weight)?;
+            computed_prevote += weight;
+        }
+
+        if computed_prevote.to_string() != self.consensus.pre_vote_power {
+            return Err(ChainError::Crypto(
+                "prevote power does not match recorded aggregate".into(),
+            ));
+        }
+
         let total = parse_natural(&self.consensus.total_power)?;
         let quorum = parse_natural(&self.consensus.quorum_threshold)?;
-        let prevote = parse_natural(&self.consensus.pre_vote_power)?;
-        let precommit = parse_natural(&self.consensus.pre_commit_power)?;
-        let commit = parse_natural(&self.consensus.commit_power)?;
+        let commit_total = parse_natural(&self.consensus.commit_power)?;
 
-        if prevote < quorum {
+        if computed_prevote < quorum {
             return Err(ChainError::Crypto(
                 "insufficient pre-vote power for quorum".into(),
             ));
         }
-        if precommit < quorum {
+
+        let mut precommit_voters = HashSet::new();
+        let mut computed_precommit = Natural::from(0u32);
+        for record in &self.consensus.pre_commits {
+            record.vote.verify()?;
+            let vote = &record.vote.vote;
+            if vote.kind != BftVoteKind::PreCommit {
+                return Err(ChainError::Crypto(
+                    "consensus certificate contains non-precommit in precommit set".into(),
+                ));
+            }
+            if vote.round != self.consensus.round {
+                return Err(ChainError::Crypto(
+                    "precommit references incorrect consensus round".into(),
+                ));
+            }
+            if vote.height != self.header.height {
+                return Err(ChainError::Crypto(
+                    "precommit references incorrect block height".into(),
+                ));
+            }
+            if vote.block_hash != expected_block_hash {
+                return Err(ChainError::Crypto(
+                    "precommit references unexpected block hash".into(),
+                ));
+            }
+            if !prevote_voters.contains(&vote.voter) {
+                return Err(ChainError::Crypto(
+                    "precommit without corresponding prevote".into(),
+                ));
+            }
+            if !precommit_voters.insert(vote.voter.clone()) {
+                return Err(ChainError::Crypto("duplicate precommit detected".into()));
+            }
+            let weight = parse_natural(&record.weight)?;
+            computed_precommit += weight;
+        }
+
+        if computed_precommit.to_string() != self.consensus.pre_commit_power {
+            return Err(ChainError::Crypto(
+                "precommit power does not match recorded aggregate".into(),
+            ));
+        }
+
+        if computed_precommit < quorum {
             return Err(ChainError::Crypto(
                 "insufficient pre-commit power for quorum".into(),
             ));
         }
-        if commit < quorum {
+
+        if commit_total != computed_precommit {
+            return Err(ChainError::Crypto(
+                "commit power does not match accumulated precommit power".into(),
+            ));
+        }
+
+        if commit_total < quorum {
             return Err(ChainError::Crypto(
                 "insufficient commit power for quorum".into(),
             ));
         }
+
         if total < quorum {
             return Err(ChainError::Crypto("invalid quorum configuration".into()));
         }

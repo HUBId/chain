@@ -4,7 +4,7 @@ use crate::errors::{ChainError, ChainResult};
 
 use super::aggregation::RecursiveAggregator;
 use super::circuit::{
-    CircuitError, ExecutionTrace, StarkCircuit, pruning::PruningCircuit,
+    CircuitError, ExecutionTrace, StarkCircuit, identity::IdentityCircuit, pruning::PruningCircuit,
     recursive::RecursiveCircuit, state::StateCircuit, transaction::TransactionCircuit,
 };
 use super::fri::FriProver;
@@ -15,6 +15,9 @@ use super::proof::{ProofKind, ProofPayload, StarkProof};
 pub trait StarkVerifier {
     /// Verify a transaction proof payload.
     fn verify_transaction(&self, proof: &StarkProof) -> ChainResult<()>;
+
+    /// Verify an identity proof payload.
+    fn verify_identity(&self, proof: &StarkProof) -> ChainResult<()>;
 
     /// Verify a state transition proof.
     fn verify_state(&self, proof: &StarkProof) -> ChainResult<()>;
@@ -96,6 +99,7 @@ impl NodeVerifier {
         let aggregator = RecursiveAggregator::new(self.parameters.clone());
         aggregator.aggregate_commitment(
             witness.previous_commitment.as_deref(),
+            &witness.identity_commitments,
             &witness.tx_commitments,
             &witness.state_commitment,
             &witness.pruning_commitment,
@@ -129,6 +133,25 @@ impl StarkVerifier for NodeVerifier {
             Err(ChainError::Crypto(
                 "transaction proof payload mismatch".into(),
             ))
+        }
+    }
+
+    fn verify_identity(&self, proof: &StarkProof) -> ChainResult<()> {
+        self.expect_kind(proof, ProofKind::Identity)?;
+        let public_inputs = self.check_commitment(proof)?;
+        if let ProofPayload::Identity(witness) = &proof.payload {
+            let circuit = IdentityCircuit::new(witness.clone());
+            circuit.evaluate_constraints().map_err(map_circuit_error)?;
+            let trace = circuit
+                .generate_trace(&self.parameters)
+                .map_err(map_circuit_error)?;
+            circuit
+                .verify_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
+            self.check_trace(trace.clone(), proof)?;
+            self.check_fri(proof, &public_inputs, &trace)
+        } else {
+            Err(ChainError::Crypto("identity proof payload mismatch".into()))
         }
     }
 
@@ -202,12 +225,6 @@ impl NodeVerifier {
         recursive_proof: &StarkProof,
         expected_previous_commitment: Option<&str>,
     ) -> ChainResult<String> {
-        if tx_proofs.is_empty() && expected_previous_commitment.is_some() {
-            return Err(ChainError::Crypto(
-                "recursive bundle must include at least one transaction proof".into(),
-            ));
-        }
-
         for proof in tx_proofs {
             self.verify_transaction(proof)?;
         }
