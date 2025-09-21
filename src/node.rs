@@ -23,17 +23,19 @@ use crate::crypto::{
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{EpochInfo, Ledger, ReputationAudit, SlashingEvent, SlashingReason};
+#[cfg(feature = "backend-plonky3")]
+use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
+use crate::proof_system::{ProofProver, ProofVerifierRegistry};
 use crate::rpp::{ProofArtifact, ProofModule};
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
-use crate::stwo::proof::{ProofPayload, StarkProof};
-use crate::stwo::prover::{StarkProver, WalletProver};
-use crate::stwo::verifier::{NodeVerifier, StarkVerifier};
+use crate::stwo::proof::ProofPayload;
+use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
-    Account, Address, Block, BlockHeader, BlockMetadata, BlockStarkProofs, IdentityDeclaration,
-    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
-    TransactionProofBundle, UptimeProof,
+    Account, Address, Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof,
+    IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake,
+    TimetokeUpdate, TransactionProofBundle, UptimeProof,
 };
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
@@ -171,6 +173,7 @@ struct NodeInner {
     block_interval: Duration,
     vote_mempool: RwLock<VecDeque<SignedBftVote>>,
     telemetry_last_height: RwLock<Option<u64>>,
+    verifiers: ProofVerifierRegistry,
 }
 
 #[derive(Clone)]
@@ -237,8 +240,8 @@ impl Node {
             let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
             let prover = WalletProver::new(&storage);
             let transactions: Vec<SignedTransaction> = Vec::new();
-            let transaction_proofs: Vec<StarkProof> = Vec::new();
-            let identity_proofs: Vec<StarkProof> = Vec::new();
+            let transaction_proofs: Vec<ChainProof> = Vec::new();
+            let identity_proofs: Vec<ChainProof> = Vec::new();
             let state_witness = prover.build_state_witness(
                 &pruning_proof.previous_state_root,
                 &header.state_root,
@@ -257,12 +260,15 @@ impl Node {
                 None,
                 &identity_proofs,
                 &transaction_proofs,
+                &[],
+                &[],
+                &commitments,
                 &state_proof,
                 &pruning_stark,
                 header.height,
             )?;
             let recursive_stark = prover.prove_recursive(recursive_witness)?;
-            let stark_bundle = BlockStarkProofs::new(
+            let stark_bundle = BlockProofBundle::new(
                 transaction_proofs,
                 state_proof,
                 pruning_stark,
@@ -288,6 +294,7 @@ impl Node {
                 stark_bundle,
                 signature,
                 consensus_certificate,
+                None,
             );
             genesis_block.verify(None)?;
             storage.store_block(&genesis_block)?;
@@ -330,6 +337,7 @@ impl Node {
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
             telemetry_last_height: RwLock::new(None),
+            verifiers: ProofVerifierRegistry::default(),
         });
         inner.bootstrap()?;
         Ok(Self { inner })
@@ -583,21 +591,8 @@ impl NodeInner {
     fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
         bundle.transaction.verify()?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            let verifier = NodeVerifier::new();
-            verifier.verify_transaction(&bundle.proof)?;
-            let witness_tx = match &bundle.proof.payload {
-                ProofPayload::Transaction(witness) => &witness.signed_tx,
-                _ => {
-                    return Err(ChainError::Crypto(
-                        "transaction proof payload mismatch".into(),
-                    ));
-                }
-            };
-            if witness_tx != &bundle.transaction {
-                return Err(ChainError::Crypto(
-                    "transaction proof does not match submitted transaction".into(),
-                ));
-            }
+            self.verifiers.verify_transaction(&bundle.proof)?;
+            Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
         }
         let mut mempool = self.mempool.write();
         if mempool.len() >= self.config.mempool_limit {
@@ -614,12 +609,48 @@ impl NodeInner {
         Ok(tx_hash)
     }
 
+    fn ensure_transaction_payload(
+        proof: &ChainProof,
+        expected: &SignedTransaction,
+    ) -> ChainResult<()> {
+        match proof {
+            ChainProof::Stwo(stark) => match &stark.payload {
+                ProofPayload::Transaction(witness) if &witness.signed_tx == expected => Ok(()),
+                ProofPayload::Transaction(_) => Err(ChainError::Crypto(
+                    "transaction proof does not match submitted transaction".into(),
+                )),
+                _ => Err(ChainError::Crypto(
+                    "transaction proof payload mismatch".into(),
+                )),
+            },
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(value) => {
+                let witness_value = value.get("witness").cloned().ok_or_else(|| {
+                    ChainError::Crypto("plonky3 transaction proof missing witness payload".into())
+                })?;
+                let witness: Plonky3TransactionWitness = serde_json::from_value(witness_value)
+                    .map_err(|err| {
+                        ChainError::Crypto(format!(
+                            "failed to decode plonky3 transaction witness: {err}"
+                        ))
+                    })?;
+                if &witness.transaction == expected {
+                    Ok(())
+                } else {
+                    Err(ChainError::Crypto(
+                        "transaction proof does not match submitted transaction".into(),
+                    ))
+                }
+            }
+        }
+    }
+
     fn submit_identity(&self, declaration: IdentityDeclaration) -> ChainResult<String> {
         let next_height = self.chain_tip.read().height.saturating_add(1);
         self.ledger.sync_epoch_for_height(next_height);
         if self.config.rollout.feature_gates.recursive_proofs {
-            let verifier = NodeVerifier::new();
-            verifier.verify_identity(&declaration.proof.zk_proof)?;
+            self.verifiers
+                .verify_identity(&declaration.proof.zk_proof)?;
         }
         declaration.verify()?;
 
@@ -923,7 +954,7 @@ impl NodeInner {
     }
 
     fn collect_proof_artifacts(
-        bundle: &BlockStarkProofs,
+        bundle: &BlockProofBundle,
         max_bytes: usize,
     ) -> ChainResult<Vec<ProofArtifact>> {
         let mut artifacts = Vec::new();
@@ -952,37 +983,43 @@ impl NodeInner {
 
     fn proof_artifact(
         module: ProofModule,
-        proof: &StarkProof,
+        proof: &ChainProof,
         max_bytes: usize,
     ) -> ChainResult<Option<ProofArtifact>> {
-        let bytes = match hex::decode(&proof.commitment) {
-            Ok(bytes) => bytes,
-            Err(_) => return Ok(None),
-        };
-        let mut commitment = [0u8; 32];
-        if bytes.len() >= 32 {
-            commitment.copy_from_slice(&bytes[..32]);
-        } else {
-            commitment[..bytes.len()].copy_from_slice(&bytes);
+        match proof {
+            ChainProof::Stwo(stark) => {
+                let bytes = match hex::decode(&stark.commitment) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return Ok(None),
+                };
+                let mut commitment = [0u8; 32];
+                if bytes.len() >= 32 {
+                    commitment.copy_from_slice(&bytes[..32]);
+                } else {
+                    commitment[..bytes.len()].copy_from_slice(&bytes);
+                }
+                let encoded = serde_json::to_vec(proof).map_err(|err| {
+                    ChainError::Config(format!(
+                        "failed to encode {:?} proof artifact: {err}",
+                        module
+                    ))
+                })?;
+                if encoded.len() > max_bytes {
+                    return Err(ChainError::Config(format!(
+                        "proof artifact for {:?} exceeds max_proof_size_bytes ({max_bytes})",
+                        module
+                    )));
+                }
+                Ok(Some(ProofArtifact {
+                    module,
+                    commitment,
+                    proof: encoded,
+                    verification_key: None,
+                }))
+            }
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => Ok(None),
         }
-        let encoded = serde_json::to_vec(proof).map_err(|err| {
-            ChainError::Config(format!(
-                "failed to encode {:?} proof artifact: {err}",
-                module
-            ))
-        })?;
-        if encoded.len() > max_bytes {
-            return Err(ChainError::Config(format!(
-                "proof artifact for {:?} exceeds max_proof_size_bytes ({max_bytes})",
-                module
-            )));
-        }
-        Ok(Some(ProofArtifact {
-            module,
-            commitment,
-            proof: encoded,
-            verification_key: None,
-        }))
     }
 
     fn produce_block(&self) -> ChainResult<()> {
@@ -1084,7 +1121,7 @@ impl NodeInner {
             .map(|bundle| (bundle.transaction, bundle.proof))
             .unzip();
 
-        let identity_proofs: Vec<StarkProof> = accepted_identities
+        let identity_proofs: Vec<ChainProof> = accepted_identities
             .iter()
             .map(|declaration| declaration.proof.zk_proof.clone())
             .collect();
@@ -1236,22 +1273,6 @@ impl NodeInner {
         let previous_recursive_stark = previous_block
             .as_ref()
             .map(|block| &block.stark.recursive_proof);
-        let recursive_witness = prover.build_recursive_witness(
-            previous_recursive_stark,
-            &identity_proofs,
-            &transaction_proofs,
-            &state_proof,
-            &pruning_stark,
-            header.height,
-        )?;
-        let recursive_stark = prover.prove_recursive(recursive_witness)?;
-
-        let stark_bundle = BlockStarkProofs::new(
-            transaction_proofs,
-            state_proof,
-            pruning_stark,
-            recursive_stark,
-        );
 
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
         if !round.commit_reached() {
@@ -1264,6 +1285,37 @@ impl NodeInner {
         let module_witnesses = self.ledger.drain_module_witnesses();
         let module_artifacts = self.ledger.stage_module_witnesses(&module_witnesses)?;
         let consensus_certificate = round.certificate();
+        let consensus_witness =
+            prover.build_consensus_witness(&block_hash_hex, &consensus_certificate)?;
+        let consensus_proof = prover.prove_consensus(consensus_witness)?;
+        let uptime_chain_proofs: Vec<ChainProof> = uptime_proofs
+            .iter()
+            .map(|proof| {
+                proof.proof.clone().ok_or_else(|| {
+                    ChainError::Crypto("uptime proof missing zk proof payload".into())
+                })
+            })
+            .collect::<ChainResult<_>>()?;
+        let consensus_chain_proofs = vec![consensus_proof.clone()];
+        let recursive_witness = prover.build_recursive_witness(
+            previous_recursive_stark,
+            &identity_proofs,
+            &transaction_proofs,
+            &uptime_chain_proofs,
+            &consensus_chain_proofs,
+            &commitments,
+            &state_proof,
+            &pruning_stark,
+            header.height,
+        )?;
+        let recursive_stark = prover.prove_recursive(recursive_witness)?;
+
+        let stark_bundle = BlockProofBundle::new(
+            transaction_proofs,
+            state_proof,
+            pruning_stark,
+            recursive_stark,
+        );
         let mut proof_artifacts =
             Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;
         proof_artifacts.extend(module_artifacts);
@@ -1282,6 +1334,7 @@ impl NodeInner {
             stark_bundle,
             signature,
             consensus_certificate,
+            Some(consensus_proof),
         );
         block.verify(previous_block.as_ref())?;
         self.storage.store_block(&block)?;

@@ -3,6 +3,11 @@ name = "rpp-chain"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["backend-stwo"]
+backend-stwo = ["dep:stwo"]
+backend-plonky3 = []
+
 [dependencies]
 anyhow = "1.0"
 axum = { version = "0.7", features = ["macros"] }
@@ -16,7 +21,7 @@ rand = "0.7"
 rocksdb = { version = "0.24", features = ["multi-threaded-cf"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-stwo = "1.0.0"
+stwo = { version = "1.0.0", optional = true }
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.8"

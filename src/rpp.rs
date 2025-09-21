@@ -44,6 +44,7 @@ pub enum CommitmentScheme {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProofSystemKind {
     Stwo,
+    Plonky3,
     Plonky2,
     Halo2,
 }

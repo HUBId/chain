@@ -458,7 +458,15 @@ mod tests {
                 aggregated_commitment,
                 identity_commitments: Vec::new(),
                 tx_commitments: Vec::new(),
+                uptime_commitments: Vec::new(),
+                consensus_commitments: Vec::new(),
                 state_commitment: "77".repeat(32),
+                global_state_root: "11".repeat(32),
+                utxo_root: "22".repeat(32),
+                reputation_root: "33".repeat(32),
+                timetoke_root: "44".repeat(32),
+                zsi_root: "55".repeat(32),
+                proof_root: "66".repeat(32),
                 pruning_commitment: "88".repeat(32),
                 block_height,
             }),
@@ -504,8 +512,15 @@ mod tests {
             Some(prev) => RecursiveProof::extend(&prev.recursive_proof, &header, &pruning_proof),
             None => RecursiveProof::genesis(&header, &pruning_proof),
         };
-        let previous_recursive_commitment =
-            previous.map(|block| block.stark.recursive_proof.commitment.clone());
+        let previous_recursive_commitment = previous.map(|block| {
+            block
+                .stark
+                .recursive_proof
+                .expect_stwo()
+                .expect("recursive proof")
+                .commitment
+                .clone()
+        });
         let recursive_stark = dummy_recursive_proof(
             previous_recursive_commitment,
             recursive_proof.chain_commitment.clone(),
@@ -525,11 +540,11 @@ mod tests {
                 verification_key: None,
             })
             .collect();
-        let stark_bundle = crate::types::BlockStarkProofs::new(
+        let stark_bundle = crate::types::BlockProofBundle::new(
             Vec::new(),
-            state_stark,
-            pruning_stark,
-            recursive_stark,
+            crate::types::ChainProof::Stwo(state_stark),
+            crate::types::ChainProof::Stwo(pruning_stark),
+            crate::types::ChainProof::Stwo(recursive_stark),
         );
         let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
         let mut consensus = ConsensusCertificate::genesis();
@@ -549,6 +564,7 @@ mod tests {
             stark_bundle,
             signature,
             consensus,
+            None,
         )
     }
 

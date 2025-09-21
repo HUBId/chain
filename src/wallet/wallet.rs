@@ -1,5 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
@@ -10,16 +11,15 @@ use crate::consensus::evaluate_vrf;
 use crate::crypto::{address_from_public_key, sign_message};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
+use crate::proof_system::ProofProver;
 use crate::reputation::Tier;
 use crate::storage::Storage;
-use crate::stwo::circuit::identity::IdentityWitness;
-use crate::stwo::prover::{StarkProver, WalletProver};
+use crate::stwo::prover::WalletProver;
 use crate::types::{
     Address, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction, Transaction,
-    TransactionProofBundle, UptimeProof,
+    TransactionProofBundle, UptimeClaim, UptimeProof,
 };
 
-use super::proofs::ProofGenerator;
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
 #[derive(Clone)]
@@ -27,7 +27,6 @@ pub struct Wallet {
     storage: Storage,
     keypair: Arc<Keypair>,
     address: Address,
-    proof_generator: ProofGenerator,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,12 +57,10 @@ pub struct ConsensusReceipt {
 impl Wallet {
     pub fn new(storage: Storage, keypair: Keypair) -> Self {
         let address = address_from_public_key(&keypair.public);
-        let proof_generator = ProofGenerator::new(address.clone());
         Self {
             storage,
             keypair: Arc::new(keypair),
             address,
-            proof_generator,
         }
     }
 
@@ -102,21 +99,9 @@ impl Wallet {
             commitment_proof: commitment_proof.clone(),
         };
 
-        let commitment_hex = genesis.expected_commitment()?;
-        let witness = IdentityWitness {
-            wallet_pk: genesis.wallet_pk.clone(),
-            wallet_addr: genesis.wallet_addr.clone(),
-            vrf_tag: genesis.vrf_tag.clone(),
-            epoch_nonce: genesis.epoch_nonce.clone(),
-            state_root: genesis.state_root.clone(),
-            identity_root: genesis.identity_root.clone(),
-            initial_reputation: genesis.initial_reputation,
-            commitment: commitment_hex.clone(),
-            identity_leaf: commitment_proof.leaf,
-            identity_path: commitment_proof.siblings,
-        };
-
         let prover = self.stark_prover();
+        let witness = prover.build_identity_witness(&genesis)?;
+        let commitment_hex = witness.commitment.clone();
         let proof = prover.prove_identity(witness)?;
         let identity_proof = IdentityProof {
             commitment: commitment_hex,
@@ -212,8 +197,38 @@ impl Wallet {
         Ok(TransactionProofBundle::new(tx.clone(), proof))
     }
 
-    pub fn generate_uptime_proof(&self) -> UptimeProof {
-        self.proof_generator.generate_uptime_proof()
+    pub fn generate_uptime_proof(&self) -> ChainResult<UptimeProof> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let window_end = now;
+        let window_start = window_end.saturating_sub(3600);
+        let node_clock = now;
+
+        let tip_metadata = self.storage.tip()?;
+        let (tip_height, head_hash) = match tip_metadata {
+            Some(meta) => (meta.height, meta.hash),
+            None => (0, hex::encode([0u8; 32])),
+        };
+
+        let accounts = self.storage.load_accounts()?;
+        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        ledger.sync_epoch_for_height(tip_height);
+        let epoch = ledger.current_epoch();
+
+        let claim = UptimeClaim {
+            wallet_address: self.address.clone(),
+            node_clock,
+            epoch,
+            head_hash,
+            window_start,
+            window_end,
+        };
+        let prover = self.stark_prover();
+        let witness = prover.build_uptime_witness(&claim)?;
+        let proof = prover.prove_uptime(witness)?;
+        Ok(UptimeProof::new(claim, proof))
     }
 
     pub fn history(&self) -> ChainResult<Vec<HistoryEntry>> {

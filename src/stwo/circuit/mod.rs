@@ -5,17 +5,21 @@ use serde::{Deserialize, Serialize};
 use crate::stwo::air::{AirDefinition, ConstraintCompressor};
 use crate::stwo::params::{FieldElement, StarkParameters};
 
+pub mod consensus;
 pub mod identity;
 pub mod pruning;
 pub mod recursive;
 pub mod state;
 pub mod transaction;
+pub mod uptime;
 
+pub use consensus::{ConsensusWitness, VotePower};
 pub use identity::IdentityWitness;
 pub use pruning::PruningWitness;
 pub use recursive::RecursiveWitness;
 pub use state::StateWitness;
 pub use transaction::TransactionWitness;
+pub use uptime::UptimeWitness;
 
 /// Execution trace segment captured while evaluating a circuit.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -7,6 +7,9 @@ pub mod identity_tree;
 pub mod ledger;
 pub mod migration;
 pub mod node;
+#[cfg(feature = "backend-plonky3")]
+pub mod plonky3;
+pub mod proof_system;
 pub mod reputation;
 pub mod rpp;
 pub mod state;

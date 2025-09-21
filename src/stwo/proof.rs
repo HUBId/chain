@@ -39,6 +39,8 @@ pub enum ProofKind {
     Pruning,
     Recursive,
     Identity,
+    Uptime,
+    Consensus,
 }
 
 /// Serialized witness payloads embedded in placeholder proofs. In a production
@@ -52,6 +54,8 @@ pub enum ProofPayload {
     Pruning(super::circuit::pruning::PruningWitness),
     Recursive(super::circuit::recursive::RecursiveWitness),
     Identity(super::circuit::identity::IdentityWitness),
+    Uptime(super::circuit::uptime::UptimeWitness),
+    Consensus(super::circuit::consensus::ConsensusWitness),
 }
 
 /// High-level container describing a STARK-style proof.

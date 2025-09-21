@@ -1,10 +1,55 @@
 //! Recursive aggregation helper utilities shared between the prover and wallet.
 
 use crate::errors::{ChainError, ChainResult};
+use crate::rpp::GlobalStateCommitments;
 
 use super::circuit::recursive::RecursiveWitness;
 use super::params::{FieldElement, PoseidonHasher, StarkParameters};
 use super::proof::{ProofKind, ProofPayload, StarkProof};
+
+/// Snapshot of the ledger commitments that must anchor the recursive witness.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateCommitmentSnapshot {
+    pub global_state_root: String,
+    pub utxo_root: String,
+    pub reputation_root: String,
+    pub timetoke_root: String,
+    pub zsi_root: String,
+    pub proof_root: String,
+}
+
+impl StateCommitmentSnapshot {
+    /// Build a snapshot from a ledger commitment bundle.
+    pub fn from_commitments(commitments: &GlobalStateCommitments) -> Self {
+        Self {
+            global_state_root: hex::encode(commitments.global_state_root),
+            utxo_root: hex::encode(commitments.utxo_root),
+            reputation_root: hex::encode(commitments.reputation_root),
+            timetoke_root: hex::encode(commitments.timetoke_root),
+            zsi_root: hex::encode(commitments.zsi_root),
+            proof_root: hex::encode(commitments.proof_root),
+        }
+    }
+
+    /// Construct a snapshot from pre-formatted header fields.
+    pub fn from_header_fields(
+        global_state_root: impl Into<String>,
+        utxo_root: impl Into<String>,
+        reputation_root: impl Into<String>,
+        timetoke_root: impl Into<String>,
+        zsi_root: impl Into<String>,
+        proof_root: impl Into<String>,
+    ) -> Self {
+        Self {
+            global_state_root: global_state_root.into(),
+            utxo_root: utxo_root.into(),
+            reputation_root: reputation_root.into(),
+            timetoke_root: timetoke_root.into(),
+            zsi_root: zsi_root.into(),
+            proof_root: proof_root.into(),
+        }
+    }
+}
 
 fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
@@ -41,7 +86,10 @@ fn compute_recursive_commitment(
     previous_commitment: Option<&str>,
     identity_commitments: &[String],
     tx_commitments: &[String],
+    uptime_commitments: &[String],
+    consensus_commitments: &[String],
     state_commitment: &str,
+    state_roots: &StateCommitmentSnapshot,
     pruning_commitment: &str,
     block_height: u64,
 ) -> FieldElement {
@@ -52,16 +100,22 @@ fn compute_recursive_commitment(
 
     let mut all_commitments = identity_commitments.to_vec();
     all_commitments.extend_from_slice(tx_commitments);
-    let tx_digest = fold_commitments(&hasher, parameters, &all_commitments);
-    let state_element = string_to_field(parameters, state_commitment);
+    all_commitments.extend_from_slice(uptime_commitments);
+    all_commitments.extend_from_slice(consensus_commitments);
+    let activity_digest = fold_commitments(&hasher, parameters, &all_commitments);
     let pruning_element = string_to_field(parameters, pruning_commitment);
-    let state_pruning_digest = hasher.hash(&[
-        state_element,
-        pruning_element,
+    let state_digest = hasher.hash(&[
+        string_to_field(parameters, state_commitment),
+        string_to_field(parameters, &state_roots.global_state_root),
+        string_to_field(parameters, &state_roots.utxo_root),
+        string_to_field(parameters, &state_roots.reputation_root),
+        string_to_field(parameters, &state_roots.timetoke_root),
+        string_to_field(parameters, &state_roots.zsi_root),
+        string_to_field(parameters, &state_roots.proof_root),
         parameters.element_from_u64(block_height),
     ]);
 
-    hasher.hash(&[previous, state_pruning_digest, tx_digest])
+    hasher.hash(&[previous, state_digest, pruning_element, activity_digest])
 }
 
 fn extract_previous_commitment(previous: Option<&StarkProof>) -> ChainResult<Option<String>> {
@@ -97,13 +151,17 @@ impl RecursiveAggregator {
     }
 
     /// Build the recursive witness combining the supplied proof commitments.
+    #[allow(clippy::too_many_arguments)]
     pub fn build_witness(
         &self,
         previous_recursive: Option<&StarkProof>,
         identity_proofs: &[StarkProof],
         tx_proofs: &[StarkProof],
+        uptime_proofs: &[StarkProof],
+        consensus_proofs: &[StarkProof],
         state_proof: &StarkProof,
         pruning_proof: &StarkProof,
+        state_roots: &StateCommitmentSnapshot,
         block_height: u64,
     ) -> ChainResult<RecursiveWitness> {
         let previous_commitment = extract_previous_commitment(previous_recursive)?;
@@ -120,6 +178,18 @@ impl RecursiveAggregator {
             tx_commitments.push(proof.commitment.clone());
         }
 
+        let mut uptime_commitments = Vec::with_capacity(uptime_proofs.len());
+        for proof in uptime_proofs {
+            ensure_kind(proof, ProofKind::Uptime)?;
+            uptime_commitments.push(proof.commitment.clone());
+        }
+
+        let mut consensus_commitments = Vec::with_capacity(consensus_proofs.len());
+        for proof in consensus_proofs {
+            ensure_kind(proof, ProofKind::Consensus)?;
+            consensus_commitments.push(proof.commitment.clone());
+        }
+
         ensure_kind(state_proof, ProofKind::State)?;
         ensure_kind(pruning_proof, ProofKind::Pruning)?;
 
@@ -128,7 +198,10 @@ impl RecursiveAggregator {
             previous_commitment.as_deref(),
             &identity_commitments,
             &tx_commitments,
+            &uptime_commitments,
+            &consensus_commitments,
             &state_proof.commitment,
+            state_roots,
             &pruning_proof.commitment,
             block_height,
         );
@@ -138,8 +211,16 @@ impl RecursiveAggregator {
             aggregated_commitment: aggregated.to_hex(),
             identity_commitments,
             tx_commitments,
+            uptime_commitments,
+            consensus_commitments,
             state_commitment: state_proof.commitment.clone(),
             pruning_commitment: pruning_proof.commitment.clone(),
+            global_state_root: state_roots.global_state_root.clone(),
+            utxo_root: state_roots.utxo_root.clone(),
+            reputation_root: state_roots.reputation_root.clone(),
+            timetoke_root: state_roots.timetoke_root.clone(),
+            zsi_root: state_roots.zsi_root.clone(),
+            proof_root: state_roots.proof_root.clone(),
             block_height,
         })
     }
@@ -150,7 +231,10 @@ impl RecursiveAggregator {
         previous_commitment: Option<&str>,
         identity_commitments: &[String],
         tx_commitments: &[String],
+        uptime_commitments: &[String],
+        consensus_commitments: &[String],
         state_commitment: &str,
+        state_roots: &StateCommitmentSnapshot,
         pruning_commitment: &str,
         block_height: u64,
     ) -> FieldElement {
@@ -159,7 +243,10 @@ impl RecursiveAggregator {
             previous_commitment,
             identity_commitments,
             tx_commitments,
+            uptime_commitments,
+            consensus_commitments,
             state_commitment,
+            state_roots,
             pruning_commitment,
             block_height,
         )
@@ -170,11 +257,13 @@ impl RecursiveAggregator {
 mod tests {
     use super::*;
     use crate::reputation::{ReputationWeights, Tier};
+    use crate::stwo::circuit::consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower};
     use crate::stwo::circuit::identity::IdentityWitness;
     use crate::stwo::circuit::pruning::PruningWitness;
     use crate::stwo::circuit::recursive::RecursiveWitness as CircuitRecursiveWitness;
     use crate::stwo::circuit::state::StateWitness;
     use crate::stwo::circuit::transaction::TransactionWitness;
+    use crate::stwo::circuit::uptime::UptimeWitness;
     use crate::stwo::circuit::{ExecutionTrace, TraceSegment};
     use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
     use crate::types::{Account, SignedTransaction, Stake, Transaction};
@@ -310,25 +399,90 @@ mod tests {
         )
     }
 
+    fn dummy_uptime_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
+        let witness = UptimeWitness {
+            wallet_address: "wallet".into(),
+            node_clock: 10,
+            epoch: 1,
+            head_hash: "aa".repeat(32),
+            window_start: 0,
+            window_end: 5,
+            commitment: commitment.clone(),
+        };
+        make_proof(
+            parameters,
+            ProofKind::Uptime,
+            ProofPayload::Uptime(witness),
+            commitment,
+        )
+    }
+
+    fn dummy_consensus_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
+        let vote = VotePower {
+            voter: "validator".into(),
+            weight: 1,
+        };
+        let witness = CircuitConsensusWitness {
+            block_hash: "bb".repeat(32),
+            round: 1,
+            leader_proposal: "bb".repeat(32),
+            quorum_threshold: 1,
+            pre_votes: vec![vote.clone()],
+            pre_commits: vec![vote.clone()],
+            commit_votes: vec![vote],
+        };
+        make_proof(
+            parameters,
+            ProofKind::Consensus,
+            ProofPayload::Consensus(witness),
+            commitment,
+        )
+    }
+
+    fn sample_state_roots(seed: u64) -> StateCommitmentSnapshot {
+        let base = seed * 10;
+        StateCommitmentSnapshot::from_header_fields(
+            format!("{:064x}", base),
+            format!("{:064x}", base + 1),
+            format!("{:064x}", base + 2),
+            format!("{:064x}", base + 3),
+            format!("{:064x}", base + 4),
+            format!("{:064x}", base + 5),
+        )
+    }
+
     fn dummy_recursive_proof(
         parameters: &StarkParameters,
         aggregated_commitment: String,
         previous_commitment: Option<String>,
         identity_commitments: Option<Vec<String>>,
         tx_commitments: Option<Vec<String>>,
+        uptime_commitments: Option<Vec<String>>,
+        consensus_commitments: Option<Vec<String>>,
         state_commitment: String,
+        state_roots: StateCommitmentSnapshot,
         pruning_commitment: String,
         block_height: u64,
     ) -> StarkProof {
         let identities =
             identity_commitments.unwrap_or_else(|| vec![aggregated_commitment.clone()]);
-        let commitments = tx_commitments.unwrap_or_default();
+        let tx_commitments = tx_commitments.unwrap_or_default();
+        let uptime_commitments = uptime_commitments.unwrap_or_default();
+        let consensus_commitments = consensus_commitments.unwrap_or_default();
         let witness = CircuitRecursiveWitness {
             previous_commitment,
             aggregated_commitment: aggregated_commitment.clone(),
             identity_commitments: identities,
-            tx_commitments: commitments,
+            tx_commitments,
+            uptime_commitments,
+            consensus_commitments,
             state_commitment,
+            global_state_root: state_roots.global_state_root,
+            utxo_root: state_roots.utxo_root,
+            reputation_root: state_roots.reputation_root,
+            timetoke_root: state_roots.timetoke_root,
+            zsi_root: state_roots.zsi_root,
+            proof_root: state_roots.proof_root,
             pruning_commitment,
             block_height,
         };
@@ -361,12 +515,27 @@ mod tests {
                     .to_hex()
             })
             .collect();
+        let uptime_commitments: Vec<String> = (20..=21)
+            .map(|idx| {
+                hasher
+                    .hash(&[params.element_from_u64(idx), zero.clone(), zero.clone()])
+                    .to_hex()
+            })
+            .collect();
+        let consensus_commitments: Vec<String> = (30..=30)
+            .map(|idx| {
+                hasher
+                    .hash(&[params.element_from_u64(idx), zero.clone(), zero.clone()])
+                    .to_hex()
+            })
+            .collect();
         let state_commitment = hasher
             .hash(&[params.element_from_u64(99), zero.clone(), zero.clone()])
             .to_hex();
         let pruning_commitment = hasher
             .hash(&[params.element_from_u64(77), zero.clone(), zero.clone()])
             .to_hex();
+        let state_roots = sample_state_roots(2);
 
         let previous_identity_commitments = vec![
             hasher
@@ -384,11 +553,15 @@ mod tests {
         let previous_pruning_commitment = hasher
             .hash(&[params.element_from_u64(7), zero.clone(), zero.clone()])
             .to_hex();
+        let previous_state_roots = sample_state_roots(1);
         let previous_field = aggregator.aggregate_commitment(
             None,
             &previous_identity_commitments,
             &previous_tx_commitments,
+            &[],
+            &[],
             &previous_state_commitment,
+            &previous_state_roots,
             &previous_pruning_commitment,
             1,
         );
@@ -399,7 +572,10 @@ mod tests {
             None,
             Some(previous_identity_commitments.clone()),
             Some(previous_tx_commitments.clone()),
+            Some(Vec::new()),
+            Some(Vec::new()),
             previous_state_commitment.clone(),
+            previous_state_roots.clone(),
             previous_pruning_commitment.clone(),
             1,
         );
@@ -414,6 +590,16 @@ mod tests {
             .cloned()
             .map(|commitment| dummy_transaction_proof(&params, commitment))
             .collect();
+        let uptime_proofs: Vec<StarkProof> = uptime_commitments
+            .iter()
+            .cloned()
+            .map(|commitment| dummy_uptime_proof(&params, commitment))
+            .collect();
+        let consensus_proofs: Vec<StarkProof> = consensus_commitments
+            .iter()
+            .cloned()
+            .map(|commitment| dummy_consensus_proof(&params, commitment))
+            .collect();
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
         let pruning_proof = dummy_pruning_proof(&params, pruning_commitment.clone());
 
@@ -422,8 +608,11 @@ mod tests {
                 Some(&previous_proof),
                 &identity_proofs,
                 &tx_proofs,
+                &uptime_proofs,
+                &consensus_proofs,
                 &state_proof,
                 &pruning_proof,
+                &state_roots,
                 2,
             )
             .expect("recursive witness");
@@ -436,15 +625,26 @@ mod tests {
             Some(previous_commitment_hex.as_str()),
             &identity_commitments,
             &tx_commitments,
+            &uptime_commitments,
+            &consensus_commitments,
             &state_commitment,
+            &state_roots,
             &pruning_commitment,
             2,
         );
         assert_eq!(witness.aggregated_commitment, expected.to_hex());
         assert_eq!(witness.identity_commitments, identity_commitments);
         assert_eq!(witness.tx_commitments, tx_commitments);
+        assert_eq!(witness.uptime_commitments, uptime_commitments);
+        assert_eq!(witness.consensus_commitments, consensus_commitments);
         assert_eq!(witness.state_commitment, state_commitment);
         assert_eq!(witness.pruning_commitment, pruning_commitment);
+        assert_eq!(witness.global_state_root, state_roots.global_state_root);
+        assert_eq!(witness.utxo_root, state_roots.utxo_root);
+        assert_eq!(witness.reputation_root, state_roots.reputation_root);
+        assert_eq!(witness.timetoke_root, state_roots.timetoke_root);
+        assert_eq!(witness.zsi_root, state_roots.zsi_root);
+        assert_eq!(witness.proof_root, state_roots.proof_root);
     }
 
     #[test]
@@ -463,17 +663,23 @@ mod tests {
         let identity_commitment = hasher
             .hash(&[params.element_from_u64(25), zero.clone(), zero.clone()])
             .to_hex();
+        let state_roots = sample_state_roots(3);
+
         let previous_tx_commitments = vec![
             hasher
                 .hash(&[params.element_from_u64(3), zero.clone(), zero.clone()])
                 .to_hex(),
         ];
         let previous_identity_commitments = vec![identity_commitment.clone()];
+        let previous_roots = sample_state_roots(2);
         let previous_aggregate = aggregator.aggregate_commitment(
             None,
             &previous_identity_commitments,
             &previous_tx_commitments,
+            &[],
+            &[],
             &state_commitment,
+            &previous_roots,
             &pruning_commitment,
             1,
         );
@@ -484,7 +690,10 @@ mod tests {
             None,
             Some(previous_identity_commitments.clone()),
             Some(previous_tx_commitments),
+            Some(Vec::new()),
+            Some(Vec::new()),
             state_commitment.clone(),
+            previous_roots.clone(),
             pruning_commitment.clone(),
             1,
         );
@@ -498,8 +707,11 @@ mod tests {
                 Some(&previous),
                 &[identity_proof],
                 &[],
+                &[],
+                &[],
                 &state_proof,
                 &pruning_proof,
+                &state_roots,
                 2,
             )
             .expect("recursive witness with identity commitments");
@@ -510,11 +722,16 @@ mod tests {
             vec![identity_commitment.clone()]
         );
         assert!(witness.tx_commitments.is_empty());
+        assert!(witness.uptime_commitments.is_empty());
+        assert!(witness.consensus_commitments.is_empty());
         let expected = aggregator.aggregate_commitment(
             Some(previous_hex.as_str()),
             &[identity_commitment],
             &[],
+            &[],
+            &[],
             &state_commitment,
+            &state_roots,
             &pruning_commitment,
             2,
         );

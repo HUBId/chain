@@ -7,8 +7,8 @@ use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof};
 use crate::stwo::circuit::identity::IdentityWitness;
 use crate::stwo::circuit::string_to_field;
 use crate::stwo::params::StarkParameters;
-use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
-use crate::types::Address;
+use crate::stwo::proof::{ProofKind, ProofPayload};
+use crate::types::{Address, ChainProof};
 
 /// Zero-knowledge backed genesis declaration for a sovereign identity.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -44,7 +44,7 @@ pub struct IdentityProof {
     /// Blake2s commitment over the public inputs of the ZK circuit.
     pub commitment: String,
     /// Deterministic STARK proof attesting to the identity constraints.
-    pub zk_proof: StarkProof,
+    pub zk_proof: ChainProof,
 }
 
 impl IdentityGenesis {
@@ -220,17 +220,18 @@ impl IdentityProof {
                 "identity proof commitment mismatch".into(),
             ));
         }
-        if self.zk_proof.commitment != self.commitment {
+        let stark_proof = self.zk_proof.expect_stwo()?;
+        if stark_proof.commitment != self.commitment {
             return Err(ChainError::Transaction(
                 "embedded proof commitment does not match declared commitment".into(),
             ));
         }
-        if self.zk_proof.kind != ProofKind::Identity {
+        if stark_proof.kind != ProofKind::Identity {
             return Err(ChainError::Transaction(
                 "embedded proof is not an identity proof".into(),
             ));
         }
-        match &self.zk_proof.payload {
+        match &stark_proof.payload {
             ProofPayload::Identity(witness) => {
                 if witness.wallet_pk != genesis.wallet_pk
                     || witness.wallet_addr != genesis.wallet_addr

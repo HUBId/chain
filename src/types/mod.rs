@@ -1,7 +1,7 @@
 mod account;
 mod block;
 mod identity;
-mod stwo;
+mod proofs;
 mod transaction;
 mod uptime;
 
@@ -14,8 +14,8 @@ pub use block::{
     TimetokeUpdate,
 };
 pub use identity::{IdentityDeclaration, IdentityGenesis, IdentityProof};
-pub use stwo::{BlockStarkProofs, TransactionProofBundle};
+pub use proofs::{BlockProofBundle, ChainProof, TransactionProofBundle};
 pub use transaction::{SignedTransaction, Transaction, TransactionEnvelope};
-pub use uptime::UptimeProof;
+pub use uptime::{UptimeClaim, UptimeProof};
 
 pub type Address = String;

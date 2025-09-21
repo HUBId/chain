@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use crate::consensus::{ConsensusCertificate, SignedBftVote};
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
-use crate::storage::{CF_BLOCKS, CF_METADATA, SCHEMA_VERSION_KEY, STORAGE_SCHEMA_VERSION, Storage};
+use crate::storage::{CF_BLOCKS, CF_METADATA, STORAGE_SCHEMA_VERSION, Storage};
 use crate::types::{
-    Block, BlockHeader, BlockStarkProofs, IdentityDeclaration, PruningProof, RecursiveProof,
+    Block, BlockHeader, BlockProofBundle, IdentityDeclaration, PruningProof, RecursiveProof,
     ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
 };
 
@@ -135,7 +135,7 @@ struct LegacyBlockV0 {
     pub proof_artifacts: Vec<ProofArtifact>,
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
-    pub stark: BlockStarkProofs,
+    pub stark: BlockProofBundle,
     pub signature: String,
     pub consensus: ConsensusCertificate,
     pub hash: String,
@@ -193,6 +193,7 @@ impl LegacyBlockV0 {
             proof_artifacts,
             pruning_proof,
             recursive_proof,
+            consensus_proof: None,
             stark,
             signature,
             consensus,
@@ -229,11 +230,17 @@ mod tests {
     use crate::crypto::{generate_keypair, signature_to_hex};
     use crate::reputation::{ReputationWeights, Tier};
     use crate::rpp::ProofModule;
+    use crate::storage::SCHEMA_VERSION_KEY;
     use crate::stwo::circuit::{
-        ExecutionTrace, TraceSegment, pruning::PruningWitness, recursive::RecursiveWitness,
+        ExecutionTrace, TraceSegment,
+        consensus::{ConsensusWitness, VotePower},
+        pruning::PruningWitness,
+        recursive::RecursiveWitness,
         state::StateWitness,
+        uptime::UptimeWitness,
     };
     use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::types::ChainProof;
     use ed25519_dalek::Signer;
     use tempfile::tempdir;
 
@@ -260,9 +267,44 @@ mod tests {
                 aggregated_commitment: "77".repeat(32),
                 identity_commitments: vec!["88".repeat(32)],
                 tx_commitments: vec!["99".repeat(32)],
+                uptime_commitments: vec!["aa".repeat(32)],
+                consensus_commitments: vec!["bb".repeat(32)],
                 state_commitment: "aa".repeat(32),
+                global_state_root: "cc".repeat(32),
+                utxo_root: "dd".repeat(32),
+                reputation_root: "ee".repeat(32),
+                timetoke_root: "ff".repeat(32),
+                zsi_root: "11".repeat(32),
+                proof_root: "22".repeat(32),
                 pruning_commitment: "bb".repeat(32),
                 block_height: 1,
+            }),
+            ProofKind::Uptime => ProofPayload::Uptime(UptimeWitness {
+                wallet_address: "alice".into(),
+                node_clock: 10_000,
+                epoch: 1,
+                head_hash: "11".repeat(32),
+                window_start: 5_000,
+                window_end: 8_600,
+                commitment: "22".repeat(32),
+            }),
+            ProofKind::Consensus => ProofPayload::Consensus(ConsensusWitness {
+                block_hash: "33".repeat(32),
+                round: 1,
+                leader_proposal: "33".repeat(32),
+                quorum_threshold: 1,
+                pre_votes: vec![VotePower {
+                    voter: "alice".into(),
+                    weight: 1,
+                }],
+                pre_commits: vec![VotePower {
+                    voter: "alice".into(),
+                    weight: 1,
+                }],
+                commit_votes: vec![VotePower {
+                    voter: "alice".into(),
+                    weight: 1,
+                }],
             }),
             _ => ProofPayload::State(StateWitness {
                 prev_state_root: "11".repeat(32),
@@ -342,11 +384,11 @@ mod tests {
             }],
             pruning_proof: pruning,
             recursive_proof: recursive,
-            stark: BlockStarkProofs {
-                transaction_proofs: vec![dummy_proof(ProofKind::Transaction)],
-                state_proof: dummy_proof(ProofKind::State),
-                pruning_proof: dummy_proof(ProofKind::Pruning),
-                recursive_proof: dummy_proof(ProofKind::Recursive),
+            stark: BlockProofBundle {
+                transaction_proofs: vec![ChainProof::Stwo(dummy_proof(ProofKind::Transaction))],
+                state_proof: ChainProof::Stwo(dummy_proof(ProofKind::State)),
+                pruning_proof: ChainProof::Stwo(dummy_proof(ProofKind::Pruning)),
+                recursive_proof: ChainProof::Stwo(dummy_proof(ProofKind::Recursive)),
             },
             signature: signature_to_hex(&signature),
             consensus: ConsensusCertificate::genesis(),
