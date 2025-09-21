@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 
 use rpp_chain::api;
 use rpp_chain::config::NodeConfig;
-use rpp_chain::crypto::{generate_keypair, save_keypair};
+use rpp_chain::crypto::{generate_keypair, generate_vrf_keypair, save_keypair, save_vrf_keypair};
 use rpp_chain::migration;
 use rpp_chain::node::Node;
 
@@ -36,6 +36,8 @@ enum Commands {
     Keygen {
         #[arg(short, long, default_value = "keys/node.toml")]
         path: PathBuf,
+        #[arg(long, default_value = "keys/vrf.toml")]
+        vrf_path: PathBuf,
     },
     /// Upgrade the on-disk storage schema to the latest format
     Migrate {
@@ -56,7 +58,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Start { config } => start_node(config).await?,
         Commands::GenerateConfig { path } => generate_config(path)?,
-        Commands::Keygen { path } => keygen(path)?,
+        Commands::Keygen { path, vrf_path } => keygen(path, vrf_path)?,
         Commands::Migrate { config, dry_run } => migrate_storage(config, dry_run)?,
     }
 
@@ -99,10 +101,12 @@ fn generate_config(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn keygen(path: PathBuf) -> Result<()> {
+fn keygen(path: PathBuf, vrf_path: PathBuf) -> Result<()> {
     let keypair = generate_keypair();
     save_keypair(&path, &keypair)?;
-    info!(?path, "generated node keypair");
+    let vrf_keypair = generate_vrf_keypair()?;
+    save_vrf_keypair(&vrf_path, &vrf_keypair)?;
+    info!(?path, ?vrf_path, "generated node and VRF keypairs");
     Ok(())
 }
 

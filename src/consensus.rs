@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use malachite::Natural;
@@ -7,17 +6,16 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::crypto::{
-    address_from_public_key, public_key_from_hex, signature_from_hex, verify_signature,
+    VrfPublicKey, VrfSecretKey, address_from_public_key, public_key_from_hex, signature_from_hex,
+    verify_signature, vrf_public_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::types::{Account, Address, Stake};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VrfProof {
-    pub randomness: Natural,
-    pub proof: String,
-}
+#[cfg(test)]
+use crate::vrf::VrfSubmission;
+use crate::vrf::{self, PoseidonVrfInput, VerifiedSubmission, VrfProof, VrfSubmissionPool};
+use tracing::warn;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProposerSelection {
@@ -28,6 +26,7 @@ pub struct ProposerSelection {
     pub quorum_threshold: Natural,
     pub timetoke_hours: u64,
     pub tier: Tier,
+    pub vrf_public_key: String,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -128,7 +127,6 @@ impl ConsensusCertificate {
     }
 }
 
-const VRF_SELECTION_WINDOW: u64 = 1_000_000;
 const MAX_TIMETOKE_HOURS: u64 = 24 * 30;
 
 #[derive(Clone, Debug)]
@@ -148,7 +146,7 @@ pub struct ValidatorProfile {
     pub tier: Tier,
     pub timetoke_hours: u64,
     pub vrf: VrfProof,
-    pub selection_slot: u64,
+    pub randomness: Natural,
 }
 
 impl ValidatorProfile {
@@ -194,86 +192,6 @@ pub fn classify_participants(
     (validators, observers)
 }
 
-struct EvaluatedCandidate {
-    profile: ValidatorCandidate,
-    vrf: VrfProof,
-    slot: u64,
-    threshold: u64,
-}
-
-impl EvaluatedCandidate {
-    fn into_validator_profile(self) -> ValidatorProfile {
-        ValidatorProfile {
-            address: self.profile.address,
-            stake: self.profile.stake,
-            reputation_score: self.profile.reputation_score,
-            tier: self.profile.tier,
-            timetoke_hours: self.profile.timetoke_hours,
-            vrf: self.vrf,
-            selection_slot: self.slot,
-        }
-    }
-}
-
-fn timetoke_threshold(hours: u64) -> u64 {
-    let base = VRF_SELECTION_WINDOW / 10;
-    let capped = hours.min(MAX_TIMETOKE_HOURS);
-    if MAX_TIMETOKE_HOURS == 0 {
-        return base;
-    }
-    let bonus_range = VRF_SELECTION_WINDOW.saturating_sub(base);
-    base + (bonus_range * capped) / MAX_TIMETOKE_HOURS
-}
-
-fn vrf_selection_slot(proof: &VrfProof) -> u64 {
-    match hex::decode(&proof.proof) {
-        Ok(bytes) if bytes.len() >= 8 => {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&bytes[..8]);
-            u64::from_be_bytes(buf) % VRF_SELECTION_WINDOW
-        }
-        Ok(bytes) => {
-            let mut buf = [0u8; 8];
-            let start = 8 - bytes.len();
-            buf[start..].copy_from_slice(&bytes);
-            u64::from_be_bytes(buf) % VRF_SELECTION_WINDOW
-        }
-        Err(_) => VRF_SELECTION_WINDOW.saturating_sub(1),
-    }
-}
-
-fn candidate_cmp(a: &EvaluatedCandidate, b: &EvaluatedCandidate) -> Ordering {
-    let tier_cmp = a.profile.tier.cmp(&b.profile.tier);
-    if tier_cmp != Ordering::Equal {
-        return tier_cmp;
-    }
-    let timetoke_cmp = a.profile.timetoke_hours.cmp(&b.profile.timetoke_hours);
-    if timetoke_cmp != Ordering::Equal {
-        return timetoke_cmp;
-    }
-    let slot_cmp = b.slot.cmp(&a.slot);
-    if slot_cmp != Ordering::Equal {
-        return slot_cmp;
-    }
-    b.profile.address.cmp(&a.profile.address)
-}
-
-fn leader_cmp(a: &ValidatorProfile, b: &ValidatorProfile) -> Ordering {
-    let tier_cmp = a.tier.cmp(&b.tier);
-    if tier_cmp != Ordering::Equal {
-        return tier_cmp;
-    }
-    let timetoke_cmp = a.timetoke_hours.cmp(&b.timetoke_hours);
-    if timetoke_cmp != Ordering::Equal {
-        return timetoke_cmp;
-    }
-    let slot_cmp = b.selection_slot.cmp(&a.selection_slot);
-    if slot_cmp != Ordering::Equal {
-        return slot_cmp;
-    }
-    b.address.cmp(&a.address)
-}
-
 fn quorum_threshold(total: &Natural) -> Natural {
     if *total == Natural::from(0u32) {
         return Natural::from(0u32);
@@ -311,7 +229,25 @@ pub fn evaluate_vrf(
     round: u64,
     address: &Address,
     timetoke_hours: u64,
+    secret: Option<&VrfSecretKey>,
 ) -> VrfProof {
+    if let Some(secret_key) = secret {
+        let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
+        let input = PoseidonVrfInput::new(*seed, round, tier_seed);
+        match vrf::generate_vrf(&input, secret_key) {
+            Ok(output) => {
+                return VrfProof::from_output(&output);
+            }
+            Err(err) => {
+                warn!(
+                    %address,
+                    ?err,
+                    "failed to generate VRF via Poseidon backend; falling back to legacy hash"
+                );
+            }
+        }
+    }
+
     let data = vrf_domain(seed, round, address, timetoke_hours);
     let hash = Blake2sHasher::hash(&data);
     let hash_bytes: [u8; 32] = hash.into();
@@ -327,8 +263,26 @@ pub fn verify_vrf(
     address: &Address,
     timetoke_hours: u64,
     proof: &VrfProof,
+    public: Option<&VrfPublicKey>,
 ) -> bool {
-    let expected = evaluate_vrf(seed, round, address, timetoke_hours);
+    if let Some(public_key) = public {
+        if let Ok(output) = proof.to_vrf_output() {
+            let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
+            let input = PoseidonVrfInput::new(*seed, round, tier_seed);
+            match vrf::verify_vrf(&input, public_key, &output) {
+                Ok(()) => return true,
+                Err(err) => {
+                    warn!(
+                        %address,
+                        ?err,
+                        "Poseidon VRF verification failed; falling back to legacy hash",
+                    );
+                }
+            }
+        }
+    }
+
+    let expected = evaluate_vrf(seed, round, address, timetoke_hours, None);
     expected.proof == proof.proof && expected.randomness == proof.randomness
 }
 
@@ -341,6 +295,9 @@ pub struct ConsensusRound {
     voting_power: HashMap<Address, Natural>,
     total_power: Natural,
     quorum: Natural,
+    validator_submissions: HashMap<Address, VerifiedSubmission>,
+    vrf_audit: Vec<vrf::VrfSelectionRecord>,
+    vrf_metrics: vrf::VrfSelectionMetrics,
     proposal: Option<ProposerSelection>,
     pre_votes: Vec<VoteRecord>,
     pre_commits: Vec<VoteRecord>,
@@ -356,49 +313,67 @@ impl ConsensusRound {
     pub fn new(
         round: u64,
         seed: [u8; 32],
+        target_validator_count: usize,
         candidates: Vec<ValidatorCandidate>,
         observers: Vec<ObserverProfile>,
+        submissions: &VrfSubmissionPool,
     ) -> Self {
         let mut voting_power = HashMap::new();
         let mut total_power = Natural::from(0u32);
         let mut validators = Vec::new();
-        let mut fallback: Option<EvaluatedCandidate> = None;
+        let mut validator_submissions = HashMap::new();
+        let mut candidate_map = HashMap::new();
+
         for candidate in candidates.into_iter() {
-            let vrf = evaluate_vrf(&seed, round, &candidate.address, candidate.timetoke_hours);
-            let slot = vrf_selection_slot(&vrf);
-            let threshold = timetoke_threshold(candidate.timetoke_hours);
-            let evaluated = EvaluatedCandidate {
-                profile: candidate,
-                vrf,
-                slot,
-                threshold,
-            };
-            if evaluated.slot <= evaluated.threshold {
-                let profile = evaluated.into_validator_profile();
+            candidate_map.insert(candidate.address.clone(), candidate);
+        }
+
+        let selection = vrf::select_validators(submissions, target_validator_count);
+        let vrf_metrics = selection.metrics.clone();
+        for submission in &selection.validators {
+            if !submission.verified {
+                warn!(address = %submission.address, "ignoring unverified VRF submission");
+                continue;
+            }
+            if let Some(candidate) = candidate_map.get(&submission.address) {
+                let profile = ValidatorProfile {
+                    address: candidate.address.clone(),
+                    stake: candidate.stake.clone(),
+                    reputation_score: candidate.reputation_score,
+                    tier: candidate.tier.clone(),
+                    timetoke_hours: candidate.timetoke_hours,
+                    vrf: submission.proof.clone(),
+                    randomness: submission.randomness.clone(),
+                };
                 let power = profile.voting_power();
                 total_power += power.clone();
                 voting_power.insert(profile.address.clone(), power);
+                validator_submissions.insert(submission.address.clone(), submission.clone());
                 validators.push(profile);
-            } else {
-                match &mut fallback {
-                    Some(current) => {
-                        if candidate_cmp(&evaluated, current) == Ordering::Greater {
-                            *current = evaluated;
-                        }
-                    }
-                    None => {
-                        fallback = Some(evaluated);
-                    }
-                }
             }
         }
+
         if validators.is_empty() {
-            if let Some(evaluated) = fallback {
-                let profile = evaluated.into_validator_profile();
-                let power = profile.voting_power();
-                total_power += power.clone();
-                voting_power.insert(profile.address.clone(), power);
-                validators.push(profile);
+            if let Some(fallback) = selection.fallback.clone() {
+                if !fallback.submission.verified {
+                    warn!(address = %fallback.submission.address, "ignoring unverified fallback submission");
+                } else if let Some(candidate) = candidate_map.get(&fallback.submission.address) {
+                    let profile = ValidatorProfile {
+                        address: candidate.address.clone(),
+                        stake: candidate.stake.clone(),
+                        reputation_score: candidate.reputation_score,
+                        tier: candidate.tier.clone(),
+                        timetoke_hours: candidate.timetoke_hours,
+                        vrf: fallback.submission.proof.clone(),
+                        randomness: fallback.submission.randomness.clone(),
+                    };
+                    let power = profile.voting_power();
+                    total_power += power.clone();
+                    voting_power.insert(profile.address.clone(), power);
+                    validator_submissions
+                        .insert(fallback.submission.address.clone(), fallback.submission);
+                    validators.push(profile);
+                }
             }
         }
         validators.sort_by(|a, b| a.address.cmp(&b.address));
@@ -411,6 +386,9 @@ impl ConsensusRound {
             voting_power,
             total_power,
             quorum,
+            validator_submissions,
+            vrf_audit: selection.audit.clone(),
+            vrf_metrics,
             proposal: None,
             pre_votes: Vec::new(),
             pre_commits: Vec::new(),
@@ -439,6 +417,14 @@ impl ConsensusRound {
         &self.validators
     }
 
+    pub fn vrf_audit(&self) -> &[vrf::VrfSelectionRecord] {
+        &self.vrf_audit
+    }
+
+    pub fn vrf_metrics(&self) -> &vrf::VrfSelectionMetrics {
+        &self.vrf_metrics
+    }
+
     pub fn commit_participants(&self) -> Vec<Address> {
         let mut participants: Vec<Address> = self.precommit_voters.iter().cloned().collect();
         participants.sort();
@@ -458,15 +444,36 @@ impl ConsensusRound {
     }
 
     pub fn select_proposer(&mut self) -> Option<ProposerSelection> {
-        let leader = self.validators.iter().max_by(|a, b| leader_cmp(a, b))?;
+        let submissions: Vec<VerifiedSubmission> = self
+            .validators
+            .iter()
+            .filter_map(|profile| self.validator_submissions.get(&profile.address).cloned())
+            .collect();
+        let leader_submission = vrf::select_leader(&submissions)?;
+        let public_key = match leader_submission.public_key.as_ref() {
+            Some(key) => key,
+            None => {
+                warn!(
+                    address = %leader_submission.address,
+                    "selected leader is missing VRF public key"
+                );
+                return None;
+            }
+        };
+        let public_key_hex = vrf_public_key_to_hex(public_key);
+        let leader = self
+            .validators
+            .iter()
+            .find(|profile| profile.address == leader_submission.address)?;
         let selection = ProposerSelection {
             proposer: leader.address.clone(),
-            randomness: leader.vrf.randomness.clone(),
-            proof: leader.vrf.clone(),
+            randomness: leader_submission.proof.randomness.clone(),
+            proof: leader_submission.proof.clone(),
             total_voting_power: self.total_power.clone(),
             quorum_threshold: self.quorum.clone(),
             timetoke_hours: leader.timetoke_hours,
             tier: leader.tier.clone(),
+            vrf_public_key: public_key_hex,
         };
         self.proposal = Some(selection.clone());
         Some(selection)
@@ -583,13 +590,15 @@ pub fn aggregate_total_stake(entries: &[(Address, Stake)]) -> Natural {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::address_from_public_key;
+    use crate::crypto::{address_from_public_key, generate_vrf_keypair};
     use crate::reputation::Tier;
     use crate::types::{Account, Stake};
     use ed25519_dalek::{Keypair, Signer};
     use rand::rngs::OsRng;
 
-    fn validator_round() -> (ConsensusRound, Keypair, Address, String) {
+    fn validator_round_with_target(
+        target_validator_count: usize,
+    ) -> (ConsensusRound, Keypair, Address, String) {
         let mut rng = OsRng;
         let keypair = Keypair::generate(&mut rng);
         let address = address_from_public_key(&keypair.public);
@@ -597,11 +606,36 @@ mod tests {
         account.reputation.tier = Tier::Tl3;
         account.reputation.score = 1.0;
         account.reputation.timetokes.hours_online = super::MAX_TIMETOKE_HOURS;
-        let (validators, observers) = classify_participants(&[account]);
-        let mut round = ConsensusRound::new(1, [0u8; 32], validators, observers);
+        let (validators, observers) = classify_participants(&[account.clone()]);
+        let mut pool = VrfSubmissionPool::new();
+        let tier_seed = vrf::derive_tier_seed(&address, account.reputation.timetokes.hours_online);
+        let input = PoseidonVrfInput::new([0u8; 32], 1, tier_seed);
+        let vrf_keypair = generate_vrf_keypair().expect("vrf keypair");
+        let output = vrf::generate_vrf(&input, &vrf_keypair.secret).expect("generate vrf");
+        let submission = VrfSubmission {
+            address: address.clone(),
+            public_key: Some(vrf_keypair.public.clone()),
+            input,
+            proof: VrfProof::from_output(&output),
+            tier: account.reputation.tier.clone(),
+            timetoke_hours: account.reputation.timetokes.hours_online,
+        };
+        vrf::submit_vrf(&mut pool, submission);
+        let mut round = ConsensusRound::new(
+            1,
+            [0u8; 32],
+            target_validator_count,
+            validators,
+            observers,
+            &pool,
+        );
         let block_hash = hex::encode([5u8; 32]);
         round.set_block_hash(block_hash.clone());
         (round, keypair, address, block_hash)
+    }
+
+    fn validator_round() -> (ConsensusRound, Keypair, Address, String) {
+        validator_round_with_target(100)
     }
 
     #[test]
@@ -660,5 +694,29 @@ mod tests {
         };
         let err = round.register_prevote(&signed).unwrap_err();
         assert!(matches!(err, ChainError::Crypto(_)));
+    }
+
+    #[test]
+    fn consensus_round_reports_vrf_metrics() {
+        let (round, _, _, _) = validator_round();
+        let metrics = round.vrf_metrics().clone();
+        assert_eq!(metrics.pool_entries, 1);
+        assert_eq!(metrics.verified_submissions, 1);
+        assert_eq!(metrics.accepted_validators, 1);
+        assert_eq!(metrics.rejected_candidates, 0);
+        assert!(!metrics.fallback_selected);
+        assert_eq!(metrics.target_validator_count, 100);
+    }
+
+    #[test]
+    fn consensus_round_metrics_flag_fallback_usage() {
+        let (round, _, _, _) = validator_round_with_target(0);
+        let metrics = round.vrf_metrics().clone();
+        assert_eq!(metrics.pool_entries, 1);
+        assert_eq!(metrics.verified_submissions, 1);
+        assert_eq!(metrics.accepted_validators, 0);
+        assert!(metrics.rejected_candidates >= 1);
+        assert!(metrics.fallback_selected);
+        assert_eq!(metrics.target_validator_count, 0);
     }
 }

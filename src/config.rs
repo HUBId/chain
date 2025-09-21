@@ -12,6 +12,7 @@ use crate::types::Stake;
 pub struct NodeConfig {
     pub data_dir: PathBuf,
     pub key_path: PathBuf,
+    pub vrf_key_path: PathBuf,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
     #[serde(default = "default_proof_cache_dir")]
@@ -24,6 +25,8 @@ pub struct NodeConfig {
     pub mempool_limit: usize,
     #[serde(default = "default_epoch_length")]
     pub epoch_length: u64,
+    #[serde(default = "default_target_validator_count")]
+    pub target_validator_count: usize,
     #[serde(default = "default_max_proof_size_bytes")]
     pub max_proof_size_bytes: usize,
     #[serde(default)]
@@ -37,6 +40,10 @@ fn default_max_block_identity_registrations() -> usize {
 
 fn default_epoch_length() -> u64 {
     DEFAULT_EPOCH_LENGTH
+}
+
+fn default_target_validator_count() -> usize {
+    100
 }
 
 fn default_snapshot_dir() -> PathBuf {
@@ -72,6 +79,9 @@ impl NodeConfig {
         if let Some(parent) = self.key_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        if let Some(parent) = self.vrf_key_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::create_dir_all(&self.snapshot_dir)?;
         fs::create_dir_all(&self.proof_cache_dir)?;
         Ok(())
@@ -83,6 +93,7 @@ impl Default for NodeConfig {
         Self {
             data_dir: PathBuf::from("./data"),
             key_path: PathBuf::from("./keys/node.toml"),
+            vrf_key_path: PathBuf::from("./keys/vrf.toml"),
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
             rpc_listen: "127.0.0.1:7070".parse().expect("valid socket addr"),
@@ -91,6 +102,7 @@ impl Default for NodeConfig {
             max_block_identity_registrations: default_max_block_identity_registrations(),
             mempool_limit: 8_192,
             epoch_length: default_epoch_length(),
+            target_validator_count: default_target_validator_count(),
             max_proof_size_bytes: default_max_proof_size_bytes(),
             rollout: RolloutConfig::default(),
             genesis: GenesisConfig::default(),

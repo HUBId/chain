@@ -2,6 +2,7 @@
 
 data_dir = "./data"
 key_path = "./keys/node.toml"
+vrf_key_path = "./keys/vrf.toml"
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"
 rpc_listen = "127.0.0.1:7070"
@@ -10,6 +11,7 @@ max_block_transactions = 512
 max_block_identity_registrations = 32
 mempool_limit = 8192
 epoch_length = 1440
+target_validator_count = 100
 max_proof_size_bytes = 4194304
 
 [rollout]

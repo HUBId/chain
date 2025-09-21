@@ -10,7 +10,7 @@ It integrates:
 
 ## Features
 
-- Deterministic stake-weighted proposer selection backed by Malachite `Natural` arithmetic.
+- Deterministic stake-weighted proposer selection backed by Malachite `Natural` arithmetic plus Poseidon-based VRF proofs for validator fairness.
 - RocksDB-backed storage with column families for blocks, accounts, and metadata.
 - Ed25519 transaction signing and verification with Stwo hashing for all payload commitments.
 - HTTP/JSON API powered by Axum for transaction submission and state inspection.
@@ -35,8 +35,8 @@ cargo test
 # Create a default configuration file
 cargo run -- generate-config --path config/node.toml
 
-# Generate a new Ed25519 keypair for the node
-cargo run -- keygen --path keys/node.toml
+# Generate new Ed25519 + VRF keypairs for the node
+cargo run -- keygen --path keys/node.toml --vrf-path keys/vrf.toml
 ```
 
 ### Run storage migrations
@@ -64,6 +64,7 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 - `GET /blocks/{height}` – Fetch a specific block by height.
 - `GET /accounts/{address}` – Inspect account balance, nonce, and stake.
 - `POST /transactions` – Submit a signed transaction (JSON body matching `SignedTransaction`).
+- `GET /status/node` – Runtime snapshot with mempool occupancy and the latest VRF selection metrics.
 
 ## Configuration Highlights
 
@@ -71,11 +72,13 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 
 - `data_dir`: persistent storage directory (RocksDB is stored in `data_dir/db`).
 - `key_path`: location of the node's Ed25519 keypair file.
+- `vrf_key_path`: path to the node's Poseidon VRF keypair (auto-created on first launch).
 - `snapshot_dir`: directory where reconstructed state snapshots are materialized.
 - `proof_cache_dir`: location for cached recursive/STARK proof blobs.
 - `rpc_listen`: HTTP API address.
 - `block_time_ms`: block production interval in milliseconds.
 - `max_block_transactions` / `mempool_limit`: throughput tuning knobs.
+- `epoch_length` / `target_validator_count`: consensus epoch duration and desired validator set size driving VRF thresholds.
 - `max_proof_size_bytes`: upper bound accepted for proof artifacts during deployment.
 - `rollout.release_channel`: deployment channel (`development`, `testnet`, `canary`, `mainnet`) reflected in node status.
 - `rollout.feature_gates`: toggles for pruning, recursive proofs, reconstruction, and consensus enforcement.
@@ -85,7 +88,7 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 ### Rollout & Telemetry
 
 - `GET /status/rollout` – Inspect the current rollout channel, enabled feature gates, and telemetry runtime state.
-- When telemetry is enabled, the node periodically emits JSON snapshots with node, consensus, and mempool metrics to the log (and tags the configured endpoint for external scrapers).
+- When telemetry is enabled, the node periodically emits JSON snapshots with node, consensus, mempool, and VRF selection metrics to the log (and tags the configured endpoint for external scrapers).
 
 ## Development Notes
 

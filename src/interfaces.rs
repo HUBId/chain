@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use malachite::Natural;
 use serde::{Deserialize, Serialize};
 
-use crate::consensus::{SignedBftVote, VrfProof};
+use crate::consensus::SignedBftVote;
 use crate::errors::ChainResult;
 use crate::reputation::{ReputationProfile, Tier};
 use crate::rpp::TimetokeRecord;
 use crate::types::{
     Address, Block, BlockProofBundle, SignedTransaction, TransactionProofBundle, UptimeProof,
 };
+use crate::vrf::{VrfProof, VrfSubmission};
 use crate::wallet::Wallet;
 
 /// Identifier used for epoch-specific consensus state.
@@ -153,6 +154,7 @@ pub trait ConsensusEngine {
     fn current_epoch(&self) -> EpochId;
     fn validator_set(&self, epoch: EpochId) -> ChainResult<ValidatorSet>;
     fn leader_for(&self, epoch: EpochId, round: RoundId) -> ChainResult<LeaderAssignment>;
+    fn submit_vrf(&self, submission: VrfSubmission) -> ChainResult<()>;
     fn submit_proposal(&self, block: Block) -> ChainResult<()>;
     fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<()>;
 }
@@ -199,6 +201,7 @@ pub trait RewardDistributor {
 pub trait ConsensusNetwork {
     fn broadcast_block(&self, block: &Block) -> ChainResult<()>;
     fn broadcast_vote(&self, vote: &SignedBftVote) -> ChainResult<()>;
+    fn broadcast_vrf_submission(&self, submission: &VrfSubmission) -> ChainResult<()>;
     fn broadcast_proof(&self, proof: &BlockProofBundle) -> ChainResult<()>;
     fn broadcast_snapshot(&self, records: &[TimetokeRecord]) -> ChainResult<()>;
     fn broadcast_meta(&self, event: &NetworkMetaEvent) -> ChainResult<()>;
@@ -217,6 +220,7 @@ pub struct NetworkMetaEvent {
 pub trait ValidatorNode {
     fn wallet(&self) -> &Wallet;
     fn profile(&self) -> ChainResult<ValidatorProfile>;
+    fn submit_vrf(&self, submission: VrfSubmission) -> ChainResult<()>;
     fn propose_block(&self, block: Block) -> ChainResult<()>;
     fn cast_vote(&self, vote: SignedBftVote) -> ChainResult<()>;
     fn receive_rewards(&self, payouts: &[RewardPayout]) -> ChainResult<()>;
