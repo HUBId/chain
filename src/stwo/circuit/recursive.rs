@@ -12,7 +12,15 @@ pub struct RecursiveWitness {
     pub aggregated_commitment: String,
     pub identity_commitments: Vec<String>,
     pub tx_commitments: Vec<String>,
+    pub uptime_commitments: Vec<String>,
+    pub consensus_commitments: Vec<String>,
     pub state_commitment: String,
+    pub global_state_root: String,
+    pub utxo_root: String,
+    pub reputation_root: String,
+    pub timetoke_root: String,
+    pub zsi_root: String,
+    pub proof_root: String,
     pub pruning_commitment: String,
     pub block_height: u64,
 }
@@ -54,17 +62,23 @@ impl RecursiveCircuit {
             Some(value) => Self::decode_field(params, value)?,
             None => FieldElement::zero(params.modulus()),
         };
-        let state_element = Self::decode_field(params, &self.witness.state_commitment)?;
         let pruning_element = Self::decode_field(params, &self.witness.pruning_commitment)?;
-        let state_pruning_digest = hasher.hash(&[
-            state_element,
-            pruning_element,
-            params.element_from_u64(self.witness.block_height),
-        ]);
         let mut commitments = self.witness.identity_commitments.clone();
         commitments.extend(self.witness.tx_commitments.clone());
-        let tx_digest = Self::fold_commitments(&hasher, params, &commitments)?;
-        let final_inputs = vec![previous, state_pruning_digest, tx_digest];
+        commitments.extend(self.witness.uptime_commitments.clone());
+        commitments.extend(self.witness.consensus_commitments.clone());
+        let activity_digest = Self::fold_commitments(&hasher, params, &commitments)?;
+        let state_digest = hasher.hash(&[
+            Self::decode_field(params, &self.witness.state_commitment)?,
+            Self::decode_field(params, &self.witness.global_state_root)?,
+            Self::decode_field(params, &self.witness.utxo_root)?,
+            Self::decode_field(params, &self.witness.reputation_root)?,
+            Self::decode_field(params, &self.witness.timetoke_root)?,
+            Self::decode_field(params, &self.witness.zsi_root)?,
+            Self::decode_field(params, &self.witness.proof_root)?,
+            params.element_from_u64(self.witness.block_height),
+        ]);
+        let final_inputs = vec![previous, state_digest, pruning_element, activity_digest];
         Ok(hasher.hash(&final_inputs))
     }
 }
@@ -75,7 +89,11 @@ impl StarkCircuit for RecursiveCircuit {
     }
 
     fn evaluate_constraints(&self) -> Result<(), CircuitError> {
-        if self.witness.identity_commitments.is_empty() && self.witness.tx_commitments.is_empty() {
+        if self.witness.identity_commitments.is_empty()
+            && self.witness.tx_commitments.is_empty()
+            && self.witness.uptime_commitments.is_empty()
+            && self.witness.consensus_commitments.is_empty()
+        {
             return Err(CircuitError::ConstraintViolation(
                 "recursive witness missing aggregated commitments".into(),
             ));
@@ -98,6 +116,8 @@ impl StarkCircuit for RecursiveCircuit {
         let mut fold_rows = Vec::new();
         let mut commitments = self.witness.identity_commitments.clone();
         commitments.extend(self.witness.tx_commitments.clone());
+        commitments.extend(self.witness.uptime_commitments.clone());
+        commitments.extend(self.witness.consensus_commitments.clone());
         for commitment in commitments.iter() {
             let commitment_element = Self::decode_field(parameters, commitment)?;
             let next = hasher.hash(&[
@@ -109,7 +129,7 @@ impl StarkCircuit for RecursiveCircuit {
             accumulator = next;
         }
         let fold_segment = TraceSegment::new(
-            "tx_fold",
+            "commit_fold",
             vec![
                 "accumulator_in".to_string(),
                 "commitment".to_string(),
@@ -122,16 +142,21 @@ impl StarkCircuit for RecursiveCircuit {
             Some(value) => Self::decode_field(parameters, value)?,
             None => FieldElement::zero(parameters.modulus()),
         };
-        let state_element = Self::decode_field(parameters, &self.witness.state_commitment)?;
         let pruning_element = Self::decode_field(parameters, &self.witness.pruning_commitment)?;
-        let state_pruning_digest = hasher.hash(&[
-            state_element,
-            pruning_element,
+        let state_digest = hasher.hash(&[
+            Self::decode_field(parameters, &self.witness.state_commitment)?,
+            Self::decode_field(parameters, &self.witness.global_state_root)?,
+            Self::decode_field(parameters, &self.witness.utxo_root)?,
+            Self::decode_field(parameters, &self.witness.reputation_root)?,
+            Self::decode_field(parameters, &self.witness.timetoke_root)?,
+            Self::decode_field(parameters, &self.witness.zsi_root)?,
+            Self::decode_field(parameters, &self.witness.proof_root)?,
             parameters.element_from_u64(self.witness.block_height),
         ]);
         let aggregate = hasher.hash(&[
             previous.clone(),
-            state_pruning_digest.clone(),
+            state_digest.clone(),
+            pruning_element.clone(),
             accumulator.clone(),
         ]);
         let witness_commitment =
@@ -140,14 +165,16 @@ impl StarkCircuit for RecursiveCircuit {
             "aggregation",
             vec![
                 "previous".to_string(),
-                "state_pruning_digest".to_string(),
-                "tx_digest".to_string(),
+                "state_digest".to_string(),
+                "pruning".to_string(),
+                "activity_digest".to_string(),
                 "aggregate_computed".to_string(),
                 "aggregate_witness".to_string(),
             ],
             vec![vec![
                 previous,
-                state_pruning_digest,
+                state_digest,
+                pruning_element,
                 accumulator,
                 aggregate.clone(),
                 witness_commitment,
@@ -162,7 +189,7 @@ impl StarkCircuit for RecursiveCircuit {
         parameters: &StarkParameters,
         trace: &ExecutionTrace,
     ) -> Result<AirDefinition, CircuitError> {
-        let fold_segment = "tx_fold";
+        let fold_segment = "commit_fold";
         let accumulator_in = AirColumn::new(fold_segment, "accumulator_in");
         let accumulator_out = AirColumn::new(fold_segment, "accumulator_out");
 

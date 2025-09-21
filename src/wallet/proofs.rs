@@ -40,12 +40,6 @@ impl ProofGenerator {
             .unwrap_or_default()
             .as_secs();
         let window_start = now.saturating_sub(3600);
-        let commitment = UptimeProof::commitment_bytes(&self.wallet_address, window_start, now);
-        UptimeProof {
-            wallet_address: self.wallet_address.clone(),
-            window_start,
-            window_end: now,
-            proof_commitment: hex::encode(commitment),
-        }
+        UptimeProof::legacy(self.wallet_address.clone(), window_start, now)
     }
 }

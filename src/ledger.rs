@@ -6,6 +6,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
+use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, Tier};
 use crate::rpp::{
     AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
@@ -397,6 +398,16 @@ impl Ledger {
                 "uptime proof commitment mismatch".into(),
             ));
         }
+        if let Some(zk_proof) = &proof.proof {
+            let registry = ProofVerifierRegistry::default();
+            registry.verify_uptime(zk_proof)?;
+            let claim = proof.claim()?;
+            if claim.wallet_address != proof.wallet_address {
+                return Err(ChainError::Transaction(
+                    "uptime proof wallet address mismatch".into(),
+                ));
+            }
+        }
         let module_before = self.module_records(&proof.wallet_address);
         let (credited_hours, updated_account) = {
             let mut accounts = self.global_state.write_accounts();
@@ -778,8 +789,8 @@ mod tests {
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
     use crate::types::{
-        IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction, Transaction,
-        UptimeProof,
+        ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction,
+        Transaction, UptimeProof,
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use std::collections::{HashMap, HashSet};
@@ -846,7 +857,7 @@ mod tests {
             genesis,
             proof: IdentityProof {
                 commitment: commitment_hex,
-                zk_proof: proof,
+                zk_proof: ChainProof::Stwo(proof),
             },
         }
     }
@@ -1011,13 +1022,7 @@ mod tests {
 
         let window_start = 3_600;
         let window_end = 10_800;
-        let commitment = UptimeProof::commitment_bytes(&address, window_start, window_end);
-        let proof = UptimeProof {
-            wallet_address: address.clone(),
-            window_start,
-            window_end,
-            proof_commitment: hex::encode(commitment),
-        };
+        let proof = UptimeProof::legacy(address.clone(), window_start, window_end);
 
         let total_hours = ledger.apply_uptime_proof(&proof).unwrap();
         assert_eq!(total_hours, 2);
@@ -1039,22 +1044,11 @@ mod tests {
 
         let first_start = 1_000;
         let first_end = first_start + 3_600;
-        let commitment = UptimeProof::commitment_bytes(&address, first_start, first_end);
-        let proof = UptimeProof {
-            wallet_address: address.clone(),
-            window_start: first_start,
-            window_end: first_end,
-            proof_commitment: hex::encode(commitment),
-        };
+        let proof = UptimeProof::legacy(address.clone(), first_start, first_end);
 
         ledger.apply_uptime_proof(&proof).unwrap();
 
-        let duplicate = UptimeProof {
-            wallet_address: address.clone(),
-            window_start: first_start,
-            window_end: first_end,
-            proof_commitment: proof.proof_commitment.clone(),
-        };
+        let duplicate = UptimeProof::legacy(address.clone(), first_start, first_end);
 
         let err = ledger.apply_uptime_proof(&duplicate).unwrap_err();
         assert!(matches!(err, ChainError::Transaction(_)));
@@ -1070,26 +1064,17 @@ mod tests {
 
         let first_start = 0;
         let first_end = 3_600;
-        let first_commitment = UptimeProof::commitment_bytes(&address, first_start, first_end);
-        let first_proof = UptimeProof {
-            wallet_address: address.clone(),
-            window_start: first_start,
-            window_end: first_end,
-            proof_commitment: hex::encode(first_commitment),
-        };
+        let first_proof = UptimeProof::legacy(address.clone(), first_start, first_end);
 
         ledger.apply_uptime_proof(&first_proof).unwrap();
 
         // Second proof overlaps the first hour but extends for two additional hours.
         let second_start = 1_800; // overlaps with the already credited hour
         let second_end = 10_800; // extends two new hours beyond the first proof
-        let second_commitment = UptimeProof::commitment_bytes(&address, second_start, second_end);
-        let second_proof = UptimeProof {
-            wallet_address: address.clone(),
-            window_start: second_start,
-            window_end: second_end,
-            proof_commitment: hex::encode(second_commitment),
-        };
+        let mut second_proof = UptimeProof::legacy(address.clone(), second_start, second_end);
+        second_proof.node_clock = Some(second_end);
+        second_proof.epoch = Some(0);
+        second_proof.head_hash = Some(hex::encode([0u8; 32]));
 
         let total_hours = ledger.apply_uptime_proof(&second_proof).unwrap();
         assert_eq!(total_hours, 3);
