@@ -4,10 +4,11 @@ use std::mem;
 use parking_lot::RwLock;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
+use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
 use crate::proof_system::ProofVerifierRegistry;
-use crate::reputation::{self, Tier};
+use crate::reputation::{self, ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{
     AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
     ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
@@ -73,6 +74,8 @@ pub struct Ledger {
     epoch_length: u64,
     epoch_state: RwLock<EpochState>,
     slashing_log: RwLock<Vec<SlashingEvent>>,
+    reputation_params: ReputationParams,
+    timetoke_params: TimetokeParams,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -119,6 +122,8 @@ impl Ledger {
             epoch_length: epoch_length.max(1),
             epoch_state: RwLock::new(EpochState::new(u64::MAX, [0u8; 32])),
             slashing_log: RwLock::new(Vec::new()),
+            reputation_params: ReputationParams::default(),
+            timetoke_params: TimetokeParams::default(),
         };
         ledger.sync_epoch_for_height(0);
         ledger
@@ -164,6 +169,71 @@ impl Ledger {
 
     pub fn accounts_snapshot(&self) -> Vec<Account> {
         self.global_state.accounts_snapshot()
+    }
+
+    pub fn timetoke_snapshot(&self) -> Vec<TimetokeRecord> {
+        let now = reputation::current_timestamp();
+        let mut accounts = self.global_state.write_accounts();
+        let mut records = Vec::new();
+        let mut touched = Vec::new();
+        for account in accounts.values_mut() {
+            let mut updated = false;
+            if account
+                .reputation
+                .timetokes
+                .apply_decay(now, &self.timetoke_params)
+                .is_some()
+            {
+                account
+                    .reputation
+                    .recompute_with_params(&self.reputation_params, now);
+                account.reputation.update_decay_reference(now);
+                updated = true;
+            }
+            if account
+                .reputation
+                .timetokes
+                .should_sync(now, &self.timetoke_params)
+            {
+                account.reputation.timetokes.mark_synced(now);
+                records.push(account.reputation.timetokes.as_record(&account.address));
+                updated = true;
+            }
+            if updated {
+                touched.push(account.clone());
+            }
+        }
+        drop(accounts);
+        for account in &touched {
+            self.index_account_modules(account);
+        }
+        records.sort_by(|a, b| a.identity.cmp(&b.identity));
+        records
+    }
+
+    pub fn sync_timetoke_records(&self, records: &[TimetokeRecord]) -> ChainResult<Vec<Address>> {
+        let mut accounts = self.global_state.write_accounts();
+        let mut updated_accounts = Vec::new();
+        let now = reputation::current_timestamp();
+        for record in records {
+            if let Some(account) = accounts.get_mut(&record.identity) {
+                if account.reputation.timetokes.merge_snapshot(record) {
+                    account
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
+                    account.reputation.update_decay_reference(now);
+                    updated_accounts.push(account.clone());
+                }
+            }
+        }
+        drop(accounts);
+        for account in &updated_accounts {
+            self.index_account_modules(account);
+        }
+        Ok(updated_accounts
+            .into_iter()
+            .map(|account| account.address)
+            .collect())
     }
 
     fn module_records(&self, address: &str) -> ModuleRecordSnapshots {
@@ -419,19 +489,25 @@ impl Ledger {
                     "uptime proof requires a validated genesis identity".into(),
                 ));
             }
-            if !account
+            let credited = account
                 .reputation
-                .record_online_proof(proof.window_start, proof.window_end)
-            {
+                .record_online_proof(proof.window_start, proof.window_end, &self.timetoke_params)
+                .ok_or_else(|| {
+                    ChainError::Transaction(
+                        "uptime proof does not extend the recorded online window".into(),
+                    )
+                })?;
+            if credited == 0 {
                 return Err(ChainError::Transaction(
                     "uptime proof does not extend the recorded online window".into(),
                 ));
             }
-            let weights = crate::reputation::ReputationWeights::default();
             let now = crate::reputation::current_timestamp();
-            account.reputation.recompute_score(&weights, now);
+            account
+                .reputation
+                .recompute_with_params(&self.reputation_params, now);
             account.reputation.update_decay_reference(now);
-            (account.reputation.timetokes.hours_online, account.clone())
+            (credited, account.clone())
         };
         self.index_account_modules(&updated_account);
         let module_after = self.module_records(&proof.wallet_address);
@@ -463,7 +539,6 @@ impl Ledger {
         tx.verify()?;
         let module_sender_before = self.module_records(&tx.payload.from);
         let module_recipient_before = self.module_records(&tx.payload.to);
-        let weights = crate::reputation::ReputationWeights::default();
         let now = crate::reputation::current_timestamp();
         let (binding_change, sender_before, sender_after, recipient_before, recipient_after) = {
             let mut accounts = self.global_state.write_accounts();
@@ -486,6 +561,10 @@ impl Ledger {
                 let before = sender.clone();
                 sender.balance -= total;
                 sender.nonce += 1;
+                sender
+                    .reputation
+                    .recompute_with_params(&self.reputation_params, now);
+                sender.reputation.update_decay_reference(now);
                 let after = sender.clone();
                 (binding_change, before, after)
             };
@@ -495,14 +574,18 @@ impl Ledger {
                     let recipient = existing.get_mut();
                     let before = recipient.clone();
                     recipient.balance = recipient.balance.saturating_add(tx.payload.amount);
-                    recipient.reputation.recompute_score(&weights, now);
+                    recipient
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
                     recipient.reputation.update_decay_reference(now);
                     (Some(before), recipient.clone())
                 }
                 Entry::Vacant(entry) => {
                     let mut account = Account::new(tx.payload.to.clone(), 0, Stake::default());
                     account.balance = tx.payload.amount;
-                    account.reputation.recompute_score(&weights, now);
+                    account
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
                     account.reputation.update_decay_reference(now);
                     let inserted = entry.insert(account);
                     (None, inserted.clone())
@@ -598,9 +681,10 @@ impl Ledger {
                     account.bind_node_identity()?;
                     account.balance = account.balance.saturating_add(reward as u128);
                     account.reputation.record_consensus_success();
-                    let weights = crate::reputation::ReputationWeights::default();
                     let now = crate::reputation::current_timestamp();
-                    account.reputation.recompute_score(&weights, now);
+                    account
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
                     account.reputation.update_decay_reference(now);
                     account.clone()
                 }
@@ -609,9 +693,10 @@ impl Ledger {
                     account.bind_node_identity()?;
                     account.balance = account.balance.saturating_add(reward as u128);
                     account.reputation.record_consensus_success();
-                    let weights = crate::reputation::ReputationWeights::default();
                     let now = crate::reputation::current_timestamp();
-                    account.reputation.recompute_score(&weights, now);
+                    account
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
                     account.reputation.update_decay_reference(now);
                     let inserted = entry.insert(account);
                     inserted.clone()
@@ -629,6 +714,58 @@ impl Ledger {
                 reputation_after,
             ));
         }
+        Ok(())
+    }
+
+    pub fn distribute_consensus_rewards(
+        &self,
+        leader: &Address,
+        validators: &[ConsensusValidatorProfile],
+        base_reward: u64,
+        leader_bonus_percent: u8,
+    ) -> ChainResult<()> {
+        if validators.is_empty() {
+            return Ok(());
+        }
+
+        let validator_count = validators.len() as u64;
+        let base_share = base_reward / validator_count;
+        let mut remainder = base_reward.saturating_sub(base_share * validator_count);
+
+        let leader_bonus = if leader_bonus_percent == 0 {
+            0
+        } else {
+            let raw = (u128::from(base_reward) * u128::from(leader_bonus_percent)) + 99;
+            (raw / 100).min(u128::from(u64::MAX)) as u64
+        };
+
+        let mut ordered: Vec<_> = validators.to_vec();
+        ordered.sort_by(|a, b| {
+            b.tier
+                .cmp(&a.tier)
+                .then(b.timetoke_hours.cmp(&a.timetoke_hours))
+                .then(b.selection_slot.cmp(&a.selection_slot))
+                .then(a.address.cmp(&b.address))
+        });
+
+        let mut leader_rewarded = false;
+        for profile in ordered {
+            let mut payout = base_share;
+            if remainder > 0 {
+                payout = payout.saturating_add(1);
+                remainder -= 1;
+            }
+            if &profile.address == leader {
+                payout = payout.saturating_add(leader_bonus);
+                leader_rewarded = true;
+            }
+            self.reward_proposer(&profile.address, payout)?;
+        }
+
+        if !leader_rewarded && leader_bonus > 0 {
+            self.reward_proposer(leader, leader_bonus)?;
+        }
+
         Ok(())
     }
 
@@ -802,7 +939,7 @@ mod tests {
         let wallet_pk = hex::encode(&pk_bytes);
         let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
         let epoch_nonce_bytes = ledger.current_epoch_nonce();
-        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr);
+        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0);
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,
@@ -976,6 +1113,72 @@ mod tests {
     }
 
     #[test]
+    fn distributes_consensus_rewards_with_leader_bonus() {
+        use crate::consensus::{ValidatorProfile as RoundValidator, VrfProof};
+        use malachite::Natural;
+
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let leader_address = "aa".repeat(16);
+        let peer_one = "bb".repeat(16);
+        let peer_two = "cc".repeat(16);
+
+        let validators = vec![
+            RoundValidator {
+                address: leader_address.clone(),
+                stake: Stake::from_u128(1_000),
+                reputation_score: 1.2,
+                tier: Tier::Tl4,
+                timetoke_hours: 180,
+                vrf: VrfProof {
+                    randomness: Natural::from(42u32),
+                    proof: "00ff".to_string(),
+                },
+                selection_slot: 5,
+            },
+            RoundValidator {
+                address: peer_one.clone(),
+                stake: Stake::from_u128(900),
+                reputation_score: 1.0,
+                tier: Tier::Tl3,
+                timetoke_hours: 160,
+                vrf: VrfProof {
+                    randomness: Natural::from(24u32),
+                    proof: "00aa".to_string(),
+                },
+                selection_slot: 7,
+            },
+            RoundValidator {
+                address: peer_two.clone(),
+                stake: Stake::from_u128(800),
+                reputation_score: 0.95,
+                tier: Tier::Tl3,
+                timetoke_hours: 120,
+                vrf: VrfProof {
+                    randomness: Natural::from(11u32),
+                    proof: "0099".to_string(),
+                },
+                selection_slot: 9,
+            },
+        ];
+
+        ledger
+            .distribute_consensus_rewards(&leader_address, &validators, 100, 20)
+            .unwrap();
+
+        let leader = ledger.get_account(&leader_address).unwrap();
+        let one = ledger.get_account(&peer_one).unwrap();
+        let two = ledger.get_account(&peer_two).unwrap();
+
+        assert_eq!(leader.balance, 54);
+        assert_eq!(one.balance, 33);
+        assert_eq!(two.balance, 33);
+
+        assert_eq!(leader.reputation.consensus_success, 1);
+        assert_eq!(one.reputation.consensus_success, 1);
+        assert_eq!(two.reputation.consensus_success, 1);
+    }
+
+    #[test]
     fn reputation_audit_reflects_account_state() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let mut account = Account::new("audited".into(), 5_000, Stake::from_u128(1_000));
@@ -1024,8 +1227,8 @@ mod tests {
         let window_end = 10_800;
         let proof = UptimeProof::legacy(address.clone(), window_start, window_end);
 
-        let total_hours = ledger.apply_uptime_proof(&proof).unwrap();
-        assert_eq!(total_hours, 2);
+        let credited_hours = ledger.apply_uptime_proof(&proof).unwrap();
+        assert_eq!(credited_hours, 2);
         let account = ledger.get_account(&address).unwrap();
         assert_eq!(account.reputation.timetokes.hours_online, 2);
         assert_eq!(
@@ -1076,10 +1279,53 @@ mod tests {
         second_proof.epoch = Some(0);
         second_proof.head_hash = Some(hex::encode([0u8; 32]));
 
-        let total_hours = ledger.apply_uptime_proof(&second_proof).unwrap();
-        assert_eq!(total_hours, 3);
+        let credited_hours = ledger.apply_uptime_proof(&second_proof).unwrap();
+        assert_eq!(credited_hours, 2);
         let account = ledger.get_account(&address).unwrap();
         assert_eq!(account.reputation.timetokes.hours_online, 3);
+    }
+
+    #[test]
+    fn timetoke_snapshot_marks_sync() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "syncnode".repeat(4);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("sync-proof");
+        account.reputation.timetokes.hours_online = 5;
+        ledger.upsert_account(account).unwrap();
+
+        let snapshot = ledger.timetoke_snapshot();
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].identity, address);
+        assert_eq!(snapshot[0].balance, 5);
+
+        let refreshed = ledger.get_account(&address).unwrap();
+        assert!(refreshed.reputation.timetokes.last_sync_timestamp > 0);
+    }
+
+    #[test]
+    fn sync_timetoke_records_merges_newer_state() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "peer".repeat(4);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("peer-proof");
+        ledger.upsert_account(account).unwrap();
+
+        let record = TimetokeRecord {
+            identity: address.clone(),
+            balance: 8,
+            epoch_accrual: 0,
+            decay_rate: 1.0,
+            last_update: 1_000,
+            last_sync: 1_000,
+            last_decay: 1_000,
+        };
+
+        let updated = ledger.sync_timetoke_records(&[record]).unwrap();
+        assert_eq!(updated, vec![address.clone()]);
+        let refreshed = ledger.get_account(&address).unwrap();
+        assert_eq!(refreshed.reputation.timetokes.hours_online, 8);
+        assert_eq!(refreshed.reputation.timetokes.last_proof_timestamp, 1_000);
     }
 
     fn sample_witness_bundle() -> ModuleWitnessBundle {
@@ -1109,6 +1355,8 @@ mod tests {
             epoch_accrual: 1,
             decay_rate: 0.0,
             last_update: 100,
+            last_sync: 80,
+            last_decay: 90,
         };
         let updated_timetoke = TimetokeRecord {
             identity: "alice".into(),
@@ -1116,6 +1364,8 @@ mod tests {
             epoch_accrual: 3,
             decay_rate: 0.0,
             last_update: 200,
+            last_sync: 180,
+            last_decay: 190,
         };
         bundle.record_timetoke(TimetokeWitness::new(
             "alice".into(),

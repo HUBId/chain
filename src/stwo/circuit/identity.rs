@@ -89,7 +89,7 @@ impl IdentityCircuit {
             ));
         }
         let seed = self.epoch_seed()?;
-        let vrf = evaluate_vrf(&seed, 0, &self.witness.wallet_addr);
+        let vrf = evaluate_vrf(&seed, 0, &self.witness.wallet_addr, 0);
         if vrf.proof != self.witness.vrf_tag {
             return Err(ChainError::Transaction(
                 "VRF tag does not match epoch seed and wallet address".into(),
@@ -139,7 +139,7 @@ impl StarkCircuit for IdentityCircuit {
         let seed = self
             .epoch_seed()
             .map_err(|err| CircuitError::InvalidWitness(err.to_string()))?;
-        let vrf = evaluate_vrf(&seed, 0, &self.witness.wallet_addr);
+        let vrf = evaluate_vrf(&seed, 0, &self.witness.wallet_addr, 0);
         let expected_commitment = self
             .computed_commitment()
             .map_err(|err| CircuitError::InvalidWitness(err.to_string()))?;

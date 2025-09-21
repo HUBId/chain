@@ -179,6 +179,8 @@ impl LegacyBlockV0 {
             vrf_proof: header.vrf_proof,
             timestamp: header.timestamp,
             proposer: header.proposer,
+            leader_tier: "Committed".into(),
+            leader_timetoke: 0,
         };
 
         Block {
@@ -363,6 +365,8 @@ mod tests {
                 vrf_proof: header.vrf_proof.clone(),
                 timestamp: header.timestamp,
                 proposer: header.proposer.clone(),
+                leader_tier: "Committed".into(),
+                leader_timetoke: 0,
             },
             &pruning,
         );

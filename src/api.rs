@@ -14,7 +14,10 @@ use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, RolloutStatus, VrfStatus,
 };
-use crate::types::{Account, Block, IdentityDeclaration, TransactionProofBundle, UptimeProof};
+use crate::rpp::TimetokeRecord;
+use crate::types::{
+    Account, Address, Block, IdentityDeclaration, TransactionProofBundle, UptimeProof,
+};
 
 #[derive(Clone)]
 struct AppState {
@@ -33,7 +36,7 @@ struct SubmitResponse {
 
 #[derive(Serialize)]
 struct UptimeResponse {
-    total_hours: u64,
+    credited_hours: u64,
 }
 
 #[derive(Serialize)]
@@ -45,6 +48,16 @@ struct HealthResponse {
 #[derive(Deserialize)]
 struct SlashingQuery {
     limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+struct TimetokeSyncRequest {
+    records: Vec<TimetokeRecord>,
+}
+
+#[derive(Serialize)]
+struct TimetokeSyncResponse {
+    updated: Vec<Address>,
 }
 
 pub async fn serve(node: NodeHandle, addr: SocketAddr) -> ChainResult<()> {
@@ -61,6 +74,8 @@ pub async fn serve(node: NodeHandle, addr: SocketAddr) -> ChainResult<()> {
         .route("/consensus/votes", post(submit_vote))
         .route("/uptime/proofs", post(submit_uptime_proof))
         .route("/ledger/slashing", get(slashing_events))
+        .route("/ledger/timetoke", get(timetoke_snapshot))
+        .route("/ledger/timetoke/sync", post(sync_timetoke))
         .route("/ledger/reputation/:address", get(reputation_audit))
         .route("/blocks/latest", get(latest_block))
         .route("/blocks/:height", get(block_by_height))
@@ -121,7 +136,7 @@ async fn submit_uptime_proof(
     state
         .node
         .submit_uptime_proof(proof)
-        .map(|total_hours| Json(UptimeResponse { total_hours }))
+        .map(|credited_hours| Json(UptimeResponse { credited_hours }))
         .map_err(to_http_error)
 }
 
@@ -199,6 +214,27 @@ async fn slashing_events(
         .node
         .slashing_events(limit)
         .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn timetoke_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<TimetokeRecord>>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .timetoke_snapshot()
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn sync_timetoke(
+    State(state): State<AppState>,
+    Json(request): Json<TimetokeSyncRequest>,
+) -> Result<Json<TimetokeSyncResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .node
+        .sync_timetoke_records(request.records)
+        .map(|updated| Json(TimetokeSyncResponse { updated }))
         .map_err(to_http_error)
 }
 

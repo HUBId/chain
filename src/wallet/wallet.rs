@@ -86,7 +86,7 @@ impl Wallet {
 
         let wallet_pk = hex::encode(self.keypair.public.to_bytes());
         let wallet_addr = self.address.clone();
-        let vrf = evaluate_vrf(&epoch_nonce, 0, &wallet_addr);
+        let vrf = evaluate_vrf(&epoch_nonce, 0, &wallet_addr, 0);
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,

@@ -47,6 +47,8 @@ pub struct BlockHeader {
     pub vrf_proof: String,
     pub timestamp: u64,
     pub proposer: Address,
+    pub leader_tier: String,
+    pub leader_timetoke: u64,
 }
 
 impl BlockHeader {
@@ -64,6 +66,8 @@ impl BlockHeader {
         randomness: String,
         vrf_proof: String,
         proposer: Address,
+        leader_tier: String,
+        leader_timetoke: u64,
     ) -> Self {
         Self {
             height,
@@ -79,6 +83,8 @@ impl BlockHeader {
             randomness,
             vrf_proof,
             proposer,
+            leader_tier,
+            leader_timetoke,
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -734,7 +740,13 @@ impl Block {
             randomness,
             proof: self.header.vrf_proof.clone(),
         };
-        if !verify_vrf(&seed, self.header.height, &self.header.proposer, &proof) {
+        if !verify_vrf(
+            &seed,
+            self.header.height,
+            &self.header.proposer,
+            self.header.leader_timetoke,
+            &proof,
+        ) {
             return Err(ChainError::Crypto("invalid VRF proof".into()));
         }
 
@@ -1177,6 +1189,8 @@ mod tests {
             "0".to_string(),
             "12".repeat(32),
             "13".repeat(32),
+            Tier::Tl5.to_string(),
+            0,
         );
         let prev_pruning = PruningProof::genesis(&state_root);
         let prev_recursive = RecursiveProof::genesis(&prev_header, &prev_pruning);
@@ -1204,7 +1218,7 @@ mod tests {
             None,
         );
 
-        let vrf = evaluate_vrf(&prev_block.block_hash(), 1, &address);
+        let vrf = evaluate_vrf(&prev_block.block_hash(), 1, &address, 0);
         let header = BlockHeader::new(
             1,
             prev_block.hash.clone(),
@@ -1219,6 +1233,8 @@ mod tests {
             vrf.randomness.to_string(),
             vrf.proof.clone(),
             address.clone(),
+            Tier::Tl3.to_string(),
+            0,
         );
         let block_hash_hex = hex::encode(header.hash());
         let prevote = BftVote {
@@ -1331,6 +1347,8 @@ mod tests {
             "0".to_string(),
             "88".repeat(32),
             "99".repeat(32),
+            Tier::Tl5.to_string(),
+            0,
         );
         let pruning_proof = PruningProof::genesis(&state_root);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);

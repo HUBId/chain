@@ -26,6 +26,8 @@ impl TimetokeState {
             epoch_accrual: 0,
             decay_rate: 1.0,
             last_update: account.reputation.timetokes.last_proof_timestamp,
+            last_sync: account.reputation.timetokes.last_sync_timestamp,
+            last_decay: account.reputation.timetokes.last_decay_timestamp,
         };
         self.records.write().insert(account.address.clone(), record);
     }
@@ -36,6 +38,12 @@ impl TimetokeState {
 
     pub fn get(&self, address: &Address) -> Option<TimetokeRecord> {
         self.records.read().get(address).cloned()
+    }
+
+    pub fn snapshot(&self) -> Vec<TimetokeRecord> {
+        let mut records = self.records.read().values().cloned().collect::<Vec<_>>();
+        records.sort_by(|a, b| a.identity.cmp(&b.identity));
+        records
     }
 
     pub fn commitment(&self) -> [u8; 32] {
