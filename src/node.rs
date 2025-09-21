@@ -7,7 +7,7 @@ use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
 use tokio::time;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use hex;
 use serde::Serialize;
@@ -15,14 +15,17 @@ use serde_json;
 
 use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, SignedBftVote,
+    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, SignedBftVote, ValidatorCandidate,
     aggregate_total_stake, classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
-    address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
+    VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
+    sign_message, signature_to_hex, vrf_public_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::{EpochInfo, Ledger, ReputationAudit, SlashingEvent, SlashingReason};
+use crate::ledger::{
+    EpochInfo, Ledger, ReputationAudit, SlashingEvent, SlashingReason, VrfHistoryRecord,
+};
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_system::{ProofProver, ProofVerifierRegistry};
@@ -38,6 +41,7 @@ use crate::types::{
     IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake,
     TimetokeUpdate, TransactionProofBundle, UptimeProof,
 };
+use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -60,6 +64,7 @@ pub struct NodeStatus {
     pub pending_identities: usize,
     pub pending_votes: usize,
     pub pending_uptime_proofs: usize,
+    pub vrf_metrics: crate::vrf::VrfSelectionMetrics,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -131,7 +136,8 @@ pub struct VrfStatus {
     pub address: Address,
     pub epoch: u64,
     pub epoch_nonce: String,
-    pub proof: crate::consensus::VrfProof,
+    pub public_key: String,
+    pub proof: crate::vrf::VrfProof,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -165,16 +171,19 @@ pub struct Node {
 struct NodeInner {
     config: NodeConfig,
     keypair: Keypair,
+    vrf_keypair: VrfKeypair,
     address: Address,
     storage: Storage,
     ledger: Ledger,
     mempool: RwLock<VecDeque<TransactionProofBundle>>,
     identity_mempool: RwLock<VecDeque<IdentityDeclaration>>,
     uptime_mempool: RwLock<VecDeque<RecordedUptimeProof>>,
+    vrf_mempool: RwLock<VrfSubmissionPool>,
     chain_tip: RwLock<ChainTip>,
     block_interval: Duration,
     vote_mempool: RwLock<VecDeque<SignedBftVote>>,
     telemetry_last_height: RwLock<Option<u64>>,
+    vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
 }
 
@@ -193,6 +202,7 @@ impl Node {
     pub fn new(config: NodeConfig) -> ChainResult<Self> {
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
+        let vrf_keypair = load_or_generate_vrf_keypair(&config.vrf_key_path)?;
         let address = address_from_public_key(&keypair.public);
         let db_path = config.data_dir.join("db");
         let storage = Storage::open(&db_path)?;
@@ -222,7 +232,7 @@ impl Node {
             let stakes = ledger.stake_snapshot();
             let total_stake = aggregate_total_stake(&stakes);
             let genesis_seed = [0u8; 32];
-            let vrf = evaluate_vrf(&genesis_seed, 0, &address, 0);
+            let vrf = evaluate_vrf(&genesis_seed, 0, &address, 0, Some(&vrf_keypair.secret));
             let header = BlockHeader::new(
                 0,
                 hex::encode([0u8; 32]),
@@ -235,6 +245,7 @@ impl Node {
                 hex::encode(commitments.proof_root),
                 total_stake.to_string(),
                 vrf.randomness.to_string(),
+                vrf_public_key_to_hex(&vrf_keypair.public),
                 vrf.proof.clone(),
                 address.clone(),
                 Tier::Tl5.to_string(),
@@ -329,18 +340,21 @@ impl Node {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
             keypair,
+            vrf_keypair,
             address,
             storage,
             ledger,
             mempool: RwLock::new(VecDeque::new()),
             identity_mempool: RwLock::new(VecDeque::new()),
             uptime_mempool: RwLock::new(VecDeque::new()),
+            vrf_mempool: RwLock::new(VrfSubmissionPool::new()),
             chain_tip: RwLock::new(ChainTip {
                 height: 0,
                 last_hash: [0u8; 32],
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
             telemetry_last_height: RwLock::new(None),
+            vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             verifiers: ProofVerifierRegistry::default(),
         });
         inner.bootstrap()?;
@@ -369,6 +383,10 @@ impl NodeHandle {
 
     pub fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
         self.inner.submit_vote(vote)
+    }
+
+    pub fn submit_vrf_submission(&self, submission: VrfSubmission) -> ChainResult<()> {
+        self.inner.submit_vrf_submission(submission)
     }
 
     pub fn submit_uptime_proof(&self, proof: UptimeProof) -> ChainResult<u64> {
@@ -405,6 +423,10 @@ impl NodeHandle {
 
     pub fn vrf_status(&self, address: &str) -> ChainResult<VrfStatus> {
         self.inner.vrf_status(address)
+    }
+
+    pub fn vrf_history(&self, epoch: Option<u64>) -> ChainResult<Vec<VrfHistoryRecord>> {
+        self.inner.vrf_history(epoch)
     }
 
     pub fn slashing_events(&self, limit: usize) -> ChainResult<Vec<SlashingEvent>> {
@@ -725,6 +747,26 @@ impl NodeInner {
         Ok(vote_hash)
     }
 
+    fn submit_vrf_submission(&self, submission: VrfSubmission) -> ChainResult<()> {
+        let address = submission.address.clone();
+        let epoch = submission.input.epoch;
+        let mut pool = self.vrf_mempool.write();
+        if let Some(existing) = pool.get(&address) {
+            if existing.input != submission.input {
+                debug!(
+                    address = %address,
+                    prev_epoch = existing.input.epoch,
+                    new_epoch = epoch,
+                    "updated VRF submission"
+                );
+            }
+        } else {
+            debug!(address = %address, epoch, "recorded VRF submission");
+        }
+        vrf::submit_vrf(&mut pool, submission);
+        Ok(())
+    }
+
     fn submit_uptime_proof(&self, proof: UptimeProof) -> ChainResult<u64> {
         let credited = self.ledger.apply_uptime_proof(&proof)?;
         if let Some(account) = self.ledger.get_account(&proof.wallet_address) {
@@ -786,6 +828,7 @@ impl NodeInner {
             pending_identities: self.identity_mempool.read().len(),
             pending_votes: self.vote_mempool.read().len(),
             pending_uptime_proofs: self.uptime_mempool.read().len(),
+            vrf_metrics: self.vrf_metrics.read().clone(),
         })
     }
 
@@ -931,13 +974,24 @@ impl NodeInner {
     fn vrf_status(&self, address: &str) -> ChainResult<VrfStatus> {
         let epoch_info = self.ledger.epoch_info();
         let nonce = self.ledger.current_epoch_nonce();
-        let proof = evaluate_vrf(&nonce, 0, &address.to_string(), 0);
+        let proof = evaluate_vrf(
+            &nonce,
+            0,
+            &address.to_string(),
+            0,
+            Some(&self.vrf_keypair.secret),
+        );
         Ok(VrfStatus {
             address: address.to_string(),
             epoch: epoch_info.epoch,
             epoch_nonce: epoch_info.epoch_nonce,
+            public_key: vrf_public_key_to_hex(&self.vrf_keypair.public),
             proof,
         })
+    }
+
+    fn vrf_history(&self, epoch: Option<u64>) -> ChainResult<Vec<VrfHistoryRecord>> {
+        Ok(self.ledger.vrf_history(epoch))
     }
 
     fn slashing_events(&self, limit: usize) -> ChainResult<Vec<SlashingEvent>> {
@@ -968,6 +1022,63 @@ impl NodeInner {
             public_key: hex::encode(self.keypair.public.to_bytes()),
             signature: signature_to_hex(&signature),
         }
+    }
+
+    fn gather_vrf_submissions(
+        &self,
+        epoch: u64,
+        seed: [u8; 32],
+        candidates: &[ValidatorCandidate],
+    ) -> VrfSubmissionPool {
+        let candidate_addresses: HashSet<Address> = candidates
+            .iter()
+            .map(|candidate| candidate.address.clone())
+            .collect();
+        let mut pool = {
+            let mut mempool = self.vrf_mempool.write();
+            mempool.retain(|address, submission| {
+                submission.input.epoch == epoch
+                    && submission.input.last_block_header == seed
+                    && candidate_addresses.contains(address)
+            });
+            mempool.clone()
+        };
+
+        for candidate in candidates {
+            if candidate.address != self.address {
+                continue;
+            }
+            let tier_seed = vrf::derive_tier_seed(&candidate.address, candidate.timetoke_hours);
+            let input = PoseidonVrfInput::new(seed, epoch, tier_seed);
+            match vrf::generate_vrf(&input, &self.vrf_keypair.secret) {
+                Ok(output) => {
+                    let submission = VrfSubmission {
+                        address: candidate.address.clone(),
+                        public_key: Some(self.vrf_keypair.public.clone()),
+                        input,
+                        proof: VrfProof::from_output(&output),
+                        tier: candidate.tier.clone(),
+                        timetoke_hours: candidate.timetoke_hours,
+                    };
+                    vrf::submit_vrf(&mut pool, submission.clone());
+                    if let Err(err) = self.submit_vrf_submission(submission) {
+                        warn!(
+                            address = %candidate.address,
+                            ?err,
+                            "failed to persist local VRF submission"
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        address = %candidate.address,
+                        ?err,
+                        "failed to produce local VRF submission"
+                    );
+                }
+            }
+        }
+        pool
     }
 
     fn drain_votes_for(&self, height: u64, block_hash: &str) -> Vec<SignedBftVote> {
@@ -1092,9 +1203,24 @@ impl NodeInner {
         let tip_snapshot = *self.chain_tip.read();
         let height = tip_snapshot.height + 1;
         self.ledger.sync_epoch_for_height(height);
+        let epoch = self.ledger.current_epoch();
         let accounts_snapshot = self.ledger.accounts_snapshot();
         let (validators, observers) = classify_participants(&accounts_snapshot);
-        let mut round = ConsensusRound::new(height, tip_snapshot.last_hash, validators, observers);
+        let vrf_pool = self.gather_vrf_submissions(epoch, tip_snapshot.last_hash, &validators);
+        let mut round = ConsensusRound::new(
+            height,
+            tip_snapshot.last_hash,
+            self.config.target_validator_count,
+            validators,
+            observers,
+            &vrf_pool,
+        );
+        {
+            let mut metrics = self.vrf_metrics.write();
+            *metrics = round.vrf_metrics().clone();
+        }
+        self.ledger
+            .record_vrf_history(epoch, round.round(), round.vrf_audit());
         let selection = match round.select_proposer() {
             Some(selection) => selection,
             None => {
@@ -1232,6 +1358,7 @@ impl NodeInner {
             hex::encode(commitments.proof_root),
             selection.total_voting_power.to_string(),
             selection.randomness.to_string(),
+            selection.vrf_public_key.clone(),
             selection.proof.proof.clone(),
             self.address.clone(),
             selection.tier.to_string(),

@@ -10,8 +10,10 @@ use malachite::Natural;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
-use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, VrfProof, verify_vrf};
-use crate::crypto::{signature_from_hex, signature_to_hex, verify_signature};
+use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, verify_vrf};
+use crate::crypto::{
+    signature_from_hex, signature_to_hex, verify_signature, vrf_public_key_from_hex,
+};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::ReputationAudit;
 #[cfg(feature = "backend-plonky3")]
@@ -21,6 +23,7 @@ use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
 use crate::state::merkle::compute_merkle_root;
 use crate::stwo::aggregation::StateCommitmentSnapshot;
 use crate::stwo::proof::ProofPayload;
+use crate::vrf::VrfProof;
 
 use serde_json;
 
@@ -44,6 +47,7 @@ pub struct BlockHeader {
     pub proof_root: String,
     pub total_stake: String,
     pub randomness: String,
+    pub vrf_public_key: String,
     pub vrf_proof: String,
     pub timestamp: u64,
     pub proposer: Address,
@@ -64,6 +68,7 @@ impl BlockHeader {
         proof_root: String,
         total_stake: String,
         randomness: String,
+        vrf_public_key: String,
         vrf_proof: String,
         proposer: Address,
         leader_tier: String,
@@ -81,6 +86,7 @@ impl BlockHeader {
             proof_root,
             total_stake,
             randomness,
+            vrf_public_key,
             vrf_proof,
             proposer,
             leader_tier,
@@ -740,12 +746,18 @@ impl Block {
             randomness,
             proof: self.header.vrf_proof.clone(),
         };
+        let public_key = if self.header.vrf_public_key.trim().is_empty() {
+            None
+        } else {
+            Some(vrf_public_key_from_hex(&self.header.vrf_public_key)?)
+        };
         if !verify_vrf(
             &seed,
             self.header.height,
             &self.header.proposer,
             self.header.leader_timetoke,
             &proof,
+            public_key.as_ref(),
         ) {
             return Err(ChainError::Crypto("invalid VRF proof".into()));
         }
@@ -1065,7 +1077,7 @@ mod tests {
     use crate::consensus::{
         BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
     };
-    use crate::crypto::address_from_public_key;
+    use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::reputation::{ReputationWeights, Tier};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
     use crate::stwo::circuit::{
@@ -1173,8 +1185,11 @@ mod tests {
         let mut rng = OsRng;
         let keypair = Keypair::generate(&mut rng);
         let address = address_from_public_key(&keypair.public);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
 
         let state_root = "aa".repeat(32);
+        let genesis_seed = [0u8; 32];
+        let genesis_vrf = evaluate_vrf(&genesis_seed, 0, &address, 0, Some(&vrf_keypair.secret));
         let prev_header = BlockHeader::new(
             0,
             hex::encode([0u8; 32]),
@@ -1186,8 +1201,9 @@ mod tests {
             "ff".repeat(32),
             "11".repeat(32),
             "0".to_string(),
-            "0".to_string(),
-            "12".repeat(32),
+            genesis_vrf.randomness.to_string(),
+            vrf_public_key_to_hex(&vrf_keypair.public),
+            genesis_vrf.proof.clone(),
             "13".repeat(32),
             Tier::Tl5.to_string(),
             0,
@@ -1218,7 +1234,13 @@ mod tests {
             None,
         );
 
-        let vrf = evaluate_vrf(&prev_block.block_hash(), 1, &address, 0);
+        let vrf = evaluate_vrf(
+            &prev_block.block_hash(),
+            1,
+            &address,
+            0,
+            Some(&vrf_keypair.secret),
+        );
         let header = BlockHeader::new(
             1,
             prev_block.hash.clone(),
@@ -1231,6 +1253,7 @@ mod tests {
             "26".repeat(32),
             "1000".to_string(),
             vrf.randomness.to_string(),
+            vrf_public_key_to_hex(&vrf_keypair.public),
             vrf.proof.clone(),
             address.clone(),
             Tier::Tl3.to_string(),
@@ -1333,6 +1356,10 @@ mod tests {
     #[test]
     fn stored_block_roundtrip_preserves_pruning_state() {
         let state_root = "11".repeat(32);
+        let proposer = "99".repeat(32);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+        let genesis_seed = [0u8; 32];
+        let vrf = evaluate_vrf(&genesis_seed, 0, &proposer, 0, Some(&vrf_keypair.secret));
         let header = BlockHeader::new(
             0,
             hex::encode([0u8; 32]),
@@ -1344,9 +1371,10 @@ mod tests {
             "66".repeat(32),
             "77".repeat(32),
             "0".to_string(),
-            "0".to_string(),
-            "88".repeat(32),
-            "99".repeat(32),
+            vrf.randomness.to_string(),
+            vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf.proof.clone(),
+            proposer.clone(),
             Tier::Tl5.to_string(),
             0,
         );

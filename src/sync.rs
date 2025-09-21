@@ -507,6 +507,7 @@ mod tests {
             proof_root,
             "0".to_string(),
             height.to_string(),
+            format!("vrfpk{:02}", height),
             format!("vrf{:02}", height),
             format!("proposer{:02}", height),
             Tier::Tl3.to_string(),

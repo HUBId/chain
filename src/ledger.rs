@@ -1,4 +1,4 @@
-use std::collections::{HashSet, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::mem;
 
 use parking_lot::RwLock;
@@ -21,6 +21,7 @@ use crate::types::{
     Account, Address, IdentityDeclaration, SignedTransaction, Stake, UptimeProof,
     WalletBindingChange,
 };
+use crate::vrf::{VrfProof, VrfSelectionRecord};
 use hex;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +75,8 @@ pub struct Ledger {
     epoch_length: u64,
     epoch_state: RwLock<EpochState>,
     slashing_log: RwLock<Vec<SlashingEvent>>,
+    vrf_history: RwLock<HashMap<u64, Vec<VrfHistoryRecord>>>,
+    vrf_history_tags: RwLock<HashMap<u64, HashSet<String>>>,
     reputation_params: ReputationParams,
     timetoke_params: TimetokeParams,
 }
@@ -108,6 +111,21 @@ pub struct EpochInfo {
     pub epoch_nonce: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VrfHistoryRecord {
+    pub epoch: u64,
+    pub round: u64,
+    pub address: Address,
+    pub tier: Tier,
+    pub timetoke_hours: u64,
+    pub public_key: Option<String>,
+    pub proof: VrfProof,
+    pub verified: bool,
+    pub accepted: bool,
+    pub threshold: Option<String>,
+    pub rejection_reason: Option<String>,
+}
+
 impl Ledger {
     pub fn new(epoch_length: u64) -> Self {
         let ledger = Self {
@@ -122,6 +140,8 @@ impl Ledger {
             epoch_length: epoch_length.max(1),
             epoch_state: RwLock::new(EpochState::new(u64::MAX, [0u8; 32])),
             slashing_log: RwLock::new(Vec::new()),
+            vrf_history: RwLock::new(HashMap::new()),
+            vrf_history_tags: RwLock::new(HashMap::new()),
             reputation_params: ReputationParams::default(),
             timetoke_params: TimetokeParams::default(),
         };
@@ -411,18 +431,18 @@ impl Ledger {
             .bind_genesis_identity(declaration.commitment());
 
         {
-            let mut state = self.epoch_state.write();
+            let state = self.epoch_state.read();
             let expected_nonce = hex::encode(state.nonce);
             if expected_nonce != genesis.epoch_nonce {
                 return Err(ChainError::Transaction(
                     "identity declaration references an outdated epoch nonce".into(),
                 ));
             }
-            if !state.used_vrf_tags.insert(genesis.vrf_tag.clone()) {
-                return Err(ChainError::Transaction(
-                    "VRF tag already registered for this epoch".into(),
-                ));
-            }
+        }
+        if !self.register_vrf_tag(&genesis.vrf_tag) {
+            return Err(ChainError::Transaction(
+                "VRF tag already registered for this epoch".into(),
+            ));
         }
         let module_before = self.module_records(&genesis.wallet_addr);
         self.upsert_account(account.clone())?;
@@ -744,7 +764,7 @@ impl Ledger {
             b.tier
                 .cmp(&a.tier)
                 .then(b.timetoke_hours.cmp(&a.timetoke_hours))
-                .then(b.selection_slot.cmp(&a.selection_slot))
+                .then(b.randomness.cmp(&a.randomness))
                 .then(a.address.cmp(&b.address))
         });
 
@@ -782,6 +802,62 @@ impl Ledger {
 
     pub fn drain_module_witnesses(&self) -> ModuleWitnessBundle {
         self.module_witnesses.write().drain()
+    }
+
+    pub fn register_vrf_tag(&self, tag: &str) -> bool {
+        self.epoch_state
+            .write()
+            .used_vrf_tags
+            .insert(tag.to_string())
+    }
+
+    pub fn record_vrf_history(&self, epoch: u64, round: u64, records: &[VrfSelectionRecord]) {
+        if records.is_empty() {
+            return;
+        }
+        let mut tags = self.vrf_history_tags.write();
+        let tag_set = tags.entry(epoch).or_default();
+        let mut history = self.vrf_history.write();
+        let bucket = history.entry(epoch).or_default();
+        for record in records {
+            let tag = record.proof.proof.clone();
+            if !tag_set.insert(tag) {
+                continue;
+            }
+            bucket.push(VrfHistoryRecord {
+                epoch,
+                round,
+                address: record.address.clone(),
+                tier: record.tier.clone(),
+                timetoke_hours: record.timetoke_hours,
+                public_key: record.public_key.clone(),
+                proof: record.proof.clone(),
+                verified: record.verified,
+                accepted: record.accepted,
+                threshold: record.threshold.clone(),
+                rejection_reason: record.rejection_reason.clone(),
+            });
+        }
+    }
+
+    pub fn vrf_history(&self, epoch: Option<u64>) -> Vec<VrfHistoryRecord> {
+        let history = self.vrf_history.read();
+        match epoch {
+            Some(epoch) => history.get(&epoch).cloned().unwrap_or_default(),
+            None => {
+                let mut entries: Vec<VrfHistoryRecord> = history
+                    .values()
+                    .flat_map(|records| records.clone())
+                    .collect();
+                entries.sort_by(|a, b| {
+                    a.epoch
+                        .cmp(&b.epoch)
+                        .then_with(|| a.round.cmp(&b.round))
+                        .then_with(|| a.address.cmp(&b.address))
+                });
+                entries
+            }
+        }
     }
 
     pub fn stage_module_witnesses(
@@ -929,6 +1005,7 @@ mod tests {
         ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction,
         Transaction, UptimeProof,
     };
+    use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use std::collections::{HashMap, HashSet};
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
@@ -939,7 +1016,7 @@ mod tests {
         let wallet_pk = hex::encode(&pk_bytes);
         let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
         let epoch_nonce_bytes = ledger.current_epoch_nonce();
-        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0);
+        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0, None);
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,
@@ -1113,8 +1190,61 @@ mod tests {
     }
 
     #[test]
+    fn record_vrf_history_tracks_entries() {
+        use malachite::Natural;
+
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        ledger.sync_epoch_for_height(1);
+        let epoch = ledger.current_epoch();
+        let proof_hex = "aa".repeat(64);
+        let record = VrfSelectionRecord {
+            epoch,
+            address: "validator".into(),
+            tier: Tier::Tl3,
+            timetoke_hours: 12,
+            public_key: Some("pk".into()),
+            proof: VrfProof {
+                randomness: Natural::from(5u32),
+                proof: proof_hex.clone(),
+            },
+            verified: true,
+            accepted: true,
+            threshold: Some("10".into()),
+            rejection_reason: None,
+        };
+        ledger.record_vrf_history(epoch, 1, &[record.clone()]);
+        ledger.record_vrf_history(epoch, 1, &[record.clone()]);
+        let mut other = record.clone();
+        other.proof.proof = "bb".repeat(64);
+        other.accepted = false;
+        other.rejection_reason = Some("threshold".into());
+        ledger.record_vrf_history(epoch + 1, 0, &[other.clone()]);
+
+        let current_epoch_history = ledger.vrf_history(Some(epoch));
+        assert_eq!(current_epoch_history.len(), 1);
+        let entry = &current_epoch_history[0];
+        assert_eq!(entry.round, 1);
+        assert_eq!(entry.address, record.address);
+        assert!(entry.accepted);
+        assert_eq!(entry.public_key, record.public_key);
+
+        let all_history = ledger.vrf_history(None);
+        assert_eq!(all_history.len(), 2);
+        assert_eq!(all_history[0].epoch, epoch);
+        assert_eq!(all_history[1].epoch, epoch + 1);
+    }
+
+    #[test]
+    fn register_vrf_tag_rejects_duplicates() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        assert!(ledger.register_vrf_tag("tag-1"));
+        assert!(!ledger.register_vrf_tag("tag-1"));
+    }
+
+    #[test]
     fn distributes_consensus_rewards_with_leader_bonus() {
-        use crate::consensus::{ValidatorProfile as RoundValidator, VrfProof};
+        use crate::consensus::ValidatorProfile as RoundValidator;
+        use crate::vrf::VrfProof;
         use malachite::Natural;
 
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
@@ -1130,10 +1260,10 @@ mod tests {
                 tier: Tier::Tl4,
                 timetoke_hours: 180,
                 vrf: VrfProof {
-                    randomness: Natural::from(42u32),
+                    randomness: Natural::from(5u32),
                     proof: "00ff".to_string(),
                 },
-                selection_slot: 5,
+                randomness: Natural::from(5u32),
             },
             RoundValidator {
                 address: peer_one.clone(),
@@ -1142,10 +1272,10 @@ mod tests {
                 tier: Tier::Tl3,
                 timetoke_hours: 160,
                 vrf: VrfProof {
-                    randomness: Natural::from(24u32),
+                    randomness: Natural::from(7u32),
                     proof: "00aa".to_string(),
                 },
-                selection_slot: 7,
+                randomness: Natural::from(7u32),
             },
             RoundValidator {
                 address: peer_two.clone(),
@@ -1154,10 +1284,10 @@ mod tests {
                 tier: Tier::Tl3,
                 timetoke_hours: 120,
                 vrf: VrfProof {
-                    randomness: Natural::from(11u32),
+                    randomness: Natural::from(9u32),
                     proof: "0099".to_string(),
                 },
-                selection_slot: 9,
+                randomness: Natural::from(9u32),
             },
         ];
 

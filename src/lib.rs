@@ -18,4 +18,5 @@ pub mod storage;
 pub mod stwo;
 pub mod sync;
 pub mod types;
+pub mod vrf;
 pub mod wallet;

@@ -33,6 +33,28 @@ dispatches verification through the shared traits used by wallets and nodes, so
   artifacts to mempools or importing blocks, enforcing consistency across all
   proof categories.【F:src/proof_system/mod.rs†L90-L220】【F:src/node.rs†L591-L727】
 
+## VRF Poseidon Domain & Key Management
+
+* `PoseidonVrfInput` encodes the `(last_block_header, epoch, tier_seed)` tuple,
+  derives Poseidon digests, and exposes fixed-width randomness helpers to match
+  the blueprint domain separation requirements.【F:src/vrf/mod.rs†L16-L102】
+* `generate_vrf` and `verify_vrf` wrap ed25519 signatures over Poseidon digests,
+  hashing proofs into randomness and validating outputs alongside strict proof
+  parsing for consensus use.【F:src/vrf/mod.rs†L103-L208】
+* `select_validators` derives per-epoch thresholds from the epoch number,
+  tier seed, and configurable validator target, blending smoothed binomial
+  expectations with the observed randomness quantile so the committee size
+  adapts to participation instead of the legacy selection window heuristic.【F:src/vrf/mod.rs†L320-L480】
+* Dedicated VRF key lifecycle helpers cover generation, persistence,
+  re-loading, and hex conversion so operators and integration tests share the
+  same storage format.【F:src/crypto.rs†L17-L229】
+* Validator selection emits audit records that the ledger persists per epoch,
+  deduplicating proofs and exposing query hooks so historical VRF decisions can
+  be inspected alongside consensus data.【F:src/vrf/mod.rs†L360-L494】【F:src/ledger.rs†L100-L214】【F:src/node.rs†L1140-L1214】
+* Node status and telemetry snapshots include VRF selection metrics covering the
+  submission pool size, accepted validator count, rejections, and fallback
+  usage so operators can monitor participation over time.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】【F:src/node.rs†L489-L548】
+
 ## Circuit Palette
 
 * **Transaction Circuit** – enforces signature validity, balance conservation,

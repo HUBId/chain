@@ -42,6 +42,10 @@ production.
 3. **Scrape structured logs.** Configure log aggregation to capture the
    `telemetry` target; payloads contain release channel, active feature gates,
    and health snapshots for dashboards.【F:src/node.rs†L489-L517】
+4. **Track VRF participation.** The node status snapshot includes `vrf_metrics`
+   with submission counts, accepted validators, rejection totals, and fallback
+   usage so dashboards can alert on declining VRF participation or repeated
+   fallback elections.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】
 
 ## Observability Dashboards
 
