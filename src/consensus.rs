@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use malachite::Natural;
@@ -25,6 +26,8 @@ pub struct ProposerSelection {
     pub proof: VrfProof,
     pub total_voting_power: Natural,
     pub quorum_threshold: Natural,
+    pub timetoke_hours: u64,
+    pub tier: Tier,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -125,19 +128,36 @@ impl ConsensusCertificate {
     }
 }
 
+const VRF_SELECTION_WINDOW: u64 = 1_000_000;
+const MAX_TIMETOKE_HOURS: u64 = 24 * 30;
+
+#[derive(Clone, Debug)]
+pub struct ValidatorCandidate {
+    pub address: Address,
+    pub stake: Stake,
+    pub reputation_score: f64,
+    pub tier: Tier,
+    pub timetoke_hours: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct ValidatorProfile {
     pub address: Address,
     pub stake: Stake,
     pub reputation_score: f64,
     pub tier: Tier,
+    pub timetoke_hours: u64,
+    pub vrf: VrfProof,
+    pub selection_slot: u64,
 }
 
 impl ValidatorProfile {
     pub fn voting_power(&self) -> Natural {
-        let multiplier = (self.reputation_score * 1000.0).round() as i64 + 1000;
-        let multiplier = multiplier.max(1) as u64;
-        self.stake.as_natural().clone() * Natural::from(multiplier)
+        let base_multiplier = (self.reputation_score * 1000.0).round() as i64 + 1000;
+        let base_multiplier = base_multiplier.max(1) as u128;
+        let timetoke_bonus = (self.timetoke_hours.min(MAX_TIMETOKE_HOURS) + 1) as u128;
+        let multiplier = Natural::from(base_multiplier) * Natural::from(timetoke_bonus);
+        self.stake.as_natural().clone() * multiplier
     }
 }
 
@@ -149,18 +169,19 @@ pub struct ObserverProfile {
 
 pub fn classify_participants(
     accounts: &[Account],
-) -> (Vec<ValidatorProfile>, Vec<ObserverProfile>) {
+) -> (Vec<ValidatorCandidate>, Vec<ObserverProfile>) {
     let mut validators = Vec::new();
     let mut observers = Vec::new();
     for account in accounts {
-        let profile = ValidatorProfile {
+        let candidate = ValidatorCandidate {
             address: account.address.clone(),
             stake: account.stake.clone(),
             reputation_score: account.reputation.score,
             tier: account.reputation.tier.clone(),
+            timetoke_hours: account.reputation.timetokes.hours_online,
         };
         match account.reputation.tier {
-            Tier::Tl3 | Tier::Tl4 | Tier::Tl5 => validators.push(profile),
+            Tier::Tl3 | Tier::Tl4 | Tier::Tl5 => validators.push(candidate),
             Tier::Tl1 | Tier::Tl2 => observers.push(ObserverProfile {
                 address: account.address.clone(),
                 tier: account.reputation.tier.clone(),
@@ -171,6 +192,86 @@ pub fn classify_participants(
         }
     }
     (validators, observers)
+}
+
+struct EvaluatedCandidate {
+    profile: ValidatorCandidate,
+    vrf: VrfProof,
+    slot: u64,
+    threshold: u64,
+}
+
+impl EvaluatedCandidate {
+    fn into_validator_profile(self) -> ValidatorProfile {
+        ValidatorProfile {
+            address: self.profile.address,
+            stake: self.profile.stake,
+            reputation_score: self.profile.reputation_score,
+            tier: self.profile.tier,
+            timetoke_hours: self.profile.timetoke_hours,
+            vrf: self.vrf,
+            selection_slot: self.slot,
+        }
+    }
+}
+
+fn timetoke_threshold(hours: u64) -> u64 {
+    let base = VRF_SELECTION_WINDOW / 10;
+    let capped = hours.min(MAX_TIMETOKE_HOURS);
+    if MAX_TIMETOKE_HOURS == 0 {
+        return base;
+    }
+    let bonus_range = VRF_SELECTION_WINDOW.saturating_sub(base);
+    base + (bonus_range * capped) / MAX_TIMETOKE_HOURS
+}
+
+fn vrf_selection_slot(proof: &VrfProof) -> u64 {
+    match hex::decode(&proof.proof) {
+        Ok(bytes) if bytes.len() >= 8 => {
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&bytes[..8]);
+            u64::from_be_bytes(buf) % VRF_SELECTION_WINDOW
+        }
+        Ok(bytes) => {
+            let mut buf = [0u8; 8];
+            let start = 8 - bytes.len();
+            buf[start..].copy_from_slice(&bytes);
+            u64::from_be_bytes(buf) % VRF_SELECTION_WINDOW
+        }
+        Err(_) => VRF_SELECTION_WINDOW.saturating_sub(1),
+    }
+}
+
+fn candidate_cmp(a: &EvaluatedCandidate, b: &EvaluatedCandidate) -> Ordering {
+    let tier_cmp = a.profile.tier.cmp(&b.profile.tier);
+    if tier_cmp != Ordering::Equal {
+        return tier_cmp;
+    }
+    let timetoke_cmp = a.profile.timetoke_hours.cmp(&b.profile.timetoke_hours);
+    if timetoke_cmp != Ordering::Equal {
+        return timetoke_cmp;
+    }
+    let slot_cmp = b.slot.cmp(&a.slot);
+    if slot_cmp != Ordering::Equal {
+        return slot_cmp;
+    }
+    b.profile.address.cmp(&a.profile.address)
+}
+
+fn leader_cmp(a: &ValidatorProfile, b: &ValidatorProfile) -> Ordering {
+    let tier_cmp = a.tier.cmp(&b.tier);
+    if tier_cmp != Ordering::Equal {
+        return tier_cmp;
+    }
+    let timetoke_cmp = a.timetoke_hours.cmp(&b.timetoke_hours);
+    if timetoke_cmp != Ordering::Equal {
+        return timetoke_cmp;
+    }
+    let slot_cmp = b.selection_slot.cmp(&a.selection_slot);
+    if slot_cmp != Ordering::Equal {
+        return slot_cmp;
+    }
+    b.address.cmp(&a.address)
 }
 
 fn quorum_threshold(total: &Natural) -> Natural {
@@ -196,16 +297,22 @@ fn natural_from_bytes(bytes: &[u8]) -> Natural {
     value
 }
 
-fn vrf_domain(seed: &[u8; 32], round: u64, address: &Address) -> Vec<u8> {
-    let mut data = Vec::with_capacity(32 + 8 + address.len());
+fn vrf_domain(seed: &[u8; 32], round: u64, address: &Address, timetoke_hours: u64) -> Vec<u8> {
+    let mut data = Vec::with_capacity(32 + 8 + 8 + address.len());
     data.extend_from_slice(seed);
     data.extend_from_slice(&round.to_le_bytes());
     data.extend_from_slice(address.as_bytes());
+    data.extend_from_slice(&timetoke_hours.to_le_bytes());
     data
 }
 
-pub fn evaluate_vrf(seed: &[u8; 32], round: u64, address: &Address) -> VrfProof {
-    let data = vrf_domain(seed, round, address);
+pub fn evaluate_vrf(
+    seed: &[u8; 32],
+    round: u64,
+    address: &Address,
+    timetoke_hours: u64,
+) -> VrfProof {
+    let data = vrf_domain(seed, round, address, timetoke_hours);
     let hash = Blake2sHasher::hash(&data);
     let hash_bytes: [u8; 32] = hash.into();
     VrfProof {
@@ -214,8 +321,14 @@ pub fn evaluate_vrf(seed: &[u8; 32], round: u64, address: &Address) -> VrfProof 
     }
 }
 
-pub fn verify_vrf(seed: &[u8; 32], round: u64, address: &Address, proof: &VrfProof) -> bool {
-    let expected = evaluate_vrf(seed, round, address);
+pub fn verify_vrf(
+    seed: &[u8; 32],
+    round: u64,
+    address: &Address,
+    timetoke_hours: u64,
+    proof: &VrfProof,
+) -> bool {
+    let expected = evaluate_vrf(seed, round, address, timetoke_hours);
     expected.proof == proof.proof && expected.randomness == proof.randomness
 }
 
@@ -243,16 +356,52 @@ impl ConsensusRound {
     pub fn new(
         round: u64,
         seed: [u8; 32],
-        validators: Vec<ValidatorProfile>,
+        candidates: Vec<ValidatorCandidate>,
         observers: Vec<ObserverProfile>,
     ) -> Self {
         let mut voting_power = HashMap::new();
         let mut total_power = Natural::from(0u32);
-        for validator in &validators {
-            let power = validator.voting_power();
-            total_power += power.clone();
-            voting_power.insert(validator.address.clone(), power);
+        let mut validators = Vec::new();
+        let mut fallback: Option<EvaluatedCandidate> = None;
+        for candidate in candidates.into_iter() {
+            let vrf = evaluate_vrf(&seed, round, &candidate.address, candidate.timetoke_hours);
+            let slot = vrf_selection_slot(&vrf);
+            let threshold = timetoke_threshold(candidate.timetoke_hours);
+            let evaluated = EvaluatedCandidate {
+                profile: candidate,
+                vrf,
+                slot,
+                threshold,
+            };
+            if evaluated.slot <= evaluated.threshold {
+                let profile = evaluated.into_validator_profile();
+                let power = profile.voting_power();
+                total_power += power.clone();
+                voting_power.insert(profile.address.clone(), power);
+                validators.push(profile);
+            } else {
+                match &mut fallback {
+                    Some(current) => {
+                        if candidate_cmp(&evaluated, current) == Ordering::Greater {
+                            *current = evaluated;
+                        }
+                    }
+                    None => {
+                        fallback = Some(evaluated);
+                    }
+                }
+            }
         }
+        if validators.is_empty() {
+            if let Some(evaluated) = fallback {
+                let profile = evaluated.into_validator_profile();
+                let power = profile.voting_power();
+                total_power += power.clone();
+                voting_power.insert(profile.address.clone(), power);
+                validators.push(profile);
+            }
+        }
+        validators.sort_by(|a, b| a.address.cmp(&b.address));
         let quorum = quorum_threshold(&total_power);
         Self {
             round,
@@ -309,45 +458,15 @@ impl ConsensusRound {
     }
 
     pub fn select_proposer(&mut self) -> Option<ProposerSelection> {
-        if self.validators.is_empty() {
-            return None;
-        }
-        let mut domain = self.seed.to_vec();
-        domain.extend_from_slice(&self.round.to_le_bytes());
-        let seed_randomness = Blake2sHasher::hash(&domain);
-        let seed_bytes: [u8; 32] = seed_randomness.into();
-        let mut cursor = natural_from_bytes(&seed_bytes);
-        if self.total_power > Natural::from(0u32) {
-            cursor %= self.total_power.clone();
-        }
-        for validator in &self.validators {
-            let power = self
-                .voting_power
-                .get(&validator.address)
-                .cloned()
-                .unwrap_or_else(|| Natural::from(0u32));
-            if cursor < power {
-                let vrf = evaluate_vrf(&self.seed, self.round, &validator.address);
-                let selection = ProposerSelection {
-                    proposer: validator.address.clone(),
-                    randomness: vrf.randomness.clone(),
-                    proof: vrf,
-                    total_voting_power: self.total_power.clone(),
-                    quorum_threshold: self.quorum.clone(),
-                };
-                self.proposal = Some(selection.clone());
-                return Some(selection);
-            }
-            cursor -= power;
-        }
-        let last = self.validators.last().unwrap();
-        let vrf = evaluate_vrf(&self.seed, self.round, &last.address);
+        let leader = self.validators.iter().max_by(|a, b| leader_cmp(a, b))?;
         let selection = ProposerSelection {
-            proposer: last.address.clone(),
-            randomness: vrf.randomness.clone(),
-            proof: vrf,
+            proposer: leader.address.clone(),
+            randomness: leader.vrf.randomness.clone(),
+            proof: leader.vrf.clone(),
             total_voting_power: self.total_power.clone(),
             quorum_threshold: self.quorum.clone(),
+            timetoke_hours: leader.timetoke_hours,
+            tier: leader.tier.clone(),
         };
         self.proposal = Some(selection.clone());
         Some(selection)
@@ -477,6 +596,7 @@ mod tests {
         let mut account = Account::new(address.clone(), 0, Stake::from_u128(1_000));
         account.reputation.tier = Tier::Tl3;
         account.reputation.score = 1.0;
+        account.reputation.timetokes.hours_online = super::MAX_TIMETOKE_HOURS;
         let (validators, observers) = classify_participants(&[account]);
         let mut round = ConsensusRound::new(1, [0u8; 32], validators, observers);
         let block_hash = hex::encode([5u8; 32]);

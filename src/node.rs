@@ -26,7 +26,8 @@ use crate::ledger::{EpochInfo, Ledger, ReputationAudit, SlashingEvent, SlashingR
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_system::{ProofProver, ProofVerifierRegistry};
-use crate::rpp::{ProofArtifact, ProofModule};
+use crate::reputation::Tier;
+use crate::rpp::{ProofArtifact, ProofModule, TimetokeRecord};
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
 use crate::stwo::proof::ProofPayload;
@@ -40,6 +41,7 @@ use crate::types::{
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
+const LEADER_BONUS_PERCENT: u8 = 20;
 
 #[derive(Clone, Copy)]
 struct ChainTip {
@@ -220,7 +222,7 @@ impl Node {
             let stakes = ledger.stake_snapshot();
             let total_stake = aggregate_total_stake(&stakes);
             let genesis_seed = [0u8; 32];
-            let vrf = evaluate_vrf(&genesis_seed, 0, &address);
+            let vrf = evaluate_vrf(&genesis_seed, 0, &address, 0);
             let header = BlockHeader::new(
                 0,
                 hex::encode([0u8; 32]),
@@ -235,6 +237,8 @@ impl Node {
                 vrf.randomness.to_string(),
                 vrf.proof.clone(),
                 address.clone(),
+                Tier::Tl5.to_string(),
+                0,
             );
             let pruning_proof = PruningProof::genesis(&state_root_hex);
             let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
@@ -409,6 +413,14 @@ impl NodeHandle {
 
     pub fn reputation_audit(&self, address: &str) -> ChainResult<Option<ReputationAudit>> {
         self.inner.reputation_audit(address)
+    }
+
+    pub fn timetoke_snapshot(&self) -> ChainResult<Vec<TimetokeRecord>> {
+        self.inner.timetoke_snapshot()
+    }
+
+    pub fn sync_timetoke_records(&self, records: Vec<TimetokeRecord>) -> ChainResult<Vec<Address>> {
+        self.inner.sync_timetoke_records(records)
     }
 
     pub fn address(&self) -> &str {
@@ -728,6 +740,26 @@ impl NodeInner {
         Ok(credited)
     }
 
+    fn timetoke_snapshot(&self) -> ChainResult<Vec<TimetokeRecord>> {
+        let records = self.ledger.timetoke_snapshot();
+        for record in &records {
+            if let Some(account) = self.ledger.get_account(&record.identity) {
+                self.storage.persist_account(&account)?;
+            }
+        }
+        Ok(records)
+    }
+
+    fn sync_timetoke_records(&self, records: Vec<TimetokeRecord>) -> ChainResult<Vec<Address>> {
+        let updated = self.ledger.sync_timetoke_records(&records)?;
+        for address in &updated {
+            if let Some(account) = self.ledger.get_account(address) {
+                self.storage.persist_account(&account)?;
+            }
+        }
+        Ok(updated)
+    }
+
     fn get_block(&self, height: u64) -> ChainResult<Option<Block>> {
         self.storage.read_block(height)
     }
@@ -899,7 +931,7 @@ impl NodeInner {
     fn vrf_status(&self, address: &str) -> ChainResult<VrfStatus> {
         let epoch_info = self.ledger.epoch_info();
         let nonce = self.ledger.current_epoch_nonce();
-        let proof = evaluate_vrf(&nonce, 0, &address.to_string());
+        let proof = evaluate_vrf(&nonce, 0, &address.to_string(), 0);
         Ok(VrfStatus {
             address: address.to_string(),
             epoch: epoch_info.epoch,
@@ -1114,7 +1146,12 @@ impl NodeInner {
         }
 
         let block_reward = BASE_BLOCK_REWARD.saturating_add(total_fees);
-        self.ledger.reward_proposer(&self.address, block_reward)?;
+        self.ledger.distribute_consensus_rewards(
+            &selection.proposer,
+            round.validators(),
+            block_reward,
+            LEADER_BONUS_PERCENT,
+        )?;
 
         let (transactions, transaction_proofs): (Vec<SignedTransaction>, Vec<_>) = accepted
             .into_iter()
@@ -1197,6 +1234,8 @@ impl NodeInner {
             selection.randomness.to_string(),
             selection.proof.proof.clone(),
             self.address.clone(),
+            selection.tier.to_string(),
+            selection.timetoke_hours,
         );
         let block_hash_hex = hex::encode(header.hash());
         round.set_block_hash(block_hash_hex.clone());

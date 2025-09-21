@@ -4,6 +4,7 @@ pub mod consensus;
 pub mod crypto;
 pub mod errors;
 pub mod identity_tree;
+pub mod interfaces;
 pub mod ledger;
 pub mod migration;
 pub mod node;

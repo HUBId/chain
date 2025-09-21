@@ -132,7 +132,7 @@ impl IdentityGenesis {
 
     fn verify_vrf_tag(&self) -> ChainResult<()> {
         let seed = self.epoch_seed()?;
-        let proof = evaluate_vrf(&seed, 0, &self.wallet_addr);
+        let proof = evaluate_vrf(&seed, 0, &self.wallet_addr, 0);
         if proof.proof != self.vrf_tag {
             return Err(ChainError::Transaction(
                 "VRF tag does not match the provided wallet and epoch".into(),

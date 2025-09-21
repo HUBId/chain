@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use hex;
 use serde::Serialize;
 
+#[cfg(test)]
+use crate::reputation::Tier;
+
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
@@ -506,6 +509,8 @@ mod tests {
             height.to_string(),
             format!("vrf{:02}", height),
             format!("proposer{:02}", height),
+            Tier::Tl3.to_string(),
+            height,
         );
         let pruning_proof = PruningProof::from_previous(previous, &header);
         let recursive_proof = match previous {

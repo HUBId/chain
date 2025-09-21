@@ -408,12 +408,29 @@ pub enum AssetType {
 
 /// Snapshot of a node's time-based participation token balance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TimetokeRecord {
     pub identity: Address,
     pub balance: u128,
     pub epoch_accrual: u64,
     pub decay_rate: f32,
     pub last_update: u64,
+    pub last_sync: u64,
+    pub last_decay: u64,
+}
+
+impl Default for TimetokeRecord {
+    fn default() -> Self {
+        Self {
+            identity: String::new(),
+            balance: 0,
+            epoch_accrual: 0,
+            decay_rate: 1.0,
+            last_update: 0,
+            last_sync: 0,
+            last_decay: 0,
+        }
+    }
 }
 
 /// Consolidated reputation information committed into `rep_root`.
@@ -1622,6 +1639,8 @@ mod tests {
             epoch_accrual: 1,
             decay_rate: 0.0,
             last_update: 100,
+            last_sync: 80,
+            last_decay: 90,
         };
         let updated_timetoke = TimetokeRecord {
             identity: "alice".into(),
@@ -1629,6 +1648,8 @@ mod tests {
             epoch_accrual: 3,
             decay_rate: 0.0,
             last_update: 200,
+            last_sync: 180,
+            last_decay: 190,
         };
         bundle.record_timetoke(TimetokeWitness::new(
             "alice".into(),
