@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "circuits": {
+    "transaction": {
+      "degree": 1024,
+      "commitment": "tx-vk-0001"
+    },
+    "reputation": {
+      "degree": 512,
+      "commitment": "rep-vk-0001"
+    },
+    "block": {
+      "degree": 2048,
+      "commitment": "block-vk-0001"
+    },
+    "identity": {
+      "degree": 256,
+      "commitment": "id-vk-0001"
+    }
+  }
+}
