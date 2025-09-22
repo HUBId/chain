@@ -16,8 +16,8 @@ use crate::reputation::Tier;
 use crate::storage::Storage;
 use crate::stwo::prover::WalletProver;
 use crate::types::{
-    Address, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction, Transaction,
-    TransactionProofBundle, UptimeClaim, UptimeProof,
+    Account, Address, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction,
+    Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
 
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
@@ -128,6 +128,10 @@ impl Wallet {
             tier: account.reputation.tier.clone(),
             uptime_hours: account.reputation.timetokes.hours_online,
         })
+    }
+
+    pub fn account_by_address(&self, address: &Address) -> ChainResult<Option<Account>> {
+        self.storage.read_account(address)
     }
 
     pub fn build_transaction(
