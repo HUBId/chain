@@ -21,6 +21,7 @@ rand = "0.7"
 rocksdb = { version = "0.24", features = ["multi-threaded-cf"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+storage-firewood = { path = "storage-firewood" }
 stwo = { version = "1.0.0", optional = true }
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
