@@ -111,6 +111,53 @@ impl Default for NodeConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WalletConfig {
+    pub data_dir: PathBuf,
+    pub key_path: PathBuf,
+    #[serde(default = "default_wallet_rpc_listen")]
+    pub rpc_listen: SocketAddr,
+}
+
+fn default_wallet_rpc_listen() -> SocketAddr {
+    "127.0.0.1:9090".parse().expect("valid socket addr")
+}
+
+impl WalletConfig {
+    pub fn load(path: &Path) -> ChainResult<Self> {
+        let content = fs::read_to_string(path)?;
+        toml::from_str(&content)
+            .map_err(|err| ChainError::Config(format!("unable to parse wallet config: {err}")))
+    }
+
+    pub fn save(&self, path: &Path) -> ChainResult<()> {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let encoded = toml::to_string_pretty(self)
+            .map_err(|err| ChainError::Config(format!("unable to encode wallet config: {err}")))?;
+        fs::write(path, encoded)?;
+        Ok(())
+    }
+
+    pub fn ensure_directories(&self) -> ChainResult<()> {
+        fs::create_dir_all(&self.data_dir)?;
+        if let Some(parent) = self.key_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletConfig {
+    fn default() -> Self {
+        Self {
+            data_dir: PathBuf::from("./data"),
+            key_path: PathBuf::from("./keys/node.toml"),
+            rpc_listen: default_wallet_rpc_listen(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GenesisConfig {
     pub chain_id: String,
     pub accounts: Vec<GenesisAccount>,

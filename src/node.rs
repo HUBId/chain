@@ -449,6 +449,14 @@ impl NodeHandle {
         &self.inner.address
     }
 
+    pub fn storage(&self) -> Storage {
+        self.inner.storage.clone()
+    }
+
+    pub fn state_root(&self) -> ChainResult<String> {
+        Ok(hex::encode(self.inner.ledger.state_root()))
+    }
+
     pub fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
         self.inner.reconstruction_plan(start_height)
     }
