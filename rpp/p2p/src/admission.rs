@@ -1,236 +1,255 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
-use crate::gossip::GossipTopic;
+use libp2p::PeerId;
+use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TierLevel {
-    Observer = 0,
-    Tier1 = 1,
-    Tier2 = 2,
-    Tier3 = 3,
-    Tier4 = 4,
-}
+use crate::peerstore::{Peerstore, PeerstoreError, ReputationSnapshot};
+use crate::tier::TierLevel;
+use crate::topics::GossipTopic;
 
-impl TierLevel {
-    pub fn from_score(score: f64) -> TierLevel {
-        match score {
-            s if s >= 3.5 => TierLevel::Tier4,
-            s if s >= 2.5 => TierLevel::Tier3,
-            s if s >= 1.5 => TierLevel::Tier2,
-            s if s >= 0.5 => TierLevel::Tier1,
-            _ => TierLevel::Observer,
-        }
-    }
+const DEFAULT_GOSSIP_REWARD: f64 = 0.2;
+const DEFAULT_UPTIME_REWARD: f64 = 0.3;
+const DEFAULT_VOTE_REWARD: f64 = 0.6;
+const DEFAULT_SLASH_PENALTY: f64 = 2.5;
+const DEFAULT_PENALTY_THRESHOLD: f64 = 0.1;
 
-    pub fn required_for_topic(topic: GossipTopic) -> TierLevel {
-        match topic {
-            GossipTopic::Blocks | GossipTopic::Votes => TierLevel::Tier3,
-            GossipTopic::Proofs => TierLevel::Tier1,
-            GossipTopic::Snapshots => TierLevel::Tier2,
-            GossipTopic::Meta => TierLevel::Observer,
-        }
-    }
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum AdmissionError {
+    #[error("unknown peer")]
+    UnknownPeer,
+    #[error("peer banned until {until:?}")]
+    Banned { until: SystemTime },
+    #[error("tier {actual:?} below required {required:?}")]
+    TierInsufficient {
+        required: TierLevel,
+        actual: TierLevel,
+    },
 }
 
 #[derive(Debug, Clone)]
-pub struct PeerReputation {
-    pub peer_id: String,
-    pub score: f64,
-    pub tier: TierLevel,
-    pub uptime: Duration,
-    pub last_updated: Instant,
-}
-
-impl PeerReputation {
-    pub fn new(peer_id: impl Into<String>, score: f64, uptime: Duration) -> Self {
-        let peer_id = peer_id.into();
-        let tier = TierLevel::from_score(score);
-        Self {
-            peer_id,
-            score,
-            tier,
-            uptime,
-            last_updated: Instant::now(),
-        }
-    }
-
-    pub fn set_score(&mut self, score: f64) {
-        self.score = score;
-        self.tier = TierLevel::from_score(score);
-        self.last_updated = Instant::now();
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ReputationEvent {
-    pub peer_id: String,
-    pub delta: f64,
-    pub description: String,
+pub enum ReputationEvent {
+    GossipSuccess { topic: GossipTopic },
+    UptimeProof,
+    VoteIncluded,
+    Slash { severity: f64, reason: &'static str },
+    ManualPenalty { amount: f64, reason: &'static str },
 }
 
 impl ReputationEvent {
-    pub fn new(peer_id: impl Into<String>, delta: f64, description: impl Into<String>) -> Self {
-        Self {
-            peer_id: peer_id.into(),
-            delta,
-            description: description.into(),
+    pub fn label(&self) -> &'static str {
+        match self {
+            ReputationEvent::GossipSuccess { .. } => "gossip_success",
+            ReputationEvent::UptimeProof => "uptime_proof",
+            ReputationEvent::VoteIncluded => "vote_included",
+            ReputationEvent::Slash { reason, .. } => reason,
+            ReputationEvent::ManualPenalty { reason, .. } => reason,
         }
     }
 }
 
-#[derive(Debug)]
-struct TokenBucket {
-    capacity: u32,
-    tokens: u32,
-    refill_interval: Duration,
-    last_refill: Instant,
-}
-
-impl TokenBucket {
-    fn new(capacity: u32, refill_interval: Duration) -> Self {
-        Self {
-            capacity,
-            tokens: capacity,
-            refill_interval,
-            last_refill: Instant::now(),
-        }
-    }
-
-    fn consume(&mut self, amount: u32) -> bool {
-        self.refill();
-        if self.tokens >= amount {
-            self.tokens -= amount;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn refill(&mut self) {
-        let now = Instant::now();
-        if now.duration_since(self.last_refill) >= self.refill_interval {
-            self.tokens = self.capacity;
-            self.last_refill = now;
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct ReputationOutcome {
+    pub snapshot: ReputationSnapshot,
+    pub label: &'static str,
 }
 
 #[derive(Debug)]
 pub struct AdmissionControl {
-    peers: Mutex<HashMap<String, PeerReputation>>,
-    quarantine: Mutex<HashSet<String>>,
-    rate_limits: Mutex<HashMap<String, TokenBucket>>,
-    default_bucket: TokenBucket,
+    peerstore: Arc<Peerstore>,
+    gossip_reward: f64,
+    uptime_reward: f64,
+    vote_reward: f64,
+    slash_penalty: f64,
+    ban_window: Duration,
 }
 
 impl AdmissionControl {
-    pub fn new() -> Self {
+    pub fn new(peerstore: Arc<Peerstore>) -> Self {
         Self {
-            peers: Mutex::new(HashMap::new()),
-            quarantine: Mutex::new(HashSet::new()),
-            rate_limits: Mutex::new(HashMap::new()),
-            default_bucket: TokenBucket::new(32, Duration::from_secs(1)),
+            peerstore,
+            gossip_reward: DEFAULT_GOSSIP_REWARD,
+            uptime_reward: DEFAULT_UPTIME_REWARD,
+            vote_reward: DEFAULT_VOTE_REWARD,
+            slash_penalty: DEFAULT_SLASH_PENALTY,
+            ban_window: Duration::from_secs(180),
         }
     }
 
-    pub fn register_peer(&self, peer: PeerReputation) {
-        let mut peers = self.peers.lock().expect("peers mutex poisoned");
-        peers.insert(peer.peer_id.clone(), peer);
-    }
-
-    pub fn record_event(&self, event: ReputationEvent) {
-        let mut peers = self.peers.lock().expect("peers mutex poisoned");
-        let entry = peers.entry(event.peer_id.clone()).or_insert_with(|| {
-            PeerReputation::new(event.peer_id.clone(), 0.0, Duration::from_secs(0))
-        });
-        let new_score = (entry.score + event.delta).clamp(0.0, 5.0);
-        entry.set_score(new_score);
-    }
-
-    pub fn reputation(&self, peer_id: &str) -> Option<PeerReputation> {
-        self.peers
-            .lock()
-            .expect("peers mutex poisoned")
-            .get(peer_id)
-            .cloned()
-    }
-
-    pub fn quarantine(&self, peer_id: impl Into<String>) {
-        self.quarantine
-            .lock()
-            .expect("quarantine mutex poisoned")
-            .insert(peer_id.into());
-    }
-
-    pub fn is_quarantined(&self, peer_id: &str) -> bool {
-        self.quarantine
-            .lock()
-            .expect("quarantine mutex poisoned")
-            .contains(peer_id)
-    }
-
-    pub fn check_publish(&self, peer_id: &str, topic: GossipTopic) -> bool {
-        if self.is_quarantined(peer_id) {
-            return false;
+    fn topic_policy(topic: GossipTopic) -> (TierLevel, TierLevel) {
+        match topic {
+            GossipTopic::Blocks | GossipTopic::Votes => (TierLevel::Tl0, TierLevel::Tl3),
+            GossipTopic::Proofs => (TierLevel::Tl0, TierLevel::Tl1),
+            GossipTopic::Snapshots => (TierLevel::Tl0, TierLevel::Tl1),
+            GossipTopic::Meta => (TierLevel::Tl0, TierLevel::Tl0),
         }
-
-        let required_tier = TierLevel::required_for_topic(topic);
-        let tier_ok = self
-            .peers
-            .lock()
-            .expect("peers mutex poisoned")
-            .get(peer_id)
-            .map(|r| r.tier >= required_tier)
-            .unwrap_or(false);
-        if !tier_ok {
-            return false;
-        }
-
-        let mut limits = self
-            .rate_limits
-            .lock()
-            .expect("rate limit mutex poisoned");
-        let bucket = limits
-            .entry(peer_id.to_string())
-            .or_insert_with(|| self.default_bucket.clone());
-        bucket.consume(1)
     }
-}
 
-impl Clone for TokenBucket {
-    fn clone(&self) -> Self {
-        Self {
-            capacity: self.capacity,
-            tokens: self.tokens,
-            refill_interval: self.refill_interval,
-            last_refill: Instant::now(),
+    fn ensure_tier(required: TierLevel, actual: TierLevel) -> Result<(), AdmissionError> {
+        if actual >= required {
+            Ok(())
+        } else {
+            Err(AdmissionError::TierInsufficient { required, actual })
         }
+    }
+
+    pub fn can_subscribe_local(
+        &self,
+        tier: TierLevel,
+        topic: GossipTopic,
+    ) -> Result<(), AdmissionError> {
+        let (required, _) = Self::topic_policy(topic);
+        Self::ensure_tier(required, tier)
+    }
+
+    pub fn can_publish_local(
+        &self,
+        tier: TierLevel,
+        topic: GossipTopic,
+    ) -> Result<(), AdmissionError> {
+        let (_, required) = Self::topic_policy(topic);
+        Self::ensure_tier(required, tier)
+    }
+
+    pub fn can_remote_subscribe(
+        &self,
+        peer: &PeerId,
+        topic: GossipTopic,
+    ) -> Result<ReputationSnapshot, AdmissionError> {
+        let snapshot = self
+            .peerstore
+            .reputation_snapshot(peer)
+            .ok_or(AdmissionError::UnknownPeer)?;
+        if let Some(until) = snapshot.banned_until {
+            return Err(AdmissionError::Banned { until });
+        }
+        let (required, _) = Self::topic_policy(topic);
+        Self::ensure_tier(required, snapshot.tier)?;
+        Ok(snapshot)
+    }
+
+    pub fn can_remote_publish(
+        &self,
+        peer: &PeerId,
+        topic: GossipTopic,
+    ) -> Result<ReputationSnapshot, AdmissionError> {
+        let snapshot = self
+            .peerstore
+            .reputation_snapshot(peer)
+            .ok_or(AdmissionError::UnknownPeer)?;
+        if let Some(until) = snapshot.banned_until {
+            return Err(AdmissionError::Banned { until });
+        }
+        let (_, required) = Self::topic_policy(topic);
+        Self::ensure_tier(required, snapshot.tier)?;
+        Ok(snapshot)
+    }
+
+    pub fn record_event(
+        &self,
+        peer: PeerId,
+        event: ReputationEvent,
+    ) -> Result<ReputationOutcome, PeerstoreError> {
+        let snapshot = match event {
+            ReputationEvent::GossipSuccess { topic } => {
+                let reward = match topic {
+                    GossipTopic::Blocks | GossipTopic::Votes => self.gossip_reward * 2.0,
+                    GossipTopic::Proofs => self.gossip_reward,
+                    GossipTopic::Snapshots => self.gossip_reward * 1.5,
+                    GossipTopic::Meta => self.gossip_reward * 0.5,
+                };
+                self.peerstore.update_reputation(peer, reward)?
+            }
+            ReputationEvent::UptimeProof => {
+                self.peerstore.update_reputation(peer, self.uptime_reward)?
+            }
+            ReputationEvent::VoteIncluded => {
+                self.peerstore.update_reputation(peer, self.vote_reward)?
+            }
+            ReputationEvent::Slash { severity, .. } => {
+                let penalty = -(self.slash_penalty * severity.max(1.0));
+                let snapshot = self.peerstore.update_reputation(peer, penalty)?;
+                if severity >= 1.0 || snapshot.reputation < DEFAULT_PENALTY_THRESHOLD {
+                    let until = SystemTime::now() + self.ban_window;
+                    self.peerstore.ban_peer_until(peer, until)?
+                } else {
+                    snapshot
+                }
+            }
+            ReputationEvent::ManualPenalty { amount, .. } => {
+                let snapshot = self.peerstore.update_reputation(peer, -amount.abs())?;
+                if snapshot.reputation < DEFAULT_PENALTY_THRESHOLD {
+                    let until = SystemTime::now() + self.ban_window;
+                    self.peerstore.ban_peer_until(peer, until)?
+                } else {
+                    snapshot
+                }
+            }
+        };
+
+        let final_snapshot = self
+            .peerstore
+            .reputation_snapshot(&peer)
+            .unwrap_or(snapshot);
+
+        Ok(ReputationOutcome {
+            snapshot: final_snapshot,
+            label: event.label(),
+        })
+    }
+
+    pub fn peerstore(&self) -> &Arc<Peerstore> {
+        &self.peerstore
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::peerstore::PeerstoreConfig;
+    use proptest::prelude::*;
 
     #[test]
     fn enforces_tier_requirements() {
-        let admission = AdmissionControl::new();
-        admission.register_peer(PeerReputation::new("alice", 3.0, Duration::from_secs(10)));
-        assert!(admission.check_publish("alice", GossipTopic::Blocks));
-        assert!(admission.check_publish("alice", GossipTopic::Votes));
-        assert!(admission.check_publish("alice", GossipTopic::Proofs));
+        let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("open"));
+        let control = AdmissionControl::new(store.clone());
+        let peer = PeerId::random();
 
-        assert!(!admission.check_publish("unknown", GossipTopic::Proofs));
+        store
+            .record_handshake(
+                peer,
+                &crate::handshake::HandshakePayload::new("peer", vec![], TierLevel::Tl1),
+            )
+            .expect("handshake");
+
+        assert!(control
+            .can_remote_publish(&peer, GossipTopic::Proofs)
+            .is_ok());
+        assert!(matches!(
+            control.can_remote_publish(&peer, GossipTopic::Votes),
+            Err(AdmissionError::TierInsufficient { .. })
+        ));
     }
 
-    #[test]
-    fn enforces_quarantine() {
-        let admission = AdmissionControl::new();
-        admission.register_peer(PeerReputation::new("carol", 2.0, Duration::from_secs(5)));
-        assert!(admission.check_publish("carol", GossipTopic::Proofs));
-        admission.quarantine("carol");
-        assert!(!admission.check_publish("carol", GossipTopic::Proofs));
+    proptest! {
+        #[test]
+        fn tier_gating_matches_threshold(score in 0.0f64..10.0) {
+            let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("open"));
+            let control = AdmissionControl::new(store.clone());
+            let peer = PeerId::random();
+            let tier = TierLevel::from_reputation(score);
+
+            store
+                .record_handshake(peer, &crate::handshake::HandshakePayload::new("peer", vec![], tier))
+                .expect("handshake");
+            store
+                .set_reputation(peer, score)
+                .expect("reputation");
+
+            let proofs_allowed = control.can_remote_publish(&peer, GossipTopic::Proofs).is_ok();
+            let votes_allowed = control.can_remote_publish(&peer, GossipTopic::Votes).is_ok();
+            prop_assert_eq!(proofs_allowed, tier >= TierLevel::Tl1);
+            prop_assert_eq!(votes_allowed, tier >= TierLevel::Tl3);
+        }
     }
 }

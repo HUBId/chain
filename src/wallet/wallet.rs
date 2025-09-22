@@ -72,6 +72,10 @@ impl Wallet {
         &self.address
     }
 
+    pub fn firewood_state_root(&self) -> ChainResult<String> {
+        Ok(hex::encode(self.storage.state_root()?))
+    }
+
     pub fn build_identity_declaration(&self) -> ChainResult<IdentityDeclaration> {
         let accounts = self.storage.load_accounts()?;
         let mut tip_height = 0;

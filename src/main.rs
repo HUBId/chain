@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand};
+use parking_lot::RwLock;
 use tokio::signal;
 use tokio::task::{JoinError, JoinHandle};
 use tracing::info;
@@ -14,7 +16,8 @@ use rpp_chain::crypto::{
     save_vrf_keypair,
 };
 use rpp_chain::migration;
-use rpp_chain::node::Node;
+use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
@@ -25,20 +28,20 @@ struct Cli {
     command: Commands,
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Clone)]
 struct StartArgs {
-    /// Enable the embedded wallet runtime (Electrum-style UI + proofs)
-    #[arg(long, default_value_t = false)]
-    wallet: bool,
-    /// Enable the full node runtime (consensus, block production, RPC)
-    #[arg(long, default_value_t = false)]
-    node: bool,
-    /// Path to the node configuration file
-    #[arg(long, default_value = "config/node.toml")]
-    node_config: PathBuf,
-    /// Path to the wallet configuration file
-    #[arg(long, default_value = "config/wallet.toml")]
-    wallet_config: PathBuf,
+    /// Select the runtime mode (node, wallet, hybrid, validator)
+    #[arg(long, value_enum, default_value_t = RuntimeMode::Node)]
+    mode: RuntimeMode,
+    /// Optional runtime profile to apply (resolves config paths and default mode)
+    #[arg(long)]
+    profile: Option<String>,
+    /// Override the node configuration file path
+    #[arg(long)]
+    node_config: Option<PathBuf>,
+    /// Override the wallet configuration file path
+    #[arg(long)]
+    wallet_config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -96,15 +99,14 @@ async fn main() -> Result<()> {
 }
 
 async fn start_runtime(args: StartArgs) -> Result<()> {
-    let enable_wallet = args.wallet;
-    let enable_node = args.node || (!args.wallet && !args.node);
-
+    let resolved = args.resolve()?;
+    let runtime_mode = Arc::new(RwLock::new(resolved.mode));
     let mut node_handle = None;
     let mut node_task = None;
     let mut rpc_addr = None;
 
-    if enable_node {
-        let config = load_or_init_node_config(&args.node_config)?;
+    if let Some(node_config_path) = resolved.node_config.as_ref() {
+        let config = load_or_init_node_config(node_config_path)?;
         let addr = config.rpc_listen;
         let node = Node::new(config)?;
         let handle = node.handle();
@@ -113,9 +115,9 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         rpc_addr = Some(addr);
     }
 
-    let mut wallet_instance = None;
-    if enable_wallet {
-        let config = load_or_init_wallet_config(&args.wallet_config)?;
+    let mut wallet_instance: Option<Arc<Wallet>> = None;
+    if let Some(wallet_config_path) = resolved.wallet_config.as_ref() {
+        let config = load_or_init_wallet_config(wallet_config_path)?;
         config.ensure_directories()?;
         let storage = if let Some(handle) = &node_handle {
             handle.storage()
@@ -124,16 +126,27 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             Storage::open(&db_path)?
         };
         let keypair = load_or_generate_keypair(&config.key_path)?;
-        let wallet = Wallet::new(storage, keypair);
+        let wallet = Arc::new(Wallet::new(storage, keypair));
         wallet_instance = Some(wallet);
         if rpc_addr.is_none() {
             rpc_addr = Some(config.rpc_listen);
         }
     }
 
+    if node_handle.is_none() && wallet_instance.is_none() {
+        return Err(anyhow!(
+            "runtime mode {:?} requires node and/or wallet components",
+            resolved.mode
+        ));
+    }
+
     let rpc_addr = rpc_addr.ok_or_else(|| anyhow!("no runtime role selected"))?;
 
-    let context = api::ApiContext::new(node_handle.clone(), wallet_instance.clone());
+    let context = api::ApiContext::new(
+        runtime_mode.clone(),
+        node_handle.clone(),
+        wallet_instance.clone(),
+    );
     let api_task = tokio::spawn(async move { api::serve(context, rpc_addr).await });
 
     if let Some(wallet) = &wallet_instance {
@@ -150,6 +163,16 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     }
     if let Some(handle) = &node_handle {
         info!(address = %handle.address(), "node runtime initialised");
+    }
+
+    if resolved.mode == RuntimeMode::Validator {
+        if let (Some(handle), Some(wallet)) = (&node_handle, &wallet_instance) {
+            spawn_validator_daemon(handle.clone(), Arc::clone(wallet), runtime_mode.clone());
+        } else {
+            info!(
+                "validator mode requested without both node and wallet; background tasks not started"
+            );
+        }
     }
 
     run_until_shutdown(node_task, api_task).await
@@ -247,6 +270,93 @@ fn load_or_init_wallet_config(path: &Path) -> Result<WalletConfig> {
         let config = WalletConfig::default();
         config.save(path)?;
         Ok(config)
+    }
+}
+
+impl StartArgs {
+    fn resolve(&self) -> Result<ResolvedRuntime> {
+        let mut mode = self.mode;
+        let mut node_config = self.node_config.clone();
+        let mut wallet_config = self.wallet_config.clone();
+
+        if let Some(profile_name) = &self.profile {
+            let profile = RuntimeProfile::load(profile_name)
+                .map_err(|err| anyhow!("failed to load runtime profile '{profile_name}': {err}"))?;
+            if let Some(profile_mode) = profile.mode() {
+                mode = profile_mode;
+            }
+            if let Some(path) = profile.node_config_path() {
+                node_config = Some(path);
+            }
+            if let Some(path) = profile.wallet_config_path() {
+                wallet_config = Some(path);
+            }
+        }
+
+        if mode.includes_node() && node_config.is_none() {
+            node_config = Some(PathBuf::from("config/node.toml"));
+        }
+        if mode.includes_wallet() && wallet_config.is_none() {
+            wallet_config = Some(PathBuf::from("config/wallet.toml"));
+        }
+
+        Ok(ResolvedRuntime {
+            mode,
+            node_config,
+            wallet_config,
+        })
+    }
+}
+
+struct ResolvedRuntime {
+    mode: RuntimeMode,
+    node_config: Option<PathBuf>,
+    wallet_config: Option<PathBuf>,
+}
+
+fn spawn_validator_daemon(node: NodeHandle, wallet: Arc<Wallet>, mode: Arc<RwLock<RuntimeMode>>) {
+    tokio::spawn(async move {
+        validator_daemon(node, wallet, mode).await;
+    });
+}
+
+async fn validator_daemon(node: NodeHandle, wallet: Arc<Wallet>, mode: Arc<RwLock<RuntimeMode>>) {
+    use tokio::time::{Duration, interval};
+    use tracing::{info, warn};
+
+    let mut ticker = interval(Duration::from_secs(3600));
+    loop {
+        ticker.tick().await;
+        let current_mode = *mode.read();
+        if !current_mode.includes_node() || !current_mode.includes_wallet() {
+            continue;
+        }
+
+        match wallet.generate_uptime_proof() {
+            Ok(proof) => match node.submit_uptime_proof(proof.clone()) {
+                Ok(credited) => {
+                    info!(
+                        credited_hours = credited,
+                        "validator uptime proof submitted"
+                    );
+                }
+                Err(err) => {
+                    warn!(?err, "failed to submit validator uptime proof");
+                }
+            },
+            Err(err) => warn!(?err, "failed to generate validator uptime proof"),
+        }
+
+        match node.telemetry_snapshot() {
+            Ok(snapshot) => {
+                info!(
+                    height = snapshot.node.height,
+                    pending_txs = snapshot.mempool.transactions.len(),
+                    "validator telemetry snapshot"
+                );
+            }
+            Err(err) => warn!(?err, "failed to collect validator telemetry"),
+        }
     }
 }
 

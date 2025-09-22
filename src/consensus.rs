@@ -29,7 +29,7 @@ pub struct ProposerSelection {
     pub vrf_public_key: String,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum BftVoteKind {
     PreVote,
     PreCommit,
@@ -41,6 +41,116 @@ impl BftVoteKind {
             BftVoteKind::PreVote => 0,
             BftVoteKind::PreCommit => 1,
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EvidenceKind {
+    DoubleSignPrevote,
+    DoubleSignPrecommit,
+    InvalidProof,
+    InvalidProposal,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvidenceRecord {
+    pub address: Address,
+    pub height: u64,
+    pub round: u64,
+    pub kind: EvidenceKind,
+    pub vote_kind: Option<BftVoteKind>,
+    pub block_hashes: Vec<String>,
+}
+
+impl EvidenceRecord {
+    fn double_sign(vote: &SignedBftVote, previous: &str) -> Self {
+        let kind = match vote.vote.kind {
+            BftVoteKind::PreVote => EvidenceKind::DoubleSignPrevote,
+            BftVoteKind::PreCommit => EvidenceKind::DoubleSignPrecommit,
+        };
+        Self {
+            address: vote.vote.voter.clone(),
+            height: vote.vote.height,
+            round: vote.vote.round,
+            kind,
+            vote_kind: Some(vote.vote.kind),
+            block_hashes: vec![previous.to_string(), vote.vote.block_hash.clone()],
+        }
+    }
+
+    fn invalid_proof(address: &Address, height: u64, round: u64) -> Self {
+        Self {
+            address: address.clone(),
+            height,
+            round,
+            kind: EvidenceKind::InvalidProof,
+            vote_kind: None,
+            block_hashes: Vec::new(),
+        }
+    }
+
+    fn invalid_proposal(
+        address: &Address,
+        height: u64,
+        round: u64,
+        block_hash: Option<String>,
+    ) -> Self {
+        Self {
+            address: address.clone(),
+            height,
+            round,
+            kind: EvidenceKind::InvalidProposal,
+            vote_kind: None,
+            block_hashes: block_hash.into_iter().collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EvidencePool {
+    votes: HashMap<(u64, u64, BftVoteKind, Address), String>,
+}
+
+impl EvidencePool {
+    pub fn record_vote(&mut self, vote: &SignedBftVote) -> Option<EvidenceRecord> {
+        let key = (
+            vote.vote.height,
+            vote.vote.round,
+            vote.vote.kind,
+            vote.vote.voter.clone(),
+        );
+        if let Some(existing) = self.votes.get(&key) {
+            if existing != &vote.vote.block_hash {
+                return Some(EvidenceRecord::double_sign(vote, existing));
+            }
+            return None;
+        }
+        self.votes.insert(key, vote.vote.block_hash.clone());
+        None
+    }
+
+    pub fn record_invalid_proof(
+        &mut self,
+        address: &Address,
+        height: u64,
+        round: u64,
+    ) -> EvidenceRecord {
+        EvidenceRecord::invalid_proof(address, height, round)
+    }
+
+    pub fn record_invalid_proposal(
+        &mut self,
+        address: &Address,
+        height: u64,
+        round: u64,
+        block_hash: Option<String>,
+    ) -> EvidenceRecord {
+        EvidenceRecord::invalid_proposal(address, height, round, block_hash)
+    }
+
+    pub fn prune_below(&mut self, threshold_height: u64) {
+        self.votes
+            .retain(|(height, _, _, _), _| *height >= threshold_height);
     }
 }
 
@@ -215,15 +325,6 @@ fn natural_from_bytes(bytes: &[u8]) -> Natural {
     value
 }
 
-fn vrf_domain(seed: &[u8; 32], round: u64, address: &Address, timetoke_hours: u64) -> Vec<u8> {
-    let mut data = Vec::with_capacity(32 + 8 + 8 + address.len());
-    data.extend_from_slice(seed);
-    data.extend_from_slice(&round.to_le_bytes());
-    data.extend_from_slice(address.as_bytes());
-    data.extend_from_slice(&timetoke_hours.to_le_bytes());
-    data
-}
-
 pub fn evaluate_vrf(
     seed: &[u8; 32],
     round: u64,
@@ -231,29 +332,21 @@ pub fn evaluate_vrf(
     timetoke_hours: u64,
     secret: Option<&VrfSecretKey>,
 ) -> VrfProof {
+    let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
+    let input = PoseidonVrfInput::new(*seed, round, tier_seed);
     if let Some(secret_key) = secret {
-        let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
-        let input = PoseidonVrfInput::new(*seed, round, tier_seed);
         match vrf::generate_vrf(&input, secret_key) {
-            Ok(output) => {
-                return VrfProof::from_output(&output);
-            }
+            Ok(output) => return VrfProof::from_output(&output),
             Err(err) => {
-                warn!(
-                    %address,
-                    ?err,
-                    "failed to generate VRF via Poseidon backend; falling back to legacy hash"
-                );
+                warn!(%address, ?err, "failed to generate VRF output via Poseidon backend");
             }
         }
     }
 
-    let data = vrf_domain(seed, round, address, timetoke_hours);
-    let hash = Blake2sHasher::hash(&data);
-    let hash_bytes: [u8; 32] = hash.into();
+    let digest = input.poseidon_digest_bytes();
     VrfProof {
-        randomness: natural_from_bytes(&hash_bytes),
-        proof: hex::encode(hash_bytes),
+        randomness: natural_from_bytes(&digest),
+        proof: hex::encode(digest),
     }
 }
 
@@ -265,25 +358,16 @@ pub fn verify_vrf(
     proof: &VrfProof,
     public: Option<&VrfPublicKey>,
 ) -> bool {
-    if let Some(public_key) = public {
-        if let Ok(output) = proof.to_vrf_output() {
-            let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
-            let input = PoseidonVrfInput::new(*seed, round, tier_seed);
-            match vrf::verify_vrf(&input, public_key, &output) {
-                Ok(()) => return true,
-                Err(err) => {
-                    warn!(
-                        %address,
-                        ?err,
-                        "Poseidon VRF verification failed; falling back to legacy hash",
-                    );
-                }
-            }
-        }
-    }
-
-    let expected = evaluate_vrf(seed, round, address, timetoke_hours, None);
-    expected.proof == proof.proof && expected.randomness == proof.randomness
+    let Some(public_key) = public else {
+        warn!(%address, "missing VRF public key for verification");
+        return false;
+    };
+    let Ok(output) = proof.to_vrf_output() else {
+        return false;
+    };
+    let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
+    let input = PoseidonVrfInput::new(*seed, round, tier_seed);
+    vrf::verify_vrf(&input, public_key, &output).is_ok()
 }
 
 #[derive(Clone, Debug)]
@@ -329,7 +413,8 @@ impl ConsensusRound {
         }
 
         let selection = vrf::select_validators(submissions, target_validator_count);
-        let vrf_metrics = selection.metrics.clone();
+        let mut vrf_metrics = selection.metrics.clone();
+        vrf_metrics.set_round(round);
         for submission in &selection.validators {
             if !submission.verified {
                 warn!(address = %submission.address, "ignoring unverified VRF submission");
@@ -718,5 +803,52 @@ mod tests {
         assert!(metrics.rejected_candidates >= 1);
         assert!(metrics.fallback_selected);
         assert_eq!(metrics.target_validator_count, 0);
+    }
+
+    #[test]
+    fn evidence_pool_flags_double_sign() {
+        let (_, keypair, address, block_hash) = validator_round();
+        let vote = BftVote {
+            round: 1,
+            height: 1,
+            block_hash: block_hash.clone(),
+            voter: address.clone(),
+            kind: BftVoteKind::PreVote,
+        };
+        let signature = keypair.sign(&vote.message_bytes());
+        let mut signed = SignedBftVote {
+            vote: vote.clone(),
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        };
+        let mut pool = EvidencePool::default();
+        assert!(pool.record_vote(&signed).is_none());
+        signed.vote.block_hash = hex::encode([7u8; 32]);
+        let double_sign = pool.record_vote(&signed).expect("double sign detected");
+        assert_eq!(double_sign.address, address);
+        assert_eq!(double_sign.vote_kind, Some(BftVoteKind::PreVote));
+        assert_eq!(double_sign.block_hashes.len(), 2);
+    }
+
+    #[test]
+    fn evidence_pool_prunes_entries() {
+        let (_, keypair, address, block_hash) = validator_round();
+        let vote = BftVote {
+            round: 1,
+            height: 5,
+            block_hash: block_hash.clone(),
+            voter: address.clone(),
+            kind: BftVoteKind::PreCommit,
+        };
+        let signature = keypair.sign(&vote.message_bytes());
+        let signed = SignedBftVote {
+            vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        };
+        let mut pool = EvidencePool::default();
+        assert!(pool.record_vote(&signed).is_none());
+        pool.prune_below(6);
+        assert!(pool.record_vote(&signed).is_none());
     }
 }

@@ -11,7 +11,7 @@ use crate::errors::{ChainError, ChainResult};
 use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
 use crate::types::StoredBlock;
-use crate::types::{Block, BlockMetadata, BlockPayload};
+use crate::types::{Block, BlockMetadata, BlockPayload, ChainProof};
 
 /// Interface that provides raw block payloads required for reconstruction.
 pub trait PayloadProvider {
@@ -116,6 +116,44 @@ pub struct ReconstructionEngine {
     snapshot_dir: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct StateSyncChunk {
+    pub start_height: u64,
+    pub end_height: u64,
+    pub requests: Vec<ReconstructionRequest>,
+}
+
+impl StateSyncChunk {
+    fn from_requests(requests: Vec<ReconstructionRequest>) -> Self {
+        let start_height = requests.first().map(|req| req.height).unwrap_or(0);
+        let end_height = requests
+            .last()
+            .map(|req| req.height)
+            .unwrap_or(start_height);
+        Self {
+            start_height,
+            end_height,
+            requests,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LightClientUpdate {
+    pub height: u64,
+    pub block_hash: String,
+    pub state_root: String,
+    pub recursive_proof: ChainProof,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct StateSyncPlan {
+    pub snapshot: SnapshotSummary,
+    pub tip: BlockMetadata,
+    pub chunks: Vec<StateSyncChunk>,
+    pub light_client_updates: Vec<LightClientUpdate>,
+}
+
 impl ReconstructionEngine {
     pub fn new(storage: Storage) -> Self {
         Self {
@@ -178,6 +216,37 @@ impl ReconstructionEngine {
         self.plan_from_height(0)
     }
 
+    pub fn state_sync_plan(&self, chunk_size: usize) -> ChainResult<StateSyncPlan> {
+        if chunk_size == 0 {
+            return Err(ChainError::Config(
+                "state sync chunk size must be greater than zero".into(),
+            ));
+        }
+        let plan = self.full_plan()?;
+        let mut chunks = Vec::new();
+        if !plan.requests.is_empty() {
+            let mut buffer: Vec<ReconstructionRequest> = Vec::new();
+            for request in plan.requests.iter().cloned() {
+                buffer.push(request);
+                if buffer.len() == chunk_size {
+                    let chunk_requests = std::mem::take(&mut buffer);
+                    chunks.push(StateSyncChunk::from_requests(chunk_requests));
+                }
+            }
+            if !buffer.is_empty() {
+                let remaining = std::mem::take(&mut buffer);
+                chunks.push(StateSyncChunk::from_requests(remaining));
+            }
+        }
+        let updates = self.light_client_feed(plan.start_height)?;
+        Ok(StateSyncPlan {
+            snapshot: plan.snapshot.clone(),
+            tip: plan.tip.clone(),
+            chunks,
+            light_client_updates: updates,
+        })
+    }
+
     pub fn persist_plan(&self, plan: &ReconstructionPlan) -> ChainResult<Option<PathBuf>> {
         let Some(dir) = self.snapshot_dir.as_ref() else {
             return Ok(None);
@@ -219,6 +288,22 @@ impl ReconstructionEngine {
             previous = Some(block);
         }
         Ok(())
+    }
+
+    pub fn light_client_feed(&self, start_height: u64) -> ChainResult<Vec<LightClientUpdate>> {
+        let mut records = self.storage.load_block_records_from(start_height)?;
+        records.sort_by_key(|record| record.height());
+        let mut updates = Vec::new();
+        for record in records {
+            let header = &record.envelope.header;
+            updates.push(LightClientUpdate {
+                height: header.height,
+                block_hash: record.hash().to_string(),
+                state_root: header.state_root.clone(),
+                recursive_proof: record.envelope.stark.recursive_proof.clone(),
+            });
+        }
+        Ok(updates)
     }
 
     pub fn reconstruct_block<P: PayloadProvider>(
@@ -607,5 +692,43 @@ mod tests {
         assert_eq!(hydrated.len(), 2);
         assert!(!hydrated[1].pruned);
         assert_eq!(hydrated[1].header.height, 1);
+    }
+
+    #[test]
+    fn state_sync_plan_groups_chunks_and_updates_light_clients() {
+        let temp_dir = tempdir().expect("tempdir");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let genesis = make_block(0, None);
+        storage.store_block(&genesis).expect("store genesis");
+
+        let block_one = make_block(1, Some(&genesis));
+        storage.store_block(&block_one).expect("store block one");
+        storage
+            .prune_block_payload(1)
+            .expect("prune block one payload");
+
+        let block_two = make_block(2, Some(&block_one));
+        storage.store_block(&block_two).expect("store block two");
+        storage
+            .prune_block_payload(2)
+            .expect("prune block two payload");
+
+        let engine = ReconstructionEngine::new(storage.clone());
+        let plan = engine.state_sync_plan(1).expect("state sync plan");
+        assert_eq!(plan.snapshot.height, 0);
+        assert_eq!(plan.tip.height, 2);
+        assert_eq!(plan.chunks.len(), 2);
+        assert_eq!(plan.chunks[0].requests.len(), 1);
+        assert_eq!(plan.chunks[1].requests.len(), 1);
+        assert_eq!(plan.light_client_updates.len(), 3);
+        assert_eq!(plan.light_client_updates[2].height, 2);
+
+        let light_client_feed = engine.light_client_feed(1).expect("feed from height 1");
+        assert_eq!(light_client_feed.len(), 2);
+        assert!(
+            light_client_feed
+                .iter()
+                .all(|update| !update.state_root.is_empty())
+        );
     }
 }

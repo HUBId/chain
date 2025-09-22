@@ -1,0 +1,2 @@
+mode = "node"
+node_config = "../node.toml"

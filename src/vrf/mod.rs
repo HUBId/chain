@@ -5,7 +5,7 @@
 //! error types so that subsequent work can focus on integrating the actual
 //! cryptography and consensus wiring without reshaping interfaces again.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::crypto::{VrfPublicKey, VrfSecretKey, vrf_public_key_to_hex};
@@ -30,6 +30,8 @@ pub const POSEIDON_TIER_SEED_DOMAIN: &[u8] = b"chain.vrf.tier_seed";
 pub const VRF_RANDOMNESS_BITS: usize = 256;
 /// Domain separator used when deriving per-epoch validator thresholds.
 const THRESHOLD_DOMAIN: &[u8] = b"chain.vrf.threshold";
+/// Domain separator for the epoch entropy beacon accumulator.
+const ENTROPY_BEACON_DOMAIN: &[u8] = b"chain.vrf.entropy";
 
 /// Structured input to the VRF consisting of the values mandated by the
 /// blueprint: the previous block header hash, the current epoch number and a
@@ -232,6 +234,8 @@ pub struct VerifiedSubmission {
     pub timetoke_hours: u64,
     pub randomness: Natural,
     pub verified: bool,
+    pub weight: Natural,
+    pub weighted_randomness: Natural,
 }
 
 impl VerifiedSubmission {
@@ -350,6 +354,8 @@ pub struct VrfSelectionRecord {
     pub accepted: bool,
     pub threshold: Option<String>,
     pub rejection_reason: Option<String>,
+    pub weight: Option<String>,
+    pub weighted_randomness: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -360,6 +366,12 @@ pub struct VrfSelectionMetrics {
     pub accepted_validators: usize,
     pub rejected_candidates: usize,
     pub fallback_selected: bool,
+    pub unique_addresses: usize,
+    pub participation_rate: f64,
+    pub total_weight: String,
+    pub entropy_beacon: String,
+    pub latest_epoch: Option<u64>,
+    pub latest_round: Option<u64>,
 }
 
 impl VrfSelectionMetrics {
@@ -377,6 +389,75 @@ impl VrfSelectionMetrics {
 
     fn record_fallback(&mut self) {
         self.fallback_selected = true;
+    }
+
+    fn record_epoch(&mut self, epoch: u64) {
+        self.latest_epoch = Some(epoch);
+    }
+
+    pub fn set_round(&mut self, round: u64) {
+        self.latest_round = Some(round);
+    }
+}
+
+/// Tracks replay protection and entropy beacons across epochs.
+#[derive(Clone, Debug)]
+pub struct VrfEpochManager {
+    epoch_length: u64,
+    active_epoch: u64,
+    seen: HashSet<String>,
+    latest_entropy: [u8; 32],
+}
+
+impl VrfEpochManager {
+    pub fn new(epoch_length: u64, active_epoch: u64) -> Self {
+        Self {
+            epoch_length: epoch_length.max(1),
+            active_epoch,
+            seen: HashSet::new(),
+            latest_entropy: default_entropy_state(),
+        }
+    }
+
+    fn rotate_epoch(&mut self, epoch: u64) {
+        if epoch < self.active_epoch {
+            return;
+        }
+        if epoch > self.active_epoch {
+            self.active_epoch = epoch;
+            self.seen.clear();
+        }
+    }
+
+    pub fn active_epoch(&self) -> u64 {
+        self.active_epoch
+    }
+
+    pub fn register_submission(&mut self, submission: &VrfSubmission) -> bool {
+        if submission.input.epoch < self.active_epoch {
+            return false;
+        }
+        self.rotate_epoch(submission.input.epoch);
+        let key = format!(
+            "{}:{}:{}",
+            submission.input.epoch,
+            submission.address,
+            submission.proof.randomness.to_string()
+        );
+        self.seen.insert(key)
+    }
+
+    pub fn record_entropy(&mut self, epoch: u64, beacon: [u8; 32]) {
+        self.rotate_epoch(epoch);
+        self.latest_entropy = beacon;
+    }
+
+    pub fn entropy_hex(&self) -> String {
+        hex::encode(self.latest_entropy)
+    }
+
+    pub fn epoch_length(&self) -> u64 {
+        self.epoch_length
     }
 }
 
@@ -401,10 +482,8 @@ pub fn generate_vrf(input: &PoseidonVrfInput, secret: &VrfSecretKey) -> VrfResul
     let public: PublicKey = (&secret).into();
     let signature = expanded.sign(&digest, &public);
     let proof_bytes = signature.to_bytes();
-    let randomness: [u8; 32] = Blake2sHasher::hash(&proof_bytes).into();
-
     Ok(VrfOutput {
-        randomness,
+        randomness: digest,
         proof: proof_bytes,
     })
 }
@@ -426,8 +505,7 @@ pub fn verify_vrf(
         .verify(&digest, &signature)
         .map_err(|_| VrfError::VerificationFailed)?;
 
-    let expected_randomness: [u8; 32] = Blake2sHasher::hash(&output.proof).into();
-    if expected_randomness != output.randomness {
+    if digest != output.randomness {
         return Err(VrfError::VerificationFailed);
     }
 
@@ -451,14 +529,20 @@ pub fn select_validators(
     let mut result = ValidatorSelection::default();
     result.metrics.pool_entries = pool.len();
     result.metrics.target_validator_count = target_validator_count;
+    result.metrics.unique_addresses = pool.len();
 
     if pool.is_empty() {
+        result.metrics.total_weight = "0".into();
+        result.metrics.entropy_beacon = hex::encode(default_entropy_state());
         return result;
     }
 
     let mut audit_records: Vec<VrfSelectionRecord> = Vec::new();
     let mut audit_index: HashMap<Address, usize> = HashMap::new();
     let mut verified_by_epoch: HashMap<u64, Vec<VerifiedSubmission>> = HashMap::new();
+    let mut total_weight = Natural::from(0u32);
+    let mut accepted_count: usize = 0;
+    let mut entropy_state = default_entropy_state();
 
     for submission in pool.iter() {
         match validate_submission(submission) {
@@ -480,6 +564,8 @@ pub fn select_validators(
                     accepted: false,
                     threshold: None,
                     rejection_reason: None,
+                    weight: Some(verified.weight.to_string()),
+                    weighted_randomness: Some(verified.weighted_randomness.to_string()),
                 });
                 verified_by_epoch
                     .entry(verified.input.epoch)
@@ -503,6 +589,8 @@ pub fn select_validators(
                     accepted: false,
                     threshold: None,
                     rejection_reason: Some(reason_string.clone()),
+                    weight: None,
+                    weighted_randomness: None,
                 });
                 result.rejected.push(RejectedSubmission {
                     submission: submission.clone(),
@@ -517,6 +605,9 @@ pub fn select_validators(
         result
             .rejected
             .sort_by(|a, b| a.submission.address.cmp(&b.submission.address));
+        result.metrics.total_weight = "0".into();
+        result.metrics.entropy_beacon = hex::encode(entropy_state);
+        result.metrics.participation_rate = 0.0;
         return result;
     }
 
@@ -524,7 +615,7 @@ pub fn select_validators(
     for (epoch, submissions) in verified_by_epoch.iter() {
         let randomness: Vec<Natural> = submissions
             .iter()
-            .map(|entry| entry.randomness.clone())
+            .map(|entry| entry.weighted_randomness.clone())
             .collect();
         strategies.insert(
             *epoch,
@@ -536,14 +627,21 @@ pub fn select_validators(
         let Some(strategy) = strategies.get(&epoch) else {
             continue;
         };
+        result.metrics.record_epoch(epoch);
         for submission in submissions {
             let threshold = strategy.threshold_for_seed(&submission.input.tier_seed);
-            if submission.randomness < threshold {
+            if submission.weighted_randomness < threshold {
                 result.metrics.record_accept();
+                accepted_count = accepted_count.saturating_add(1);
+                total_weight += submission.weight.clone();
+                update_entropy_beacon(&mut entropy_state, &submission);
                 if let Some(index) = audit_index.get(&submission.address) {
                     if let Some(entry) = audit_records.get_mut(*index) {
                         entry.accepted = true;
                         entry.threshold = Some(threshold.to_string());
+                        entry.weight = Some(submission.weight.to_string());
+                        entry.weighted_randomness =
+                            Some(submission.weighted_randomness.to_string());
                     }
                 }
                 result.validators.push(submission.clone());
@@ -556,6 +654,9 @@ pub fn select_validators(
                     if let Some(entry) = audit_records.get_mut(*index) {
                         entry.threshold = Some(threshold.to_string());
                         entry.rejection_reason = Some(reason.to_string());
+                        entry.weight = Some(submission.weight.to_string());
+                        entry.weighted_randomness =
+                            Some(submission.weighted_randomness.to_string());
                     }
                 }
                 let rejected = RejectedSubmission {
@@ -589,6 +690,13 @@ pub fn select_validators(
         .rejected
         .sort_by(|a, b| a.submission.address.cmp(&b.submission.address));
     result.audit = audit_records;
+    result.metrics.participation_rate = if result.metrics.pool_entries == 0 {
+        0.0
+    } else {
+        (accepted_count as f64) / (result.metrics.pool_entries as f64)
+    };
+    result.metrics.total_weight = total_weight.to_string();
+    result.metrics.entropy_beacon = hex::encode(entropy_state);
     result
 }
 
@@ -628,6 +736,9 @@ fn validate_submission(submission: &VrfSubmission) -> Result<VerifiedSubmission,
         return Err(RejectionReason::MissingPublicKey);
     };
 
+    let weight = submission_weight(&submission.tier, submission.timetoke_hours);
+    let weighted_randomness = weighted_randomness(&randomness, &weight);
+
     Ok(VerifiedSubmission {
         address: submission.address.clone(),
         public_key: submission.public_key.clone(),
@@ -637,6 +748,8 @@ fn validate_submission(submission: &VrfSubmission) -> Result<VerifiedSubmission,
         timetoke_hours: submission.timetoke_hours,
         randomness,
         verified,
+        weight,
+        weighted_randomness,
     })
 }
 
@@ -653,6 +766,43 @@ pub fn derive_tier_seed(address: &Address, timetoke_hours: u64) -> [u8; 32] {
     data.extend_from_slice(&decode_address_bytes(address));
     data.extend_from_slice(&timetoke_hours.to_be_bytes());
     Blake2sHasher::hash(&data).into()
+}
+
+fn tier_weight(tier: &Tier) -> u64 {
+    match tier {
+        Tier::Tl0 => 1,
+        Tier::Tl1 => 2,
+        Tier::Tl2 => 3,
+        Tier::Tl3 => 4,
+        Tier::Tl4 => 5,
+        Tier::Tl5 => 6,
+    }
+}
+
+fn submission_weight(tier: &Tier, timetoke_hours: u64) -> Natural {
+    let tier_component = Natural::from(tier_weight(tier));
+    let timetoke_component = Natural::from(timetoke_hours.max(1));
+    tier_component * timetoke_component
+}
+
+fn weighted_randomness(randomness: &Natural, weight: &Natural) -> Natural {
+    if weight == &Natural::from(0u32) {
+        return randomness.clone();
+    }
+    randomness.clone() / weight.clone()
+}
+
+fn update_entropy_beacon(state: &mut [u8; 32], submission: &VerifiedSubmission) {
+    let mut data = Vec::with_capacity(ENTROPY_BEACON_DOMAIN.len() + state.len() + 32 + 32);
+    data.extend_from_slice(ENTROPY_BEACON_DOMAIN);
+    data.extend_from_slice(state);
+    data.extend_from_slice(&natural_to_bytes(&submission.randomness));
+    data.extend_from_slice(&submission.input.tier_seed);
+    *state = Blake2sHasher::hash(&data).into();
+}
+
+fn default_entropy_state() -> [u8; 32] {
+    Blake2sHasher::hash(ENTROPY_BEACON_DOMAIN).into()
 }
 
 fn natural_from_bytes(bytes: &[u8]) -> Natural {
@@ -810,7 +960,8 @@ fn candidate_cmp(a: &VerifiedSubmission, b: &VerifiedSubmission) -> std::cmp::Or
         .cmp(&b.verified)
         .then_with(|| a.tier.cmp(&b.tier))
         .then_with(|| a.timetoke_hours.cmp(&b.timetoke_hours))
-        .then_with(|| b.randomness.cmp(&a.randomness))
+        .then_with(|| a.weight.cmp(&b.weight))
+        .then_with(|| b.weighted_randomness.cmp(&a.weighted_randomness))
         .then_with(|| b.address.cmp(&a.address))
 }
 
@@ -819,7 +970,8 @@ fn leader_cmp(a: &VerifiedSubmission, b: &VerifiedSubmission) -> std::cmp::Order
         .cmp(&b.verified)
         .then_with(|| a.tier.cmp(&b.tier))
         .then_with(|| a.timetoke_hours.cmp(&b.timetoke_hours))
-        .then_with(|| b.randomness.cmp(&a.randomness))
+        .then_with(|| a.weight.cmp(&b.weight))
+        .then_with(|| b.weighted_randomness.cmp(&a.weighted_randomness))
         .then_with(|| b.address.cmp(&a.address))
 }
 
@@ -871,6 +1023,8 @@ mod tests {
             randomness: randomness.clone(),
             proof: "00".repeat(SIGNATURE_LENGTH),
         };
+        let weight = submission_weight(&tier, timetoke_hours);
+        let weighted_randomness = weighted_randomness(&randomness, &weight);
 
         VerifiedSubmission {
             address: address.to_string(),
@@ -881,6 +1035,8 @@ mod tests {
             timetoke_hours,
             randomness,
             verified: true,
+            weight,
+            weighted_randomness,
         }
     }
 
@@ -1109,6 +1265,8 @@ mod tests {
         assert!(accepted.accepted);
         assert!(accepted.threshold.is_some());
         assert!(accepted.rejection_reason.is_none());
+        assert!(accepted.weight.is_some());
+        assert!(accepted.weighted_randomness.is_some());
 
         let rejected = selection
             .audit
@@ -1117,6 +1275,13 @@ mod tests {
             .expect("rejected record");
         assert!(!rejected.accepted);
         assert!(rejected.rejection_reason.is_some());
+        assert!(rejected.weight.is_none());
+        assert!(rejected.weighted_randomness.is_none());
+
+        assert!(selection.metrics.accepted_validators >= 1);
+        assert!(selection.metrics.participation_rate > 0.0);
+        assert!(!selection.metrics.entropy_beacon.is_empty());
+        assert!(!selection.metrics.total_weight.is_empty());
     }
 
     #[test]
@@ -1169,5 +1334,21 @@ mod tests {
         let threshold = strategy.threshold_for_seed(&[0x33; 32]);
         assert!(threshold >= Natural::from(15u32));
         assert!(threshold <= vrf_randomness_domain());
+    }
+
+    #[test]
+    fn epoch_manager_rejects_replays_and_tracks_entropy() {
+        let (submission, _, _) = submission_for("epoch_mgr", Tier::Tl3, 12);
+        let mut manager = VrfEpochManager::new(64, submission.input.epoch);
+        assert!(manager.register_submission(&submission));
+        assert!(!manager.register_submission(&submission));
+
+        let beacon = [0x42u8; 32];
+        manager.record_entropy(submission.input.epoch, beacon);
+        assert_eq!(manager.entropy_hex(), hex::encode(beacon));
+
+        let mut next = submission.clone();
+        next.input.epoch += 1;
+        assert!(manager.register_submission(&next));
     }
 }

@@ -103,6 +103,11 @@ impl FirewoodKv {
         hasher.finalize().into()
     }
 
+    /// Compute the hash of the in-memory state without mutating it.
+    pub fn root_hash(&self) -> Hash {
+        self.hash_state()
+    }
+
     fn record_put(&mut self, key: Vec<u8>, value: Vec<u8>) {
         self.state.insert(key.clone(), value.clone());
         self.pending.push(LogRecord::Put { key, value });

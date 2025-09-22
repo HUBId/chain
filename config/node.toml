@@ -2,6 +2,7 @@
 
 data_dir = "./data"
 key_path = "./keys/node.toml"
+p2p_key_path = "./keys/p2p.toml"
 vrf_key_path = "./keys/vrf.toml"
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"

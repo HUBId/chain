@@ -124,6 +124,8 @@ pub struct VrfHistoryRecord {
     pub accepted: bool,
     pub threshold: Option<String>,
     pub rejection_reason: Option<String>,
+    pub weight: Option<String>,
+    pub weighted_randomness: Option<String>,
 }
 
 impl Ledger {
@@ -836,6 +838,8 @@ impl Ledger {
                 accepted: record.accepted,
                 threshold: record.threshold.clone(),
                 rejection_reason: record.rejection_reason.clone(),
+                weight: record.weight.clone(),
+                weighted_randomness: record.weighted_randomness.clone(),
             });
         }
     }
@@ -1211,6 +1215,8 @@ mod tests {
             accepted: true,
             threshold: Some("10".into()),
             rejection_reason: None,
+            weight: Some("48".into()),
+            weighted_randomness: Some("1".into()),
         };
         ledger.record_vrf_history(epoch, 1, &[record.clone()]);
         ledger.record_vrf_history(epoch, 1, &[record.clone()]);
@@ -1218,6 +1224,8 @@ mod tests {
         other.proof.proof = "bb".repeat(64);
         other.accepted = false;
         other.rejection_reason = Some("threshold".into());
+        other.weight = Some("48".into());
+        other.weighted_randomness = Some("3".into());
         ledger.record_vrf_history(epoch + 1, 0, &[other.clone()]);
 
         let current_epoch_history = ledger.vrf_history(Some(epoch));
@@ -1227,6 +1235,7 @@ mod tests {
         assert_eq!(entry.address, record.address);
         assert!(entry.accepted);
         assert_eq!(entry.public_key, record.public_key);
+        assert_eq!(entry.weight, record.weight);
 
         let all_history = ledger.vrf_history(None);
         assert_eq!(all_history.len(), 2);

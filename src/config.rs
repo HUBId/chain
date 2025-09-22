@@ -12,6 +12,8 @@ use crate::types::Stake;
 pub struct NodeConfig {
     pub data_dir: PathBuf,
     pub key_path: PathBuf,
+    #[serde(default = "default_p2p_key_path")]
+    pub p2p_key_path: PathBuf,
     pub vrf_key_path: PathBuf,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
@@ -54,6 +56,10 @@ fn default_proof_cache_dir() -> PathBuf {
     PathBuf::from("./data/proofs")
 }
 
+fn default_p2p_key_path() -> PathBuf {
+    PathBuf::from("./keys/p2p.toml")
+}
+
 fn default_max_proof_size_bytes() -> usize {
     4 * 1024 * 1024
 }
@@ -79,6 +85,9 @@ impl NodeConfig {
         if let Some(parent) = self.key_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        if let Some(parent) = self.p2p_key_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         if let Some(parent) = self.vrf_key_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -93,6 +102,7 @@ impl Default for NodeConfig {
         Self {
             data_dir: PathBuf::from("./data"),
             key_path: PathBuf::from("./keys/node.toml"),
+            p2p_key_path: default_p2p_key_path(),
             vrf_key_path: PathBuf::from("./keys/vrf.toml"),
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
@@ -151,7 +161,7 @@ impl Default for WalletConfig {
     fn default() -> Self {
         Self {
             data_dir: PathBuf::from("./data"),
-            key_path: PathBuf::from("./keys/node.toml"),
+            key_path: PathBuf::from("./keys/wallet.toml"),
             rpc_listen: default_wallet_rpc_listen(),
         }
     }
