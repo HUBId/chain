@@ -1299,6 +1299,7 @@ dependencies = [
  "rand 0.7.3",
  "rocksdb",
  "rpp-consensus",
+ "rpp-p2p",
  "serde",
  "serde_json",
  "storage-firewood",
@@ -1321,6 +1322,10 @@ dependencies = [
  "serde_json",
  "tokio",
 ]
+
+[[package]]
+name = "rpp-p2p"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-demangle"
