@@ -1799,6 +1799,10 @@ dependencies = [
 name = "storage-firewood"
 version = "0.1.0"
 dependencies = [
+ "bincode",
+ "blake3",
+ "parking_lot",
+ "serde",
  "thiserror 1.0.69",
 ]
 
