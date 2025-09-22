@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use rocksdb::IteratorMode;
 use serde::{Deserialize, Serialize};
+use storage_firewood::kv::FirewoodKv;
 
 use crate::consensus::{ConsensusCertificate, SignedBftVote};
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
-use crate::storage::{CF_BLOCKS, CF_METADATA, STORAGE_SCHEMA_VERSION, Storage};
+use crate::storage::{STORAGE_SCHEMA_VERSION, Storage};
 use crate::types::{
     Block, BlockHeader, BlockProofBundle, IdentityDeclaration, PruningProof, RecursiveProof,
     ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
@@ -37,8 +37,8 @@ pub fn migrate_storage(path: &Path, dry_run: bool) -> ChainResult<MigrationRepor
         )));
     }
 
-    let db = Storage::open_db(path)?;
-    let current_version = Storage::read_schema_version_raw(&db)?.unwrap_or(0);
+    let mut kv = Storage::open_db(path)?;
+    let current_version = Storage::read_schema_version_raw(&kv)?.unwrap_or(0);
     let mut report = MigrationReport {
         from_version: current_version,
         to_version: current_version,
@@ -51,32 +51,25 @@ pub fn migrate_storage(path: &Path, dry_run: bool) -> ChainResult<MigrationRepor
         return Ok(report);
     }
 
-    let (converted, already_current) = migrate_block_records(&db, dry_run)?;
+    let (converted, already_current) = migrate_block_records(&mut kv, dry_run)?;
     report.upgraded_blocks += converted;
     report.already_current_blocks += already_current;
 
     if !dry_run {
-        Storage::write_schema_version_raw(&db, STORAGE_SCHEMA_VERSION)?;
+        Storage::write_schema_version_raw(&mut kv, STORAGE_SCHEMA_VERSION)?;
     }
     report.to_version = STORAGE_SCHEMA_VERSION;
 
     Ok(report)
 }
 
-fn migrate_block_records(
-    db: &rocksdb::DBWithThreadMode<rocksdb::MultiThreaded>,
-    dry_run: bool,
-) -> ChainResult<(usize, usize)> {
-    let blocks_cf = db
-        .cf_handle(CF_BLOCKS)
-        .ok_or_else(|| ChainError::Config("missing blocks column family".into()))?;
-    let mut iterator = db.iterator_cf(&blocks_cf, IteratorMode::Start);
+fn migrate_block_records(kv: &mut FirewoodKv, dry_run: bool) -> ChainResult<(usize, usize)> {
+    let entries: Vec<(Vec<u8>, Vec<u8>)> = kv.scan_prefix(&[b'b']).collect();
     let mut converted = 0usize;
     let mut already_current = 0usize;
+    let mut mutated = false;
 
-    while let Some(entry) = iterator.next() {
-        let (key, value) = entry?;
-
+    for (key, value) in entries {
         if bincode::deserialize::<StoredBlock>(&value).is_ok() {
             already_current += 1;
             continue;
@@ -86,7 +79,8 @@ fn migrate_block_records(
             if !dry_run {
                 let stored = StoredBlock::from_block(&block);
                 let bytes = bincode::serialize(&stored)?;
-                db.put_cf(&blocks_cf, key, bytes)?;
+                kv.put(key.clone(), bytes);
+                mutated = true;
             }
             converted += 1;
             continue;
@@ -97,9 +91,14 @@ fn migrate_block_records(
         if !dry_run {
             let stored = StoredBlock::from_block(&block);
             let bytes = bincode::serialize(&stored)?;
-            db.put_cf(&blocks_cf, key, bytes)?;
+            kv.put(key.clone(), bytes);
+            mutated = true;
         }
         converted += 1;
+    }
+
+    if mutated {
+        kv.commit()?;
     }
 
     Ok((converted, already_current))
@@ -212,18 +211,8 @@ pub fn storage_is_current(path: &Path) -> ChainResult<bool> {
     if !path.exists() {
         return Ok(false);
     }
-    let mut opts = rocksdb::Options::default();
-    opts.create_if_missing(false);
-    let cf_descriptors = vec![rocksdb::ColumnFamilyDescriptor::new(
-        CF_METADATA,
-        rocksdb::Options::default(),
-    )];
-    let db = rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_cf_descriptors(
-        &opts,
-        path,
-        cf_descriptors,
-    )?;
-    let version = Storage::read_schema_version_raw(&db)?.unwrap_or(0);
+    let kv = Storage::open_db(path)?;
+    let version = Storage::read_schema_version_raw(&kv)?.unwrap_or(0);
     Ok(version >= STORAGE_SCHEMA_VERSION)
 }
 
@@ -407,28 +396,14 @@ mod tests {
     fn migrates_legacy_block_records() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("db");
-        std::fs::create_dir_all(&db_path).unwrap();
-
-        let mut opts = rocksdb::Options::default();
-        opts.create_if_missing(true);
-        opts.create_missing_column_families(true);
-        let cf_descriptors = vec![
-            rocksdb::ColumnFamilyDescriptor::new(CF_BLOCKS, rocksdb::Options::default()),
-            rocksdb::ColumnFamilyDescriptor::new(CF_METADATA, rocksdb::Options::default()),
-        ];
-        let db = rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_cf_descriptors(
-            &opts,
-            &db_path,
-            cf_descriptors,
-        )
-        .unwrap();
-        {
-            let blocks_cf = db.cf_handle(CF_BLOCKS).unwrap();
-            let legacy = legacy_block();
-            let bytes = bincode::serialize(&legacy).unwrap();
-            db.put_cf(&blocks_cf, 1u64.to_be_bytes(), bytes).unwrap();
-        }
-        drop(db);
+        let mut kv = Storage::open_db(&db_path).unwrap();
+        let legacy = legacy_block();
+        let bytes = bincode::serialize(&legacy).unwrap();
+        let mut key = vec![b'b'];
+        key.extend_from_slice(&1u64.to_be_bytes());
+        kv.put(key, bytes);
+        kv.commit().unwrap();
+        drop(kv);
 
         let report = migrate_storage(&db_path, false).unwrap();
         assert_eq!(report.from_version, 0);
@@ -445,38 +420,21 @@ mod tests {
     fn dry_run_does_not_persist_changes() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("db");
-        std::fs::create_dir_all(&db_path).unwrap();
-
-        let mut opts = rocksdb::Options::default();
-        opts.create_if_missing(true);
-        opts.create_missing_column_families(true);
-        let cf_descriptors = vec![
-            rocksdb::ColumnFamilyDescriptor::new(CF_BLOCKS, rocksdb::Options::default()),
-            rocksdb::ColumnFamilyDescriptor::new(CF_METADATA, rocksdb::Options::default()),
-        ];
-        let db = rocksdb::DBWithThreadMode::<rocksdb::MultiThreaded>::open_cf_descriptors(
-            &opts,
-            &db_path,
-            cf_descriptors,
-        )
-        .unwrap();
-        {
-            let blocks_cf = db.cf_handle(CF_BLOCKS).unwrap();
-            let legacy = legacy_block();
-            let bytes = bincode::serialize(&legacy).unwrap();
-            db.put_cf(&blocks_cf, 1u64.to_be_bytes(), bytes).unwrap();
-        }
-        drop(db);
+        let mut kv = Storage::open_db(&db_path).unwrap();
+        let legacy = legacy_block();
+        let bytes = bincode::serialize(&legacy).unwrap();
+        let mut key = vec![b'b'];
+        key.extend_from_slice(&1u64.to_be_bytes());
+        kv.put(key, bytes);
+        kv.commit().unwrap();
+        drop(kv);
 
         let report = migrate_storage(&db_path, true).unwrap();
         assert_eq!(report.upgraded_blocks, 1);
 
-        let db = Storage::open_db(&db_path).unwrap();
-        let metadata_cf = db.cf_handle(CF_METADATA).unwrap();
-        assert!(
-            db.get_cf(&metadata_cf, SCHEMA_VERSION_KEY)
-                .unwrap()
-                .is_none()
-        );
+        let kv = Storage::open_db(&db_path).unwrap();
+        let mut schema_key = vec![b'm'];
+        schema_key.extend_from_slice(SCHEMA_VERSION_KEY);
+        assert!(kv.get(&schema_key).is_none());
     }
 }
