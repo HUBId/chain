@@ -1,0 +1,2 @@
+mode = "wallet"
+wallet_config = "../wallet.toml"

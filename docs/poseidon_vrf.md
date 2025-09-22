@@ -21,12 +21,12 @@ helpers for digest construction:
 
 ## VRF Proof Generation & Verification
 `generate_vrf` signs the Poseidon digest with the node's VRF secret key and
-hashes the signature bytes via Blake2s to derive the randomness field. The
-companion `verify_vrf` routine reconstructs the digest, validates the signature
-with the public key, and re-hashes the proof bytes to ensure the published
-randomness matches the canonical value. `VrfOutput` keeps the randomness and
-proof in fixed-size arrays and supplies parsing helpers to rebuild outputs from
-byte or hex encodings.
+publishes the digest itself as the 32-byte randomness field. The companion
+`verify_vrf` routine reconstructs the digest, validates the signature with the
+public key, and ensures the advertised randomness matches the canonical
+Poseidon output. `VrfOutput` keeps the randomness and proof in fixed-size
+arrays and supplies parsing helpers to rebuild outputs from byte or hex
+encodings.
 
 ## Key Management
 The crypto module owns the VRF key lifecycle:
@@ -43,12 +43,13 @@ The crypto module owns the VRF key lifecycle:
 
 ## Consensus Integration
 Consensus evaluation paths request Poseidon-backed proofs when VRF key material
-is available and fall back to the legacy Blake2s hash otherwise. Successful
-Poseidon evaluations retain the randomness and proof bytes so validator
-threshold checks and proposer selection can operate without any extra
-conversions. Verification applies the same strategy: attempt cryptographic
-validation first, log failures, and finally compare against the deterministic
-hash fallback to preserve backward compatibility.
+is available and fall back to computing the raw digest only when no secret key
+is supplied (for example during identity registration). Successful Poseidon
+evaluations retain the randomness and proof bytes so validator threshold checks
+and proposer selection can operate without any extra conversions. Verification
+requires the published proof to verify against the signer’s VRF public key and
+no longer accepts legacy Blake2s fallbacks, ensuring replayed hashes cannot
+masquerade as valid proofs.
 
 Validator thresholds are now computed per epoch by combining the epoch number,
 each candidate's tier seed, and the operator-defined target validator count.
@@ -80,9 +81,10 @@ for per-epoch validator selection.
 ## Telemetry & Metrics
 `GET /status/node` now surfaces a `vrf_metrics` payload containing the submission
 pool size, verified/accepted counts, rejection totals, and whether a fallback
-validator was promoted in the last round. Telemetry snapshots include the same
-structure so operators can chart VRF participation rates alongside consensus
-and mempool health.
+validator was promoted in the last round. The payload also reports participation
+rate, the cumulative validator weight, and the epoch entropy beacon produced by
+the VRF epoch manager so operators can chart fairness and randomness drift
+alongside consensus and mempool health.
 
 ## Testing Guidance
 Run `cargo test vrf::tests` to exercise the Poseidon digest helpers, VRF

@@ -1,0 +1,3 @@
+mode = "hybrid"
+node_config = "../node.toml"
+wallet_config = "../wallet.toml"

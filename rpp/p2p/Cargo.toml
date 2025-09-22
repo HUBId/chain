@@ -4,3 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64 = "0.21"
+async-trait = "0.1"
+futures = "0.3"
+hex = "0.4"
+libp2p = { version = "0.54", features = ["macros", "noise", "request-response", "identify", "ping", "gossipsub", "tcp", "tokio", "yamux"] }
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time"] }
+toml = "0.8"
+tracing = "0.1"
+blake3 = "1.5"
+rand = { version = "0.8", features = ["std"] }
+
+[dev-dependencies]
+tempfile = "3.10"
+proptest = "1.4"

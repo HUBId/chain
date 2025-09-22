@@ -72,6 +72,7 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 
 - `data_dir`: persistent storage directory (RocksDB is stored in `data_dir/db`).
 - `key_path`: location of the node's Ed25519 keypair file.
+- `p2p_key_path`: persistent libp2p Ed25519 identity used for Noise handshakes.
 - `vrf_key_path`: path to the node's Poseidon VRF keypair (auto-created on first launch).
 - `snapshot_dir`: directory where reconstructed state snapshots are materialized.
 - `proof_cache_dir`: location for cached recursive/STARK proof blobs.

@@ -13,10 +13,13 @@ use crate::consensus::SignedBftVote;
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
-    ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, RolloutStatus, VrfStatus,
+    BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
+    NodeTelemetrySnapshot, RolloutStatus, VrfStatus,
 };
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
+use crate::runtime::RuntimeMode;
+use crate::sync::ReconstructionPlan;
 use crate::types::{
     Account, Address, Block, IdentityDeclaration, SignedTransaction, Transaction,
     TransactionProofBundle, UptimeProof,
@@ -25,19 +28,42 @@ use crate::wallet::{
     ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet,
     WalletAccountSummary,
 };
+use parking_lot::RwLock;
 
 #[derive(Clone)]
 pub struct ApiContext {
+    mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
     wallet: Option<Arc<Wallet>>,
 }
 
 impl ApiContext {
-    pub fn new(node: Option<NodeHandle>, wallet: Option<Wallet>) -> Self {
-        Self {
-            node,
-            wallet: wallet.map(Arc::new),
-        }
+    pub fn new(
+        mode: Arc<RwLock<RuntimeMode>>,
+        node: Option<NodeHandle>,
+        wallet: Option<Arc<Wallet>>,
+    ) -> Self {
+        Self { mode, node, wallet }
+    }
+
+    fn current_mode(&self) -> RuntimeMode {
+        *self.mode.read()
+    }
+
+    fn node_available(&self) -> bool {
+        self.node.is_some()
+    }
+
+    fn wallet_available(&self) -> bool {
+        self.wallet.is_some()
+    }
+
+    fn node_enabled(&self) -> bool {
+        self.node_available() && self.current_mode().includes_node()
+    }
+
+    fn wallet_enabled(&self) -> bool {
+        self.wallet_available() && self.current_mode().includes_wallet()
     }
 
     fn node_handle(&self) -> Option<NodeHandle> {
@@ -49,11 +75,60 @@ impl ApiContext {
     }
 
     fn require_node(&self) -> Result<NodeHandle, (StatusCode, Json<ErrorResponse>)> {
-        self.node_handle().ok_or_else(|| unavailable("node"))
+        if !self.node_available() {
+            return Err(not_started("node"));
+        }
+        if !self.node_enabled() {
+            return Err(unavailable("node"));
+        }
+        Ok(self.node_handle().expect("node handle available"))
     }
 
     fn require_wallet(&self) -> Result<Arc<Wallet>, (StatusCode, Json<ErrorResponse>)> {
-        self.wallet_handle().ok_or_else(|| unavailable("wallet"))
+        if !self.wallet_available() {
+            return Err(not_started("wallet"));
+        }
+        if !self.wallet_enabled() {
+            return Err(unavailable("wallet"));
+        }
+        Ok(self.wallet_handle().expect("wallet handle available"))
+    }
+
+    fn node_for_mode(&self) -> Option<NodeHandle> {
+        if self.node_enabled() {
+            self.node_handle()
+        } else {
+            None
+        }
+    }
+
+    fn wallet_for_mode(&self) -> Option<Arc<Wallet>> {
+        if self.wallet_enabled() {
+            self.wallet_handle()
+        } else {
+            None
+        }
+    }
+
+    fn runtime_state(&self) -> RuntimeModeResponse {
+        RuntimeModeResponse {
+            mode: self.current_mode(),
+            node_available: self.node_available(),
+            wallet_available: self.wallet_available(),
+            node_enabled: self.node_enabled(),
+            wallet_enabled: self.wallet_enabled(),
+        }
+    }
+
+    fn update_mode(&self, mode: RuntimeMode) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+        if mode.includes_node() && !self.node_available() {
+            return Err(not_started("node"));
+        }
+        if mode.includes_wallet() && !self.wallet_available() {
+            return Err(not_started("wallet"));
+        }
+        *self.mode.write() = mode;
+        Ok(())
     }
 }
 
@@ -77,6 +152,20 @@ struct HealthResponse {
     status: &'static str,
     address: String,
     role: &'static str,
+}
+
+#[derive(Serialize)]
+struct RuntimeModeResponse {
+    mode: RuntimeMode,
+    node_available: bool,
+    wallet_available: bool,
+    node_enabled: bool,
+    wallet_enabled: bool,
+}
+
+#[derive(Deserialize)]
+struct RuntimeModeUpdate {
+    mode: RuntimeMode,
 }
 
 #[derive(Deserialize)]
@@ -162,6 +251,21 @@ struct WalletNodeResponse {
 }
 
 #[derive(Serialize)]
+struct UiNodeStatusResponse {
+    mode: RuntimeMode,
+    node: Option<NodeStatus>,
+    consensus: Option<ConsensusStatus>,
+    mempool: Option<MempoolStatus>,
+    bft: Option<BftMembership>,
+}
+
+#[derive(Serialize)]
+struct UiReputationResponse {
+    mode: RuntimeMode,
+    summary: Option<WalletAccountSummary>,
+}
+
+#[derive(Serialize)]
 struct TierResponse {
     tier: Tier,
 }
@@ -181,6 +285,17 @@ struct WalletUptimeProofResponse {
     proof: UptimeProof,
 }
 
+#[derive(Serialize)]
+struct BlockProofResponse {
+    height: u64,
+    proof: Option<BlockProofArtifactsView>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotPlanQuery {
+    start: Option<u64>,
+}
+
 #[derive(Deserialize)]
 struct SubmitUptimeRequest {
     proof: Option<UptimeProof>,
@@ -189,6 +304,18 @@ struct SubmitUptimeRequest {
 pub async fn serve(context: ApiContext, addr: SocketAddr) -> ChainResult<()> {
     let router = Router::new()
         .route("/health", get(health))
+        .route("/runtime/mode", get(runtime_mode).post(update_runtime_mode))
+        .route("/ui/history", get(ui_history))
+        .route("/ui/send/preview", post(ui_send_preview))
+        .route("/ui/receive", get(ui_receive))
+        .route("/ui/node", get(ui_node_status))
+        .route("/ui/reputation", get(ui_reputation))
+        .route("/ui/bft/membership", get(ui_bft_membership))
+        .route("/proofs/block/:height", get(block_proofs))
+        .route("/snapshots/plan", get(snapshot_plan))
+        .route("/validator/telemetry", get(validator_telemetry))
+        .route("/validator/vrf", get(validator_vrf))
+        .route("/validator/uptime", post(validator_submit_uptime))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
         .route("/status/consensus", get(consensus_status))
@@ -230,17 +357,174 @@ pub async fn serve(context: ApiContext, addr: SocketAddr) -> ChainResult<()> {
 }
 
 async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
-    let (address, role) = match (state.node_handle(), state.wallet_handle()) {
-        (Some(node), Some(wallet)) => (node.address().to_string(), "hybrid"),
-        (Some(node), None) => (node.address().to_string(), "node"),
-        (None, Some(wallet)) => (wallet.address().clone(), "wallet"),
-        (None, None) => (String::from("unknown"), "offline"),
+    let mode = state.current_mode();
+    let address = if let Some(node) = state.node_for_mode() {
+        node.address().to_string()
+    } else if let Some(wallet) = state.wallet_for_mode() {
+        wallet.address().clone()
+    } else if let Some(node) = state.node_handle() {
+        node.address().to_string()
+    } else if let Some(wallet) = state.wallet_handle() {
+        wallet.address().clone()
+    } else {
+        String::from("unknown")
     };
     Json(HealthResponse {
         status: "ok",
         address,
-        role,
+        role: mode.as_str(),
     })
+}
+
+async fn runtime_mode(State(state): State<ApiContext>) -> Json<RuntimeModeResponse> {
+    Json(state.runtime_state())
+}
+
+async fn update_runtime_mode(
+    State(state): State<ApiContext>,
+    Json(request): Json<RuntimeModeUpdate>,
+) -> Result<Json<RuntimeModeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state.update_mode(request.mode)?;
+    Ok(Json(state.runtime_state()))
+}
+
+async fn ui_history(
+    State(state): State<ApiContext>,
+) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    wallet
+        .history()
+        .map(|entries| Json(WalletHistoryResponse { entries }))
+        .map_err(to_http_error)
+}
+
+async fn ui_send_preview(
+    State(state): State<ApiContext>,
+    Json(request): Json<TxComposeRequest>,
+) -> Result<Json<SendPreview>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let TxComposeRequest {
+        to,
+        amount,
+        fee,
+        memo,
+    } = request;
+    wallet
+        .preview_send(to, amount, fee, memo)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn ui_receive(
+    State(state): State<ApiContext>,
+    Query(query): Query<ReceiveQuery>,
+) -> Result<Json<ReceiveResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let count = query.count.unwrap_or(10).min(256);
+    Ok(Json(ReceiveResponse {
+        addresses: wallet.receive_addresses(count),
+    }))
+}
+
+async fn ui_node_status(
+    State(state): State<ApiContext>,
+) -> Result<Json<UiNodeStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mode = state.current_mode();
+    if let Some(node) = state.node_for_mode() {
+        let node_status = node.node_status().map_err(to_http_error)?;
+        let consensus = node.consensus_status().map_err(to_http_error)?;
+        let mempool = node.mempool_status().map_err(to_http_error)?;
+        let bft = node.bft_membership().map_err(to_http_error)?;
+        Ok(Json(UiNodeStatusResponse {
+            mode,
+            node: Some(node_status),
+            consensus: Some(consensus),
+            mempool: Some(mempool),
+            bft: Some(bft),
+        }))
+    } else {
+        Ok(Json(UiNodeStatusResponse {
+            mode,
+            node: None,
+            consensus: None,
+            mempool: None,
+            bft: None,
+        }))
+    }
+}
+
+async fn ui_reputation(
+    State(state): State<ApiContext>,
+) -> Result<Json<UiReputationResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mode = state.current_mode();
+    let summary = if let Some(wallet) = state.wallet_for_mode() {
+        Some(wallet.account_summary().map_err(to_http_error)?)
+    } else {
+        None
+    };
+    Ok(Json(UiReputationResponse { mode, summary }))
+}
+
+async fn ui_bft_membership(
+    State(state): State<ApiContext>,
+) -> Result<Json<BftMembership>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .require_node()?
+        .bft_membership()
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn block_proofs(
+    State(state): State<ApiContext>,
+    Path(height): Path<u64>,
+) -> Result<Json<BlockProofResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let proof = state
+        .require_node()?
+        .block_proofs(height)
+        .map_err(to_http_error)?;
+    Ok(Json(BlockProofResponse { height, proof }))
+}
+
+async fn snapshot_plan(
+    State(state): State<ApiContext>,
+    Query(query): Query<SnapshotPlanQuery>,
+) -> Result<Json<ReconstructionPlan>, (StatusCode, Json<ErrorResponse>)> {
+    let start = query.start.unwrap_or(0);
+    state
+        .require_node()?
+        .reconstruction_plan(start)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn validator_telemetry(
+    State(state): State<ApiContext>,
+) -> Result<Json<NodeTelemetrySnapshot>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .require_node()?
+        .telemetry_snapshot()
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn validator_vrf(
+    State(state): State<ApiContext>,
+) -> Result<Json<VrfStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let address = node.address().to_string();
+    node.vrf_status(&address).map(Json).map_err(to_http_error)
+}
+
+async fn validator_submit_uptime(
+    State(state): State<ApiContext>,
+) -> Result<Json<UptimeResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let wallet = state.require_wallet()?;
+    let proof = wallet.generate_uptime_proof().map_err(to_http_error)?;
+    node.submit_uptime_proof(proof)
+        .map(|credited_hours| Json(UptimeResponse { credited_hours }))
+        .map_err(to_http_error)
 }
 
 async fn submit_transaction(
@@ -617,6 +901,17 @@ fn unavailable(component: &str) -> (StatusCode, Json<ErrorResponse>) {
         StatusCode::SERVICE_UNAVAILABLE,
         Json(ErrorResponse {
             error: format!("{component} runtime disabled"),
+        }),
+    )
+}
+
+fn not_started(component: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: format!(
+                "{component} runtime not started; restart with a profile that enables it"
+            ),
         }),
     )
 }

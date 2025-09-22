@@ -1,9 +1,12 @@
+use std::collections::HashSet;
 use std::convert::TryInto;
 use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use storage_firewood::api::StateUpdate;
 use storage_firewood::kv::FirewoodKv;
+use storage_firewood::pruning::{FirewoodPruner, PruningProof as FirewoodPruningProof};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::types::{Account, Block, BlockMetadata, StoredBlock};
@@ -18,8 +21,18 @@ const TIP_HASH_KEY: &[u8] = b"tip_hash";
 const TIP_TIMESTAMP_KEY: &[u8] = b"tip_timestamp";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 
+const SCHEMA_ACCOUNTS: &str = "accounts";
+
+#[derive(Clone, Debug)]
+pub struct StateTransitionReceipt {
+    pub previous_root: [u8; 32],
+    pub new_root: [u8; 32],
+    pub pruning_proof: Option<FirewoodPruningProof>,
+}
+
 pub struct Storage {
     kv: Arc<Mutex<FirewoodKv>>,
+    pruner: Arc<Mutex<FirewoodPruner>>,
 }
 
 impl Storage {
@@ -27,6 +40,7 @@ impl Storage {
         let kv = FirewoodKv::open(path)?;
         let storage = Self {
             kv: Arc::new(Mutex::new(kv)),
+            pruner: Arc::new(Mutex::new(FirewoodPruner::new(8))),
         };
         storage.ensure_schema_supported()?;
         Ok(storage)
@@ -113,6 +127,108 @@ impl Storage {
 
     pub(crate) fn open_db(path: &Path) -> ChainResult<FirewoodKv> {
         FirewoodKv::open(path).map_err(ChainError::from)
+    }
+
+    pub fn state_root(&self) -> ChainResult<[u8; 32]> {
+        let kv = self.kv.lock();
+        Ok(kv.root_hash())
+    }
+
+    fn schema_key(&self, schema: &str, key: Vec<u8>) -> ChainResult<Vec<u8>> {
+        match schema {
+            SCHEMA_ACCOUNTS => {
+                let mut namespaced = Vec::with_capacity(1 + key.len());
+                namespaced.push(PREFIX_ACCOUNT);
+                namespaced.extend_from_slice(&key);
+                Ok(namespaced)
+            }
+            other => Err(ChainError::Config(format!(
+                "unsupported firewood schema '{}'",
+                other
+            ))),
+        }
+    }
+
+    pub fn apply_state_updates(
+        &self,
+        block_height: Option<u64>,
+        updates: Vec<StateUpdate>,
+    ) -> ChainResult<StateTransitionReceipt> {
+        let previous_root = self.state_root()?;
+        if updates.is_empty() {
+            let pruning_proof = block_height.and_then(|height| {
+                let mut pruner = self.pruner.lock();
+                Some(pruner.prune_block(height, previous_root).1)
+            });
+            return Ok(StateTransitionReceipt {
+                previous_root,
+                new_root: previous_root,
+                pruning_proof,
+            });
+        }
+
+        let mut kv = self.kv.lock();
+        for update in updates {
+            let key = self.schema_key(&update.schema, update.key)?;
+            if let Some(value) = update.value {
+                kv.put(key, value);
+            } else {
+                kv.delete(&key);
+            }
+        }
+        let new_root = kv.commit()?;
+        drop(kv);
+        let pruning_proof = block_height.map(|height| {
+            let mut pruner = self.pruner.lock();
+            pruner.prune_block(height, new_root).1
+        });
+        Ok(StateTransitionReceipt {
+            previous_root,
+            new_root,
+            pruning_proof,
+        })
+    }
+
+    pub fn apply_account_snapshot(
+        &self,
+        block_height: Option<u64>,
+        accounts: &[Account],
+    ) -> ChainResult<StateTransitionReceipt> {
+        let previous_root = self.state_root()?;
+        let mut kv = self.kv.lock();
+        let existing_keys: Vec<Vec<u8>> = kv
+            .scan_prefix(&[PREFIX_ACCOUNT])
+            .map(|(key, _)| key)
+            .collect();
+        let allowed: HashSet<String> = accounts
+            .iter()
+            .map(|account| account.address.clone())
+            .collect();
+        for key in existing_keys {
+            if key.len() < 2 {
+                continue;
+            }
+            if let Ok(address) = String::from_utf8(key[1..].to_vec()) {
+                if !allowed.contains(&address) {
+                    kv.delete(&key);
+                }
+            }
+        }
+        for account in accounts {
+            let data = bincode::serialize(account)?;
+            kv.put(account_key(&account.address), data);
+        }
+        let new_root = kv.commit()?;
+        drop(kv);
+        let pruning_proof = block_height.map(|height| {
+            let mut pruner = self.pruner.lock();
+            pruner.prune_block(height, new_root).1
+        });
+        Ok(StateTransitionReceipt {
+            previous_root,
+            new_root,
+            pruning_proof,
+        })
     }
 
     pub fn store_block(&self, block: &Block) -> ChainResult<()> {
@@ -210,10 +326,12 @@ impl Storage {
     }
 
     pub fn persist_account(&self, account: &Account) -> ChainResult<()> {
-        let mut kv = self.kv.lock();
-        let data = bincode::serialize(account)?;
-        kv.put(account_key(&account.address), data);
-        kv.commit()?;
+        let update = StateUpdate {
+            schema: SCHEMA_ACCOUNTS.to_string(),
+            key: account.address.as_bytes().to_vec(),
+            value: Some(bincode::serialize(account)?),
+        };
+        let _ = self.apply_state_updates(None, vec![update])?;
         Ok(())
     }
 
@@ -274,6 +392,7 @@ impl Clone for Storage {
     fn clone(&self) -> Self {
         Self {
             kv: self.kv.clone(),
+            pruner: self.pruner.clone(),
         }
     }
 }

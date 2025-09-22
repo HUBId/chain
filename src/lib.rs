@@ -1,4 +1,5 @@
 pub mod api;
+pub mod blueprint;
 pub mod config;
 pub mod consensus;
 pub mod crypto;
@@ -8,11 +9,13 @@ pub mod interfaces;
 pub mod ledger;
 pub mod migration;
 pub mod node;
+pub mod orchestration;
 #[cfg(feature = "backend-plonky3")]
 pub mod plonky3;
 pub mod proof_system;
 pub mod reputation;
 pub mod rpp;
+pub mod runtime;
 pub mod state;
 pub mod storage;
 pub mod stwo;

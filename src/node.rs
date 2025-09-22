@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,8 +15,9 @@ use serde_json;
 
 use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, SignedBftVote, ValidatorCandidate,
-    aggregate_total_stake, classify_participants, evaluate_vrf,
+    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
+    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
+    classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
     VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
@@ -30,9 +31,10 @@ use crate::ledger::{
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_system::{ProofProver, ProofVerifierRegistry};
 use crate::reputation::Tier;
-use crate::rpp::{ProofArtifact, ProofModule, TimetokeRecord};
+use crate::rpp::{ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord};
+use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
-use crate::storage::Storage;
+use crate::storage::{StateTransitionReceipt, Storage};
 use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
@@ -41,7 +43,10 @@ use crate::types::{
     IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake,
     TimetokeUpdate, TransactionProofBundle, UptimeProof,
 };
-use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
+use crate::vrf::{
+    self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
+};
+use rpp_p2p::NodeIdentity;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -141,6 +146,43 @@ pub struct VrfStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct ValidatorMembershipEntry {
+    pub address: Address,
+    pub stake: Stake,
+    pub reputation_score: f64,
+    pub tier: Tier,
+    pub timetoke_hours: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ObserverMembershipEntry {
+    pub address: Address,
+    pub tier: Tier,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BftMembership {
+    pub height: u64,
+    pub epoch: u64,
+    pub epoch_nonce: String,
+    pub validators: Vec<ValidatorMembershipEntry>,
+    pub observers: Vec<ObserverMembershipEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BlockProofArtifactsView {
+    pub hash: String,
+    pub height: u64,
+    pub pruning_proof: PruningProof,
+    pub recursive_proof: RecursiveProof,
+    pub stark: BlockProofBundle,
+    pub module_witnesses: ModuleWitnessBundle,
+    pub proof_artifacts: Vec<ProofArtifact>,
+    pub consensus_proof: Option<ChainProof>,
+    pub pruned: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct TelemetryRuntimeStatus {
     pub enabled: bool,
     pub endpoint: Option<String>,
@@ -156,12 +198,12 @@ pub struct RolloutStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct TelemetrySnapshot {
-    release_channel: ReleaseChannel,
-    feature_gates: FeatureGates,
-    node: NodeStatus,
-    consensus: ConsensusStatus,
-    mempool: MempoolStatus,
+pub struct NodeTelemetrySnapshot {
+    pub release_channel: ReleaseChannel,
+    pub feature_gates: FeatureGates,
+    pub node: NodeStatus,
+    pub consensus: ConsensusStatus,
+    pub mempool: MempoolStatus,
 }
 
 pub struct Node {
@@ -172,6 +214,7 @@ struct NodeInner {
     config: NodeConfig,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
+    p2p_identity: Arc<NodeIdentity>,
     address: Address,
     storage: Storage,
     ledger: Ledger,
@@ -179,9 +222,12 @@ struct NodeInner {
     identity_mempool: RwLock<VecDeque<IdentityDeclaration>>,
     uptime_mempool: RwLock<VecDeque<RecordedUptimeProof>>,
     vrf_mempool: RwLock<VrfSubmissionPool>,
+    vrf_epoch: RwLock<VrfEpochManager>,
     chain_tip: RwLock<ChainTip>,
     block_interval: Duration,
     vote_mempool: RwLock<VecDeque<SignedBftVote>>,
+    proposal_inbox: RwLock<HashMap<(u64, Address), VerifiedProposal>>,
+    evidence_pool: RwLock<EvidencePool>,
     telemetry_last_height: RwLock<Option<u64>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
@@ -198,11 +244,20 @@ struct RecordedUptimeProof {
     credited_hours: u64,
 }
 
+#[derive(Clone)]
+struct VerifiedProposal {
+    block: Block,
+}
+
 impl Node {
     pub fn new(config: NodeConfig) -> ChainResult<Self> {
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
         let vrf_keypair = load_or_generate_vrf_keypair(&config.vrf_key_path)?;
+        let p2p_identity = Arc::new(
+            NodeIdentity::load_or_generate(&config.p2p_key_path)
+                .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
+        );
         let address = address_from_public_key(&keypair.public);
         let db_path = config.data_dir.join("db");
         let storage = Storage::open(&db_path)?;
@@ -335,12 +390,14 @@ impl Node {
             .map(|meta| meta.height.saturating_add(1))
             .unwrap_or(0);
         ledger.sync_epoch_for_height(next_height);
+        let epoch_manager = VrfEpochManager::new(config.epoch_length, ledger.current_epoch());
 
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
             keypair,
             vrf_keypair,
+            p2p_identity,
             address,
             storage,
             ledger,
@@ -348,15 +405,19 @@ impl Node {
             identity_mempool: RwLock::new(VecDeque::new()),
             uptime_mempool: RwLock::new(VecDeque::new()),
             vrf_mempool: RwLock::new(VrfSubmissionPool::new()),
+            vrf_epoch: RwLock::new(epoch_manager),
             chain_tip: RwLock::new(ChainTip {
                 height: 0,
                 last_hash: [0u8; 32],
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
+            proposal_inbox: RwLock::new(HashMap::new()),
+            evidence_pool: RwLock::new(EvidencePool::default()),
             telemetry_last_height: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             verifiers: ProofVerifierRegistry::default(),
         });
+        debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
         Ok(Self { inner })
     }
@@ -383,6 +444,10 @@ impl NodeHandle {
 
     pub fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
         self.inner.submit_vote(vote)
+    }
+
+    pub fn submit_block_proposal(&self, block: Block) -> ChainResult<String> {
+        self.inner.submit_block_proposal(block)
     }
 
     pub fn submit_vrf_submission(&self, submission: VrfSubmission) -> ChainResult<()> {
@@ -437,6 +502,10 @@ impl NodeHandle {
         self.inner.reputation_audit(address)
     }
 
+    pub fn bft_membership(&self) -> ChainResult<BftMembership> {
+        self.inner.bft_membership()
+    }
+
     pub fn timetoke_snapshot(&self) -> ChainResult<Vec<TimetokeRecord>> {
         self.inner.timetoke_snapshot()
     }
@@ -455,6 +524,14 @@ impl NodeHandle {
 
     pub fn state_root(&self) -> ChainResult<String> {
         Ok(hex::encode(self.inner.ledger.state_root()))
+    }
+
+    pub fn block_proofs(&self, height: u64) -> ChainResult<Option<BlockProofArtifactsView>> {
+        self.inner.block_proofs(height)
+    }
+
+    pub fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
+        self.inner.telemetry_snapshot()
     }
 
     pub fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
@@ -529,16 +606,7 @@ impl NodeInner {
     }
 
     fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
-        let node = self.node_status()?;
-        let consensus = self.consensus_status()?;
-        let mempool = self.mempool_status()?;
-        let snapshot = TelemetrySnapshot {
-            release_channel: self.config.rollout.release_channel,
-            feature_gates: self.config.rollout.feature_gates.clone(),
-            node,
-            consensus,
-            mempool,
-        };
+        let snapshot = self.build_telemetry_snapshot()?;
         let encoded = serde_json::to_string(&snapshot).map_err(|err| {
             ChainError::Config(format!("unable to encode telemetry snapshot: {err}"))
         })?;
@@ -558,6 +626,72 @@ impl NodeInner {
         }
         *self.telemetry_last_height.write() = Some(snapshot.node.height);
         Ok(())
+    }
+
+    fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
+        self.build_telemetry_snapshot()
+    }
+
+    fn build_telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
+        let node = self.node_status()?;
+        let consensus = self.consensus_status()?;
+        let mempool = self.mempool_status()?;
+        Ok(NodeTelemetrySnapshot {
+            release_channel: self.config.rollout.release_channel,
+            feature_gates: self.config.rollout.feature_gates.clone(),
+            node,
+            consensus,
+            mempool,
+        })
+    }
+
+    fn block_proofs(&self, height: u64) -> ChainResult<Option<BlockProofArtifactsView>> {
+        let stored = self.storage.read_block_record(height)?;
+        Ok(stored.map(|record| {
+            let envelope = record.envelope;
+            BlockProofArtifactsView {
+                hash: envelope.hash.clone(),
+                height,
+                pruning_proof: envelope.pruning_proof.clone(),
+                recursive_proof: envelope.recursive_proof.clone(),
+                stark: envelope.stark.clone(),
+                module_witnesses: envelope.module_witnesses.clone(),
+                proof_artifacts: envelope.proof_artifacts.clone(),
+                consensus_proof: envelope.consensus_proof.clone(),
+                pruned: envelope.pruned,
+            }
+        }))
+    }
+
+    fn bft_membership(&self) -> ChainResult<BftMembership> {
+        let accounts_snapshot = self.ledger.accounts_snapshot();
+        let (validators, observers) = classify_participants(&accounts_snapshot);
+        let validator_entries = validators
+            .into_iter()
+            .map(|candidate| ValidatorMembershipEntry {
+                address: candidate.address,
+                stake: candidate.stake,
+                reputation_score: candidate.reputation_score,
+                tier: candidate.tier,
+                timetoke_hours: candidate.timetoke_hours,
+            })
+            .collect();
+        let observer_entries = observers
+            .into_iter()
+            .map(|observer| ObserverMembershipEntry {
+                address: observer.address,
+                tier: observer.tier,
+            })
+            .collect();
+        let epoch_info = self.ledger.epoch_info();
+        let node_status = self.node_status()?;
+        Ok(BftMembership {
+            height: node_status.height,
+            epoch: epoch_info.epoch,
+            epoch_nonce: epoch_info.epoch_nonce,
+            validators: validator_entries,
+            observers: observer_entries,
+        })
     }
 
     fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
@@ -743,6 +877,12 @@ impl NodeInner {
                 "vote references an already finalized height".into(),
             ));
         }
+        if let Some(evidence) = self.evidence_pool.write().record_vote(&vote) {
+            self.apply_evidence(evidence);
+            return Err(ChainError::Transaction(
+                "conflicting vote detected for validator".into(),
+            ));
+        }
         let mut mempool = self.vote_mempool.write();
         if mempool.len() >= self.config.mempool_limit {
             return Err(ChainError::Transaction("vote mempool full".into()));
@@ -755,9 +895,80 @@ impl NodeInner {
         Ok(vote_hash)
     }
 
+    fn submit_block_proposal(&self, block: Block) -> ChainResult<String> {
+        let height = block.header.height;
+        let round = block.consensus.round;
+        let proposer = block.header.proposer.clone();
+        let previous_block = if height == 0 {
+            None
+        } else {
+            self.storage.read_block(height - 1)?
+        };
+        match block.verify_without_stark(previous_block.as_ref()) {
+            Ok(()) => {
+                let hash = block.hash.clone();
+                let mut inbox = self.proposal_inbox.write();
+                inbox.insert((height, proposer), VerifiedProposal { block });
+                Ok(hash)
+            }
+            Err(err) => {
+                let evidence = self.evidence_pool.write().record_invalid_proposal(
+                    &proposer,
+                    height,
+                    round,
+                    Some(block.hash.clone()),
+                );
+                self.apply_evidence(evidence);
+                Err(err)
+            }
+        }
+    }
+
+    fn apply_evidence(&self, evidence: EvidenceRecord) {
+        let (reason, reason_label) = match evidence.kind {
+            EvidenceKind::DoubleSignPrevote | EvidenceKind::DoubleSignPrecommit => {
+                (SlashingReason::ConsensusFault, "double-sign")
+            }
+            EvidenceKind::InvalidProof => (SlashingReason::InvalidVote, "invalid-proof"),
+            EvidenceKind::InvalidProposal => (SlashingReason::ConsensusFault, "invalid-proposal"),
+        };
+        if let Err(err) = self.ledger.slash_validator(&evidence.address, reason) {
+            warn!(
+                address = %evidence.address,
+                ?err,
+                reason = reason_label,
+                "failed to apply slashing evidence"
+            );
+            return;
+        }
+        debug!(
+            address = %evidence.address,
+            height = evidence.height,
+            round = evidence.round,
+            reason = reason_label,
+            "recorded consensus evidence"
+        );
+        if let Some(vote_kind) = evidence.vote_kind {
+            let mut mempool = self.vote_mempool.write();
+            mempool.retain(|vote| {
+                !(vote.vote.voter == evidence.address
+                    && vote.vote.height == evidence.height
+                    && vote.vote.round == evidence.round
+                    && vote.vote.kind == vote_kind)
+            });
+        }
+    }
+
     fn submit_vrf_submission(&self, submission: VrfSubmission) -> ChainResult<()> {
         let address = submission.address.clone();
         let epoch = submission.input.epoch;
+        {
+            let mut epoch_manager = self.vrf_epoch.write();
+            if !epoch_manager.register_submission(&submission) {
+                debug!(address = %address, epoch, "duplicate VRF submission ignored");
+                return Ok(());
+            }
+        }
         let mut pool = self.vrf_mempool.write();
         if let Some(existing) = pool.get(&address) {
             if existing.input != submission.input {
@@ -1104,6 +1315,13 @@ impl NodeInner {
         matched
     }
 
+    fn take_verified_proposal(&self, height: u64, proposer: &Address) -> Option<Block> {
+        let mut inbox = self.proposal_inbox.write();
+        inbox
+            .remove(&(height, proposer.clone()))
+            .map(|proposal| proposal.block)
+    }
+
     fn collect_proof_artifacts(
         bundle: &BlockProofBundle,
         max_bytes: usize,
@@ -1223,9 +1441,19 @@ impl NodeInner {
             observers,
             &vrf_pool,
         );
+        let round_metrics = round.vrf_metrics().clone();
         {
             let mut metrics = self.vrf_metrics.write();
-            *metrics = round.vrf_metrics().clone();
+            *metrics = round_metrics.clone();
+        }
+        if let Some(epoch_value) = round_metrics.latest_epoch {
+            if let Ok(bytes) = hex::decode(&round_metrics.entropy_beacon) {
+                if bytes.len() == 32 {
+                    let mut beacon = [0u8; 32];
+                    beacon.copy_from_slice(&bytes);
+                    self.vrf_epoch.write().record_entropy(epoch_value, beacon);
+                }
+            }
         }
         self.ledger
             .record_vrf_history(epoch, round.round(), round.vrf_audit());
@@ -1237,7 +1465,67 @@ impl NodeInner {
             }
         };
         if selection.proposer != self.address {
-            info!(proposer = %selection.proposer, "not elected proposer for this round");
+            if let Some(proposal) = self.take_verified_proposal(height, &selection.proposer) {
+                info!(
+                    proposer = %selection.proposer,
+                    height,
+                    "processing verified external proposal"
+                );
+                let block_hash = proposal.hash.clone();
+                round.set_block_hash(block_hash.clone());
+                let local_prevote =
+                    self.build_local_vote(height, round.round(), &block_hash, BftVoteKind::PreVote);
+                if let Err(err) = round.register_prevote(&local_prevote) {
+                    warn!(
+                        ?err,
+                        "failed to register local prevote for external proposal"
+                    );
+                }
+                let local_precommit = self.build_local_vote(
+                    height,
+                    round.round(),
+                    &block_hash,
+                    BftVoteKind::PreCommit,
+                );
+                if let Err(err) = round.register_precommit(&local_precommit) {
+                    warn!(
+                        ?err,
+                        "failed to register local precommit for external proposal"
+                    );
+                }
+                let external_votes = self.drain_votes_for(height, &block_hash);
+                for vote in &external_votes {
+                    let result = match vote.vote.kind {
+                        BftVoteKind::PreVote => round.register_prevote(vote),
+                        BftVoteKind::PreCommit => round.register_precommit(vote),
+                    };
+                    if let Err(err) = result {
+                        warn!(?err, voter = %vote.vote.voter, "rejecting invalid consensus vote");
+                        if self.config.rollout.feature_gates.consensus_enforcement {
+                            if let Err(slash_err) = self
+                                .ledger
+                                .slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
+                            {
+                                warn!(
+                                    ?slash_err,
+                                    voter = %vote.vote.voter,
+                                    "failed to slash validator for invalid vote"
+                                );
+                            }
+                        }
+                    }
+                }
+                if round.commit_reached() {
+                    info!(height, proposer = %selection.proposer, "commit quorum observed externally");
+                    self.evidence_pool.write().prune_below(height);
+                }
+            } else {
+                info!(
+                    proposer = %selection.proposer,
+                    height,
+                    "no verified proposal available for external leader"
+                );
+            }
             return Ok(());
         }
         if round.total_power().clone() == Natural::from(0u32) {
@@ -1490,6 +1778,7 @@ impl NodeInner {
             pruning_stark,
             recursive_stark,
         );
+        let state_proof_artifact = stark_bundle.state_proof.clone();
         let mut proof_artifacts =
             Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;
         proof_artifacts.extend(module_artifacts);
@@ -1516,20 +1805,33 @@ impl NodeInner {
             let _ = self.storage.prune_block_payload(block.header.height - 1)?;
         }
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
-        self.persist_accounts()?;
+        let receipt = self.persist_accounts(height)?;
+        let lifecycle = StateLifecycle::new(&self.storage);
+        lifecycle.verify_transition(
+            &state_proof_artifact,
+            &receipt.previous_root,
+            &receipt.new_root,
+        )?;
+        let encoded_new_root = hex::encode(receipt.new_root);
+        if encoded_new_root != block.header.state_root {
+            return Err(ChainError::Config(
+                "firewood state root does not match block header".into(),
+            ));
+        }
         let mut tip = self.chain_tip.write();
         tip.height = block.header.height;
         tip.last_hash = block.block_hash();
         info!(height = tip.height, "sealed block");
+        self.evidence_pool
+            .write()
+            .prune_below(block.header.height.saturating_add(1));
         Ok(())
     }
 
-    fn persist_accounts(&self) -> ChainResult<()> {
+    fn persist_accounts(&self, block_height: u64) -> ChainResult<StateTransitionReceipt> {
         let accounts = self.ledger.accounts_snapshot();
-        for account in accounts {
-            self.storage.persist_account(&account)?;
-        }
-        Ok(())
+        let lifecycle = StateLifecycle::new(&self.storage);
+        lifecycle.apply_block(block_height, &accounts)
     }
 
     fn bootstrap(&self) -> ChainResult<()> {
