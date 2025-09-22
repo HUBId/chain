@@ -1,11 +1,12 @@
 use std::io;
 
+use storage_firewood::kv::KvError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ChainError {
     #[error("storage error: {0}")]
-    Storage(#[from] rocksdb::Error),
+    Storage(#[from] KvError),
     #[error("serialization error: {0}")]
     Serialization(#[from] bincode::Error),
     #[error("configuration error: {0}")]
