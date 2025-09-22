@@ -1,48 +1,70 @@
-/// Canonical representation of the state root hash produced after every commit.
-pub type StateRoot = Vec<u8>;
+use std::sync::Arc;
 
-/// Read-only view over a committed state snapshot.
-pub trait StateReader {
-    /// Error type returned by reader implementations.
-    type Error;
+use parking_lot::{Mutex, RwLock};
+use thiserror::Error;
 
-    /// Fetch a raw value for the provided `schema` and `key` combination.
-    fn get_raw(&self, schema: &str, key: &[u8]) -> Result<Option<Vec<u8>>, Self::Error>;
+use crate::{
+    kv::{FirewoodKv, Hash, KvError},
+    pruning::{FirewoodPruner, PruningProof},
+    tree::{FirewoodTree, MerkleProof},
+};
 
-    /// Return the root hash for this snapshot.
-    fn root_hash(&self) -> StateRoot;
+pub type StateRoot = Hash;
+
+#[derive(Debug, Error)]
+pub enum StateError {
+    #[error("kv error: {0}")]
+    Kv(#[from] KvError),
 }
 
-/// Mutable transaction that stages updates prior to a commit.
-pub trait StateTransaction {
-    /// Error type surfaced during transaction processing.
-    type Error;
-
-    /// Insert or update a value in the given `schema`.
-    fn put_raw(&mut self, schema: &str, key: Vec<u8>, value: Vec<u8>) -> Result<(), Self::Error>;
-
-    /// Remove an entry from the given `schema`.
-    fn delete_raw(&mut self, schema: &str, key: &[u8]) -> Result<(), Self::Error>;
-
-    /// Finalize the transaction and return the resulting state root.
-    fn commit(self) -> Result<StateRoot, Self::Error>;
-
-    /// Abort the transaction, discarding staged changes.
-    fn rollback(self) -> Result<(), Self::Error>;
+pub struct FirewoodState {
+    kv: Mutex<FirewoodKv>,
+    tree: RwLock<FirewoodTree>,
+    pruner: Mutex<FirewoodPruner>,
 }
 
-/// High-level state manager that coordinates snapshot access and transactional updates.
-pub trait StateManager {
-    /// Unified error type returned by the manager and its associated components.
-    type Error;
-    /// Transaction type created by `begin_transaction`.
-    type Transaction: StateTransaction<Error = Self::Error>;
-    /// Reader type returned when accessing committed state.
-    type Reader: StateReader<Error = Self::Error>;
+impl FirewoodState {
+    pub fn open(path: &str) -> Result<Arc<Self>, StateError> {
+        let kv = FirewoodKv::open(path)?;
+        let mut tree = FirewoodTree::new();
+        for (key, value) in kv.scan_prefix(b"") {
+            tree.update(&key, value);
+        }
+        let pruner = FirewoodPruner::new(3);
+        Ok(Arc::new(FirewoodState {
+            kv: Mutex::new(kv),
+            tree: RwLock::new(tree),
+            pruner: Mutex::new(pruner),
+        }))
+    }
 
-    /// Acquire a read-only handle to the latest committed state.
-    fn reader(&self) -> Result<Self::Reader, Self::Error>;
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.kv.lock().get(key)
+    }
 
-    /// Start a new state transaction.
-    fn begin_transaction(&self) -> Result<Self::Transaction, Self::Error>;
+    pub fn put(&self, key: Vec<u8>, value: Vec<u8>) {
+        self.kv.lock().put(key.clone(), value.clone());
+        let mut tree = self.tree.write();
+        tree.update(&key, value);
+    }
+
+    pub fn delete(&self, key: &[u8]) {
+        self.kv.lock().delete(key);
+        let mut tree = self.tree.write();
+        tree.delete(key);
+    }
+
+    pub fn commit_block(&self, block_id: u64) -> Result<(StateRoot, PruningProof), StateError> {
+        let mut kv = self.kv.lock();
+        let root = kv.commit()?;
+        let mut pruner = self.pruner.lock();
+        let (_, proof) = pruner.prune_block(block_id, root);
+        Ok((root, proof))
+    }
+
+    pub fn prove(&self, key: &[u8]) -> MerkleProof {
+        let tree = self.tree.read();
+        tree.get_proof(key)
+    }
 }
+

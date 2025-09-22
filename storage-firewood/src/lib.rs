@@ -8,71 +8,61 @@ pub mod wal;
 
 #[cfg(test)]
 mod tests {
-    use super::state::{StateManager, StateReader, StateRoot, StateTransaction};
+    use std::env;
 
-    struct NoopState;
+    use super::{
+        kv::FirewoodKv,
+        pruning::FirewoodPruner,
+        tree::FirewoodTree,
+    };
 
-    #[derive(Clone)]
-    struct NoopReader;
-
-    struct NoopTransaction;
-
-    #[derive(Debug)]
-    struct Error;
-
-    impl StateReader for NoopReader {
-        type Error = Error;
-
-        fn get_raw(&self, _schema: &str, _key: &[u8]) -> Result<Option<Vec<u8>>, Self::Error> {
-            Ok(None)
-        }
-
-        fn root_hash(&self) -> StateRoot {
-            Vec::new()
-        }
-    }
-
-    impl StateTransaction for NoopTransaction {
-        type Error = Error;
-
-        fn put_raw(&mut self, _schema: &str, _key: Vec<u8>, _value: Vec<u8>) -> Result<(), Self::Error> {
-            Ok(())
-        }
-
-        fn delete_raw(&mut self, _schema: &str, _key: &[u8]) -> Result<(), Self::Error> {
-            Ok(())
-        }
-
-        fn commit(self) -> Result<StateRoot, Self::Error> {
-            Ok(Vec::new())
-        }
-
-        fn rollback(self) -> Result<(), Self::Error> {
-            Ok(())
-        }
-    }
-
-    impl StateManager for NoopState {
-        type Error = Error;
-        type Transaction = NoopTransaction;
-        type Reader = NoopReader;
-
-        fn reader(&self) -> Result<Self::Reader, Self::Error> {
-            Ok(NoopReader)
-        }
-
-        fn begin_transaction(&self) -> Result<Self::Transaction, Self::Error> {
-            Ok(NoopTransaction)
-        }
+    fn temp_dir(name: &str) -> String {
+        let mut dir = env::temp_dir();
+        dir.push(format!("firewood-{}", name));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir.to_string_lossy().into_owned()
     }
 
     #[test]
-    fn traits_can_be_implemented() {
-        let state = NoopState;
-        let reader = state.reader().expect("reader");
-        assert!(reader.root_hash().is_empty());
+    fn kv_roundtrip_and_commit() {
+        let dir = temp_dir("kv");
+        let mut kv = FirewoodKv::open(&dir).expect("open kv");
+        kv.put(b"alpha".to_vec(), b"one".to_vec());
+        kv.put(b"beta".to_vec(), b"two".to_vec());
+        let root = kv.commit().expect("commit");
+        assert_eq!(kv.get(b"alpha"), Some(b"one".to_vec()));
+        assert_eq!(kv.get(b"beta"), Some(b"two".to_vec()));
+        assert_eq!(root.len(), 32);
+    }
 
-        let tx = state.begin_transaction().expect("tx");
-        tx.commit().expect("commit");
+    #[test]
+    fn tree_proof_verifies() {
+        let mut tree = FirewoodTree::new();
+        let root = tree.update(b"key", b"value".to_vec());
+        let proof = tree.get_proof(b"key");
+        assert!(super::tree::FirewoodTree::verify_proof(&root, &proof));
+    }
+
+    #[test]
+    fn pruner_retains_recent_snapshots() {
+        let mut pruner = FirewoodPruner::new(2);
+        pruner.prune_block(1, [0u8; 32]);
+        pruner.prune_block(2, [1u8; 32]);
+        pruner.prune_block(3, [2u8; 32]);
+        assert!(FirewoodPruner::verify_pruned_state(
+            [2u8; 32],
+            &pruner.prune_block(4, [2u8; 32]).1,
+        ));
+    }
+
+    #[test]
+    fn state_commit_flow() {
+        let dir = temp_dir("state");
+        let state = super::state::FirewoodState::open(&dir).expect("open state");
+        state.put(b"account".to_vec(), vec![1, 2, 3]);
+        let (root, proof) = state.commit_block(1).expect("commit block");
+        assert_eq!(root.len(), 32);
+        assert!(FirewoodPruner::verify_pruned_state(root, &proof));
     }
 }
