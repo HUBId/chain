@@ -20,3 +20,5 @@ pub mod sync;
 pub mod types;
 pub mod vrf;
 pub mod wallet;
+
+pub use rpp_consensus as consensus_engine;

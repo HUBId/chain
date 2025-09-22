@@ -1500,6 +1500,7 @@ dependencies = [
  "parking_lot",
  "rand 0.7.3",
  "rocksdb",
+ "rpp-consensus",
  "serde",
  "serde_json",
  "storage-firewood",
@@ -1511,6 +1512,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "rpp-consensus"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
