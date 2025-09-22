@@ -1502,6 +1502,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_json",
+ "storage-firewood",
  "stwo",
  "tempfile",
  "thiserror 1.0.69",
@@ -1792,6 +1793,13 @@ dependencies = [
  "getrandom 0.2.16",
  "hex",
  "serde",
+]
+
+[[package]]
+name = "storage-firewood"
+version = "0.1.0"
+dependencies = [
+ "thiserror 1.0.69",
 ]
 
 [[package]]
