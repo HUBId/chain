@@ -865,7 +865,7 @@ impl NodeInner {
                 cmd = commands.recv() => {
                     match cmd {
                         Some(SnapshotPublishCommand::Immediate) => {
-                            if let Err(err) = self.publish_snapshot_plan().await {
+                            if let Err(err) = self.publish_snapshot_plan(true).await {
                                 warn!(?err, "snapshot plan publication failed");
                             }
                         }
@@ -873,7 +873,7 @@ impl NodeInner {
                     }
                 }
                 _ = interval.tick() => {
-                    if let Err(err) = self.publish_snapshot_plan().await {
+                    if let Err(err) = self.publish_snapshot_plan(false).await {
                         warn!(?err, "scheduled snapshot plan publication failed");
                     }
                 }
@@ -1002,7 +1002,7 @@ impl NodeInner {
         Ok(())
     }
 
-    async fn publish_snapshot_plan(&self) -> ChainResult<()> {
+    async fn publish_snapshot_plan(&self, force: bool) -> ChainResult<()> {
         if !self.config.rollout.feature_gates.reconstruction {
             return Ok(());
         }
@@ -1016,10 +1016,40 @@ impl NodeInner {
         })?;
         let mut store = SnapshotStore::new(SNAPSHOT_CHUNK_BYTES);
         let root = store.insert(payload);
+        let chunk_total = store.chunk_count(&root).map_err(|err| {
+            ChainError::Config(format!("unable to compute snapshot chunk count: {err}"))
+        })?;
         let chunks = store.stream(&root).map_err(|err| {
             ChainError::Config(format!("unable to prepare snapshot payload: {err}"))
         })?;
-        let chunk_total = chunks.first().map(|chunk| chunk.total).unwrap_or(0);
+
+        let should_skip = if force {
+            false
+        } else {
+            let status = self.snapshot_status.lock();
+            let unchanged_root = status
+                .last_root
+                .as_ref()
+                .map(|last| last == &root)
+                .unwrap_or(false);
+            unchanged_root
+                && status.total_chunks == Some(chunk_total)
+                && status.latest_verified_height == Some(plan.tip.height)
+        };
+
+        if should_skip {
+            {
+                let mut status = self.snapshot_status.lock();
+                status.last_updated = Some(SystemTime::now());
+            }
+            debug!(
+                height = plan.tip.height,
+                root = %root.to_hex(),
+                "skipping snapshot publication; plan unchanged"
+            );
+            return Ok(());
+        }
+
         let metadata = SnapshotPlanMetadata {
             payload_root: root.to_hex().to_string(),
             snapshot_height: plan.snapshot.height,

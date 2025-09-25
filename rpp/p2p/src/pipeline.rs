@@ -509,8 +509,13 @@ impl SnapshotStore {
             .get(root)
             .ok_or(PipelineError::SnapshotNotFound)?;
         let mut chunks = Vec::new();
-        let total = ((data.len() as f64) / (self.chunk_size as f64)).ceil() as u64;
-        for (index, window) in data.chunks(self.chunk_size).enumerate() {
+        let chunk_size = self.chunk_size.max(1);
+        let total = if data.is_empty() {
+            0
+        } else {
+            ((data.len() as u64) + (chunk_size as u64) - 1) / (chunk_size as u64)
+        };
+        for (index, window) in data.chunks(chunk_size).enumerate() {
             chunks.push(SnapshotChunk {
                 root: *root,
                 index: index as u64,
@@ -519,6 +524,20 @@ impl SnapshotStore {
             });
         }
         Ok(chunks)
+    }
+
+    pub fn chunk_count(&self, root: &Hash) -> Result<u64, PipelineError> {
+        let data = self
+            .snapshots
+            .get(root)
+            .ok_or(PipelineError::SnapshotNotFound)?;
+        if data.is_empty() {
+            Ok(0)
+        } else {
+            let chunk_size = self.chunk_size.max(1) as u64;
+            let len = data.len() as u64;
+            Ok((len + chunk_size - 1) / chunk_size)
+        }
     }
 }
 
@@ -777,8 +796,10 @@ mod tests {
         let mut store = SnapshotStore::new(8);
         let payload = b"state-snapshot-payload".to_vec();
         let root = store.insert(payload.clone());
+        let expected_chunks = store.chunk_count(&root).unwrap();
         let chunks = store.stream(&root).unwrap();
         assert!(chunks.len() > 1);
+        assert_eq!(expected_chunks, chunks.len() as u64);
 
         let mut client = LightClientSync::new();
         client.ingest_header(root);
