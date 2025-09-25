@@ -17,3 +17,9 @@ Weitere Schritte:
 * `.cargo/config.toml` vorbereiten, um die neuen Vendor-Pfade als `source` oder via `[patch.crates-io]` einzubinden.
 * Nachziehen transitiver Abhängigkeiten (`itoa`, `ryu`, `memchr` etc.) im nächsten Batch.
 * Nach erfolgreicher Einbindung `cargo check` ausführen, sobald alle benötigten Crates lokal verfügbar sind.
+
+## Batch 2 – Async-Web-Stack (2025-09-24)
+
+| Crate | Version(en) | Zielverzeichnis | Notizen |
+|-------|-------------|-----------------|---------|
+| axum | 0.8.4 | `vendor/axum/0.8.4/` | Archiv `axum-main-1.zip` entpackt; Workspace umfasst `axum-core` und `axum-macros` für Pfadabhängigkeiten. |
