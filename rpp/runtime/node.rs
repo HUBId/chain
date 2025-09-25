@@ -70,6 +70,7 @@ pub struct NodeStatus {
     pub pending_votes: usize,
     pub pending_uptime_proofs: usize,
     pub vrf_metrics: crate::vrf::VrfSelectionMetrics,
+    pub tip: Option<BlockMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -367,8 +368,9 @@ impl Node {
                 None,
             );
             genesis_block.verify(None)?;
-            storage.store_block(&genesis_block)?;
-            tip_metadata = Some(BlockMetadata::from(&genesis_block));
+            let genesis_metadata = BlockMetadata::from(&genesis_block);
+            storage.store_block(&genesis_block, &genesis_metadata)?;
+            tip_metadata = Some(genesis_metadata);
         }
 
         if accounts.is_empty() {
@@ -1037,6 +1039,7 @@ impl NodeInner {
     fn node_status(&self) -> ChainResult<NodeStatus> {
         let tip = *self.chain_tip.read();
         let epoch_info: EpochInfo = self.ledger.epoch_info();
+        let metadata = self.storage.tip()?;
         Ok(NodeStatus {
             address: self.address.clone(),
             height: tip.height,
@@ -1048,6 +1051,7 @@ impl NodeInner {
             pending_votes: self.vote_mempool.read().len(),
             pending_uptime_proofs: self.uptime_mempool.read().len(),
             vrf_metrics: self.vrf_metrics.read().clone(),
+            tip: metadata,
         })
     }
 
@@ -1800,23 +1804,30 @@ impl NodeInner {
             Some(consensus_proof),
         );
         block.verify(previous_block.as_ref())?;
-        self.storage.store_block(&block)?;
-        if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
-            let _ = self.storage.prune_block_payload(block.header.height - 1)?;
-        }
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
         let receipt = self.persist_accounts(height)?;
+        let encoded_new_root = hex::encode(receipt.new_root);
+        if encoded_new_root != block.header.state_root {
+            return Err(ChainError::Config(
+                "firewood state root does not match block header".into(),
+            ));
+        }
         let lifecycle = StateLifecycle::new(&self.storage);
         lifecycle.verify_transition(
             &state_proof_artifact,
             &receipt.previous_root,
             &receipt.new_root,
         )?;
-        let encoded_new_root = hex::encode(receipt.new_root);
-        if encoded_new_root != block.header.state_root {
-            return Err(ChainError::Config(
-                "firewood state root does not match block header".into(),
-            ));
+        let mut metadata = BlockMetadata::from(&block);
+        metadata.previous_state_root = hex::encode(receipt.previous_root);
+        metadata.new_state_root = encoded_new_root;
+        metadata.pruning_root = receipt
+            .pruning_proof
+            .as_ref()
+            .map(|proof| hex::encode(proof.root));
+        self.storage.store_block(&block, &metadata)?;
+        if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
+            let _ = self.storage.prune_block_payload(block.header.height - 1)?;
         }
         let mut tip = self.chain_tip.write();
         tip.height = block.header.height;

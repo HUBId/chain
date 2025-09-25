@@ -222,9 +222,11 @@ mod tests {
             )
             .expect("handshake");
 
-        assert!(control
-            .can_remote_publish(&peer, GossipTopic::Proofs)
-            .is_ok());
+        assert!(
+            control
+                .can_remote_publish(&peer, GossipTopic::Proofs)
+                .is_ok()
+        );
         assert!(matches!(
             control.can_remote_publish(&peer, GossipTopic::Votes),
             Err(AdmissionError::TierInsufficient { .. })

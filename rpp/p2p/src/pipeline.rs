@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::str::FromStr;
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use blake3::Hash;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
@@ -122,8 +122,8 @@ impl TryFrom<StoredProofRecord> for ProofRecord {
         let payload = general_purpose::STANDARD
             .decode(&value.payload)
             .map_err(|err: base64::DecodeError| PipelineError::Persistence(err.to_string()))?;
-        let digest_bytes = hex::decode(value.digest)
-            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        let digest_bytes =
+            hex::decode(value.digest).map_err(|err| PipelineError::Persistence(err.to_string()))?;
         if digest_bytes.len() != 32 {
             return Err(PipelineError::Persistence("invalid digest".into()));
         }
@@ -229,7 +229,12 @@ impl ProofMempool {
         })
     }
 
-    pub fn ingest(&mut self, peer: PeerId, topic: GossipTopic, payload: Vec<u8>) -> Result<bool, PipelineError> {
+    pub fn ingest(
+        &mut self,
+        peer: PeerId,
+        topic: GossipTopic,
+        payload: Vec<u8>,
+    ) -> Result<bool, PipelineError> {
         let digest = blake3::hash(&payload);
         if !self.seen.insert(digest) {
             return Err(PipelineError::Duplicate);
@@ -240,8 +245,7 @@ impl ProofMempool {
                 topic
             )));
         }
-        self.validator
-            .validate(&peer, &payload)?;
+        self.validator.validate(&peer, &payload)?;
         let record = ProofRecord {
             peer,
             topic,
@@ -600,9 +604,11 @@ mod tests {
 
         let peer: PeerId = PeerId::random();
         let payload = b"proof-payload".to_vec();
-        assert!(pipeline
-            .ingest(peer, GossipTopic::Proofs, payload.clone())
-            .unwrap());
+        assert!(
+            pipeline
+                .ingest(peer, GossipTopic::Proofs, payload.clone())
+                .unwrap()
+        );
         assert_eq!(pipeline.len(), 1);
         assert_eq!(*validator.0.lock(), 1);
 
@@ -623,9 +629,8 @@ mod tests {
     async fn persistent_storage_recovers_state() {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("proofs.json");
-        let storage = Arc::new(
-            PersistentProofStorage::with_capacity(&path, 8).expect("persistent storage"),
-        );
+        let storage =
+            Arc::new(PersistentProofStorage::with_capacity(&path, 8).expect("persistent storage"));
         let validator = Arc::new(CountingValidator::default());
 
         {
@@ -671,7 +676,10 @@ mod tests {
             .ingest_vote(&block_id, voters[1], 0, b"vote-1".to_vec())
             .unwrap();
         match outcome {
-            VoteOutcome::Recorded { reached_quorum, power } => {
+            VoteOutcome::Recorded {
+                reached_quorum,
+                power,
+            } => {
                 assert!(reached_quorum);
                 assert!(power >= 2.0);
             }

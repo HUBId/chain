@@ -24,23 +24,33 @@ fn global_sender() -> ConsensusResult<UnboundedSender<ConsensusMessage>> {
 }
 
 pub fn submit_proposal(proposal: Proposal) -> ConsensusResult<()> {
-    global_sender()?.send(ConsensusMessage::Proposal(proposal)).map_err(|_| ConsensusError::ChannelClosed)
+    global_sender()?
+        .send(ConsensusMessage::Proposal(proposal))
+        .map_err(|_| ConsensusError::ChannelClosed)
 }
 
 pub fn submit_prevote(vote: PreVote) -> ConsensusResult<()> {
-    global_sender()?.send(ConsensusMessage::PreVote(vote)).map_err(|_| ConsensusError::ChannelClosed)
+    global_sender()?
+        .send(ConsensusMessage::PreVote(vote))
+        .map_err(|_| ConsensusError::ChannelClosed)
 }
 
 pub fn submit_precommit(vote: PreCommit) -> ConsensusResult<()> {
-    global_sender()?.send(ConsensusMessage::PreCommit(vote)).map_err(|_| ConsensusError::ChannelClosed)
+    global_sender()?
+        .send(ConsensusMessage::PreCommit(vote))
+        .map_err(|_| ConsensusError::ChannelClosed)
 }
 
 pub fn finalize_block(commit: Commit) -> ConsensusResult<()> {
-    global_sender()?.send(ConsensusMessage::Commit(commit)).map_err(|_| ConsensusError::ChannelClosed)
+    global_sender()?
+        .send(ConsensusMessage::Commit(commit))
+        .map_err(|_| ConsensusError::ChannelClosed)
 }
 
 pub fn shutdown() -> ConsensusResult<()> {
-    global_sender()?.send(ConsensusMessage::Shutdown).map_err(|_| ConsensusError::ChannelClosed)
+    global_sender()?
+        .send(ConsensusMessage::Shutdown)
+        .map_err(|_| ConsensusError::ChannelClosed)
 }
 
 pub fn run_bft_loop(state: &mut ConsensusState) {

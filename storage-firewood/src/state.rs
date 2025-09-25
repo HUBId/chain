@@ -67,4 +67,3 @@ impl FirewoodState {
         tree.get_proof(key)
     }
 }
-

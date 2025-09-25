@@ -666,11 +666,17 @@ mod tests {
         let genesis = make_block(0, None);
         let mut payloads = HashMap::new();
         payloads.insert(0, BlockPayload::from_block(&genesis));
-        storage.store_block(&genesis).expect("store genesis");
+        let genesis_metadata = BlockMetadata::from(&genesis);
+        storage
+            .store_block(&genesis, &genesis_metadata)
+            .expect("store genesis");
 
         let block_one = make_block(1, Some(&genesis));
         payloads.insert(1, BlockPayload::from_block(&block_one));
-        storage.store_block(&block_one).expect("store block one");
+        let block_one_metadata = BlockMetadata::from(&block_one);
+        storage
+            .store_block(&block_one, &block_one_metadata)
+            .expect("store block one");
         storage
             .prune_block_payload(1)
             .expect("prune block one payload");
@@ -699,16 +705,25 @@ mod tests {
         let temp_dir = tempdir().expect("tempdir");
         let storage = Storage::open(temp_dir.path()).expect("open storage");
         let genesis = make_block(0, None);
-        storage.store_block(&genesis).expect("store genesis");
+        let genesis_metadata = BlockMetadata::from(&genesis);
+        storage
+            .store_block(&genesis, &genesis_metadata)
+            .expect("store genesis");
 
         let block_one = make_block(1, Some(&genesis));
-        storage.store_block(&block_one).expect("store block one");
+        let block_one_metadata = BlockMetadata::from(&block_one);
+        storage
+            .store_block(&block_one, &block_one_metadata)
+            .expect("store block one");
         storage
             .prune_block_payload(1)
             .expect("prune block one payload");
 
         let block_two = make_block(2, Some(&block_one));
-        storage.store_block(&block_two).expect("store block two");
+        let block_two_metadata = BlockMetadata::from(&block_two);
+        storage
+            .store_block(&block_two, &block_two_metadata)
+            .expect("store block two");
         storage
             .prune_block_payload(2)
             .expect("prune block two payload");

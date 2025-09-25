@@ -42,9 +42,14 @@ pub fn distribute_rewards(
 
     let base = base_reward;
     for validator in &validators.validators {
-        distribution
-            .rewards
-            .insert(validator.id.clone(), base + if validator.id == leader.id { leader_extra } else { 0 });
+        distribution.rewards.insert(
+            validator.id.clone(),
+            base + if validator.id == leader.id {
+                leader_extra
+            } else {
+                0
+            },
+        );
     }
 
     distribution

@@ -112,7 +112,10 @@ impl FileWal {
         writer.write_all(record)?;
         writer.flush()?;
 
-        self.index.lock().push(WalEntry { sequence: seq, offset });
+        self.index.lock().push(WalEntry {
+            sequence: seq,
+            offset,
+        });
 
         Ok(seq)
     }
@@ -131,7 +134,10 @@ impl FileWal {
         from_sequence: SequenceNumber,
     ) -> Result<Vec<(SequenceNumber, Vec<u8>)>, WalError> {
         let index = self.index.lock();
-        let start = match index.iter().position(|entry| entry.sequence >= from_sequence) {
+        let start = match index
+            .iter()
+            .position(|entry| entry.sequence >= from_sequence)
+        {
             Some(pos) => pos,
             None => return Ok(Vec::new()),
         };
@@ -176,12 +182,13 @@ impl FileWal {
             return Ok(());
         }
 
+        let retained = index.split_off(retain_pos);
+        drop(index);
+
         // Copy retained entries into a fresh log file.
         let tmp_path = self.path.with_extension("wal.tmp");
         let mut tmp_file = BufWriter::new(File::create(&tmp_path)?);
         let mut reader = BufReader::new(File::open(&self.path)?);
-
-        let retained = index.split_off(retain_pos);
         let mut new_index = Vec::with_capacity(retained.len());
 
         let mut offset = 0u64;
@@ -232,6 +239,4 @@ impl FileWal {
             .map(|entry| entry.sequence + 1)
             .unwrap_or(0)
     }
-
 }
-

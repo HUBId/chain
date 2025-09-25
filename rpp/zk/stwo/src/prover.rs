@@ -134,10 +134,13 @@ pub fn prove_block(block: &Block, prev_proof: &Proof) -> Proof {
         reputation_root: block.reputation_root.clone(),
         previous_proof_digest: prev_proof.digest(),
     };
-    let leaves = vec![prev_proof.digest(), poseidon::hash_elements(&[
-        FieldElement::from(block.height as u128),
-        FieldElement::from_bytes(block.tx_root.as_bytes()),
-    ])];
+    let leaves = vec![
+        prev_proof.digest(),
+        poseidon::hash_elements(&[
+            FieldElement::from(block.height as u128),
+            FieldElement::from_bytes(block.tx_root.as_bytes()),
+        ]),
+    ];
     let witness = PruningWitness::new(inputs, leaves);
     build_proof(ProofCircuit::Block, &witness)
 }

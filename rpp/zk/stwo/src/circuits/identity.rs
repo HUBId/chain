@@ -26,7 +26,11 @@ impl CircuitWitness for IdentityWitness {
 }
 
 impl IdentityWitness {
-    pub fn new(genesis: IdentityGenesis, wallet_public_key: String, vote_signature: String) -> Self {
+    pub fn new(
+        genesis: IdentityGenesis,
+        wallet_public_key: String,
+        vote_signature: String,
+    ) -> Self {
         Self {
             genesis,
             wallet_public_key,

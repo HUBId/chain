@@ -34,11 +34,7 @@ impl libp2p::request_response::Codec for HandshakeCodec {
     type Request = HandshakePayload;
     type Response = HandshakePayload;
 
-    async fn read_request<T>(
-        &mut self,
-        _: &Self::Protocol,
-        io: &mut T,
-    ) -> io::Result<Self::Request>
+    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {

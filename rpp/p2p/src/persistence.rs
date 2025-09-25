@@ -77,7 +77,10 @@ impl GossipStateStore {
         Self::with_capacity(path, 64)
     }
 
-    pub fn with_capacity(path: impl Into<PathBuf>, capacity: usize) -> Result<Self, GossipStateError> {
+    pub fn with_capacity(
+        path: impl Into<PathBuf>,
+        capacity: usize,
+    ) -> Result<Self, GossipStateError> {
         let path = path.into();
         let state = if path.exists() {
             let raw = fs::read_to_string(&path)?;

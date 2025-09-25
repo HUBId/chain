@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose, Engine as _};
-use libp2p::identity::{self, Keypair};
+use base64::{Engine as _, engine::general_purpose};
 use libp2p::PeerId;
+use libp2p::identity::{self, Keypair};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -53,8 +53,8 @@ impl NodeIdentity {
 
     fn load(path: &Path) -> Result<Self, IdentityError> {
         let raw = fs::read_to_string(path)?;
-        let stored: StoredIdentity = toml::from_str(&raw)
-            .map_err(|err| IdentityError::Encoding(err.to_string()))?;
+        let stored: StoredIdentity =
+            toml::from_str(&raw).map_err(|err| IdentityError::Encoding(err.to_string()))?;
         let bytes = general_purpose::STANDARD
             .decode(stored.key)
             .map_err(|err| IdentityError::Encoding(err.to_string()))?;

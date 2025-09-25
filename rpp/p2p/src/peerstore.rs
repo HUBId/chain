@@ -72,7 +72,11 @@ impl PeerRecord {
     }
 
     fn set_reputation(&mut self, score: f64) -> TierLevel {
-        let clamped = if score.is_finite() { score.max(0.0) } else { 0.0 };
+        let clamped = if score.is_finite() {
+            score.max(0.0)
+        } else {
+            0.0
+        };
         self.reputation = clamped;
         self.tier = TierLevel::from_reputation(self.reputation);
         self.last_seen = Some(SystemTime::now());
@@ -115,10 +119,7 @@ impl From<&PeerRecord> for StoredPeerRecord {
             peer_id: record.peer_id.to_base58(),
             addresses: record.addresses.iter().map(|a| a.to_string()).collect(),
             zsi_id: record.zsi_id.clone(),
-            vrf_proof: record
-                .vrf_proof
-                .as_ref()
-                .map(|bytes| hex::encode(bytes)),
+            vrf_proof: record.vrf_proof.as_ref().map(|bytes| hex::encode(bytes)),
             tier: record.tier,
             reputation: record.reputation,
             last_seen: record.last_seen.map(|time| {
@@ -234,21 +235,21 @@ impl Peerstore {
     ) -> Result<(), PeerstoreError> {
         {
             let mut guard = self.peers.write();
-            let entry = guard.entry(peer_id).or_insert_with(|| PeerRecord::new(peer_id));
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
             entry.apply_handshake(payload);
             entry.clear_ban_if_elapsed();
         }
         self.persist()
     }
 
-    pub fn record_address(
-        &self,
-        peer_id: PeerId,
-        addr: Multiaddr,
-    ) -> Result<(), PeerstoreError> {
+    pub fn record_address(&self, peer_id: PeerId, addr: Multiaddr) -> Result<(), PeerstoreError> {
         {
             let mut guard = self.peers.write();
-            let entry = guard.entry(peer_id).or_insert_with(|| PeerRecord::new(peer_id));
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
             entry.record_address(addr);
         }
         self.persist()
@@ -282,7 +283,9 @@ impl Peerstore {
     ) -> Result<ReputationSnapshot, PeerstoreError> {
         let snapshot = {
             let mut guard = self.peers.write();
-            let entry = guard.entry(peer_id).or_insert_with(|| PeerRecord::new(peer_id));
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
             entry.apply_reputation_delta(delta);
             entry.clear_ban_if_elapsed();
             ReputationSnapshot {
@@ -303,7 +306,9 @@ impl Peerstore {
     ) -> Result<ReputationSnapshot, PeerstoreError> {
         let snapshot = {
             let mut guard = self.peers.write();
-            let entry = guard.entry(peer_id).or_insert_with(|| PeerRecord::new(peer_id));
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
             entry.set_reputation(score);
             entry.clear_ban_if_elapsed();
             ReputationSnapshot {
@@ -324,7 +329,9 @@ impl Peerstore {
     ) -> Result<ReputationSnapshot, PeerstoreError> {
         let snapshot = {
             let mut guard = self.peers.write();
-            let entry = guard.entry(peer_id).or_insert_with(|| PeerRecord::new(peer_id));
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
             entry.set_ban(until);
             ReputationSnapshot {
                 peer_id,
@@ -340,7 +347,9 @@ impl Peerstore {
     pub fn unban_peer(&self, peer_id: PeerId) -> Result<ReputationSnapshot, PeerstoreError> {
         let snapshot = {
             let mut guard = self.peers.write();
-            let entry = guard.entry(peer_id).or_insert_with(|| PeerRecord::new(peer_id));
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
             entry.remove_ban();
             entry.clear_ban_if_elapsed();
             ReputationSnapshot {
@@ -427,19 +436,13 @@ mod tests {
         assert!(snapshot.banned_until.is_none());
 
         let ban_until = SystemTime::now() + Duration::from_secs(10);
-        store
-            .ban_peer_until(peer_id, ban_until)
-            .expect("ban peer");
+        store.ban_peer_until(peer_id, ban_until).expect("ban peer");
 
-        let snapshot = store
-            .reputation_snapshot(&peer_id)
-            .expect("snapshot");
+        let snapshot = store.reputation_snapshot(&peer_id).expect("snapshot");
         assert!(snapshot.banned_until.is_some());
 
         store.unban_peer(peer_id).expect("unban");
-        let snapshot = store
-            .reputation_snapshot(&peer_id)
-            .expect("snapshot");
+        let snapshot = store.reputation_snapshot(&peer_id).expect("snapshot");
         assert!(snapshot.banned_until.is_none());
     }
 }
