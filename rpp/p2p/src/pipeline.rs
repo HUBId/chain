@@ -7,11 +7,14 @@ use std::str::FromStr;
 
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
+use hex;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::topics::GossipTopic;
+
+const HEX_DIGEST_LENGTH: usize = 32;
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -29,6 +32,8 @@ pub enum PipelineError {
     SnapshotVerification(String),
     #[error("persistence error: {0}")]
     Persistence(String),
+    #[error("encoding error: {0}")]
+    Encoding(String),
 }
 
 /// Handler invoked whenever a gossip proof is received on the `proofs` topic.
@@ -412,6 +417,68 @@ pub struct SnapshotChunk {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotPlanMetadata {
+    pub payload_root: String,
+    pub snapshot_height: u64,
+    pub snapshot_hash: String,
+    pub tip_height: u64,
+    pub tip_hash: String,
+    pub chunk_count: u64,
+    pub light_client_updates: u64,
+    pub refreshed_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotChunkPayload {
+    pub root: String,
+    pub index: u64,
+    pub total: u64,
+    pub data: Vec<u8>,
+}
+
+impl SnapshotChunkPayload {
+    pub fn from_chunk(chunk: &SnapshotChunk) -> Self {
+        Self {
+            root: chunk.root.to_hex().to_string(),
+            index: chunk.index,
+            total: chunk.total,
+            data: chunk.data.clone(),
+        }
+    }
+
+    pub fn into_chunk(self) -> Result<SnapshotChunk, PipelineError> {
+        let decoded = hex::decode(&self.root)
+            .map_err(|err| PipelineError::Encoding(err.to_string()))?;
+        if decoded.len() != HEX_DIGEST_LENGTH {
+            return Err(PipelineError::Encoding("invalid snapshot root".into()));
+        }
+        let mut root = [0u8; HEX_DIGEST_LENGTH];
+        root.copy_from_slice(&decoded);
+        Ok(SnapshotChunk {
+            root: Hash::from(root),
+            index: self.index,
+            total: self.total,
+            data: self.data,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SnapshotMessage {
+    Announcement(SnapshotPlanMetadata),
+    Chunk(SnapshotChunkPayload),
+}
+
+pub fn encode_snapshot_message(message: &SnapshotMessage) -> Result<Vec<u8>, PipelineError> {
+    serde_json::to_vec(message).map_err(|err| PipelineError::Encoding(err.to_string()))
+}
+
+pub fn decode_snapshot_message(payload: &[u8]) -> Result<SnapshotMessage, PipelineError> {
+    serde_json::from_slice(payload).map_err(|err| PipelineError::Encoding(err.to_string()))
+}
+
 #[derive(Debug)]
 pub struct SnapshotStore {
     snapshots: HashMap<Hash, Vec<u8>>,
@@ -471,6 +538,12 @@ impl LightClientSync {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.expected_root = None;
+        self.received.clear();
+        self.total = None;
+    }
+
     pub fn ingest_header(&mut self, root: Hash) {
         self.expected_root = Some(root);
     }
@@ -522,6 +595,18 @@ impl LightClientSync {
                 "reconstructed root mismatch".to_string(),
             ))
         }
+    }
+
+    pub fn received_chunks(&self) -> usize {
+        self.received.len()
+    }
+
+    pub fn expected_total(&self) -> Option<u64> {
+        self.total
+    }
+
+    pub fn expected_root(&self) -> Option<Hash> {
+        self.expected_root
     }
 }
 

@@ -1,11 +1,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use blake3::Hash;
 use ed25519_dalek::Keypair;
 use malachite::Natural;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use tokio::time;
 use tracing::{debug, info, warn};
 
@@ -37,7 +40,7 @@ use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
 use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
-use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
+use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof,
     IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake,
@@ -46,16 +49,122 @@ use crate::types::{
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
-use rpp_p2p::NodeIdentity;
+use rpp_p2p::{
+    GossipStateStore, GossipTopic, HandshakePayload, LightClientSync, Network, NetworkEvent,
+    NodeIdentity, Peerstore, PeerstoreConfig, SnapshotChunkPayload, SnapshotMessage,
+    SnapshotPlanMetadata, SnapshotStore, TierLevel, decode_snapshot_message,
+    encode_snapshot_message,
+};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
+const SNAPSHOT_CHUNK_BYTES: usize = 64 * 1024;
+const SNAPSHOT_REQUESTS_PER_CHUNK: usize = 16;
+const SNAPSHOT_PUBLISH_INTERVAL_SECS: u64 = 30;
 
 #[derive(Clone, Copy)]
 struct ChainTip {
     height: u64,
     last_hash: [u8; 32],
+}
+
+#[derive(Default)]
+struct SnapshotSyncRuntimeStatus {
+    last_root: Option<Hash>,
+    total_chunks: Option<u64>,
+    received_chunks: u64,
+    verified: bool,
+    latest_verified_height: Option<u64>,
+    last_tip_hash: Option<String>,
+    last_updated: Option<SystemTime>,
+}
+
+impl SnapshotSyncRuntimeStatus {
+    fn pending_chunks(&self) -> Option<u64> {
+        self.total_chunks
+            .map(|total| total.saturating_sub(self.received_chunks.min(total)))
+    }
+
+    fn to_public(&self) -> SnapshotSyncStatus {
+        SnapshotSyncStatus {
+            last_root: self.last_root.map(|hash| hash.to_hex().to_string()),
+            total_chunks: self.total_chunks,
+            received_chunks: self.received_chunks,
+            pending_chunks: self.pending_chunks(),
+            verified: self.verified,
+            latest_verified_height: self.latest_verified_height,
+            last_tip_hash: self.last_tip_hash.clone(),
+            last_update_timestamp: self.last_updated.map(|time| {
+                time.duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }),
+        }
+    }
+
+    fn reset_for_announcement(&mut self, root: Option<Hash>, metadata: &SnapshotPlanMetadata) {
+        self.last_root = root;
+        self.total_chunks = Some(metadata.chunk_count);
+        self.received_chunks = 0;
+        self.verified = metadata.chunk_count == 0;
+        self.latest_verified_height = Some(metadata.tip_height);
+        self.last_tip_hash = Some(metadata.tip_hash.clone());
+        self.last_updated = Some(SystemTime::now());
+    }
+
+    fn record_publish(&mut self, root: Hash, chunk_total: u64, plan: &StateSyncPlan) {
+        self.last_root = Some(root);
+        self.total_chunks = Some(chunk_total);
+        self.received_chunks = chunk_total;
+        self.verified = true;
+        self.latest_verified_height = Some(plan.tip.height);
+        self.last_tip_hash = Some(plan.tip.hash.clone());
+        self.last_updated = Some(SystemTime::now());
+    }
+
+    fn record_chunk_progress(
+        &mut self,
+        received: u64,
+        total: Option<u64>,
+        root: Option<Hash>,
+        verified: bool,
+    ) {
+        self.received_chunks = received;
+        if let Some(total) = total {
+            self.total_chunks = Some(total);
+        }
+        if let Some(root) = root {
+            self.last_root = Some(root);
+        }
+        if verified {
+            self.verified = true;
+        }
+        self.last_updated = Some(SystemTime::now());
+    }
+}
+
+enum NetworkCommand {
+    Publish { topic: GossipTopic, data: Vec<u8> },
+    Shutdown,
+}
+
+#[derive(Clone, Copy)]
+enum SnapshotPublishCommand {
+    Immediate,
+    Shutdown,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SnapshotSyncStatus {
+    pub last_root: Option<String>,
+    pub total_chunks: Option<u64>,
+    pub received_chunks: u64,
+    pub pending_chunks: Option<u64>,
+    pub verified: bool,
+    pub latest_verified_height: Option<u64>,
+    pub last_tip_hash: Option<String>,
+    pub last_update_timestamp: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -70,6 +179,7 @@ pub struct NodeStatus {
     pub pending_votes: usize,
     pub pending_uptime_proofs: usize,
     pub vrf_metrics: crate::vrf::VrfSelectionMetrics,
+    pub snapshot_sync: SnapshotSyncStatus,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -204,6 +314,7 @@ pub struct NodeTelemetrySnapshot {
     pub node: NodeStatus,
     pub consensus: ConsensusStatus,
     pub mempool: MempoolStatus,
+    pub snapshot_sync: SnapshotSyncStatus,
 }
 
 pub struct Node {
@@ -231,6 +342,13 @@ struct NodeInner {
     telemetry_last_height: RwLock<Option<u64>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
+    network: Mutex<Option<Network>>,
+    network_cmd_tx: mpsc::Sender<NetworkCommand>,
+    network_cmd_rx: AsyncMutex<Option<mpsc::Receiver<NetworkCommand>>>,
+    snapshot_cmd_tx: mpsc::Sender<SnapshotPublishCommand>,
+    snapshot_cmd_rx: AsyncMutex<Option<mpsc::Receiver<SnapshotPublishCommand>>>,
+    light_client_sync: Arc<AsyncMutex<LightClientSync>>,
+    snapshot_status: Mutex<SnapshotSyncRuntimeStatus>,
 }
 
 #[derive(Clone)]
@@ -392,6 +510,28 @@ impl Node {
         ledger.sync_epoch_for_height(next_height);
         let epoch_manager = VrfEpochManager::new(config.epoch_length, ledger.current_epoch());
 
+        let peerstore_path = config.data_dir.join("peerstore.json");
+        let peerstore = Arc::new(
+            Peerstore::open(PeerstoreConfig::persistent(&peerstore_path))
+                .map_err(|err| ChainError::Config(format!("unable to open peerstore: {err}")))?,
+        );
+        let gossip_path = config.data_dir.join("gossip.json");
+        let gossip_state = Arc::new(GossipStateStore::open(&gossip_path).map_err(|err| {
+            ChainError::Config(format!("unable to open gossip state store: {err}"))
+        })?);
+        let handshake = HandshakePayload::new(address.to_string(), Vec::new(), TierLevel::Tl5);
+        let network = Network::new(
+            p2p_identity.clone(),
+            peerstore,
+            handshake,
+            Some(gossip_state),
+        )
+        .map_err(|err| ChainError::Config(format!("failed to initialise network: {err}")))?;
+        let (network_cmd_tx, network_cmd_rx) = mpsc::channel(128);
+        let (snapshot_cmd_tx, snapshot_cmd_rx) = mpsc::channel(16);
+        let light_client_sync = Arc::new(AsyncMutex::new(LightClientSync::new()));
+        let snapshot_status = Mutex::new(SnapshotSyncRuntimeStatus::default());
+
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -416,6 +556,13 @@ impl Node {
             telemetry_last_height: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             verifiers: ProofVerifierRegistry::default(),
+            network: Mutex::new(Some(network)),
+            network_cmd_tx: network_cmd_tx.clone(),
+            network_cmd_rx: AsyncMutex::new(Some(network_cmd_rx)),
+            snapshot_cmd_tx: snapshot_cmd_tx.clone(),
+            snapshot_cmd_rx: AsyncMutex::new(Some(snapshot_cmd_rx)),
+            light_client_sync: light_client_sync.clone(),
+            snapshot_status,
         });
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
@@ -567,6 +714,22 @@ impl NodeHandle {
     ) -> ChainResult<Vec<Block>> {
         self.inner.execute_reconstruction_plan(plan, provider)
     }
+
+    pub fn snapshot_sync_status(&self) -> SnapshotSyncStatus {
+        self.inner.snapshot_sync_status()
+    }
+
+    pub fn latest_snapshot_height(&self) -> Option<u64> {
+        self.inner.latest_snapshot_height()
+    }
+
+    pub fn pending_snapshot_chunks(&self) -> Option<u64> {
+        self.inner.pending_snapshot_chunks()
+    }
+
+    pub fn force_snapshot_publication(&self) -> ChainResult<()> {
+        self.inner.force_snapshot_publication()
+    }
 }
 
 impl NodeInner {
@@ -585,13 +748,334 @@ impl NodeInner {
                 worker.telemetry_loop(config).await;
             });
         }
+        let network = self
+            .network
+            .lock()
+            .take()
+            .ok_or_else(|| ChainError::Config("network stack already initialised".into()))?;
+        let mut network_rx = self
+            .network_cmd_rx
+            .lock()
+            .await
+            .take()
+            .ok_or_else(|| ChainError::Config("network command channel unavailable".into()))?;
+        let mut snapshot_rx =
+            self.snapshot_cmd_rx.lock().await.take().ok_or_else(|| {
+                ChainError::Config("snapshot publisher channel unavailable".into())
+            })?;
+
         let mut ticker = time::interval(self.block_interval);
-        loop {
-            ticker.tick().await;
-            if let Err(err) = self.produce_block() {
-                warn!(?err, "block production failed");
+        let network_loop = self.clone().network_loop(network, &mut network_rx);
+        tokio::pin!(network_loop);
+        let publisher_loop = self.clone().snapshot_publisher_loop(&mut snapshot_rx);
+        tokio::pin!(publisher_loop);
+
+        if let Err(err) = self
+            .snapshot_cmd_tx
+            .try_send(SnapshotPublishCommand::Immediate)
+        {
+            if !matches!(err, TrySendError::Full(_)) {
+                warn!(?err, "unable to queue initial snapshot publication");
             }
         }
+
+        loop {
+            tokio::select! {
+                result = &mut network_loop => {
+                    match result {
+                        Ok(_) => {},
+                        Err(err) => {
+                            warn!(?err, "network loop terminated with error");
+                            return Err(err);
+                        }
+                    }
+                    break;
+                }
+                result = &mut publisher_loop => {
+                    match result {
+                        Ok(_) => {},
+                        Err(err) => {
+                            warn!(?err, "snapshot publisher terminated with error");
+                            return Err(err);
+                        }
+                    }
+                    break;
+                }
+                _ = ticker.tick() => {
+                    if let Err(err) = self.produce_block() {
+                        warn!(?err, "block production failed");
+                    }
+                }
+            }
+        }
+
+        let _ = self.network_cmd_tx.send(NetworkCommand::Shutdown).await;
+        let _ = self
+            .snapshot_cmd_tx
+            .send(SnapshotPublishCommand::Shutdown)
+            .await;
+
+        Ok(())
+    }
+
+    async fn network_loop(
+        self: Arc<Self>,
+        mut network: Network,
+        commands: &mut mpsc::Receiver<NetworkCommand>,
+    ) -> ChainResult<()> {
+        loop {
+            tokio::select! {
+                cmd = commands.recv() => {
+                    match cmd {
+                        Some(NetworkCommand::Publish { topic, data }) => {
+                            if let Err(err) = network.publish(topic, data) {
+                                warn!(?err, ?topic, "failed to publish gossip payload");
+                            }
+                        }
+                        Some(NetworkCommand::Shutdown) | None => break,
+                    }
+                }
+                event = network.next_event() => {
+                    match event {
+                        Ok(event) => {
+                            if let Err(err) = self.clone().process_network_event(event).await {
+                                warn!(?err, "network event handling failed");
+                            }
+                        }
+                        Err(err) => {
+                            return Err(ChainError::Config(format!(
+                                "network error: {err}"
+                            )));
+                        }
+                    }
+                }
+                else => break,
+            }
+        }
+        Ok(())
+    }
+
+    async fn snapshot_publisher_loop(
+        self: Arc<Self>,
+        commands: &mut mpsc::Receiver<SnapshotPublishCommand>,
+    ) -> ChainResult<()> {
+        let mut interval = time::interval(Duration::from_secs(SNAPSHOT_PUBLISH_INTERVAL_SECS));
+        loop {
+            tokio::select! {
+                cmd = commands.recv() => {
+                    match cmd {
+                        Some(SnapshotPublishCommand::Immediate) => {
+                            if let Err(err) = self.publish_snapshot_plan().await {
+                                warn!(?err, "snapshot plan publication failed");
+                            }
+                        }
+                        Some(SnapshotPublishCommand::Shutdown) | None => break,
+                    }
+                }
+                _ = interval.tick() => {
+                    if let Err(err) = self.publish_snapshot_plan().await {
+                        warn!(?err, "scheduled snapshot plan publication failed");
+                    }
+                }
+                else => break,
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_network_event(self: Arc<Self>, event: NetworkEvent) -> ChainResult<()> {
+        match event {
+            NetworkEvent::NewListenAddr(addr) => {
+                info!(?addr, "libp2p listening");
+            }
+            NetworkEvent::GossipMessage { topic, data, .. } => {
+                if topic == GossipTopic::Snapshots {
+                    self.handle_snapshot_message(data).await?;
+                }
+            }
+            NetworkEvent::HandshakeCompleted { peer, .. } => {
+                debug!(?peer, "handshake completed");
+            }
+            NetworkEvent::ReputationUpdated {
+                peer,
+                tier,
+                score,
+                label,
+            } => {
+                debug!(?peer, ?tier, score, ?label, "peer reputation updated");
+            }
+            NetworkEvent::PeerBanned { peer, until } => {
+                warn!(?peer, ?until, "peer banned by admission control");
+            }
+            NetworkEvent::AdmissionRejected {
+                peer,
+                topic,
+                reason,
+            } => {
+                warn!(?peer, ?topic, ?reason, "peer admission rejected");
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_snapshot_message(self: Arc<Self>, data: Vec<u8>) -> ChainResult<()> {
+        match decode_snapshot_message(&data) {
+            Ok(SnapshotMessage::Announcement(metadata)) => {
+                self.handle_snapshot_announcement(metadata).await?;
+            }
+            Ok(SnapshotMessage::Chunk(payload)) => {
+                self.handle_snapshot_chunk(payload).await?;
+            }
+            Err(err) => {
+                warn!(?err, "unable to decode snapshot gossip payload");
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_snapshot_announcement(
+        self: Arc<Self>,
+        metadata: SnapshotPlanMetadata,
+    ) -> ChainResult<()> {
+        let root = if metadata.payload_root.is_empty() {
+            None
+        } else {
+            Some(Self::decode_snapshot_root(&metadata.payload_root)?)
+        };
+
+        {
+            let mut sync = self.light_client_sync.lock().await;
+            sync.reset();
+            if let Some(root_value) = root {
+                sync.ingest_header(root_value);
+            }
+        }
+
+        {
+            let mut status = self.snapshot_status.lock();
+            status.reset_for_announcement(root, &metadata);
+        }
+
+        Ok(())
+    }
+
+    async fn handle_snapshot_chunk(
+        self: Arc<Self>,
+        payload: SnapshotChunkPayload,
+    ) -> ChainResult<()> {
+        let chunk = match payload.into_chunk() {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                warn!(?err, "rejected snapshot chunk payload");
+                return Ok(());
+            }
+        };
+
+        let (received, total, expected_root, verified) = {
+            let mut sync = self.light_client_sync.lock().await;
+            if let Err(err) = sync.ingest_chunk(chunk) {
+                warn!(?err, "light client rejected snapshot chunk");
+                return Ok(());
+            }
+            let received = sync.received_chunks() as u64;
+            let total = sync.expected_total();
+            let expected_root = sync.expected_root();
+            let verified = match sync.verify() {
+                Ok(value) => value,
+                Err(err) => {
+                    warn!(?err, "snapshot verification failed");
+                    false
+                }
+            };
+            (received, total, expected_root, verified)
+        };
+
+        {
+            let mut status = self.snapshot_status.lock();
+            status.record_chunk_progress(received, total, expected_root, verified);
+        }
+
+        if verified {
+            info!("snapshot payload verified successfully");
+        }
+
+        Ok(())
+    }
+
+    async fn publish_snapshot_plan(&self) -> ChainResult<()> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Ok(());
+        }
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
+        let plan = engine.state_sync_plan(SNAPSHOT_REQUESTS_PER_CHUNK)?;
+        let payload = serde_json::to_vec(&plan).map_err(|err| {
+            ChainError::Config(format!("unable to encode state sync plan: {err}"))
+        })?;
+        let mut store = SnapshotStore::new(SNAPSHOT_CHUNK_BYTES);
+        let root = store.insert(payload);
+        let chunks = store.stream(&root).map_err(|err| {
+            ChainError::Config(format!("unable to prepare snapshot payload: {err}"))
+        })?;
+        let chunk_total = chunks.first().map(|chunk| chunk.total).unwrap_or(0);
+        let metadata = SnapshotPlanMetadata {
+            payload_root: root.to_hex().to_string(),
+            snapshot_height: plan.snapshot.height,
+            snapshot_hash: plan.snapshot.block_hash.clone(),
+            tip_height: plan.tip.height,
+            tip_hash: plan.tip.hash.clone(),
+            chunk_count: chunk_total,
+            light_client_updates: plan.light_client_updates.len() as u64,
+            refreshed_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        };
+        let announcement = SnapshotMessage::Announcement(metadata);
+        let announcement_payload = encode_snapshot_message(&announcement).map_err(|err| {
+            ChainError::Config(format!("unable to encode snapshot announcement: {err}"))
+        })?;
+        self.network_cmd_tx
+            .send(NetworkCommand::Publish {
+                topic: GossipTopic::Snapshots,
+                data: announcement_payload,
+            })
+            .await
+            .map_err(|_| ChainError::Config("network worker unavailable".into()))?;
+
+        for chunk in chunks {
+            let message = SnapshotMessage::Chunk(SnapshotChunkPayload::from_chunk(&chunk));
+            let payload = encode_snapshot_message(&message).map_err(|err| {
+                ChainError::Config(format!("unable to encode snapshot chunk: {err}"))
+            })?;
+            self.network_cmd_tx
+                .send(NetworkCommand::Publish {
+                    topic: GossipTopic::Snapshots,
+                    data: payload,
+                })
+                .await
+                .map_err(|_| ChainError::Config("network worker unavailable".into()))?;
+        }
+
+        {
+            let mut status = self.snapshot_status.lock();
+            status.record_publish(root, chunk_total, &plan);
+        }
+
+        Ok(())
+    }
+
+    fn decode_snapshot_root(root: &str) -> ChainResult<Hash> {
+        let bytes = hex::decode(root)
+            .map_err(|err| ChainError::Config(format!("invalid snapshot root: {err}")))?;
+        if bytes.len() != 32 {
+            return Err(ChainError::Config("snapshot root must be 32 bytes".into()));
+        }
+        let mut array = [0u8; 32];
+        array.copy_from_slice(&bytes);
+        Ok(Hash::from(array))
     }
 
     async fn telemetry_loop(self: Arc<Self>, config: TelemetryConfig) {
@@ -636,12 +1120,14 @@ impl NodeInner {
         let node = self.node_status()?;
         let consensus = self.consensus_status()?;
         let mempool = self.mempool_status()?;
+        let snapshot_sync = self.snapshot_sync_status();
         Ok(NodeTelemetrySnapshot {
             release_channel: self.config.rollout.release_channel,
             feature_gates: self.config.rollout.feature_gates.clone(),
             node,
             consensus,
             mempool,
+            snapshot_sync,
         })
     }
 
@@ -1048,6 +1534,7 @@ impl NodeInner {
             pending_votes: self.vote_mempool.read().len(),
             pending_uptime_proofs: self.uptime_mempool.read().len(),
             vrf_metrics: self.vrf_metrics.read().clone(),
+            snapshot_sync: self.snapshot_sync_status(),
         })
     }
 
@@ -1108,6 +1595,30 @@ impl NodeInner {
             votes,
             uptime_proofs,
         })
+    }
+
+    fn snapshot_sync_status(&self) -> SnapshotSyncStatus {
+        self.snapshot_status.lock().to_public()
+    }
+
+    fn latest_snapshot_height(&self) -> Option<u64> {
+        self.snapshot_status.lock().latest_verified_height
+    }
+
+    fn pending_snapshot_chunks(&self) -> Option<u64> {
+        self.snapshot_status.lock().pending_chunks()
+    }
+
+    fn force_snapshot_publication(&self) -> ChainResult<()> {
+        match self
+            .snapshot_cmd_tx
+            .try_send(SnapshotPublishCommand::Immediate)
+        {
+            Ok(_) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(TrySendError::Closed(_)) => {
+                Err(ChainError::Config("snapshot publisher unavailable".into()))
+            }
+        }
     }
 
     fn rollout_status(&self) -> RolloutStatus {
@@ -1825,6 +2336,9 @@ impl NodeInner {
         self.evidence_pool
             .write()
             .prune_below(block.header.height.saturating_add(1));
+        if let Err(err) = self.force_snapshot_publication() {
+            warn!(?err, "failed to queue snapshot publication");
+        }
         Ok(())
     }
 

@@ -19,8 +19,9 @@ pub use identity::{IdentityError, NodeIdentity};
 pub use peerstore::{PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError};
 pub use pipeline::{
     BlockProposal, ConsensusPipeline, LightClientSync, MetaTelemetry, PersistentProofStorage,
-    PipelineError, ProofMempool, ProofRecord, ProofStorage, SnapshotChunk, SnapshotStore,
-    TelemetryEvent, VoteOutcome,
+    PipelineError, ProofMempool, ProofRecord, ProofStorage, SnapshotChunk, SnapshotChunkPayload,
+    SnapshotMessage, SnapshotPlanMetadata, SnapshotStore, TelemetryEvent, VoteOutcome,
+    decode_snapshot_message, encode_snapshot_message,
 };
 pub use persistence::{GossipStateError, GossipStateStore};
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
