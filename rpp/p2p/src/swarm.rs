@@ -9,14 +9,14 @@ use libp2p::noise;
 use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::yamux;
-use libp2p::{identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder};
+use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, identify, ping};
 use thiserror::Error;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
-use crate::handshake::{HandshakeCodec, HandshakePayload, HANDSHAKE_PROTOCOL};
+use crate::handshake::{HANDSHAKE_PROTOCOL, HandshakeCodec, HandshakePayload};
 use crate::identity::NodeIdentity;
-use crate::persistence::GossipStateStore;
 use crate::peerstore::{Peerstore, PeerstoreError};
+use crate::persistence::GossipStateStore;
 use crate::security::{RateLimiter, ReplayProtector};
 use crate::tier::TierLevel;
 use crate::topics::GossipTopic;
@@ -49,16 +49,11 @@ impl RppBehaviour {
     fn new(identity: &Keypair) -> Result<Self, NetworkError> {
         let protocols = std::iter::once((HANDSHAKE_PROTOCOL.to_string(), ProtocolSupport::Full));
         let cfg = request_response::Config::default();
-        let request_response = request_response::Behaviour::with_codec(
-            HandshakeCodec::default(),
-            protocols,
-            cfg,
-        );
+        let request_response =
+            request_response::Behaviour::with_codec(HandshakeCodec::default(), protocols, cfg);
 
-        let identify = identify::Behaviour::new(identify::Config::new(
-            "rpp/0.1.0".into(),
-            identity.public(),
-        ));
+        let identify =
+            identify::Behaviour::new(identify::Config::new("rpp/0.1.0".into(), identity.public()));
 
         let ping = ping::Behaviour::new(ping::Config::new());
         let gossipsub = Self::build_gossipsub(identity)?;
@@ -152,15 +147,25 @@ fn build_peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
 #[derive(Debug)]
 pub enum NetworkEvent {
     NewListenAddr(Multiaddr),
-    HandshakeCompleted { peer: PeerId, payload: HandshakePayload },
-    GossipMessage { peer: PeerId, topic: GossipTopic, data: Vec<u8> },
+    HandshakeCompleted {
+        peer: PeerId,
+        payload: HandshakePayload,
+    },
+    GossipMessage {
+        peer: PeerId,
+        topic: GossipTopic,
+        data: Vec<u8>,
+    },
     ReputationUpdated {
         peer: PeerId,
         tier: TierLevel,
         score: f64,
         label: &'static str,
     },
-    PeerBanned { peer: PeerId, until: SystemTime },
+    PeerBanned {
+        peer: PeerId,
+        until: SystemTime,
+    },
     AdmissionRejected {
         peer: PeerId,
         topic: GossipTopic,
@@ -234,7 +239,11 @@ impl Network {
         *self.swarm.local_peer_id()
     }
 
-    pub fn publish(&mut self, topic: GossipTopic, data: impl Into<Vec<u8>>) -> Result<MessageId, NetworkError> {
+    pub fn publish(
+        &mut self,
+        topic: GossipTopic,
+        data: impl Into<Vec<u8>>,
+    ) -> Result<MessageId, NetworkError> {
         self.admission
             .can_publish_local(self.handshake.tier, topic)?;
         let payload = data.into();
@@ -272,7 +281,9 @@ impl Network {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     return Ok(NetworkEvent::NewListenAddr(address));
                 }
-                SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
+                SwarmEvent::ConnectionEstablished {
+                    peer_id, endpoint, ..
+                } => {
                     let addr = endpoint.get_remote_address().clone();
                     if let Err(err) = self.peerstore.record_address(peer_id, addr.clone()) {
                         tracing::warn!(?peer_id, ?addr, ?err, "failed to record peer address");
@@ -313,14 +324,18 @@ impl Network {
     ) -> Result<Option<NetworkEvent>, NetworkError> {
         match event {
             request_response::Event::Message { peer, message } => match message {
-                request_response::Message::Request { request, channel, .. } => {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
                     self.peerstore.record_handshake(peer, &request)?;
                     let payload = self.handshake.clone();
                     self.swarm
                         .behaviour_mut()
                         .request_response
                         .send_response(channel, payload)
-                        .map_err(|err| NetworkError::Swarm(format!("handshake response error: {err:?}")))?;
+                        .map_err(|err| {
+                            NetworkError::Swarm(format!("handshake response error: {err:?}"))
+                        })?;
                     Ok(Some(NetworkEvent::HandshakeCompleted {
                         peer,
                         payload: request,
@@ -395,9 +410,14 @@ impl Network {
                             )?;
                             self.enqueue_outcome(outcome);
                             if let Some(state) = &self.gossip_state {
-                                if let Err(err) = state.record_message(topic, propagation_source, digest)
+                                if let Err(err) =
+                                    state.record_message(topic, propagation_source, digest)
                                 {
-                                    tracing::warn!(?topic, ?err, "failed to persist gossip message");
+                                    tracing::warn!(
+                                        ?topic,
+                                        ?err,
+                                        "failed to persist gossip message"
+                                    );
                                 }
                             }
                             return Ok(Some(NetworkEvent::GossipMessage {
@@ -504,9 +524,9 @@ impl Network {
             .behaviour_mut()
             .gossipsub
             .subscribe(&ident)
-            .map_err(|err| NetworkError::Gossipsub(format!(
-                "failed to subscribe to {topic:?}: {err}"
-            )))?;
+            .map_err(|err| {
+                NetworkError::Gossipsub(format!("failed to subscribe to {topic:?}: {err}"))
+            })?;
         if let Some(state) = &self.gossip_state {
             if let Err(err) = state.record_subscription(topic) {
                 tracing::warn!(?topic, ?err, "failed to persist subscription");
@@ -515,11 +535,7 @@ impl Network {
         Ok(())
     }
 
-    fn penalise_peer(
-        &mut self,
-        peer: PeerId,
-        event: ReputationEvent,
-    ) -> Result<(), NetworkError> {
+    fn penalise_peer(&mut self, peer: PeerId, event: ReputationEvent) -> Result<(), NetworkError> {
         let outcome = self.admission.record_event(peer, event)?;
         self.enqueue_outcome(outcome);
         Ok(())
@@ -534,8 +550,10 @@ impl Network {
             label: outcome.label,
         });
         if let Some(until) = snapshot.banned_until {
-            self.pending
-                .push_back(NetworkEvent::PeerBanned { peer: snapshot.peer_id, until });
+            self.pending.push_back(NetworkEvent::PeerBanned {
+                peer: snapshot.peer_id,
+                until,
+            });
             self.swarm
                 .behaviour_mut()
                 .gossipsub
@@ -544,8 +562,11 @@ impl Network {
     }
 
     fn enqueue_rejection(&mut self, peer: PeerId, topic: GossipTopic, reason: AdmissionError) {
-        self.pending
-            .push_back(NetworkEvent::AdmissionRejected { peer, topic, reason });
+        self.pending.push_back(NetworkEvent::AdmissionRejected {
+            peer,
+            topic,
+            reason,
+        });
     }
 }
 
@@ -553,8 +574,8 @@ impl Network {
 mod tests {
     use super::*;
     use crate::handshake::HandshakePayload;
-    use crate::persistence::GossipStateStore;
     use crate::peerstore::PeerstoreConfig;
+    use crate::persistence::GossipStateStore;
     use std::time::Duration as StdDuration;
     use tempfile::tempdir;
     use tokio::time::timeout;
@@ -563,11 +584,7 @@ mod tests {
         Arc::new(NodeIdentity::load_or_generate(path).expect("identity"))
     }
 
-    async fn init_network(
-        dir: &tempfile::TempDir,
-        name: &str,
-        tier: TierLevel,
-    ) -> Network {
+    async fn init_network(dir: &tempfile::TempDir, name: &str, tier: TierLevel) -> Network {
         let key_path = dir.path().join(format!("{name}.key"));
         let identity = temp_identity(&key_path);
         let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
@@ -589,7 +606,11 @@ mod tests {
             .record_subscription(GossipTopic::Blocks)
             .expect("subscription");
         store
-            .record_message(GossipTopic::Blocks, PeerId::random(), blake3::hash(b"payload"))
+            .record_message(
+                GossipTopic::Blocks,
+                PeerId::random(),
+                blake3::hash(b"payload"),
+            )
             .expect("message");
 
         let key_path = dir.path().join("node.key");
@@ -639,14 +660,18 @@ mod tests {
         let mut got_b = false;
         for _ in 0..40 {
             if !got_a {
-                if let Ok(Ok(event)) = timeout(StdDuration::from_millis(250), network_a.next_event()).await {
+                if let Ok(Ok(event)) =
+                    timeout(StdDuration::from_millis(250), network_a.next_event()).await
+                {
                     if let NetworkEvent::HandshakeCompleted { .. } = event {
                         got_a = true;
                     }
                 }
             }
             if !got_b {
-                if let Ok(Ok(event)) = timeout(StdDuration::from_millis(250), network_b.next_event()).await {
+                if let Ok(Ok(event)) =
+                    timeout(StdDuration::from_millis(250), network_b.next_event()).await
+                {
                     if let NetworkEvent::HandshakeCompleted { .. } = event {
                         got_b = true;
                     }
@@ -679,14 +704,18 @@ mod tests {
 
         timeout(StdDuration::from_secs(20), async {
             while !(got_message && got_reputation) {
-                if let Ok(Ok(event)) = timeout(StdDuration::from_millis(250), network_a.next_event()).await {
+                if let Ok(Ok(event)) =
+                    timeout(StdDuration::from_millis(250), network_a.next_event()).await
+                {
                     if let NetworkEvent::ReputationUpdated { peer, .. } = event {
                         if peer == network_b.local_peer_id() {
                             got_reputation = true;
                         }
                     }
                 }
-                if let Ok(Ok(event)) = timeout(StdDuration::from_millis(250), network_b.next_event()).await {
+                if let Ok(Ok(event)) =
+                    timeout(StdDuration::from_millis(250), network_b.next_event()).await
+                {
                     match event {
                         NetworkEvent::GossipMessage { peer, topic, data } => {
                             assert_eq!(topic, GossipTopic::Blocks);
@@ -717,12 +746,16 @@ mod tests {
 
         assert!(matches!(
             low.publish(GossipTopic::Proofs, b"proof".to_vec()),
-            Err(NetworkError::Admission(AdmissionError::TierInsufficient { .. }))
+            Err(NetworkError::Admission(
+                AdmissionError::TierInsufficient { .. }
+            ))
         ));
 
         assert!(matches!(
             mid.publish(GossipTopic::Votes, b"vote".to_vec()),
-            Err(NetworkError::Admission(AdmissionError::TierInsufficient { .. }))
+            Err(NetworkError::Admission(
+                AdmissionError::TierInsufficient { .. }
+            ))
         ));
 
         match high.publish(GossipTopic::Votes, b"vote".to_vec()) {

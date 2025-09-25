@@ -19,6 +19,7 @@ const PREFIX_METADATA: u8 = b'm';
 const TIP_HEIGHT_KEY: &[u8] = b"tip_height";
 const TIP_HASH_KEY: &[u8] = b"tip_hash";
 const TIP_TIMESTAMP_KEY: &[u8] = b"tip_timestamp";
+const TIP_METADATA_KEY: &[u8] = b"tip_metadata";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 
 const SCHEMA_ACCOUNTS: &str = "accounts";
@@ -231,7 +232,7 @@ impl Storage {
         })
     }
 
-    pub fn store_block(&self, block: &Block) -> ChainResult<()> {
+    pub fn store_block(&self, block: &Block, metadata: &BlockMetadata) -> ChainResult<()> {
         let mut kv = self.kv.lock();
         let key = block_key(block.header.height);
         let record = StoredBlock::from_block(block);
@@ -245,6 +246,10 @@ impl Storage {
         kv.put(
             metadata_key(TIP_TIMESTAMP_KEY),
             block.header.timestamp.to_be_bytes().to_vec(),
+        );
+        kv.put(
+            metadata_key(TIP_METADATA_KEY),
+            bincode::serialize(metadata)?,
         );
         kv.commit()?;
         Ok(())
@@ -357,6 +362,11 @@ impl Storage {
 
     pub fn tip(&self) -> ChainResult<Option<BlockMetadata>> {
         let kv = self.kv.lock();
+        if let Some(metadata) = kv.get(&metadata_key(TIP_METADATA_KEY)) {
+            let metadata: BlockMetadata = bincode::deserialize(&metadata)?;
+            return Ok(Some(metadata));
+        }
+
         let Some(height_bytes) = kv.get(&metadata_key(TIP_HEIGHT_KEY)) else {
             return Ok(None);
         };
@@ -380,11 +390,16 @@ impl Storage {
                 .try_into()
                 .map_err(|_| ChainError::Config("invalid tip timestamp encoding".into()))?,
         );
-        Ok(Some(BlockMetadata {
-            height,
-            hash,
-            timestamp,
-        }))
+
+        let block_bytes = kv
+            .get(&block_key(height))
+            .ok_or_else(|| ChainError::Config("missing tip block record".into()))?;
+        let record: StoredBlock = bincode::deserialize(&block_bytes)?;
+        let mut metadata = BlockMetadata::from(&record.into_block());
+        metadata.height = height;
+        metadata.hash = hash;
+        metadata.timestamp = timestamp;
+        Ok(Some(metadata))
     }
 }
 
@@ -416,4 +431,255 @@ fn metadata_key(suffix: &[u8]) -> Vec<u8> {
     key.push(PREFIX_METADATA);
     key.extend_from_slice(suffix);
     key
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::consensus::ConsensusCertificate;
+    use crate::reputation::Tier;
+    use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
+    use crate::state::merkle::compute_merkle_root;
+    use crate::stwo::circuit::{
+        ExecutionTrace, pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness,
+    };
+    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::types::{
+        Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
+        RecursiveProof,
+    };
+    use ed25519_dalek::Signature;
+    use hex;
+    use tempfile::tempdir;
+
+    fn dummy_state_proof() -> StarkProof {
+        StarkProof {
+            kind: ProofKind::State,
+            commitment: "11".repeat(32),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::State(StateWitness {
+                prev_state_root: "22".repeat(32),
+                new_state_root: "33".repeat(32),
+                identities: Vec::new(),
+                transactions: Vec::new(),
+                accounts_before: Vec::new(),
+                accounts_after: Vec::new(),
+                required_tier: Tier::Tl0,
+                reputation_weights: crate::reputation::ReputationWeights::default(),
+            }),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            fri_proof: FriProof {
+                commitments: Vec::new(),
+                challenges: Vec::new(),
+            },
+        }
+    }
+
+    fn dummy_pruning_proof() -> StarkProof {
+        StarkProof {
+            kind: ProofKind::Pruning,
+            commitment: "44".repeat(32),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::Pruning(PruningWitness {
+                previous_tx_root: "55".repeat(32),
+                pruned_tx_root: "66".repeat(32),
+                original_transactions: Vec::new(),
+                removed_transactions: Vec::new(),
+            }),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            fri_proof: FriProof {
+                commitments: Vec::new(),
+                challenges: Vec::new(),
+            },
+        }
+    }
+
+    fn dummy_recursive_proof(
+        previous_commitment: Option<String>,
+        aggregated_commitment: String,
+        block_height: u64,
+    ) -> StarkProof {
+        StarkProof {
+            kind: ProofKind::Recursive,
+            commitment: aggregated_commitment.clone(),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::Recursive(RecursiveWitness {
+                previous_commitment,
+                aggregated_commitment,
+                identity_commitments: Vec::new(),
+                tx_commitments: Vec::new(),
+                uptime_commitments: Vec::new(),
+                consensus_commitments: Vec::new(),
+                state_commitment: "77".repeat(32),
+                global_state_root: "11".repeat(32),
+                utxo_root: "22".repeat(32),
+                reputation_root: "33".repeat(32),
+                timetoke_root: "44".repeat(32),
+                zsi_root: "55".repeat(32),
+                proof_root: "66".repeat(32),
+                pruning_commitment: "88".repeat(32),
+                block_height,
+            }),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            fri_proof: FriProof {
+                commitments: Vec::new(),
+                challenges: Vec::new(),
+            },
+        }
+    }
+
+    fn make_block(height: u64, previous: Option<&Block>) -> Block {
+        let previous_hash = previous
+            .map(|block| block.hash.clone())
+            .unwrap_or_else(|| hex::encode([0u8; 32]));
+        let mut tx_leaves: Vec<[u8; 32]> = Vec::new();
+        let tx_root = hex::encode(compute_merkle_root(&mut tx_leaves));
+        let state_root = hex::encode([height as u8 + 2; 32]);
+        let utxo_root = hex::encode([height as u8 + 3; 32]);
+        let reputation_root = hex::encode([height as u8 + 4; 32]);
+        let timetoke_root = hex::encode([height as u8 + 5; 32]);
+        let zsi_root = hex::encode([height as u8 + 6; 32]);
+        let proof_root = hex::encode([height as u8 + 7; 32]);
+        let header = BlockHeader::new(
+            height,
+            previous_hash,
+            tx_root,
+            state_root,
+            utxo_root,
+            reputation_root,
+            timetoke_root,
+            zsi_root,
+            proof_root,
+            "0".to_string(),
+            height.to_string(),
+            format!("vrfpk{:02}", height),
+            format!("vrf{:02}", height),
+            format!("proposer{:02}", height),
+            Tier::Tl3.to_string(),
+            height,
+        );
+        let pruning_proof = PruningProof::from_previous(previous, &header);
+        let recursive_proof = match previous {
+            Some(prev) => RecursiveProof::extend(&prev.recursive_proof, &header, &pruning_proof),
+            None => RecursiveProof::genesis(&header, &pruning_proof),
+        };
+        let previous_recursive_commitment = previous.map(|block| {
+            block
+                .stark
+                .recursive_proof
+                .expect_stwo()
+                .expect("recursive proof")
+                .commitment
+                .clone()
+        });
+        let recursive_stark = dummy_recursive_proof(
+            previous_recursive_commitment,
+            recursive_proof.chain_commitment.clone(),
+            height,
+        );
+        let state_stark = dummy_state_proof();
+        let pruning_stark = dummy_pruning_proof();
+        let module_witnesses = ModuleWitnessBundle::default();
+        let proof_artifacts = module_witnesses
+            .expected_artifacts()
+            .expect("expected artifacts")
+            .into_iter()
+            .map(|(module, commitment, payload)| ProofArtifact {
+                module,
+                commitment,
+                proof: payload,
+                verification_key: None,
+            })
+            .collect();
+        let stark_bundle = BlockProofBundle::new(
+            Vec::new(),
+            ChainProof::Stwo(state_stark),
+            ChainProof::Stwo(pruning_stark),
+            ChainProof::Stwo(recursive_stark),
+        );
+        let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
+        let mut consensus = ConsensusCertificate::genesis();
+        consensus.round = height;
+        Block::new(
+            header,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            module_witnesses,
+            proof_artifacts,
+            pruning_proof,
+            recursive_proof,
+            stark_bundle,
+            signature,
+            consensus,
+            None,
+        )
+    }
+
+    #[test]
+    fn tip_metadata_persists_receipt_fields() {
+        let temp_dir = tempdir().expect("tempdir");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let genesis = make_block(0, None);
+        let mut metadata = BlockMetadata::from(&genesis);
+        metadata.previous_state_root = "aa".repeat(32);
+        metadata.new_state_root = "bb".repeat(32);
+        metadata.pruning_root = Some("cc".repeat(32));
+        storage
+            .store_block(&genesis, &metadata)
+            .expect("store genesis");
+        drop(storage);
+
+        let reopened = Storage::open(temp_dir.path()).expect("reopen storage");
+        let tip = reopened.tip().expect("tip").expect("metadata");
+        assert_eq!(tip.height, 0);
+        assert_eq!(tip.hash, genesis.hash);
+        assert_eq!(tip.previous_state_root, metadata.previous_state_root);
+        assert_eq!(tip.new_state_root, metadata.new_state_root);
+        assert_eq!(tip.pruning_root, metadata.pruning_root);
+        assert_eq!(tip.proof_commitment, metadata.proof_commitment);
+        assert_eq!(tip.recursive_anchor, metadata.recursive_anchor);
+    }
+
+    #[test]
+    fn tip_metadata_falls_back_when_serialized_entry_missing() {
+        let temp_dir = tempdir().expect("tempdir");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let genesis = make_block(0, None);
+        let metadata = BlockMetadata::from(&genesis);
+        storage
+            .store_block(&genesis, &metadata)
+            .expect("store genesis");
+        {
+            let mut kv = storage.kv.lock();
+            kv.delete(&metadata_key(TIP_METADATA_KEY));
+            kv.commit().expect("commit deletion");
+        }
+        let tip = storage.tip().expect("tip").expect("metadata");
+        assert_eq!(tip.height, 0);
+        assert_eq!(tip.hash, genesis.hash);
+        assert_eq!(tip.timestamp, genesis.header.timestamp);
+        assert_eq!(
+            tip.previous_state_root,
+            genesis.pruning_proof.previous_state_root
+        );
+        assert_eq!(tip.new_state_root, genesis.header.state_root);
+        assert_eq!(
+            tip.pruning_commitment,
+            genesis.pruning_proof.witness_commitment
+        );
+        assert_eq!(
+            tip.proof_commitment,
+            genesis.recursive_proof.proof_commitment
+        );
+    }
 }

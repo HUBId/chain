@@ -8,7 +8,7 @@ use crate::bft_loop::ConsensusMessage;
 use crate::leader::{elect_leader, LeaderContext};
 use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal};
 use crate::rewards::{distribute_rewards, RewardDistribution};
-use crate::validator::{select_validators, Validator, ValidatorId, ValidatorSet, VRFOutput};
+use crate::validator::{select_validators, VRFOutput, Validator, ValidatorId, ValidatorSet};
 use crate::ConsensusError;
 
 static MESSAGE_SENDER: OnceLock<Mutex<Option<UnboundedSender<ConsensusMessage>>>> = OnceLock::new();
@@ -33,7 +33,12 @@ pub struct ConsensusConfig {
 }
 
 impl ConsensusConfig {
-    pub fn new(view_timeout_ms: u64, precommit_timeout_ms: u64, base_reward: u64, leader_bonus: f64) -> Self {
+    pub fn new(
+        view_timeout_ms: u64,
+        precommit_timeout_ms: u64,
+        base_reward: u64,
+        leader_bonus: f64,
+    ) -> Self {
         Self {
             view_timeout: Duration::from_millis(view_timeout_ms),
             precommit_timeout: Duration::from_millis(precommit_timeout_ms),
@@ -52,7 +57,12 @@ pub struct GenesisConfig {
 }
 
 impl GenesisConfig {
-    pub fn new(epoch: u64, validator_outputs: Vec<VRFOutput>, reputation_root: String, config: ConsensusConfig) -> Self {
+    pub fn new(
+        epoch: u64,
+        validator_outputs: Vec<VRFOutput>,
+        reputation_root: String,
+        config: ConsensusConfig,
+    ) -> Self {
         Self {
             epoch,
             validator_outputs,
@@ -210,7 +220,8 @@ impl ConsensusState {
             epoch: self.epoch,
             round: self.round,
         };
-        self.current_leader = elect_leader(&self.validator_set, context).map(|leader| leader.validator);
+        self.current_leader =
+            elect_leader(&self.validator_set, context).map(|leader| leader.validator);
     }
 
     pub fn take_commit(&mut self) -> Option<Commit> {
@@ -257,11 +268,15 @@ impl ConsensusState {
     }
 
     pub fn recompute_totals(&mut self) {
-        let total: u64 = self.validator_set.validators.iter().map(|v| v.voting_power()).sum();
+        let total: u64 = self
+            .validator_set
+            .validators
+            .iter()
+            .map(|v| v.voting_power())
+            .sum();
         self.validator_set.total_voting_power = total;
         self.validator_set.quorum_threshold = (total * 2) / 3 + 1;
     }
-
 }
 
 pub fn initialize_state(
@@ -273,7 +288,12 @@ pub fn initialize_state(
     base_reward: u64,
     leader_bonus: f64,
 ) -> Result<ConsensusState, ConsensusError> {
-    let config = ConsensusConfig::new(view_timeout_ms, precommit_timeout_ms, base_reward, leader_bonus);
+    let config = ConsensusConfig::new(
+        view_timeout_ms,
+        precommit_timeout_ms,
+        base_reward,
+        leader_bonus,
+    );
     let genesis = GenesisConfig::new(epoch, vrf_outputs, reputation_root, config);
     ConsensusState::new(genesis)
 }

@@ -16,7 +16,11 @@ fn fri_inputs_from_trace(trace: &crate::circuits::CircuitTrace) -> Vec<FieldElem
     ]
 }
 
-fn verify_witness(proof: &Proof, witness_trace: crate::circuits::CircuitTrace, public_inputs: serde_json::Value) -> bool {
+fn verify_witness(
+    proof: &Proof,
+    witness_trace: crate::circuits::CircuitTrace,
+    public_inputs: serde_json::Value,
+) -> bool {
     if proof.format != ProofFormat::Json {
         return false;
     }
@@ -74,10 +78,13 @@ pub fn verify_block(block: &Block, proof: &Proof) -> bool {
         reputation_root: block.reputation_root.clone(),
         previous_proof_digest: digest_bytes,
     };
-    let leaves = vec![digest_bytes, poseidon::hash_elements(&[
-        FieldElement::from(block.height as u128),
-        FieldElement::from_bytes(block.tx_root.as_bytes()),
-    ])];
+    let leaves = vec![
+        digest_bytes,
+        poseidon::hash_elements(&[
+            FieldElement::from(block.height as u128),
+            FieldElement::from_bytes(block.tx_root.as_bytes()),
+        ]),
+    ];
     let witness = PruningWitness::new(inputs, leaves);
     verify_witness(proof, witness.trace(), witness.public_inputs())
 }

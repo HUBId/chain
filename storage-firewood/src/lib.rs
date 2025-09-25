@@ -10,11 +10,7 @@ pub mod wal;
 mod tests {
     use std::env;
 
-    use super::{
-        kv::FirewoodKv,
-        pruning::FirewoodPruner,
-        tree::FirewoodTree,
-    };
+    use super::{kv::FirewoodKv, pruning::FirewoodPruner, tree::FirewoodTree};
 
     fn temp_dir(name: &str) -> String {
         let mut dir = env::temp_dir();

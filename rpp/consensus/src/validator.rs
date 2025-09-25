@@ -92,16 +92,12 @@ pub fn select_validators(_epoch: u64, vrf_outputs: &[VRFOutput]) -> ValidatorSet
 }
 
 pub fn select_leader(validators: &ValidatorSet) -> Option<Validator> {
-    validators
-        .validators
-        .iter()
-        .cloned()
-        .max_by(|a, b| {
-            a.reputation_tier
-                .cmp(&b.reputation_tier)
-                .then_with(|| a.timetoken_balance.cmp(&b.timetoken_balance))
-                .then_with(|| a.vrf_output.cmp(&b.vrf_output))
-        })
+    validators.validators.iter().cloned().max_by(|a, b| {
+        a.reputation_tier
+            .cmp(&b.reputation_tier)
+            .then_with(|| a.timetoken_balance.cmp(&b.timetoken_balance))
+            .then_with(|| a.vrf_output.cmp(&b.vrf_output))
+    })
 }
 
 pub fn timetoken_balances(validators: &ValidatorSet) -> BTreeMap<ValidatorId, u64> {

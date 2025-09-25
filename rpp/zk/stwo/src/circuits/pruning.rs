@@ -27,7 +27,10 @@ impl CircuitWitness for PruningWitness {
 
 impl PruningWitness {
     pub fn new(inputs: PruningInputs, leaf_hashes: Vec<[u8; 32]>) -> Self {
-        Self { inputs, leaf_hashes }
+        Self {
+            inputs,
+            leaf_hashes,
+        }
     }
 
     pub fn public_inputs(&self) -> serde_json::Value {

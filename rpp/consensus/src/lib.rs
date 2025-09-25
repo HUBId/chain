@@ -16,7 +16,9 @@ pub use leader::{Leader, LeaderContext};
 pub use messages::{Block, Commit, ConsensusProof, PreCommit, PreVote, Proposal, Signature};
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};
-pub use validator::{select_leader, select_validators, Validator, ValidatorId, ValidatorSet, VRFOutput};
+pub use validator::{
+    select_leader, select_validators, VRFOutput, Validator, ValidatorId, ValidatorSet,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsensusError {

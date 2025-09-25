@@ -1440,19 +1440,49 @@ fn ensure_digest(label: &str, value: &str) -> ChainResult<()> {
     Ok(())
 }
 
+fn recursive_anchor_default() -> String {
+    RecursiveProof::anchor()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockMetadata {
     pub height: u64,
     pub hash: String,
     pub timestamp: u64,
+    pub previous_state_root: String,
+    pub new_state_root: String,
+    #[serde(default)]
+    pub pruning_root: Option<String>,
+    pub pruning_commitment: String,
+    pub proof_commitment: String,
+    pub previous_proof_commitment: String,
+    pub chain_commitment: String,
+    pub previous_chain_commitment: String,
+    #[serde(default = "recursive_anchor_default")]
+    pub recursive_anchor: String,
 }
 
-impl From<&Block> for BlockMetadata {
-    fn from(block: &Block) -> Self {
+impl BlockMetadata {
+    pub fn from_block(block: &Block) -> Self {
         Self {
             height: block.header.height,
             hash: block.hash.clone(),
             timestamp: block.header.timestamp,
+            previous_state_root: block.pruning_proof.previous_state_root.clone(),
+            new_state_root: block.header.state_root.clone(),
+            pruning_root: None,
+            pruning_commitment: block.pruning_proof.witness_commitment.clone(),
+            proof_commitment: block.recursive_proof.proof_commitment.clone(),
+            previous_proof_commitment: block.recursive_proof.previous_proof_commitment.clone(),
+            chain_commitment: block.recursive_proof.chain_commitment.clone(),
+            previous_chain_commitment: block.recursive_proof.previous_chain_commitment.clone(),
+            recursive_anchor: RecursiveProof::anchor(),
         }
+    }
+}
+
+impl From<&Block> for BlockMetadata {
+    fn from(block: &Block) -> Self {
+        BlockMetadata::from_block(block)
     }
 }

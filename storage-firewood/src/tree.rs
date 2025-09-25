@@ -1,7 +1,7 @@
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
 use crate::kv::Hash;
+use serde::{Deserialize, Serialize};
 
 const TREE_HEIGHT: usize = 256;
 
@@ -171,7 +171,10 @@ impl FirewoodTree {
         }
 
         let value = match &node.kind {
-            NodeKind::Leaf { key: existing_key, value } if existing_key == &key => Some(value.clone()),
+            NodeKind::Leaf {
+                key: existing_key,
+                value,
+            } if existing_key == &key => Some(value.clone()),
             _ => None,
         };
 
@@ -213,7 +216,13 @@ impl FirewoodTree {
         }
     }
 
-    fn insert(node: Node, defaults: &[Hash; TREE_HEIGHT + 1], depth: usize, key: [u8; 32], value: Vec<u8>) -> Node {
+    fn insert(
+        node: Node,
+        defaults: &[Hash; TREE_HEIGHT + 1],
+        depth: usize,
+        key: [u8; 32],
+        value: Vec<u8>,
+    ) -> Node {
         if depth == TREE_HEIGHT {
             return Node::leaf(key, value);
         }
@@ -226,19 +235,33 @@ impl FirewoodTree {
                 );
                 FirewoodTree::insert(branch, defaults, depth, key, value)
             }
-            NodeKind::Leaf { key: existing_key, value: existing_value } => {
+            NodeKind::Leaf {
+                key: existing_key,
+                value: existing_value,
+            } => {
                 if existing_key == key {
                     Node::leaf(key, value)
                 } else {
-                    FirewoodTree::split_leaf(existing_key, existing_value, key, value, defaults, depth)
+                    FirewoodTree::split_leaf(
+                        existing_key,
+                        existing_value,
+                        key,
+                        value,
+                        defaults,
+                        depth,
+                    )
                 }
             }
-            NodeKind::Branch { mut left, mut right } => {
+            NodeKind::Branch {
+                mut left,
+                mut right,
+            } => {
                 let bit = key_bit(&key, depth);
                 if bit == 0 {
                     *left = FirewoodTree::insert((*left).clone(), defaults, depth + 1, key, value);
                 } else {
-                    *right = FirewoodTree::insert((*right).clone(), defaults, depth + 1, key, value);
+                    *right =
+                        FirewoodTree::insert((*right).clone(), defaults, depth + 1, key, value);
                 }
                 Node::branch((*left).clone(), (*right).clone())
             }
@@ -248,7 +271,10 @@ impl FirewoodTree {
     fn remove(node: Node, defaults: &[Hash; TREE_HEIGHT + 1], depth: usize, key: [u8; 32]) -> Node {
         match node.kind {
             NodeKind::Empty => Node::empty(defaults[depth]),
-            NodeKind::Leaf { key: existing_key, value } => {
+            NodeKind::Leaf {
+                key: existing_key,
+                value,
+            } => {
                 if existing_key == key {
                     Node::empty(defaults[depth])
                 } else {
@@ -261,7 +287,10 @@ impl FirewoodTree {
                     }
                 }
             }
-            NodeKind::Branch { mut left, mut right } => {
+            NodeKind::Branch {
+                mut left,
+                mut right,
+            } => {
                 let bit = key_bit(&key, depth);
                 if bit == 0 {
                     *left = FirewoodTree::remove((*left).clone(), defaults, depth + 1, key);
@@ -305,4 +334,3 @@ impl FirewoodTree {
         Node::branch(left, right)
     }
 }
-

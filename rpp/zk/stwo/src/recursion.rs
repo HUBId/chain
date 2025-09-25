@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::params::FieldElement;
 use crate::prover::Proof;
 use crate::utils::poseidon;
-use crate::params::FieldElement;
 
 /// A recursive proof bundles the digest of all previous proofs together with the
 /// newest proof object.  The structure keeps the recursive chain deterministic

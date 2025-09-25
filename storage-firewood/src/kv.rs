@@ -1,4 +1,8 @@
-use std::{collections::{BTreeMap, VecDeque}, fs, path::Path};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fs,
+    path::Path,
+};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -176,7 +180,10 @@ impl FirewoodKv {
     }
 
     /// Iterate over the in-memory state for a specific prefix.
-    pub fn scan_prefix<'a>(&'a self, prefix: &'a [u8]) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a {
+    pub fn scan_prefix<'a>(
+        &'a self,
+        prefix: &'a [u8],
+    ) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a {
         let start = prefix.to_vec();
         self.state
             .range(start..)
@@ -184,4 +191,3 @@ impl FirewoodKv {
             .map(|(key, value)| (key.clone(), value.clone()))
     }
 }
-

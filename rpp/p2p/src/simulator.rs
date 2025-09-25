@@ -13,7 +13,11 @@ impl SimulationReport {
     pub fn summary(&self) -> String {
         format!(
             "peers={} rounds={} avg_latency_ms={:.2} mesh_stability={:.3} reputation_drift={:.4}",
-            self.peers, self.rounds, self.avg_latency_ms, self.mesh_stability, self.reputation_drift
+            self.peers,
+            self.rounds,
+            self.avg_latency_ms,
+            self.mesh_stability,
+            self.reputation_drift
         )
     }
 }
@@ -31,7 +35,11 @@ impl NetworkSimulation {
     }
 
     pub fn with_seed(peers: usize, rounds: u32, seed: u64) -> Self {
-        Self { peers: peers.max(1), rounds: rounds.max(1), seed }
+        Self {
+            peers: peers.max(1),
+            rounds: rounds.max(1),
+            seed,
+        }
     }
 
     pub fn run(&self) -> SimulationReport {

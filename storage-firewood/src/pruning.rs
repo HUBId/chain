@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
-use serde::{Deserialize, Serialize};
 use crate::kv::Hash;
+use serde::{Deserialize, Serialize};
 
 /// Proof artifact returned after pruning a block. The proof records the
 /// resulting root and a Merkle proof that can be used to validate the compacted
@@ -29,10 +29,7 @@ impl FirewoodPruner {
     }
 
     pub fn prune_block(&mut self, block_id: u64, root: Hash) -> (Hash, PruningProof) {
-        let proof = PruningProof {
-            block_id,
-            root,
-        };
+        let proof = PruningProof { block_id, root };
 
         self.snapshots.push_back(proof.clone());
         while self.snapshots.len() > self.retain {
@@ -50,4 +47,3 @@ impl FirewoodPruner {
         true
     }
 }
-
