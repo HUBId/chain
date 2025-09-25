@@ -1,0 +1,52 @@
+# Lokal konfigurierte Crate-Pfade für den Offline-Betrieb.
+# Diese Einträge verweisen auf die bereits entpackten Archive unterhalb von `vendor/`.
+
+# Basis-Batch gemäß `docs/vendor_log.md`.
+
+[patch.crates-io]
+# Dummy-Tabelle, damit nachfolgende `[[patch.crates-io]]`-Einträge gültig sind.
+
+[[patch.crates-io]]
+name = "anyhow"
+version = "1.0.100"
+path = "../vendor/anyhow/1.0.100"
+
+[[patch.crates-io]]
+name = "thiserror"
+version = "1.0.69"
+path = "../vendor/thiserror/1.0.69"
+
+[[patch.crates-io]]
+name = "thiserror"
+version = "2.0.16"
+path = "../vendor/thiserror/2.0.16"
+
+[[patch.crates-io]]
+name = "thiserror-impl"
+version = "1.0.69"
+path = "../vendor/thiserror-impl/1.0.69"
+
+[[patch.crates-io]]
+name = "thiserror-impl"
+version = "2.0.16"
+path = "../vendor/thiserror-impl/2.0.16"
+
+[[patch.crates-io]]
+name = "serde"
+version = "1.0.225"
+path = "../vendor/serde/1.0.225"
+
+[[patch.crates-io]]
+name = "serde_core"
+version = "1.0.225"
+path = "../vendor/serde_core/1.0.225"
+
+[[patch.crates-io]]
+name = "serde_derive"
+version = "1.0.225"
+path = "../vendor/serde_derive/1.0.225"
+
+[[patch.crates-io]]
+name = "serde_json"
+version = "1.0.145"
+path = "../vendor/serde_json/1.0.145"
