@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -455,74 +455,491 @@ impl SnapshotStore {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkGlobalStateCommitments {
+    pub global_state_root: String,
+    pub utxo_root: String,
+    pub reputation_root: String,
+    pub timetoke_root: String,
+    pub zsi_root: String,
+    pub proof_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkSnapshotSummary {
+    pub height: u64,
+    pub block_hash: String,
+    pub commitments: NetworkGlobalStateCommitments,
+    pub chain_commitment: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkBlockMetadata {
+    pub height: u64,
+    pub hash: String,
+    pub timestamp: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NetworkPayloadExpectations {
+    pub transaction_proofs: usize,
+    pub transaction_witnesses: usize,
+    pub timetoke_witnesses: usize,
+    pub reputation_witnesses: usize,
+    pub zsi_witnesses: usize,
+    pub consensus_witnesses: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkReconstructionRequest {
+    pub height: u64,
+    pub block_hash: String,
+    pub tx_root: String,
+    pub state_root: String,
+    pub utxo_root: String,
+    pub reputation_root: String,
+    pub timetoke_root: String,
+    pub zsi_root: String,
+    pub proof_root: String,
+    pub pruning_commitment: String,
+    pub aggregated_commitment: String,
+    pub previous_commitment: Option<String>,
+    #[serde(default)]
+    pub payload_expectations: NetworkPayloadExpectations,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStateSyncChunk {
+    pub start_height: u64,
+    pub end_height: u64,
+    pub requests: Vec<NetworkReconstructionRequest>,
+    #[serde(default)]
+    pub proofs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkLightClientUpdate {
+    pub height: u64,
+    pub block_hash: String,
+    pub state_root: String,
+    pub proof_commitment: String,
+    #[serde(default)]
+    pub previous_commitment: Option<String>,
+    #[serde(default)]
+    pub recursive_proof: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStateSyncPlan {
+    pub snapshot: NetworkSnapshotSummary,
+    pub tip: NetworkBlockMetadata,
+    pub chunks: Vec<NetworkStateSyncChunk>,
+    pub light_client_updates: Vec<NetworkLightClientUpdate>,
+}
+
+pub trait RecursiveProofVerifier: std::fmt::Debug + Send + Sync + 'static {
+    fn verify_recursive(
+        &self,
+        proof: &[u8],
+        expected_commitment: &str,
+        previous_commitment: Option<&str>,
+    ) -> Result<(), PipelineError>;
+}
+
+#[derive(Debug, Default)]
+pub struct NoopRecursiveProofVerifier;
+
+impl RecursiveProofVerifier for NoopRecursiveProofVerifier {
+    fn verify_recursive(
+        &self,
+        _proof: &[u8],
+        _expected_commitment: &str,
+        _previous_commitment: Option<&str>,
+    ) -> Result<(), PipelineError> {
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct LightClientSync {
-    expected_root: Option<Hash>,
-    received: HashMap<u64, Vec<u8>>,
-    total: Option<u64>,
+    verifier: Arc<dyn RecursiveProofVerifier>,
+    plan: Option<ActivePlan>,
+    received_chunks: HashMap<usize, [u8; 32]>,
+    accepted_updates: HashSet<u64>,
+}
+
+impl Default for LightClientSync {
+    fn default() -> Self {
+        Self::new(Arc::new(NoopRecursiveProofVerifier))
+    }
 }
 
 impl LightClientSync {
-    pub fn new() -> Self {
+    pub fn new(verifier: Arc<dyn RecursiveProofVerifier>) -> Self {
         Self {
-            expected_root: None,
-            received: HashMap::new(),
-            total: None,
+            verifier,
+            plan: None,
+            received_chunks: HashMap::new(),
+            accepted_updates: HashSet::new(),
         }
     }
 
-    pub fn ingest_header(&mut self, root: Hash) {
-        self.expected_root = Some(root);
+    pub fn ingest_plan(&mut self, payload: &[u8]) -> Result<(), PipelineError> {
+        let plan: NetworkStateSyncPlan = serde_json::from_slice(payload)
+            .map_err(|err| PipelineError::Validation(format!("invalid plan payload: {err}")))?;
+        let active = ActivePlan::try_from(plan)?;
+        self.plan = Some(active);
+        self.received_chunks.clear();
+        self.accepted_updates.clear();
+        Ok(())
     }
 
-    pub fn ingest_recursive_proof(&mut self, _proof: &[u8]) {
-        // Placeholder for real recursive verification.
-    }
-
-    pub fn ingest_chunk(&mut self, chunk: SnapshotChunk) -> Result<(), PipelineError> {
-        if let Some(expected) = self.expected_root {
-            if expected != chunk.root {
-                return Err(PipelineError::SnapshotVerification(
-                    "chunk root mismatch".to_string(),
-                ));
+    pub fn ingest_light_client_update(
+        &mut self,
+        payload: &[u8],
+    ) -> Result<(), PipelineError> {
+        let update: NetworkLightClientUpdate = serde_json::from_slice(payload)
+            .map_err(|err| PipelineError::Validation(format!("invalid update payload: {err}")))?;
+        let plan = self
+            .plan
+            .as_mut()
+            .ok_or_else(|| PipelineError::SnapshotVerification("no active plan".into()))?;
+        let Some(index) = plan.update_index_by_height.get(&update.height).copied() else {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "unexpected light client height {}",
+                update.height
+            )));
+        };
+        if self.accepted_updates.contains(&update.height) {
+            return Err(PipelineError::Duplicate);
+        }
+        let expected = &plan.updates[index];
+        if expected.block_hash != update.block_hash {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "block hash mismatch for height {}",
+                update.height
+            )));
+        }
+        if expected.state_root != update.state_root {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "state root mismatch for height {}",
+                update.height
+            )));
+        }
+        if expected.commitment != update.proof_commitment {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "commitment mismatch for height {}",
+                update.height
+            )));
+        }
+        if index > 0 {
+            let previous_height = plan.updates[index - 1].height;
+            if !self.accepted_updates.contains(&previous_height) {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "missing checkpoint for height {}",
+                    previous_height
+                )));
             }
-        } else {
-            self.expected_root = Some(chunk.root);
         }
-        self.total = Some(chunk.total);
-        self.received.insert(chunk.index, chunk.data);
+        let expected_previous = if index == 0 {
+            expected
+                .expected_previous
+                .as_deref()
+                .or_else(|| Some(plan.snapshot.chain_commitment.as_str()))
+        } else {
+            Some(plan.updates[index - 1].commitment.as_str())
+        };
+        if let Some(ref advertised) = update.previous_commitment {
+            if Some(advertised.as_str()) != expected_previous {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "previous commitment mismatch for height {}",
+                    update.height
+                )));
+            }
+        }
+        let proof_bytes = general_purpose::STANDARD
+            .decode(update.recursive_proof.as_bytes())
+            .map_err(|err: base64::DecodeError| {
+                PipelineError::Validation(format!("invalid proof encoding: {err}"))
+            })?;
+        if proof_bytes.is_empty() {
+            return Err(PipelineError::SnapshotVerification(
+                "empty recursive proof".into(),
+            ));
+        }
+        self.verifier
+            .verify_recursive(&proof_bytes, &expected.commitment, expected_previous)?;
+        self.accepted_updates.insert(update.height);
+        Ok(())
+    }
+
+    pub fn ingest_chunk(&mut self, payload: &[u8]) -> Result<(), PipelineError> {
+        let chunk: NetworkStateSyncChunk = serde_json::from_slice(payload)
+            .map_err(|err| PipelineError::Validation(format!("invalid chunk payload: {err}")))?;
+        let plan = self
+            .plan
+            .as_ref()
+            .ok_or_else(|| PipelineError::SnapshotVerification("no active plan".into()))?;
+        let Some(index) = plan
+            .chunk_index_by_start
+            .get(&chunk.start_height)
+            .copied()
+        else {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "unexpected chunk starting at {}",
+                chunk.start_height
+            )));
+        };
+        let expected = &plan.chunks[index];
+        if expected.end_height != chunk.end_height {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "chunk end height mismatch for start {}",
+                chunk.start_height
+            )));
+        }
+        if chunk.requests.len() != expected.aggregated_commitments.len() {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "chunk request count mismatch for start {}",
+                chunk.start_height
+            )));
+        }
+        for (request, expected_commitment) in chunk
+            .requests
+            .iter()
+            .zip(expected.aggregated_commitments.iter())
+        {
+            let commitment = decode_hex_digest(&request.aggregated_commitment)?;
+            if &commitment != expected_commitment {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "aggregated commitment mismatch at height {}",
+                    request.height
+                )));
+            }
+        }
+        if chunk.proofs.is_empty() {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "missing merkle proofs for chunk starting at {}",
+                chunk.start_height
+            )));
+        }
+        let mut proofs = Vec::with_capacity(chunk.proofs.len());
+        for proof in &chunk.proofs {
+            proofs.push(decode_hex_digest(proof)?);
+        }
+        let root = compute_merkle_root(&mut proofs);
+        if root != expected.expected_root {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "chunk root mismatch for start {}",
+                chunk.start_height
+            )));
+        }
+        self.received_chunks.insert(index, root);
         Ok(())
     }
 
     pub fn verify(&self) -> Result<bool, PipelineError> {
-        let expected_root = match self.expected_root {
-            Some(root) => root,
-            None => return Ok(false),
+        let Some(plan) = &self.plan else {
+            return Ok(false);
         };
-        let total = match self.total {
-            Some(total) => total,
-            None => return Ok(false),
-        };
-        for index in 0..total {
-            if !self.received.contains_key(&index) {
-                return Ok(false);
+        if self.received_chunks.len() != plan.chunks.len() {
+            return Err(PipelineError::SnapshotVerification(
+                "incomplete chunk set".into(),
+            ));
+        }
+        for chunk in &plan.chunks {
+            if !self.received_chunks.contains_key(&chunk.index) {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "missing chunk starting at {}",
+                    chunk.start_height
+                )));
             }
         }
-        let mut payload = Vec::new();
-        for index in 0..total {
-            if let Some(data) = self.received.get(&index) {
-                payload.extend_from_slice(data);
+        if self.accepted_updates.len() != plan.updates.len() {
+            return Err(PipelineError::SnapshotVerification(
+                "missing recursive proofs".into(),
+            ));
+        }
+        for update in &plan.updates {
+            if !self.accepted_updates.contains(&update.height) {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "missing proof for height {}",
+                    update.height
+                )));
             }
         }
-        let root = blake3::hash(&payload);
-        if root == expected_root {
-            Ok(true)
-        } else {
-            Err(PipelineError::SnapshotVerification(
-                "reconstructed root mismatch".to_string(),
-            ))
+        let mut chunk_roots: Vec<[u8; 32]> = Vec::with_capacity(plan.chunks.len());
+        for chunk in &plan.chunks {
+            let root = self.received_chunks.get(&chunk.index).ok_or_else(|| {
+                PipelineError::SnapshotVerification(format!(
+                    "missing chunk starting at {}",
+                    chunk.start_height
+                ))
+            })?;
+            chunk_roots.push(*root);
         }
+        let computed_snapshot = compute_merkle_root(&mut chunk_roots);
+        if computed_snapshot != plan.snapshot_commitment {
+            return Err(PipelineError::SnapshotVerification(
+                "snapshot commitment mismatch".into(),
+            ));
+        }
+        Ok(true)
     }
+}
+
+#[derive(Debug, Clone)]
+struct ExpectedChunk {
+    index: usize,
+    start_height: u64,
+    end_height: u64,
+    aggregated_commitments: Vec<[u8; 32]>,
+    expected_root: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+struct ExpectedUpdate {
+    height: u64,
+    block_hash: String,
+    state_root: String,
+    commitment: String,
+    expected_previous: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ActivePlan {
+    snapshot: NetworkSnapshotSummary,
+    snapshot_commitment: [u8; 32],
+    chunks: Vec<ExpectedChunk>,
+    chunk_index_by_start: BTreeMap<u64, usize>,
+    updates: Vec<ExpectedUpdate>,
+    update_index_by_height: BTreeMap<u64, usize>,
+}
+
+impl TryFrom<NetworkStateSyncPlan> for ActivePlan {
+    type Error = PipelineError;
+
+    fn try_from(plan: NetworkStateSyncPlan) -> Result<Self, Self::Error> {
+        let snapshot_commitment = decode_hex_digest(&plan.snapshot.chain_commitment)?;
+        let mut chunks = Vec::with_capacity(plan.chunks.len());
+        let mut chunk_index_by_start = BTreeMap::new();
+        for (index, chunk) in plan.chunks.iter().enumerate() {
+            if chunk.requests.is_empty() {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "empty chunk starting at {}",
+                    chunk.start_height
+                )));
+            }
+            if chunk_index_by_start
+                .insert(chunk.start_height, index)
+                .is_some()
+            {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "duplicate chunk start height {}",
+                    chunk.start_height
+                )));
+            }
+            let mut aggregated = Vec::with_capacity(chunk.requests.len());
+            for request in &chunk.requests {
+                aggregated.push(decode_hex_digest(&request.aggregated_commitment)?);
+            }
+            let mut leaves = aggregated.clone();
+            let expected_root = compute_merkle_root(&mut leaves);
+            chunks.push(ExpectedChunk {
+                index,
+                start_height: chunk.start_height,
+                end_height: chunk.end_height,
+                aggregated_commitments: aggregated,
+                expected_root,
+            });
+        }
+
+        let mut updates = Vec::with_capacity(plan.light_client_updates.len());
+        let mut update_index_by_height = BTreeMap::new();
+        let mut previous_commitment = Some(plan.snapshot.chain_commitment.clone());
+        for (index, update) in plan.light_client_updates.iter().enumerate() {
+            if update.proof_commitment.is_empty() {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "missing proof commitment for height {}",
+                    update.height
+                )));
+            }
+            if update_index_by_height.insert(update.height, index).is_some() {
+                return Err(PipelineError::SnapshotVerification(format!(
+                    "duplicate light client height {}",
+                    update.height
+                )));
+            }
+            let expected_previous = update
+                .previous_commitment
+                .clone()
+                .or_else(|| previous_commitment.clone());
+            updates.push(ExpectedUpdate {
+                height: update.height,
+                block_hash: update.block_hash.clone(),
+                state_root: update.state_root.clone(),
+                commitment: update.proof_commitment.clone(),
+                expected_previous,
+            });
+            previous_commitment = Some(update.proof_commitment.clone());
+        }
+
+        Ok(Self {
+            snapshot: plan.snapshot,
+            snapshot_commitment,
+            chunks,
+            chunk_index_by_start,
+            updates,
+            update_index_by_height,
+        })
+    }
+}
+
+fn decode_hex_digest(value: &str) -> Result<[u8; 32], PipelineError> {
+    let bytes = hex::decode(value)
+        .map_err(|err| PipelineError::Validation(format!("invalid hex digest: {err}")))?;
+    if bytes.len() != 32 {
+        return Err(PipelineError::SnapshotVerification(format!(
+            "expected 32-byte digest, received {} bytes",
+            bytes.len()
+        )));
+    }
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&bytes);
+    Ok(digest)
+}
+
+fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
+    use blake2::digest::Digest;
+    use blake2::Blake2s256;
+
+    if leaves.is_empty() {
+        let mut hasher = Blake2s256::new();
+        hasher.update(b"rpp-empty");
+        let output = hasher.finalize();
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&output);
+        return digest;
+    }
+    leaves.sort();
+    let mut current = leaves.clone();
+    while current.len() > 1 {
+        let mut next = Vec::with_capacity((current.len() + 1) / 2);
+        for pair in current.chunks(2) {
+            let left = pair[0];
+            let right = if pair.len() == 2 { pair[1] } else { pair[0] };
+            let mut data = Vec::with_capacity(64);
+            data.extend_from_slice(&left);
+            data.extend_from_slice(&right);
+            let mut hasher = Blake2s256::new();
+            hasher.update(&data);
+            let output = hasher.finalize();
+            let mut digest = [0u8; 32];
+            digest.copy_from_slice(&output);
+            next.push(digest);
+        }
+        current = next;
+    }
+    current[0]
 }
 
 #[derive(Debug, Clone)]
@@ -689,18 +1106,108 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_roundtrip_and_light_client_validation() {
-        let mut store = SnapshotStore::new(8);
-        let payload = b"state-snapshot-payload".to_vec();
-        let root = store.insert(payload.clone());
-        let chunks = store.stream(&root).unwrap();
-        assert!(chunks.len() > 1);
+        let aggregated_one = [1u8; 32];
+        let aggregated_two = [2u8; 32];
+        let mut chunk_leaves = vec![aggregated_one, aggregated_two];
+        let chunk_root = compute_merkle_root(&mut chunk_leaves);
+        let mut snapshot_leaves = vec![chunk_root];
+        let snapshot_root = compute_merkle_root(&mut snapshot_leaves);
 
-        let mut client = LightClientSync::new();
-        client.ingest_header(root);
-        client.ingest_recursive_proof(b"recursive-proof");
-        for chunk in chunks {
-            client.ingest_chunk(chunk).unwrap();
-        }
+        let plan = NetworkStateSyncPlan {
+            snapshot: NetworkSnapshotSummary {
+                height: 0,
+                block_hash: "snapshot".into(),
+                commitments: NetworkGlobalStateCommitments {
+                    global_state_root: hex::encode([0u8; 32]),
+                    utxo_root: hex::encode([0u8; 32]),
+                    reputation_root: hex::encode([0u8; 32]),
+                    timetoke_root: hex::encode([0u8; 32]),
+                    zsi_root: hex::encode([0u8; 32]),
+                    proof_root: hex::encode([0u8; 32]),
+                },
+                chain_commitment: hex::encode(snapshot_root),
+            },
+            tip: NetworkBlockMetadata {
+                height: 1,
+                hash: "tip".into(),
+                timestamp: 42,
+            },
+            chunks: vec![NetworkStateSyncChunk {
+                start_height: 0,
+                end_height: 1,
+                requests: vec![
+                    NetworkReconstructionRequest {
+                        height: 0,
+                        block_hash: "block-0".into(),
+                        tx_root: "tx".into(),
+                        state_root: "state".into(),
+                        utxo_root: "utxo".into(),
+                        reputation_root: "reputation".into(),
+                        timetoke_root: "timetoke".into(),
+                        zsi_root: "zsi".into(),
+                        proof_root: "proof".into(),
+                        pruning_commitment: "pruning".into(),
+                        aggregated_commitment: hex::encode(aggregated_one),
+                        previous_commitment: None,
+                        payload_expectations: NetworkPayloadExpectations::default(),
+                    },
+                    NetworkReconstructionRequest {
+                        height: 1,
+                        block_hash: "block-1".into(),
+                        tx_root: "tx".into(),
+                        state_root: "state".into(),
+                        utxo_root: "utxo".into(),
+                        reputation_root: "reputation".into(),
+                        timetoke_root: "timetoke".into(),
+                        zsi_root: "zsi".into(),
+                        proof_root: "proof".into(),
+                        pruning_commitment: "pruning".into(),
+                        aggregated_commitment: hex::encode(aggregated_two),
+                        previous_commitment: None,
+                        payload_expectations: NetworkPayloadExpectations::default(),
+                    },
+                ],
+                proofs: Vec::new(),
+            }],
+            light_client_updates: vec![NetworkLightClientUpdate {
+                height: 1,
+                block_hash: "block-1".into(),
+                state_root: "state".into(),
+                proof_commitment: hex::encode([9u8; 32]),
+                previous_commitment: None,
+                recursive_proof: String::new(),
+            }],
+        };
+
+        let plan_payload = serde_json::to_vec(&plan).expect("plan encode");
+        let mut client = LightClientSync::default();
+        client.ingest_plan(&plan_payload).expect("plan");
+
+        let chunk_payload = serde_json::to_vec(&NetworkStateSyncChunk {
+            start_height: 0,
+            end_height: 1,
+            requests: plan.chunks[0].requests.clone(),
+            proofs: vec![
+                hex::encode(aggregated_one),
+                hex::encode(aggregated_two),
+            ],
+        })
+        .expect("chunk encode");
+        client.ingest_chunk(&chunk_payload).expect("chunk");
+
+        let update_payload = serde_json::to_vec(&NetworkLightClientUpdate {
+            height: 1,
+            block_hash: "block-1".into(),
+            state_root: "state".into(),
+            proof_commitment: plan.light_client_updates[0].proof_commitment.clone(),
+            previous_commitment: Some(plan.snapshot.chain_commitment.clone()),
+            recursive_proof: general_purpose::STANDARD.encode(b"recursive-proof"),
+        })
+        .expect("update encode");
+        client
+            .ingest_light_client_update(&update_payload)
+            .expect("update");
+
         assert!(client.verify().unwrap());
     }
 
