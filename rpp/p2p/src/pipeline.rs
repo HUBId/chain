@@ -418,6 +418,129 @@ pub struct SnapshotChunk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkSnapshotSummary {
+    pub height: u64,
+    pub block_hash: String,
+    pub commitments: serde_json::Value,
+    pub chain_commitment: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkBlockMetadata {
+    pub height: u64,
+    pub hash: String,
+    pub timestamp: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NetworkPayloadExpectations {
+    pub transaction_proofs: usize,
+    pub transaction_witnesses: usize,
+    pub timetoke_witnesses: usize,
+    pub reputation_witnesses: usize,
+    pub zsi_witnesses: usize,
+    pub consensus_witnesses: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkReconstructionRequest {
+    pub height: u64,
+    pub block_hash: String,
+    pub tx_root: String,
+    pub state_root: String,
+    pub utxo_root: String,
+    pub reputation_root: String,
+    pub timetoke_root: String,
+    pub zsi_root: String,
+    pub proof_root: String,
+    pub pruning_commitment: String,
+    pub aggregated_commitment: String,
+    #[serde(default)]
+    pub previous_commitment: Option<String>,
+    pub payload_expectations: NetworkPayloadExpectations,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStateSyncChunk {
+    pub start_height: u64,
+    pub end_height: u64,
+    #[serde(default)]
+    pub requests: Vec<NetworkReconstructionRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkLightClientUpdate {
+    pub height: u64,
+    pub block_hash: String,
+    pub state_root: String,
+    pub recursive_proof: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkStateSyncPlan {
+    pub snapshot: NetworkSnapshotSummary,
+    pub tip: NetworkBlockMetadata,
+    #[serde(default)]
+    pub chunks: Vec<NetworkStateSyncChunk>,
+    #[serde(default)]
+    pub light_client_updates: Vec<NetworkLightClientUpdate>,
+}
+
+#[derive(Debug, Clone)]
+struct ActivePlan {
+    plan: NetworkStateSyncPlan,
+}
+
+impl TryFrom<NetworkStateSyncPlan> for ActivePlan {
+    type Error = PipelineError;
+
+    fn try_from(plan: NetworkStateSyncPlan) -> Result<Self, Self::Error> {
+        if plan.tip.hash.is_empty() {
+            return Err(PipelineError::Validation(
+                "plan tip hash cannot be empty".into(),
+            ));
+        }
+        if let Some(out_of_order) = plan
+            .light_client_updates
+            .windows(2)
+            .find(|window| window[0].height > window[1].height)
+        {
+            return Err(PipelineError::Validation(format!(
+                "light client updates out of order at height {}",
+                out_of_order[1].height
+            )));
+        }
+        Ok(Self { plan })
+    }
+}
+
+impl ActivePlan {
+    fn tip_height(&self) -> u64 {
+        self.plan.tip.height
+    }
+
+    fn tip_hash(&self) -> &str {
+        &self.plan.tip.hash
+    }
+
+    fn latest_light_client_height(&self) -> Option<u64> {
+        self.plan
+            .light_client_updates
+            .iter()
+            .map(|update| update.height)
+            .max()
+    }
+
+    fn pending_light_client_updates(&self, accepted: &HashSet<u64>) -> usize {
+        self.plan
+            .light_client_updates
+            .iter()
+            .filter(|update| !accepted.contains(&update.height))
+            .count()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotPlanMetadata {
     pub payload_root: String,
     pub snapshot_height: u64,
@@ -544,31 +667,49 @@ impl SnapshotStore {
 #[derive(Debug)]
 pub struct LightClientSync {
     expected_root: Option<Hash>,
-    received: HashMap<u64, Vec<u8>>,
+    received_chunks: HashMap<u64, Vec<u8>>,
     total: Option<u64>,
+    plan: Option<ActivePlan>,
+    accepted_updates: HashSet<u64>,
 }
 
 impl LightClientSync {
     pub fn new() -> Self {
         Self {
             expected_root: None,
-            received: HashMap::new(),
+            received_chunks: HashMap::new(),
             total: None,
+            plan: None,
+            accepted_updates: HashSet::new(),
         }
     }
 
     pub fn reset(&mut self) {
         self.expected_root = None;
-        self.received.clear();
+        self.received_chunks.clear();
         self.total = None;
+        self.plan = None;
+        self.accepted_updates.clear();
     }
 
-    pub fn ingest_header(&mut self, root: Hash) {
-        self.expected_root = Some(root);
+    pub fn prepare(&mut self, root: Option<Hash>, chunk_total: u64) {
+        self.reset();
+        self.expected_root = root;
+        self.total = Some(chunk_total);
     }
 
     pub fn ingest_recursive_proof(&mut self, _proof: &[u8]) {
         // Placeholder for real recursive verification.
+    }
+
+    pub fn ingest_plan(&mut self, payload: &[u8]) -> Result<(), PipelineError> {
+        let plan: NetworkStateSyncPlan = serde_json::from_slice(payload)
+            .map_err(|err| PipelineError::Validation(format!("invalid plan payload: {err}")))?;
+        let active = ActivePlan::try_from(plan)?;
+        self.plan = Some(active);
+        self.received_chunks.clear();
+        self.accepted_updates.clear();
+        Ok(())
     }
 
     pub fn ingest_chunk(&mut self, chunk: SnapshotChunk) -> Result<(), PipelineError> {
@@ -582,11 +723,11 @@ impl LightClientSync {
             self.expected_root = Some(chunk.root);
         }
         self.total = Some(chunk.total);
-        self.received.insert(chunk.index, chunk.data);
+        self.received_chunks.insert(chunk.index, chunk.data);
         Ok(())
     }
 
-    pub fn verify(&self) -> Result<bool, PipelineError> {
+    pub fn verify(&mut self) -> Result<bool, PipelineError> {
         let expected_root = match self.expected_root {
             Some(root) => root,
             None => return Ok(false),
@@ -596,18 +737,19 @@ impl LightClientSync {
             None => return Ok(false),
         };
         for index in 0..total {
-            if !self.received.contains_key(&index) {
+            if !self.received_chunks.contains_key(&index) {
                 return Ok(false);
             }
         }
         let mut payload = Vec::new();
         for index in 0..total {
-            if let Some(data) = self.received.get(&index) {
+            if let Some(data) = self.received_chunks.get(&index) {
                 payload.extend_from_slice(data);
             }
         }
         let root = blake3::hash(&payload);
         if root == expected_root {
+            self.ingest_plan(&payload)?;
             Ok(true)
         } else {
             Err(PipelineError::SnapshotVerification(
@@ -617,7 +759,7 @@ impl LightClientSync {
     }
 
     pub fn received_chunks(&self) -> usize {
-        self.received.len()
+        self.received_chunks.len()
     }
 
     pub fn expected_total(&self) -> Option<u64> {
@@ -626,6 +768,31 @@ impl LightClientSync {
 
     pub fn expected_root(&self) -> Option<Hash> {
         self.expected_root
+    }
+
+    pub fn latest_verified_height(&self) -> Option<u64> {
+        self.plan
+            .as_ref()
+            .and_then(|plan| plan.latest_light_client_height())
+    }
+
+    pub fn plan_tip_height(&self) -> Option<u64> {
+        self.plan.as_ref().map(|plan| plan.tip_height())
+    }
+
+    pub fn plan_tip_hash(&self) -> Option<&str> {
+        self.plan.as_ref().map(|plan| plan.tip_hash())
+    }
+
+    pub fn pending_light_client_updates(&self) -> usize {
+        self.plan
+            .as_ref()
+            .map(|plan| plan.pending_light_client_updates(&self.accepted_updates))
+            .unwrap_or(0)
+    }
+
+    pub fn mark_light_client_update_applied(&mut self, height: u64) {
+        self.accepted_updates.insert(height);
     }
 }
 
@@ -794,7 +961,52 @@ mod tests {
     #[tokio::test]
     async fn snapshot_roundtrip_and_light_client_validation() {
         let mut store = SnapshotStore::new(8);
-        let payload = b"state-snapshot-payload".to_vec();
+        let plan = NetworkStateSyncPlan {
+            snapshot: NetworkSnapshotSummary {
+                height: 42,
+                block_hash: "snapshot-hash".into(),
+                commitments: serde_json::json!({
+                    "global_state_root": "root",
+                    "utxo_root": "utxo",
+                    "reputation_root": "rep",
+                    "timetoke_root": "tt",
+                    "zsi_root": "zsi",
+                    "proof_root": "proof",
+                }),
+                chain_commitment: "chain".into(),
+            },
+            tip: NetworkBlockMetadata {
+                height: 128,
+                hash: "tip-hash".into(),
+                timestamp: 1,
+            },
+            chunks: vec![NetworkStateSyncChunk {
+                start_height: 10,
+                end_height: 20,
+                requests: vec![NetworkReconstructionRequest {
+                    height: 10,
+                    block_hash: "block-10".into(),
+                    tx_root: "tx".into(),
+                    state_root: "state".into(),
+                    utxo_root: "utxo".into(),
+                    reputation_root: "rep".into(),
+                    timetoke_root: "tt".into(),
+                    zsi_root: "zsi".into(),
+                    proof_root: "proof".into(),
+                    pruning_commitment: "prune".into(),
+                    aggregated_commitment: "agg".into(),
+                    previous_commitment: Some("prev".into()),
+                    payload_expectations: NetworkPayloadExpectations::default(),
+                }],
+            }],
+            light_client_updates: vec![NetworkLightClientUpdate {
+                height: 128,
+                block_hash: "tip-hash".into(),
+                state_root: "state".into(),
+                recursive_proof: serde_json::json!({ "kind": "stwo" }),
+            }],
+        };
+        let payload = serde_json::to_vec(&plan).unwrap();
         let root = store.insert(payload.clone());
         let expected_chunks = store.chunk_count(&root).unwrap();
         let chunks = store.stream(&root).unwrap();
@@ -802,12 +1014,16 @@ mod tests {
         assert_eq!(expected_chunks, chunks.len() as u64);
 
         let mut client = LightClientSync::new();
-        client.ingest_header(root);
+        client.prepare(Some(root), expected_chunks);
         client.ingest_recursive_proof(b"recursive-proof");
         for chunk in chunks {
             client.ingest_chunk(chunk).unwrap();
         }
         assert!(client.verify().unwrap());
+        assert_eq!(client.latest_verified_height(), Some(128));
+        assert_eq!(client.pending_light_client_updates(), 1);
+        client.mark_light_client_update_applied(128);
+        assert_eq!(client.pending_light_client_updates(), 0);
     }
 
     #[tokio::test]

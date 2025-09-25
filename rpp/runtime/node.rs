@@ -129,6 +129,9 @@ impl SnapshotSyncRuntimeStatus {
         total: Option<u64>,
         root: Option<Hash>,
         verified: bool,
+        plan_tip_height: Option<u64>,
+        plan_tip_hash: Option<String>,
+        latest_verified_height: Option<u64>,
     ) {
         self.received_chunks = received;
         if let Some(total) = total {
@@ -139,6 +142,12 @@ impl SnapshotSyncRuntimeStatus {
         }
         if verified {
             self.verified = true;
+            if let Some(height) = latest_verified_height.or(plan_tip_height) {
+                self.latest_verified_height = Some(height);
+            }
+            if let Some(hash) = plan_tip_hash {
+                self.last_tip_hash = Some(hash);
+            }
         }
         self.last_updated = Some(SystemTime::now());
     }
@@ -945,10 +954,7 @@ impl NodeInner {
 
         {
             let mut sync = self.light_client_sync.lock().await;
-            sync.reset();
-            if let Some(root_value) = root {
-                sync.ingest_header(root_value);
-            }
+            sync.prepare(root, metadata.chunk_count);
         }
 
         {
@@ -971,7 +977,15 @@ impl NodeInner {
             }
         };
 
-        let (received, total, expected_root, verified) = {
+        let (
+            received,
+            total,
+            expected_root,
+            verified,
+            plan_tip_height,
+            plan_tip_hash,
+            latest_verified_height,
+        ) = {
             let mut sync = self.light_client_sync.lock().await;
             if let Err(err) = sync.ingest_chunk(chunk) {
                 warn!(?err, "light client rejected snapshot chunk");
@@ -987,12 +1001,31 @@ impl NodeInner {
                     false
                 }
             };
-            (received, total, expected_root, verified)
+            let plan_tip_height = sync.plan_tip_height();
+            let plan_tip_hash = sync.plan_tip_hash().map(|value| value.to_string());
+            let latest_verified_height = sync.latest_verified_height();
+            (
+                received,
+                total,
+                expected_root,
+                verified,
+                plan_tip_height,
+                plan_tip_hash,
+                latest_verified_height,
+            )
         };
 
         {
             let mut status = self.snapshot_status.lock();
-            status.record_chunk_progress(received, total, expected_root, verified);
+            status.record_chunk_progress(
+                received,
+                total,
+                expected_root,
+                verified,
+                plan_tip_height,
+                plan_tip_hash,
+                latest_verified_height,
+            );
         }
 
         if verified {
