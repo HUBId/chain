@@ -50,3 +50,18 @@ path = "../vendor/serde_derive/1.0.225"
 name = "serde_json"
 version = "1.0.145"
 path = "../vendor/serde_json/1.0.145"
+
+[[patch.crates-io]]
+name = "axum"
+version = "0.8.4"
+path = "../vendor/axum/0.8.4/axum"
+
+[[patch.crates-io]]
+name = "axum-core"
+version = "0.5.2"
+path = "../vendor/axum/0.8.4/axum-core"
+
+[[patch.crates-io]]
+name = "axum-macros"
+version = "0.5.0"
+path = "../vendor/axum/0.8.4/axum-macros"
