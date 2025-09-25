@@ -4,6 +4,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
+use crate::state::{BlueprintTransferPolicy, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -98,18 +99,18 @@ impl<'a> WalletWorkflows<'a> {
             .wallet
             .account_by_address(self.wallet.address())?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
-        let required_tier = Tier::Tl1;
-        if sender_account.reputation.tier < required_tier {
-            return Err(ChainError::Transaction(
-                "wallet tier insufficient for transfers".into(),
-            ));
-        }
+        let transfer_policy = BlueprintTransferPolicy::blueprint_default();
+        transfer_policy.ensure_account_allowed(&sender_account)?;
         if !sender_account.reputation.zsi.validated {
             return Err(ChainError::Transaction(
                 "wallet identity must be ZSI-validated".into(),
             ));
         }
         let status = status_from_account(&sender_account);
+        let utxo_state = UtxoState::with_policy(transfer_policy.clone());
+        for account in self.wallet.accounts_snapshot()? {
+            utxo_state.upsert_from_account(&account);
+        }
         let transaction = self
             .wallet
             .build_transaction(to.clone(), amount, fee, memo)?;
@@ -117,20 +118,25 @@ impl<'a> WalletWorkflows<'a> {
         let bundle = self.wallet.prove_transaction(&signed)?;
         let tx_hash_bytes = bundle.transaction.hash();
         let tx_hash = hex::encode(tx_hash_bytes);
-        let total_input = sender_account.balance;
         let fee_u128 = u128::from(fee);
         let total_debit = amount
             .checked_add(fee_u128)
             .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
-        if total_input < total_debit {
+        if sender_account.balance < total_debit {
             return Err(ChainError::Transaction(
                 "insufficient balance for requested transfer".into(),
             ));
         }
-        let remaining = total_input - total_debit;
-        let sender_input = ledger_snapshot_utxo(self.wallet.address(), total_input);
-        let mut utxo_inputs = vec![sender_input.clone()];
+        let mut utxo_inputs = utxo_state.select_inputs_for_owner(
+            self.wallet.address(),
+            total_debit,
+            &transfer_policy,
+        )?;
         utxo_inputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
+        let total_input_value = sum_values(&utxo_inputs)?;
+        let remaining = total_input_value
+            .checked_sub(total_debit)
+            .ok_or_else(|| ChainError::Transaction("selected inputs insufficient".into()))?;
         let mut planned_outputs = Vec::new();
         planned_outputs.push(planned_utxo(&tx_hash_bytes, 0, &to, amount));
         if remaining > 0 {
@@ -141,7 +147,6 @@ impl<'a> WalletWorkflows<'a> {
                 remaining,
             ));
         }
-        let total_input_value = sum_values(&utxo_inputs)?;
         let total_output_value = sum_values(&planned_outputs)?;
         if total_input_value < total_output_value + fee_u128 {
             return Err(ChainError::Transaction(
@@ -160,9 +165,10 @@ impl<'a> WalletWorkflows<'a> {
             .checked_add(amount)
             .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
         let recipient_post_utxo = ledger_snapshot_utxo(&to, recipient_balance_after);
-        let sender_post_utxo = ledger_snapshot_utxo(self.wallet.address(), remaining);
+        let sender_post_utxo =
+            ledger_snapshot_utxo(self.wallet.address(), sender_account.balance - total_debit);
         let policy = TransactionPolicy {
-            required_tier,
+            required_tier: transfer_policy.min_tier,
             status,
         };
         let state_root = self.wallet.firewood_state_root()?;
@@ -216,12 +222,14 @@ fn status_from_account(account: &Account) -> ReputationStatus {
 }
 
 fn ledger_snapshot_utxo(address: &Address, value: u128) -> UtxoRecord {
-    let script_hash: [u8; 32] = Blake2sHasher::hash(address.as_bytes()).into();
+    let mut seed = address.as_bytes().to_vec();
+    seed.extend_from_slice(&0u32.to_be_bytes());
+    let tx_id: [u8; 32] = Blake2sHasher::hash(&seed).into();
+    let mut script_seed = address.as_bytes().to_vec();
+    script_seed.extend_from_slice(&0u32.to_be_bytes());
+    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
     UtxoRecord {
-        outpoint: UtxoOutpoint {
-            tx_id: script_hash,
-            index: 0,
-        },
+        outpoint: UtxoOutpoint { tx_id, index: 0 },
         owner: address.clone(),
         value,
         asset_type: AssetType::Native,
@@ -231,7 +239,9 @@ fn ledger_snapshot_utxo(address: &Address, value: u128) -> UtxoRecord {
 }
 
 fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {
-    let script_hash: [u8; 32] = Blake2sHasher::hash(owner.as_bytes()).into();
+    let mut script_seed = owner.as_bytes().to_vec();
+    script_seed.extend_from_slice(&index.to_be_bytes());
+    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
     UtxoRecord {
         outpoint: UtxoOutpoint {
             tx_id: *tx_hash,

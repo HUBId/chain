@@ -138,6 +138,10 @@ impl Wallet {
         self.storage.read_account(address)
     }
 
+    pub fn accounts_snapshot(&self) -> ChainResult<Vec<Account>> {
+        self.storage.load_accounts()
+    }
+
     pub fn build_transaction(
         &self,
         to: Address,
