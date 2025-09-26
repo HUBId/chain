@@ -8,11 +8,13 @@ use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rpp_p2p::{
     GossipTopic, HandshakePayload, MetaTelemetry, NetworkError, NetworkEvent, NodeIdentity,
+    TierLevel,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
 
 use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
+use crate::node::NetworkIdentityProfile;
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
 
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
@@ -23,6 +25,10 @@ enum NodeCommand {
     Publish {
         topic: GossipTopic,
         data: Vec<u8>,
+        response: oneshot::Sender<Result<(), NodeError>>,
+    },
+    UpdateIdentity {
+        profile: IdentityProfile,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     Shutdown,
@@ -70,6 +76,7 @@ pub struct NodeRuntimeConfig {
     pub identity_path: PathBuf,
     pub p2p: P2pConfig,
     pub telemetry: TelemetryConfig,
+    pub identity: Option<IdentityProfile>,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -78,6 +85,24 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             identity_path: config.p2p_key_path.clone(),
             p2p: config.p2p.clone(),
             telemetry: config.rollout.telemetry.clone(),
+            identity: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct IdentityProfile {
+    pub zsi_id: String,
+    pub tier: TierLevel,
+    pub vrf_proof: Vec<u8>,
+}
+
+impl From<NetworkIdentityProfile> for IdentityProfile {
+    fn from(profile: NetworkIdentityProfile) -> Self {
+        Self {
+            zsi_id: profile.zsi_id,
+            tier: profile.tier,
+            vrf_proof: profile.vrf_proof,
         }
     }
 }
@@ -134,7 +159,11 @@ impl NodeInner {
     pub fn new(config: NodeRuntimeConfig) -> Result<(Self, NodeHandle), NodeError> {
         let network_config = NetworkConfig::from_config(&config.p2p)?;
         let telemetry = TelemetryHandle::spawn(config.telemetry.clone());
-        let resources = NetworkResources::initialise(&config.identity_path, &network_config)?;
+        let resources = NetworkResources::initialise(
+            &config.identity_path,
+            &network_config,
+            config.identity.clone(),
+        )?;
         let (network, identity) = resources.into_parts();
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, _) = broadcast::channel(256);
@@ -199,6 +228,14 @@ impl NodeInner {
                 } else {
                     Err(NodeError::GossipDisabled)
                 };
+                let _ = response.send(result);
+                Ok(false)
+            }
+            NodeCommand::UpdateIdentity { profile, response } => {
+                let result = self
+                    .network
+                    .update_identity(profile.zsi_id, profile.tier, profile.vrf_proof)
+                    .map_err(NodeError::from);
                 let _ = response.send(result);
                 Ok(false)
             }
@@ -345,6 +382,19 @@ impl NodeHandle {
         result
     }
 
+    /// Updates the handshake identity used for peer admission and gossip permissions.
+    pub async fn update_identity(&self, profile: IdentityProfile) -> Result<(), NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::UpdateIdentity {
+                profile,
+                response: tx,
+            })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)?
+    }
+
     /// Signals the runtime to shut down.
     pub async fn shutdown(&self) -> Result<(), NodeError> {
         self.commands
@@ -388,6 +438,7 @@ mod tests {
                 retry_max: 0,
                 sample_interval_secs: 1,
             },
+            identity: None,
         }
     }
 

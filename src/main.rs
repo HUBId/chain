@@ -117,7 +117,12 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path)?;
         let addr = config.rpc_listen;
-        let p2p_config = NodeRuntimeConfig::from(&config);
+        let node = Node::new(config.clone())?;
+        let network_identity = node
+            .network_identity_profile()
+            .map_err(|err| anyhow!(err))?;
+        let mut p2p_config = NodeRuntimeConfig::from(&config);
+        p2p_config.identity = Some(network_identity.into());
         let (p2p_runtime, p2p_runtime_handle) = P2pNode::new(p2p_config)
             .map_err(|err| anyhow!("failed to initialise p2p runtime: {err}"))?;
         let p2p_join = tokio::task::spawn_blocking(move || -> Result<()> {
@@ -133,7 +138,6 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         p2p_handle = Some(p2p_runtime_handle.clone());
         p2p_task = Some(p2p_join);
 
-        let node = Node::new(config)?;
         let handle = node.handle();
         node_handle = Some(handle.clone());
         node_task = Some(tokio::spawn(async move {

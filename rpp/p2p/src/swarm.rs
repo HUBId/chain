@@ -242,6 +242,19 @@ impl Network {
         Ok(())
     }
 
+    pub fn update_identity(
+        &mut self,
+        zsi_id: String,
+        tier: TierLevel,
+        vrf_proof: Vec<u8>,
+    ) -> Result<(), NetworkError> {
+        self.handshake = HandshakePayload::new(zsi_id, Some(vrf_proof), tier);
+        let signed = self.sign_handshake()?;
+        let peer_id = self.local_peer_id();
+        self.peerstore.record_handshake(peer_id, &signed)?;
+        Ok(())
+    }
+
     pub fn local_peer_id(&self) -> PeerId {
         *self.swarm.local_peer_id()
     }
