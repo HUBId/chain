@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -16,6 +17,7 @@ use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
     NodeTelemetrySnapshot, RolloutStatus, VrfStatus,
 };
+use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
 use crate::runtime::RuntimeMode;
@@ -35,6 +37,7 @@ pub struct ApiContext {
     mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
     wallet: Option<Arc<Wallet>>,
+    orchestrator: Option<Arc<PipelineOrchestrator>>,
 }
 
 impl ApiContext {
@@ -42,8 +45,14 @@ impl ApiContext {
         mode: Arc<RwLock<RuntimeMode>>,
         node: Option<NodeHandle>,
         wallet: Option<Arc<Wallet>>,
+        orchestrator: Option<Arc<PipelineOrchestrator>>,
     ) -> Self {
-        Self { mode, node, wallet }
+        Self {
+            mode,
+            node,
+            wallet,
+            orchestrator,
+        }
     }
 
     fn current_mode(&self) -> RuntimeMode {
@@ -64,6 +73,14 @@ impl ApiContext {
 
     fn wallet_enabled(&self) -> bool {
         self.wallet_available() && self.current_mode().includes_wallet()
+    }
+
+    fn orchestrator_available(&self) -> bool {
+        self.orchestrator.is_some()
+    }
+
+    fn orchestrator_enabled(&self) -> bool {
+        self.orchestrator_available() && self.node_enabled()
     }
 
     fn node_handle(&self) -> Option<NodeHandle> {
@@ -94,6 +111,20 @@ impl ApiContext {
         Ok(self.wallet_handle().expect("wallet handle available"))
     }
 
+    fn require_orchestrator(
+        &self,
+    ) -> Result<Arc<PipelineOrchestrator>, (StatusCode, Json<ErrorResponse>)> {
+        if !self.orchestrator_available() {
+            return Err(not_started("orchestrator"));
+        }
+        if !self.orchestrator_enabled() {
+            return Err(unavailable("orchestrator"));
+        }
+        Ok(self
+            .orchestrator_handle()
+            .expect("orchestrator handle available"))
+    }
+
     fn node_for_mode(&self) -> Option<NodeHandle> {
         if self.node_enabled() {
             self.node_handle()
@@ -110,6 +141,18 @@ impl ApiContext {
         }
     }
 
+    fn orchestrator_handle(&self) -> Option<Arc<PipelineOrchestrator>> {
+        self.orchestrator.as_ref().map(Arc::clone)
+    }
+
+    fn orchestrator_for_mode(&self) -> Option<Arc<PipelineOrchestrator>> {
+        if self.orchestrator_enabled() {
+            self.orchestrator_handle()
+        } else {
+            None
+        }
+    }
+
     fn runtime_state(&self) -> RuntimeModeResponse {
         RuntimeModeResponse {
             mode: self.current_mode(),
@@ -117,6 +160,8 @@ impl ApiContext {
             wallet_available: self.wallet_available(),
             node_enabled: self.node_enabled(),
             wallet_enabled: self.wallet_enabled(),
+            orchestrator_available: self.orchestrator_available(),
+            orchestrator_enabled: self.orchestrator_enabled(),
         }
     }
 
@@ -161,6 +206,8 @@ struct RuntimeModeResponse {
     wallet_available: bool,
     node_enabled: bool,
     wallet_enabled: bool,
+    orchestrator_available: bool,
+    orchestrator_enabled: bool,
 }
 
 #[derive(Deserialize)]
@@ -248,6 +295,7 @@ struct ReceiveResponse {
 struct WalletNodeResponse {
     metrics: NodeTabMetrics,
     consensus: Option<ConsensusReceipt>,
+    pipeline: Option<PipelineDashboardSnapshot>,
 }
 
 #[derive(Serialize)]
@@ -301,6 +349,25 @@ struct SubmitUptimeRequest {
     proof: Option<UptimeProof>,
 }
 
+#[derive(Deserialize)]
+struct PipelineWaitRequest {
+    hash: String,
+    stage: PipelineStage,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct PipelineWaitResponse {
+    hash: String,
+    stage: PipelineStage,
+    completed: bool,
+}
+
+#[derive(Serialize)]
+struct PipelineShutdownResponse {
+    status: &'static str,
+}
+
 pub async fn serve(context: ApiContext, addr: SocketAddr) -> ChainResult<()> {
     let router = Router::new()
         .route("/health", get(health))
@@ -347,6 +414,9 @@ pub async fn serve(context: ApiContext, addr: SocketAddr) -> ChainResult<()> {
         .route("/wallet/state/root", get(wallet_state_root))
         .route("/wallet/uptime/proof", post(wallet_generate_uptime))
         .route("/wallet/uptime/submit", post(wallet_submit_uptime))
+        .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
+        .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
+        .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown))
         .with_state(context);
 
     let listener = TcpListener::bind(addr).await?;
@@ -842,7 +912,14 @@ async fn wallet_node_view(
     let wallet = state.require_wallet()?;
     let metrics = wallet.node_metrics().map_err(to_http_error)?;
     let consensus = wallet.latest_consensus_receipt().map_err(to_http_error)?;
-    Ok(Json(WalletNodeResponse { metrics, consensus }))
+    let pipeline = state
+        .orchestrator_for_mode()
+        .map(|orchestrator| wallet.pipeline_dashboard(orchestrator.as_ref()));
+    Ok(Json(WalletNodeResponse {
+        metrics,
+        consensus,
+        pipeline,
+    }))
 }
 
 async fn wallet_state_root(
@@ -880,6 +957,44 @@ async fn wallet_submit_uptime(
     node.submit_uptime_proof(proof)
         .map(|credited_hours| Json(UptimeResponse { credited_hours }))
         .map_err(to_http_error)
+}
+
+async fn wallet_pipeline_dashboard(
+    State(state): State<ApiContext>,
+) -> Result<Json<PipelineDashboardSnapshot>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let orchestrator = state.require_orchestrator()?;
+    Ok(Json(wallet.pipeline_dashboard(orchestrator.as_ref())))
+}
+
+async fn wallet_pipeline_wait(
+    State(state): State<ApiContext>,
+    Json(request): Json<PipelineWaitRequest>,
+) -> Result<Json<PipelineWaitResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let orchestrator = state.require_orchestrator()?;
+    let timeout = request
+        .timeout_ms
+        .map(Duration::from_millis)
+        .unwrap_or_else(|| Duration::from_secs(10));
+    wallet
+        .wait_for_pipeline_stage(orchestrator.as_ref(), &request.hash, request.stage, timeout)
+        .await
+        .map_err(to_http_error)?;
+    Ok(Json(PipelineWaitResponse {
+        hash: request.hash,
+        stage: request.stage,
+        completed: true,
+    }))
+}
+
+async fn wallet_pipeline_shutdown(
+    State(state): State<ApiContext>,
+) -> Result<Json<PipelineShutdownResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let orchestrator = state.require_orchestrator()?;
+    wallet.shutdown_pipeline(orchestrator.as_ref());
+    Ok(Json(PipelineShutdownResponse { status: "ok" }))
 }
 
 fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {

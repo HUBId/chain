@@ -1,6 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
@@ -11,6 +11,7 @@ use crate::consensus::evaluate_vrf;
 use crate::crypto::{address_from_public_key, sign_message};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
+use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::proof_system::ProofProver;
 use crate::reputation::Tier;
 use crate::storage::Storage;
@@ -306,6 +307,28 @@ impl Wallet {
             latest_block_hash: tip.as_ref().map(|meta| meta.hash.clone()),
             total_blocks: self.storage.load_blockchain()?.len() as u64,
         })
+    }
+
+    pub fn pipeline_dashboard(
+        &self,
+        orchestrator: &PipelineOrchestrator,
+    ) -> PipelineDashboardSnapshot {
+        let receiver = orchestrator.subscribe_dashboard();
+        receiver.borrow().clone()
+    }
+
+    pub async fn wait_for_pipeline_stage(
+        &self,
+        orchestrator: &PipelineOrchestrator,
+        hash: &str,
+        stage: PipelineStage,
+        timeout: Duration,
+    ) -> ChainResult<()> {
+        orchestrator.wait_for_stage(hash, stage, timeout).await
+    }
+
+    pub fn shutdown_pipeline(&self, orchestrator: &PipelineOrchestrator) {
+        orchestrator.shutdown();
     }
 
     pub fn latest_consensus_receipt(&self) -> ChainResult<Option<ConsensusReceipt>> {
