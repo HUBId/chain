@@ -232,6 +232,7 @@ struct NodeInner {
     block_interval: Duration,
     vote_mempool: RwLock<VecDeque<SignedBftVote>>,
     proposal_inbox: RwLock<HashMap<(u64, Address), VerifiedProposal>>,
+    consensus_rounds: RwLock<HashMap<u64, u64>>,
     evidence_pool: RwLock<EvidencePool>,
     telemetry_last_height: RwLock<Option<u64>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
@@ -418,6 +419,7 @@ impl Node {
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
             proposal_inbox: RwLock::new(HashMap::new()),
+            consensus_rounds: RwLock::new(HashMap::new()),
             evidence_pool: RwLock::new(EvidencePool::default()),
             telemetry_last_height: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
@@ -896,6 +898,7 @@ impl NodeInner {
                 "conflicting vote detected for validator".into(),
             ));
         }
+        self.observe_consensus_round(vote.vote.height, vote.vote.round);
         let mut mempool = self.vote_mempool.write();
         if mempool.len() >= self.config.mempool_limit {
             return Err(ChainError::Transaction("vote mempool full".into()));
@@ -1003,6 +1006,7 @@ impl NodeInner {
         match block.verify_without_stark(previous_block.as_ref()) {
             Ok(()) => {
                 let hash = block.hash.clone();
+                self.observe_consensus_round(height, round);
                 let mut inbox = self.proposal_inbox.write();
                 inbox.insert((height, proposer), VerifiedProposal { block });
                 Ok(hash)
@@ -1415,6 +1419,28 @@ impl NodeInner {
         matched
     }
 
+    fn current_consensus_round(&self, height: u64) -> u64 {
+        self.consensus_rounds
+            .read()
+            .get(&height)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn observe_consensus_round(&self, height: u64, round: u64) {
+        let mut rounds = self.consensus_rounds.write();
+        let entry = rounds.entry(height).or_insert(round);
+        if round > *entry {
+            *entry = round;
+        }
+    }
+
+    fn prune_consensus_rounds_below(&self, threshold_height: u64) {
+        self.consensus_rounds
+            .write()
+            .retain(|&tracked_height, _| tracked_height >= threshold_height);
+    }
+
     fn take_verified_proposal(&self, height: u64, proposer: &Address) -> Option<Block> {
         let mut inbox = self.proposal_inbox.write();
         inbox
@@ -1528,13 +1554,17 @@ impl NodeInner {
         }
         let tip_snapshot = *self.chain_tip.read();
         let height = tip_snapshot.height + 1;
+        self.prune_consensus_rounds_below(height);
         self.ledger.sync_epoch_for_height(height);
         let epoch = self.ledger.current_epoch();
         let accounts_snapshot = self.ledger.accounts_snapshot();
         let (validators, observers) = classify_participants(&accounts_snapshot);
         let vrf_pool = self.gather_vrf_submissions(epoch, tip_snapshot.last_hash, &validators);
+        let round_number = self.current_consensus_round(height);
+        self.observe_consensus_round(height, round_number);
         let mut round = ConsensusRound::new(
             height,
+            round_number,
             tip_snapshot.last_hash,
             self.config.target_validator_count,
             validators,
@@ -1937,6 +1967,7 @@ impl NodeInner {
         self.evidence_pool
             .write()
             .prune_below(block.header.height.saturating_add(1));
+        self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
         Ok(())
     }
 
