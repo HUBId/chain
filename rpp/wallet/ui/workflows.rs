@@ -7,7 +7,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::BlueprintTransferPolicy;
+use crate::state::{BlueprintTransferPolicy, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -215,6 +215,11 @@ impl<'a> WalletWorkflows<'a> {
             return Err(ChainError::Transaction(
                 "insufficient balance for requested transfer".into(),
             ));
+        }
+        let accounts = self.wallet.accounts_snapshot()?;
+        let utxo_state = UtxoState::new();
+        for account in &accounts {
+            utxo_state.upsert_from_account(account);
         }
         let utxo_inputs = select_inputs_from_available(
             self.wallet.unspent_utxos(self.wallet.address())?,

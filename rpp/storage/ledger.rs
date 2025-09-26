@@ -11,12 +11,13 @@ use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, Identit
 use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{
-    AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
-    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
-    TimetokeWitness, TransactionWitness, UtxoRecord, ZsiRecord, ZsiWitness,
+    AccountBalanceWitness, AssetType, ConsensusWitness, GlobalStateCommitments,
+    ModuleWitnessBundle, ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness,
+    TimetokeRecord, TimetokeWitness, TransactionWitness, UtxoOutpoint, UtxoRecord, ZsiRecord,
+    ZsiWitness,
 };
 use crate::state::{
-    GlobalState, ProofRegistry, ReputationState, TimetokeState, UtxoState, ZsiRegistry,
+    GlobalState, ProofRegistry, ReputationState, StoredUtxo, TimetokeState, UtxoState, ZsiRegistry,
 };
 use crate::types::{
     Account, Address, AttestedIdentityRequest, SignedTransaction, Stake, UptimeProof,
@@ -585,6 +586,10 @@ impl Ledger {
         let tx_id = tx.hash();
         let module_sender_before = self.module_records(&tx.payload.from);
         let module_recipient_before = self.module_records(&tx.payload.to);
+        let mut spent_outpoints = Vec::new();
+        if let Some(utxo) = module_sender_before.utxo.as_ref() {
+            spent_outpoints.push(utxo.outpoint.clone());
+        }
         let now = crate::reputation::current_timestamp();
         let (binding_change, sender_before, sender_after, recipient_before, recipient_after) = {
             let mut accounts = self.global_state.write_accounts();
@@ -645,12 +650,53 @@ impl Ledger {
                 recipient_after,
             )
         };
+        for outpoint in &spent_outpoints {
+            if !self.utxo_state.remove_spent(outpoint) {
+                return Err(ChainError::Transaction(
+                    "transaction input already spent".into(),
+                ));
+            }
+        }
         let WalletBindingChange { previous, current } = binding_change;
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(&tx.payload.from, previous.as_deref(), &current)?;
         drop(tree);
-        self.index_account_modules(&sender_after, Some(tx_id));
-        self.index_account_modules(&recipient_after, Some(tx_id));
+        let mut accounts_for_update = vec![sender_after.clone()];
+        if sender_after.address != recipient_after.address {
+            accounts_for_update.push(recipient_after.clone());
+        }
+        for account in &accounts_for_update {
+            self.reputation_state.upsert_from_account(account);
+            self.timetoke_state.upsert_from_account(account);
+            self.zsi_registry.upsert_from_account(account);
+        }
+
+        let mut utxo_outputs = Vec::new();
+        if sender_after.address == recipient_after.address {
+            utxo_outputs.push(utxo_output_record(
+                tx_id,
+                0,
+                &sender_after.address,
+                sender_after.balance,
+            ));
+        } else {
+            utxo_outputs.push(utxo_output_record(
+                tx_id,
+                0,
+                &recipient_after.address,
+                recipient_after.balance,
+            ));
+            utxo_outputs.push(utxo_output_record(
+                tx_id,
+                1,
+                &sender_after.address,
+                sender_after.balance,
+            ));
+        }
+        for record in &utxo_outputs {
+            self.utxo_state.insert(StoredUtxo::new(record.clone()));
+        }
+
         let sender_modules_after = self.module_records(&tx.payload.from);
         let recipient_modules_after = self.module_records(&tx.payload.to);
 
@@ -1014,6 +1060,20 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
     data.extend_from_slice(&epoch.to_le_bytes());
     data.extend_from_slice(state_root);
     Blake2sHasher::hash(&data).into()
+}
+
+fn utxo_output_record(tx_id: [u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {
+    let mut script_seed = owner.as_bytes().to_vec();
+    script_seed.extend_from_slice(&index.to_be_bytes());
+    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+    UtxoRecord {
+        outpoint: UtxoOutpoint { tx_id, index },
+        owner: owner.clone(),
+        value,
+        asset_type: AssetType::Native,
+        script_hash,
+        timelock: None,
+    }
 }
 
 #[cfg(test)]
