@@ -12,5 +12,5 @@ pub use lifecycle::StateLifecycle;
 pub use proof_registry::ProofRegistry;
 pub use reputation::ReputationState;
 pub use timetoke::TimetokeState;
-pub use utxo::{BlueprintTransferPolicy, StoredUtxo, UtxoState};
+pub use utxo::{StoredUtxo, UtxoState};
 pub use zsi::ZsiRegistry;
