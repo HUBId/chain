@@ -2411,6 +2411,9 @@ mod telemetry_tests {
         let config = TelemetryConfig {
             enabled: true,
             endpoint: Some(endpoint),
+            auth_token: None,
+            timeout_ms: 5_000,
+            retry_max: 3,
             sample_interval_secs: 1,
         };
         let client = Client::new();
@@ -2434,6 +2437,9 @@ mod telemetry_tests {
         let config = TelemetryConfig {
             enabled: true,
             endpoint: Some(endpoint),
+            auth_token: None,
+            timeout_ms: 5_000,
+            retry_max: 3,
             sample_interval_secs: 1,
         };
         let client = Client::new();
@@ -2455,6 +2461,9 @@ mod telemetry_tests {
         let config = TelemetryConfig {
             enabled: true,
             endpoint: None,
+            auth_token: None,
+            timeout_ms: 5_000,
+            retry_max: 3,
             sample_interval_secs: 1,
         };
         let client = Client::new();

@@ -9,6 +9,26 @@ use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::types::Stake;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct P2pConfig {
+    pub listen_addr: String,
+    pub bootstrap_peers: Vec<String>,
+    pub heartbeat_interval_ms: u64,
+    pub gossip_enabled: bool,
+}
+
+impl Default for P2pConfig {
+    fn default() -> Self {
+        Self {
+            listen_addr: "/ip4/0.0.0.0/tcp/7600".to_string(),
+            bootstrap_peers: Vec::new(),
+            heartbeat_interval_ms: 5_000,
+            gossip_enabled: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
     pub data_dir: PathBuf,
     pub key_path: PathBuf,
@@ -33,6 +53,8 @@ pub struct NodeConfig {
     pub max_proof_size_bytes: usize,
     #[serde(default)]
     pub rollout: RolloutConfig,
+    #[serde(default)]
+    pub p2p: P2pConfig,
     pub genesis: GenesisConfig,
 }
 
@@ -115,6 +137,7 @@ impl Default for NodeConfig {
             target_validator_count: default_target_validator_count(),
             max_proof_size_bytes: default_max_proof_size_bytes(),
             rollout: RolloutConfig::default(),
+            p2p: P2pConfig::default(),
             genesis: GenesisConfig::default(),
         }
     }
@@ -211,6 +234,12 @@ impl Default for FeatureGates {
 pub struct TelemetryConfig {
     pub enabled: bool,
     pub endpoint: Option<String>,
+    pub auth_token: Option<String>,
+    #[serde(default = "default_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_retry_max")]
+    pub retry_max: u64,
+    #[serde(default = "default_sample_interval_secs")]
     pub sample_interval_secs: u64,
 }
 
@@ -219,9 +248,24 @@ impl Default for TelemetryConfig {
         Self {
             enabled: false,
             endpoint: None,
-            sample_interval_secs: 30,
+            auth_token: None,
+            timeout_ms: default_timeout_ms(),
+            retry_max: default_retry_max(),
+            sample_interval_secs: default_sample_interval_secs(),
         }
     }
+}
+
+fn default_timeout_ms() -> u64 {
+    5_000
+}
+
+fn default_retry_max() -> u64 {
+    3
+}
+
+fn default_sample_interval_secs() -> u64 {
+    30
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
