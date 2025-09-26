@@ -1,9 +1,13 @@
+use std::convert::TryFrom;
 use std::fs;
 use std::path::Path;
 
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
-use rand::RngCore;
 use rand::rngs::OsRng;
+use schnorrkel::SignatureError as VrfSignatureError;
+use schnorrkel::keys::{
+    ExpansionMode, Keypair as VrfKeypairInner, MiniSecretKey, PublicKey as SrPublicKey,
+};
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
@@ -23,35 +27,65 @@ pub struct StoredVrfKeypair {
 
 #[derive(Debug, Clone)]
 pub struct VrfSecretKey {
-    bytes: [u8; 32],
+    inner: MiniSecretKey,
 }
 
 impl VrfSecretKey {
+    pub fn new(inner: MiniSecretKey) -> Self {
+        Self { inner }
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
-        self.bytes
+        self.inner.to_bytes()
+    }
+
+    pub fn as_mini_secret(&self) -> &MiniSecretKey {
+        &self.inner
+    }
+
+    pub fn expand_to_keypair(&self) -> VrfKeypairInner {
+        self.inner.expand_to_keypair(ExpansionMode::Uniform)
+    }
+
+    pub fn derive_public(&self) -> VrfPublicKey {
+        VrfPublicKey {
+            inner: self.expand_to_keypair().public,
+        }
     }
 }
 
-impl From<[u8; 32]> for VrfSecretKey {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self { bytes }
+impl TryFrom<[u8; 32]> for VrfSecretKey {
+    type Error = VrfSignatureError;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        MiniSecretKey::from_bytes(&bytes).map(VrfSecretKey::new)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct VrfPublicKey {
-    bytes: [u8; 32],
+    inner: SrPublicKey,
 }
 
 impl VrfPublicKey {
+    pub fn new(inner: SrPublicKey) -> Self {
+        Self { inner }
+    }
+
     pub fn to_bytes(&self) -> [u8; 32] {
-        self.bytes
+        self.inner.to_bytes()
+    }
+
+    pub fn as_public_key(&self) -> &SrPublicKey {
+        &self.inner
     }
 }
 
-impl From<[u8; 32]> for VrfPublicKey {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self { bytes }
+impl TryFrom<[u8; 32]> for VrfPublicKey {
+    type Error = VrfSignatureError;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        SrPublicKey::from_bytes(&bytes).map(VrfPublicKey::new)
     }
 }
 
@@ -139,21 +173,15 @@ pub fn signature_to_hex(signature: &Signature) -> String {
     hex::encode(signature.to_bytes())
 }
 
-fn derive_vrf_public(secret: &[u8; 32]) -> ChainResult<[u8; 32]> {
-    let secret = SecretKey::from_bytes(secret)
-        .map_err(|err| ChainError::Config(format!("invalid VRF secret key bytes: {err}")))?;
-    let public: PublicKey = (&secret).into();
-    Ok(public.to_bytes())
+fn derive_vrf_public(secret: &VrfSecretKey) -> VrfPublicKey {
+    secret.derive_public()
 }
 
 pub fn generate_vrf_keypair() -> ChainResult<VrfKeypair> {
-    let mut secret = [0u8; 32];
-    OsRng.fill_bytes(&mut secret);
-    let public = derive_vrf_public(&secret)?;
-    Ok(VrfKeypair {
-        public: VrfPublicKey::from(public),
-        secret: VrfSecretKey::from(secret),
-    })
+    let secret = MiniSecretKey::generate();
+    let secret = VrfSecretKey::new(secret);
+    let public = derive_vrf_public(&secret);
+    Ok(VrfKeypair { public, secret })
 }
 
 pub fn load_or_generate_vrf_keypair(path: &Path) -> ChainResult<VrfKeypair> {
@@ -192,16 +220,23 @@ pub fn load_vrf_keypair(path: &Path) -> ChainResult<VrfKeypair> {
     let public_bytes: [u8; 32] = public_vec
         .try_into()
         .map_err(|_| ChainError::Config("invalid VRF public key length".to_string()))?;
-    let derived_public = derive_vrf_public(&secret_bytes)?;
-    if derived_public != public_bytes {
+    let secret = VrfSecretKey::try_from(secret_bytes)
+        .map_err(|err| ChainError::Config(format!("invalid VRF secret key bytes: {err}")))?;
+    let public = match VrfPublicKey::try_from(public_bytes) {
+        Ok(key) => key,
+        Err(_) => {
+            return Err(ChainError::Config(
+                "VRF public key mismatch; regenerate the VRF keypair".to_string(),
+            ));
+        }
+    };
+    let derived_public = derive_vrf_public(&secret);
+    if derived_public.to_bytes() != public.to_bytes() {
         return Err(ChainError::Config(
             "VRF public key mismatch; regenerate the VRF keypair".to_string(),
         ));
     }
-    Ok(VrfKeypair {
-        public: VrfPublicKey::from(public_bytes),
-        secret: VrfSecretKey::from(secret_bytes),
-    })
+    Ok(VrfKeypair { public, secret })
 }
 
 pub fn vrf_public_key_from_hex(data: &str) -> ChainResult<VrfPublicKey> {
@@ -210,7 +245,8 @@ pub fn vrf_public_key_from_hex(data: &str) -> ChainResult<VrfPublicKey> {
     let bytes: [u8; 32] = bytes
         .try_into()
         .map_err(|_| ChainError::Config("invalid VRF public key length".to_string()))?;
-    Ok(VrfPublicKey::from(bytes))
+    VrfPublicKey::try_from(bytes)
+        .map_err(|err| ChainError::Config(format!("invalid VRF public key bytes: {err}")))
 }
 
 pub fn vrf_secret_key_from_hex(data: &str) -> ChainResult<VrfSecretKey> {
@@ -219,7 +255,8 @@ pub fn vrf_secret_key_from_hex(data: &str) -> ChainResult<VrfSecretKey> {
     let bytes: [u8; 32] = bytes
         .try_into()
         .map_err(|_| ChainError::Config("invalid VRF secret key length".to_string()))?;
-    Ok(VrfSecretKey::from(bytes))
+    VrfSecretKey::try_from(bytes)
+        .map_err(|err| ChainError::Config(format!("invalid VRF secret key bytes: {err}")))
 }
 
 pub fn vrf_public_key_to_hex(key: &VrfPublicKey) -> String {

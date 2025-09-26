@@ -56,3 +56,33 @@ fn vrf_submission_roundtrip_after_reload() {
     let leader = select_leader(&selection.validators).expect("leader");
     assert_eq!(leader.address, "addr_vrf_roundtrip");
 }
+
+#[test]
+fn vrf_verification_rejects_tampered_proof() {
+    let keypair = generate_vrf_keypair().expect("generate vrf keypair");
+    let input = sample_input();
+    let output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
+
+    let mut tampered = output.clone();
+    tampered.proof[0] ^= 0x01;
+
+    let error = verify_vrf(&input, &keypair.public, &tampered)
+        .expect_err("tampered proof must fail verification");
+    assert!(matches!(
+        error,
+        rpp_chain::vrf::VrfError::VerificationFailed | rpp_chain::vrf::VrfError::Backend(_)
+    ));
+}
+
+#[test]
+fn vrf_outputs_are_unpredictable_for_distinct_keys() {
+    let input = sample_input();
+    let first = generate_vrf_keypair().expect("generate vrf keypair");
+    let second = generate_vrf_keypair().expect("generate vrf keypair");
+
+    let first_output = generate_vrf(&input, &first.secret).expect("first vrf output");
+    let second_output = generate_vrf(&input, &second.secret).expect("second vrf output");
+
+    assert_ne!(first_output.randomness, second_output.randomness);
+    assert_ne!(first_output.preoutput, second_output.preoutput);
+}

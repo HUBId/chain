@@ -346,7 +346,8 @@ pub fn evaluate_vrf(
     let digest = input.poseidon_digest_bytes();
     VrfProof {
         randomness: natural_from_bytes(&digest),
-        proof: hex::encode(digest),
+        preoutput: hex::encode(digest),
+        proof: "00".repeat(vrf::VRF_PROOF_LENGTH),
     }
 }
 

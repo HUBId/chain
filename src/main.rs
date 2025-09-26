@@ -28,7 +28,7 @@ use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
-use crate::gossip::{spawn_node_event_worker, NodeGossipProcessor};
+use crate::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 
 #[derive(Parser)]
 #[command(author, version, about = "Production-ready RPP blockchain node")]

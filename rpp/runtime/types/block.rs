@@ -49,6 +49,7 @@ pub struct BlockHeader {
     pub total_stake: String,
     pub randomness: String,
     pub vrf_public_key: String,
+    pub vrf_preoutput: String,
     pub vrf_proof: String,
     pub timestamp: u64,
     pub proposer: Address,
@@ -70,6 +71,7 @@ impl BlockHeader {
         total_stake: String,
         randomness: String,
         vrf_public_key: String,
+        vrf_preoutput: String,
         vrf_proof: String,
         proposer: Address,
         leader_tier: String,
@@ -88,6 +90,7 @@ impl BlockHeader {
             total_stake,
             randomness,
             vrf_public_key,
+            vrf_preoutput,
             vrf_proof,
             proposer,
             leader_tier,
@@ -999,6 +1002,7 @@ impl Block {
         let randomness = parse_natural(&self.header.randomness)?;
         let proof = VrfProof {
             randomness,
+            preoutput: self.header.vrf_preoutput.clone(),
             proof: self.header.vrf_proof.clone(),
         };
         let public_key = if self.header.vrf_public_key.trim().is_empty() {
@@ -1469,6 +1473,7 @@ mod tests {
             "0".to_string(),
             "66".repeat(32),
             "77".repeat(32),
+            "88".repeat(crate::vrf::VRF_PROOF_LENGTH),
             proposer_address,
             Tier::Tl5.to_string(),
             0,
@@ -1702,6 +1707,7 @@ mod tests {
             "0".to_string(),
             genesis_vrf.randomness.to_string(),
             vrf_public_key_to_hex(&vrf_keypair.public),
+            genesis_vrf.preoutput.clone(),
             genesis_vrf.proof.clone(),
             "13".repeat(32),
             Tier::Tl5.to_string(),
@@ -1756,6 +1762,7 @@ mod tests {
             "1000".to_string(),
             vrf.randomness.to_string(),
             vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf.preoutput.clone(),
             vrf.proof.clone(),
             address.clone(),
             Tier::Tl3.to_string(),
@@ -1929,6 +1936,7 @@ mod tests {
             "0".to_string(),
             vrf.randomness.to_string(),
             vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf.preoutput.clone(),
             vrf.proof.clone(),
             proposer.clone(),
             Tier::Tl5.to_string(),
