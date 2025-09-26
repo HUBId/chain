@@ -839,35 +839,22 @@ impl NodeInner {
     async fn telemetry_loop(self: Arc<Self>, config: TelemetryConfig) {
         let interval = Duration::from_secs(config.sample_interval_secs.max(1));
         let mut ticker = time::interval(interval);
+        let client = reqwest::Client::new();
         loop {
             ticker.tick().await;
-            if let Err(err) = self.emit_telemetry(&config) {
+            if let Err(err) = self.emit_telemetry(&client, &config).await {
                 warn!(?err, "failed to emit telemetry snapshot");
             }
         }
     }
 
-    fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
+    async fn emit_telemetry(
+        &self,
+        client: &reqwest::Client,
+        config: &TelemetryConfig,
+    ) -> ChainResult<()> {
         let snapshot = self.build_telemetry_snapshot()?;
-        let encoded = serde_json::to_string(&snapshot).map_err(|err| {
-            ChainError::Config(format!("unable to encode telemetry snapshot: {err}"))
-        })?;
-        if let Some(endpoint) = &config.endpoint {
-            if endpoint.is_empty() {
-                info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
-            } else {
-                info!(
-                    target = "telemetry",
-                    ?endpoint,
-                    payload = %encoded,
-                    "telemetry snapshot dispatched"
-                );
-            }
-        } else {
-            info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
-        }
-        *self.telemetry_last_height.write() = Some(snapshot.node.height);
-        Ok(())
+        send_telemetry_with_tracking(client, config, &snapshot, &self.telemetry_last_height).await
     }
 
     fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
@@ -2318,6 +2305,260 @@ impl NodeInner {
             tip.last_hash = [0u8; 32];
         }
         Ok(())
+    }
+}
+
+pub(super) async fn send_telemetry_with_tracking(
+    client: &reqwest::Client,
+    config: &TelemetryConfig,
+    snapshot: &NodeTelemetrySnapshot,
+    telemetry_last_height: &RwLock<Option<u64>>,
+) -> ChainResult<()> {
+    dispatch_telemetry_snapshot(client, config.endpoint.as_deref(), snapshot).await?;
+    *telemetry_last_height.write() = Some(snapshot.node.height);
+    Ok(())
+}
+
+pub(super) async fn dispatch_telemetry_snapshot(
+    client: &reqwest::Client,
+    endpoint: Option<&str>,
+    snapshot: &NodeTelemetrySnapshot,
+) -> ChainResult<()> {
+    let encoded = serde_json::to_string(snapshot)
+        .map_err(|err| ChainError::Config(format!("unable to encode telemetry snapshot: {err}")))?;
+
+    match endpoint {
+        Some(endpoint) if !endpoint.is_empty() => {
+            info!(target = "telemetry", ?endpoint, payload = %encoded, "telemetry snapshot dispatching");
+            let response = match client.post(endpoint).json(snapshot).send().await {
+                Ok(response) => response,
+                Err(err) => {
+                    warn!(
+                        target = "telemetry",
+                        ?endpoint,
+                        error = %err,
+                        "telemetry snapshot dispatch failed"
+                    );
+                    return Err(ChainError::Config(format!(
+                        "unable to dispatch telemetry snapshot: {err}"
+                    )));
+                }
+            };
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = match response.text().await {
+                    Ok(body) => body,
+                    Err(err) => {
+                        warn!(
+                            target = "telemetry",
+                            ?endpoint,
+                            %status,
+                            error = %err,
+                            "failed to read telemetry endpoint response"
+                        );
+                        String::new()
+                    }
+                };
+                warn!(
+                    target = "telemetry",
+                    ?endpoint,
+                    %status,
+                    body = %body,
+                    "telemetry snapshot dispatch failed"
+                );
+                return Err(ChainError::Config(format!(
+                    "telemetry endpoint responded with status {status}"
+                )));
+            }
+
+            info!(
+                target = "telemetry",
+                ?endpoint,
+                payload = %encoded,
+                "telemetry snapshot dispatched"
+            );
+        }
+        _ => {
+            info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::{
+        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
+        ReleaseChannel, TelemetryConfig, dispatch_telemetry_snapshot, send_telemetry_with_tracking,
+    };
+    use crate::vrf::VrfSelectionMetrics;
+    use axum::http::StatusCode;
+    use axum::{Router, routing::post};
+    use parking_lot::RwLock;
+    use reqwest::Client;
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::oneshot;
+    use tracing_test::traced_test;
+
+    #[tokio::test]
+    async fn telemetry_dispatch_posts_and_updates_height() {
+        let (addr, counter, shutdown) = spawn_test_server(StatusCode::OK).await;
+        let endpoint = format!("http://{addr}/");
+        let config = TelemetryConfig {
+            enabled: true,
+            endpoint: Some(endpoint),
+            sample_interval_secs: 1,
+        };
+        let client = Client::new();
+        let snapshot = sample_snapshot(42);
+        let last_height = RwLock::new(None);
+
+        send_telemetry_with_tracking(&client, &config, &snapshot, &last_height)
+            .await
+            .expect("dispatch succeeds");
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(*last_height.read(), Some(42));
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn telemetry_dispatch_logs_on_failure_and_preserves_height() {
+        let (addr, counter, shutdown) = spawn_test_server(StatusCode::INTERNAL_SERVER_ERROR).await;
+        let endpoint = format!("http://{addr}/");
+        let config = TelemetryConfig {
+            enabled: true,
+            endpoint: Some(endpoint),
+            sample_interval_secs: 1,
+        };
+        let client = Client::new();
+        let snapshot = sample_snapshot(24);
+        let last_height = RwLock::new(None);
+
+        let result = send_telemetry_with_tracking(&client, &config, &snapshot, &last_height).await;
+
+        assert!(result.is_err());
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        assert_eq!(*last_height.read(), None);
+        assert!(logs_contain("telemetry snapshot dispatch failed"));
+        let _ = shutdown.send(());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn telemetry_dispatch_falls_back_to_logging_without_endpoint() {
+        let config = TelemetryConfig {
+            enabled: true,
+            endpoint: None,
+            sample_interval_secs: 1,
+        };
+        let client = Client::new();
+        let snapshot = sample_snapshot(7);
+        let last_height = RwLock::new(None);
+
+        send_telemetry_with_tracking(&client, &config, &snapshot, &last_height)
+            .await
+            .expect("dispatch succeeds");
+
+        assert_eq!(*last_height.read(), Some(7));
+        assert!(logs_contain("telemetry snapshot"));
+    }
+
+    #[tokio::test]
+    async fn telemetry_dispatch_invokes_endpoint_directly() {
+        let (addr, counter, shutdown) = spawn_test_server(StatusCode::OK).await;
+        let endpoint = format!("http://{addr}/");
+        let client = Client::new();
+        let snapshot = sample_snapshot(99);
+
+        dispatch_telemetry_snapshot(&client, Some(&endpoint), &snapshot)
+            .await
+            .expect("dispatch succeeds");
+
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let _ = shutdown.send(());
+    }
+
+    fn sample_snapshot(height: u64) -> NodeTelemetrySnapshot {
+        NodeTelemetrySnapshot {
+            release_channel: ReleaseChannel::Development,
+            feature_gates: FeatureGates::default(),
+            node: NodeStatus {
+                address: "addr".into(),
+                height,
+                last_hash: "hash".into(),
+                epoch: 0,
+                epoch_nonce: "nonce".into(),
+                pending_transactions: 0,
+                pending_identities: 0,
+                pending_votes: 0,
+                pending_uptime_proofs: 0,
+                vrf_metrics: VrfSelectionMetrics::default(),
+                tip: None,
+            },
+            consensus: ConsensusStatus {
+                height,
+                block_hash: None,
+                proposer: None,
+                round: 0,
+                total_power: "0".into(),
+                quorum_threshold: "0".into(),
+                pre_vote_power: "0".into(),
+                pre_commit_power: "0".into(),
+                commit_power: "0".into(),
+                quorum_reached: false,
+                observers: 0,
+                epoch: 0,
+                epoch_nonce: "nonce".into(),
+                pending_votes: 0,
+            },
+            mempool: MempoolStatus {
+                transactions: Vec::new(),
+                identities: Vec::new(),
+                votes: Vec::new(),
+                uptime_proofs: Vec::new(),
+            },
+        }
+    }
+
+    async fn spawn_test_server(
+        status: StatusCode,
+    ) -> (SocketAddr, Arc<AtomicUsize>, oneshot::Sender<()>) {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+
+        let app = Router::new().route(
+            "/",
+            post(move |_body: axum::body::Bytes| {
+                let counter = counter_clone.clone();
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    (status, ())
+                }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .expect("serve test telemetry");
+        });
+
+        (addr, counter, shutdown_tx)
     }
 }
 
