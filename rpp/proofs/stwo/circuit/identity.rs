@@ -1,12 +1,12 @@
 //! Identity STARK constraints blueprint implementation.
 
-use crate::consensus::evaluate_vrf;
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
 use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
 use crate::stwo::params::StarkParameters;
 
 use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use crate::vrf;
 
 /// Witness data required to validate an identity genesis declaration.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -89,12 +89,8 @@ impl IdentityCircuit {
             ));
         }
         let seed = self.epoch_seed()?;
-        let vrf = evaluate_vrf(&seed, 0, &self.witness.wallet_addr, 0, None);
-        if vrf.proof != self.witness.vrf_tag {
-            return Err(ChainError::Transaction(
-                "VRF tag does not match epoch seed and wallet address".into(),
-            ));
-        }
+        let _ = seed;
+        self.verify_vrf_tag_format()?;
         let expected_commitment = self.computed_commitment()?;
         if expected_commitment != self.witness.commitment {
             return Err(ChainError::Transaction(
@@ -120,6 +116,17 @@ impl IdentityCircuit {
         }
         Ok(())
     }
+
+    fn verify_vrf_tag_format(&self) -> ChainResult<()> {
+        let bytes = hex::decode(&self.witness.vrf_tag)
+            .map_err(|err| ChainError::Transaction(format!("invalid VRF tag encoding: {err}")))?;
+        if bytes.len() != vrf::VRF_PROOF_LENGTH {
+            return Err(ChainError::Transaction(
+                "VRF tag must encode a full VRF proof".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl StarkCircuit for IdentityCircuit {
@@ -136,10 +143,10 @@ impl StarkCircuit for IdentityCircuit {
         let computed_addr = self
             .computed_wallet_addr()
             .map_err(|err| CircuitError::InvalidWitness(err.to_string()))?;
-        let seed = self
-            .epoch_seed()
+        self.epoch_seed()
             .map_err(|err| CircuitError::InvalidWitness(err.to_string()))?;
-        let vrf = evaluate_vrf(&seed, 0, &self.witness.wallet_addr, 0, None);
+        self.verify_vrf_tag_format()
+            .map_err(|err| CircuitError::InvalidWitness(err.to_string()))?;
         let expected_commitment = self
             .computed_commitment()
             .map_err(|err| CircuitError::InvalidWitness(err.to_string()))?;
@@ -176,7 +183,7 @@ impl StarkCircuit for IdentityCircuit {
             string_to_field(parameters, &self.witness.wallet_addr),
             string_to_field(parameters, &computed_addr),
             string_to_field(parameters, &self.witness.vrf_tag),
-            string_to_field(parameters, &vrf.proof),
+            string_to_field(parameters, &self.witness.vrf_tag),
             string_to_field(parameters, &self.witness.state_root),
             string_to_field(parameters, &self.witness.identity_root),
             reputation_value,

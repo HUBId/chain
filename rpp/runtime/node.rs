@@ -335,7 +335,7 @@ impl Node {
             let stakes = ledger.stake_snapshot();
             let total_stake = aggregate_total_stake(&stakes);
             let genesis_seed = [0u8; 32];
-            let vrf = evaluate_vrf(&genesis_seed, 0, &address, 0, Some(&vrf_keypair.secret));
+            let vrf = evaluate_vrf(&genesis_seed, 0, &address, 0, Some(&vrf_keypair.secret))?;
             let header = BlockHeader::new(
                 0,
                 hex::encode([0u8; 32]),
@@ -494,6 +494,7 @@ mod tests {
     use super::*;
     use crate::config::NodeConfig;
     use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
+    use crate::crypto::{generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::errors::ChainError;
     use crate::ledger::Ledger;
     use crate::stwo::circuit::{
@@ -538,12 +539,21 @@ mod tests {
         let wallet_pk = hex::encode(&pk_bytes);
         let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
         let epoch_nonce_bytes = ledger.current_epoch_nonce();
-        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0, None);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+        let vrf = evaluate_vrf(
+            &epoch_nonce_bytes,
+            0,
+            &wallet_addr,
+            0,
+            Some(&vrf_keypair.secret),
+        )
+        .expect("evaluate vrf");
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,
             wallet_addr,
-            vrf_tag: vrf.proof.clone(),
+            vrf_public_key: vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf_proof: vrf.clone(),
             epoch_nonce: hex::encode(epoch_nonce_bytes),
             state_root: hex::encode(ledger.state_root()),
             identity_root: hex::encode(ledger.identity_root()),
@@ -555,7 +565,7 @@ mod tests {
         let witness = IdentityWitness {
             wallet_pk: genesis.wallet_pk.clone(),
             wallet_addr: genesis.wallet_addr.clone(),
-            vrf_tag: genesis.vrf_tag.clone(),
+            vrf_tag: genesis.vrf_tag().to_string(),
             epoch_nonce: genesis.epoch_nonce.clone(),
             state_root: genesis.state_root.clone(),
             identity_root: genesis.identity_root.clone(),
@@ -1417,7 +1427,7 @@ impl NodeInner {
                 epoch_nonce: request.declaration.genesis.epoch_nonce.clone(),
                 state_root: request.declaration.genesis.state_root.clone(),
                 identity_root: request.declaration.genesis.identity_root.clone(),
-                vrf_tag: request.declaration.genesis.vrf_tag.clone(),
+                vrf_tag: request.declaration.genesis.vrf_tag().to_string(),
                 attested_votes: request.attested_votes.len(),
                 gossip_confirmations: request.gossip_confirmations.len(),
             })
@@ -1543,7 +1553,7 @@ impl NodeInner {
             &address.to_string(),
             0,
             Some(&self.vrf_keypair.secret),
-        );
+        )?;
         Ok(VrfStatus {
             address: address.to_string(),
             epoch: epoch_info.epoch,

@@ -166,7 +166,7 @@ impl<'a> WalletWorkflows<'a> {
                 ChainError::Config(format!("unable to persist identity workflow state: {err}"))
             })?;
         Ok(IdentityWorkflow {
-            vrf_tag: declaration.genesis.vrf_tag.clone(),
+            vrf_tag: declaration.genesis.vrf_tag().to_string(),
             epoch_nonce: declaration.genesis.epoch_nonce.clone(),
             state_root: declaration.genesis.state_root.clone(),
             identity_root: declaration.genesis.identity_root.clone(),

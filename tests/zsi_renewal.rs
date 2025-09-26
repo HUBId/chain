@@ -2,7 +2,7 @@ use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
 use hex;
 
 use rpp_chain::consensus::{BftVote, BftVoteKind, SignedBftVote};
-use rpp_chain::crypto::address_from_public_key;
+use rpp_chain::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
 use rpp_chain::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
 use rpp_chain::stwo::circuit::StarkCircuit;
 use rpp_chain::stwo::circuit::identity::{IdentityCircuit, IdentityWitness};
@@ -45,13 +45,21 @@ fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
     let wallet_addr = hex::encode::<[u8; 32]>(
         stwo::core::vcs::blake2_hash::Blake2sHasher::hash(&pk_bytes).into(),
     );
-    let vrf =
-        rpp_chain::consensus::evaluate_vrf(&ledger.current_epoch_nonce(), 0, &wallet_addr, 0, None);
+    let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+    let vrf = rpp_chain::consensus::evaluate_vrf(
+        &ledger.current_epoch_nonce(),
+        0,
+        &wallet_addr,
+        0,
+        Some(&vrf_keypair.secret),
+    )
+    .expect("evaluate vrf");
     let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
     let genesis = IdentityGenesis {
         wallet_pk: pk_hex,
         wallet_addr: wallet_addr.clone(),
-        vrf_tag: vrf.proof.clone(),
+        vrf_public_key: vrf_public_key_to_hex(&vrf_keypair.public),
+        vrf_proof: vrf.clone(),
         epoch_nonce: hex::encode(ledger.current_epoch_nonce()),
         state_root: hex::encode(ledger.state_root()),
         identity_root: hex::encode(ledger.identity_root()),
@@ -64,7 +72,7 @@ fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
     let witness = IdentityWitness {
         wallet_pk: genesis.wallet_pk.clone(),
         wallet_addr: genesis.wallet_addr.clone(),
-        vrf_tag: genesis.vrf_tag.clone(),
+        vrf_tag: genesis.vrf_tag().to_string(),
         epoch_nonce: genesis.epoch_nonce.clone(),
         state_root: genesis.state_root.clone(),
         identity_root: genesis.identity_root.clone(),

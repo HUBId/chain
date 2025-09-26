@@ -8,7 +8,10 @@ use serde::{Serialize, de::DeserializeOwned};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::consensus::evaluate_vrf;
-use crate::crypto::{address_from_public_key, sign_message};
+use crate::crypto::{
+    StoredVrfKeypair, VrfKeypair, address_from_public_key, generate_vrf_keypair, sign_message,
+    vrf_public_key_from_hex, vrf_public_key_to_hex, vrf_secret_key_from_hex, vrf_secret_key_to_hex,
+};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
@@ -25,6 +28,7 @@ use crate::types::{
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
 const IDENTITY_WORKFLOW_KEY: &[u8] = b"wallet_identity_workflow";
+const IDENTITY_VRF_KEY: &[u8] = b"wallet_identity_vrf_keypair";
 
 #[derive(Clone)]
 pub struct Wallet {
@@ -109,6 +113,43 @@ impl Wallet {
         self.storage.delete_metadata_blob(IDENTITY_WORKFLOW_KEY)
     }
 
+    fn persist_identity_vrf_keypair(&self, keypair: &VrfKeypair) -> ChainResult<()> {
+        let stored = StoredVrfKeypair {
+            public_key: vrf_public_key_to_hex(&keypair.public),
+            secret_key: vrf_secret_key_to_hex(&keypair.secret),
+        };
+        let encoded = serde_json::to_vec(&stored).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to encode VRF keypair for wallet persistence: {err}"
+            ))
+        })?;
+        self.storage.write_metadata_blob(IDENTITY_VRF_KEY, encoded)
+    }
+
+    fn load_identity_vrf_keypair(&self) -> ChainResult<Option<VrfKeypair>> {
+        let maybe_bytes = self.storage.read_metadata_blob(IDENTITY_VRF_KEY)?;
+        let Some(bytes) = maybe_bytes else {
+            return Ok(None);
+        };
+        let stored: StoredVrfKeypair = serde_json::from_slice(&bytes).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to decode persisted VRF keypair for wallet: {err}"
+            ))
+        })?;
+        let secret = vrf_secret_key_from_hex(&stored.secret_key)?;
+        let public = vrf_public_key_from_hex(&stored.public_key)?;
+        Ok(Some(VrfKeypair { public, secret }))
+    }
+
+    fn load_or_generate_identity_vrf_keypair(&self) -> ChainResult<VrfKeypair> {
+        if let Some(keypair) = self.load_identity_vrf_keypair()? {
+            return Ok(keypair);
+        }
+        let keypair = generate_vrf_keypair()?;
+        self.persist_identity_vrf_keypair(&keypair)?;
+        Ok(keypair)
+    }
+
     pub fn build_identity_declaration(&self) -> ChainResult<IdentityDeclaration> {
         let accounts = self.storage.load_accounts()?;
         let mut tip_height = 0;
@@ -123,12 +164,14 @@ impl Wallet {
 
         let wallet_pk = hex::encode(self.keypair.public.to_bytes());
         let wallet_addr = self.address.clone();
-        let vrf = evaluate_vrf(&epoch_nonce, 0, &wallet_addr, 0, None);
+        let vrf_keypair = self.load_or_generate_identity_vrf_keypair()?;
+        let vrf = evaluate_vrf(&epoch_nonce, 0, &wallet_addr, 0, Some(&vrf_keypair.secret))?;
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,
             wallet_addr,
-            vrf_tag: vrf.proof.clone(),
+            vrf_public_key: vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf_proof: vrf.clone(),
             epoch_nonce: hex::encode(epoch_nonce),
             state_root,
             identity_root,

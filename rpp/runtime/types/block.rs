@@ -1368,12 +1368,21 @@ mod tests {
         let wallet_pk = hex::encode(&pk_bytes);
         let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
         let epoch_nonce_bytes = ledger.current_epoch_nonce();
-        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0, None);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+        let vrf = evaluate_vrf(
+            &epoch_nonce_bytes,
+            0,
+            &wallet_addr,
+            0,
+            Some(&vrf_keypair.secret),
+        )
+        .expect("evaluate vrf");
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,
             wallet_addr,
-            vrf_tag: vrf.proof.clone(),
+            vrf_public_key: vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf_proof: vrf.clone(),
             epoch_nonce: hex::encode(epoch_nonce_bytes),
             state_root: hex::encode(ledger.state_root()),
             identity_root: hex::encode(ledger.identity_root()),
@@ -1385,7 +1394,7 @@ mod tests {
         let witness = IdentityWitness {
             wallet_pk: genesis.wallet_pk.clone(),
             wallet_addr: genesis.wallet_addr.clone(),
-            vrf_tag: genesis.vrf_tag.clone(),
+            vrf_tag: genesis.vrf_tag().to_string(),
             epoch_nonce: genesis.epoch_nonce.clone(),
             state_root: genesis.state_root.clone(),
             identity_root: genesis.identity_root.clone(),
@@ -1693,7 +1702,8 @@ mod tests {
 
         let state_root = "aa".repeat(32);
         let genesis_seed = [0u8; 32];
-        let genesis_vrf = evaluate_vrf(&genesis_seed, 0, &address, 0, Some(&vrf_keypair.secret));
+        let genesis_vrf = evaluate_vrf(&genesis_seed, 0, &address, 0, Some(&vrf_keypair.secret))
+            .expect("evaluate vrf");
         let prev_header = BlockHeader::new(
             0,
             hex::encode([0u8; 32]),
@@ -1748,7 +1758,8 @@ mod tests {
             &address,
             0,
             Some(&vrf_keypair.secret),
-        );
+        )
+        .expect("evaluate vrf");
         let header = BlockHeader::new(
             1,
             prev_block.hash.clone(),
@@ -1922,7 +1933,8 @@ mod tests {
         let proposer = "99".repeat(32);
         let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
         let genesis_seed = [0u8; 32];
-        let vrf = evaluate_vrf(&genesis_seed, 0, &proposer, 0, Some(&vrf_keypair.secret));
+        let vrf = evaluate_vrf(&genesis_seed, 0, &proposer, 0, Some(&vrf_keypair.secret))
+            .expect("evaluate vrf");
         let header = BlockHeader::new(
             0,
             hex::encode([0u8; 32]),

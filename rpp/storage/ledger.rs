@@ -465,7 +465,7 @@ impl Ledger {
                 ));
             }
         }
-        if !self.register_vrf_tag(&genesis.vrf_tag) {
+        if !self.register_vrf_tag(genesis.vrf_tag()) {
             return Err(ChainError::Transaction(
                 "VRF tag already registered for this epoch".into(),
             ));
@@ -1072,7 +1072,7 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
 mod tests {
     use super::*;
     use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
-    use crate::crypto::address_from_public_key;
+    use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::rpp::{
         AccountBalanceWitness, ConsensusWitness, ModuleWitnessBundle, ProofModule,
         ReputationEventKind, ReputationRecord, ReputationWitness, TierDescriptor, TimetokeRecord,
@@ -1144,12 +1144,21 @@ mod tests {
         let wallet_pk = hex::encode(&pk_bytes);
         let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
         let epoch_nonce_bytes = ledger.current_epoch_nonce();
-        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0, None);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+        let vrf = evaluate_vrf(
+            &epoch_nonce_bytes,
+            0,
+            &wallet_addr,
+            0,
+            Some(&vrf_keypair.secret),
+        )
+        .expect("evaluate vrf");
         let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
         let genesis = IdentityGenesis {
             wallet_pk,
             wallet_addr,
-            vrf_tag: vrf.proof.clone(),
+            vrf_public_key: vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf_proof: vrf.clone(),
             epoch_nonce: hex::encode(epoch_nonce_bytes),
             state_root: hex::encode(ledger.state_root()),
             identity_root: hex::encode(ledger.identity_root()),
@@ -1160,7 +1169,7 @@ mod tests {
         let witness = IdentityWitness {
             wallet_pk: genesis.wallet_pk.clone(),
             wallet_addr: genesis.wallet_addr.clone(),
-            vrf_tag: genesis.vrf_tag.clone(),
+            vrf_tag: genesis.vrf_tag().to_string(),
             epoch_nonce: genesis.epoch_nonce.clone(),
             state_root: genesis.state_root.clone(),
             identity_root: genesis.identity_root.clone(),

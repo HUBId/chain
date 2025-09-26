@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
-use crate::consensus::{BftVoteKind, SignedBftVote, evaluate_vrf};
+use crate::consensus::{BftVoteKind, SignedBftVote};
+use crate::crypto::{VrfPublicKey, vrf_public_key_from_hex};
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof};
 use crate::stwo::circuit::identity::IdentityWitness;
@@ -11,6 +12,7 @@ use crate::stwo::circuit::string_to_field;
 use crate::stwo::params::StarkParameters;
 use crate::stwo::proof::{ProofKind, ProofPayload};
 use crate::types::{Address, ChainProof};
+use crate::vrf::{self, PoseidonVrfInput, VrfProof};
 
 /// Zero-knowledge backed genesis declaration for a sovereign identity.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,8 +21,10 @@ pub struct IdentityGenesis {
     pub wallet_pk: String,
     /// Wallet address derived from the public key commitment.
     pub wallet_addr: Address,
-    /// VRF tag binding the registration to an epoch-specific nonce.
-    pub vrf_tag: String,
+    /// VRF public key used to validate the registration proof.
+    pub vrf_public_key: String,
+    /// VRF proof binding the registration to an epoch-specific nonce.
+    pub vrf_proof: VrfProof,
     /// Epoch nonce used when deriving the VRF tag (hex-encoded 32 bytes).
     pub epoch_nonce: String,
     /// State root the claimant observed when constructing the proof.
@@ -55,7 +59,7 @@ impl IdentityGenesis {
         let public_key_bytes = self.public_key_bytes()?;
         self.verify_wallet_address(&public_key_bytes)?;
         self.verify_initial_reputation()?;
-        self.verify_vrf_tag()?;
+        self.verify_vrf_proof()?;
         self.verify_root_encoding(&self.state_root, "state root")?;
         self.verify_root_encoding(&self.identity_root, "identity root")?;
         self.verify_commitment_proof()?;
@@ -85,7 +89,7 @@ impl IdentityGenesis {
         let hasher = parameters.poseidon_hasher();
         let inputs = vec![
             string_to_field(&parameters, &self.wallet_addr),
-            string_to_field(&parameters, &self.vrf_tag),
+            string_to_field(&parameters, self.vrf_tag()),
             string_to_field(&parameters, &self.identity_root),
             string_to_field(&parameters, &self.state_root),
         ];
@@ -132,15 +136,25 @@ impl IdentityGenesis {
         Ok(seed)
     }
 
-    fn verify_vrf_tag(&self) -> ChainResult<()> {
+    fn verify_vrf_proof(&self) -> ChainResult<()> {
         let seed = self.epoch_seed()?;
-        let proof = evaluate_vrf(&seed, 0, &self.wallet_addr, 0, None);
-        if proof.proof != self.vrf_tag {
-            return Err(ChainError::Transaction(
-                "VRF tag does not match the provided wallet and epoch".into(),
-            ));
-        }
-        Ok(())
+        let public_key = self.vrf_public_key()?;
+        let output = self
+            .vrf_proof
+            .to_vrf_output()
+            .map_err(|err| ChainError::Crypto(format!("invalid VRF proof encoding: {err}")))?;
+        let tier_seed = vrf::derive_tier_seed(&self.wallet_addr, 0);
+        let input = PoseidonVrfInput::new(seed, 0, tier_seed);
+        vrf::verify_vrf(&input, &public_key, &output)
+            .map_err(|err| ChainError::Crypto(format!("VRF proof verification failed: {err}")))
+    }
+
+    fn vrf_public_key(&self) -> ChainResult<VrfPublicKey> {
+        vrf_public_key_from_hex(&self.vrf_public_key)
+    }
+
+    pub fn vrf_tag(&self) -> &str {
+        &self.vrf_proof.proof
     }
 
     fn verify_root_encoding(&self, value: &str, label: &str) -> ChainResult<()> {
@@ -203,7 +217,7 @@ impl IdentityDeclaration {
         Ok(IdentityWitness {
             wallet_pk: self.genesis.wallet_pk.clone(),
             wallet_addr: self.genesis.wallet_addr.clone(),
-            vrf_tag: self.genesis.vrf_tag.clone(),
+            vrf_tag: self.genesis.vrf_tag().to_string(),
             epoch_nonce: self.genesis.epoch_nonce.clone(),
             state_root: self.genesis.state_root.clone(),
             identity_root: self.genesis.identity_root.clone(),
@@ -237,7 +251,7 @@ impl IdentityProof {
             ProofPayload::Identity(witness) => {
                 if witness.wallet_pk != genesis.wallet_pk
                     || witness.wallet_addr != genesis.wallet_addr
-                    || witness.vrf_tag != genesis.vrf_tag
+                    || witness.vrf_tag != genesis.vrf_tag()
                     || witness.epoch_nonce != genesis.epoch_nonce
                     || witness.state_root != genesis.state_root
                     || witness.identity_root != genesis.identity_root
