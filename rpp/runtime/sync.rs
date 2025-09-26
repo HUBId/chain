@@ -454,8 +454,11 @@ fn decode_digest(value: &str) -> ChainResult<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::ConsensusCertificate;
-    use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
+    use crate::consensus::{
+        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
+    };
+    use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
+    use crate::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::ExecutionTrace;
     use crate::stwo::circuit::{
@@ -463,7 +466,8 @@ mod tests {
     };
     use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
     use crate::types::{BlockHeader, PruningProof, RecursiveProof};
-    use ed25519_dalek::Signature;
+    use ed25519_dalek::{Keypair, Signature, Signer};
+    use rand::rngs::OsRng;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
@@ -574,6 +578,12 @@ mod tests {
         let previous_hash = previous
             .map(|block| block.hash.clone())
             .unwrap_or_else(|| hex::encode([0u8; 32]));
+        let proposer = format!("proposer{:02}", height);
+        let seed = previous
+            .map(|block| block.block_hash())
+            .unwrap_or([0u8; 32]);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+        let vrf = evaluate_vrf(&seed, height, &proposer, height, Some(&vrf_keypair.secret));
         let mut tx_leaves: Vec<[u8; 32]> = Vec::new();
         let tx_root = hex::encode(compute_merkle_root(&mut tx_leaves));
         let state_root = hex::encode([height as u8 + 2; 32]);
@@ -593,13 +603,40 @@ mod tests {
             zsi_root,
             proof_root,
             "0".to_string(),
-            height.to_string(),
-            format!("vrfpk{:02}", height),
-            format!("vrf{:02}", height),
-            format!("proposer{:02}", height),
+            vrf.randomness.to_string(),
+            vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf.proof.clone(),
+            proposer.clone(),
             Tier::Tl3.to_string(),
             height,
         );
+        let mut rng = OsRng;
+        let keypair = Keypair::generate(&mut rng);
+        let address = address_from_public_key(&keypair.public);
+        let block_hash_hex = hex::encode(header.hash());
+        let prevote = BftVote {
+            round: height,
+            height,
+            block_hash: block_hash_hex.clone(),
+            voter: address.clone(),
+            kind: BftVoteKind::PreVote,
+        };
+        let prevote_sig = keypair.sign(&prevote.message_bytes());
+        let signed_prevote = SignedBftVote {
+            vote: prevote.clone(),
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(prevote_sig.to_bytes()),
+        };
+        let precommit_vote = BftVote {
+            kind: BftVoteKind::PreCommit,
+            ..prevote
+        };
+        let precommit_sig = keypair.sign(&precommit_vote.message_bytes());
+        let signed_precommit = SignedBftVote {
+            vote: precommit_vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(precommit_sig.to_bytes()),
+        };
         let pruning_proof = PruningProof::from_previous(previous, &header);
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =
@@ -624,7 +661,12 @@ mod tests {
         };
         let state_stark = dummy_state_proof();
         let pruning_stark = dummy_pruning_proof();
-        let module_witnesses = ModuleWitnessBundle::default();
+        let mut module_witnesses = ModuleWitnessBundle::default();
+        module_witnesses.record_consensus(ConsensusWitness::new(
+            height,
+            height,
+            vec![address.clone()],
+        ));
         let proof_artifacts = module_witnesses
             .expected_artifacts()
             .expect("expected artifacts")
@@ -645,6 +687,19 @@ mod tests {
         let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
         let mut consensus = ConsensusCertificate::genesis();
         consensus.round = height;
+        consensus.total_power = "1".to_string();
+        consensus.quorum_threshold = "1".to_string();
+        consensus.pre_vote_power = "1".to_string();
+        consensus.pre_commit_power = "1".to_string();
+        consensus.commit_power = "1".to_string();
+        consensus.pre_votes = vec![VoteRecord {
+            vote: signed_prevote,
+            weight: "1".to_string(),
+        }];
+        consensus.pre_commits = vec![VoteRecord {
+            vote: signed_precommit,
+            weight: "1".to_string(),
+        }];
         Block::new(
             header,
             Vec::new(),
