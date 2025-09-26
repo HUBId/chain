@@ -2889,8 +2889,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "bincode",
  "blake2",
+ "blake3",
  "clap",
  "ed25519-dalek 1.0.1",
  "hex",
@@ -2898,6 +2900,7 @@ dependencies = [
  "malachite",
  "num-bigint",
  "num-traits",
+ "once_cell",
  "parking_lot",
  "rand 0.7.3",
  "rpp-consensus",

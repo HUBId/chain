@@ -714,10 +714,14 @@ impl Block {
     fn decode_plonky3_transaction_witness(
         proof: &serde_json::Value,
     ) -> ChainResult<Plonky3TransactionWitness> {
-        let witness_value = proof.get("witness").cloned().ok_or_else(|| {
-            ChainError::Crypto("plonky3 transaction proof missing witness payload".into())
-        })?;
-        serde_json::from_value(witness_value).map_err(|err| {
+        let public_inputs = proof
+            .get("public_inputs")
+            .and_then(|inputs| inputs.get("witness"))
+            .cloned()
+            .ok_or_else(|| {
+                ChainError::Crypto("plonky3 transaction proof missing witness payload".into())
+            })?;
+        serde_json::from_value(public_inputs).map_err(|err| {
             ChainError::Crypto(format!(
                 "failed to decode plonky3 transaction witness: {err}"
             ))

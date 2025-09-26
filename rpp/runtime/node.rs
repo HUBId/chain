@@ -809,9 +809,15 @@ impl NodeInner {
             },
             #[cfg(feature = "backend-plonky3")]
             ChainProof::Plonky3(value) => {
-                let witness_value = value.get("witness").cloned().ok_or_else(|| {
-                    ChainError::Crypto("plonky3 transaction proof missing witness payload".into())
-                })?;
+                let witness_value = value
+                    .get("public_inputs")
+                    .and_then(|inputs| inputs.get("witness"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        ChainError::Crypto(
+                            "plonky3 transaction proof missing witness payload".into(),
+                        )
+                    })?;
                 let witness: Plonky3TransactionWitness = serde_json::from_value(witness_value)
                     .map_err(|err| {
                         ChainError::Crypto(format!(

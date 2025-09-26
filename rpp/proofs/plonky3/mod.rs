@@ -6,7 +6,11 @@
 
 pub mod aggregation;
 pub mod circuit;
+pub mod crypto;
 pub mod params;
 pub mod proof;
 pub mod prover;
 pub mod verifier;
+
+#[cfg(test)]
+mod tests;

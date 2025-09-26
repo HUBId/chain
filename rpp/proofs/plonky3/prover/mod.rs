@@ -1,6 +1,6 @@
 //! Wallet integration for the Plonky3 backend.
 
-use serde_json::Value;
+use serde_json::{Map, Number, Value};
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
@@ -35,7 +35,7 @@ impl Plonky3Prover {
         }
     }
 
-    fn encode_placeholder<T: serde::Serialize>(
+    fn encode_proof<T: serde::Serialize>(
         &self,
         circuit: &str,
         witness: &T,
@@ -43,17 +43,15 @@ impl Plonky3Prover {
     ) -> ChainResult<ChainProof> {
         let witness_value = serde_json::to_value(witness).map_err(|err| {
             ChainError::Crypto(format!(
-                "failed to serialize {circuit} witness for Plonky3 placeholder: {err}"
+                "failed to serialize {circuit} witness for Plonky3 proof generation: {err}"
             ))
         })?;
-        let proof = match block_height {
-            Some(height) => Plonky3Proof::placeholder(circuit, witness_value, height),
-            None => Plonky3Proof::from_parts(
-                circuit,
-                witness_value,
-                Value::String("pending-implementation".into()),
-            ),
-        };
+        let mut public_inputs = Map::new();
+        public_inputs.insert("witness".into(), witness_value);
+        if let Some(height) = block_height {
+            public_inputs.insert("block_height".into(), Value::Number(Number::from(height)));
+        }
+        let proof = Plonky3Proof::new(circuit, Value::Object(public_inputs))?;
         proof.into_value().map(ChainProof::Plonky3)
     }
 }
@@ -188,19 +186,19 @@ impl ProofProver for Plonky3Prover {
     }
 
     fn prove_transaction(&self, witness: Self::TransactionWitness) -> ChainResult<ChainProof> {
-        self.encode_placeholder("transaction", &witness, None)
+        self.encode_proof("transaction", &witness, None)
     }
 
     fn prove_identity(&self, witness: Self::IdentityWitness) -> ChainResult<ChainProof> {
-        self.encode_placeholder("identity", &witness, None)
+        self.encode_proof("identity", &witness, None)
     }
 
     fn prove_state_transition(&self, witness: Self::StateWitness) -> ChainResult<ChainProof> {
-        self.encode_placeholder("state", &witness, None)
+        self.encode_proof("state", &witness, None)
     }
 
     fn prove_pruning(&self, witness: Self::PruningWitness) -> ChainResult<ChainProof> {
-        self.encode_placeholder("pruning", &witness, None)
+        self.encode_proof("pruning", &witness, None)
     }
 
     fn prove_recursive(&self, witness: Self::RecursiveWitness) -> ChainResult<ChainProof> {
@@ -220,10 +218,10 @@ impl ProofProver for Plonky3Prover {
     }
 
     fn prove_uptime(&self, witness: Self::UptimeWitness) -> ChainResult<ChainProof> {
-        self.encode_placeholder("uptime", &witness, None)
+        self.encode_proof("uptime", &witness, None)
     }
 
     fn prove_consensus(&self, witness: Self::ConsensusWitness) -> ChainResult<ChainProof> {
-        self.encode_placeholder("consensus", &witness, Some(witness.round))
+        self.encode_proof("consensus", &witness, Some(witness.round))
     }
 }
