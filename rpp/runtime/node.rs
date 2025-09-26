@@ -6,8 +6,9 @@ use std::time::Duration;
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
+use reqwest::{Client, header};
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use hex;
 use serde::Serialize;
@@ -51,6 +52,9 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
+const TELEMETRY_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+const TELEMETRY_HTTP_RETRIES: usize = 3;
+const TELEMETRY_RETRY_BACKOFF_SECS: u64 = 1;
 
 #[derive(Clone, Copy)]
 struct ChainTip {
@@ -601,30 +605,43 @@ impl NodeInner {
         let mut ticker = time::interval(interval);
         loop {
             ticker.tick().await;
-            if let Err(err) = self.emit_telemetry(&config) {
+            if let Err(err) = self.emit_telemetry(&config).await {
                 warn!(?err, "failed to emit telemetry snapshot");
             }
         }
     }
 
-    fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
+    async fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
         let snapshot = self.build_telemetry_snapshot()?;
         let encoded = serde_json::to_string(&snapshot).map_err(|err| {
             ChainError::Config(format!("unable to encode telemetry snapshot: {err}"))
         })?;
-        if let Some(endpoint) = &config.endpoint {
-            if endpoint.is_empty() {
-                info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
-            } else {
-                info!(
+        match config
+            .endpoint
+            .as_deref()
+            .filter(|endpoint| !endpoint.is_empty())
+        {
+            Some(endpoint) => match post_telemetry_snapshot(endpoint, &encoded).await {
+                Ok(()) => info!(
                     target = "telemetry",
-                    ?endpoint,
-                    payload = %encoded,
-                    "telemetry snapshot dispatched"
-                );
+                    endpoint,
+                    payload_len = encoded.len(),
+                    "telemetry snapshot posted"
+                ),
+                Err(err) => {
+                    error!(
+                        target = "telemetry",
+                        endpoint,
+                        payload_len = encoded.len(),
+                        ?err,
+                        "telemetry HTTP dispatch failed"
+                    );
+                    return Err(err);
+                }
+            },
+            None => {
+                info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
             }
-        } else {
-            info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
         }
         *self.telemetry_last_height.write() = Some(snapshot.node.height);
         Ok(())
@@ -1866,6 +1883,168 @@ impl NodeInner {
             tip.last_hash = [0u8; 32];
         }
         Ok(())
+    }
+}
+
+async fn post_telemetry_snapshot(endpoint: &str, payload: &str) -> ChainResult<()> {
+    let client = Client::builder()
+        .timeout(TELEMETRY_HTTP_TIMEOUT)
+        .build()
+        .map_err(|err| {
+            ChainError::Config(format!("failed to build telemetry HTTP client: {err}"))
+        })?;
+
+    let mut last_error: Option<String> = None;
+    for attempt in 1..=TELEMETRY_HTTP_RETRIES {
+        match client
+            .post(endpoint)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(payload.to_owned())
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return Ok(());
+                }
+                let body = match response.text().await {
+                    Ok(text) => text,
+                    Err(err) => {
+                        warn!(
+                            target = "telemetry",
+                            endpoint,
+                            attempt,
+                            ?status,
+                            error = %err,
+                            "failed to read telemetry error body"
+                        );
+                        String::new()
+                    }
+                };
+                let preview: String = body.chars().take(200).collect();
+                warn!(
+                    target = "telemetry",
+                    endpoint,
+                    attempt,
+                    ?status,
+                    body_len = body.len(),
+                    body_preview = %preview,
+                    "telemetry endpoint responded with non-success status"
+                );
+                last_error = Some(format!(
+                    "endpoint returned status {status} with body length {}",
+                    body.len()
+                ));
+            }
+            Err(err) => {
+                warn!(
+                    target = "telemetry",
+                    endpoint,
+                    attempt,
+                    error = %err,
+                    "telemetry HTTP request failed"
+                );
+                last_error = Some(err.to_string());
+            }
+        }
+
+        if attempt < TELEMETRY_HTTP_RETRIES {
+            let backoff = Duration::from_secs(TELEMETRY_RETRY_BACKOFF_SECS * attempt as u64);
+            time::sleep(backoff).await;
+        }
+    }
+
+    Err(ChainError::Config(format!(
+        "telemetry HTTP post failed after {TELEMETRY_HTTP_RETRIES} attempts: {}",
+        last_error.unwrap_or_else(|| "unknown error".to_string())
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+    use axum::{Router, routing::post};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
+    use tokio::sync::oneshot;
+
+    async fn run_test_server(
+        app: Router,
+    ) -> (String, oneshot::Sender<()>, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        });
+        let handle = tokio::spawn(async move {
+            server.await.unwrap();
+        });
+        (format!("http://{}", addr), shutdown_tx, handle)
+    }
+
+    #[tokio::test]
+    async fn telemetry_http_post_succeeds() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let app = Router::new().route(
+            "/telemetry",
+            post({
+                let tx = tx.clone();
+                move |body: String| {
+                    let tx = tx.clone();
+                    async move {
+                        tx.send(body).unwrap();
+                        StatusCode::OK
+                    }
+                }
+            }),
+        );
+
+        let (base_url, shutdown_tx, handle) = run_test_server(app).await;
+        let endpoint = format!("{}/telemetry", base_url);
+        let payload = "{\"ok\":true}";
+
+        post_telemetry_snapshot(&endpoint, payload).await.unwrap();
+        let received = rx.recv().await.expect("payload received");
+        assert_eq!(received, payload);
+
+        shutdown_tx.send(()).unwrap();
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn telemetry_http_post_retries_and_fails() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/telemetry",
+            post({
+                let attempts = attempts.clone();
+                move |body: String| {
+                    let attempts = attempts.clone();
+                    async move {
+                        let _ = body;
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::INTERNAL_SERVER_ERROR
+                    }
+                }
+            }),
+        );
+
+        let (base_url, shutdown_tx, handle) = run_test_server(app).await;
+        let endpoint = format!("{}/telemetry", base_url);
+
+        let result = post_telemetry_snapshot(&endpoint, "{}").await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), TELEMETRY_HTTP_RETRIES);
+
+        shutdown_tx.send(()).unwrap();
+        handle.await.unwrap();
     }
 }
 

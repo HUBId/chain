@@ -26,6 +26,7 @@ consensus_enforcement = true
 
 [rollout.telemetry]
 enabled = false
+endpoint = ""
 sample_interval_secs = 30
 
 [genesis]

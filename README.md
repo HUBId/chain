@@ -83,13 +83,14 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 - `max_proof_size_bytes`: upper bound accepted for proof artifacts during deployment.
 - `rollout.release_channel`: deployment channel (`development`, `testnet`, `canary`, `mainnet`) reflected in node status.
 - `rollout.feature_gates`: toggles for pruning, recursive proofs, reconstruction, and consensus enforcement.
-- `rollout.telemetry`: enable periodic telemetry snapshots and configure the sampling cadence.
+- `rollout.telemetry`: enable periodic telemetry snapshots, configure the sampling cadence, and optionally provide an HTTP endpoint to receive snapshots.
 - `genesis.accounts`: initial allocations with balances and stakes.
 
 ### Rollout & Telemetry
 
 - `GET /status/rollout` – Inspect the current rollout channel, enabled feature gates, and telemetry runtime state.
-- When telemetry is enabled, the node periodically emits JSON snapshots with node, consensus, mempool, and VRF selection metrics to the log (and tags the configured endpoint for external scrapers).
+- When telemetry is enabled, the node periodically emits JSON snapshots with node, consensus, mempool, and VRF selection metrics. If `rollout.telemetry.endpoint` is a non-empty URL, the snapshot is dispatched via an HTTP POST using `reqwest` with `rustls` TLS support, with retries and a per-request timeout. Leaving the endpoint empty keeps the previous behavior of logging the payload locally.
+- Building telemetry with outbound posting enabled requires the `reqwest` dependency (already included in `Cargo.toml`) and network connectivity from the node to the configured endpoint.
 
 ## Development Notes
 
