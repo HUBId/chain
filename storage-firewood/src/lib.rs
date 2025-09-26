@@ -46,10 +46,24 @@ mod tests {
         pruner.prune_block(1, [0u8; 32]);
         pruner.prune_block(2, [1u8; 32]);
         pruner.prune_block(3, [2u8; 32]);
-        assert!(FirewoodPruner::verify_pruned_state(
-            [2u8; 32],
-            &pruner.prune_block(4, [2u8; 32]).1,
-        ));
+        let (commitment_root, proof) = pruner.prune_block(4, [2u8; 32]);
+        assert!(FirewoodPruner::verify_pruned_state(commitment_root, &proof));
+    }
+
+    #[test]
+    fn pruning_proof_rejects_tampering() {
+        let mut pruner = FirewoodPruner::new(4);
+        let (commitment_root, mut proof) = pruner.prune_block(1, [1u8; 32]);
+        assert!(FirewoodPruner::verify_pruned_state(commitment_root, &proof));
+        assert!(!FirewoodPruner::verify_pruned_state([0u8; 32], &proof));
+
+        // Corrupt the stored merkle path and expect verification to fail.
+        if let Some(first) = proof.merkle_path.first_mut() {
+            first[0] ^= 0xFF;
+        } else {
+            proof.commitment_root[0] ^= 0xFF;
+        }
+        assert!(!FirewoodPruner::verify_pruned_state(commitment_root, &proof));
     }
 
     #[test]
@@ -59,6 +73,9 @@ mod tests {
         state.put(b"account".to_vec(), vec![1, 2, 3]);
         let (root, proof) = state.commit_block(1).expect("commit block");
         assert_eq!(root.len(), 32);
-        assert!(FirewoodPruner::verify_pruned_state(root, &proof));
+        assert!(FirewoodPruner::verify_pruned_state(
+            proof.commitment_root,
+            &proof
+        ));
     }
 }
