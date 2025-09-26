@@ -12,11 +12,23 @@ use crate::types::{Account, Address};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredUtxo {
     pub record: UtxoRecord,
+    pub spent: bool,
 }
 
 impl StoredUtxo {
     pub fn new(record: UtxoRecord) -> Self {
-        Self { record }
+        Self {
+            record,
+            spent: false,
+        }
+    }
+
+    pub fn mark_spent(&mut self) {
+        self.spent = true;
+    }
+
+    pub fn is_spent(&self) -> bool {
+        self.spent
     }
 }
 
@@ -38,7 +50,14 @@ impl UtxoState {
 
     /// Remove a spent UTXO. Returns `true` if an entry was removed.
     pub fn remove_spent(&self, outpoint: &UtxoOutpoint) -> bool {
-        self.entries.blocking_write().remove(outpoint).is_some()
+        let mut entries = self.entries.blocking_write();
+        match entries.get_mut(outpoint) {
+            Some(stored) if !stored.is_spent() => {
+                stored.mark_spent();
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Fetch a UTXO by its outpoint.
@@ -46,17 +65,39 @@ impl UtxoState {
         self.entries
             .blocking_read()
             .get(outpoint)
+            .filter(|stored| !stored.is_spent())
             .map(|stored| stored.record.clone())
+    }
+
+    fn canonical_entry_for_account(&self, address: &Address) -> Option<(UtxoOutpoint, StoredUtxo)> {
+        self.entries
+            .blocking_read()
+            .iter()
+            .filter(|(_, stored)| stored.record.owner == *address && !stored.is_spent())
+            .min_by(
+                |(left_outpoint, left_stored), (right_outpoint, right_stored)| {
+                    left_stored
+                        .record
+                        .outpoint
+                        .index
+                        .cmp(&right_stored.record.outpoint.index)
+                        .then_with(|| left_outpoint.cmp(right_outpoint))
+                },
+            )
+            .map(|(outpoint, stored)| (outpoint.clone(), stored.clone()))
     }
 
     /// Return the canonical UTXO associated with the provided account.
     pub fn get_for_account(&self, address: &Address) -> Option<UtxoRecord> {
-        self.entries
-            .blocking_read()
-            .values()
-            .filter(|stored| stored.record.owner == *address)
-            .min_by_key(|stored| stored.record.outpoint.index)
-            .map(|stored| stored.record.clone())
+        self.canonical_entry_for_account(address)
+            .map(|(_, stored)| stored.record)
+    }
+
+    /// Select deterministic inputs for the provided owner.
+    pub fn select_inputs_for_owner(&self, owner: &Address) -> Vec<(UtxoOutpoint, StoredUtxo)> {
+        self.canonical_entry_for_account(owner)
+            .into_iter()
+            .collect()
     }
 
     pub fn upsert_from_account(&self, account: &Account) {
@@ -94,20 +135,15 @@ impl UtxoState {
             .entries
             .blocking_read()
             .iter()
-            .filter(|(_, stored)| stored.record.owner == *owner)
+            .filter(|(_, stored)| stored.record.owner == *owner && !stored.is_spent())
             .map(|(_, stored)| stored.record.clone())
             .collect();
         outputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         outputs
     }
 
-    pub fn snapshot(&self) -> Vec<UtxoRecord> {
-        self.entries
-            .blocking_read()
-            .iter()
-            .filter(|(outpoint, _)| outpoint.index == 0)
-            .map(|(_, stored)| stored.record.clone())
-            .collect()
+    pub fn snapshot(&self) -> BTreeMap<UtxoOutpoint, StoredUtxo> {
+        self.entries.blocking_read().clone()
     }
 
     pub fn commitment(&self) -> [u8; 32] {
@@ -115,9 +151,10 @@ impl UtxoState {
             .entries
             .blocking_read()
             .iter()
-            .filter(|(outpoint, _)| outpoint.index == 0)
-            .map(|(_, stored)| {
-                let payload = serde_json::to_vec(&stored.record).expect("serialize utxo record");
+            .filter(|(_, stored)| !stored.is_spent())
+            .map(|(outpoint, stored)| {
+                let payload = bincode::serialize(&(outpoint.clone(), stored.clone()))
+                    .expect("serialize utxo snapshot entry");
                 Blake2sHasher::hash(&payload).into()
             })
             .collect();
@@ -174,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_spent_removes_entry() {
+    fn remove_spent_marks_entry() {
         let state = UtxoState::new();
         let outpoint = UtxoOutpoint {
             tx_id: [2u8; 32],
@@ -184,6 +221,9 @@ mod tests {
         state.insert(StoredUtxo::new(record));
         assert!(state.remove_spent(&outpoint));
         assert!(state.get(&outpoint).is_none());
+        let snapshot = state.snapshot();
+        let stored = snapshot.get(&outpoint).expect("entry exists in snapshot");
+        assert!(stored.is_spent());
     }
 
     #[test]
@@ -198,6 +238,10 @@ mod tests {
             .expect("carol utxo");
         assert_eq!(fetched.outpoint, second.outpoint);
         assert_eq!(fetched.value, second.value);
+        let inputs = state.select_inputs_for_owner(&"carol".to_string());
+        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs[0].0, second.outpoint);
+        assert_eq!(inputs[0].1.record.value, second.value);
     }
 
     #[test]
@@ -211,5 +255,21 @@ mod tests {
         assert_eq!(record.owner, account.address);
         assert_eq!(record.value, account.balance);
         assert_eq!(record.outpoint.index, 0);
+    }
+
+    #[test]
+    fn snapshot_includes_spent_entries() {
+        let state = UtxoState::new();
+        let outpoint = UtxoOutpoint {
+            tx_id: [7u8; 32],
+            index: 3,
+        };
+        let record = sample_record("eve", outpoint.tx_id, outpoint.index, 55);
+        state.insert(StoredUtxo::new(record));
+        assert!(state.remove_spent(&outpoint));
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.len(), 1);
+        let stored = snapshot.get(&outpoint).expect("stored utxo");
+        assert!(stored.is_spent());
     }
 }
