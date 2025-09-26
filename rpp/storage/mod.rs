@@ -520,8 +520,10 @@ mod tests {
     fn dummy_recursive_proof(
         previous_commitment: Option<String>,
         aggregated_commitment: String,
-        block_height: u64,
+        header: &BlockHeader,
+        pruning: &PruningProof,
     ) -> StarkProof {
+        let previous_commitment = previous_commitment.or_else(|| Some(RecursiveProof::anchor()));
         StarkProof {
             kind: ProofKind::Recursive,
             commitment: aggregated_commitment.clone(),
@@ -533,15 +535,15 @@ mod tests {
                 tx_commitments: Vec::new(),
                 uptime_commitments: Vec::new(),
                 consensus_commitments: Vec::new(),
-                state_commitment: "77".repeat(32),
-                global_state_root: "11".repeat(32),
-                utxo_root: "22".repeat(32),
-                reputation_root: "33".repeat(32),
-                timetoke_root: "44".repeat(32),
-                zsi_root: "55".repeat(32),
-                proof_root: "66".repeat(32),
-                pruning_commitment: "88".repeat(32),
-                block_height,
+                state_commitment: header.state_root.clone(),
+                global_state_root: header.state_root.clone(),
+                utxo_root: header.utxo_root.clone(),
+                reputation_root: header.reputation_root.clone(),
+                timetoke_root: header.timetoke_root.clone(),
+                zsi_root: header.zsi_root.clone(),
+                proof_root: header.proof_root.clone(),
+                pruning_commitment: pruning.witness_commitment.clone(),
+                block_height: header.height,
             }),
             trace: ExecutionTrace {
                 segments: Vec::new(),
@@ -584,24 +586,27 @@ mod tests {
             height,
         );
         let pruning_proof = PruningProof::from_previous(previous, &header);
-        let recursive_proof = match previous {
-            Some(prev) => RecursiveProof::extend(&prev.recursive_proof, &header, &pruning_proof),
-            None => RecursiveProof::genesis(&header, &pruning_proof),
-        };
-        let previous_recursive_commitment = previous.map(|block| {
-            block
-                .stark
-                .recursive_proof
-                .expect_stwo()
-                .expect("recursive proof")
-                .commitment
-                .clone()
-        });
+        let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
+        let previous_recursive_commitment =
+            previous.map(|block| block.recursive_proof.commitment.clone());
         let recursive_stark = dummy_recursive_proof(
-            previous_recursive_commitment,
-            recursive_proof.chain_commitment.clone(),
-            height,
+            previous_recursive_commitment.clone(),
+            aggregated_commitment.clone(),
+            &header,
+            &pruning_proof,
         );
+        let recursive_chain_proof = ChainProof::Stwo(recursive_stark.clone());
+        let recursive_proof = match previous {
+            Some(prev) => RecursiveProof::extend(
+                &prev.recursive_proof,
+                &header,
+                &pruning_proof,
+                &recursive_chain_proof,
+            )
+            .expect("recursive extend"),
+            None => RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain_proof)
+                .expect("recursive genesis"),
+        };
         let state_stark = dummy_state_proof();
         let pruning_stark = dummy_pruning_proof();
         let module_witnesses = ModuleWitnessBundle::default();
@@ -620,7 +625,7 @@ mod tests {
             Vec::new(),
             ChainProof::Stwo(state_stark),
             ChainProof::Stwo(pruning_stark),
-            ChainProof::Stwo(recursive_stark),
+            recursive_chain_proof,
         );
         let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
         let mut consensus = ConsensusCertificate::genesis();
@@ -665,7 +670,7 @@ mod tests {
         assert_eq!(tip.previous_state_root, metadata.previous_state_root);
         assert_eq!(tip.new_state_root, metadata.new_state_root);
         assert_eq!(tip.pruning_root, metadata.pruning_root);
-        assert_eq!(tip.proof_commitment, metadata.proof_commitment);
+        assert_eq!(tip.recursive_commitment, metadata.recursive_commitment);
         assert_eq!(tip.recursive_anchor, metadata.recursive_anchor);
     }
 
@@ -696,9 +701,6 @@ mod tests {
             tip.pruning_commitment,
             genesis.pruning_proof.witness_commitment
         );
-        assert_eq!(
-            tip.proof_commitment,
-            genesis.recursive_proof.proof_commitment
-        );
+        assert_eq!(tip.recursive_commitment, genesis.recursive_proof.commitment);
     }
 }

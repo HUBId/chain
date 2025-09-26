@@ -313,7 +313,6 @@ impl Node {
                 0,
             );
             let pruning_proof = PruningProof::genesis(&state_root_hex);
-            let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
             let prover = WalletProver::new(&storage);
             let transactions: Vec<SignedTransaction> = Vec::new();
             let transaction_proofs: Vec<ChainProof> = Vec::new();
@@ -350,6 +349,8 @@ impl Node {
                 pruning_stark,
                 recursive_stark,
             );
+            let recursive_proof =
+                RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)?;
             let mut proof_artifacts =
                 NodeInner::collect_proof_artifacts(&stark_bundle, config.max_proof_size_bytes)?;
             proof_artifacts.extend(module_artifacts);
@@ -1837,11 +1838,6 @@ impl NodeInner {
 
         let previous_block = self.storage.read_block(tip_snapshot.height)?;
         let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
-        let recursive_proof = match previous_block.as_ref() {
-            Some(block) => RecursiveProof::extend(&block.recursive_proof, &header, &pruning_proof),
-            None => RecursiveProof::genesis(&header, &pruning_proof),
-        };
-
         let prover = WalletProver::new(&self.storage);
         let state_witness = prover.build_state_witness(
             &pruning_proof.previous_state_root,
@@ -1913,6 +1909,17 @@ impl NodeInner {
             pruning_stark,
             recursive_stark,
         );
+        let recursive_proof = match previous_block.as_ref() {
+            Some(block) => RecursiveProof::extend(
+                &block.recursive_proof,
+                &header,
+                &pruning_proof,
+                &stark_bundle.recursive_proof,
+            )?,
+            None => {
+                RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)?
+            }
+        };
         let state_proof_artifact = stark_bundle.state_proof.clone();
         let mut proof_artifacts =
             Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;

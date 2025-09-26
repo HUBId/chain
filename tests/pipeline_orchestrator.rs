@@ -42,9 +42,7 @@ impl OrchestratorFixture {
         node_config.rollout.feature_gates.reconstruction = false;
         node_config.rollout.feature_gates.consensus_enforcement = false;
 
-        node_config
-            .ensure_directories()
-            .expect("node directories");
+        node_config.ensure_directories().expect("node directories");
 
         let node = match Node::new(node_config.clone()) {
             Ok(node) => node,
