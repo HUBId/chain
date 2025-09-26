@@ -443,8 +443,12 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NodeConfig;
-    use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
+    use crate::config::{GenesisAccount, GenesisConfig, NodeConfig};
+    use crate::consensus::{
+        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, aggregate_total_stake,
+        evaluate_vrf,
+    };
+    use crate::crypto::{save_keypair, vrf_public_key_from_hex};
     use crate::errors::ChainError;
     use crate::ledger::Ledger;
     use crate::stwo::circuit::{
@@ -455,8 +459,18 @@ mod tests {
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
-    use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
+    use crate::stwo::prover::WalletProver;
+    use crate::types::{
+        Block, BlockMetadata, BlockProofBundle, ChainProof, IdentityDeclaration, IdentityGenesis,
+        IdentityProof, RecursiveProof, SignedTransaction,
+    };
+    use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, derive_tier_seed};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
+    use malachite::Natural;
+    use std::convert::TryInto;
+    use std::fs;
+    use std::path::Path;
+    use std::str::FromStr;
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
     use tempfile::tempdir;
 
@@ -582,6 +596,363 @@ mod tests {
         config.snapshot_dir = base.join("snapshots");
         config.proof_cache_dir = base.join("proofs");
         (dir, config)
+    }
+
+    fn copy_dir(src: &Path, dst: &Path) {
+        fs::create_dir_all(dst).expect("create destination directory");
+        for entry in fs::read_dir(src).expect("read source directory") {
+            let entry = entry.expect("directory entry");
+            let path = entry.path();
+            let target = dst.join(entry.file_name());
+            if path.is_dir() {
+                copy_dir(&path, &target);
+            } else {
+                if let Some(parent) = target.parent() {
+                    fs::create_dir_all(parent).expect("create parent directories");
+                }
+                fs::copy(&path, &target).expect("copy file");
+            }
+        }
+    }
+
+    fn tier_from_name(name: &str) -> Tier {
+        [
+            Tier::Tl0,
+            Tier::Tl1,
+            Tier::Tl2,
+            Tier::Tl3,
+            Tier::Tl4,
+            Tier::Tl5,
+        ]
+        .into_iter()
+        .find(|tier| tier.to_string() == name)
+        .expect("unknown tier name")
+    }
+
+    fn promote_validator(node: &Node, keypair: &Keypair, tier: Tier) {
+        let address = address_from_public_key(&keypair.public);
+        let key_hex = hex::encode(keypair.public.to_bytes());
+        node.inner
+            .ledger
+            .ensure_node_binding(&address, &key_hex)
+            .expect("bind validator");
+        let mut account = node
+            .inner
+            .ledger
+            .get_account(&address)
+            .expect("validator account");
+        account.reputation.tier = tier;
+        account.reputation.score = 1.0;
+        node.inner
+            .ledger
+            .upsert_account(account)
+            .expect("upsert validator");
+    }
+
+    fn rebuild_genesis(node: &Node) {
+        let ledger = &node.inner.ledger;
+        let storage = &node.inner.storage;
+        let accounts = ledger.accounts_snapshot();
+        for account in &accounts {
+            storage.persist_account(account).expect("persist account");
+        }
+        let module_witnesses = ledger.drain_module_witnesses();
+        let module_artifacts = ledger
+            .stage_module_witnesses(&module_witnesses)
+            .expect("stage module witnesses");
+        let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
+        let tx_root = compute_merkle_root(&mut tx_hashes);
+        let commitments = ledger.global_commitments();
+        let state_root_hex = hex::encode(commitments.global_state_root);
+        let stakes = ledger.stake_snapshot();
+        let total_stake = aggregate_total_stake(&stakes);
+        let leader_account = ledger
+            .get_account(&node.inner.address)
+            .expect("leader account");
+        let leader_tier = leader_account.reputation.tier.to_string();
+        let leader_timetoke = leader_account.reputation.timetokes.hours_online;
+        let genesis_seed = [0u8; 32];
+        let vrf = evaluate_vrf(
+            &genesis_seed,
+            0,
+            &node.inner.address,
+            leader_timetoke,
+            Some(&node.inner.vrf_keypair.secret),
+        );
+        let header = BlockHeader::new(
+            0,
+            hex::encode([0u8; 32]),
+            hex::encode(tx_root),
+            state_root_hex.clone(),
+            hex::encode(commitments.utxo_root),
+            hex::encode(commitments.reputation_root),
+            hex::encode(commitments.timetoke_root),
+            hex::encode(commitments.zsi_root),
+            hex::encode(commitments.proof_root),
+            total_stake.to_string(),
+            vrf.randomness.to_string(),
+            vrf_public_key_to_hex(&node.inner.vrf_keypair.public),
+            vrf.proof.clone(),
+            node.inner.address.clone(),
+            leader_tier,
+            leader_timetoke,
+        );
+        let pruning_proof = PruningProof::genesis(&state_root_hex);
+        let prover = WalletProver::new(storage);
+        let transactions: Vec<SignedTransaction> = Vec::new();
+        let transaction_proofs: Vec<ChainProof> = Vec::new();
+        let identity_proofs: Vec<ChainProof> = Vec::new();
+        let state_witness = prover
+            .build_state_witness(
+                &pruning_proof.previous_state_root,
+                &header.state_root,
+                &Vec::new(),
+                &transactions,
+            )
+            .expect("state witness");
+        let state_proof = prover
+            .prove_state_transition(state_witness)
+            .expect("state proof");
+        let pruning_witness = prover
+            .build_pruning_witness(&Vec::new(), &transactions, &pruning_proof, Vec::new())
+            .expect("pruning witness");
+        let pruning_stark = prover
+            .prove_pruning(pruning_witness)
+            .expect("pruning proof");
+        let recursive_witness = prover
+            .build_recursive_witness(
+                None,
+                &identity_proofs,
+                &transaction_proofs,
+                &[],
+                &[],
+                &commitments,
+                &state_proof,
+                &pruning_stark,
+                header.height,
+            )
+            .expect("recursive witness");
+        let recursive_stark = prover
+            .prove_recursive(recursive_witness)
+            .expect("recursive stark");
+        let stark_bundle = BlockProofBundle::new(
+            transaction_proofs,
+            state_proof.clone(),
+            pruning_stark,
+            recursive_stark,
+        );
+        let recursive_proof =
+            RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)
+                .expect("recursive proof");
+        let mut proof_artifacts = NodeInner::collect_proof_artifacts(
+            &stark_bundle,
+            node.inner.config.max_proof_size_bytes,
+        )
+        .expect("collect proof artifacts");
+        proof_artifacts.extend(module_artifacts);
+        let signature = sign_message(&node.inner.keypair, &header.canonical_bytes());
+        let consensus_certificate = ConsensusCertificate::genesis();
+        let genesis_block = Block::new(
+            header,
+            Vec::new(),
+            transactions,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            module_witnesses,
+            proof_artifacts,
+            pruning_proof,
+            recursive_proof,
+            stark_bundle,
+            signature,
+            consensus_certificate,
+            None,
+        );
+        genesis_block
+            .verify(None, &node.inner.keypair.public)
+            .expect("verify rebuilt genesis");
+        let metadata = BlockMetadata::from(&genesis_block);
+        storage
+            .store_block(&genesis_block, &metadata)
+            .expect("store rebuilt genesis");
+        let mut tip = node.inner.chain_tip.write();
+        tip.height = 0;
+        tip.last_hash = genesis_block.block_hash();
+        drop(tip);
+        node.inner.bootstrap().expect("bootstrap rebuilt genesis");
+    }
+
+    fn vrf_submission_from_block(block: &Block, epoch: u64) -> VrfSubmission {
+        let previous_bytes = hex::decode(&block.header.previous_hash).expect("decode previous");
+        let seed: [u8; 32] = previous_bytes.try_into().expect("previous hash length");
+        let tier = tier_from_name(&block.header.leader_tier);
+        let timetoke_hours = block.header.leader_timetoke;
+        let tier_seed = derive_tier_seed(&block.header.proposer, timetoke_hours);
+        let input = PoseidonVrfInput::new(seed, epoch, tier_seed);
+        let randomness = Natural::from_str(&block.header.randomness).expect("parse randomness");
+        let proof = VrfProof {
+            randomness,
+            proof: block.header.vrf_proof.clone(),
+        };
+        let public_key = vrf_public_key_from_hex(&block.header.vrf_public_key).expect("vrf key");
+        VrfSubmission {
+            address: block.header.proposer.clone(),
+            public_key: Some(public_key),
+            input,
+            proof,
+            tier,
+            timetoke_hours,
+        }
+    }
+
+    #[test]
+    fn node_finalizes_external_proposal() {
+        let (_tmp1, mut config1) = temp_config();
+        let (_tmp2, mut config2) = temp_config();
+
+        let keypair1 = seeded_keypair(11);
+        let keypair2 = seeded_keypair(22);
+        save_keypair(&config1.key_path, &keypair1).expect("write keypair 1");
+        save_keypair(&config2.key_path, &keypair2).expect("write keypair 2");
+
+        let address1 = address_from_public_key(&keypair1.public);
+        let address2 = address_from_public_key(&keypair2.public);
+
+        let genesis_accounts = vec![
+            GenesisAccount {
+                address: address1.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            },
+            GenesisAccount {
+                address: address2.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            },
+        ];
+        let genesis = GenesisConfig {
+            chain_id: "test-chain".to_string(),
+            accounts: genesis_accounts,
+        };
+        config1.genesis = genesis.clone();
+        config2.genesis = genesis;
+
+        let data_dir1 = config1.data_dir.clone();
+        let data_dir2 = config2.data_dir.clone();
+
+        let node1 = Node::new(config1).expect("node 1");
+
+        promote_validator(&node1, &keypair1, Tier::Tl5);
+        promote_validator(&node1, &keypair2, Tier::Tl5);
+
+        rebuild_genesis(&node1);
+
+        copy_dir(&data_dir1, &data_dir2);
+
+        let node2 = Node::new(config2).expect("node 2");
+
+        promote_validator(&node2, &keypair1, Tier::Tl5);
+        promote_validator(&node2, &keypair2, Tier::Tl5);
+
+        let next_height = node1.inner.chain_tip.read().height + 1;
+        node1.inner.ledger.sync_epoch_for_height(next_height);
+        let epoch = node1.inner.ledger.current_epoch();
+
+        let seed = node1.inner.chain_tip.read().last_hash;
+        let node2_account = node1
+            .inner
+            .ledger
+            .get_account(&address2)
+            .expect("node2 account on node1");
+        let tier_seed =
+            derive_tier_seed(&address2, node2_account.reputation.timetokes.hours_online);
+        let vrf_input = PoseidonVrfInput::new(seed, epoch, tier_seed);
+        let node2_vrf_output = vrf::generate_vrf(&vrf_input, &node2.inner.vrf_keypair.secret)
+            .expect("node2 vrf output");
+        let node2_submission = VrfSubmission {
+            address: address2.clone(),
+            public_key: Some(node2.inner.vrf_keypair.public.clone()),
+            input: vrf_input,
+            proof: VrfProof::from_output(&node2_vrf_output),
+            tier: node2_account.reputation.tier.clone(),
+            timetoke_hours: node2_account.reputation.timetokes.hours_online,
+        };
+        node1
+            .inner
+            .submit_vrf_submission(node2_submission)
+            .expect("register node2 vrf submission on node1");
+
+        let request_height = next_height;
+        let request = attested_request(&node1.inner.ledger, request_height);
+        let request_clone = request.clone();
+
+        node1
+            .inner
+            .submit_identity(request)
+            .expect("enqueue identity on node1");
+        node2
+            .inner
+            .submit_identity(request_clone)
+            .expect("enqueue identity on node2");
+
+        node1.inner.produce_block().expect("node1 produce block");
+
+        let block = node1
+            .inner
+            .storage
+            .read_block(1)
+            .expect("read block 1")
+            .expect("block produced");
+        assert_eq!(block.header.height, 1);
+
+        let votes = block.bft_votes.clone();
+        assert!(!votes.is_empty(), "block should record votes");
+
+        node2
+            .inner
+            .submit_block_proposal(block.clone())
+            .expect("submit external block");
+        for vote in &votes {
+            node2
+                .inner
+                .submit_vote(vote.clone())
+                .expect("submit external vote");
+        }
+
+        let follower_epoch = node2.inner.ledger.current_epoch();
+        let submission = vrf_submission_from_block(&block, follower_epoch);
+        node2
+            .inner
+            .submit_vrf_submission(submission)
+            .expect("register proposer vrf on node2");
+
+        let initial_balance = node2
+            .inner
+            .ledger
+            .get_account(&block.header.proposer)
+            .expect("proposer account before")
+            .balance;
+
+        let tip_before = node2.inner.chain_tip.read().height;
+        node2
+            .inner
+            .produce_block()
+            .expect("node2 adopt external block");
+        let tip_after = node2.inner.chain_tip.read().height;
+        assert_eq!(tip_after, tip_before + 1, "node2 tip should advance");
+
+        assert!(node2.inner.identity_mempool.read().is_empty());
+        assert!(node2.inner.mempool.read().is_empty());
+        assert!(node2.inner.uptime_mempool.read().is_empty());
+
+        let final_balance = node2
+            .inner
+            .ledger
+            .get_account(&block.header.proposer)
+            .expect("proposer account after")
+            .balance;
+        assert!(final_balance > initial_balance, "proposer reward applied");
     }
 
     #[test]
