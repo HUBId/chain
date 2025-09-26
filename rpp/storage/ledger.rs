@@ -18,7 +18,7 @@ use crate::state::{
     GlobalState, ProofRegistry, ReputationState, TimetokeState, UtxoState, ZsiRegistry,
 };
 use crate::types::{
-    Account, Address, IdentityDeclaration, SignedTransaction, Stake, UptimeProof,
+    Account, Address, AttestedIdentityRequest, SignedTransaction, Stake, UptimeProof,
     WalletBindingChange,
 };
 use crate::vrf::{VrfProof, VrfSelectionRecord};
@@ -367,8 +367,9 @@ impl Ledger {
         }
     }
 
-    pub fn register_identity(&self, declaration: IdentityDeclaration) -> ChainResult<()> {
-        declaration.verify()?;
+    pub fn register_identity(&self, request: &AttestedIdentityRequest) -> ChainResult<()> {
+        request.declaration.verify()?;
+        let declaration = &request.declaration;
         let genesis = &declaration.genesis;
         let key_commitment = genesis.public_key_commitment()?;
         {
@@ -1006,8 +1007,8 @@ mod tests {
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
     use crate::types::{
-        ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction,
-        Transaction, UptimeProof,
+        AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        SignedTransaction, Transaction, UptimeProof,
     };
     use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
@@ -1080,11 +1081,20 @@ mod tests {
         }
     }
 
+    fn attested_request(declaration: IdentityDeclaration) -> AttestedIdentityRequest {
+        AttestedIdentityRequest {
+            declaration,
+            attested_votes: Vec::new(),
+            gossip_confirmations: Vec::new(),
+        }
+    }
+
     #[test]
     fn register_identity_creates_account() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let declaration = sample_identity_declaration(&ledger);
-        ledger.register_identity(declaration.clone()).unwrap();
+        let request = attested_request(declaration.clone());
+        ledger.register_identity(&request).unwrap();
 
         let account = ledger
             .get_account(&declaration.genesis.wallet_addr)
@@ -1107,8 +1117,11 @@ mod tests {
     fn duplicate_identity_rejected() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let declaration = sample_identity_declaration(&ledger);
-        ledger.register_identity(declaration.clone()).unwrap();
-        let err = ledger.register_identity(declaration).unwrap_err();
+        let request = attested_request(declaration.clone());
+        ledger.register_identity(&request).unwrap();
+        let err = ledger
+            .register_identity(&attested_request(declaration))
+            .unwrap_err();
         assert!(matches!(err, ChainError::Transaction(_)));
     }
 

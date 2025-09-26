@@ -1,4 +1,6 @@
-use serde::Serialize;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
@@ -24,6 +26,45 @@ pub struct TransactionPolicy {
     pub status: ReputationStatus,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IdentityGenesisPhase {
+    pub request_id: String,
+    pub attestation_digest: String,
+    pub public_key_commitment: String,
+    pub declaration: IdentityDeclaration,
+    pub submitted_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IdentityQuorumPhase {
+    pub request_id: String,
+    pub attestation_digest: String,
+    pub quorum_met: bool,
+    pub quorum_votes: usize,
+    pub observers: Vec<Address>,
+    pub last_vote_height: Option<u64>,
+    pub last_vote_round: Option<u64>,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IdentityFinalizationPhase {
+    pub request_id: String,
+    pub finalised: bool,
+    pub height: Option<u64>,
+    pub block_hash: Option<String>,
+    pub error: Option<String>,
+    pub updated_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IdentityWorkflowState {
+    pub request_id: String,
+    pub genesis: IdentityGenesisPhase,
+    pub quorum: IdentityQuorumPhase,
+    pub finalization: IdentityFinalizationPhase,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct IdentityWorkflow {
     pub declaration: IdentityDeclaration,
@@ -33,6 +74,7 @@ pub struct IdentityWorkflow {
     pub epoch_nonce: String,
     pub state_root: String,
     pub identity_root: String,
+    pub state: IdentityWorkflowState,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -72,7 +114,56 @@ impl<'a> WalletWorkflows<'a> {
     pub fn identity_attestation(&self) -> ChainResult<IdentityWorkflow> {
         let declaration = self.wallet.build_identity_declaration()?;
         let attestation_digest = hex::encode(declaration.hash()?);
+        let request_id = attestation_digest.clone();
         let public_key_commitment = declaration.genesis.public_key_commitment()?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut state = IdentityWorkflowState {
+            request_id: request_id.clone(),
+            genesis: IdentityGenesisPhase {
+                request_id: request_id.clone(),
+                attestation_digest: attestation_digest.clone(),
+                public_key_commitment: public_key_commitment.clone(),
+                declaration: declaration.clone(),
+                submitted_at: timestamp,
+            },
+            quorum: IdentityQuorumPhase {
+                request_id: request_id.clone(),
+                attestation_digest: attestation_digest.clone(),
+                quorum_met: false,
+                quorum_votes: 0,
+                observers: Vec::new(),
+                last_vote_height: None,
+                last_vote_round: None,
+                updated_at: timestamp,
+            },
+            finalization: IdentityFinalizationPhase {
+                request_id: request_id.clone(),
+                finalised: false,
+                height: None,
+                block_hash: None,
+                error: None,
+                updated_at: timestamp,
+            },
+        };
+        if let Some(mut persisted) = self
+            .wallet
+            .load_identity_workflow_state::<IdentityWorkflowState>()?
+        {
+            if persisted.request_id == request_id {
+                persisted.genesis.declaration = declaration.clone();
+                persisted.genesis.attestation_digest = attestation_digest.clone();
+                persisted.genesis.public_key_commitment = public_key_commitment.clone();
+                state = persisted;
+            }
+        }
+        self.wallet
+            .persist_identity_workflow_state(&state)
+            .map_err(|err| {
+                ChainError::Config(format!("unable to persist identity workflow state: {err}"))
+            })?;
         Ok(IdentityWorkflow {
             vrf_tag: declaration.genesis.vrf_tag.clone(),
             epoch_nonce: declaration.genesis.epoch_nonce.clone(),
@@ -80,6 +171,7 @@ impl<'a> WalletWorkflows<'a> {
             identity_root: declaration.genesis.identity_root.clone(),
             attestation_digest,
             public_key_commitment,
+            state,
             declaration,
         })
     }
