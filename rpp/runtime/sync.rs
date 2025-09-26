@@ -7,11 +7,13 @@ use serde::Serialize;
 #[cfg(test)]
 use crate::reputation::Tier;
 
+use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
 use crate::types::StoredBlock;
 use crate::types::{Block, BlockMetadata, BlockPayload, ChainProof};
+use ed25519_dalek::PublicKey;
 
 /// Interface that provides raw block payloads required for reconstruction.
 pub trait PayloadProvider {
@@ -332,7 +334,8 @@ impl ReconstructionEngine {
             .read_block_record(height)?
             .ok_or_else(|| ChainError::Config("missing block in storage".into()))?;
         let block = self.hydrate_record(record, provider)?;
-        block.verify_without_stark(previous.as_ref())?;
+        let proposer_key = self.proposer_public_key(&block.header.proposer)?;
+        block.verify_without_stark(previous.as_ref(), &proposer_key)?;
         Ok(block)
     }
 
@@ -370,7 +373,8 @@ impl ReconstructionEngine {
                 .read_block_record(height)?
                 .ok_or_else(|| ChainError::Config("missing block in storage".into()))?;
             let block = self.hydrate_record(record, provider)?;
-            block.verify_without_stark(previous.as_ref())?;
+            let proposer_key = self.proposer_public_key(&block.header.proposer)?;
+            block.verify_without_stark(previous.as_ref(), &proposer_key)?;
             previous = Some(block.clone());
             results.push(block);
         }
@@ -405,6 +409,16 @@ impl ReconstructionEngine {
         let request = ReconstructionRequest::from_record(&record)?;
         let payload = provider.fetch_payload(&request)?;
         Ok(record.into_block_with_payload(payload))
+    }
+
+    fn proposer_public_key(&self, proposer: &str) -> ChainResult<PublicKey> {
+        let account = self.storage.read_account(proposer)?.ok_or_else(|| {
+            ChainError::Crypto("validator account missing for signature verification".into())
+        })?;
+        let key_hex = account.identity.wallet_public_key.ok_or_else(|| {
+            ChainError::Crypto("validator wallet public key not registered".into())
+        })?;
+        public_key_from_hex(&key_hex)
     }
 
     fn persist_plan_to(&self, dir: &Path, plan: &ReconstructionPlan) -> ChainResult<PathBuf> {
@@ -465,8 +479,8 @@ mod tests {
         pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness,
     };
     use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
-    use crate::types::{BlockHeader, PruningProof, RecursiveProof};
-    use ed25519_dalek::{Keypair, Signature, Signer};
+    use crate::types::{Account, BlockHeader, PruningProof, RecursiveProof, Stake};
+    use ed25519_dalek::{Keypair, Signer};
     use rand::rngs::OsRng;
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -488,6 +502,17 @@ mod tests {
                 .cloned()
                 .ok_or_else(|| ChainError::Config("missing payload for requested height".into()))
         }
+    }
+
+    fn persist_validator_account(storage: &Storage, keypair: &Keypair) {
+        let address = address_from_public_key(&keypair.public);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account
+            .ensure_wallet_binding(&hex::encode(keypair.public.to_bytes()))
+            .expect("bind wallet key");
+        storage
+            .persist_account(&account)
+            .expect("persist validator account");
     }
 
     fn dummy_state_proof() -> StarkProof {
@@ -574,16 +599,13 @@ mod tests {
         }
     }
 
-    fn make_block(height: u64, previous: Option<&Block>) -> Block {
+    fn make_block(height: u64, previous: Option<&Block>) -> (Block, Keypair) {
         let previous_hash = previous
             .map(|block| block.hash.clone())
             .unwrap_or_else(|| hex::encode([0u8; 32]));
-        let proposer = format!("proposer{:02}", height);
         let seed = previous
             .map(|block| block.block_hash())
             .unwrap_or([0u8; 32]);
-        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
-        let vrf = evaluate_vrf(&seed, height, &proposer, height, Some(&vrf_keypair.secret));
         let mut tx_leaves: Vec<[u8; 32]> = Vec::new();
         let tx_root = hex::encode(compute_merkle_root(&mut tx_leaves));
         let state_root = hex::encode([height as u8 + 2; 32]);
@@ -592,6 +614,11 @@ mod tests {
         let timetoke_root = hex::encode([height as u8 + 5; 32]);
         let zsi_root = hex::encode([height as u8 + 6; 32]);
         let proof_root = hex::encode([height as u8 + 7; 32]);
+        let mut rng = OsRng;
+        let keypair = Keypair::generate(&mut rng);
+        let address = address_from_public_key(&keypair.public);
+        let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
+        let vrf = evaluate_vrf(&seed, height, &address, height, Some(&vrf_keypair.secret));
         let header = BlockHeader::new(
             height,
             previous_hash,
@@ -606,13 +633,10 @@ mod tests {
             vrf.randomness.to_string(),
             vrf_public_key_to_hex(&vrf_keypair.public),
             vrf.proof.clone(),
-            proposer.clone(),
+            address.clone(),
             Tier::Tl3.to_string(),
             height,
         );
-        let mut rng = OsRng;
-        let keypair = Keypair::generate(&mut rng);
-        let address = address_from_public_key(&keypair.public);
         let block_hash_hex = hex::encode(header.hash());
         let prevote = BftVote {
             round: height,
@@ -684,7 +708,7 @@ mod tests {
             crate::types::ChainProof::Stwo(pruning_stark),
             recursive_chain_proof,
         );
-        let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
+        let signature = keypair.sign(&header.canonical_bytes());
         let mut consensus = ConsensusCertificate::genesis();
         consensus.round = height;
         consensus.total_power = "1".to_string();
@@ -700,7 +724,7 @@ mod tests {
             vote: signed_precommit,
             weight: "1".to_string(),
         }];
-        Block::new(
+        let block = Block::new(
             header,
             Vec::new(),
             Vec::new(),
@@ -716,22 +740,24 @@ mod tests {
             signature,
             consensus,
             None,
-        )
+        );
+        (block, keypair)
     }
 
     #[test]
     fn reconstruction_plan_detects_pruned_blocks() {
         let temp_dir = tempdir().expect("tempdir");
         let storage = Storage::open(temp_dir.path()).expect("open storage");
-        let genesis = make_block(0, None);
+        let (genesis, genesis_keypair) = make_block(0, None);
         let mut payloads = HashMap::new();
         payloads.insert(0, BlockPayload::from_block(&genesis));
         let genesis_metadata = BlockMetadata::from(&genesis);
         storage
             .store_block(&genesis, &genesis_metadata)
             .expect("store genesis");
+        persist_validator_account(&storage, &genesis_keypair);
 
-        let block_one = make_block(1, Some(&genesis));
+        let (block_one, block_one_keypair) = make_block(1, Some(&genesis));
         payloads.insert(1, BlockPayload::from_block(&block_one));
         let block_one_metadata = BlockMetadata::from(&block_one);
         storage
@@ -740,6 +766,7 @@ mod tests {
         storage
             .prune_block_payload(1)
             .expect("prune block one payload");
+        persist_validator_account(&storage, &block_one_keypair);
 
         let engine = ReconstructionEngine::new(storage.clone());
         let plan = engine.plan_from_height(0).expect("plan reconstruction");
@@ -764,13 +791,14 @@ mod tests {
     fn state_sync_plan_groups_chunks_and_updates_light_clients() {
         let temp_dir = tempdir().expect("tempdir");
         let storage = Storage::open(temp_dir.path()).expect("open storage");
-        let genesis = make_block(0, None);
+        let (genesis, genesis_keypair) = make_block(0, None);
         let genesis_metadata = BlockMetadata::from(&genesis);
         storage
             .store_block(&genesis, &genesis_metadata)
             .expect("store genesis");
+        persist_validator_account(&storage, &genesis_keypair);
 
-        let block_one = make_block(1, Some(&genesis));
+        let (block_one, block_one_keypair) = make_block(1, Some(&genesis));
         let block_one_metadata = BlockMetadata::from(&block_one);
         storage
             .store_block(&block_one, &block_one_metadata)
@@ -778,8 +806,9 @@ mod tests {
         storage
             .prune_block_payload(1)
             .expect("prune block one payload");
+        persist_validator_account(&storage, &block_one_keypair);
 
-        let block_two = make_block(2, Some(&block_one));
+        let (block_two, block_two_keypair) = make_block(2, Some(&block_one));
         let block_two_metadata = BlockMetadata::from(&block_two);
         storage
             .store_block(&block_two, &block_two_metadata)
@@ -787,6 +816,7 @@ mod tests {
         storage
             .prune_block_payload(2)
             .expect("prune block two payload");
+        persist_validator_account(&storage, &block_two_keypair);
 
         let engine = ReconstructionEngine::new(storage.clone());
         let plan = engine.state_sync_plan(1).expect("state sync plan");

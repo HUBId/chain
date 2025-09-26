@@ -680,16 +680,30 @@ impl Block {
         self.header.hash()
     }
 
-    pub fn verify(&self, previous: Option<&Block>) -> ChainResult<()> {
-        self.verify_internal(previous, VerifyMode::Full)
+    pub fn verify(
+        &self,
+        previous: Option<&Block>,
+        proposer_public_key: &PublicKey,
+    ) -> ChainResult<()> {
+        self.verify_internal(previous, VerifyMode::Full, proposer_public_key)
     }
 
-    pub fn verify_without_stark(&self, previous: Option<&Block>) -> ChainResult<()> {
-        self.verify_internal(previous, VerifyMode::WithoutStark)
+    pub fn verify_without_stark(
+        &self,
+        previous: Option<&Block>,
+        proposer_public_key: &PublicKey,
+    ) -> ChainResult<()> {
+        self.verify_internal(previous, VerifyMode::WithoutStark, proposer_public_key)
     }
 
-    fn verify_internal(&self, previous: Option<&Block>, mode: VerifyMode) -> ChainResult<()> {
+    fn verify_internal(
+        &self,
+        previous: Option<&Block>,
+        mode: VerifyMode,
+        proposer_public_key: &PublicKey,
+    ) -> ChainResult<()> {
         let registry = ProofVerifierRegistry::default();
+        self.verify_signature(proposer_public_key)?;
         if self.pruned {
             self.verify_pruned_payload()?;
         } else {
@@ -1432,10 +1446,15 @@ mod tests {
         }
     }
 
-    fn build_identity_block(request: AttestedIdentityRequest, height: u64) -> Block {
+    fn build_identity_block(
+        request: AttestedIdentityRequest,
+        height: u64,
+        proposer: &Keypair,
+    ) -> Block {
         let mut operations = vec![request.declaration.hash().expect("hash")];
         let tx_root = compute_merkle_root(&mut operations);
         let state_root = request.declaration.genesis.state_root.clone();
+        let proposer_address = address_from_public_key(&proposer.public);
         let header = BlockHeader::new(
             height,
             "00".repeat(32),
@@ -1450,7 +1469,7 @@ mod tests {
             "0".to_string(),
             "66".repeat(32),
             "77".repeat(32),
-            "aa".repeat(32),
+            proposer_address,
             Tier::Tl5.to_string(),
             0,
         );
@@ -1466,6 +1485,7 @@ mod tests {
         );
         let mut consensus = ConsensusCertificate::genesis();
         consensus.round = height;
+        let signature = proposer.sign(&header.canonical_bytes());
         Block::new(
             header,
             vec![request],
@@ -1479,7 +1499,7 @@ mod tests {
             pruning_proof,
             recursive_proof,
             stark_bundle,
-            Signature::from_bytes(&[0u8; 64]).expect("signature"),
+            signature,
             consensus,
             None,
         )
@@ -1526,8 +1546,11 @@ mod tests {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let height = 1;
         let request = attested_request(&ledger, height);
-        let block = build_identity_block(request, height);
-        block.verify_without_stark(None).expect("block verifies");
+        let proposer = seeded_keypair(42);
+        let block = build_identity_block(request, height, &proposer);
+        block
+            .verify_without_stark(None, &proposer.public)
+            .expect("block verifies");
     }
 
     #[test]
@@ -1538,13 +1561,33 @@ mod tests {
         request
             .gossip_confirmations
             .truncate(IDENTITY_ATTESTATION_GOSSIP_MIN - 1);
-        let block = build_identity_block(request, height);
+        let proposer = seeded_keypair(43);
+        let block = build_identity_block(request, height, &proposer);
         let err = block
-            .verify_without_stark(None)
+            .verify_without_stark(None, &proposer.public)
             .expect_err("block must reject attestation");
         match err {
             ChainError::Transaction(message) => {
                 assert!(message.contains("gossip"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn block_rejects_invalid_signature() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let height = 1;
+        let request = attested_request(&ledger, height);
+        let proposer = seeded_keypair(44);
+        let mut block = build_identity_block(request, height, &proposer);
+        block.signature = "00".repeat(64);
+        let err = block
+            .verify_without_stark(None, &proposer.public)
+            .expect_err("invalid signature must be rejected");
+        match err {
+            ChainError::Crypto(message) => {
+                assert!(message.contains("signature"));
             }
             other => panic!("unexpected error: {other:?}"),
         }

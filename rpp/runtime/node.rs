@@ -371,7 +371,7 @@ impl Node {
                 consensus_certificate,
                 None,
             );
-            genesis_block.verify(None)?;
+            genesis_block.verify(None, &keypair.public)?;
             let genesis_metadata = BlockMetadata::from(&genesis_block);
             storage.store_block(&genesis_block, &genesis_metadata)?;
             tip_metadata = Some(genesis_metadata);
@@ -1206,7 +1206,8 @@ impl NodeInner {
         } else {
             self.storage.read_block(height - 1)?
         };
-        match block.verify_without_stark(previous_block.as_ref()) {
+        let proposer_key = self.ledger.validator_public_key(&proposer)?;
+        match block.verify_without_stark(previous_block.as_ref(), &proposer_key) {
             Ok(()) => {
                 let hash = block.hash.clone();
                 self.observe_consensus_round(height, round);
@@ -2148,7 +2149,7 @@ impl NodeInner {
             consensus_certificate,
             Some(consensus_proof),
         );
-        block.verify(previous_block.as_ref())?;
+        block.verify(previous_block.as_ref(), &self.keypair.public)?;
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
         let receipt = self.persist_accounts(height)?;
         let encoded_new_root = hex::encode(receipt.new_root);
@@ -2197,7 +2198,8 @@ impl NodeInner {
                 .storage
                 .read_block(metadata.height)?
                 .ok_or_else(|| ChainError::Config("tip metadata missing block".into()))?;
-            block.verify(None)?;
+            let proposer_key = self.ledger.validator_public_key(&block.header.proposer)?;
+            block.verify(None, &proposer_key)?;
             let mut tip = self.chain_tip.write();
             tip.height = block.header.height;
             tip.last_hash = block.block_hash();
