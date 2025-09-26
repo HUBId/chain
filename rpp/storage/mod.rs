@@ -135,6 +135,25 @@ impl Storage {
         Ok(kv.root_hash())
     }
 
+    pub fn read_metadata_blob(&self, key: &[u8]) -> ChainResult<Option<Vec<u8>>> {
+        let kv = self.kv.lock();
+        Ok(kv.get(&metadata_key(key)))
+    }
+
+    pub fn write_metadata_blob(&self, key: &[u8], value: Vec<u8>) -> ChainResult<()> {
+        let mut kv = self.kv.lock();
+        kv.put(metadata_key(key), value);
+        kv.commit()?;
+        Ok(())
+    }
+
+    pub fn delete_metadata_blob(&self, key: &[u8]) -> ChainResult<()> {
+        let mut kv = self.kv.lock();
+        kv.delete(&metadata_key(key));
+        kv.commit()?;
+        Ok(())
+    }
+
     fn schema_key(&self, schema: &str, key: Vec<u8>) -> ChainResult<Vec<u8>> {
         match schema {
             SCHEMA_ACCOUNTS => {

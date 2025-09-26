@@ -21,7 +21,7 @@ use crate::rpp::TimetokeRecord;
 use crate::runtime::RuntimeMode;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
-    Account, Address, Block, IdentityDeclaration, SignedTransaction, Transaction,
+    Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
     TransactionProofBundle, UptimeProof,
 };
 use crate::wallet::{
@@ -540,11 +540,11 @@ async fn submit_transaction(
 
 async fn submit_identity(
     State(state): State<ApiContext>,
-    Json(declaration): Json<IdentityDeclaration>,
+    Json(request): Json<AttestedIdentityRequest>,
 ) -> Result<Json<SubmitResponse>, (StatusCode, Json<ErrorResponse>)> {
     state
         .require_node()?
-        .submit_identity(declaration)
+        .submit_identity(request)
         .map(|hash| Json(SubmitResponse { hash }))
         .map_err(to_http_error)
 }

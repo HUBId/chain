@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
-use crate::consensus::evaluate_vrf;
+use crate::consensus::{BftVoteKind, SignedBftVote, evaluate_vrf};
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof};
 use crate::stwo::circuit::identity::IdentityWitness;
@@ -254,5 +256,71 @@ impl IdentityProof {
                 "identity proof payload mismatch".into(),
             )),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AttestedIdentityRequest {
+    pub declaration: IdentityDeclaration,
+    pub attested_votes: Vec<SignedBftVote>,
+    pub gossip_confirmations: Vec<Address>,
+}
+
+impl AttestedIdentityRequest {
+    pub fn identity_hash(&self) -> ChainResult<String> {
+        Ok(hex::encode(self.declaration.hash()?))
+    }
+
+    pub fn verify(
+        &self,
+        expected_height: u64,
+        quorum_threshold: usize,
+        min_gossip: usize,
+    ) -> ChainResult<()> {
+        self.declaration.verify()?;
+        let identity_hash = self.identity_hash()?;
+        let mut voters = HashSet::new();
+        for vote in &self.attested_votes {
+            vote.verify()?;
+            if vote.vote.block_hash != identity_hash {
+                return Err(ChainError::Transaction(
+                    "identity attestation vote references mismatched request".into(),
+                ));
+            }
+            if vote.vote.height != expected_height {
+                return Err(ChainError::Transaction(
+                    "identity attestation vote references unexpected height".into(),
+                ));
+            }
+            if vote.vote.kind != BftVoteKind::PreCommit {
+                return Err(ChainError::Transaction(
+                    "identity attestation must be composed of pre-commit votes".into(),
+                ));
+            }
+            if !voters.insert(vote.vote.voter.clone()) {
+                return Err(ChainError::Transaction(
+                    "duplicate attestation vote detected for identity request".into(),
+                ));
+            }
+        }
+        if voters.len() < quorum_threshold {
+            return Err(ChainError::Transaction(
+                "insufficient quorum power for identity attestation".into(),
+            ));
+        }
+        let mut gossip = HashSet::new();
+        for address in &self.gossip_confirmations {
+            if !gossip.insert(address.clone()) {
+                return Err(ChainError::Transaction(
+                    "duplicate gossip confirmation detected for identity attestation".into(),
+                ));
+            }
+        }
+        if gossip.len() < min_gossip {
+            return Err(ChainError::Transaction(
+                "insufficient gossip confirmations for identity attestation".into(),
+            ));
+        }
+        Ok(())
     }
 }

@@ -39,9 +39,9 @@ use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
-    Account, Address, Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof,
-    IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake,
-    TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
+    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -51,6 +51,8 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
+const IDENTITY_QUORUM_THRESHOLD: usize = 3;
+const IDENTITY_GOSSIP_THRESHOLD: usize = 2;
 
 #[derive(Clone, Copy)]
 struct ChainTip {
@@ -91,6 +93,8 @@ pub struct PendingIdentitySummary {
     pub state_root: String,
     pub identity_root: String,
     pub vrf_tag: String,
+    pub attested_votes: usize,
+    pub gossip_confirmations: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -220,7 +224,7 @@ struct NodeInner {
     storage: Storage,
     ledger: Ledger,
     mempool: RwLock<VecDeque<TransactionProofBundle>>,
-    identity_mempool: RwLock<VecDeque<IdentityDeclaration>>,
+    identity_mempool: RwLock<VecDeque<AttestedIdentityRequest>>,
     uptime_mempool: RwLock<VecDeque<RecordedUptimeProof>>,
     vrf_mempool: RwLock<VrfSubmissionPool>,
     vrf_epoch: RwLock<VrfEpochManager>,
@@ -440,8 +444,8 @@ impl NodeHandle {
         self.inner.submit_transaction(bundle)
     }
 
-    pub fn submit_identity(&self, declaration: IdentityDeclaration) -> ChainResult<String> {
-        self.inner.submit_identity(declaration)
+    pub fn submit_identity(&self, request: AttestedIdentityRequest) -> ChainResult<String> {
+        self.inner.submit_identity(request)
     }
 
     pub fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
@@ -823,15 +827,15 @@ impl NodeInner {
         }
     }
 
-    fn submit_identity(&self, declaration: IdentityDeclaration) -> ChainResult<String> {
+    fn submit_identity(&self, request: AttestedIdentityRequest) -> ChainResult<String> {
         let next_height = self.chain_tip.read().height.saturating_add(1);
         self.ledger.sync_epoch_for_height(next_height);
         if self.config.rollout.feature_gates.recursive_proofs {
             self.verifiers
-                .verify_identity(&declaration.proof.zk_proof)?;
+                .verify_identity(&request.declaration.proof.zk_proof)?;
         }
-        declaration.verify()?;
-
+        self.validate_identity_attestation(&request, next_height)?;
+        let declaration = &request.declaration;
         let expected_epoch_nonce = hex::encode(self.ledger.current_epoch_nonce());
         if expected_epoch_nonce != declaration.genesis.epoch_nonce {
             return Err(ChainError::Transaction(
@@ -852,20 +856,27 @@ impl NodeInner {
             ));
         }
 
-        let hash = hex::encode(declaration.hash()?);
+        let hash = request.identity_hash()?;
         let mut mempool = self.identity_mempool.write();
         if mempool.len() >= self.config.mempool_limit {
             return Err(ChainError::Transaction("identity mempool full".into()));
         }
-        if mempool
-            .iter()
-            .any(|existing| existing.genesis.wallet_addr == declaration.genesis.wallet_addr)
-        {
+        if mempool.iter().any(|existing| {
+            existing.declaration.genesis.wallet_addr == declaration.genesis.wallet_addr
+        }) {
             return Err(ChainError::Transaction(
                 "identity for this wallet already queued".into(),
             ));
         }
-        mempool.push_back(declaration);
+        if mempool
+            .iter()
+            .any(|existing| existing.identity_hash().ok().as_deref() == Some(hash.as_str()))
+        {
+            return Err(ChainError::Transaction(
+                "identity request already queued for attestation".into(),
+            ));
+        }
+        mempool.push_back(request);
         Ok(hash)
     }
 
@@ -895,6 +906,89 @@ impl NodeInner {
         }
         mempool.push_back(vote);
         Ok(vote_hash)
+    }
+
+    fn validate_identity_attestation(
+        &self,
+        request: &AttestedIdentityRequest,
+        expected_height: u64,
+    ) -> ChainResult<()> {
+        request.declaration.verify()?;
+        let identity_hash = request.identity_hash()?;
+        let mut voters = HashSet::new();
+        for vote in &request.attested_votes {
+            if let Err(err) = vote.verify() {
+                self.punish_invalid_identity(
+                    &vote.vote.voter,
+                    "invalid identity attestation signature",
+                );
+                return Err(err);
+            }
+            if vote.vote.block_hash != identity_hash {
+                self.punish_invalid_identity(
+                    &vote.vote.voter,
+                    "identity attestation references mismatched hash",
+                );
+                return Err(ChainError::Transaction(
+                    "identity attestation vote references mismatched request".into(),
+                ));
+            }
+            if vote.vote.height != expected_height {
+                self.punish_invalid_identity(
+                    &vote.vote.voter,
+                    "identity attestation references wrong height",
+                );
+                return Err(ChainError::Transaction(
+                    "identity attestation vote references unexpected height".into(),
+                ));
+            }
+            if vote.vote.kind != BftVoteKind::PreCommit {
+                self.punish_invalid_identity(
+                    &vote.vote.voter,
+                    "identity attestation wrong vote kind",
+                );
+                return Err(ChainError::Transaction(
+                    "identity attestation must be composed of pre-commit votes".into(),
+                ));
+            }
+            if !voters.insert(vote.vote.voter.clone()) {
+                return Err(ChainError::Transaction(
+                    "duplicate attestation vote detected for identity request".into(),
+                ));
+            }
+        }
+        if voters.len() < IDENTITY_QUORUM_THRESHOLD {
+            return Err(ChainError::Transaction(
+                "insufficient quorum power for identity attestation".into(),
+            ));
+        }
+        let mut gossip = HashSet::new();
+        for address in &request.gossip_confirmations {
+            gossip.insert(address.clone());
+        }
+        if gossip.len() < IDENTITY_GOSSIP_THRESHOLD {
+            return Err(ChainError::Transaction(
+                "insufficient gossip confirmations for identity attestation".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn punish_invalid_identity(&self, address: &str, context: &str) {
+        if !self.config.rollout.feature_gates.consensus_enforcement {
+            return;
+        }
+        if let Err(err) = self
+            .ledger
+            .slash_validator(address, SlashingReason::InvalidIdentity)
+        {
+            warn!(
+                offender = %address,
+                ?err,
+                context,
+                "failed to slash validator for invalid identity attestation"
+            );
+        }
     }
 
     fn submit_block_proposal(&self, block: Block) -> ChainResult<String> {
@@ -1073,13 +1167,15 @@ impl NodeInner {
             .identity_mempool
             .read()
             .iter()
-            .map(|declaration| PendingIdentitySummary {
-                wallet_addr: declaration.genesis.wallet_addr.clone(),
-                commitment: declaration.commitment().to_string(),
-                epoch_nonce: declaration.genesis.epoch_nonce.clone(),
-                state_root: declaration.genesis.state_root.clone(),
-                identity_root: declaration.genesis.identity_root.clone(),
-                vrf_tag: declaration.genesis.vrf_tag.clone(),
+            .map(|request| PendingIdentitySummary {
+                wallet_addr: request.declaration.genesis.wallet_addr.clone(),
+                commitment: request.declaration.commitment().to_string(),
+                epoch_nonce: request.declaration.genesis.epoch_nonce.clone(),
+                state_root: request.declaration.genesis.state_root.clone(),
+                identity_root: request.declaration.genesis.identity_root.clone(),
+                vrf_tag: request.declaration.genesis.vrf_tag.clone(),
+                attested_votes: request.attested_votes.len(),
+                gossip_confirmations: request.gossip_confirmations.len(),
             })
             .collect();
         let votes = self
@@ -1396,12 +1492,12 @@ impl NodeInner {
     }
 
     fn produce_block(&self) -> ChainResult<()> {
-        let mut identity_pending: Vec<IdentityDeclaration> = Vec::new();
+        let mut identity_pending: Vec<AttestedIdentityRequest> = Vec::new();
         {
             let mut mempool = self.identity_mempool.write();
             while identity_pending.len() < self.config.max_block_identity_registrations {
-                if let Some(declaration) = mempool.pop_front() {
-                    identity_pending.push(declaration);
+                if let Some(request) = mempool.pop_front() {
+                    identity_pending.push(request);
                 } else {
                     break;
                 }
@@ -1537,10 +1633,10 @@ impl NodeInner {
             return Ok(());
         }
 
-        let mut accepted_identities: Vec<IdentityDeclaration> = Vec::new();
-        for declaration in identity_pending {
-            match self.ledger.register_identity(declaration.clone()) {
-                Ok(_) => accepted_identities.push(declaration),
+        let mut accepted_identities: Vec<AttestedIdentityRequest> = Vec::new();
+        for request in identity_pending {
+            match self.ledger.register_identity(&request) {
+                Ok(_) => accepted_identities.push(request),
                 Err(err) => {
                     warn!(?err, "dropping invalid identity declaration");
                     if self.config.rollout.feature_gates.consensus_enforcement {
@@ -1554,6 +1650,11 @@ impl NodeInner {
                 }
             }
         }
+
+        let identity_declarations: Vec<IdentityDeclaration> = accepted_identities
+            .iter()
+            .map(|request| request.declaration.clone())
+            .collect();
 
         let mut accepted: Vec<TransactionProofBundle> = Vec::new();
         let mut total_fees: u64 = 0;
@@ -1586,7 +1687,7 @@ impl NodeInner {
 
         let identity_proofs: Vec<ChainProof> = accepted_identities
             .iter()
-            .map(|declaration| declaration.proof.zk_proof.clone())
+            .map(|request| request.declaration.proof.zk_proof.clone())
             .collect();
 
         let mut uptime_proofs = Vec::new();
@@ -1610,7 +1711,7 @@ impl NodeInner {
             touched_identities.insert(tx.payload.from.clone());
             touched_identities.insert(tx.payload.to.clone());
         }
-        for declaration in &accepted_identities {
+        for declaration in &identity_declarations {
             touched_identities.insert(declaration.genesis.wallet_addr.clone());
         }
         for update in &timetoke_updates {
@@ -1626,7 +1727,7 @@ impl NodeInner {
         reputation_updates.sort_by(|a, b| a.identity.cmp(&b.identity));
 
         let mut operation_hashes = Vec::new();
-        for declaration in &accepted_identities {
+        for declaration in &identity_declarations {
             operation_hashes.push(declaration.hash()?);
         }
         for tx in &transactions {
@@ -1715,7 +1816,7 @@ impl NodeInner {
         let state_witness = prover.build_state_witness(
             &pruning_proof.previous_state_root,
             &header.state_root,
-            &accepted_identities,
+            &identity_declarations,
             &transactions,
         )?;
         let state_proof = prover.prove_state_transition(state_witness)?;
@@ -1788,7 +1889,7 @@ impl NodeInner {
         proof_artifacts.extend(module_artifacts);
         let block = Block::new(
             header,
-            accepted_identities,
+            identity_declarations,
             transactions,
             uptime_proofs,
             timetoke_updates,

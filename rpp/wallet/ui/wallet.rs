@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::consensus::evaluate_vrf;
@@ -21,6 +21,8 @@ use crate::types::{
 };
 
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
+
+const IDENTITY_WORKFLOW_KEY: &[u8] = b"wallet_identity_workflow";
 
 #[derive(Clone)]
 pub struct Wallet {
@@ -74,6 +76,35 @@ impl Wallet {
 
     pub fn firewood_state_root(&self) -> ChainResult<String> {
         Ok(hex::encode(self.storage.state_root()?))
+    }
+
+    pub fn persist_identity_workflow_state<T: Serialize>(&self, state: &T) -> ChainResult<()> {
+        let encoded = serde_json::to_vec(state).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to encode identity workflow state for persistence: {err}"
+            ))
+        })?;
+        self.storage
+            .write_metadata_blob(IDENTITY_WORKFLOW_KEY, encoded)
+    }
+
+    pub fn load_identity_workflow_state<T: DeserializeOwned>(&self) -> ChainResult<Option<T>> {
+        let maybe_bytes = self.storage.read_metadata_blob(IDENTITY_WORKFLOW_KEY)?;
+        match maybe_bytes {
+            Some(bytes) => {
+                let state = serde_json::from_slice(&bytes).map_err(|err| {
+                    ChainError::Config(format!(
+                        "failed to decode persisted identity workflow state: {err}"
+                    ))
+                })?;
+                Ok(Some(state))
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub fn clear_identity_workflow_state(&self) -> ChainResult<()> {
+        self.storage.delete_metadata_blob(IDENTITY_WORKFLOW_KEY)
     }
 
     pub fn build_identity_declaration(&self) -> ChainResult<IdentityDeclaration> {
