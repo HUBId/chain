@@ -564,8 +564,10 @@ mod tests {
     }
 
     #[test]
-    fn updates_reputation_and_ban_state() {
-        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+    fn updates_reputation_and_ban_state_across_restart() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("peerstore.json");
+        let store = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("open");
         let keypair = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
         let payload = signed_handshake(&keypair, "peer", TierLevel::Tl1, false);
@@ -583,11 +585,32 @@ mod tests {
         let ban_until = SystemTime::now() + Duration::from_secs(10);
         store.ban_peer_until(peer_id, ban_until).expect("ban peer");
 
-        let snapshot = store.reputation_snapshot(&peer_id).expect("snapshot");
-        assert!(snapshot.banned_until.is_some());
+        drop(store);
 
-        store.unban_peer(peer_id).expect("unban");
-        let snapshot = store.reputation_snapshot(&peer_id).expect("snapshot");
+        let reloaded = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("reload");
+        let snapshot = reloaded
+            .reputation_snapshot(&peer_id)
+            .expect("snapshot");
+        assert_eq!(snapshot.tier, TierLevel::Tl2);
+        assert_eq!(snapshot.reputation, 2.4);
+        let banned_until = snapshot.banned_until.expect("ban persisted");
+        let original = ban_until
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("original duration")
+            .as_secs();
+        let restored = banned_until
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("restored duration")
+            .as_secs();
+        assert_eq!(original, restored);
+
+        reloaded.unban_peer(peer_id).expect("unban");
+        drop(reloaded);
+
+        let clean = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("clean");
+        let snapshot = clean
+            .reputation_snapshot(&peer_id)
+            .expect("snapshot");
         assert!(snapshot.banned_until.is_none());
     }
 

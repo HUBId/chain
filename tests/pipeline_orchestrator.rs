@@ -35,6 +35,8 @@ impl OrchestratorFixture {
         node_config.vrf_key_path = key_dir.join("vrf.toml");
         node_config.snapshot_dir = node_data.join("snapshots");
         node_config.proof_cache_dir = node_data.join("proofs");
+        node_config.p2p.peerstore_path = node_data.join("p2p/peerstore.json");
+        node_config.p2p.gossip_path = Some(node_data.join("p2p/gossip.json"));
         node_config.block_time_ms = 200;
         node_config.mempool_limit = 64;
         node_config.rollout.feature_gates.pruning = false;

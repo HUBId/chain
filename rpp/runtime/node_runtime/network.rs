@@ -5,8 +5,8 @@ use std::time::Duration;
 use libp2p::Multiaddr;
 use log::warn;
 use rpp_p2p::{
-    HandshakePayload, IdentityError, Network, NetworkError, NodeIdentity, Peerstore,
-    PeerstoreConfig, PeerstoreError, TierLevel,
+    GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network, NetworkError,
+    NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, TierLevel,
 };
 use thiserror::Error;
 
@@ -82,10 +82,18 @@ impl NetworkResources {
     pub fn initialise(
         identity_path: &Path,
         config: &NetworkConfig,
+        p2p_config: &P2pConfig,
         identity_profile: Option<IdentityProfile>,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
-        let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory())?);
+        let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::persistent(
+            &p2p_config.peerstore_path,
+        ))?);
+        let gossip_state = if let Some(path) = p2p_config.gossip_path.as_ref() {
+            Some(Arc::new(GossipStateStore::open(path)?))
+        } else {
+            None
+        };
         let node_label = identity.peer_id().to_base58();
         let (handshake, profile) = if let Some(profile) = identity_profile {
             (
@@ -102,7 +110,7 @@ impl NetworkResources {
                 None,
             )
         };
-        let mut network = Network::new(identity.clone(), peerstore, handshake, None)?;
+        let mut network = Network::new(identity.clone(), peerstore, handshake, gossip_state)?;
         if let Some(profile) = profile {
             network.update_identity(profile.zsi_id, profile.tier, profile.vrf_proof)?;
         }
@@ -134,6 +142,8 @@ pub enum NetworkSetupError {
     Identity(#[from] IdentityError),
     #[error("peerstore error: {0}")]
     Peerstore(#[from] PeerstoreError),
+    #[error("gossip state error: {0}")]
+    GossipState(#[from] GossipStateError),
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
 }

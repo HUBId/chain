@@ -162,6 +162,7 @@ impl NodeInner {
         let resources = NetworkResources::initialise(
             &config.identity_path,
             &network_config,
+            &config.p2p,
             config.identity.clone(),
         )?;
         let (network, identity) = resources.into_parts();
