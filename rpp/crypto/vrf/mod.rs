@@ -13,11 +13,10 @@ use crate::errors::ChainError;
 use crate::reputation::Tier;
 use crate::stwo::params::{FieldElement, StarkParameters};
 use crate::types::Address;
-use ed25519_dalek::{
-    ExpandedSecretKey, PublicKey, SIGNATURE_LENGTH, SecretKey, Signature, Verifier,
-};
 use malachite::Natural;
 use malachite::base::num::arithmetic::traits::DivRem;
+use schnorrkel::signing_context;
+use schnorrkel::vrf::{VRFPreOut, VRFProof};
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use thiserror::Error;
@@ -28,10 +27,16 @@ pub const POSEIDON_VRF_DOMAIN: &[u8] = b"chain.vrf.poseidon";
 pub const POSEIDON_TIER_SEED_DOMAIN: &[u8] = b"chain.vrf.tier_seed";
 /// Bit width of the VRF randomness output domain.
 pub const VRF_RANDOMNESS_BITS: usize = 256;
+/// Length of the VRF pre-output element encoded by the backend.
+pub const VRF_PREOUTPUT_LENGTH: usize = 32;
+/// Length of the VRF proof encoded by the backend.
+pub const VRF_PROOF_LENGTH: usize = schnorrkel::vrf::VRF_PROOF_LENGTH;
 /// Domain separator used when deriving per-epoch validator thresholds.
 const THRESHOLD_DOMAIN: &[u8] = b"chain.vrf.threshold";
 /// Domain separator for the epoch entropy beacon accumulator.
 const ENTROPY_BEACON_DOMAIN: &[u8] = b"chain.vrf.entropy";
+/// Domain separator used when deriving VRF output randomness bytes.
+const VRF_RANDOMNESS_CONTEXT: &[u8] = b"chain.vrf.randomness";
 
 /// Structured input to the VRF consisting of the values mandated by the
 /// blueprint: the previous block header hash, the current epoch number and a
@@ -106,7 +111,8 @@ impl PoseidonVrfInput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VrfOutput {
     pub randomness: [u8; 32],
-    pub proof: [u8; SIGNATURE_LENGTH],
+    pub preoutput: [u8; VRF_PREOUTPUT_LENGTH],
+    pub proof: [u8; VRF_PROOF_LENGTH],
 }
 
 impl VrfOutput {
@@ -122,42 +128,57 @@ impl VrfOutput {
         hex::encode(self.proof)
     }
 
+    /// Returns the pre-output bytes as a hex string.
+    pub fn preoutput_hex(&self) -> String {
+        hex::encode(self.preoutput)
+    }
+
     /// Returns a reference to the raw signature bytes backing the proof.
-    pub fn proof_bytes(&self) -> &[u8; SIGNATURE_LENGTH] {
+    pub fn proof_bytes(&self) -> &[u8; VRF_PROOF_LENGTH] {
         &self.proof
     }
 
-    /// Reconstructs a VRF output from raw randomness and proof byte slices.
-    pub fn from_bytes(randomness: &[u8], proof: &[u8]) -> VrfResult<Self> {
+    /// Reconstructs a VRF output from raw randomness, pre-output and proof byte slices.
+    pub fn from_bytes(randomness: &[u8], preoutput: &[u8], proof: &[u8]) -> VrfResult<Self> {
         if randomness.len() != 32 {
             return Err(VrfError::InvalidInput(
                 "VRF randomness must be exactly 32 bytes".to_string(),
             ));
         }
-        if proof.len() != SIGNATURE_LENGTH {
+        if preoutput.len() != VRF_PREOUTPUT_LENGTH {
+            return Err(VrfError::InvalidInput(
+                "VRF preoutput must be exactly 32 bytes".to_string(),
+            ));
+        }
+        if proof.len() != VRF_PROOF_LENGTH {
             return Err(VrfError::InvalidInput(format!(
-                "VRF proof must be exactly {SIGNATURE_LENGTH} bytes"
+                "VRF proof must be exactly {VRF_PROOF_LENGTH} bytes"
             )));
         }
 
         let mut randomness_bytes = [0u8; 32];
         randomness_bytes.copy_from_slice(randomness);
-        let mut proof_bytes = [0u8; SIGNATURE_LENGTH];
+        let mut preoutput_bytes = [0u8; VRF_PREOUTPUT_LENGTH];
+        preoutput_bytes.copy_from_slice(preoutput);
+        let mut proof_bytes = [0u8; VRF_PROOF_LENGTH];
         proof_bytes.copy_from_slice(proof);
 
         Ok(Self {
             randomness: randomness_bytes,
+            preoutput: preoutput_bytes,
             proof: proof_bytes,
         })
     }
 
-    /// Parses a VRF output from hexadecimal encodings of randomness and proof.
-    pub fn from_hex(randomness_hex: &str, proof_hex: &str) -> VrfResult<Self> {
+    /// Parses a VRF output from hexadecimal encodings of randomness, pre-output and proof.
+    pub fn from_hex(randomness_hex: &str, preoutput_hex: &str, proof_hex: &str) -> VrfResult<Self> {
         let randomness = hex::decode(randomness_hex)
             .map_err(|err| VrfError::InvalidInput(format!("invalid randomness encoding: {err}")))?;
+        let preoutput = hex::decode(preoutput_hex)
+            .map_err(|err| VrfError::InvalidInput(format!("invalid preoutput encoding: {err}")))?;
         let proof = hex::decode(proof_hex)
             .map_err(|err| VrfError::InvalidInput(format!("invalid proof encoding: {err}")))?;
-        Self::from_bytes(&randomness, &proof)
+        Self::from_bytes(&randomness, &preoutput, &proof)
     }
 }
 
@@ -187,6 +208,7 @@ impl From<VrfError> for ChainError {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VrfProof {
     pub randomness: Natural,
+    pub preoutput: String,
     pub proof: String,
 }
 
@@ -194,6 +216,7 @@ impl VrfProof {
     pub fn from_output(output: &VrfOutput) -> Self {
         Self {
             randomness: natural_from_bytes(&output.randomness),
+            preoutput: output.preoutput_hex(),
             proof: output.proof_hex(),
         }
     }
@@ -204,10 +227,13 @@ impl VrfProof {
 
     pub fn to_vrf_output(&self) -> VrfResult<VrfOutput> {
         let randomness = self.randomness_bytes();
+        let preoutput_bytes = hex::decode(&self.preoutput).map_err(|err| {
+            VrfError::InvalidInput(format!("failed to decode VRF preoutput hex: {err}"))
+        })?;
         let proof_bytes = hex::decode(&self.proof).map_err(|err| {
             VrfError::InvalidInput(format!("failed to decode VRF proof hex: {err}"))
         })?;
-        VrfOutput::from_bytes(&randomness, &proof_bytes)
+        VrfOutput::from_bytes(&randomness, &preoutput_bytes, &proof_bytes)
     }
 }
 
@@ -476,14 +502,16 @@ pub struct ValidatorSelection {
 /// step; for now this function only exposes the intended signature.
 pub fn generate_vrf(input: &PoseidonVrfInput, secret: &VrfSecretKey) -> VrfResult<VrfOutput> {
     let digest = input.poseidon_digest_bytes();
-    let secret = SecretKey::from_bytes(&secret.to_bytes())
-        .map_err(|err| VrfError::InvalidInput(format!("invalid VRF secret key: {err}")))?;
-    let expanded = ExpandedSecretKey::from(&secret);
-    let public: PublicKey = (&secret).into();
-    let signature = expanded.sign(&digest, &public);
-    let proof_bytes = signature.to_bytes();
+    let keypair = secret.expand_to_keypair();
+    let context = signing_context(POSEIDON_VRF_DOMAIN);
+    let (inout, proof, _) = keypair.vrf_sign(context.bytes(&digest));
+    let randomness: [u8; 32] = inout.make_bytes(VRF_RANDOMNESS_CONTEXT);
+    let preoutput = inout.to_preout().0;
+    let proof_bytes = proof.to_bytes();
+
     Ok(VrfOutput {
-        randomness: digest,
+        randomness,
+        preoutput,
         proof: proof_bytes,
     })
 }
@@ -496,16 +524,17 @@ pub fn verify_vrf(
     output: &VrfOutput,
 ) -> VrfResult<()> {
     let digest = input.poseidon_digest_bytes();
-    let public = PublicKey::from_bytes(&public.to_bytes())
-        .map_err(|err| VrfError::InvalidInput(format!("invalid VRF public key: {err}")))?;
-    let signature = Signature::from_bytes(&output.proof)
+    let context = signing_context(POSEIDON_VRF_DOMAIN);
+    let proof = VRFProof::from_bytes(output.proof_bytes())
         .map_err(|err| VrfError::InvalidInput(format!("invalid VRF proof bytes: {err}")))?;
+    let preoutput = VRFPreOut(output.preoutput);
+    let (inout, _) = public
+        .as_public_key()
+        .vrf_verify(context.bytes(&digest), &preoutput, &proof)
+        .map_err(|err| VrfError::Backend(format!("{err}")))?;
 
-    public
-        .verify(&digest, &signature)
-        .map_err(|_| VrfError::VerificationFailed)?;
-
-    if digest != output.randomness {
+    let expected: [u8; 32] = inout.make_bytes(VRF_RANDOMNESS_CONTEXT);
+    if expected != output.randomness {
         return Err(VrfError::VerificationFailed);
     }
 
@@ -978,7 +1007,7 @@ fn leader_cmp(a: &VerifiedSubmission, b: &VerifiedSubmission) -> std::cmp::Order
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{VrfKeypair, VrfPublicKey, generate_vrf_keypair};
+    use crate::crypto::{VrfKeypair, generate_vrf_keypair};
 
     fn sample_seed() -> [u8; 32] {
         [0x11; 32]
@@ -1019,16 +1048,18 @@ mod tests {
         let seed = sample_seed();
         let tier_seed = derive_tier_seed(&address.to_string(), timetoke_hours);
         let input = PoseidonVrfInput::new(seed, sample_epoch(), tier_seed);
+        let keypair = generate_vrf_keypair().expect("vrf keypair");
         let proof = VrfProof {
             randomness: randomness.clone(),
-            proof: "00".repeat(SIGNATURE_LENGTH),
+            preoutput: "00".repeat(VRF_PREOUTPUT_LENGTH),
+            proof: "00".repeat(VRF_PROOF_LENGTH),
         };
         let weight = submission_weight(&tier, timetoke_hours);
         let weighted_randomness = weighted_randomness(&randomness, &weight);
 
         VerifiedSubmission {
             address: address.to_string(),
-            public_key: Some(VrfPublicKey::from([0u8; 32])),
+            public_key: Some(keypair.public),
             input,
             proof,
             tier,
@@ -1108,7 +1139,22 @@ mod tests {
         output.proof[0] ^= 0xFF;
         assert!(matches!(
             verify_vrf(&input, &keypair.public, &output),
-            Err(VrfError::VerificationFailed) | Err(VrfError::InvalidInput(_))
+            Err(VrfError::VerificationFailed)
+                | Err(VrfError::InvalidInput(_))
+                | Err(VrfError::Backend(_))
+        ));
+    }
+
+    #[test]
+    fn verify_fails_for_tampered_preoutput() {
+        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
+        let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
+        let mut output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
+        output.preoutput[0] ^= 0xFF;
+        assert!(matches!(
+            verify_vrf(&input, &keypair.public, &output),
+            Err(VrfError::VerificationFailed) | Err(VrfError::Backend(_))
         ));
     }
 
@@ -1119,24 +1165,49 @@ mod tests {
         let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
         let output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
         let randomness_hex = output.randomness_hex();
+        let preoutput_hex = output.preoutput_hex();
         let proof_hex = output.proof_hex();
 
-        let parsed = VrfOutput::from_hex(&randomness_hex, &proof_hex).expect("parse hex");
+        let parsed =
+            VrfOutput::from_hex(&randomness_hex, &preoutput_hex, &proof_hex).expect("parse hex");
         assert_eq!(parsed, output);
     }
 
     #[test]
     fn vrf_output_parsing_rejects_invalid_lengths() {
         let randomness = [0u8; 31];
-        let proof = [0u8; SIGNATURE_LENGTH + 1];
+        let preoutput = [0u8; VRF_PREOUTPUT_LENGTH + 1];
+        let proof = [0u8; VRF_PROOF_LENGTH + 1];
         assert!(matches!(
-            VrfOutput::from_bytes(&randomness, &[0u8; SIGNATURE_LENGTH]),
+            VrfOutput::from_bytes(
+                &randomness,
+                &[0u8; VRF_PREOUTPUT_LENGTH],
+                &[0u8; VRF_PROOF_LENGTH]
+            ),
             Err(VrfError::InvalidInput(_))
         ));
         assert!(matches!(
-            VrfOutput::from_bytes(&[0u8; 32], &proof),
+            VrfOutput::from_bytes(&[0u8; 32], &preoutput, &[0u8; VRF_PROOF_LENGTH]),
             Err(VrfError::InvalidInput(_))
         ));
+        assert!(matches!(
+            VrfOutput::from_bytes(&[0u8; 32], &[0u8; VRF_PREOUTPUT_LENGTH], &proof),
+            Err(VrfError::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn different_keys_produce_distinct_randomness() {
+        let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
+        let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
+        let first = generate_vrf_keypair().expect("generate vrf keypair");
+        let second = generate_vrf_keypair().expect("generate vrf keypair");
+
+        let first_output = generate_vrf(&input, &first.secret).expect("first vrf");
+        let second_output = generate_vrf(&input, &second.secret).expect("second vrf");
+
+        assert_ne!(first_output.randomness, second_output.randomness);
+        assert_ne!(first_output.preoutput, second_output.preoutput);
     }
 
     #[test]
@@ -1168,7 +1239,8 @@ mod tests {
     fn select_validators_rejects_invalid_proof() {
         let mut pool = VrfSubmissionPool::new();
         let (mut submission, _, _) = submission_for("addr_invalid", Tier::Tl3, 12);
-        submission.proof.proof = "00".repeat(SIGNATURE_LENGTH);
+        submission.proof.preoutput = "00".repeat(VRF_PREOUTPUT_LENGTH);
+        submission.proof.proof = "00".repeat(VRF_PROOF_LENGTH);
         submit_vrf(&mut pool, submission.clone());
 
         let selection = select_validators(&pool, 1);

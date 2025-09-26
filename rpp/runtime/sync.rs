@@ -632,6 +632,7 @@ mod tests {
             "0".to_string(),
             vrf.randomness.to_string(),
             vrf_public_key_to_hex(&vrf_keypair.public),
+            vrf.preoutput.clone(),
             vrf.proof.clone(),
             address.clone(),
             Tier::Tl3.to_string(),

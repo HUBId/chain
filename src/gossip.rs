@@ -39,8 +39,7 @@ impl GossipProcessor for NodeGossipProcessor {
     fn handle_block(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
         let block: Block = serde_json::from_slice(payload)
             .map_err(|err| anyhow!("invalid block gossip payload: {err}"))?;
-        self
-            .node
+        self.node
             .submit_block_proposal(block)
             .map(|_| ())
             .map_err(|err| anyhow!("failed to submit block proposal: {err}"))
@@ -49,8 +48,7 @@ impl GossipProcessor for NodeGossipProcessor {
     fn handle_vote(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
         let vote: SignedBftVote = serde_json::from_slice(payload)
             .map_err(|err| anyhow!("invalid vote gossip payload: {err}"))?;
-        self
-            .node
+        self.node
             .submit_vote(vote)
             .map(|_| ())
             .map_err(|err| anyhow!("failed to submit vote: {err}"))
@@ -59,8 +57,7 @@ impl GossipProcessor for NodeGossipProcessor {
     fn handle_proof(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
         let bundle: TransactionProofBundle = serde_json::from_slice(payload)
             .map_err(|err| anyhow!("invalid proof gossip payload: {err}"))?;
-        self
-            .node
+        self.node
             .submit_transaction(bundle)
             .map(|_| ())
             .map_err(|err| anyhow!("failed to submit proof bundle: {err}"))
@@ -165,10 +162,7 @@ mod tests {
 
     impl TestProcessor {
         fn record(&self, topic: GossipTopic, payload: &[u8]) {
-            self.events
-                .lock()
-                .unwrap()
-                .push((topic, payload.to_vec()));
+            self.events.lock().unwrap().push((topic, payload.to_vec()));
         }
 
         fn topics(&self) -> Vec<GossipTopic> {

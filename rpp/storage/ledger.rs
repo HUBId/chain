@@ -1587,7 +1587,11 @@ mod tests {
         assert_eq!(new_entry.owner, address);
         assert!(!new_entry.is_spent());
 
-        assert!(snapshot_after.get(&UtxoOutpoint { tx_id, index: 1 }).is_none());
+        assert!(
+            snapshot_after
+                .get(&UtxoOutpoint { tx_id, index: 1 })
+                .is_none()
+        );
 
         let snapshot_for_account = ledger
             .utxo_state
@@ -1653,7 +1657,8 @@ mod tests {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         ledger.sync_epoch_for_height(1);
         let epoch = ledger.current_epoch();
-        let proof_hex = "aa".repeat(64);
+        let proof_hex = "aa".repeat(crate::vrf::VRF_PROOF_LENGTH);
+        let preoutput_hex = "bb".repeat(crate::vrf::VRF_PREOUTPUT_LENGTH);
         let record = VrfSelectionRecord {
             epoch,
             address: "validator".into(),
@@ -1662,6 +1667,7 @@ mod tests {
             public_key: Some("pk".into()),
             proof: VrfProof {
                 randomness: Natural::from(5u32),
+                preoutput: preoutput_hex.clone(),
                 proof: proof_hex.clone(),
             },
             verified: true,
@@ -1674,7 +1680,8 @@ mod tests {
         ledger.record_vrf_history(epoch, 1, &[record.clone()]);
         ledger.record_vrf_history(epoch, 1, &[record.clone()]);
         let mut other = record.clone();
-        other.proof.proof = "bb".repeat(64);
+        other.proof.preoutput = "cc".repeat(crate::vrf::VRF_PREOUTPUT_LENGTH);
+        other.proof.proof = "dd".repeat(crate::vrf::VRF_PROOF_LENGTH);
         other.accepted = false;
         other.rejection_reason = Some("threshold".into());
         other.weight = Some("48".into());
@@ -1723,6 +1730,7 @@ mod tests {
                 timetoke_hours: 180,
                 vrf: VrfProof {
                     randomness: Natural::from(5u32),
+                    preoutput: "00ff".to_string(),
                     proof: "00ff".to_string(),
                 },
                 randomness: Natural::from(5u32),
@@ -1735,6 +1743,7 @@ mod tests {
                 timetoke_hours: 160,
                 vrf: VrfProof {
                     randomness: Natural::from(7u32),
+                    preoutput: "00aa".to_string(),
                     proof: "00aa".to_string(),
                 },
                 randomness: Natural::from(7u32),
@@ -1747,6 +1756,7 @@ mod tests {
                 timetoke_hours: 120,
                 vrf: VrfProof {
                     randomness: Natural::from(9u32),
+                    preoutput: "0099".to_string(),
                     proof: "0099".to_string(),
                 },
                 randomness: Natural::from(9u32),
