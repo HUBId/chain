@@ -11,6 +11,8 @@ use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod gossip;
+
 use rpp_chain::api;
 use rpp_chain::config::{NodeConfig, WalletConfig};
 use rpp_chain::crypto::{
@@ -25,6 +27,8 @@ use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2p
 use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
+
+use crate::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 
 #[derive(Parser)]
 #[command(author, version, about = "Production-ready RPP blockchain node")]
@@ -113,6 +117,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut rpc_addr = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
     let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
+    let mut gossip_task: Option<JoinHandle<Result<()>>> = None;
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path)?;
@@ -151,6 +156,13 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         orchestrator.spawn(shutdown_rx.clone());
         orchestrator_instance = Some(orchestrator);
         orchestrator_shutdown = Some(shutdown_rx);
+
+        if let Some(p2p) = p2p_handle.as_ref() {
+            let events = p2p.subscribe();
+            let processor = Arc::new(NodeGossipProcessor::new(handle.clone()));
+            let shutdown = orchestrator_shutdown.as_ref().map(|rx| rx.clone());
+            gossip_task = Some(spawn_node_event_worker(events, processor, shutdown));
+        }
     }
 
     let mut wallet_instance: Option<Arc<Wallet>> = None;
@@ -234,6 +246,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         api_task,
         orchestrator_instance,
         p2p_handle,
+        gossip_task,
     )
     .await
 }
@@ -453,6 +466,7 @@ async fn run_until_shutdown(
     api_task: JoinHandle<Result<()>>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     p2p_handle: Option<P2pHandle>,
+    gossip_task: Option<JoinHandle<Result<()>>>,
 ) -> Result<()> {
     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<Result<()>>();
 
@@ -460,6 +474,9 @@ async fn run_until_shutdown(
         spawn_task_forwarder(&completion_tx, task);
     }
     if let Some(task) = p2p_task {
+        spawn_task_forwarder(&completion_tx, task);
+    }
+    if let Some(task) = gossip_task {
         spawn_task_forwarder(&completion_tx, task);
     }
     spawn_task_forwarder(&completion_tx, api_task);
