@@ -11,12 +11,13 @@ use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, Identit
 use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{
-    AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
-    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
-    TimetokeWitness, TransactionWitness, UtxoRecord, ZsiRecord, ZsiWitness,
+    AccountBalanceWitness, AssetType, ConsensusWitness, GlobalStateCommitments,
+    ModuleWitnessBundle, ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness,
+    TimetokeRecord, TimetokeWitness, TransactionWitness, UtxoOutpoint, UtxoRecord, ZsiRecord,
+    ZsiWitness,
 };
 use crate::state::{
-    GlobalState, ProofRegistry, ReputationState, TimetokeState, UtxoState, ZsiRegistry,
+    GlobalState, ProofRegistry, ReputationState, StoredUtxo, TimetokeState, UtxoState, ZsiRegistry,
 };
 use crate::types::{
     Account, Address, AttestedIdentityRequest, SignedTransaction, Stake, UptimeProof,
@@ -196,7 +197,7 @@ impl Ledger {
     }
 
     pub fn utxos_for_owner(&self, address: &Address) -> Vec<UtxoRecord> {
-        self.utxo_state.unspent_outputs_for_owner(address)
+        self.utxo_state.get_for_account(address)
     }
 
     pub fn validator_public_key(&self, address: &str) -> ChainResult<PublicKey> {
@@ -277,7 +278,7 @@ impl Ledger {
     fn module_records(&self, address: &str) -> ModuleRecordSnapshots {
         let address = address.to_string();
         ModuleRecordSnapshots {
-            utxo: self.utxo_state.get_for_account(&address),
+            utxos: self.utxo_state.get_for_account(&address),
             reputation: self.reputation_state.get(&address),
             timetoke: self.timetoke_state.get(&address),
             zsi: self.zsi_registry.get(&address),
@@ -679,10 +680,10 @@ impl Ledger {
             sender_after_witness,
             recipient_before_witness,
             recipient_after_witness,
-            module_sender_before.utxo.clone(),
-            sender_modules_after.utxo.clone(),
-            module_recipient_before.utxo.clone(),
-            recipient_modules_after.utxo.clone(),
+            module_sender_before.latest_utxo(),
+            sender_modules_after.latest_utxo(),
+            module_recipient_before.latest_utxo(),
+            recipient_modules_after.latest_utxo(),
         );
 
         let sender_reputation_witness = sender_modules_after.reputation.clone().map(|after| {
@@ -946,24 +947,64 @@ impl Ledger {
         self.reputation_state.upsert_from_account(account);
         self.timetoke_state.upsert_from_account(account);
         self.zsi_registry.upsert_from_account(account);
+        let existing = self.utxo_state.get_for_account(&account.address);
         match utxo_tx_id {
-            Some(tx_id) => self.utxo_state.upsert_with_transaction(account, tx_id),
-            None => self.utxo_state.upsert_from_account(account),
+            Some(tx_id) => {
+                for record in existing {
+                    self.utxo_state.remove_spent(&record.outpoint);
+                }
+                let record = account_snapshot_utxo(account, tx_id);
+                self.utxo_state
+                    .insert(record.outpoint.clone(), StoredUtxo::from(record));
+            }
+            None => {
+                if let Some(mut current) = existing
+                    .into_iter()
+                    .max_by(|a, b| a.outpoint.cmp(&b.outpoint))
+                {
+                    if current.value != account.balance {
+                        current.value = account.balance;
+                        self.utxo_state
+                            .insert(current.outpoint.clone(), StoredUtxo::from(current));
+                    }
+                } else {
+                    let record = account_snapshot_utxo(account, [0u8; 32]);
+                    self.utxo_state
+                        .insert(record.outpoint.clone(), StoredUtxo::from(record));
+                }
+            }
         }
+    }
+}
+
+fn account_snapshot_utxo(account: &Account, tx_id: [u8; 32]) -> UtxoRecord {
+    let mut script_seed = account.address.as_bytes().to_vec();
+    script_seed.extend_from_slice(&0u32.to_be_bytes());
+    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+    UtxoRecord {
+        outpoint: UtxoOutpoint { tx_id, index: 0 },
+        owner: account.address.clone(),
+        value: account.balance,
+        asset_type: AssetType::Native,
+        script_hash,
+        timelock: None,
     }
 }
 
 #[derive(Default, Clone)]
 struct ModuleRecordSnapshots {
-    utxo: Option<UtxoRecord>,
+    utxos: Vec<UtxoRecord>,
     reputation: Option<ReputationRecord>,
     timetoke: Option<TimetokeRecord>,
     zsi: Option<ZsiRecord>,
 }
 
 impl ModuleRecordSnapshots {
-    fn empty() -> Self {
-        Self::default()
+    fn latest_utxo(&self) -> Option<UtxoRecord> {
+        self.utxos
+            .iter()
+            .max_by(|a, b| a.outpoint.cmp(&b.outpoint))
+            .cloned()
     }
 }
 

@@ -5,13 +5,63 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
-use crate::reputation::Tier;
+use crate::reputation::{ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::BlueprintTransferPolicy;
+use crate::state::{StoredUtxo, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
 use super::wallet::Wallet;
+
+#[derive(Clone, Debug)]
+pub struct BlueprintTransferPolicy {
+    pub min_tier: Tier,
+    pub min_score: f64,
+    pub min_timetoke_hours: u64,
+    pub max_inputs: usize,
+    pub preferred_fragment_value: u128,
+    pub max_fragments_per_account: usize,
+}
+
+impl BlueprintTransferPolicy {
+    pub fn blueprint_default() -> Self {
+        let reputation_params = ReputationParams::default();
+        let timetoke_params = TimetokeParams::default();
+        Self {
+            min_tier: Tier::Tl2,
+            min_score: reputation_params.tier_thresholds.tier5_min_score / 3.0,
+            min_timetoke_hours: timetoke_params.decay_step_hours.saturating_mul(6),
+            max_inputs: 4,
+            preferred_fragment_value: 25_000,
+            max_fragments_per_account: 8,
+        }
+    }
+
+    pub fn ensure_account_allowed(&self, account: &Account) -> ChainResult<()> {
+        if account.reputation.tier < self.min_tier {
+            return Err(ChainError::Transaction(
+                "wallet tier insufficient for requested policy".into(),
+            ));
+        }
+        if account.reputation.score < self.min_score {
+            return Err(ChainError::Transaction(
+                "wallet reputation score below blueprint minimum".into(),
+            ));
+        }
+        if account.reputation.timetokes.hours_online < self.min_timetoke_hours {
+            return Err(ChainError::Transaction(
+                "wallet timetoke hours below blueprint minimum".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for BlueprintTransferPolicy {
+    fn default() -> Self {
+        Self::blueprint_default()
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ReputationStatus {
@@ -199,6 +249,8 @@ impl<'a> WalletWorkflows<'a> {
                 "wallet identity must be ZSI-validated".into(),
             ));
         }
+        let accounts_snapshot = self.wallet.accounts_snapshot()?;
+        let utxo_state = build_utxo_state(&accounts_snapshot);
         let status = status_from_account(&sender_account);
         let transaction = self
             .wallet
@@ -323,33 +375,47 @@ fn status_from_account(account: &Account) -> ReputationStatus {
     }
 }
 
+fn build_utxo_state(accounts: &[Account]) -> UtxoState {
+    let state = UtxoState::new();
+    for account in accounts {
+        let record = snapshot_utxo_record(&account.address, account.balance, [0u8; 32]);
+        state.insert(record.outpoint.clone(), StoredUtxo::from(record));
+    }
+    state
+}
+
 fn ledger_snapshot_utxo(
     state: &UtxoState,
     address: &Address,
     value: u128,
     tx_id_override: Option<[u8; 32]>,
 ) -> UtxoRecord {
-    let mut record = state.get_for_account(address).unwrap_or_else(|| {
-        let mut script_seed = address.as_bytes().to_vec();
-        script_seed.extend_from_slice(&0u32.to_be_bytes());
-        let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
-        UtxoRecord {
-            outpoint: UtxoOutpoint {
-                tx_id: tx_id_override.unwrap_or([0u8; 32]),
-                index: 0,
-            },
-            owner: address.clone(),
-            value,
-            asset_type: AssetType::Native,
-            script_hash,
-            timelock: None,
-        }
-    });
+    let mut record = state
+        .get_for_account(address)
+        .into_iter()
+        .max_by(|a, b| a.outpoint.cmp(&b.outpoint))
+        .unwrap_or_else(|| {
+            snapshot_utxo_record(address, value, tx_id_override.unwrap_or([0u8; 32]))
+        });
     if let Some(tx_id) = tx_id_override {
         record.outpoint.tx_id = tx_id;
     }
     record.value = value;
     record
+}
+
+fn snapshot_utxo_record(address: &Address, value: u128, tx_id: [u8; 32]) -> UtxoRecord {
+    let mut script_seed = address.as_bytes().to_vec();
+    script_seed.extend_from_slice(&0u32.to_be_bytes());
+    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+    UtxoRecord {
+        outpoint: UtxoOutpoint { tx_id, index: 0 },
+        owner: address.clone(),
+        value,
+        asset_type: AssetType::Native,
+        script_hash,
+        timelock: None,
+    }
 }
 
 fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {
