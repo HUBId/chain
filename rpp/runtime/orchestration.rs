@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 use crate::errors::{ChainError, ChainResult};
 use crate::node::NodeHandle;
 use crate::reputation::Tier;
+use crate::runtime::node_runtime::NodeHandle as P2pHandle;
 use crate::types::{Address, Block};
 use crate::wallet::workflows::TransactionWorkflow;
 
@@ -189,6 +190,8 @@ impl PipelineMetrics {
 #[derive(Clone)]
 pub struct PipelineOrchestrator {
     node: NodeHandle,
+    #[allow(dead_code)]
+    p2p: Option<P2pHandle>,
     metrics: Arc<PipelineMetrics>,
     submissions: mpsc::Sender<PipelineSubmission>,
     submissions_rx: Arc<Mutex<Option<mpsc::Receiver<PipelineSubmission>>>>,
@@ -197,13 +200,14 @@ pub struct PipelineOrchestrator {
 
 impl PipelineOrchestrator {
     /// Construct an orchestrator that drives the end-to-end pipeline for the provided node.
-    pub fn new(node: NodeHandle) -> (Self, watch::Receiver<bool>) {
+    pub fn new(node: NodeHandle, p2p: Option<P2pHandle>) -> (Self, watch::Receiver<bool>) {
         let (tx, rx) = mpsc::channel(DEFAULT_QUEUE_DEPTH);
         let metrics = Arc::new(PipelineMetrics::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         (
             Self {
                 node,
+                p2p,
                 metrics,
                 submissions: tx,
                 submissions_rx: Arc::new(Mutex::new(Some(rx))),
