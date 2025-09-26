@@ -114,6 +114,17 @@ impl Default for BlueprintTransferPolicy {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct StoredUtxo {
+    pub record: UtxoRecord,
+}
+
+impl StoredUtxo {
+    pub fn new(record: UtxoRecord) -> Self {
+        Self { record }
+    }
+}
+
 #[derive(Default)]
 pub struct UtxoState {
     entries: RwLock<BTreeMap<UtxoOutpoint, StoredUtxo>>,
@@ -299,7 +310,8 @@ impl UtxoState {
             .collect()
     }
 
-    pub fn insert(&self, record: UtxoRecord) {
+    pub fn insert(&self, stored: StoredUtxo) {
+        let record = stored.record.clone();
         let mut entries = self.entries.write();
         entries.insert(
             record.outpoint.clone(),
@@ -315,6 +327,10 @@ impl UtxoState {
                 reputation_score: 0.0,
                 timetoke_hours: 0,
             });
+    }
+
+    pub fn remove_spent(&self, outpoint: &UtxoOutpoint) -> bool {
+        self.remove(outpoint).is_some()
     }
 
     pub fn remove(&self, outpoint: &UtxoOutpoint) -> Option<UtxoRecord> {
