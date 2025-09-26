@@ -73,6 +73,10 @@ The node will open a RocksDB instance under the configured `data_dir`, start blo
 - `data_dir`: persistent storage directory (RocksDB is stored in `data_dir/db`).
 - `key_path`: location of the node's Ed25519 keypair file.
 - `p2p_key_path`: persistent libp2p Ed25519 identity used for Noise handshakes.
+- `p2p_listen`: list of libp2p multiaddresses the node binds to for gossip and RPC backhaul.
+- `p2p_seeds`: bootstrap peers (multiaddresses) dialed on startup to join the gossip mesh.
+- `peerstore_path`: JSON database persisting authenticated peers, tiers, and ban windows across restarts.
+- `gossip_state_path`: persisted GossipSub mesh snapshot used to restore topics, peers, and replay protection filters.
 - `vrf_key_path`: path to the node's Poseidon VRF keypair (auto-created on first launch).
 - `snapshot_dir`: directory where reconstructed state snapshots are materialized.
 - `proof_cache_dir`: location for cached recursive/STARK proof blobs.

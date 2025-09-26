@@ -3,6 +3,10 @@
 data_dir = "./data"
 key_path = "./keys/node.toml"
 p2p_key_path = "./keys/p2p.toml"
+p2p_listen = ["/ip4/0.0.0.0/tcp/7050"]
+p2p_seeds = []
+peerstore_path = "./data/p2p/peerstore.json"
+gossip_state_path = "./data/p2p/gossip.json"
 vrf_key_path = "./keys/vrf.toml"
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"

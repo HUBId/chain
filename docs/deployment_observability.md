@@ -29,6 +29,9 @@ production.
 3. **Run storage migrations prior to rollout.** Execute `cargo run -- migrate`
    against production data before switching binaries to guarantee the RocksDB
    schema matches the proof bundle format.【F:README.md†L96-L107】
+4. **Bootstrap the libp2p swarm.** Configure `p2p_listen`, `p2p_seeds`,
+   `peerstore_path`, and `gossip_state_path` so validators reconnect to known
+   peers and restore GossipSub mesh state across restarts.【F:config/node.toml†L3-L11】【F:rpp/runtime/config.rs†L12-L83】
 
 ## Telemetry & Metrics
 

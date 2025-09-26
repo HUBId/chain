@@ -6,7 +6,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 /// the tree to guarantee deterministic aggregation across modules.
 pub fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
     if leaves.is_empty() {
-        return Blake2sHasher::hash(b"rpp-empty").into();
+        return [0u8; 32];
     }
     leaves.sort();
     while leaves.len() > 1 {

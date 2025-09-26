@@ -2897,6 +2897,7 @@ dependencies = [
  "ed25519-dalek 1.0.1",
  "hex",
  "hex-literal",
+ "libp2p",
  "malachite",
  "num-bigint",
  "num-traits",

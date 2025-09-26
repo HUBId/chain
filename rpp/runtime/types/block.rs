@@ -387,7 +387,9 @@ impl RecursiveProof {
             previous_commitment,
             proof: proof.clone(),
         };
-        instance.verify(header, pruning, previous)?;
+        if header.height > 0 {
+            instance.verify(header, pruning, previous)?;
+        }
         Ok(instance)
     }
 

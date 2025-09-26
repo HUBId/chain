@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
-use tokio::time;
+use tokio::{sync::Mutex, time};
 use tracing::{debug, info, warn};
 
 use hex;
-use serde::Serialize;
+use libp2p::{Multiaddr, PeerId};
+use serde::{Deserialize, Serialize};
 use serde_json;
 
 use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
@@ -49,18 +50,22 @@ use crate::types::{
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
-use rpp_p2p::NodeIdentity;
+use rpp_p2p::{
+    GossipStateStore, GossipTopic, HandshakePayload, MetaTelemetry, Network, NetworkError,
+    NetworkEvent, NodeIdentity, Peerstore, PeerstoreConfig, ReputationEvent, TierLevel,
+};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
+const SOFTWARE_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Clone, Copy)]
 struct ChainTip {
     height: u64,
     last_hash: [u8; 32],
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeStatus {
     pub address: Address,
     pub height: u64,
@@ -75,7 +80,7 @@ pub struct NodeStatus {
     pub tip: Option<BlockMetadata>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingTransactionSummary {
     pub hash: String,
     pub from: Address,
@@ -85,7 +90,7 @@ pub struct PendingTransactionSummary {
     pub nonce: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingIdentitySummary {
     pub wallet_addr: Address,
     pub commitment: String,
@@ -97,7 +102,7 @@ pub struct PendingIdentitySummary {
     pub gossip_confirmations: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingVoteSummary {
     pub hash: String,
     pub voter: Address,
@@ -107,7 +112,7 @@ pub struct PendingVoteSummary {
     pub kind: BftVoteKind,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MempoolStatus {
     pub transactions: Vec<PendingTransactionSummary>,
     pub identities: Vec<PendingIdentitySummary>,
@@ -115,7 +120,7 @@ pub struct MempoolStatus {
     pub uptime_proofs: Vec<PendingUptimeSummary>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingUptimeSummary {
     pub identity: Address,
     pub window_start: u64,
@@ -123,7 +128,7 @@ pub struct PendingUptimeSummary {
     pub credited_hours: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConsensusStatus {
     pub height: u64,
     pub block_hash: Option<String>,
@@ -141,7 +146,7 @@ pub struct ConsensusStatus {
     pub pending_votes: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VrfStatus {
     pub address: Address,
     pub epoch: u64,
@@ -150,7 +155,7 @@ pub struct VrfStatus {
     pub proof: crate::vrf::VrfProof,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ValidatorMembershipEntry {
     pub address: Address,
     pub stake: Stake,
@@ -159,13 +164,13 @@ pub struct ValidatorMembershipEntry {
     pub timetoke_hours: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ObserverMembershipEntry {
     pub address: Address,
     pub tier: Tier,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BftMembership {
     pub height: u64,
     pub epoch: u64,
@@ -174,7 +179,7 @@ pub struct BftMembership {
     pub observers: Vec<ObserverMembershipEntry>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockProofArtifactsView {
     pub hash: String,
     pub height: u64,
@@ -187,7 +192,7 @@ pub struct BlockProofArtifactsView {
     pub pruned: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TelemetryRuntimeStatus {
     pub enabled: bool,
     pub endpoint: Option<String>,
@@ -195,20 +200,39 @@ pub struct TelemetryRuntimeStatus {
     pub last_observed_height: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PeerHeartbeatSummary {
+    pub peer: String,
+    pub version: String,
+    pub latency_ms: u128,
+    pub last_seen: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NetworkTelemetryStatus {
+    pub local_peer_id: String,
+    pub listen_addresses: Vec<String>,
+    pub seeds: Vec<String>,
+    pub peers: Vec<PeerHeartbeatSummary>,
+    pub offline: Vec<PeerHeartbeatSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RolloutStatus {
     pub release_channel: ReleaseChannel,
     pub feature_gates: FeatureGates,
     pub telemetry: TelemetryRuntimeStatus,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeTelemetrySnapshot {
     pub release_channel: ReleaseChannel,
     pub feature_gates: FeatureGates,
+    pub software_version: String,
     pub node: NodeStatus,
     pub consensus: ConsensusStatus,
     pub mempool: MempoolStatus,
+    pub network: NetworkTelemetryStatus,
 }
 
 pub struct Node {
@@ -220,6 +244,8 @@ struct NodeInner {
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
     p2p_identity: Arc<NodeIdentity>,
+    network: Mutex<Network>,
+    meta_telemetry: RwLock<MetaTelemetry>,
     address: Address,
     storage: Storage,
     ledger: Ledger,
@@ -408,7 +434,9 @@ impl Node {
                 consensus_certificate,
                 None,
             );
-            genesis_block.verify(None, &keypair.public)?;
+            if genesis_block.header.height > 0 {
+                genesis_block.verify(None, &keypair.public)?;
+            }
             let genesis_metadata = BlockMetadata::from(&genesis_block);
             storage.store_block(&genesis_block, &genesis_metadata)?;
             tip_metadata = Some(genesis_metadata);
@@ -435,12 +463,53 @@ impl Node {
         ledger.sync_epoch_for_height(next_height);
         let epoch_manager = VrfEpochManager::new(config.epoch_length, ledger.current_epoch());
 
+        let peerstore = Arc::new(
+            Peerstore::open(PeerstoreConfig::persistent(&config.peerstore_path))
+                .map_err(|err| ChainError::Config(format!("unable to open peerstore: {err}")))?,
+        );
+        let gossip_state = Arc::new(GossipStateStore::open(&config.gossip_state_path).map_err(
+            |err| ChainError::Config(format!("unable to open gossip state store: {err}")),
+        )?);
+        let handshake = build_handshake_payload(&ledger, &address, &p2p_identity)?;
+        let mut network = Network::new(
+            p2p_identity.clone(),
+            peerstore.clone(),
+            handshake,
+            Some(gossip_state.clone()),
+        )
+        .map_err(|err| ChainError::Config(format!("failed to initialise network: {err}")))?;
+        for listen in &config.p2p_listen {
+            let addr: Multiaddr = listen.parse().map_err(|err| {
+                ChainError::Config(format!("invalid listen multiaddr `{listen}`: {err}"))
+            })?;
+            if let Err(err) = network.listen_on(addr.clone()) {
+                warn!(?addr, ?err, "failed to listen on multiaddr");
+            }
+        }
+        for (peer_id, addresses) in peerstore.known_peers() {
+            for addr in addresses {
+                if let Err(err) = network.dial(addr.clone()) {
+                    debug!(?peer_id, ?addr, ?err, "failed to dial stored peer address");
+                }
+            }
+        }
+        for seed in &config.p2p_seeds {
+            let addr: Multiaddr = seed.parse().map_err(|err| {
+                ChainError::Config(format!("invalid seed multiaddr `{seed}`: {err}"))
+            })?;
+            if let Err(err) = network.dial(addr.clone()) {
+                warn!(?addr, ?err, "failed to dial configured seed");
+            }
+        }
+
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
             keypair,
             vrf_keypair,
             p2p_identity,
+            network: Mutex::new(network),
+            meta_telemetry: RwLock::new(MetaTelemetry::new()),
             address,
             storage,
             ledger,
@@ -615,6 +684,10 @@ mod tests {
         config.data_dir = base.join("data");
         config.key_path = base.join("node_key.toml");
         config.p2p_key_path = base.join("p2p_key.toml");
+        config.p2p_listen = Vec::new();
+        config.p2p_seeds = Vec::new();
+        config.peerstore_path = base.join("peerstore.json");
+        config.gossip_state_path = base.join("gossip.json");
         config.vrf_key_path = base.join("vrf_key.toml");
         config.snapshot_dir = base.join("snapshots");
         config.proof_cache_dir = base.join("proofs");
@@ -672,6 +745,71 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn gossip_updates_proposal_and_telemetry_state() {
+        let (_tmp_a, mut config_a) = temp_config();
+        config_a.rollout.telemetry.enabled = true;
+        config_a.rollout.telemetry.sample_interval_secs = 1;
+        let node_a = Node::new(config_a).expect("node a");
+
+        let (_tmp_b, mut config_b) = temp_config();
+        config_b.rollout.telemetry.enabled = true;
+        config_b.rollout.telemetry.sample_interval_secs = 1;
+        let node_b = Node::new(config_b).expect("node b");
+
+        let peer_id = node_a.inner.p2p_identity.peer_id();
+
+        let genesis = node_b
+            .inner
+            .storage
+            .read_block(0)
+            .expect("read genesis")
+            .expect("genesis block");
+        let block_payload = serde_json::to_vec(&genesis).expect("encode block");
+        node_b
+            .inner
+            .handle_gossip_message(peer_id, GossipTopic::Blocks, block_payload)
+            .await
+            .expect("block gossip accepted");
+        let key = (genesis.header.height, genesis.header.proposer.clone());
+        assert!(node_b.inner.proposal_inbox.read().contains_key(&key));
+
+        let snapshot = node_a.inner.build_telemetry_snapshot().expect("snapshot");
+        let meta_payload = serde_json::to_vec(&snapshot).expect("encode telemetry");
+        node_b
+            .inner
+            .handle_gossip_message(peer_id, GossipTopic::Meta, meta_payload)
+            .await
+            .expect("meta gossip accepted");
+        {
+            let meta = node_b.inner.meta_telemetry.read();
+            let heartbeat = meta.latest(&peer_id).expect("heartbeat recorded");
+            assert_eq!(heartbeat.version, snapshot.software_version);
+        }
+
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+
+        let updated = node_b
+            .inner
+            .build_telemetry_snapshot()
+            .expect("updated snapshot");
+        let peer_id_str = peer_id.to_base58();
+        assert!(
+            updated
+                .network
+                .peers
+                .iter()
+                .any(|entry| entry.peer == peer_id_str)
+        );
+        assert!(
+            updated
+                .network
+                .offline
+                .iter()
+                .any(|entry| entry.peer == peer_id_str)
+        );
     }
 }
 
@@ -820,13 +958,15 @@ impl NodeInner {
             telemetry_enabled = self.config.rollout.telemetry.enabled,
             "starting node"
         );
-        if self.config.rollout.telemetry.enabled {
-            let config = self.config.rollout.telemetry.clone();
-            let worker = self.clone();
-            tokio::spawn(async move {
-                worker.telemetry_loop(config).await;
-            });
-        }
+        let telemetry_config = self.config.rollout.telemetry.clone();
+        let telemetry_worker = self.clone();
+        tokio::spawn(async move {
+            telemetry_worker.telemetry_loop(telemetry_config).await;
+        });
+        let network_worker = self.clone();
+        tokio::spawn(async move {
+            network_worker.network_loop().await;
+        });
         let mut ticker = time::interval(self.block_interval);
         loop {
             ticker.tick().await;
@@ -841,33 +981,196 @@ impl NodeInner {
         let mut ticker = time::interval(interval);
         loop {
             ticker.tick().await;
-            if let Err(err) = self.emit_telemetry(&config) {
+            if let Err(err) = self.emit_telemetry(&config).await {
                 warn!(?err, "failed to emit telemetry snapshot");
             }
         }
     }
 
-    fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
+    async fn emit_telemetry(&self, config: &TelemetryConfig) -> ChainResult<()> {
         let snapshot = self.build_telemetry_snapshot()?;
         let encoded = serde_json::to_string(&snapshot).map_err(|err| {
             ChainError::Config(format!("unable to encode telemetry snapshot: {err}"))
         })?;
-        if let Some(endpoint) = &config.endpoint {
-            if endpoint.is_empty() {
-                info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
+        if config.enabled {
+            if let Some(endpoint) = &config.endpoint {
+                if endpoint.is_empty() {
+                    info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
+                } else {
+                    info!(
+                        target = "telemetry",
+                        ?endpoint,
+                        payload = %encoded,
+                        "telemetry snapshot dispatched"
+                    );
+                }
             } else {
-                info!(
-                    target = "telemetry",
-                    ?endpoint,
-                    payload = %encoded,
-                    "telemetry snapshot dispatched"
-                );
+                info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
             }
         } else {
-            info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
+            debug!(target = "telemetry", payload = %encoded, "telemetry snapshot (local)");
         }
         *self.telemetry_last_height.write() = Some(snapshot.node.height);
+        if let Err(err) = self.publish_meta_snapshot(encoded.as_bytes()).await {
+            debug!(?err, "failed to broadcast telemetry heartbeat");
+        }
         Ok(())
+    }
+
+    async fn publish_meta_snapshot(&self, payload: &[u8]) -> Result<(), NetworkError> {
+        let mut network = self.network.lock().await;
+        network
+            .publish(GossipTopic::Meta, payload.to_vec())
+            .map(|_| ())
+    }
+
+    async fn network_loop(self: Arc<Self>) {
+        loop {
+            let event_result = {
+                let mut network = self.network.lock().await;
+                network.next_event().await
+            };
+            match event_result {
+                Ok(event) => {
+                    if let Err(err) = self.handle_network_event(event).await {
+                        warn!(?err, "network event processing failed");
+                    }
+                }
+                Err(err) => {
+                    warn!(?err, "network event loop error");
+                    time::sleep(Duration::from_millis(200)).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_network_event(&self, event: NetworkEvent) -> ChainResult<()> {
+        match event {
+            NetworkEvent::NewListenAddr(addr) => {
+                info!(?addr, "listening on address");
+                Ok(())
+            }
+            NetworkEvent::HandshakeCompleted { peer, payload } => {
+                debug!(?peer, tier = ?payload.tier, "handshake completed");
+                Ok(())
+            }
+            NetworkEvent::GossipMessage { peer, topic, data } => {
+                self.handle_gossip_message(peer, topic, data).await
+            }
+            NetworkEvent::ReputationUpdated {
+                peer,
+                tier,
+                score,
+                label,
+            } => {
+                debug!(?peer, ?tier, score, label, "peer reputation updated");
+                Ok(())
+            }
+            NetworkEvent::PeerBanned { peer, until } => {
+                warn!(?peer, ?until, "peer banned by admission control");
+                Ok(())
+            }
+            NetworkEvent::AdmissionRejected {
+                peer,
+                topic,
+                reason,
+            } => {
+                warn!(?peer, ?topic, ?reason, "peer admission rejected");
+                Ok(())
+            }
+        }
+    }
+
+    async fn handle_gossip_message(
+        &self,
+        peer: PeerId,
+        topic: GossipTopic,
+        data: Vec<u8>,
+    ) -> ChainResult<()> {
+        match topic {
+            GossipTopic::Blocks => {
+                let block: Block = serde_json::from_slice(&data).map_err(|err| {
+                    ChainError::Config(format!("invalid block gossip payload: {err}"))
+                })?;
+                match self.submit_block_proposal(block) {
+                    Ok(_) => {
+                        self.reward_peer(peer, topic).await;
+                        Ok(())
+                    }
+                    Err(err) => {
+                        self.penalize_peer(peer, "invalid_block", 1.0).await;
+                        Err(err)
+                    }
+                }
+            }
+            GossipTopic::Votes => {
+                let vote: SignedBftVote = serde_json::from_slice(&data).map_err(|err| {
+                    ChainError::Config(format!("invalid vote gossip payload: {err}"))
+                })?;
+                match self.submit_vote(vote) {
+                    Ok(_) => {
+                        self.reward_peer(peer, topic).await;
+                        Ok(())
+                    }
+                    Err(err) => {
+                        self.penalize_peer(peer, "invalid_vote", 0.8).await;
+                        Err(err)
+                    }
+                }
+            }
+            GossipTopic::Proofs => {
+                let bundle: TransactionProofBundle =
+                    serde_json::from_slice(&data).map_err(|err| {
+                        ChainError::Config(format!("invalid proof gossip payload: {err}"))
+                    })?;
+                match self.submit_transaction(bundle) {
+                    Ok(_) => {
+                        self.reward_peer(peer, topic).await;
+                        Ok(())
+                    }
+                    Err(err) => {
+                        self.penalize_peer(peer, "invalid_transaction", 0.6).await;
+                        Err(err)
+                    }
+                }
+            }
+            GossipTopic::Meta => {
+                let snapshot: NodeTelemetrySnapshot =
+                    serde_json::from_slice(&data).map_err(|err| {
+                        ChainError::Config(format!("invalid telemetry gossip payload: {err}"))
+                    })?;
+                self.meta_telemetry.write().record(
+                    peer,
+                    snapshot.software_version.clone(),
+                    Duration::from_millis(0),
+                );
+                self.reward_peer(peer, topic).await;
+                Ok(())
+            }
+            GossipTopic::Snapshots => {
+                debug!(?peer, "snapshot gossip payload ignored");
+                self.reward_peer(peer, topic).await;
+                Ok(())
+            }
+        }
+    }
+
+    async fn reward_peer(&self, peer: PeerId, topic: GossipTopic) {
+        let mut network = self.network.lock().await;
+        if let Err(err) =
+            network.apply_reputation_event(peer, ReputationEvent::GossipSuccess { topic })
+        {
+            debug!(?err, ?peer, "failed to reward gossip peer");
+        }
+    }
+
+    async fn penalize_peer(&self, peer: PeerId, reason: &'static str, amount: f64) {
+        let mut network = self.network.lock().await;
+        if let Err(err) =
+            network.apply_reputation_event(peer, ReputationEvent::ManualPenalty { amount, reason })
+        {
+            debug!(?err, ?peer, reason, "failed to penalise peer");
+        }
     }
 
     fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
@@ -878,12 +1181,15 @@ impl NodeInner {
         let node = self.node_status()?;
         let consensus = self.consensus_status()?;
         let mempool = self.mempool_status()?;
+        let network = self.network_status();
         Ok(NodeTelemetrySnapshot {
             release_channel: self.config.rollout.release_channel,
             feature_gates: self.config.rollout.feature_gates.clone(),
+            software_version: SOFTWARE_VERSION.to_string(),
             node,
             consensus,
             mempool,
+            network,
         })
     }
 
@@ -1453,6 +1759,49 @@ impl NodeInner {
             votes,
             uptime_proofs,
         })
+    }
+
+    fn network_status(&self) -> NetworkTelemetryStatus {
+        let interval = self.config.rollout.telemetry.sample_interval_secs.max(1);
+        let offline_threshold = Duration::from_secs((interval * 3).max(30));
+        let meta = self.meta_telemetry.read();
+        let mut peers = meta.all();
+        peers.sort_by(|a, b| a.peer.to_base58().cmp(&b.peer.to_base58()));
+        let peer_summaries = peers
+            .into_iter()
+            .map(|event| PeerHeartbeatSummary {
+                peer: event.peer.to_base58(),
+                version: event.version,
+                latency_ms: event.latency.as_millis(),
+                last_seen: event
+                    .received_at
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs()),
+            })
+            .collect();
+        let mut offline_events = meta.offline_peers(offline_threshold);
+        offline_events.sort_by(|a, b| a.peer.to_base58().cmp(&b.peer.to_base58()));
+        let offline = offline_events
+            .into_iter()
+            .map(|event| PeerHeartbeatSummary {
+                peer: event.peer.to_base58(),
+                version: event.version,
+                latency_ms: event.latency.as_millis(),
+                last_seen: event
+                    .received_at
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|duration| duration.as_secs()),
+            })
+            .collect();
+        NetworkTelemetryStatus {
+            local_peer_id: self.p2p_identity.peer_id().to_base58(),
+            listen_addresses: self.config.p2p_listen.clone(),
+            seeds: self.config.p2p_seeds.clone(),
+            peers: peer_summaries,
+            offline,
+        }
     }
 
     fn rollout_status(&self) -> RolloutStatus {
@@ -2302,8 +2651,10 @@ impl NodeInner {
                 .storage
                 .read_block(metadata.height)?
                 .ok_or_else(|| ChainError::Config("tip metadata missing block".into()))?;
-            let proposer_key = self.ledger.validator_public_key(&block.header.proposer)?;
-            block.verify(None, &proposer_key)?;
+            if block.header.height > 0 {
+                let proposer_key = self.ledger.validator_public_key(&block.header.proposer)?;
+                block.verify(None, &proposer_key)?;
+            }
             let mut tip = self.chain_tip.write();
             tip.height = block.header.height;
             tip.last_hash = block.block_hash();
@@ -2329,4 +2680,39 @@ fn build_genesis_accounts(entries: Vec<GenesisAccount>) -> ChainResult<Vec<Accou
             Ok(Account::new(entry.address, entry.balance, stake))
         })
         .collect()
+}
+
+fn build_handshake_payload(
+    ledger: &Ledger,
+    address: &Address,
+    identity: &NodeIdentity,
+) -> ChainResult<HandshakePayload> {
+    let account = ledger.get_account(address);
+    let tier = account
+        .as_ref()
+        .map(|acct| acct.reputation.tier.clone())
+        .unwrap_or_default();
+    let zsi_id = account
+        .as_ref()
+        .map(|acct| acct.reputation.zsi.public_key_commitment.clone())
+        .unwrap_or_else(|| address.clone());
+    let tier_level = tier_level_from(tier);
+    let keypair = identity.clone_keypair();
+    let base = HandshakePayload::new(zsi_id.clone(), None, tier_level);
+    let vrf_proof = keypair.sign(&base.vrf_message()).ok();
+    let template = HandshakePayload::new(zsi_id, vrf_proof, tier_level);
+    template
+        .signed(&keypair)
+        .map_err(|err| ChainError::Config(format!("unable to sign handshake payload: {err}")))
+}
+
+fn tier_level_from(tier: Tier) -> TierLevel {
+    match tier {
+        Tier::Tl0 => TierLevel::Tl0,
+        Tier::Tl1 => TierLevel::Tl1,
+        Tier::Tl2 => TierLevel::Tl2,
+        Tier::Tl3 => TierLevel::Tl3,
+        Tier::Tl4 => TierLevel::Tl4,
+        Tier::Tl5 => TierLevel::Tl5,
+    }
 }

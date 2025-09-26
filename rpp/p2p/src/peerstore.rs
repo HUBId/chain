@@ -314,6 +314,14 @@ impl Peerstore {
         self.persist()
     }
 
+    pub fn known_peers(&self) -> Vec<(PeerId, Vec<Multiaddr>)> {
+        self.peers
+            .read()
+            .iter()
+            .map(|(peer, record)| (peer.clone(), record.addresses.clone()))
+            .collect()
+    }
+
     pub fn get(&self, peer_id: &PeerId) -> Option<PeerRecord> {
         let mut guard = self.peers.write();
         guard.get_mut(peer_id).map(|record| {
@@ -622,5 +630,21 @@ mod tests {
             result,
             Err(PeerstoreError::InvalidVrf { peer, .. }) if peer == peer_id
         ));
+    }
+
+    #[test]
+    fn exposes_known_peers() {
+        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let peer = PeerId::random();
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/7000".parse().expect("addr");
+
+        store
+            .record_address(peer, addr.clone())
+            .expect("record address");
+
+        let known = store.known_peers();
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].0, peer);
+        assert_eq!(known[0].1, vec![addr]);
     }
 }

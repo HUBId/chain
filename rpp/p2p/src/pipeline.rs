@@ -978,6 +978,10 @@ impl MetaTelemetry {
         );
     }
 
+    pub fn all(&self) -> Vec<TelemetryEvent> {
+        self.heartbeats.values().cloned().collect()
+    }
+
     pub fn offline_peers(&self, threshold: Duration) -> Vec<TelemetryEvent> {
         let now = SystemTime::now();
         self.heartbeats

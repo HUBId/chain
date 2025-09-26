@@ -14,6 +14,14 @@ pub struct NodeConfig {
     pub key_path: PathBuf,
     #[serde(default = "default_p2p_key_path")]
     pub p2p_key_path: PathBuf,
+    #[serde(default = "default_p2p_listen")]
+    pub p2p_listen: Vec<String>,
+    #[serde(default = "default_p2p_seeds")]
+    pub p2p_seeds: Vec<String>,
+    #[serde(default = "default_peerstore_path")]
+    pub peerstore_path: PathBuf,
+    #[serde(default = "default_gossip_state_path")]
+    pub gossip_state_path: PathBuf,
     pub vrf_key_path: PathBuf,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
@@ -60,6 +68,22 @@ fn default_p2p_key_path() -> PathBuf {
     PathBuf::from("./keys/p2p.toml")
 }
 
+fn default_p2p_listen() -> Vec<String> {
+    vec!["/ip4/0.0.0.0/tcp/7050".to_string()]
+}
+
+fn default_p2p_seeds() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_peerstore_path() -> PathBuf {
+    PathBuf::from("./data/p2p/peerstore.json")
+}
+
+fn default_gossip_state_path() -> PathBuf {
+    PathBuf::from("./data/p2p/gossip.json")
+}
+
 fn default_max_proof_size_bytes() -> usize {
     4 * 1024 * 1024
 }
@@ -88,6 +112,12 @@ impl NodeConfig {
         if let Some(parent) = self.p2p_key_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        if let Some(parent) = self.peerstore_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Some(parent) = self.gossip_state_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         if let Some(parent) = self.vrf_key_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -103,6 +133,10 @@ impl Default for NodeConfig {
             data_dir: PathBuf::from("./data"),
             key_path: PathBuf::from("./keys/node.toml"),
             p2p_key_path: default_p2p_key_path(),
+            p2p_listen: default_p2p_listen(),
+            p2p_seeds: default_p2p_seeds(),
+            peerstore_path: default_peerstore_path(),
+            gossip_state_path: default_gossip_state_path(),
             vrf_key_path: PathBuf::from("./keys/vrf.toml"),
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),

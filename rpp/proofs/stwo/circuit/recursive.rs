@@ -94,9 +94,11 @@ impl StarkCircuit for RecursiveCircuit {
             && self.witness.uptime_commitments.is_empty()
             && self.witness.consensus_commitments.is_empty()
         {
-            return Err(CircuitError::ConstraintViolation(
-                "recursive witness missing aggregated commitments".into(),
-            ));
+            if self.witness.block_height > 0 {
+                return Err(CircuitError::ConstraintViolation(
+                    "recursive witness missing aggregated commitments".into(),
+                ));
+            }
         }
         let params = StarkParameters::blueprint_default();
         let aggregated = self.aggregate_with_params(&params)?;
