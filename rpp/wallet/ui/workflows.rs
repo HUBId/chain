@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
+use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::BlueprintTransferPolicy;
@@ -216,8 +217,10 @@ impl<'a> WalletWorkflows<'a> {
                 "insufficient balance for requested transfer".into(),
             ));
         }
+        let accounts_snapshot = self.wallet.accounts_snapshot()?;
+        let ledger = Ledger::load(accounts_snapshot, DEFAULT_EPOCH_LENGTH);
         let utxo_inputs = select_inputs_from_available(
-            self.wallet.unspent_utxos(self.wallet.address())?,
+            ledger.utxos_for_owner(self.wallet.address()),
             total_debit,
             &transfer_policy,
         )?;
@@ -245,7 +248,7 @@ impl<'a> WalletWorkflows<'a> {
         let (recipient_pre_utxo, recipient_balance_before) = match recipient_account {
             Some(ref account) => (
                 Some(ledger_snapshot_utxo(
-                    &utxo_state,
+                    ledger.utxo_for_account(&account.address),
                     &account.address,
                     account.balance,
                     None,
@@ -258,13 +261,13 @@ impl<'a> WalletWorkflows<'a> {
             .checked_add(amount)
             .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
         let recipient_post_utxo = ledger_snapshot_utxo(
-            &utxo_state,
+            ledger.utxo_for_account(&to),
             &to,
             recipient_balance_after,
             Some(tx_hash_bytes),
         );
         let sender_post_utxo = ledger_snapshot_utxo(
-            &utxo_state,
+            ledger.utxo_for_account(self.wallet.address()),
             self.wallet.address(),
             sender_account.balance - total_debit,
             Some(tx_hash_bytes),
@@ -324,12 +327,12 @@ fn status_from_account(account: &Account) -> ReputationStatus {
 }
 
 fn ledger_snapshot_utxo(
-    state: &UtxoState,
+    existing: Option<UtxoRecord>,
     address: &Address,
     value: u128,
     tx_id_override: Option<[u8; 32]>,
 ) -> UtxoRecord {
-    let mut record = state.get_for_account(address).unwrap_or_else(|| {
+    let mut record = existing.unwrap_or_else(|| {
         let mut script_seed = address.as_bytes().to_vec();
         script_seed.extend_from_slice(&0u32.to_be_bytes());
         let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();

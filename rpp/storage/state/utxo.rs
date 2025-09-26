@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
@@ -9,6 +10,56 @@ use crate::reputation::{ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::merkle::compute_merkle_root;
 use crate::types::{Account, Address};
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct StoredUtxo {
+    pub owner: Address,
+    pub value: u128,
+    pub asset_type: AssetType,
+    pub script_hash: [u8; 32],
+    pub timelock: Option<u64>,
+    pub spent: bool,
+}
+
+impl Default for StoredUtxo {
+    fn default() -> Self {
+        Self {
+            owner: Address::default(),
+            value: 0,
+            asset_type: AssetType::Native,
+            script_hash: [0u8; 32],
+            timelock: None,
+            spent: false,
+        }
+    }
+}
+
+impl From<&UtxoRecord> for StoredUtxo {
+    fn from(record: &UtxoRecord) -> Self {
+        Self {
+            owner: record.owner.clone(),
+            value: record.value,
+            asset_type: record.asset_type.clone(),
+            script_hash: record.script_hash,
+            timelock: record.timelock,
+            spent: false,
+        }
+    }
+}
+
+impl StoredUtxo {
+    pub fn into_record(self, outpoint: UtxoOutpoint) -> UtxoRecord {
+        UtxoRecord {
+            outpoint,
+            owner: self.owner,
+            value: self.value,
+            asset_type: self.asset_type,
+            script_hash: self.script_hash,
+            timelock: self.timelock,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct AccountUtxoEntry {
@@ -281,21 +332,30 @@ impl UtxoState {
             .map(|entry| entry.aggregated.clone())
     }
 
-    pub fn snapshot(&self) -> Vec<UtxoRecord> {
-        self.entries
+    pub fn snapshot(&self) -> Vec<(UtxoOutpoint, StoredUtxo)> {
+        let mut records: Vec<(UtxoOutpoint, StoredUtxo)> = self
+            .entries
             .read()
             .values()
-            .map(|entry| entry.aggregated.clone())
-            .collect()
+            .flat_map(|entry| {
+                entry
+                    .fragments
+                    .iter()
+                    .map(|fragment| (fragment.outpoint.clone(), StoredUtxo::from(fragment)))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        records.sort_by(|a, b| a.0.cmp(&b.0));
+        records
     }
 
     pub fn commitment(&self) -> [u8; 32] {
         let mut leaves: Vec<[u8; 32]> = self
-            .entries
-            .read()
-            .values()
-            .map(|entry| {
-                let payload = serde_json::to_vec(&entry.aggregated).expect("serialize utxo record");
+            .snapshot()
+            .into_iter()
+            .map(|(outpoint, stored)| {
+                let payload =
+                    serde_json::to_vec(&(outpoint, stored)).expect("serialize utxo snapshot");
                 Blake2sHasher::hash(&payload).into()
             })
             .collect();
@@ -392,5 +452,34 @@ mod tests {
             result,
             Err(ChainError::Transaction(message)) if message.contains("reputation")
         ));
+    }
+
+    #[test]
+    fn snapshot_includes_outpoints_and_unspent_flags() {
+        let policy = BlueprintTransferPolicy {
+            min_tier: Tier::Tl0,
+            min_score: 0.0,
+            min_timetoke_hours: 0,
+            max_inputs: 8,
+            preferred_fragment_value: 10,
+            max_fragments_per_account: 4,
+        };
+        let state = UtxoState::with_policy(policy);
+        let account = sample_account("addr-snap", 25, Tier::Tl3, 1.0, 12);
+        state.upsert_from_account(&account);
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.len(), 3);
+        let mut previous = None;
+        let expected_addr = account.address.clone();
+        for (outpoint, stored) in snapshot {
+            let StoredUtxo { owner, spent, .. } = stored;
+            assert_eq!(owner, expected_addr);
+            assert!(!spent);
+            if let Some(prev) = previous {
+                assert!(prev < outpoint);
+            }
+            previous = Some(outpoint);
+        }
     }
 }
