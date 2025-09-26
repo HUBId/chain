@@ -14,6 +14,7 @@ use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::proof_system::ProofProver;
 use crate::reputation::Tier;
+use crate::rpp::UtxoRecord;
 use crate::storage::Storage;
 use crate::stwo::prover::WalletProver;
 use crate::types::{
@@ -172,6 +173,12 @@ impl Wallet {
 
     pub fn accounts_snapshot(&self) -> ChainResult<Vec<Account>> {
         self.storage.load_accounts()
+    }
+
+    pub fn unspent_utxos(&self, owner: &Address) -> ChainResult<Vec<UtxoRecord>> {
+        let accounts = self.storage.load_accounts()?;
+        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        Ok(ledger.utxos_for_owner(owner))
     }
 
     pub fn build_transaction(
