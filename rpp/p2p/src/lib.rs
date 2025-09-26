@@ -20,8 +20,8 @@ pub use peerstore::{PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError};
 pub use persistence::{GossipStateError, GossipStateStore};
 pub use pipeline::{
     BlockProposal, ConsensusPipeline, LightClientSync, MetaTelemetry, PersistentProofStorage,
-    PipelineError, ProofMempool, ProofRecord, ProofStorage, SnapshotChunk, SnapshotStore,
-    TelemetryEvent, VoteOutcome,
+    PipelineError, ProofMempool, ProofRecord, ProofStorage, RecursiveProofVerifier, SnapshotChunk,
+    SnapshotStore, TelemetryEvent, VoteOutcome,
 };
 pub use roadmap::{Deliverable, Milestone, Phase, Plan, WorkItem, libp2p_backbone_plan};
 pub use security::{RateLimiter, ReplayProtector};
