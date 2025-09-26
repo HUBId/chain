@@ -938,18 +938,45 @@ impl Block {
         previous: Option<&Block>,
         registry: &ProofVerifierRegistry,
     ) -> ChainResult<()> {
-        let seed_bytes = if let Some(prev) = previous {
-            hex::decode(&prev.hash).map_err(|err| {
-                ChainError::Crypto(format!("invalid previous hash encoding: {err}"))
-            })?
+        let seed = self.consensus_seed(previous)?;
+        self.verify_consensus_certificate(seed)?;
+        if let Some(proof) = &self.consensus_proof {
+            registry.verify_consensus(proof)?;
+        }
+        Ok(())
+    }
+
+    fn verify_consensus_light(&self) -> ChainResult<()> {
+        let seed = if self.header.height == 0 {
+            [0u8; 32]
         } else {
-            vec![0u8; 32]
+            Self::decode_consensus_seed(&self.header.previous_hash)?
         };
+        self.verify_consensus_certificate(seed)
+    }
+
+    fn consensus_seed(&self, previous: Option<&Block>) -> ChainResult<[u8; 32]> {
+        if self.header.height == 0 {
+            return Ok([0u8; 32]);
+        }
+        let hash_hex = previous
+            .map(|block| block.hash.as_str())
+            .unwrap_or(&self.header.previous_hash);
+        Self::decode_consensus_seed(hash_hex)
+    }
+
+    fn decode_consensus_seed(hash_hex: &str) -> ChainResult<[u8; 32]> {
+        let seed_bytes = hex::decode(hash_hex)
+            .map_err(|err| ChainError::Crypto(format!("invalid previous hash encoding: {err}")))?;
         if seed_bytes.len() != 32 {
             return Err(ChainError::Crypto("invalid VRF seed length".into()));
         }
         let mut seed = [0u8; 32];
         seed.copy_from_slice(&seed_bytes);
+        Ok(seed)
+    }
+
+    fn verify_consensus_certificate(&self, seed: [u8; 32]) -> ChainResult<()> {
         let randomness = parse_natural(&self.header.randomness)?;
         let proof = VrfProof {
             randomness,
@@ -1109,18 +1136,6 @@ impl Block {
         if recorded_participants != commit_participants {
             return Err(ChainError::Crypto(
                 "consensus witness participants do not match commit set".into(),
-            ));
-        }
-        if let Some(proof) = &self.consensus_proof {
-            registry.verify_consensus(proof)?;
-        }
-        Ok(())
-    }
-
-    fn verify_consensus_light(&self) -> ChainResult<()> {
-        if self.consensus.round != self.header.height {
-            return Err(ChainError::Crypto(
-                "consensus certificate references incorrect round".into(),
             ));
         }
         Ok(())
@@ -1414,8 +1429,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn consensus_witness_must_reflect_commit_participants() {
+    fn consensus_block_fixture() -> (Block, Block, Address) {
         let mut rng = OsRng;
         let keypair = Keypair::generate(&mut rng);
         let address = address_from_public_key(&keypair.public);
@@ -1560,22 +1574,29 @@ mod tests {
         let mut witnesses = ModuleWitnessBundle::default();
         witnesses.record_consensus(ConsensusWitness::new(1, 1, vec![address.clone()]));
         let block = Block::new(
-            header.clone(),
+            header,
             Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            witnesses.clone(),
+            witnesses,
             Vec::new(),
-            pruning_proof.clone(),
-            recursive_proof.clone(),
-            stark_bundle.clone(),
+            pruning_proof,
+            recursive_proof,
+            stark_bundle,
             Signature::from_bytes(&[0u8; 64]).expect("signature"),
-            certificate.clone(),
+            certificate,
             None,
         );
+
+        (prev_block, block, address)
+    }
+
+    #[test]
+    fn consensus_witness_must_reflect_commit_participants() {
+        let (prev_block, block, _address) = consensus_block_fixture();
         let registry = ProofVerifierRegistry::default();
         block
             .verify_consensus(Some(&prev_block), &registry)
@@ -1598,6 +1619,43 @@ mod tests {
                 .verify_consensus(Some(&prev_block), &registry)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn light_consensus_verification_rejects_invalid_certificates() {
+        let (_prev_block, block, _address) = consensus_block_fixture();
+        block.verify_consensus_light().unwrap();
+
+        let mut invalid_vrf_block = block.clone();
+        invalid_vrf_block.header.vrf_proof = "00".to_string();
+        assert!(invalid_vrf_block.verify_consensus_light().is_err());
+
+        let mut duplicate_prevote_block = block.clone();
+        duplicate_prevote_block
+            .consensus
+            .pre_votes
+            .push(duplicate_prevote_block.consensus.pre_votes[0].clone());
+        assert!(duplicate_prevote_block.verify_consensus_light().is_err());
+
+        let mut insufficient_quorum_block = block.clone();
+        insufficient_quorum_block.consensus.pre_commits[0].weight = "1".to_string();
+        insufficient_quorum_block.consensus.pre_commit_power = "1".to_string();
+        insufficient_quorum_block.consensus.commit_power = "1".to_string();
+        assert!(insufficient_quorum_block.verify_consensus_light().is_err());
+
+        let mut missing_witness_block = block.clone();
+        missing_witness_block.module_witnesses = ModuleWitnessBundle::default();
+        assert!(missing_witness_block.verify_consensus_light().is_err());
+
+        let mut mismatched_witness_block = block.clone();
+        let mut mismatched_bundle = ModuleWitnessBundle::default();
+        mismatched_bundle.record_consensus(ConsensusWitness::new(
+            block.header.height,
+            block.consensus.round,
+            vec!["cafebabe".repeat(4)],
+        ));
+        mismatched_witness_block.module_witnesses = mismatched_bundle;
+        assert!(mismatched_witness_block.verify_consensus_light().is_err());
     }
 
     #[test]
