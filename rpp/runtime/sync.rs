@@ -618,7 +618,8 @@ mod tests {
         let keypair = Keypair::generate(&mut rng);
         let address = address_from_public_key(&keypair.public);
         let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
-        let vrf = evaluate_vrf(&seed, height, &address, height, Some(&vrf_keypair.secret));
+        let vrf = evaluate_vrf(&seed, height, &address, height, Some(&vrf_keypair.secret))
+            .expect("evaluate vrf");
         let header = BlockHeader::new(
             height,
             previous_hash,

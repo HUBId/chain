@@ -316,39 +316,19 @@ fn quorum_threshold(total: &Natural) -> Natural {
     threshold
 }
 
-fn natural_from_bytes(bytes: &[u8]) -> Natural {
-    let mut value = Natural::from(0u32);
-    for byte in bytes {
-        value *= Natural::from(256u32);
-        value += Natural::from(*byte);
-    }
-    value
-}
-
 pub fn evaluate_vrf(
     seed: &[u8; 32],
     round: u64,
     address: &Address,
     timetoke_hours: u64,
     secret: Option<&VrfSecretKey>,
-) -> VrfProof {
+) -> ChainResult<VrfProof> {
     let tier_seed = vrf::derive_tier_seed(address, timetoke_hours);
     let input = PoseidonVrfInput::new(*seed, round, tier_seed);
-    if let Some(secret_key) = secret {
-        match vrf::generate_vrf(&input, secret_key) {
-            Ok(output) => return VrfProof::from_output(&output),
-            Err(err) => {
-                warn!(%address, ?err, "failed to generate VRF output via Poseidon backend");
-            }
-        }
-    }
-
-    let digest = input.poseidon_digest_bytes();
-    VrfProof {
-        randomness: natural_from_bytes(&digest),
-        preoutput: hex::encode(digest),
-        proof: "00".repeat(vrf::VRF_PROOF_LENGTH),
-    }
+    let secret_key = secret
+        .ok_or_else(|| ChainError::Crypto("missing VRF secret key for evaluation".to_string()))?;
+    let output = vrf::generate_vrf(&input, secret_key)?;
+    Ok(VrfProof::from_output(&output))
 }
 
 pub fn verify_vrf(

@@ -79,7 +79,7 @@ impl<'a> WalletProver<'a> {
         Ok(IdentityWitness {
             wallet_pk: genesis.wallet_pk.clone(),
             wallet_addr: genesis.wallet_addr.clone(),
-            vrf_tag: genesis.vrf_tag.clone(),
+            vrf_tag: genesis.vrf_tag().to_string(),
             epoch_nonce: genesis.epoch_nonce.clone(),
             state_root: genesis.state_root.clone(),
             identity_root: genesis.identity_root.clone(),
