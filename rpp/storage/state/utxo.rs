@@ -150,6 +150,17 @@ impl UtxoState {
             .unwrap_or_default()
     }
 
+    pub fn unspent_outputs_for_owner(&self, owner: &Address) -> Vec<UtxoRecord> {
+        let mut outputs = self
+            .entries
+            .read()
+            .get(owner)
+            .map(|entry| entry.fragments.clone())
+            .unwrap_or_default();
+        outputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
+        outputs
+    }
+
     pub fn select_inputs_for_owner(
         &self,
         owner: &Address,

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +7,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::{BlueprintTransferPolicy, UtxoState};
+use crate::state::BlueprintTransferPolicy;
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -199,10 +200,6 @@ impl<'a> WalletWorkflows<'a> {
             ));
         }
         let status = status_from_account(&sender_account);
-        let utxo_state = UtxoState::with_policy(transfer_policy.clone());
-        for account in self.wallet.accounts_snapshot()? {
-            utxo_state.upsert_from_account(&account);
-        }
         let transaction = self
             .wallet
             .build_transaction(to.clone(), amount, fee, memo)?;
@@ -219,12 +216,11 @@ impl<'a> WalletWorkflows<'a> {
                 "insufficient balance for requested transfer".into(),
             ));
         }
-        let mut utxo_inputs = utxo_state.select_inputs_for_owner(
-            self.wallet.address(),
+        let utxo_inputs = select_inputs_from_available(
+            self.wallet.unspent_utxos(self.wallet.address())?,
             total_debit,
             &transfer_policy,
         )?;
-        utxo_inputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         let total_input_value = sum_values(&utxo_inputs)?;
         let remaining = total_input_value
             .checked_sub(total_debit)
@@ -347,6 +343,45 @@ fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) ->
     }
 }
 
+fn select_inputs_from_available(
+    mut available: Vec<UtxoRecord>,
+    target: u128,
+    policy: &BlueprintTransferPolicy,
+) -> ChainResult<Vec<UtxoRecord>> {
+    if available.is_empty() {
+        return Err(ChainError::Transaction(
+            "wallet inputs unavailable for requested owner".into(),
+        ));
+    }
+    available.sort_by(|a, b| match b.value.cmp(&a.value) {
+        Ordering::Equal => a.outpoint.cmp(&b.outpoint),
+        other => other,
+    });
+    let mut selected = Vec::new();
+    let mut total = 0u128;
+    for record in available {
+        if total >= target {
+            break;
+        }
+        total = total
+            .checked_add(record.value)
+            .ok_or_else(|| ChainError::Transaction("input value overflow".into()))?;
+        selected.push(record);
+        if selected.len() > policy.max_inputs {
+            return Err(ChainError::Transaction(
+                "required inputs exceed blueprint maximum".into(),
+            ));
+        }
+    }
+    if total < target {
+        return Err(ChainError::Transaction(
+            "insufficient input liquidity for requested amount".into(),
+        ));
+    }
+    selected.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
+    Ok(selected)
+}
+
 fn sum_values(records: &[UtxoRecord]) -> ChainResult<u128> {
     let mut total = 0u128;
     for record in records {
@@ -362,4 +397,84 @@ fn credited_hours(proof: &UptimeProof) -> u64 {
         return 0;
     }
     proof.window_end.saturating_sub(proof.window_start) / 3600
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::address_from_public_key;
+    use crate::errors::ChainError;
+    use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
+    use crate::reputation::{Tier, TimetokeBalance};
+    use crate::storage::Storage;
+    use crate::types::Stake;
+    use ed25519_dalek::Keypair;
+    use rand::rngs::OsRng;
+    use tempfile::tempdir;
+
+    fn wallet_fixture(balance: u128) -> (Wallet, Address, Storage, tempfile::TempDir) {
+        let tempdir = tempdir().expect("temp dir");
+        let storage = Storage::open(tempdir.path()).expect("open storage");
+        let mut rng = OsRng;
+        let keypair = Keypair::generate(&mut rng);
+        let address = address_from_public_key(&keypair.public);
+        let mut account = Account::new(address.clone(), balance, Stake::default());
+        account.reputation.tier = Tier::Tl5;
+        account.reputation.score = 10.0;
+        account.reputation.timetokes = TimetokeBalance {
+            hours_online: 10_000,
+            ..TimetokeBalance::default()
+        };
+        account.reputation.zsi.validate("proof");
+        storage.persist_account(&account).expect("persist account");
+        let wallet = Wallet::new(storage.clone(), keypair);
+        (wallet, address, storage, tempdir)
+    }
+
+    #[test]
+    fn wallet_utxo_view_matches_ledger() {
+        let (wallet, address, storage, _tempdir) = wallet_fixture(75_000);
+        let wallet_utxos = wallet.unspent_utxos(&address).expect("wallet utxo query");
+        let accounts = storage.load_accounts().expect("load accounts");
+        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        let ledger_utxos = ledger.utxos_for_owner(&address);
+        assert_eq!(wallet_utxos.len(), ledger_utxos.len());
+        for (wallet_record, ledger_record) in wallet_utxos.iter().zip(ledger_utxos.iter()) {
+            assert_eq!(wallet_record.outpoint, ledger_record.outpoint);
+            assert_eq!(wallet_record.owner, ledger_record.owner);
+            assert_eq!(wallet_record.value, ledger_record.value);
+        }
+    }
+
+    #[test]
+    fn wallet_rejects_conflicting_transaction_bundle() {
+        let (wallet, address, storage, _tempdir) = wallet_fixture(80_000);
+        let recipient = "recipient-address".to_string();
+        let first_amount = 30_000u128;
+        let fee = 100u64;
+
+        let workflow = wallet
+            .workflows()
+            .transaction_bundle(recipient.clone(), first_amount, fee, None)
+            .expect("initial bundle");
+        assert!(!workflow.utxo_inputs.is_empty());
+
+        let mut account = storage
+            .read_account(&address)
+            .expect("read account")
+            .expect("account exists");
+        let debit = first_amount + u128::from(fee);
+        account.balance = account.balance.saturating_sub(debit);
+        account.nonce += 1;
+        storage.persist_account(&account).expect("persist updated");
+
+        let conflict_amount = 80_000u128;
+        let result = wallet
+            .workflows()
+            .transaction_bundle(recipient, conflict_amount, fee, None);
+        assert!(matches!(
+            result,
+            Err(ChainError::Transaction(message)) if message.contains("insufficient")
+        ));
+    }
 }

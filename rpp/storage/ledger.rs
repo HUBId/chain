@@ -195,6 +195,10 @@ impl Ledger {
         self.global_state.accounts_snapshot()
     }
 
+    pub fn utxos_for_owner(&self, address: &Address) -> Vec<UtxoRecord> {
+        self.utxo_state.unspent_outputs_for_owner(address)
+    }
+
     pub fn validator_public_key(&self, address: &str) -> ChainResult<PublicKey> {
         let account = self.get_account(address).ok_or_else(|| {
             ChainError::Crypto("validator account missing for signature verification".into())
