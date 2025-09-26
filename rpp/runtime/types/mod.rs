@@ -22,3 +22,4 @@ pub use transaction::{SignedTransaction, Transaction, TransactionEnvelope};
 pub use uptime::{UptimeClaim, UptimeProof};
 
 pub type Address = String;
+pub type AccountId = Address;
