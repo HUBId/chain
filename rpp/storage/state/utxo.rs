@@ -8,17 +8,19 @@ use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::merkle::compute_merkle_root;
 use crate::types::{Account, Address};
 
-/// Wrapper around a [`UtxoRecord`] that is stored inside the ledger state.
+/// Stored representation of a UTXO tracked by the ledger state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredUtxo {
-    pub record: UtxoRecord,
+    pub owner: Address,
+    pub amount: u128,
     pub spent: bool,
 }
 
 impl StoredUtxo {
-    pub fn new(record: UtxoRecord) -> Self {
+    pub fn new(owner: Address, amount: u128) -> Self {
         Self {
-            record,
+            owner,
+            amount,
             spent: false,
         }
     }
@@ -29,6 +31,20 @@ impl StoredUtxo {
 
     pub fn is_spent(&self) -> bool {
         self.spent
+    }
+
+    pub fn to_record(&self, outpoint: &UtxoOutpoint) -> UtxoRecord {
+        let mut script_seed = self.owner.as_bytes().to_vec();
+        script_seed.extend_from_slice(&outpoint.index.to_be_bytes());
+        let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+        UtxoRecord {
+            outpoint: outpoint.clone(),
+            owner: self.owner.clone(),
+            value: self.amount,
+            asset_type: AssetType::Native,
+            script_hash,
+            timelock: None,
+        }
     }
 }
 
@@ -43,8 +59,7 @@ impl UtxoState {
     }
 
     /// Insert or replace a UTXO inside the state.
-    pub fn insert(&self, stored: StoredUtxo) {
-        let outpoint = stored.record.outpoint.clone();
+    pub fn insert(&self, outpoint: UtxoOutpoint, stored: StoredUtxo) {
         self.entries.blocking_write().insert(outpoint, stored);
     }
 
@@ -66,31 +81,32 @@ impl UtxoState {
             .blocking_read()
             .get(outpoint)
             .filter(|stored| !stored.is_spent())
-            .map(|stored| stored.record.clone())
+            .map(|stored| stored.to_record(outpoint))
     }
 
     fn canonical_entry_for_account(&self, address: &Address) -> Option<(UtxoOutpoint, StoredUtxo)> {
         self.entries
             .blocking_read()
             .iter()
-            .filter(|(_, stored)| stored.record.owner == *address && !stored.is_spent())
-            .min_by(
-                |(left_outpoint, left_stored), (right_outpoint, right_stored)| {
-                    left_stored
-                        .record
-                        .outpoint
-                        .index
-                        .cmp(&right_stored.record.outpoint.index)
-                        .then_with(|| left_outpoint.cmp(right_outpoint))
-                },
-            )
+            .filter(|(_, stored)| stored.owner == *address && !stored.is_spent())
+            .min_by(|(left_outpoint, _), (right_outpoint, _)| {
+                left_outpoint
+                    .index
+                    .cmp(&right_outpoint.index)
+                    .then_with(|| left_outpoint.cmp(right_outpoint))
+            })
             .map(|(outpoint, stored)| (outpoint.clone(), stored.clone()))
     }
 
     /// Return the canonical UTXO associated with the provided account.
     pub fn get_for_account(&self, address: &Address) -> Option<UtxoRecord> {
         self.canonical_entry_for_account(address)
-            .map(|(_, stored)| stored.record)
+            .map(|(outpoint, stored)| stored.to_record(&outpoint))
+    }
+
+    /// Snapshot the canonical UTXO and its outpoint for the provided account.
+    pub fn snapshot_for_account(&self, address: &Address) -> Option<(UtxoOutpoint, StoredUtxo)> {
+        self.canonical_entry_for_account(address)
     }
 
     /// Select deterministic inputs for the provided owner.
@@ -112,22 +128,15 @@ impl UtxoState {
         let mut entries = self.entries.blocking_write();
         let existing_tx_id = entries
             .iter()
-            .find(|(outpoint, stored)| {
-                stored.record.owner == account.address && outpoint.index == 0
-            })
+            .find(|(outpoint, stored)| stored.owner == account.address && outpoint.index == 0)
             .map(|(outpoint, _)| outpoint.tx_id);
         let tx_id = tx_id.or(existing_tx_id).unwrap_or([0u8; 32]);
 
-        entries.retain(|_, stored| stored.record.owner != account.address);
+        entries.retain(|_, stored| stored.owner != account.address);
 
         let aggregated_outpoint = UtxoOutpoint { tx_id, index: 0 };
-        let record = build_record(
-            &account.address,
-            account.balance,
-            aggregated_outpoint.clone(),
-            aggregated_outpoint.index,
-        );
-        entries.insert(aggregated_outpoint, StoredUtxo::new(record));
+        let stored = StoredUtxo::new(account.address.clone(), account.balance);
+        entries.insert(aggregated_outpoint, stored);
     }
 
     pub fn unspent_outputs_for_owner(&self, owner: &Address) -> Vec<UtxoRecord> {
@@ -135,8 +144,8 @@ impl UtxoState {
             .entries
             .blocking_read()
             .iter()
-            .filter(|(_, stored)| stored.record.owner == *owner && !stored.is_spent())
-            .map(|(_, stored)| stored.record.clone())
+            .filter(|(_, stored)| stored.owner == *owner && !stored.is_spent())
+            .map(|(outpoint, stored)| stored.to_record(outpoint))
             .collect();
         outputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         outputs
@@ -162,19 +171,6 @@ impl UtxoState {
     }
 }
 
-fn build_record(owner: &Address, value: u128, outpoint: UtxoOutpoint, salt: u32) -> UtxoRecord {
-    let mut script_seed = owner.as_bytes().to_vec();
-    script_seed.extend_from_slice(&salt.to_be_bytes());
-    UtxoRecord {
-        outpoint,
-        owner: owner.clone(),
-        value,
-        asset_type: AssetType::Native,
-        script_hash: Blake2sHasher::hash(&script_seed).into(),
-        timelock: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,17 +180,6 @@ mod tests {
         Account::new(address.to_string(), balance, Stake::default())
     }
 
-    fn sample_record(owner: &str, tx_id: [u8; 32], index: u32, value: u128) -> UtxoRecord {
-        UtxoRecord {
-            outpoint: UtxoOutpoint { tx_id, index },
-            owner: owner.to_string(),
-            value,
-            asset_type: AssetType::Native,
-            script_hash: [index as u8; 32],
-            timelock: None,
-        }
-    }
-
     #[test]
     fn insert_and_get_round_trip() {
         let state = UtxoState::new();
@@ -202,12 +187,11 @@ mod tests {
             tx_id: [1u8; 32],
             index: 0,
         };
-        let record = sample_record("alice", outpoint.tx_id, outpoint.index, 42);
-        state.insert(StoredUtxo::new(record.clone()));
+        state.insert(outpoint.clone(), StoredUtxo::new("alice".to_string(), 42));
         let fetched = state.get(&outpoint).expect("utxo fetched");
-        assert_eq!(fetched.outpoint, record.outpoint);
-        assert_eq!(fetched.owner, record.owner);
-        assert_eq!(fetched.value, record.value);
+        assert_eq!(fetched.outpoint, outpoint);
+        assert_eq!(fetched.owner, "alice");
+        assert_eq!(fetched.value, 42);
     }
 
     #[test]
@@ -217,8 +201,7 @@ mod tests {
             tx_id: [2u8; 32],
             index: 0,
         };
-        let record = sample_record("bob", outpoint.tx_id, outpoint.index, 7);
-        state.insert(StoredUtxo::new(record));
+        state.insert(outpoint.clone(), StoredUtxo::new("bob".to_string(), 7));
         assert!(state.remove_spent(&outpoint));
         assert!(state.get(&outpoint).is_none());
         let snapshot = state.snapshot();
@@ -229,19 +212,31 @@ mod tests {
     #[test]
     fn get_for_account_prefers_lowest_index() {
         let state = UtxoState::new();
-        let first = sample_record("carol", [3u8; 32], 1, 10);
-        let second = sample_record("carol", [4u8; 32], 0, 20);
-        state.insert(StoredUtxo::new(first.clone()));
-        state.insert(StoredUtxo::new(second.clone()));
+        let first_outpoint = UtxoOutpoint {
+            tx_id: [3u8; 32],
+            index: 1,
+        };
+        let second_outpoint = UtxoOutpoint {
+            tx_id: [4u8; 32],
+            index: 0,
+        };
+        state.insert(
+            first_outpoint.clone(),
+            StoredUtxo::new("carol".to_string(), 10),
+        );
+        state.insert(
+            second_outpoint.clone(),
+            StoredUtxo::new("carol".to_string(), 20),
+        );
         let fetched = state
             .get_for_account(&"carol".to_string())
             .expect("carol utxo");
-        assert_eq!(fetched.outpoint, second.outpoint);
-        assert_eq!(fetched.value, second.value);
+        assert_eq!(fetched.outpoint, second_outpoint);
+        assert_eq!(fetched.value, 20);
         let inputs = state.select_inputs_for_owner(&"carol".to_string());
         assert_eq!(inputs.len(), 1);
-        assert_eq!(inputs[0].0, second.outpoint);
-        assert_eq!(inputs[0].1.record.value, second.value);
+        assert_eq!(inputs[0].0, second_outpoint);
+        assert_eq!(inputs[0].1.amount, 20);
     }
 
     #[test]
@@ -264,8 +259,7 @@ mod tests {
             tx_id: [7u8; 32],
             index: 3,
         };
-        let record = sample_record("eve", outpoint.tx_id, outpoint.index, 55);
-        state.insert(StoredUtxo::new(record));
+        state.insert(outpoint.clone(), StoredUtxo::new("eve".to_string(), 55));
         assert!(state.remove_spent(&outpoint));
         let snapshot = state.snapshot();
         assert_eq!(snapshot.len(), 1);

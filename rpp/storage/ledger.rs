@@ -11,10 +11,10 @@ use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, Identit
 use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{
-    AccountBalanceWitness, AssetType, ConsensusWitness, GlobalStateCommitments,
-    ModuleWitnessBundle, ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness,
-    TimetokeRecord, TimetokeWitness, TransactionWitness, UtxoOutpoint, UtxoRecord, ZsiRecord,
-    ZsiWitness,
+    AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
+    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
+    TimetokeWitness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint, UtxoRecord,
+    ZsiRecord, ZsiWitness,
 };
 use crate::state::{
     GlobalState, ProofRegistry, ReputationState, StoredUtxo, TimetokeState, UtxoState, ZsiRegistry,
@@ -278,7 +278,7 @@ impl Ledger {
     fn module_records(&self, address: &str) -> ModuleRecordSnapshots {
         let address = address.to_string();
         ModuleRecordSnapshots {
-            utxo: self.utxo_state.get_for_account(&address),
+            utxo: self.utxo_state.snapshot_for_account(&address),
             reputation: self.reputation_state.get(&address),
             timetoke: self.timetoke_state.get(&address),
             zsi: self.zsi_registry.get(&address),
@@ -587,8 +587,8 @@ impl Ledger {
         let module_sender_before = self.module_records(&tx.payload.from);
         let module_recipient_before = self.module_records(&tx.payload.to);
         let mut spent_outpoints = Vec::new();
-        if let Some(utxo) = module_sender_before.utxo.as_ref() {
-            spent_outpoints.push(utxo.outpoint.clone());
+        if let Some((outpoint, _)) = module_sender_before.utxo.as_ref() {
+            spent_outpoints.push(outpoint.clone());
         }
         let now = crate::reputation::current_timestamp();
         let (binding_change, sender_before, sender_after, recipient_before, recipient_after) = {
@@ -671,30 +671,24 @@ impl Ledger {
             self.zsi_registry.upsert_from_account(account);
         }
 
-        let mut utxo_outputs = Vec::new();
+        let mut utxo_outputs: Vec<(UtxoOutpoint, StoredUtxo)> = Vec::new();
         if sender_after.address == recipient_after.address {
-            utxo_outputs.push(utxo_output_record(
-                tx_id,
-                0,
-                &sender_after.address,
-                sender_after.balance,
+            utxo_outputs.push((
+                UtxoOutpoint { tx_id, index: 0 },
+                StoredUtxo::new(sender_after.address.clone(), sender_after.balance),
             ));
         } else {
-            utxo_outputs.push(utxo_output_record(
-                tx_id,
-                0,
-                &recipient_after.address,
-                recipient_after.balance,
+            utxo_outputs.push((
+                UtxoOutpoint { tx_id, index: 0 },
+                StoredUtxo::new(recipient_after.address.clone(), recipient_after.balance),
             ));
-            utxo_outputs.push(utxo_output_record(
-                tx_id,
-                1,
-                &sender_after.address,
-                sender_after.balance,
+            utxo_outputs.push((
+                UtxoOutpoint { tx_id, index: 1 },
+                StoredUtxo::new(sender_after.address.clone(), sender_after.balance),
             ));
         }
-        for record in &utxo_outputs {
-            self.utxo_state.insert(StoredUtxo::new(record.clone()));
+        for (outpoint, stored) in utxo_outputs {
+            self.utxo_state.insert(outpoint, stored);
         }
 
         let sender_modules_after = self.module_records(&tx.payload.from);
@@ -718,6 +712,11 @@ impl Ledger {
             recipient_after.balance,
             recipient_after.nonce,
         );
+        let to_utxo_snapshot = |snapshot: &Option<(UtxoOutpoint, StoredUtxo)>| {
+            snapshot
+                .clone()
+                .map(|(outpoint, utxo)| TransactionUtxoSnapshot::new(outpoint, utxo))
+        };
         let tx_witness = TransactionWitness::new(
             tx_id,
             tx.payload.fee,
@@ -725,10 +724,10 @@ impl Ledger {
             sender_after_witness,
             recipient_before_witness,
             recipient_after_witness,
-            module_sender_before.utxo.clone(),
-            sender_modules_after.utxo.clone(),
-            module_recipient_before.utxo.clone(),
-            recipient_modules_after.utxo.clone(),
+            to_utxo_snapshot(&module_sender_before.utxo),
+            to_utxo_snapshot(&sender_modules_after.utxo),
+            to_utxo_snapshot(&module_recipient_before.utxo),
+            to_utxo_snapshot(&recipient_modules_after.utxo),
         );
 
         let sender_reputation_witness = sender_modules_after.reputation.clone().map(|after| {
@@ -1001,17 +1000,13 @@ impl Ledger {
 
 #[derive(Default, Clone)]
 struct ModuleRecordSnapshots {
-    utxo: Option<UtxoRecord>,
+    utxo: Option<(UtxoOutpoint, StoredUtxo)>,
     reputation: Option<ReputationRecord>,
     timetoke: Option<TimetokeRecord>,
     zsi: Option<ZsiRecord>,
 }
 
-impl ModuleRecordSnapshots {
-    fn empty() -> Self {
-        Self::default()
-    }
-}
+impl ModuleRecordSnapshots {}
 
 #[derive(Default)]
 struct ModuleWitnessBook {
@@ -1060,20 +1055,6 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
     data.extend_from_slice(&epoch.to_le_bytes());
     data.extend_from_slice(state_root);
     Blake2sHasher::hash(&data).into()
-}
-
-fn utxo_output_record(tx_id: [u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {
-    let mut script_seed = owner.as_bytes().to_vec();
-    script_seed.extend_from_slice(&index.to_be_bytes());
-    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
-    UtxoRecord {
-        outpoint: UtxoOutpoint { tx_id, index },
-        owner: owner.clone(),
-        value,
-        asset_type: AssetType::Native,
-        script_hash,
-        timelock: None,
-    }
 }
 
 #[cfg(test)]
