@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -7,7 +6,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::BlueprintTransferPolicy;
+use crate::state::{BlueprintTransferPolicy, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -200,6 +199,15 @@ impl<'a> WalletWorkflows<'a> {
             ));
         }
         let status = status_from_account(&sender_account);
+        let utxo_state = UtxoState::with_policy(transfer_policy.clone());
+        for account in self.wallet.accounts_snapshot()? {
+            let tx_id = utxo_state
+                .get_for_account(&account.address)
+                .map(|snapshot| snapshot.aggregated.outpoint.tx_id)
+                .unwrap_or([0u8; 32]);
+            let snapshot = utxo_state.snapshot_for_account(&account, tx_id);
+            utxo_state.apply_snapshot(&account, snapshot);
+        }
         let transaction = self
             .wallet
             .build_transaction(to.clone(), amount, fee, memo)?;
@@ -216,11 +224,12 @@ impl<'a> WalletWorkflows<'a> {
                 "insufficient balance for requested transfer".into(),
             ));
         }
-        let utxo_inputs = select_inputs_from_available(
-            self.wallet.unspent_utxos(self.wallet.address())?,
+        let mut utxo_inputs = utxo_state.select_inputs_for_owner(
+            self.wallet.address(),
             total_debit,
             &transfer_policy,
         )?;
+        utxo_inputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         let total_input_value = sum_values(&utxo_inputs)?;
         let remaining = total_input_value
             .checked_sub(total_debit)
@@ -329,22 +338,25 @@ fn ledger_snapshot_utxo(
     value: u128,
     tx_id_override: Option<[u8; 32]>,
 ) -> UtxoRecord {
-    let mut record = state.get_for_account(address).unwrap_or_else(|| {
-        let mut script_seed = address.as_bytes().to_vec();
-        script_seed.extend_from_slice(&0u32.to_be_bytes());
-        let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
-        UtxoRecord {
-            outpoint: UtxoOutpoint {
-                tx_id: tx_id_override.unwrap_or([0u8; 32]),
-                index: 0,
-            },
-            owner: address.clone(),
-            value,
-            asset_type: AssetType::Native,
-            script_hash,
-            timelock: None,
-        }
-    });
+    let mut record = state
+        .get_for_account(address)
+        .map(|snapshot| snapshot.aggregated)
+        .unwrap_or_else(|| {
+            let mut script_seed = address.as_bytes().to_vec();
+            script_seed.extend_from_slice(&0u32.to_be_bytes());
+            let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+            UtxoRecord {
+                outpoint: UtxoOutpoint {
+                    tx_id: tx_id_override.unwrap_or([0u8; 32]),
+                    index: 0,
+                },
+                owner: address.clone(),
+                value,
+                asset_type: AssetType::Native,
+                script_hash,
+                timelock: None,
+            }
+        });
     if let Some(tx_id) = tx_id_override {
         record.outpoint.tx_id = tx_id;
     }
@@ -367,45 +379,6 @@ fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) ->
         script_hash,
         timelock: None,
     }
-}
-
-fn select_inputs_from_available(
-    mut available: Vec<UtxoRecord>,
-    target: u128,
-    policy: &BlueprintTransferPolicy,
-) -> ChainResult<Vec<UtxoRecord>> {
-    if available.is_empty() {
-        return Err(ChainError::Transaction(
-            "wallet inputs unavailable for requested owner".into(),
-        ));
-    }
-    available.sort_by(|a, b| match b.value.cmp(&a.value) {
-        Ordering::Equal => a.outpoint.cmp(&b.outpoint),
-        other => other,
-    });
-    let mut selected = Vec::new();
-    let mut total = 0u128;
-    for record in available {
-        if total >= target {
-            break;
-        }
-        total = total
-            .checked_add(record.value)
-            .ok_or_else(|| ChainError::Transaction("input value overflow".into()))?;
-        selected.push(record);
-        if selected.len() > policy.max_inputs {
-            return Err(ChainError::Transaction(
-                "required inputs exceed blueprint maximum".into(),
-            ));
-        }
-    }
-    if total < target {
-        return Err(ChainError::Transaction(
-            "insufficient input liquidity for requested amount".into(),
-        ));
-    }
-    selected.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
-    Ok(selected)
 }
 
 fn sum_values(records: &[UtxoRecord]) -> ChainResult<u128> {

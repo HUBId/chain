@@ -6,24 +6,22 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::{ReputationParams, Tier, TimetokeParams};
-use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
+use crate::rpp::{AssetType, StoredUtxo, UtxoOutpoint, UtxoRecord};
 use crate::state::merkle::compute_merkle_root;
 use crate::types::{Account, Address};
 
 #[derive(Clone, Debug)]
 struct AccountUtxoEntry {
-    aggregated: UtxoRecord,
-    fragments: Vec<UtxoRecord>,
+    snapshot: StoredUtxo,
     tier: Tier,
     reputation_score: f64,
     timetoke_hours: u64,
 }
 
 impl AccountUtxoEntry {
-    fn new(aggregated: UtxoRecord, fragments: Vec<UtxoRecord>, account: &Account) -> Self {
+    fn new(snapshot: StoredUtxo, account: &Account) -> Self {
         Self {
-            aggregated,
-            fragments,
+            snapshot,
             tier: account.reputation.tier.clone(),
             reputation_score: account.reputation.score,
             timetoke_hours: account.reputation.timetokes.hours_online,
@@ -122,6 +120,26 @@ impl UtxoState {
         self.policy.clone()
     }
 
+    pub fn snapshot_for_account(&self, account: &Account, tx_id: [u8; 32]) -> StoredUtxo {
+        let aggregated = aggregated_record(account, tx_id);
+        let fragments = self
+            .policy
+            .fragment_values(account.balance)
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| fragment_record(account, tx_id, index as u32, value))
+            .collect();
+        StoredUtxo {
+            aggregated,
+            fragments,
+        }
+    }
+
+    pub fn apply_snapshot(&self, account: &Account, snapshot: StoredUtxo) {
+        let entry = AccountUtxoEntry::new(snapshot, account);
+        self.entries.write().insert(account.address.clone(), entry);
+    }
+
     pub fn upsert_from_account(&self, account: &Account) {
         self.upsert_from_account_with_tx(account, None);
     }
@@ -136,33 +154,25 @@ impl UtxoState {
                 self.entries
                     .read()
                     .get(&account.address)
-                    .map(|entry| entry.aggregated.outpoint.tx_id)
+                    .map(|entry| entry.snapshot.aggregated.outpoint.tx_id)
             })
             .unwrap_or([0u8; 32]);
-        let aggregated = aggregated_record(account, tx_id);
-        let fragments = self
-            .policy
-            .fragment_values(account.balance)
-            .into_iter()
-            .enumerate()
-            .map(|(index, value)| fragment_record(account, tx_id, index as u32, value))
-            .collect();
-        let entry = AccountUtxoEntry::new(aggregated, fragments, account);
-        self.entries.write().insert(account.address.clone(), entry);
+        let snapshot = self.snapshot_for_account(account, tx_id);
+        self.apply_snapshot(account, snapshot);
     }
 
-    pub fn get_for_account(&self, address: &Address) -> Option<UtxoRecord> {
+    pub fn get_for_account(&self, address: &Address) -> Option<StoredUtxo> {
         self.entries
             .read()
             .get(address)
-            .map(|entry| entry.aggregated.clone())
+            .map(|entry| entry.snapshot.clone())
     }
 
     pub fn fragments_for_account(&self, address: &Address) -> Vec<UtxoRecord> {
         self.entries
             .read()
             .get(address)
-            .map(|entry| entry.fragments.clone())
+            .map(|entry| entry.snapshot.fragments.clone())
             .unwrap_or_default()
     }
 
@@ -171,7 +181,7 @@ impl UtxoState {
             .entries
             .read()
             .get(owner)
-            .map(|entry| entry.fragments.clone())
+            .map(|entry| entry.snapshot.fragments.clone())
             .unwrap_or_default();
         outputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         outputs
@@ -202,7 +212,7 @@ impl UtxoState {
                 "owner timetoke hours below blueprint requirement".into(),
             ));
         }
-        let mut fragments = entry.fragments.clone();
+        let mut fragments = entry.snapshot.fragments.clone();
         fragments.sort_by(|a, b| match b.value.cmp(&a.value) {
             Ordering::Equal => a.outpoint.cmp(&b.outpoint),
             other => other,
@@ -237,7 +247,7 @@ impl UtxoState {
             .read()
             .values()
             .filter(|entry| entry.tier >= min_tier)
-            .map(|entry| entry.aggregated.clone())
+            .map(|entry| entry.snapshot.aggregated.clone())
             .collect()
     }
 
@@ -246,17 +256,20 @@ impl UtxoState {
             .read()
             .values()
             .filter(|entry| entry.reputation_score >= min_score)
-            .map(|entry| entry.aggregated.clone())
+            .map(|entry| entry.snapshot.aggregated.clone())
             .collect()
     }
 
     pub fn insert(&self, record: UtxoRecord) {
         let mut entries = self.entries.write();
+        let snapshot = StoredUtxo {
+            aggregated: record.clone(),
+            fragments: vec![record.clone()],
+        };
         entries.insert(
             record.owner.clone(),
             AccountUtxoEntry {
-                aggregated: record.clone(),
-                fragments: vec![record.clone()],
+                snapshot,
                 tier: Tier::Tl0,
                 reputation_score: 0.0,
                 timetoke_hours: 0,
@@ -268,24 +281,28 @@ impl UtxoState {
         let mut entries = self.entries.write();
         let owner = entries
             .iter()
-            .find(|(_, entry)| entry.aggregated.outpoint == *outpoint)
+            .find(|(_, entry)| entry.snapshot.aggregated.outpoint == *outpoint)
             .map(|(owner, _)| owner.clone());
-        owner.and_then(|address| entries.remove(&address).map(|entry| entry.aggregated))
+        owner.and_then(|address| {
+            entries
+                .remove(&address)
+                .map(|entry| entry.snapshot.aggregated)
+        })
     }
 
     pub fn get(&self, outpoint: &UtxoOutpoint) -> Option<UtxoRecord> {
         self.entries
             .read()
             .values()
-            .find(|entry| entry.aggregated.outpoint == *outpoint)
-            .map(|entry| entry.aggregated.clone())
+            .find(|entry| entry.snapshot.aggregated.outpoint == *outpoint)
+            .map(|entry| entry.snapshot.aggregated.clone())
     }
 
-    pub fn snapshot(&self) -> Vec<UtxoRecord> {
+    pub fn snapshot(&self) -> Vec<StoredUtxo> {
         self.entries
             .read()
             .values()
-            .map(|entry| entry.aggregated.clone())
+            .map(|entry| entry.snapshot.clone())
             .collect()
     }
 
@@ -295,7 +312,8 @@ impl UtxoState {
             .read()
             .values()
             .map(|entry| {
-                let payload = serde_json::to_vec(&entry.aggregated).expect("serialize utxo record");
+                let payload =
+                    serde_json::to_vec(&entry.snapshot.aggregated).expect("serialize utxo record");
                 Blake2sHasher::hash(&payload).into()
             })
             .collect();

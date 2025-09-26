@@ -12,8 +12,8 @@ use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, ReputationParams, Tier, TimetokeParams};
 use crate::rpp::{
     AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
-    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
-    TimetokeWitness, TransactionWitness, UtxoRecord, ZsiRecord, ZsiWitness,
+    ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, StoredUtxo,
+    TimetokeRecord, TimetokeWitness, TransactionWitness, UtxoRecord, ZsiRecord, ZsiWitness,
 };
 use crate::state::{
     GlobalState, ProofRegistry, ReputationState, TimetokeState, UtxoState, ZsiRegistry,
@@ -946,16 +946,21 @@ impl Ledger {
         self.reputation_state.upsert_from_account(account);
         self.timetoke_state.upsert_from_account(account);
         self.zsi_registry.upsert_from_account(account);
-        match utxo_tx_id {
-            Some(tx_id) => self.utxo_state.upsert_with_transaction(account, tx_id),
-            None => self.utxo_state.upsert_from_account(account),
-        }
+        let tx_id = utxo_tx_id
+            .or_else(|| {
+                self.utxo_state
+                    .get_for_account(&account.address)
+                    .map(|snapshot| snapshot.aggregated.outpoint.tx_id)
+            })
+            .unwrap_or([0u8; 32]);
+        let snapshot = self.utxo_state.snapshot_for_account(account, tx_id);
+        self.utxo_state.apply_snapshot(account, snapshot);
     }
 }
 
 #[derive(Default, Clone)]
 struct ModuleRecordSnapshots {
-    utxo: Option<UtxoRecord>,
+    utxo: Option<StoredUtxo>,
     reputation: Option<ReputationRecord>,
     timetoke: Option<TimetokeRecord>,
     zsi: Option<ZsiRecord>,

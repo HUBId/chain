@@ -399,6 +399,13 @@ pub struct UtxoRecord {
     pub timelock: Option<u64>,
 }
 
+/// Snapshot of all UTXO data derived for an account.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredUtxo {
+    pub aggregated: UtxoRecord,
+    pub fragments: Vec<UtxoRecord>,
+}
+
 /// Asset categories supported by the chain.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AssetType {
@@ -506,10 +513,10 @@ pub struct TransactionWitness {
     pub sender_after: AccountBalanceWitness,
     pub recipient_before: Option<AccountBalanceWitness>,
     pub recipient_after: AccountBalanceWitness,
-    pub sender_utxo_before: Option<UtxoRecord>,
-    pub sender_utxo_after: Option<UtxoRecord>,
-    pub recipient_utxo_before: Option<UtxoRecord>,
-    pub recipient_utxo_after: Option<UtxoRecord>,
+    pub sender_utxo_before: Option<StoredUtxo>,
+    pub sender_utxo_after: Option<StoredUtxo>,
+    pub recipient_utxo_before: Option<StoredUtxo>,
+    pub recipient_utxo_after: Option<StoredUtxo>,
 }
 
 impl TransactionWitness {
@@ -521,10 +528,10 @@ impl TransactionWitness {
         sender_after: AccountBalanceWitness,
         recipient_before: Option<AccountBalanceWitness>,
         recipient_after: AccountBalanceWitness,
-        sender_utxo_before: Option<UtxoRecord>,
-        sender_utxo_after: Option<UtxoRecord>,
-        recipient_utxo_before: Option<UtxoRecord>,
-        recipient_utxo_after: Option<UtxoRecord>,
+        sender_utxo_before: Option<StoredUtxo>,
+        sender_utxo_after: Option<StoredUtxo>,
+        recipient_utxo_before: Option<StoredUtxo>,
+        recipient_utxo_after: Option<StoredUtxo>,
     ) -> Self {
         Self {
             tx_id,
