@@ -581,15 +581,26 @@ impl Ledger {
         Ok(credited_hours)
     }
 
+    /// Adds an outpoint to the spend queue if it has not already been marked for removal.
+    fn queue_unique_spent_outpoint(
+        spent_outpoints: &mut Vec<UtxoOutpoint>,
+        snapshot: &Option<(UtxoOutpoint, StoredUtxo)>,
+    ) {
+        if let Some((outpoint, _)) = snapshot.as_ref() {
+            if !spent_outpoints.iter().any(|queued| queued == outpoint) {
+                spent_outpoints.push(outpoint.clone());
+            }
+        }
+    }
+
     pub fn apply_transaction(&self, tx: &SignedTransaction) -> ChainResult<u64> {
         tx.verify()?;
         let tx_id = tx.hash();
         let module_sender_before = self.module_records(&tx.payload.from);
         let module_recipient_before = self.module_records(&tx.payload.to);
         let mut spent_outpoints = Vec::new();
-        if let Some((outpoint, _)) = module_sender_before.utxo.as_ref() {
-            spent_outpoints.push(outpoint.clone());
-        }
+        Self::queue_unique_spent_outpoint(&mut spent_outpoints, &module_sender_before.utxo);
+        Self::queue_unique_spent_outpoint(&mut spent_outpoints, &module_recipient_before.utxo);
         let now = crate::reputation::current_timestamp();
         let (binding_change, sender_before, sender_after, recipient_before, recipient_after) = {
             let mut accounts = self.global_state.write_accounts();
@@ -1431,6 +1442,158 @@ mod tests {
             .snapshot_for_account(&recipient_address)
             .expect("recipient snapshot after");
         assert_eq!(recipient_snapshot.0, recipient_outpoint);
+    }
+
+    #[test]
+    fn apply_transaction_marks_existing_recipient_utxo_as_spent() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let sender_kp = deterministic_keypair();
+        let sender_address = address_from_public_key(&sender_kp.public);
+        let mut sender_account = Account::new(sender_address.clone(), 1_200, Stake::default());
+        let sender_pk_hex = hex::encode(sender_kp.public.to_bytes());
+        let _ = sender_account
+            .ensure_wallet_binding(&sender_pk_hex)
+            .expect("bind sender wallet");
+        ledger
+            .upsert_account(sender_account.clone())
+            .expect("insert sender");
+
+        let recipient_address = hex::encode([0x44u8; 32]);
+        let recipient_account = Account::new(recipient_address.clone(), 300, Stake::default());
+        ledger
+            .upsert_account(recipient_account.clone())
+            .expect("insert recipient");
+        let recipient_existing_tx_id = [4u8; 32];
+        ledger.index_account_modules(&recipient_account, Some(recipient_existing_tx_id));
+
+        let sender_input = UtxoOutpoint {
+            tx_id: [3u8; 32],
+            index: 0,
+        };
+        let recipient_existing = UtxoOutpoint {
+            tx_id: recipient_existing_tx_id,
+            index: 0,
+        };
+        ledger.utxo_state.insert(
+            sender_input.clone(),
+            StoredUtxo::new(sender_address.clone(), 700),
+        );
+
+        let recipient_before_snapshot = ledger
+            .utxo_state
+            .snapshot_for_account(&recipient_address)
+            .expect("recipient snapshot before");
+        assert_eq!(recipient_before_snapshot.0, recipient_existing);
+
+        let tx = Transaction::new(
+            sender_address.clone(),
+            recipient_address.clone(),
+            200,
+            6,
+            sender_account.nonce + 1,
+            None,
+        );
+        let signature = sender_kp.sign(&tx.canonical_bytes());
+        let signed = SignedTransaction::new(tx, signature, &sender_kp.public);
+        let tx_id = signed.hash();
+
+        ledger
+            .apply_transaction(&signed)
+            .expect("apply transaction with existing recipient utxo");
+
+        let snapshot_after = ledger.utxo_state.snapshot();
+        assert!(
+            snapshot_after
+                .get(&sender_input)
+                .expect("sender input marked")
+                .is_spent()
+        );
+        assert!(
+            snapshot_after
+                .get(&recipient_existing)
+                .expect("recipient prior output")
+                .is_spent()
+        );
+
+        let recipient_outpoint = UtxoOutpoint { tx_id, index: 0 };
+        let recipient_entry = snapshot_after
+            .get(&recipient_outpoint)
+            .expect("new recipient output");
+        assert_eq!(recipient_entry.owner, recipient_address);
+        assert!(!recipient_entry.is_spent());
+
+        let recipient_snapshot = ledger
+            .utxo_state
+            .snapshot_for_account(&recipient_address)
+            .expect("recipient snapshot after");
+        assert_eq!(recipient_snapshot.0, recipient_outpoint);
+    }
+
+    #[test]
+    fn apply_transaction_self_transfer_deduplicates_spent_outpoints() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let keypair = deterministic_keypair();
+        let address = address_from_public_key(&keypair.public);
+        let mut account = Account::new(address.clone(), 900, Stake::default());
+        let wallet_hex = hex::encode(keypair.public.to_bytes());
+        let _ = account
+            .ensure_wallet_binding(&wallet_hex)
+            .expect("bind wallet");
+        ledger
+            .upsert_account(account.clone())
+            .expect("insert account");
+
+        let existing_tx_id = [5u8; 32];
+        ledger.index_account_modules(&account, Some(existing_tx_id));
+        let existing_outpoint = UtxoOutpoint {
+            tx_id: existing_tx_id,
+            index: 0,
+        };
+
+        let before_snapshot = ledger
+            .utxo_state
+            .snapshot_for_account(&address)
+            .expect("snapshot before self transfer");
+        assert_eq!(before_snapshot.0, existing_outpoint);
+
+        let tx = Transaction::new(
+            address.clone(),
+            address.clone(),
+            120,
+            8,
+            account.nonce + 1,
+            None,
+        );
+        let signature = keypair.sign(&tx.canonical_bytes());
+        let signed = SignedTransaction::new(tx, signature, &keypair.public);
+        let tx_id = signed.hash();
+
+        ledger
+            .apply_transaction(&signed)
+            .expect("self transfer applies");
+
+        let snapshot_after = ledger.utxo_state.snapshot();
+        assert!(
+            snapshot_after
+                .get(&existing_outpoint)
+                .expect("existing outpoint")
+                .is_spent()
+        );
+
+        let new_outpoint = UtxoOutpoint { tx_id, index: 0 };
+        let new_entry = snapshot_after
+            .get(&new_outpoint)
+            .expect("new consolidated output");
+        assert_eq!(new_entry.owner, address);
+        assert!(!new_entry.is_spent());
+
+        assert!(snapshot_after.get(&UtxoOutpoint { tx_id, index: 1 }).is_none());
+
+        let snapshot_for_account = ledger
+            .utxo_state
+            .snapshot_for_account(&address)
+            .expect("account snapshot after self transfer");
+        assert_eq!(snapshot_for_account.0, new_outpoint);
     }
 
     #[test]
