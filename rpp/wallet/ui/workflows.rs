@@ -248,7 +248,12 @@ impl<'a> WalletWorkflows<'a> {
         let recipient_account = self.wallet.account_by_address(&to)?;
         let (recipient_pre_utxo, recipient_balance_before) = match recipient_account {
             Some(ref account) => (
-                Some(ledger_snapshot_utxo(&account.address, account.balance)),
+                Some(ledger_snapshot_utxo(
+                    &utxo_state,
+                    &account.address,
+                    account.balance,
+                    None,
+                )),
                 account.balance,
             ),
             None => (None, 0u128),
@@ -256,9 +261,18 @@ impl<'a> WalletWorkflows<'a> {
         let recipient_balance_after = recipient_balance_before
             .checked_add(amount)
             .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
-        let recipient_post_utxo = ledger_snapshot_utxo(&to, recipient_balance_after);
-        let sender_post_utxo =
-            ledger_snapshot_utxo(self.wallet.address(), sender_account.balance - total_debit);
+        let recipient_post_utxo = ledger_snapshot_utxo(
+            &utxo_state,
+            &to,
+            recipient_balance_after,
+            Some(tx_hash_bytes),
+        );
+        let sender_post_utxo = ledger_snapshot_utxo(
+            &utxo_state,
+            self.wallet.address(),
+            sender_account.balance - total_debit,
+            Some(tx_hash_bytes),
+        );
         let policy = TransactionPolicy {
             required_tier: transfer_policy.min_tier,
             status,
@@ -313,21 +327,33 @@ fn status_from_account(account: &Account) -> ReputationStatus {
     }
 }
 
-fn ledger_snapshot_utxo(address: &Address, value: u128) -> UtxoRecord {
-    let mut seed = address.as_bytes().to_vec();
-    seed.extend_from_slice(&0u32.to_be_bytes());
-    let tx_id: [u8; 32] = Blake2sHasher::hash(&seed).into();
-    let mut script_seed = address.as_bytes().to_vec();
-    script_seed.extend_from_slice(&0u32.to_be_bytes());
-    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
-    UtxoRecord {
-        outpoint: UtxoOutpoint { tx_id, index: 0 },
-        owner: address.clone(),
-        value,
-        asset_type: AssetType::Native,
-        script_hash,
-        timelock: None,
+fn ledger_snapshot_utxo(
+    state: &UtxoState,
+    address: &Address,
+    value: u128,
+    tx_id_override: Option<[u8; 32]>,
+) -> UtxoRecord {
+    let mut record = state.get_for_account(address).unwrap_or_else(|| {
+        let mut script_seed = address.as_bytes().to_vec();
+        script_seed.extend_from_slice(&0u32.to_be_bytes());
+        let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+        UtxoRecord {
+            outpoint: UtxoOutpoint {
+                tx_id: tx_id_override.unwrap_or([0u8; 32]),
+                index: 0,
+            },
+            owner: address.clone(),
+            value,
+            asset_type: AssetType::Native,
+            script_hash,
+            timelock: None,
+        }
+    });
+    if let Some(tx_id) = tx_id_override {
+        record.outpoint.tx_id = tx_id;
     }
+    record.value = value;
+    record
 }
 
 fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {

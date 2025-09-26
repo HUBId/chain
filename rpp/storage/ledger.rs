@@ -163,7 +163,7 @@ impl Ledger {
             )
             .expect("genesis identity commitment");
             ledger.global_state.upsert(account.clone());
-            ledger.index_account_modules(&account);
+            ledger.index_account_modules(&account, None);
         }
         drop(tree);
         ledger.sync_epoch_for_height(0);
@@ -177,7 +177,7 @@ impl Ledger {
             .global_state
             .upsert(account.clone())
             .map(|existing| existing.reputation.zsi.public_key_commitment);
-        self.index_account_modules(&account);
+        self.index_account_modules(&account, None);
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(&address, previous_commitment.as_deref(), &new_commitment)?;
         Ok(())
@@ -239,7 +239,7 @@ impl Ledger {
         }
         drop(accounts);
         for account in &touched {
-            self.index_account_modules(account);
+            self.index_account_modules(account, None);
         }
         records.sort_by(|a, b| a.identity.cmp(&b.identity));
         records
@@ -262,7 +262,7 @@ impl Ledger {
         }
         drop(accounts);
         for account in &updated_accounts {
-            self.index_account_modules(account);
+            self.index_account_modules(account, None);
         }
         Ok(updated_accounts
             .into_iter()
@@ -301,7 +301,7 @@ impl Ledger {
         let WalletBindingChange { previous, current } = binding_change;
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(address, previous.as_deref(), &current)?;
-        self.index_account_modules(&updated_account);
+        self.index_account_modules(&updated_account, None);
         Ok(())
     }
 
@@ -330,7 +330,7 @@ impl Ledger {
             penalty_percent: reason.penalty_percent(),
             timestamp,
         });
-        self.index_account_modules(&updated_account);
+        self.index_account_modules(&updated_account, None);
         let module_after = self.module_records(address);
         if let Some(reputation_after) = module_after.reputation.clone() {
             let mut book = self.module_witnesses.write();
@@ -550,7 +550,7 @@ impl Ledger {
             account.reputation.update_decay_reference(now);
             (credited, account.clone())
         };
-        self.index_account_modules(&updated_account);
+        self.index_account_modules(&updated_account, None);
         let module_after = self.module_records(&proof.wallet_address);
         {
             let mut book = self.module_witnesses.write();
@@ -578,6 +578,7 @@ impl Ledger {
 
     pub fn apply_transaction(&self, tx: &SignedTransaction) -> ChainResult<u64> {
         tx.verify()?;
+        let tx_id = tx.hash();
         let module_sender_before = self.module_records(&tx.payload.from);
         let module_recipient_before = self.module_records(&tx.payload.to);
         let now = crate::reputation::current_timestamp();
@@ -644,8 +645,8 @@ impl Ledger {
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(&tx.payload.from, previous.as_deref(), &current)?;
         drop(tree);
-        self.index_account_modules(&sender_after);
-        self.index_account_modules(&recipient_after);
+        self.index_account_modules(&sender_after, Some(tx_id));
+        self.index_account_modules(&recipient_after, Some(tx_id));
         let sender_modules_after = self.module_records(&tx.payload.from);
         let recipient_modules_after = self.module_records(&tx.payload.to);
 
@@ -668,7 +669,7 @@ impl Ledger {
             recipient_after.nonce,
         );
         let tx_witness = TransactionWitness::new(
-            tx.hash(),
+            tx_id,
             tx.payload.fee,
             sender_before_witness,
             sender_after_witness,
@@ -744,7 +745,7 @@ impl Ledger {
                 }
             }
         };
-        self.index_account_modules(&updated_account);
+        self.index_account_modules(&updated_account, None);
         let module_after = self.module_records(address);
         if let Some(reputation_after) = module_after.reputation.clone() {
             let mut book = self.module_witnesses.write();
@@ -937,11 +938,14 @@ impl Ledger {
         }))
     }
 
-    fn index_account_modules(&self, account: &Account) {
+    fn index_account_modules(&self, account: &Account, utxo_tx_id: Option<[u8; 32]>) {
         self.reputation_state.upsert_from_account(account);
         self.timetoke_state.upsert_from_account(account);
         self.zsi_registry.upsert_from_account(account);
-        self.utxo_state.upsert_from_account(account);
+        match utxo_tx_id {
+            Some(tx_id) => self.utxo_state.upsert_with_transaction(account, tx_id),
+            None => self.utxo_state.upsert_from_account(account),
+        }
     }
 }
 

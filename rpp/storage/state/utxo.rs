@@ -123,13 +123,29 @@ impl UtxoState {
     }
 
     pub fn upsert_from_account(&self, account: &Account) {
-        let aggregated = aggregated_record(account);
+        self.upsert_from_account_with_tx(account, None);
+    }
+
+    pub fn upsert_with_transaction(&self, account: &Account, tx_id: [u8; 32]) {
+        self.upsert_from_account_with_tx(account, Some(tx_id));
+    }
+
+    fn upsert_from_account_with_tx(&self, account: &Account, tx_id: Option<[u8; 32]>) {
+        let tx_id = tx_id
+            .or_else(|| {
+                self.entries
+                    .read()
+                    .get(&account.address)
+                    .map(|entry| entry.aggregated.outpoint.tx_id)
+            })
+            .unwrap_or([0u8; 32]);
+        let aggregated = aggregated_record(account, tx_id);
         let fragments = self
             .policy
             .fragment_values(account.balance)
             .into_iter()
             .enumerate()
-            .map(|(index, value)| fragment_record(account, index as u32, value))
+            .map(|(index, value)| fragment_record(account, tx_id, index as u32, value))
             .collect();
         let entry = AccountUtxoEntry::new(aggregated, fragments, account);
         self.entries.write().insert(account.address.clone(), entry);
@@ -276,24 +292,23 @@ impl UtxoState {
     }
 }
 
-fn account_outpoint(address: &Address, index: u32) -> UtxoOutpoint {
-    let mut data = address.as_bytes().to_vec();
-    data.extend_from_slice(&index.to_be_bytes());
-    let digest: [u8; 32] = Blake2sHasher::hash(&data).into();
-    UtxoOutpoint {
-        tx_id: digest,
-        index,
-    }
+fn make_outpoint(tx_id: [u8; 32], index: u32) -> UtxoOutpoint {
+    UtxoOutpoint { tx_id, index }
 }
 
-fn aggregated_record(account: &Account) -> UtxoRecord {
-    let outpoint = account_outpoint(&account.address, 0);
+fn aggregated_record(account: &Account, tx_id: [u8; 32]) -> UtxoRecord {
+    let outpoint = make_outpoint(tx_id, 0);
     build_record(&account.address, account.balance, outpoint, 0)
 }
 
-fn fragment_record(account: &Account, fragment_index: u32, value: u128) -> UtxoRecord {
+fn fragment_record(
+    account: &Account,
+    tx_id: [u8; 32],
+    fragment_index: u32,
+    value: u128,
+) -> UtxoRecord {
     let index = fragment_index.saturating_add(1);
-    let outpoint = account_outpoint(&account.address, index);
+    let outpoint = make_outpoint(tx_id, index);
     build_record(&account.address, value, outpoint, index)
 }
 
