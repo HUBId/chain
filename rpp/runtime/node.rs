@@ -49,7 +49,7 @@ use crate::types::{
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
-use rpp_p2p::NodeIdentity;
+use rpp_p2p::{HandshakePayload, NodeIdentity, TierLevel};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -290,6 +290,13 @@ struct VerifiedProposal {
     block: Block,
 }
 
+#[derive(Clone, Debug)]
+pub struct NetworkIdentityProfile {
+    pub zsi_id: String,
+    pub tier: TierLevel,
+    pub vrf_proof: Vec<u8>,
+}
+
 impl Node {
     pub fn new(config: NodeConfig) -> ChainResult<Self> {
         config.ensure_directories()?;
@@ -474,6 +481,10 @@ impl Node {
 
     pub async fn start(self) -> ChainResult<()> {
         self.inner.clone().run().await
+    }
+
+    pub fn network_identity_profile(&self) -> ChainResult<NetworkIdentityProfile> {
+        self.inner.network_identity_profile()
     }
 }
 
@@ -2305,6 +2316,36 @@ impl NodeInner {
             tip.last_hash = [0u8; 32];
         }
         Ok(())
+    }
+
+    fn network_identity_profile(&self) -> ChainResult<NetworkIdentityProfile> {
+        let account = self
+            .ledger
+            .get_account(&self.address)
+            .ok_or_else(|| ChainError::Config("node account missing in ledger".into()))?;
+        let tier_level = tier_to_level(&account.reputation.tier);
+        let zsi_id = account.reputation.zsi.public_key_commitment.clone();
+        let template = HandshakePayload::new(zsi_id.clone(), None, tier_level);
+        let keypair = self.p2p_identity.clone_keypair();
+        let vrf_proof = keypair.sign(&template.vrf_message()).map_err(|err| {
+            ChainError::Config(format!("failed to sign handshake vrf proof: {err}"))
+        })?;
+        Ok(NetworkIdentityProfile {
+            zsi_id,
+            tier: tier_level,
+            vrf_proof,
+        })
+    }
+}
+
+fn tier_to_level(tier: &Tier) -> TierLevel {
+    match tier {
+        Tier::Tl0 => TierLevel::Tl0,
+        Tier::Tl1 => TierLevel::Tl1,
+        Tier::Tl2 => TierLevel::Tl2,
+        Tier::Tl3 => TierLevel::Tl3,
+        Tier::Tl4 => TierLevel::Tl4,
+        Tier::Tl5 => TierLevel::Tl5,
     }
 }
 

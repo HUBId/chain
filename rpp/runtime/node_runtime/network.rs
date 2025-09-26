@@ -10,6 +10,7 @@ use rpp_p2p::{
 };
 use thiserror::Error;
 
+use super::node::IdentityProfile;
 use crate::config::P2pConfig;
 
 /// Resolved libp2p networking configuration used by the runtime.
@@ -81,12 +82,30 @@ impl NetworkResources {
     pub fn initialise(
         identity_path: &Path,
         config: &NetworkConfig,
+        identity_profile: Option<IdentityProfile>,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
         let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory())?);
         let node_label = identity.peer_id().to_base58();
-        let handshake = HandshakePayload::new(node_label, None, TierLevel::Tl0);
+        let (handshake, profile) = if let Some(profile) = identity_profile {
+            (
+                HandshakePayload::new(
+                    profile.zsi_id.clone(),
+                    Some(profile.vrf_proof.clone()),
+                    profile.tier,
+                ),
+                Some(profile),
+            )
+        } else {
+            (
+                HandshakePayload::new(node_label, None, TierLevel::Tl0),
+                None,
+            )
+        };
         let mut network = Network::new(identity.clone(), peerstore, handshake, None)?;
+        if let Some(profile) = profile {
+            network.update_identity(profile.zsi_id, profile.tier, profile.vrf_proof)?;
+        }
         network.listen_on(config.listen_addr().clone())?;
         for addr in config.bootstrap_peers() {
             if let Err(err) = network.dial(addr.clone()) {
