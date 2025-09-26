@@ -33,6 +33,9 @@ uuid = { version = "1.7", features = ["v4", "serde"] }
 num-bigint = { version = "0.4", features = ["serde"] }
 num-traits = "0.2"
 blake2 = "0.10"
+blake3 = "1.5"
+once_cell = "1.19"
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3.10"
