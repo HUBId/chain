@@ -1080,7 +1080,7 @@ mod tests {
     };
     use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
     fn seeded_keypair(seed: u8) -> Keypair {
@@ -1317,6 +1317,120 @@ mod tests {
             Some(hex::encode(keypair.public.to_bytes()))
         );
         assert_eq!(account.nonce, 1);
+    }
+
+    #[test]
+    fn apply_transaction_updates_utxo_state_consistently() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let sender_kp = deterministic_keypair();
+        let sender_address = address_from_public_key(&sender_kp.public);
+        let mut sender_account = Account::new(sender_address.clone(), 1_000, Stake::default());
+        let sender_pk_hex = hex::encode(sender_kp.public.to_bytes());
+        let _ = sender_account
+            .ensure_wallet_binding(&sender_pk_hex)
+            .expect("bind sender wallet");
+        ledger
+            .upsert_account(sender_account.clone())
+            .expect("insert sender");
+
+        let recipient_address = hex::encode([0x33u8; 32]);
+        let recipient_account = Account::new(recipient_address.clone(), 250, Stake::default());
+        ledger
+            .upsert_account(recipient_account.clone())
+            .expect("insert recipient");
+
+        let input_outpoint = UtxoOutpoint {
+            tx_id: [0u8; 32],
+            index: 0,
+        };
+        let extra_outpoint = UtxoOutpoint {
+            tx_id: [2u8; 32],
+            index: 5,
+        };
+        ledger.utxo_state.insert(
+            input_outpoint.clone(),
+            StoredUtxo::new(sender_address.clone(), 600),
+        );
+        ledger.utxo_state.insert(
+            extra_outpoint.clone(),
+            StoredUtxo::new(sender_address.clone(), 75),
+        );
+
+        let initial_commitment = ledger.utxo_state.commitment();
+        let canonical_before = ledger
+            .utxo_state
+            .snapshot_for_account(&sender_address)
+            .expect("sender utxo before");
+        assert_eq!(canonical_before.0, input_outpoint);
+
+        let tx = Transaction::new(
+            sender_address.clone(),
+            recipient_address.clone(),
+            150,
+            5,
+            sender_account.nonce + 1,
+            None,
+        );
+        let signature = sender_kp.sign(&tx.canonical_bytes());
+        let signed = SignedTransaction::new(tx, signature, &sender_kp.public);
+        let tx_id = signed.hash();
+
+        let fee = ledger
+            .apply_transaction(&signed)
+            .expect("apply transaction");
+        assert_eq!(fee, 5);
+
+        let snapshot_after = ledger.utxo_state.snapshot();
+        assert!(
+            snapshot_after
+                .get(&input_outpoint)
+                .expect("spent input entry")
+                .is_spent()
+        );
+        assert!(
+            !snapshot_after
+                .get(&extra_outpoint)
+                .expect("secondary output")
+                .is_spent()
+        );
+
+        let recipient_outpoint = UtxoOutpoint { tx_id, index: 0 };
+        let sender_change_outpoint = UtxoOutpoint { tx_id, index: 1 };
+
+        let recipient_entry = snapshot_after
+            .get(&recipient_outpoint)
+            .expect("recipient output");
+        assert_eq!(recipient_entry.owner, recipient_address);
+        assert!(!recipient_entry.is_spent());
+
+        let sender_entry = snapshot_after
+            .get(&sender_change_outpoint)
+            .expect("sender change output");
+        assert_eq!(sender_entry.owner, sender_address);
+        assert!(!sender_entry.is_spent());
+
+        assert_ne!(initial_commitment, ledger.utxo_state.commitment());
+
+        let serialized = bincode::serialize(&snapshot_after).expect("serialize utxo snapshot");
+        let restored: BTreeMap<UtxoOutpoint, StoredUtxo> =
+            bincode::deserialize(&serialized).expect("deserialize utxo snapshot");
+        assert_eq!(restored.len(), snapshot_after.len());
+        let mirror = UtxoState::new();
+        for (outpoint, stored) in restored.iter() {
+            mirror.insert(outpoint.clone(), stored.clone());
+        }
+        assert_eq!(mirror.commitment(), ledger.utxo_state.commitment());
+
+        let sender_snapshot = ledger
+            .utxo_state
+            .snapshot_for_account(&sender_address)
+            .expect("sender snapshot after");
+        assert_eq!(sender_snapshot.0, sender_change_outpoint);
+        let recipient_snapshot = ledger
+            .utxo_state
+            .snapshot_for_account(&recipient_address)
+            .expect("recipient snapshot after");
+        assert_eq!(recipient_snapshot.0, recipient_outpoint);
     }
 
     #[test]

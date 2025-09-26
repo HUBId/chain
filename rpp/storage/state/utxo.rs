@@ -175,6 +175,7 @@ impl UtxoState {
 mod tests {
     use super::*;
     use crate::types::Stake;
+    use std::collections::BTreeMap;
 
     fn sample_account(address: &str, balance: u128) -> Account {
         Account::new(address.to_string(), balance, Stake::default())
@@ -265,5 +266,100 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         let stored = snapshot.get(&outpoint).expect("stored utxo");
         assert!(stored.is_spent());
+    }
+
+    #[test]
+    fn multiple_outputs_per_account_are_sorted_and_serializable() {
+        let state = UtxoState::new();
+        let owner = "frank".to_string();
+        let first_outpoint = UtxoOutpoint {
+            tx_id: [9u8; 32],
+            index: 2,
+        };
+        let second_outpoint = UtxoOutpoint {
+            tx_id: [8u8; 32],
+            index: 1,
+        };
+        state.insert(first_outpoint.clone(), StoredUtxo::new(owner.clone(), 30));
+        state.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 45));
+        let outputs = state.unspent_outputs_for_owner(&owner);
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].outpoint, second_outpoint);
+        assert_eq!(outputs[0].value, 45);
+        assert_eq!(outputs[1].outpoint, first_outpoint);
+        assert_eq!(outputs[1].value, 30);
+
+        let snapshot = state.snapshot();
+        let snapshot_pairs: Vec<(UtxoOutpoint, StoredUtxo)> = snapshot
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let encoded = serde_json::to_string(&snapshot_pairs).expect("serialize snapshot");
+        let decoded: Vec<(UtxoOutpoint, StoredUtxo)> =
+            serde_json::from_str(&encoded).expect("deserialize snapshot");
+        assert_eq!(decoded.len(), snapshot_pairs.len());
+        let decoded_map: BTreeMap<UtxoOutpoint, StoredUtxo> = decoded.into_iter().collect();
+        let decoded_first = decoded_map.get(&second_outpoint).expect("decoded entry");
+        assert_eq!(decoded_first.owner, owner);
+        assert_eq!(decoded_first.amount, 45);
+        assert!(!decoded_first.is_spent());
+    }
+
+    #[test]
+    fn spent_flag_flips_and_resets_on_replacement() {
+        let state = UtxoState::new();
+        let outpoint = UtxoOutpoint {
+            tx_id: [10u8; 32],
+            index: 4,
+        };
+        state.insert(outpoint.clone(), StoredUtxo::new("ginny".to_string(), 12));
+        assert!(state.remove_spent(&outpoint));
+        let snapshot = state.snapshot();
+        assert!(snapshot.get(&outpoint).expect("snapshot entry").is_spent());
+        assert!(!state.remove_spent(&outpoint));
+        state.insert(outpoint.clone(), StoredUtxo::new("ginny".to_string(), 21));
+        let refreshed = state.get(&outpoint).expect("reinserted utxo");
+        assert_eq!(refreshed.value, 21);
+        assert_eq!(refreshed.owner, "ginny");
+    }
+
+    #[test]
+    fn commitment_changes_are_deterministic_across_sequences() {
+        let state_a = UtxoState::new();
+        let state_b = UtxoState::new();
+        let owner = "harry".to_string();
+        let first_outpoint = UtxoOutpoint {
+            tx_id: [11u8; 32],
+            index: 0,
+        };
+        let second_outpoint = UtxoOutpoint {
+            tx_id: [12u8; 32],
+            index: 5,
+        };
+
+        state_a.insert(first_outpoint.clone(), StoredUtxo::new(owner.clone(), 40));
+        state_a.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 25));
+        assert!(state_a.remove_spent(&second_outpoint));
+        state_a.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 26));
+
+        state_b.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 25));
+        state_b.insert(first_outpoint.clone(), StoredUtxo::new(owner.clone(), 40));
+        assert!(state_b.remove_spent(&second_outpoint));
+        state_b.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 26));
+
+        let commitment_a = state_a.commitment();
+        let commitment_b = state_b.commitment();
+        assert_eq!(commitment_a, commitment_b);
+
+        let snapshot = state_a.snapshot();
+        let bytes = bincode::serialize(&snapshot).expect("serialize snapshot");
+        let restored: BTreeMap<UtxoOutpoint, StoredUtxo> =
+            bincode::deserialize(&bytes).expect("deserialize snapshot");
+        assert_eq!(restored.len(), snapshot.len());
+        let mirror = UtxoState::new();
+        for (outpoint, stored) in restored.iter() {
+            mirror.insert(outpoint.clone(), stored.clone());
+        }
+        assert_eq!(mirror.commitment(), commitment_a);
     }
 }
