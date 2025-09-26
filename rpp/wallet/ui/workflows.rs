@@ -7,7 +7,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::{BlueprintTransferPolicy, UtxoState};
+use crate::state::UtxoState;
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -192,8 +192,6 @@ impl<'a> WalletWorkflows<'a> {
             .wallet
             .account_by_address(self.wallet.address())?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
-        let transfer_policy = BlueprintTransferPolicy::blueprint_default();
-        transfer_policy.ensure_account_allowed(&sender_account)?;
         if !sender_account.reputation.zsi.validated {
             return Err(ChainError::Transaction(
                 "wallet identity must be ZSI-validated".into(),
@@ -224,7 +222,6 @@ impl<'a> WalletWorkflows<'a> {
         let utxo_inputs = select_inputs_from_available(
             self.wallet.unspent_utxos(self.wallet.address())?,
             total_debit,
-            &transfer_policy,
         )?;
         let total_input_value = sum_values(&utxo_inputs)?;
         let remaining = total_input_value
@@ -275,7 +272,7 @@ impl<'a> WalletWorkflows<'a> {
             Some(tx_hash_bytes),
         );
         let policy = TransactionPolicy {
-            required_tier: transfer_policy.min_tier,
+            required_tier: Tier::Tl0,
             status,
         };
         let state_root = self.wallet.firewood_state_root()?;
@@ -377,7 +374,6 @@ fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) ->
 fn select_inputs_from_available(
     mut available: Vec<UtxoRecord>,
     target: u128,
-    policy: &BlueprintTransferPolicy,
 ) -> ChainResult<Vec<UtxoRecord>> {
     if available.is_empty() {
         return Err(ChainError::Transaction(
@@ -398,11 +394,6 @@ fn select_inputs_from_available(
             .checked_add(record.value)
             .ok_or_else(|| ChainError::Transaction("input value overflow".into()))?;
         selected.push(record);
-        if selected.len() > policy.max_inputs {
-            return Err(ChainError::Transaction(
-                "required inputs exceed blueprint maximum".into(),
-            ));
-        }
     }
     if total < target {
         return Err(ChainError::Transaction(
