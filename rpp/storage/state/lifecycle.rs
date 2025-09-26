@@ -5,7 +5,7 @@ use crate::proof_system::{ProofProver, ProofVerifierRegistry};
 use crate::storage::{StateTransitionReceipt, Storage};
 use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
-use crate::types::{Account, ChainProof, IdentityDeclaration, SignedTransaction};
+use crate::types::{Account, AttestedIdentityRequest, ChainProof, SignedTransaction};
 
 /// Coordinates the state lifecycle across Firewood storage and STWO proofs.
 pub struct StateLifecycle<'a> {
@@ -38,7 +38,7 @@ impl<'a> StateLifecycle<'a> {
         &self,
         previous_root: &[u8; 32],
         new_root: &[u8; 32],
-        identities: &[IdentityDeclaration],
+        identities: &[AttestedIdentityRequest],
         transactions: &[SignedTransaction],
     ) -> ChainResult<ChainProof> {
         let prover = WalletProver::new(self.storage);

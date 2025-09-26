@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 
-use crate::types::{IdentityDeclaration, PruningProof, SignedTransaction};
+use crate::types::{AttestedIdentityRequest, PruningProof, SignedTransaction};
 
 /// Witness capturing the pruning relation between consecutive blocks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PruningWitness {
-    pub previous_identities: Vec<IdentityDeclaration>,
+    pub previous_identities: Vec<AttestedIdentityRequest>,
     pub previous_transactions: Vec<SignedTransaction>,
     pub pruning_proof: PruningProof,
     pub removed_transactions: Vec<String>,
@@ -13,7 +13,7 @@ pub struct PruningWitness {
 
 impl PruningWitness {
     pub fn new(
-        previous_identities: &[IdentityDeclaration],
+        previous_identities: &[AttestedIdentityRequest],
         previous_transactions: &[SignedTransaction],
         pruning_proof: &PruningProof,
         removed_transactions: Vec<String>,

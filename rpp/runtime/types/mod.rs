@@ -13,7 +13,10 @@ pub use block::{
     Block, BlockHeader, BlockMetadata, ProofSystem, PruningProof, RecursiveProof, ReputationUpdate,
     TimetokeUpdate,
 };
-pub use identity::{AttestedIdentityRequest, IdentityDeclaration, IdentityGenesis, IdentityProof};
+pub use identity::{
+    AttestedIdentityRequest, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    IdentityDeclaration, IdentityGenesis, IdentityProof,
+};
 pub use proofs::{BlockProofBundle, ChainProof, TransactionProofBundle};
 pub use transaction::{SignedTransaction, Transaction, TransactionEnvelope};
 pub use uptime::{UptimeClaim, UptimeProof};

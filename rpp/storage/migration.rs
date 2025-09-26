@@ -8,8 +8,9 @@ use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
 use crate::storage::{STORAGE_SCHEMA_VERSION, Storage};
 use crate::types::{
-    Block, BlockHeader, BlockProofBundle, IdentityDeclaration, ProofSystem, PruningProof,
-    RecursiveProof, ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
+    AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle, IdentityDeclaration,
+    ProofSystem, PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, StoredBlock,
+    TimetokeUpdate, UptimeProof,
 };
 
 /// Outcome of executing storage migrations.
@@ -199,6 +200,15 @@ impl LegacyBlockV0 {
             previous_commitment,
             stark.recursive_proof.clone(),
         )?;
+
+        let identities: Vec<AttestedIdentityRequest> = identities
+            .into_iter()
+            .map(|declaration| AttestedIdentityRequest {
+                declaration,
+                attested_votes: Vec::new(),
+                gossip_confirmations: Vec::new(),
+            })
+            .collect();
 
         Ok(Block {
             header,

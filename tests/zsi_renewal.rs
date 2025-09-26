@@ -11,7 +11,8 @@ use rpp_chain::stwo::fri::FriProver;
 use rpp_chain::stwo::params::StarkParameters;
 use rpp_chain::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_chain::types::{
-    AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+    AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+    IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
 };
 
 fn seeded_keypair(seed: u8) -> Keypair {
@@ -131,10 +132,19 @@ fn zsi_identity_submission_requires_bft_attestation() {
     };
 
     request
-        .verify(height, 3, 2)
+        .verify(
+            height,
+            IDENTITY_ATTESTATION_QUORUM,
+            IDENTITY_ATTESTATION_GOSSIP_MIN,
+        )
         .expect("attestation should satisfy quorum");
     ledger
-        .register_identity(&request)
+        .register_identity(
+            &request,
+            height,
+            IDENTITY_ATTESTATION_QUORUM,
+            IDENTITY_ATTESTATION_GOSSIP_MIN,
+        )
         .expect("ledger registers attested identity");
 }
 
@@ -163,7 +173,11 @@ fn zsi_identity_submission_slashes_on_invalid_vote() {
     };
 
     let err = request
-        .verify(height, 3, 2)
+        .verify(
+            height,
+            IDENTITY_ATTESTATION_QUORUM,
+            IDENTITY_ATTESTATION_GOSSIP_MIN,
+        )
         .expect_err("invalid attestation rejected");
     assert!(matches!(err, rpp_chain::errors::ChainError::Transaction(_)));
     // Slashing is handled by the node runtime; the ledger should remain unchanged for invalid requests.

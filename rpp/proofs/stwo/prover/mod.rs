@@ -11,7 +11,7 @@ use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
 use crate::types::{
-    Account, ChainProof, IdentityDeclaration, IdentityGenesis, PruningProof, SignedTransaction,
+    Account, AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, SignedTransaction,
     Stake, UptimeClaim,
 };
 
@@ -112,7 +112,7 @@ impl<'a> WalletProver<'a> {
         &self,
         prev_state_root: &str,
         new_state_root: &str,
-        identities: &[IdentityDeclaration],
+        identities: &[AttestedIdentityRequest],
         transactions: &[SignedTransaction],
     ) -> ChainResult<StateWitness> {
         let accounts_before = self.storage.load_accounts()?;
@@ -123,7 +123,8 @@ impl<'a> WalletProver<'a> {
             .collect();
         let now = crate::reputation::current_timestamp();
 
-        for declaration in identities {
+        for request in identities {
+            let declaration = &request.declaration;
             let genesis = &declaration.genesis;
             if state.contains_key(&genesis.wallet_addr) {
                 return Err(ChainError::Transaction(
@@ -180,7 +181,7 @@ impl<'a> WalletProver<'a> {
 
     pub fn derive_pruning_witness(
         &self,
-        previous_identities: &[IdentityDeclaration],
+        previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
         removed: Vec<String>,
@@ -188,8 +189,8 @@ impl<'a> WalletProver<'a> {
         let mut leaves = Vec::with_capacity(previous_identities.len() + previous_txs.len());
         let mut original_transactions =
             Vec::with_capacity(previous_identities.len() + previous_txs.len());
-        for declaration in previous_identities {
-            let hash = declaration.hash()?;
+        for request in previous_identities {
+            let hash = request.declaration.hash()?;
             leaves.push(hash);
             original_transactions.push(hex::encode(hash));
         }
@@ -360,7 +361,7 @@ impl<'a> ProofProver for WalletProver<'a> {
         &self,
         prev_state_root: &str,
         new_state_root: &str,
-        identities: &[IdentityDeclaration],
+        identities: &[AttestedIdentityRequest],
         transactions: &[SignedTransaction],
     ) -> ChainResult<Self::StateWitness> {
         self.derive_state_witness(prev_state_root, new_state_root, identities, transactions)
@@ -368,7 +369,7 @@ impl<'a> ProofProver for WalletProver<'a> {
 
     fn build_pruning_witness(
         &self,
-        previous_identities: &[IdentityDeclaration],
+        previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
         removed: Vec<String>,

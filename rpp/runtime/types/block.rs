@@ -28,7 +28,8 @@ use crate::vrf::VrfProof;
 use serde_json;
 
 use super::{
-    Address, BlockProofBundle, ChainProof, IdentityDeclaration, SignedTransaction, UptimeProof,
+    Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
+    identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
 };
 
 const PRUNING_WITNESS_DOMAIN: &[u8] = b"rpp-pruning-proof";
@@ -604,7 +605,7 @@ impl RecursiveProof {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Block {
     pub header: BlockHeader,
-    pub identities: Vec<IdentityDeclaration>,
+    pub identities: Vec<AttestedIdentityRequest>,
     pub transactions: Vec<SignedTransaction>,
     pub uptime_proofs: Vec<UptimeProof>,
     pub timetoke_updates: Vec<TimetokeUpdate>,
@@ -633,7 +634,7 @@ enum VerifyMode {
 impl Block {
     pub fn new(
         header: BlockHeader,
-        identities: Vec<IdentityDeclaration>,
+        identities: Vec<AttestedIdentityRequest>,
         transactions: Vec<SignedTransaction>,
         uptime_proofs: Vec<UptimeProof>,
         timetoke_updates: Vec<TimetokeUpdate>,
@@ -723,7 +724,7 @@ impl Block {
             let identity_proofs: Vec<ChainProof> = self
                 .identities
                 .iter()
-                .map(|declaration| declaration.proof.zk_proof.clone())
+                .map(|request| request.declaration.proof.zk_proof.clone())
                 .collect();
             let uptime_proofs: Vec<ChainProof> = self
                 .uptime_proofs
@@ -790,12 +791,16 @@ impl Block {
         verify_stark: bool,
         registry: &ProofVerifierRegistry,
     ) -> ChainResult<()> {
-        for identity in &self.identities {
-            identity.verify()?;
+        for request in &self.identities {
+            request.verify(
+                self.header.height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )?;
         }
         if verify_stark {
-            for identity in &self.identities {
-                registry.verify_identity(&identity.proof.zk_proof)?;
+            for request in &self.identities {
+                registry.verify_identity(&request.declaration.proof.zk_proof)?;
             }
         }
 
@@ -824,8 +829,8 @@ impl Block {
 
         let mut operation_hashes =
             Vec::with_capacity(self.identities.len() + self.transactions.len());
-        for declaration in &self.identities {
-            operation_hashes.push(declaration.hash()?);
+        for request in &self.identities {
+            operation_hashes.push(request.declaration.hash()?);
         }
         for tx in &self.transactions {
             tx.verify()?;
@@ -1129,7 +1134,7 @@ impl Block {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct BlockPayload {
-    pub identities: Vec<IdentityDeclaration>,
+    pub identities: Vec<AttestedIdentityRequest>,
     pub transactions: Vec<SignedTransaction>,
     pub uptime_proofs: Vec<UptimeProof>,
     pub timetoke_updates: Vec<TimetokeUpdate>,
@@ -1275,21 +1280,195 @@ mod tests {
         BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
+    use crate::errors::ChainError;
+    use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
     use crate::reputation::{ReputationWeights, Tier};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
+    use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
-        ExecutionTrace,
+        ExecutionTrace, StarkCircuit,
         consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower},
+        identity::{IdentityCircuit, IdentityWitness},
         pruning::PruningWitness,
         recursive::RecursiveWitness,
         state::StateWitness,
+        string_to_field,
         uptime::UptimeWitness,
     };
+    use crate::stwo::fri::FriProver;
+    use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
-    use crate::types::ChainProof;
-    use ed25519_dalek::{Keypair, Signature, Signer};
+    use crate::types::{
+        AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+        IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
+    };
+    use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
     use rand::rngs::OsRng;
+    use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
+    fn seeded_keypair(seed: u8) -> Keypair {
+        let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
+        let public = PublicKey::from(&secret);
+        Keypair { secret, public }
+    }
+
+    fn sign_identity_vote(keypair: &Keypair, height: u64, hash: &str) -> SignedBftVote {
+        let voter = address_from_public_key(&keypair.public);
+        let vote = BftVote {
+            round: 0,
+            height,
+            block_hash: hash.to_string(),
+            voter: voter.clone(),
+            kind: BftVoteKind::PreCommit,
+        };
+        let signature = keypair.sign(&vote.message_bytes());
+        SignedBftVote {
+            vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        }
+    }
+
+    fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
+        ledger.sync_epoch_for_height(1);
+        let pk_bytes = vec![1u8; 32];
+        let wallet_pk = hex::encode(&pk_bytes);
+        let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
+        let epoch_nonce_bytes = ledger.current_epoch_nonce();
+        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0, None);
+        let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
+        let genesis = IdentityGenesis {
+            wallet_pk,
+            wallet_addr,
+            vrf_tag: vrf.proof.clone(),
+            epoch_nonce: hex::encode(epoch_nonce_bytes),
+            state_root: hex::encode(ledger.state_root()),
+            identity_root: hex::encode(ledger.identity_root()),
+            initial_reputation: 0,
+            commitment_proof: commitment_proof.clone(),
+        };
+        let parameters = StarkParameters::blueprint_default();
+        let expected_commitment = genesis.expected_commitment().expect("commitment");
+        let witness = IdentityWitness {
+            wallet_pk: genesis.wallet_pk.clone(),
+            wallet_addr: genesis.wallet_addr.clone(),
+            vrf_tag: genesis.vrf_tag.clone(),
+            epoch_nonce: genesis.epoch_nonce.clone(),
+            state_root: genesis.state_root.clone(),
+            identity_root: genesis.identity_root.clone(),
+            initial_reputation: genesis.initial_reputation,
+            commitment: expected_commitment.clone(),
+            identity_leaf: commitment_proof.leaf.clone(),
+            identity_path: commitment_proof.siblings.clone(),
+        };
+        let circuit = IdentityCircuit::new(witness.clone());
+        circuit.evaluate_constraints().expect("constraints");
+        let trace = circuit
+            .generate_trace(&parameters)
+            .expect("trace generation");
+        circuit
+            .verify_air(&parameters, &trace)
+            .expect("air verification");
+        let inputs = vec![
+            string_to_field(&parameters, &witness.wallet_addr),
+            string_to_field(&parameters, &witness.vrf_tag),
+            string_to_field(&parameters, &witness.identity_root),
+            string_to_field(&parameters, &witness.state_root),
+        ];
+        let hasher = parameters.poseidon_hasher();
+        let fri_prover = FriProver::new(&parameters);
+        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let proof = StarkProof::new(
+            ProofKind::Identity,
+            ProofPayload::Identity(witness),
+            inputs,
+            trace,
+            fri_proof,
+            &hasher,
+        );
+        IdentityDeclaration {
+            genesis,
+            proof: IdentityProof {
+                commitment: expected_commitment,
+                zk_proof: ChainProof::Stwo(proof),
+            },
+        }
+    }
+
+    fn attested_request(ledger: &Ledger, height: u64) -> AttestedIdentityRequest {
+        let declaration = sample_identity_declaration(ledger);
+        let identity_hash = hex::encode(declaration.hash().expect("hash"));
+        let voters: Vec<Keypair> = (0..IDENTITY_ATTESTATION_QUORUM)
+            .map(|idx| seeded_keypair(20 + idx as u8))
+            .collect();
+        let attested_votes = voters
+            .iter()
+            .map(|kp| sign_identity_vote(kp, height, &identity_hash))
+            .collect();
+        let gossip_confirmations = voters
+            .iter()
+            .take(IDENTITY_ATTESTATION_GOSSIP_MIN)
+            .map(|kp| address_from_public_key(&kp.public))
+            .collect();
+        AttestedIdentityRequest {
+            declaration,
+            attested_votes,
+            gossip_confirmations,
+        }
+    }
+
+    fn build_identity_block(request: AttestedIdentityRequest, height: u64) -> Block {
+        let mut operations = vec![request.declaration.hash().expect("hash")];
+        let tx_root = compute_merkle_root(&mut operations);
+        let state_root = request.declaration.genesis.state_root.clone();
+        let header = BlockHeader::new(
+            height,
+            "00".repeat(32),
+            hex::encode(tx_root),
+            state_root.clone(),
+            "11".repeat(32),
+            "22".repeat(32),
+            "33".repeat(32),
+            "44".repeat(32),
+            "55".repeat(32),
+            "0".to_string(),
+            "0".to_string(),
+            "66".repeat(32),
+            "77".repeat(32),
+            "aa".repeat(32),
+            Tier::Tl5.to_string(),
+            0,
+        );
+        let pruning_proof = PruningProof::genesis(&state_root);
+        let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
+        let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
+            .expect("recursive genesis");
+        let stark_bundle = BlockProofBundle::new(
+            Vec::new(),
+            ChainProof::Stwo(dummy_proof(ProofKind::State)),
+            ChainProof::Stwo(dummy_proof(ProofKind::Pruning)),
+            recursive_chain,
+        );
+        let mut consensus = ConsensusCertificate::genesis();
+        consensus.round = height;
+        Block::new(
+            header,
+            vec![request],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            ModuleWitnessBundle::default(),
+            Vec::new(),
+            pruning_proof,
+            recursive_proof,
+            stark_bundle,
+            Signature::from_bytes(&[0u8; 64]).expect("signature"),
+            consensus,
+            None,
+        )
+    }
     fn dummy_recursive_chain_proof(
         header: &BlockHeader,
         pruning: &PruningProof,
@@ -1325,6 +1504,35 @@ mod tests {
                 challenges: Vec::new(),
             },
         })
+    }
+
+    #[test]
+    fn block_accepts_valid_identity_attestation() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let height = 1;
+        let request = attested_request(&ledger, height);
+        let block = build_identity_block(request, height);
+        block.verify_without_stark(None).expect("block verifies");
+    }
+
+    #[test]
+    fn block_rejects_insufficient_gossip() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let height = 1;
+        let mut request = attested_request(&ledger, height);
+        request
+            .gossip_confirmations
+            .truncate(IDENTITY_ATTESTATION_GOSSIP_MIN - 1);
+        let block = build_identity_block(request, height);
+        let err = block
+            .verify_without_stark(None)
+            .expect_err("block must reject attestation");
+        match err {
+            ChainError::Transaction(message) => {
+                assert!(message.contains("gossip"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     fn dummy_proof(kind: ProofKind) -> StarkProof {
