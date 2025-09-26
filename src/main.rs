@@ -4,9 +4,10 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use parking_lot::RwLock;
+use tokio::runtime::Builder;
 use tokio::signal;
-use tokio::sync::watch;
-use tokio::task::{JoinError, JoinHandle};
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -19,6 +20,8 @@ use rpp_chain::crypto::{
 use rpp_chain::migration;
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
+use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
+use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
 use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
@@ -104,7 +107,9 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let resolved = args.resolve()?;
     let runtime_mode = Arc::new(RwLock::new(resolved.mode));
     let mut node_handle = None;
-    let mut node_task = None;
+    let mut node_task: Option<JoinHandle<Result<()>>> = None;
+    let mut p2p_handle: Option<P2pHandle> = None;
+    let mut p2p_task: Option<JoinHandle<Result<()>>> = None;
     let mut rpc_addr = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
     let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
@@ -112,13 +117,32 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path)?;
         let addr = config.rpc_listen;
+        let p2p_config = NodeRuntimeConfig::from(&config);
+        let (p2p_runtime, p2p_runtime_handle) = P2pNode::new(p2p_config)
+            .map_err(|err| anyhow!("failed to initialise p2p runtime: {err}"))?;
+        let p2p_join = tokio::task::spawn_blocking(move || -> Result<()> {
+            let runtime = Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|err| anyhow!("failed to build p2p executor: {err}"))?;
+            runtime
+                .block_on(async move { p2p_runtime.run().await })
+                .map_err(|err| anyhow!("p2p runtime error: {err}"))?;
+            Ok(())
+        });
+        p2p_handle = Some(p2p_runtime_handle.clone());
+        p2p_task = Some(p2p_join);
+
         let node = Node::new(config)?;
         let handle = node.handle();
         node_handle = Some(handle.clone());
-        node_task = Some(tokio::spawn(async move { node.start().await }));
+        node_task = Some(tokio::spawn(async move {
+            node.start().await.map_err(|err| anyhow!(err))
+        }));
         rpc_addr = Some(addr);
 
-        let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone());
+        let (orchestrator, shutdown_rx) =
+            PipelineOrchestrator::new(handle.clone(), p2p_handle.clone());
         let orchestrator = Arc::new(orchestrator);
         orchestrator.spawn(shutdown_rx.clone());
         orchestrator_instance = Some(orchestrator);
@@ -155,10 +179,15 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let context = api::ApiContext::new(
         runtime_mode.clone(),
         node_handle.clone(),
+        p2p_handle.clone(),
         wallet_instance.clone(),
         orchestrator_instance.clone(),
     );
-    let api_task = tokio::spawn(async move { api::serve(context, rpc_addr).await });
+    let api_task = tokio::spawn(async move {
+        api::serve(context, rpc_addr)
+            .await
+            .map_err(|err| anyhow!(err))
+    });
 
     if let Some(wallet) = &wallet_instance {
         info!(address = %wallet.address(), "wallet runtime initialised");
@@ -195,7 +224,14 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         }
     }
 
-    run_until_shutdown(node_task, api_task, orchestrator_instance).await
+    run_until_shutdown(
+        node_task,
+        p2p_task,
+        api_task,
+        orchestrator_instance,
+        p2p_handle,
+    )
+    .await
 }
 
 fn generate_config(path: PathBuf) -> Result<()> {
@@ -408,41 +444,65 @@ async fn validator_daemon(
 }
 
 async fn run_until_shutdown(
-    node_task: Option<JoinHandle<rpp_chain::errors::ChainResult<()>>>,
-    api_task: JoinHandle<rpp_chain::errors::ChainResult<()>>,
+    node_task: Option<JoinHandle<Result<()>>>,
+    p2p_task: Option<JoinHandle<Result<()>>>,
+    api_task: JoinHandle<Result<()>>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
+    p2p_handle: Option<P2pHandle>,
 ) -> Result<()> {
-    if let Some(node_task) = node_task {
-        let result = tokio::select! {
-            res = node_task => handle_join(res),
-            res = api_task => handle_join(res),
-            _ = signal::ctrl_c() => {
-                info!("shutdown signal received");
-                Ok(())
-            }
-        };
-        if let Some(orchestrator) = orchestrator.as_ref() {
-            orchestrator.shutdown();
-        }
-        result?;
-    } else {
-        let result = tokio::select! {
-            res = api_task => handle_join(res),
-            _ = signal::ctrl_c() => {
-                info!("shutdown signal received");
-                Ok(())
-            }
-        };
-        if let Some(orchestrator) = orchestrator.as_ref() {
-            orchestrator.shutdown();
-        }
-        result?;
+    let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<Result<()>>();
+
+    if let Some(task) = node_task {
+        spawn_task_forwarder(&completion_tx, task);
     }
+    if let Some(task) = p2p_task {
+        spawn_task_forwarder(&completion_tx, task);
+    }
+    spawn_task_forwarder(&completion_tx, api_task);
+
+    drop(completion_tx);
+
+    let mut shutdown_requested = false;
+
+    let mut outcome = tokio::select! {
+        Some(result) = completion_rx.recv() => result,
+        _ = signal::ctrl_c() => {
+            info!("shutdown signal received");
+            shutdown_requested = true;
+            Ok(())
+        }
+    };
+
+    if let Some(orchestrator) = orchestrator.as_ref() {
+        orchestrator.shutdown();
+    }
+
+    if shutdown_requested {
+        if let Some(handle) = p2p_handle {
+            handle
+                .shutdown()
+                .await
+                .map_err(|err| anyhow!("failed to shut down p2p runtime: {err}"))?;
+        }
+    }
+
+    while let Some(result) = completion_rx.recv().await {
+        if outcome.is_ok() && result.is_err() {
+            outcome = result;
+        }
+    }
+
+    outcome?;
     Ok(())
 }
 
-fn handle_join(result: Result<rpp_chain::errors::ChainResult<()>, JoinError>) -> Result<()> {
-    let inner = result?;
-    inner?;
-    Ok(())
+fn spawn_task_forwarder(tx: &mpsc::UnboundedSender<Result<()>>, task: JoinHandle<Result<()>>) {
+    let tx = tx.clone();
+    tokio::spawn(async move {
+        let result = match task.await {
+            Ok(inner) => inner,
+            Err(err) => Err(anyhow!("task join error: {err}")),
+        };
+        let _ = tx.send(result);
+    });
 }

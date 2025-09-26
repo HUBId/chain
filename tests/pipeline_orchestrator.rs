@@ -55,7 +55,7 @@ impl OrchestratorFixture {
         let keypair = load_keypair(&node_config.key_path).expect("load node key");
         let wallet = Arc::new(Wallet::new(handle.storage(), keypair));
 
-        let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone());
+        let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone(), None);
         let orchestrator = Arc::new(orchestrator);
         let shutdown_observer = shutdown_rx.clone();
         orchestrator.spawn(shutdown_rx);

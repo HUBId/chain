@@ -34,7 +34,7 @@ async fn orchestrated_pipeline_finalises_transaction() {
     let handle = node.handle();
     let node_keypair = load_keypair(&node_config.key_path).expect("load node key");
 
-    let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone());
+    let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone(), None);
     orchestrator.spawn(shutdown_rx);
     let node_task = tokio::spawn(async move {
         let _ = node.start().await;
