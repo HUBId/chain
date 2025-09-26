@@ -2002,8 +2002,8 @@ impl NodeInner {
             }
         };
         if selection.proposer != self.address {
-            self.restore_pending_operations(&identity_pending, &pending, &uptime_pending);
-            if let Some(proposal) = self.take_verified_proposal(height, &selection.proposer) {
+            let mut should_restore = true;
+            if let Some(mut proposal) = self.take_verified_proposal(height, &selection.proposer) {
                 info!(
                     proposer = %selection.proposer,
                     height,
@@ -2011,13 +2011,59 @@ impl NodeInner {
                 );
                 let block_hash = proposal.hash.clone();
                 round.set_block_hash(block_hash.clone());
+                let mut recorded_votes: Vec<SignedBftVote> = Vec::new();
+                let mut seen_vote_hashes: HashSet<String> = HashSet::new();
+                let mut record_vote = |vote: &SignedBftVote| {
+                    let vote_hash = vote.hash();
+                    if seen_vote_hashes.insert(vote_hash) {
+                        recorded_votes.push(vote.clone());
+                    }
+                };
+                for record in &proposal.consensus.pre_votes {
+                    match round.register_prevote(&record.vote) {
+                        Ok(()) => record_vote(&record.vote),
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                voter = %record.vote.vote.voter,
+                                "failed to register certificate prevote"
+                            );
+                        }
+                    }
+                }
+                for record in &proposal.consensus.pre_commits {
+                    match round.register_precommit(&record.vote) {
+                        Ok(()) => record_vote(&record.vote),
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                voter = %record.vote.vote.voter,
+                                "failed to register certificate precommit"
+                            );
+                        }
+                    }
+                }
+                for vote in &proposal.bft_votes {
+                    let result = match vote.vote.kind {
+                        BftVoteKind::PreVote => round.register_prevote(vote),
+                        BftVoteKind::PreCommit => round.register_precommit(vote),
+                    };
+                    if let Err(err) = result {
+                        warn!(?err, voter = %vote.vote.voter, "rejecting proposal vote");
+                    } else {
+                        record_vote(vote);
+                    }
+                }
                 let local_prevote =
                     self.build_local_vote(height, round.round(), &block_hash, BftVoteKind::PreVote);
-                if let Err(err) = round.register_prevote(&local_prevote) {
-                    warn!(
-                        ?err,
-                        "failed to register local prevote for external proposal"
-                    );
+                match round.register_prevote(&local_prevote) {
+                    Ok(()) => record_vote(&local_prevote),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "failed to register local prevote for external proposal"
+                        );
+                    }
                 }
                 let local_precommit = self.build_local_vote(
                     height,
@@ -2025,11 +2071,14 @@ impl NodeInner {
                     &block_hash,
                     BftVoteKind::PreCommit,
                 );
-                if let Err(err) = round.register_precommit(&local_precommit) {
-                    warn!(
-                        ?err,
-                        "failed to register local precommit for external proposal"
-                    );
+                match round.register_precommit(&local_precommit) {
+                    Ok(()) => record_vote(&local_precommit),
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "failed to register local precommit for external proposal"
+                        );
+                    }
                 }
                 let external_votes = self.drain_votes_for(height, &block_hash);
                 for vote in &external_votes {
@@ -2051,10 +2100,10 @@ impl NodeInner {
                                 );
                             }
                         }
+                    } else {
+                        record_vote(vote);
                     }
                 }
-                let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
-                recorded_votes.extend(external_votes.clone());
                 if round.commit_reached() {
                     info!(
                         height,
@@ -2069,13 +2118,16 @@ impl NodeInner {
                         participants.clone(),
                     );
                     let module_witnesses = self.ledger.drain_module_witnesses();
+                    proposal.module_witnesses = module_witnesses.clone();
+                    proposal.bft_votes = recorded_votes.clone();
                     let context = FinalizationContext::External {
                         block: proposal,
                         participants,
-                        votes: recorded_votes,
+                        votes: recorded_votes.clone(),
                         module_witnesses,
                     };
                     self.finalize_block(context)?;
+                    should_restore = false;
                 }
             } else {
                 info!(
@@ -2083,6 +2135,9 @@ impl NodeInner {
                     height,
                     "no verified proposal available for external leader"
                 );
+            }
+            if should_restore {
+                self.restore_pending_operations(&identity_pending, &pending, &uptime_pending);
             }
             return Ok(());
         }
