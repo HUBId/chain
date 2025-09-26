@@ -6,7 +6,7 @@ use serde_json;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
-use crate::state::merkle::compute_merkle_root;
+use crate::state::{StoredUtxo, merkle::compute_merkle_root};
 use crate::types::Address;
 
 /// 32-byte digest representing a commitment root.
@@ -499,6 +499,18 @@ impl AccountBalanceWitness {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionUtxoSnapshot {
+    pub outpoint: UtxoOutpoint,
+    pub utxo: StoredUtxo,
+}
+
+impl TransactionUtxoSnapshot {
+    pub fn new(outpoint: UtxoOutpoint, utxo: StoredUtxo) -> Self {
+        Self { outpoint, utxo }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionWitness {
     pub tx_id: CommitmentDigest,
     pub fee: u64,
@@ -506,10 +518,10 @@ pub struct TransactionWitness {
     pub sender_after: AccountBalanceWitness,
     pub recipient_before: Option<AccountBalanceWitness>,
     pub recipient_after: AccountBalanceWitness,
-    pub sender_utxo_before: Option<UtxoRecord>,
-    pub sender_utxo_after: Option<UtxoRecord>,
-    pub recipient_utxo_before: Option<UtxoRecord>,
-    pub recipient_utxo_after: Option<UtxoRecord>,
+    pub sender_utxo_before: Option<TransactionUtxoSnapshot>,
+    pub sender_utxo_after: Option<TransactionUtxoSnapshot>,
+    pub recipient_utxo_before: Option<TransactionUtxoSnapshot>,
+    pub recipient_utxo_after: Option<TransactionUtxoSnapshot>,
 }
 
 impl TransactionWitness {
@@ -521,10 +533,10 @@ impl TransactionWitness {
         sender_after: AccountBalanceWitness,
         recipient_before: Option<AccountBalanceWitness>,
         recipient_after: AccountBalanceWitness,
-        sender_utxo_before: Option<UtxoRecord>,
-        sender_utxo_after: Option<UtxoRecord>,
-        recipient_utxo_before: Option<UtxoRecord>,
-        recipient_utxo_after: Option<UtxoRecord>,
+        sender_utxo_before: Option<TransactionUtxoSnapshot>,
+        sender_utxo_after: Option<TransactionUtxoSnapshot>,
+        recipient_utxo_before: Option<TransactionUtxoSnapshot>,
+        recipient_utxo_after: Option<TransactionUtxoSnapshot>,
     ) -> Self {
         Self {
             tx_id,
