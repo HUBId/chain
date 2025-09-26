@@ -206,19 +206,31 @@ impl AdmissionControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handshake::HandshakePayload;
     use crate::peerstore::PeerstoreConfig;
     use proptest::prelude::*;
+    use libp2p::identity;
+
+    fn signed_handshake(
+        keypair: &identity::Keypair,
+        tier: TierLevel,
+    ) -> HandshakePayload {
+        HandshakePayload::new("peer", None, tier)
+            .signed(keypair)
+            .expect("handshake")
+    }
 
     #[test]
     fn enforces_tier_requirements() {
         let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("open"));
         let control = AdmissionControl::new(store.clone());
-        let peer = PeerId::random();
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer = PeerId::from(keypair.public());
 
         store
             .record_handshake(
                 peer,
-                &crate::handshake::HandshakePayload::new("peer", vec![], TierLevel::Tl1),
+                &signed_handshake(&keypair, TierLevel::Tl1),
             )
             .expect("handshake");
 
@@ -238,11 +250,12 @@ mod tests {
         fn tier_gating_matches_threshold(score in 0.0f64..10.0) {
             let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("open"));
             let control = AdmissionControl::new(store.clone());
-            let peer = PeerId::random();
+            let keypair = identity::Keypair::generate_ed25519();
+            let peer = PeerId::from(keypair.public());
             let tier = TierLevel::from_reputation(score);
 
             store
-                .record_handshake(peer, &crate::handshake::HandshakePayload::new("peer", vec![], tier))
+                .record_handshake(peer, &signed_handshake(&keypair, tier))
                 .expect("handshake");
             store
                 .set_reputation(peer, score)

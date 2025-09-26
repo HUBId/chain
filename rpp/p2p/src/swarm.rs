@@ -35,6 +35,8 @@ pub enum NetworkError {
     Gossipsub(String),
     #[error("persistence error: {0}")]
     Persistence(String),
+    #[error("handshake error: {0}")]
+    Handshake(String),
 }
 
 #[derive(NetworkBehaviour)]
@@ -178,6 +180,7 @@ pub struct Network {
     peerstore: Arc<Peerstore>,
     admission: AdmissionControl,
     handshake: HandshakePayload,
+    identity: Arc<NodeIdentity>,
     pending: VecDeque<NetworkEvent>,
     gossip_state: Option<Arc<GossipStateStore>>,
     replay: ReplayProtector,
@@ -212,6 +215,7 @@ impl Network {
             peerstore,
             admission,
             handshake,
+            identity,
             pending: VecDeque::new(),
             gossip_state,
             replay: ReplayProtector::with_capacity(1024),
@@ -271,6 +275,13 @@ impl Network {
         Ok(())
     }
 
+    fn sign_handshake(&self) -> Result<HandshakePayload, NetworkError> {
+        let keypair = self.identity.clone_keypair();
+        self.handshake
+            .signed(&keypair)
+            .map_err(|err| NetworkError::Handshake(format!("signing failed: {err}")))
+    }
+
     pub async fn next_event(&mut self) -> Result<NetworkEvent, NetworkError> {
         if let Some(event) = self.pending.pop_front() {
             return Ok(event);
@@ -288,7 +299,7 @@ impl Network {
                     if let Err(err) = self.peerstore.record_address(peer_id, addr.clone()) {
                         tracing::warn!(?peer_id, ?addr, ?err, "failed to record peer address");
                     }
-                    let payload = self.handshake.clone();
+                    let payload = self.sign_handshake()?;
                     self.swarm
                         .behaviour_mut()
                         .request_response
@@ -304,7 +315,9 @@ impl Network {
                         return Ok(evt);
                     }
                 }
-                SwarmEvent::Behaviour(RppBehaviourEvent::Identify(_)) => {}
+                SwarmEvent::Behaviour(RppBehaviourEvent::Identify(event)) => {
+                    self.handle_identify_event(event);
+                }
                 SwarmEvent::Behaviour(RppBehaviourEvent::Ping(_)) => {}
                 SwarmEvent::Dialing { .. } | SwarmEvent::ConnectionClosed { .. } => {}
                 other => {
@@ -328,7 +341,7 @@ impl Network {
                     request, channel, ..
                 } => {
                     self.peerstore.record_handshake(peer, &request)?;
-                    let payload = self.handshake.clone();
+                    let payload = self.sign_handshake()?;
                     self.swarm
                         .behaviour_mut()
                         .request_response
@@ -357,6 +370,21 @@ impl Network {
             request_response::Event::InboundFailure { peer, error, .. } => {
                 tracing::warn!(?peer, ?error, "inbound handshake failed");
                 Ok(None)
+            }
+        }
+    }
+
+    fn handle_identify_event(&mut self, event: identify::Event) {
+        match event {
+            identify::Event::Received { peer_id, info, .. }
+            | identify::Event::Pushed { peer_id, info, .. } => {
+                if let Err(err) = self.peerstore.record_public_key(peer_id, info.public_key) {
+                    tracing::debug!(?peer_id, ?err, "failed to record identify info");
+                }
+            }
+            identify::Event::Sent { .. } => {}
+            identify::Event::Error { peer_id, error, .. } => {
+                tracing::debug!(?peer_id, ?error, "identify exchange error");
             }
         }
     }
@@ -577,6 +605,7 @@ mod tests {
     use crate::peerstore::PeerstoreConfig;
     use crate::persistence::GossipStateStore;
     use std::time::Duration as StdDuration;
+    use libp2p::identity;
     use tempfile::tempdir;
     use tokio::time::timeout;
 
@@ -591,7 +620,7 @@ mod tests {
         Network::new(
             identity,
             peerstore,
-            HandshakePayload::new(name, vec![1, 2, 3], tier),
+            HandshakePayload::new(name, None, tier),
             None,
         )
         .expect("network")
@@ -619,7 +648,7 @@ mod tests {
         let network = Network::new(
             identity,
             peerstore,
-            HandshakePayload::new("node", vec![1, 2, 3], TierLevel::Tl3),
+            HandshakePayload::new("node", None, TierLevel::Tl3),
             Some(store.clone()),
         )
         .expect("network");
@@ -771,11 +800,15 @@ mod tests {
     async fn reputation_slash_triggers_ban() {
         let dir = tempdir().expect("tmp");
         let mut network = init_network(&dir, "node", TierLevel::Tl3).await;
-        let peer = PeerId::random();
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer = PeerId::from(keypair.public());
+        let handshake = HandshakePayload::new("peer", None, TierLevel::Tl3)
+            .signed(&keypair)
+            .expect("sign");
 
         network
             .peerstore
-            .record_handshake(peer, &HandshakePayload::new("peer", vec![], TierLevel::Tl3))
+            .record_handshake(peer, &handshake)
             .expect("handshake");
 
         network
