@@ -367,8 +367,14 @@ impl Ledger {
         }
     }
 
-    pub fn register_identity(&self, request: &AttestedIdentityRequest) -> ChainResult<()> {
-        request.declaration.verify()?;
+    pub fn register_identity(
+        &self,
+        request: &AttestedIdentityRequest,
+        expected_height: u64,
+        quorum_threshold: usize,
+        min_gossip: usize,
+    ) -> ChainResult<()> {
+        request.verify(expected_height, quorum_threshold, min_gossip)?;
         let declaration = &request.declaration;
         let genesis = &declaration.genesis;
         let key_commitment = genesis.public_key_commitment()?;
@@ -993,7 +999,7 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::evaluate_vrf;
+    use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
     use crate::crypto::address_from_public_key;
     use crate::rpp::{
         AccountBalanceWitness, ConsensusWitness, ModuleWitnessBundle, ProofModule,
@@ -1007,13 +1013,58 @@ mod tests {
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
     use crate::types::{
-        AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+        IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
         SignedTransaction, Transaction, UptimeProof,
     };
     use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use std::collections::{HashMap, HashSet};
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
+
+    fn seeded_keypair(seed: u8) -> Keypair {
+        let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
+        let public = PublicKey::from(&secret);
+        Keypair { secret, public }
+    }
+
+    fn sign_identity_vote(keypair: &Keypair, height: u64, hash: &str) -> SignedBftVote {
+        let voter = address_from_public_key(&keypair.public);
+        let vote = BftVote {
+            round: 0,
+            height,
+            block_hash: hash.to_string(),
+            voter: voter.clone(),
+            kind: BftVoteKind::PreCommit,
+        };
+        let signature = keypair.sign(&vote.message_bytes());
+        SignedBftVote {
+            vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        }
+    }
+
+    fn attested_request(declaration: IdentityDeclaration, height: u64) -> AttestedIdentityRequest {
+        let identity_hash = hex::encode(declaration.hash().expect("hash"));
+        let voters: Vec<Keypair> = (0..IDENTITY_ATTESTATION_QUORUM)
+            .map(|idx| seeded_keypair(10 + idx as u8))
+            .collect();
+        let attested_votes = voters
+            .iter()
+            .map(|kp| sign_identity_vote(kp, height, &identity_hash))
+            .collect();
+        let gossip_confirmations = voters
+            .iter()
+            .take(IDENTITY_ATTESTATION_GOSSIP_MIN)
+            .map(|kp| address_from_public_key(&kp.public))
+            .collect();
+        AttestedIdentityRequest {
+            declaration,
+            attested_votes,
+            gossip_confirmations,
+        }
+    }
 
     fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
         ledger.sync_epoch_for_height(1);
@@ -1081,20 +1132,20 @@ mod tests {
         }
     }
 
-    fn attested_request(declaration: IdentityDeclaration) -> AttestedIdentityRequest {
-        AttestedIdentityRequest {
-            declaration,
-            attested_votes: Vec::new(),
-            gossip_confirmations: Vec::new(),
-        }
-    }
-
     #[test]
     fn register_identity_creates_account() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let declaration = sample_identity_declaration(&ledger);
-        let request = attested_request(declaration.clone());
-        ledger.register_identity(&request).unwrap();
+        let height = 1;
+        let request = attested_request(declaration.clone(), height);
+        ledger
+            .register_identity(
+                &request,
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )
+            .unwrap();
 
         let account = ledger
             .get_account(&declaration.genesis.wallet_addr)
@@ -1117,18 +1168,69 @@ mod tests {
     fn duplicate_identity_rejected() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let declaration = sample_identity_declaration(&ledger);
-        let request = attested_request(declaration.clone());
-        ledger.register_identity(&request).unwrap();
+        let height = 1;
+        let request = attested_request(declaration.clone(), height);
+        ledger
+            .register_identity(
+                &request,
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )
+            .unwrap();
         let err = ledger
-            .register_identity(&attested_request(declaration))
+            .register_identity(
+                &attested_request(declaration, height),
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )
             .unwrap_err();
         assert!(matches!(err, ChainError::Transaction(_)));
     }
 
+    #[test]
+    fn register_identity_rejects_insufficient_votes() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let declaration = sample_identity_declaration(&ledger);
+        let height = 1;
+        let mut request = attested_request(declaration, height);
+        request
+            .attested_votes
+            .truncate(IDENTITY_ATTESTATION_QUORUM - 1);
+        let err = ledger
+            .register_identity(
+                &request,
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )
+            .expect_err("insufficient votes rejected");
+        assert!(matches!(err, ChainError::Transaction(_)));
+    }
+
+    #[test]
+    fn register_identity_rejects_insufficient_gossip() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let declaration = sample_identity_declaration(&ledger);
+        let height = 1;
+        let mut request = attested_request(declaration, height);
+        request
+            .gossip_confirmations
+            .truncate(IDENTITY_ATTESTATION_GOSSIP_MIN - 1);
+        let err = ledger
+            .register_identity(
+                &request,
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )
+            .expect_err("insufficient gossip rejected");
+        assert!(matches!(err, ChainError::Transaction(_)));
+    }
+
     fn deterministic_keypair() -> Keypair {
-        let secret = SecretKey::from_bytes(&[7u8; 32]).expect("secret");
-        let public = PublicKey::from(&secret);
-        Keypair { secret, public }
+        seeded_keypair(7)
     }
 
     #[test]

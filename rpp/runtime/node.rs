@@ -40,8 +40,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
-    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
+    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
+    TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -51,9 +52,6 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
-const IDENTITY_QUORUM_THRESHOLD: usize = 3;
-const IDENTITY_GOSSIP_THRESHOLD: usize = 2;
-
 #[derive(Clone, Copy)]
 struct ChainTip {
     height: u64,
@@ -439,6 +437,204 @@ impl Node {
 
     pub async fn start(self) -> ChainResult<()> {
         self.inner.clone().run().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::NodeConfig;
+    use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
+    use crate::errors::ChainError;
+    use crate::ledger::Ledger;
+    use crate::stwo::circuit::{
+        StarkCircuit,
+        identity::{IdentityCircuit, IdentityWitness},
+        string_to_field,
+    };
+    use crate::stwo::fri::FriProver;
+    use crate::stwo::params::StarkParameters;
+    use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
+    use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
+    use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
+    use stwo::core::vcs::blake2_hash::Blake2sHasher;
+    use tempfile::tempdir;
+
+    fn seeded_keypair(seed: u8) -> Keypair {
+        let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
+        let public = PublicKey::from(&secret);
+        Keypair { secret, public }
+    }
+
+    fn sign_identity_vote(keypair: &Keypair, height: u64, hash: &str) -> SignedBftVote {
+        let voter = address_from_public_key(&keypair.public);
+        let vote = BftVote {
+            round: 0,
+            height,
+            block_hash: hash.to_string(),
+            voter: voter.clone(),
+            kind: BftVoteKind::PreCommit,
+        };
+        let signature = keypair.sign(&vote.message_bytes());
+        SignedBftVote {
+            vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        }
+    }
+
+    fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
+        ledger.sync_epoch_for_height(1);
+        let pk_bytes = vec![1u8; 32];
+        let wallet_pk = hex::encode(&pk_bytes);
+        let wallet_addr = hex::encode::<[u8; 32]>(Blake2sHasher::hash(&pk_bytes).into());
+        let epoch_nonce_bytes = ledger.current_epoch_nonce();
+        let vrf = evaluate_vrf(&epoch_nonce_bytes, 0, &wallet_addr, 0, None);
+        let commitment_proof = ledger.identity_commitment_proof(&wallet_addr);
+        let genesis = IdentityGenesis {
+            wallet_pk,
+            wallet_addr,
+            vrf_tag: vrf.proof.clone(),
+            epoch_nonce: hex::encode(epoch_nonce_bytes),
+            state_root: hex::encode(ledger.state_root()),
+            identity_root: hex::encode(ledger.identity_root()),
+            initial_reputation: 0,
+            commitment_proof: commitment_proof.clone(),
+        };
+        let parameters = StarkParameters::blueprint_default();
+        let expected_commitment = genesis.expected_commitment().expect("commitment");
+        let witness = IdentityWitness {
+            wallet_pk: genesis.wallet_pk.clone(),
+            wallet_addr: genesis.wallet_addr.clone(),
+            vrf_tag: genesis.vrf_tag.clone(),
+            epoch_nonce: genesis.epoch_nonce.clone(),
+            state_root: genesis.state_root.clone(),
+            identity_root: genesis.identity_root.clone(),
+            initial_reputation: genesis.initial_reputation,
+            commitment: expected_commitment.clone(),
+            identity_leaf: commitment_proof.leaf.clone(),
+            identity_path: commitment_proof.siblings.clone(),
+        };
+        let circuit = IdentityCircuit::new(witness.clone());
+        circuit.evaluate_constraints().expect("constraints");
+        let trace = circuit
+            .generate_trace(&parameters)
+            .expect("trace generation");
+        circuit
+            .verify_air(&parameters, &trace)
+            .expect("air verification");
+        let inputs = vec![
+            string_to_field(&parameters, &witness.wallet_addr),
+            string_to_field(&parameters, &witness.vrf_tag),
+            string_to_field(&parameters, &witness.identity_root),
+            string_to_field(&parameters, &witness.state_root),
+        ];
+        let hasher = parameters.poseidon_hasher();
+        let fri_prover = FriProver::new(&parameters);
+        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let proof = StarkProof::new(
+            ProofKind::Identity,
+            ProofPayload::Identity(witness),
+            inputs,
+            trace,
+            fri_proof,
+            &hasher,
+        );
+        IdentityDeclaration {
+            genesis,
+            proof: IdentityProof {
+                commitment: expected_commitment,
+                zk_proof: ChainProof::Stwo(proof),
+            },
+        }
+    }
+
+    fn attested_request(ledger: &Ledger, height: u64) -> AttestedIdentityRequest {
+        let declaration = sample_identity_declaration(ledger);
+        let identity_hash = hex::encode(declaration.hash().expect("hash"));
+        let voters: Vec<Keypair> = (0..IDENTITY_ATTESTATION_QUORUM)
+            .map(|idx| seeded_keypair(50 + idx as u8))
+            .collect();
+        let attested_votes = voters
+            .iter()
+            .map(|kp| sign_identity_vote(kp, height, &identity_hash))
+            .collect();
+        let gossip_confirmations = voters
+            .iter()
+            .take(IDENTITY_ATTESTATION_GOSSIP_MIN)
+            .map(|kp| address_from_public_key(&kp.public))
+            .collect();
+        AttestedIdentityRequest {
+            declaration,
+            attested_votes,
+            gossip_confirmations,
+        }
+    }
+
+    fn temp_config() -> (tempfile::TempDir, NodeConfig) {
+        let dir = tempdir().expect("tempdir");
+        let base = dir.path();
+        let mut config = NodeConfig::default();
+        config.data_dir = base.join("data");
+        config.key_path = base.join("node_key.toml");
+        config.p2p_key_path = base.join("p2p_key.toml");
+        config.vrf_key_path = base.join("vrf_key.toml");
+        config.snapshot_dir = base.join("snapshots");
+        config.proof_cache_dir = base.join("proofs");
+        (dir, config)
+    }
+
+    #[test]
+    fn node_accepts_valid_identity_attestation() {
+        let (_tmp, config) = temp_config();
+        let node = Node::new(config).expect("node");
+        let height = node.inner.chain_tip.read().height + 1;
+        let request = attested_request(&node.inner.ledger, height);
+        node.inner
+            .validate_identity_attestation(&request, height)
+            .expect("valid attestation accepted");
+    }
+
+    #[test]
+    fn node_rejects_attestation_below_quorum() {
+        let (_tmp, config) = temp_config();
+        let node = Node::new(config).expect("node");
+        let height = node.inner.chain_tip.read().height + 1;
+        let mut request = attested_request(&node.inner.ledger, height);
+        request
+            .attested_votes
+            .truncate(IDENTITY_ATTESTATION_QUORUM - 1);
+        let err = node
+            .inner
+            .validate_identity_attestation(&request, height)
+            .expect_err("insufficient quorum rejected");
+        match err {
+            ChainError::Transaction(message) => {
+                assert!(message.contains("quorum"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn node_rejects_attestation_with_insufficient_gossip() {
+        let (_tmp, config) = temp_config();
+        let node = Node::new(config).expect("node");
+        let height = node.inner.chain_tip.read().height + 1;
+        let mut request = attested_request(&node.inner.ledger, height);
+        request
+            .gossip_confirmations
+            .truncate(IDENTITY_ATTESTATION_GOSSIP_MIN - 1);
+        let err = node
+            .inner
+            .validate_identity_attestation(&request, height)
+            .expect_err("insufficient gossip rejected");
+        match err {
+            ChainError::Transaction(message) => {
+                assert!(message.contains("gossip"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
 
@@ -967,7 +1163,7 @@ impl NodeInner {
                 ));
             }
         }
-        if voters.len() < IDENTITY_QUORUM_THRESHOLD {
+        if voters.len() < IDENTITY_ATTESTATION_QUORUM {
             return Err(ChainError::Transaction(
                 "insufficient quorum power for identity attestation".into(),
             ));
@@ -976,7 +1172,7 @@ impl NodeInner {
         for address in &request.gossip_confirmations {
             gossip.insert(address.clone());
         }
-        if gossip.len() < IDENTITY_GOSSIP_THRESHOLD {
+        if gossip.len() < IDENTITY_ATTESTATION_GOSSIP_MIN {
             return Err(ChainError::Transaction(
                 "insufficient gossip confirmations for identity attestation".into(),
             ));
@@ -1672,7 +1868,12 @@ impl NodeInner {
 
         let mut accepted_identities: Vec<AttestedIdentityRequest> = Vec::new();
         for request in identity_pending {
-            match self.ledger.register_identity(&request) {
+            match self.ledger.register_identity(
+                &request,
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            ) {
                 Ok(_) => accepted_identities.push(request),
                 Err(err) => {
                     warn!(?err, "dropping invalid identity declaration");
@@ -1848,7 +2049,7 @@ impl NodeInner {
         let state_witness = prover.build_state_witness(
             &pruning_proof.previous_state_root,
             &header.state_root,
-            &identity_declarations,
+            &accepted_identities,
             &transactions,
         )?;
         let state_proof = prover.prove_state_transition(state_witness)?;
@@ -1932,7 +2133,7 @@ impl NodeInner {
         proof_artifacts.extend(module_artifacts);
         let block = Block::new(
             header,
-            identity_declarations,
+            accepted_identities,
             transactions,
             uptime_proofs,
             timetoke_updates,

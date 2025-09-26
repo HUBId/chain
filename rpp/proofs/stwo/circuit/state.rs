@@ -6,7 +6,7 @@ use crate::reputation::{ReputationWeights, Tier, current_timestamp};
 use crate::state::merkle::compute_merkle_root;
 use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
 use crate::stwo::params::StarkParameters;
-use crate::types::{Account, IdentityDeclaration, SignedTransaction, Stake};
+use crate::types::{Account, AttestedIdentityRequest, SignedTransaction, Stake};
 use serde_json::to_vec;
 
 use super::{
@@ -19,7 +19,7 @@ use super::{
 pub struct StateWitness {
     pub prev_state_root: String,
     pub new_state_root: String,
-    pub identities: Vec<IdentityDeclaration>,
+    pub identities: Vec<AttestedIdentityRequest>,
     pub transactions: Vec<SignedTransaction>,
     pub accounts_before: Vec<Account>,
     pub accounts_after: Vec<Account>,
@@ -85,7 +85,8 @@ impl StateCircuit {
 
         let now = current_timestamp();
 
-        for declaration in &self.witness.identities {
+        for request in &self.witness.identities {
+            let declaration = &request.declaration;
             let genesis = &declaration.genesis;
             if state.contains_key(&genesis.wallet_addr) {
                 return Err(CircuitError::ConstraintViolation(
@@ -206,7 +207,8 @@ impl StarkCircuit for StateCircuit {
             .collect();
 
         let now = current_timestamp();
-        for declaration in &self.witness.identities {
+        for request in &self.witness.identities {
+            let declaration = &request.declaration;
             let genesis = &declaration.genesis;
             if state.contains_key(&genesis.wallet_addr) {
                 return Err(CircuitError::ConstraintViolation(

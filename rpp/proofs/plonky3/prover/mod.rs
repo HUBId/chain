@@ -7,7 +7,8 @@ use crate::errors::{ChainError, ChainResult};
 use crate::proof_system::ProofProver;
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
-    ChainProof, IdentityDeclaration, IdentityGenesis, PruningProof, SignedTransaction, UptimeClaim,
+    AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, SignedTransaction,
+    UptimeClaim,
 };
 
 use super::aggregation::RecursiveAggregator;
@@ -87,7 +88,7 @@ impl ProofProver for Plonky3Prover {
         &self,
         prev_state_root: &str,
         new_state_root: &str,
-        identities: &[IdentityDeclaration],
+        identities: &[AttestedIdentityRequest],
         transactions: &[SignedTransaction],
     ) -> ChainResult<Self::StateWitness> {
         Ok(StateWitness::new(
@@ -100,7 +101,7 @@ impl ProofProver for Plonky3Prover {
 
     fn build_pruning_witness(
         &self,
-        previous_identities: &[IdentityDeclaration],
+        previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
         removed: Vec<String>,

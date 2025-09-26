@@ -2,7 +2,7 @@ use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
-    BlockProofBundle, ChainProof, IdentityDeclaration, IdentityGenesis, PruningProof,
+    AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, PruningProof,
     SignedTransaction, UptimeClaim,
 };
 
@@ -41,14 +41,14 @@ pub trait ProofProver {
         &self,
         prev_state_root: &str,
         new_state_root: &str,
-        identities: &[IdentityDeclaration],
+        identities: &[AttestedIdentityRequest],
         transactions: &[SignedTransaction],
     ) -> ChainResult<Self::StateWitness>;
 
     /// Construct the pruning witness linking prior and current state roots.
     fn build_pruning_witness(
         &self,
-        previous_identities: &[IdentityDeclaration],
+        previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
         removed: Vec<String>,

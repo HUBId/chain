@@ -259,6 +259,9 @@ impl IdentityProof {
     }
 }
 
+pub const IDENTITY_ATTESTATION_QUORUM: usize = 3;
+pub const IDENTITY_ATTESTATION_GOSSIP_MIN: usize = 2;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AttestedIdentityRequest {
     pub declaration: IdentityDeclaration,
