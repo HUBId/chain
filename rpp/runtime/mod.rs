@@ -118,6 +118,9 @@ impl RuntimeProfile {
     }
 }
 
+pub mod node_runtime;
+pub mod telemetry;
+
 #[cfg(test)]
 mod tests {
     use super::*;

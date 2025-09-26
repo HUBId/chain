@@ -2972,6 +2972,8 @@ dependencies = [
  "hex",
  "hex-literal",
  "hyper 1.7.0",
+ "libp2p",
+ "log",
  "malachite",
  "num-bigint",
  "num-traits",

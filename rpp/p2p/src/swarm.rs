@@ -158,6 +158,9 @@ pub enum NetworkEvent {
         topic: GossipTopic,
         data: Vec<u8>,
     },
+    PeerDisconnected {
+        peer: PeerId,
+    },
     ReputationUpdated {
         peer: PeerId,
         tier: TierLevel,
@@ -319,7 +322,10 @@ impl Network {
                     self.handle_identify_event(event);
                 }
                 SwarmEvent::Behaviour(RppBehaviourEvent::Ping(_)) => {}
-                SwarmEvent::Dialing { .. } | SwarmEvent::ConnectionClosed { .. } => {}
+                SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                    return Ok(NetworkEvent::PeerDisconnected { peer: peer_id });
+                }
+                SwarmEvent::Dialing { .. } => {}
                 other => {
                     tracing::trace!(?other, "swarm event ignored");
                 }
