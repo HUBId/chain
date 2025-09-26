@@ -5,6 +5,7 @@ use anyhow::{Result, anyhow};
 use clap::{Args, Parser, Subcommand};
 use parking_lot::RwLock;
 use tokio::signal;
+use tokio::sync::watch;
 use tokio::task::{JoinError, JoinHandle};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -17,6 +18,7 @@ use rpp_chain::crypto::{
 };
 use rpp_chain::migration;
 use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
@@ -104,6 +106,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut node_handle = None;
     let mut node_task = None;
     let mut rpc_addr = None;
+    let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
+    let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path)?;
@@ -113,6 +117,12 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         node_handle = Some(handle.clone());
         node_task = Some(tokio::spawn(async move { node.start().await }));
         rpc_addr = Some(addr);
+
+        let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone());
+        let orchestrator = Arc::new(orchestrator);
+        orchestrator.spawn(shutdown_rx.clone());
+        orchestrator_instance = Some(orchestrator);
+        orchestrator_shutdown = Some(shutdown_rx);
     }
 
     let mut wallet_instance: Option<Arc<Wallet>> = None;
@@ -146,6 +156,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         runtime_mode.clone(),
         node_handle.clone(),
         wallet_instance.clone(),
+        orchestrator_instance.clone(),
     );
     let api_task = tokio::spawn(async move { api::serve(context, rpc_addr).await });
 
@@ -167,7 +178,16 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
 
     if resolved.mode == RuntimeMode::Validator {
         if let (Some(handle), Some(wallet)) = (&node_handle, &wallet_instance) {
-            spawn_validator_daemon(handle.clone(), Arc::clone(wallet), runtime_mode.clone());
+            if let Some(shutdown_rx) = orchestrator_shutdown.take() {
+                spawn_validator_daemon(
+                    handle.clone(),
+                    Arc::clone(wallet),
+                    runtime_mode.clone(),
+                    shutdown_rx,
+                );
+            } else {
+                info!("validator mode requested but orchestrator shutdown channel unavailable");
+            }
         } else {
             info!(
                 "validator mode requested without both node and wallet; background tasks not started"
@@ -175,7 +195,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         }
     }
 
-    run_until_shutdown(node_task, api_task).await
+    run_until_shutdown(node_task, api_task, orchestrator_instance).await
 }
 
 fn generate_config(path: PathBuf) -> Result<()> {
@@ -314,48 +334,75 @@ struct ResolvedRuntime {
     wallet_config: Option<PathBuf>,
 }
 
-fn spawn_validator_daemon(node: NodeHandle, wallet: Arc<Wallet>, mode: Arc<RwLock<RuntimeMode>>) {
+fn spawn_validator_daemon(
+    node: NodeHandle,
+    wallet: Arc<Wallet>,
+    mode: Arc<RwLock<RuntimeMode>>,
+    shutdown_rx: watch::Receiver<bool>,
+) {
     tokio::spawn(async move {
-        validator_daemon(node, wallet, mode).await;
+        validator_daemon(node, wallet, mode, shutdown_rx).await;
     });
 }
 
-async fn validator_daemon(node: NodeHandle, wallet: Arc<Wallet>, mode: Arc<RwLock<RuntimeMode>>) {
+async fn validator_daemon(
+    node: NodeHandle,
+    wallet: Arc<Wallet>,
+    mode: Arc<RwLock<RuntimeMode>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
     use tokio::time::{Duration, interval};
     use tracing::{info, warn};
 
     let mut ticker = interval(Duration::from_secs(3600));
     loop {
-        ticker.tick().await;
-        let current_mode = *mode.read();
-        if !current_mode.includes_node() || !current_mode.includes_wallet() {
-            continue;
-        }
-
-        match wallet.generate_uptime_proof() {
-            Ok(proof) => match node.submit_uptime_proof(proof.clone()) {
-                Ok(credited) => {
-                    info!(
-                        credited_hours = credited,
-                        "validator uptime proof submitted"
-                    );
+        tokio::select! {
+            change = shutdown_rx.changed() => {
+                match change {
+                    Ok(_) => {
+                        if *shutdown_rx.borrow() {
+                            info!("validator daemon shutting down");
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        info!("validator daemon shutdown channel closed");
+                        break;
+                    }
                 }
-                Err(err) => {
-                    warn!(?err, "failed to submit validator uptime proof");
-                }
-            },
-            Err(err) => warn!(?err, "failed to generate validator uptime proof"),
-        }
-
-        match node.telemetry_snapshot() {
-            Ok(snapshot) => {
-                info!(
-                    height = snapshot.node.height,
-                    pending_txs = snapshot.mempool.transactions.len(),
-                    "validator telemetry snapshot"
-                );
             }
-            Err(err) => warn!(?err, "failed to collect validator telemetry"),
+            _ = ticker.tick() => {
+                let current_mode = *mode.read();
+                if !current_mode.includes_node() || !current_mode.includes_wallet() {
+                    continue;
+                }
+
+                match wallet.generate_uptime_proof() {
+                    Ok(proof) => match node.submit_uptime_proof(proof.clone()) {
+                        Ok(credited) => {
+                            info!(
+                                credited_hours = credited,
+                                "validator uptime proof submitted"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(?err, "failed to submit validator uptime proof");
+                        }
+                    },
+                    Err(err) => warn!(?err, "failed to generate validator uptime proof"),
+                }
+
+                match node.telemetry_snapshot() {
+                    Ok(snapshot) => {
+                        info!(
+                            height = snapshot.node.height,
+                            pending_txs = snapshot.mempool.transactions.len(),
+                            "validator telemetry snapshot"
+                        );
+                    }
+                    Err(err) => warn!(?err, "failed to collect validator telemetry"),
+                }
+            }
         }
     }
 }
@@ -363,6 +410,7 @@ async fn validator_daemon(node: NodeHandle, wallet: Arc<Wallet>, mode: Arc<RwLoc
 async fn run_until_shutdown(
     node_task: Option<JoinHandle<rpp_chain::errors::ChainResult<()>>>,
     api_task: JoinHandle<rpp_chain::errors::ChainResult<()>>,
+    orchestrator: Option<Arc<PipelineOrchestrator>>,
 ) -> Result<()> {
     if let Some(node_task) = node_task {
         let result = tokio::select! {
@@ -373,6 +421,9 @@ async fn run_until_shutdown(
                 Ok(())
             }
         };
+        if let Some(orchestrator) = orchestrator.as_ref() {
+            orchestrator.shutdown();
+        }
         result?;
     } else {
         let result = tokio::select! {
@@ -382,6 +433,9 @@ async fn run_until_shutdown(
                 Ok(())
             }
         };
+        if let Some(orchestrator) = orchestrator.as_ref() {
+            orchestrator.shutdown();
+        }
         result?;
     }
     Ok(())

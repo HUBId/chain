@@ -17,7 +17,7 @@ use crate::wallet::workflows::TransactionWorkflow;
 const DEFAULT_QUEUE_DEPTH: usize = 64;
 
 /// Enumeration of lifecycle stages the orchestrator tracks for each submission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum PipelineStage {
     /// Proof bundle accepted from the wallet/gossip surface.
     GossipReceived,
