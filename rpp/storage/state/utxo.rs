@@ -32,6 +32,27 @@ impl AccountUtxoEntry {
 }
 
 #[derive(Clone, Debug)]
+struct StoredUtxo {
+    record: UtxoRecord,
+    spent: bool,
+}
+
+impl StoredUtxo {
+    fn new(record: UtxoRecord) -> Self {
+        Self {
+            record,
+            spent: false,
+        }
+    }
+}
+
+#[derive(Default)]
+struct UtxoStore {
+    accounts: BTreeMap<Address, AccountUtxoEntry>,
+    utxos: BTreeMap<UtxoOutpoint, StoredUtxo>,
+}
+
+#[derive(Clone, Debug)]
 pub struct BlueprintTransferPolicy {
     pub min_tier: Tier,
     pub min_score: f64,
@@ -102,7 +123,7 @@ impl Default for BlueprintTransferPolicy {
 
 #[derive(Default)]
 pub struct UtxoState {
-    entries: RwLock<BTreeMap<Address, AccountUtxoEntry>>,
+    entries: RwLock<UtxoStore>,
     policy: BlueprintTransferPolicy,
 }
 
@@ -113,7 +134,7 @@ impl UtxoState {
 
     pub fn with_policy(policy: BlueprintTransferPolicy) -> Self {
         Self {
-            entries: RwLock::new(BTreeMap::new()),
+            entries: RwLock::new(UtxoStore::default()),
             policy,
         }
     }
@@ -131,29 +152,39 @@ impl UtxoState {
     }
 
     fn upsert_from_account_with_tx(&self, account: &Account, tx_id: Option<[u8; 32]>) {
+        let mut store = self.entries.write();
         let tx_id = tx_id
             .or_else(|| {
-                self.entries
-                    .read()
+                store
+                    .accounts
                     .get(&account.address)
                     .map(|entry| entry.aggregated.outpoint.tx_id)
             })
             .unwrap_or([0u8; 32]);
         let aggregated = aggregated_record(account, tx_id);
-        let fragments = self
+        let fragments: Vec<UtxoRecord> = self
             .policy
             .fragment_values(account.balance)
             .into_iter()
             .enumerate()
             .map(|(index, value)| fragment_record(account, tx_id, index as u32, value))
             .collect();
-        let entry = AccountUtxoEntry::new(aggregated, fragments, account);
-        self.entries.write().insert(account.address.clone(), entry);
+        let entry = AccountUtxoEntry::new(aggregated, fragments.clone(), account);
+        store
+            .utxos
+            .retain(|_, stored| stored.record.owner != account.address);
+        for fragment in fragments {
+            store
+                .utxos
+                .insert(fragment.outpoint.clone(), StoredUtxo::new(fragment));
+        }
+        store.accounts.insert(account.address.clone(), entry);
     }
 
     pub fn get_for_account(&self, address: &Address) -> Option<UtxoRecord> {
         self.entries
             .read()
+            .accounts
             .get(address)
             .map(|entry| entry.aggregated.clone())
     }
@@ -161,18 +192,21 @@ impl UtxoState {
     pub fn fragments_for_account(&self, address: &Address) -> Vec<UtxoRecord> {
         self.entries
             .read()
+            .accounts
             .get(address)
             .map(|entry| entry.fragments.clone())
             .unwrap_or_default()
     }
 
     pub fn unspent_outputs_for_owner(&self, owner: &Address) -> Vec<UtxoRecord> {
-        let mut outputs = self
+        let mut outputs: Vec<UtxoRecord> = self
             .entries
             .read()
-            .get(owner)
-            .map(|entry| entry.fragments.clone())
-            .unwrap_or_default();
+            .utxos
+            .values()
+            .filter(|stored| stored.record.owner == *owner && !stored.spent)
+            .map(|stored| stored.record.clone())
+            .collect();
         outputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         outputs
     }
@@ -184,7 +218,7 @@ impl UtxoState {
         policy: &BlueprintTransferPolicy,
     ) -> ChainResult<Vec<UtxoRecord>> {
         let entries = self.entries.read();
-        let entry = entries.get(owner).ok_or_else(|| {
+        let entry = entries.accounts.get(owner).ok_or_else(|| {
             ChainError::Transaction("wallet inputs unavailable for requested owner".into())
         })?;
         if entry.tier < policy.min_tier {
@@ -202,7 +236,13 @@ impl UtxoState {
                 "owner timetoke hours below blueprint requirement".into(),
             ));
         }
-        let mut fragments = entry.fragments.clone();
+        let mut fragments: Vec<UtxoRecord> = entries
+            .utxos
+            .values()
+            .filter(|stored| stored.record.owner == *owner && !stored.spent)
+            .map(|stored| stored.record.clone())
+            .collect();
+        fragments.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
         fragments.sort_by(|a, b| match b.value.cmp(&a.value) {
             Ordering::Equal => a.outpoint.cmp(&b.outpoint),
             other => other,
@@ -235,6 +275,7 @@ impl UtxoState {
     pub fn owners_by_tier(&self, min_tier: Tier) -> Vec<UtxoRecord> {
         self.entries
             .read()
+            .accounts
             .values()
             .filter(|entry| entry.tier >= min_tier)
             .map(|entry| entry.aggregated.clone())
@@ -244,6 +285,7 @@ impl UtxoState {
     pub fn owners_by_reputation(&self, min_score: f64) -> Vec<UtxoRecord> {
         self.entries
             .read()
+            .accounts
             .values()
             .filter(|entry| entry.reputation_score >= min_score)
             .map(|entry| entry.aggregated.clone())
@@ -252,11 +294,14 @@ impl UtxoState {
 
     pub fn insert(&self, record: UtxoRecord) {
         let mut entries = self.entries.write();
-        entries.insert(
+        entries
+            .utxos
+            .insert(record.outpoint.clone(), StoredUtxo::new(record.clone()));
+        entries.accounts.insert(
             record.owner.clone(),
             AccountUtxoEntry {
                 aggregated: record.clone(),
-                fragments: vec![record.clone()],
+                fragments: vec![record],
                 tier: Tier::Tl0,
                 reputation_score: 0.0,
                 timetoke_hours: 0,
@@ -266,24 +311,31 @@ impl UtxoState {
 
     pub fn remove(&self, outpoint: &UtxoOutpoint) -> Option<UtxoRecord> {
         let mut entries = self.entries.write();
-        let owner = entries
-            .iter()
-            .find(|(_, entry)| entry.aggregated.outpoint == *outpoint)
-            .map(|(owner, _)| owner.clone());
-        owner.and_then(|address| entries.remove(&address).map(|entry| entry.aggregated))
+        let removed = entries.utxos.remove(outpoint)?;
+        let owner = removed.record.owner.clone();
+        if let Some(entry) = entries.accounts.get_mut(&owner) {
+            entry
+                .fragments
+                .retain(|fragment| fragment.outpoint != *outpoint);
+            if entry.aggregated.outpoint == *outpoint || entry.fragments.is_empty() {
+                entries.accounts.remove(&owner);
+            }
+        }
+        Some(removed.record)
     }
 
     pub fn get(&self, outpoint: &UtxoOutpoint) -> Option<UtxoRecord> {
         self.entries
             .read()
-            .values()
-            .find(|entry| entry.aggregated.outpoint == *outpoint)
-            .map(|entry| entry.aggregated.clone())
+            .utxos
+            .get(outpoint)
+            .map(|stored| stored.record.clone())
     }
 
     pub fn snapshot(&self) -> Vec<UtxoRecord> {
         self.entries
             .read()
+            .accounts
             .values()
             .map(|entry| entry.aggregated.clone())
             .collect()
@@ -293,6 +345,7 @@ impl UtxoState {
         let mut leaves: Vec<[u8; 32]> = self
             .entries
             .read()
+            .accounts
             .values()
             .map(|entry| {
                 let payload = serde_json::to_vec(&entry.aggregated).expect("serialize utxo record");
