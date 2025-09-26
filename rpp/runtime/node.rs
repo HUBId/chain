@@ -31,7 +31,9 @@ use crate::ledger::{
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_system::{ProofProver, ProofVerifierRegistry};
 use crate::reputation::Tier;
-use crate::rpp::{ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord};
+use crate::rpp::{
+    GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
+};
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -235,6 +237,41 @@ struct NodeInner {
     telemetry_last_height: RwLock<Option<u64>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
+}
+
+enum FinalizationContext {
+    Local(LocalFinalizationContext),
+    #[allow(dead_code)]
+    External(ExternalFinalizationContext),
+}
+
+struct LocalFinalizationContext {
+    round: ConsensusRound,
+    block_hash: String,
+    header: BlockHeader,
+    parent_height: u64,
+    commitments: GlobalStateCommitments,
+    accepted_identities: Vec<AttestedIdentityRequest>,
+    transactions: Vec<SignedTransaction>,
+    transaction_proofs: Vec<ChainProof>,
+    identity_proofs: Vec<ChainProof>,
+    uptime_proofs: Vec<UptimeProof>,
+    timetoke_updates: Vec<TimetokeUpdate>,
+    reputation_updates: Vec<ReputationUpdate>,
+    recorded_votes: Vec<SignedBftVote>,
+}
+
+#[allow(dead_code)]
+struct ExternalFinalizationContext {
+    round: ConsensusRound,
+    block: Block,
+    previous_block: Option<Block>,
+    archived_votes: Vec<SignedBftVote>,
+}
+
+enum FinalizationOutcome {
+    Sealed { block: Block, tip_height: u64 },
+    AwaitingQuorum,
 }
 
 #[derive(Clone)]
@@ -2044,7 +2081,65 @@ impl NodeInner {
         let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
         recorded_votes.extend(external_votes.clone());
 
-        let previous_block = self.storage.read_block(tip_snapshot.height)?;
+        let finalization_ctx = FinalizationContext::Local(LocalFinalizationContext {
+            round,
+            block_hash: block_hash_hex,
+            header,
+            parent_height: tip_snapshot.height,
+            commitments,
+            accepted_identities,
+            transactions,
+            transaction_proofs,
+            identity_proofs,
+            uptime_proofs,
+            timetoke_updates,
+            reputation_updates,
+            recorded_votes,
+        });
+
+        match self.finalize_block(finalization_ctx)? {
+            FinalizationOutcome::Sealed { block, tip_height } => {
+                let _ = (block, tip_height);
+            }
+            FinalizationOutcome::AwaitingQuorum => {}
+        }
+        Ok(())
+    }
+
+    fn finalize_block(&self, ctx: FinalizationContext) -> ChainResult<FinalizationOutcome> {
+        match ctx {
+            FinalizationContext::Local(ctx) => self.finalize_local_block(ctx),
+            FinalizationContext::External(ctx) => self.finalize_external_block(ctx),
+        }
+    }
+
+    fn finalize_local_block(
+        &self,
+        ctx: LocalFinalizationContext,
+    ) -> ChainResult<FinalizationOutcome> {
+        let LocalFinalizationContext {
+            round,
+            block_hash,
+            header,
+            parent_height,
+            commitments,
+            accepted_identities,
+            transactions,
+            transaction_proofs,
+            identity_proofs,
+            uptime_proofs,
+            timetoke_updates,
+            reputation_updates,
+            recorded_votes,
+        } = ctx;
+
+        if !round.commit_reached() {
+            warn!("quorum not reached for commit");
+            return Ok(FinalizationOutcome::AwaitingQuorum);
+        }
+
+        let height = header.height;
+        let previous_block = self.storage.read_block(parent_height)?;
         let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
         let prover = WalletProver::new(&self.storage);
         let state_witness = prover.build_state_witness(
@@ -2075,11 +2170,6 @@ impl NodeInner {
             .as_ref()
             .map(|block| &block.stark.recursive_proof);
 
-        let signature = sign_message(&self.keypair, &header.canonical_bytes());
-        if !round.commit_reached() {
-            warn!("quorum not reached for commit");
-            return Ok(());
-        }
         let participants = round.commit_participants();
         self.ledger
             .record_consensus_witness(height, round.round(), participants);
@@ -2087,7 +2177,7 @@ impl NodeInner {
         let module_artifacts = self.ledger.stage_module_witnesses(&module_witnesses)?;
         let consensus_certificate = round.certificate();
         let consensus_witness =
-            prover.build_consensus_witness(&block_hash_hex, &consensus_certificate)?;
+            prover.build_consensus_witness(&block_hash, &consensus_certificate)?;
         let consensus_proof = prover.prove_consensus(consensus_witness)?;
         let uptime_chain_proofs: Vec<ChainProof> = uptime_proofs
             .iter()
@@ -2128,6 +2218,7 @@ impl NodeInner {
                 RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)?
             }
         };
+        let signature = sign_message(&self.keypair, &header.canonical_bytes());
         let state_proof_artifact = stark_bundle.state_proof.clone();
         let mut proof_artifacts =
             Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;
@@ -2183,7 +2274,20 @@ impl NodeInner {
             .write()
             .prune_below(block.header.height.saturating_add(1));
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
-        Ok(())
+
+        Ok(FinalizationOutcome::Sealed {
+            tip_height: block.header.height,
+            block,
+        })
+    }
+
+    fn finalize_external_block(
+        &self,
+        ctx: ExternalFinalizationContext,
+    ) -> ChainResult<FinalizationOutcome> {
+        let _ = ctx;
+        warn!("external block finalization is not yet implemented");
+        Ok(FinalizationOutcome::AwaitingQuorum)
     }
 
     fn persist_accounts(&self, block_height: u64) -> ChainResult<StateTransitionReceipt> {
