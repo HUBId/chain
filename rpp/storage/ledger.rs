@@ -5,6 +5,7 @@ use parking_lot::RwLock;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
+use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
 use crate::proof_system::ProofVerifierRegistry;
@@ -22,6 +23,7 @@ use crate::types::{
     WalletBindingChange,
 };
 use crate::vrf::{VrfProof, VrfSelectionRecord};
+use ed25519_dalek::PublicKey;
 use hex;
 use serde::{Deserialize, Serialize};
 
@@ -191,6 +193,16 @@ impl Ledger {
 
     pub fn accounts_snapshot(&self) -> Vec<Account> {
         self.global_state.accounts_snapshot()
+    }
+
+    pub fn validator_public_key(&self, address: &str) -> ChainResult<PublicKey> {
+        let account = self.get_account(address).ok_or_else(|| {
+            ChainError::Crypto("validator account missing for signature verification".into())
+        })?;
+        let key_hex = account.identity.wallet_public_key.ok_or_else(|| {
+            ChainError::Crypto("validator wallet public key not registered".into())
+        })?;
+        public_key_from_hex(&key_hex)
     }
 
     pub fn timetoke_snapshot(&self) -> Vec<TimetokeRecord> {
