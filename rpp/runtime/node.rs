@@ -492,11 +492,17 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NodeConfig;
-    use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
-    use crate::crypto::{generate_vrf_keypair, vrf_public_key_to_hex};
+    use crate::config::{GenesisAccount, NodeConfig};
+    use crate::consensus::{
+        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
+    };
+    use crate::crypto::{
+        address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
+        vrf_public_key_from_hex, vrf_public_key_to_hex,
+    };
     use crate::errors::ChainError;
     use crate::ledger::Ledger;
+    use crate::reputation::Tier;
     use crate::stwo::circuit::{
         StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
@@ -506,7 +512,9 @@ mod tests {
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
     use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
+    use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
+    use malachite::Natural;
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
     use tempfile::tempdir;
 
@@ -694,6 +702,206 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn finalizes_external_block_from_remote_proposer() {
+        let (_tmp_a, mut config_a) = temp_config();
+        let (_tmp_b, mut config_b) = temp_config();
+
+        config_a.rollout.feature_gates.pruning = false;
+        config_b.rollout.feature_gates.pruning = false;
+        config_a.rollout.feature_gates.consensus_enforcement = false;
+        config_b.rollout.feature_gates.consensus_enforcement = false;
+
+        let key_a = load_or_generate_keypair(&config_a.key_path).expect("generate key a");
+        let key_b = load_or_generate_keypair(&config_b.key_path).expect("generate key b");
+        let address_a = address_from_public_key(&key_a.public);
+        let address_b = address_from_public_key(&key_b.public);
+
+        let genesis_accounts = vec![
+            GenesisAccount {
+                address: address_a.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            },
+            GenesisAccount {
+                address: address_b.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            },
+        ];
+        config_a.genesis.accounts = genesis_accounts.clone();
+        config_b.genesis.accounts = genesis_accounts;
+
+        let node_a = Node::new(config_a).expect("node a");
+        let node_b = Node::new(config_b).expect("node b");
+
+        let height = node_a.inner.chain_tip.read().height + 1;
+        let request = attested_request(&node_a.inner.ledger, height);
+        node_a
+            .inner
+            .submit_identity(request)
+            .expect("submit identity");
+        node_a.inner.produce_block().expect("produce block");
+
+        let block = node_a
+            .inner
+            .storage
+            .read_block(height)
+            .expect("read block")
+            .expect("block exists");
+        assert_eq!(block.header.proposer, address_a);
+
+        let previous_hash_bytes =
+            hex::decode(&block.header.previous_hash).expect("decode prev hash");
+        let mut seed = [0u8; 32];
+        if !previous_hash_bytes.is_empty() {
+            seed.copy_from_slice(&previous_hash_bytes);
+        }
+
+        let accounts_snapshot = node_b.inner.ledger.accounts_snapshot();
+        let (validators, observers) = classify_participants(&accounts_snapshot);
+        let proposer_candidate = validators
+            .iter()
+            .find(|candidate| candidate.address == block.header.proposer)
+            .expect("proposer candidate")
+            .clone();
+
+        node_b
+            .inner
+            .ledger
+            .sync_epoch_for_height(block.header.height);
+        let epoch = node_b.inner.ledger.current_epoch();
+
+        let tier = match block.header.leader_tier.as_str() {
+            "New" => Tier::Tl0,
+            "Validated" => Tier::Tl1,
+            "Available" => Tier::Tl2,
+            "Committed" => Tier::Tl3,
+            "Reliable" => Tier::Tl4,
+            "Trusted" => Tier::Tl5,
+            other => panic!("unexpected leader tier: {other}"),
+        };
+        let tier_seed = vrf::derive_tier_seed(
+            &proposer_candidate.address,
+            proposer_candidate.timetoke_hours,
+        );
+        let input = PoseidonVrfInput::new(seed, epoch, tier_seed);
+        let randomness = Natural::from_str(&block.header.randomness).expect("parse randomness");
+        let proof = VrfProof {
+            randomness,
+            preoutput: block.header.vrf_preoutput.clone(),
+            proof: block.header.vrf_proof.clone(),
+        };
+        let public_key = if block.header.vrf_public_key.trim().is_empty() {
+            None
+        } else {
+            Some(vrf_public_key_from_hex(&block.header.vrf_public_key).expect("vrf key"))
+        };
+        let mut pool = VrfSubmissionPool::new();
+        pool.insert(VrfSubmission {
+            address: block.header.proposer.clone(),
+            public_key,
+            input,
+            proof,
+            tier,
+            timetoke_hours: block.header.leader_timetoke,
+        });
+
+        let mut round = ConsensusRound::new(
+            block.header.height,
+            block.consensus.round,
+            seed,
+            node_b.inner.config.target_validator_count,
+            validators,
+            observers,
+            &pool,
+        );
+        round.set_block_hash(block.hash.clone());
+        for record in &block.consensus.pre_votes {
+            round
+                .register_prevote(&record.vote)
+                .expect("register prevote");
+        }
+        for record in &block.consensus.pre_commits {
+            round
+                .register_precommit(&record.vote)
+                .expect("register precommit");
+        }
+        assert!(round.commit_reached());
+
+        let previous_block = if block.header.height == 0 {
+            None
+        } else {
+            node_b
+                .inner
+                .storage
+                .read_block(block.header.height - 1)
+                .expect("read previous block")
+        };
+
+        let outcome = node_b
+            .inner
+            .finalize_block(FinalizationContext::External(ExternalFinalizationContext {
+                round,
+                block: block.clone(),
+                previous_block,
+                archived_votes: block.bft_votes.clone(),
+            }))
+            .expect("finalize external");
+
+        let sealed = match outcome {
+            FinalizationOutcome::Sealed { block: sealed, .. } => sealed,
+            FinalizationOutcome::AwaitingQuorum => panic!("expected sealed block"),
+        };
+        assert_eq!(sealed.hash, block.hash);
+
+        let tip_metadata = node_b
+            .inner
+            .storage
+            .tip()
+            .expect("tip metadata")
+            .expect("metadata");
+        assert_eq!(tip_metadata.height, block.header.height);
+        assert_eq!(tip_metadata.new_state_root, block.header.state_root);
+
+        let stored_record = node_b
+            .inner
+            .storage
+            .read_block_record(block.header.height)
+            .expect("read record")
+            .expect("stored block");
+        let stored_pruning = &stored_record.envelope.pruning_proof;
+        assert_eq!(
+            stored_pruning.pruned_height,
+            block.pruning_proof.pruned_height
+        );
+        assert_eq!(
+            stored_pruning.previous_block_hash,
+            block.pruning_proof.previous_block_hash
+        );
+        assert_eq!(
+            stored_pruning.resulting_state_root,
+            block.pruning_proof.resulting_state_root
+        );
+        let stored_consensus = &stored_record.envelope.consensus;
+        assert_eq!(stored_consensus.round, block.consensus.round);
+        assert_eq!(stored_consensus.total_power, block.consensus.total_power);
+        assert_eq!(
+            stored_consensus.pre_votes.len(),
+            block.consensus.pre_votes.len()
+        );
+        assert_eq!(
+            stored_consensus.pre_commits.len(),
+            block.consensus.pre_commits.len()
+        );
+
+        assert_eq!(
+            hex::encode(node_b.inner.ledger.state_root()),
+            block.header.state_root
+        );
+        assert_eq!(node_b.inner.chain_tip.read().height, block.header.height);
     }
 }
 
@@ -1897,7 +2105,27 @@ impl NodeInner {
                 }
                 if round.commit_reached() {
                     info!(height, proposer = %selection.proposer, "commit quorum observed externally");
-                    self.evidence_pool.write().prune_below(height);
+                    let previous_block = if height == 0 {
+                        None
+                    } else {
+                        self.storage.read_block(height - 1)?
+                    };
+                    let mut archived_votes = vec![local_prevote.clone(), local_precommit.clone()];
+                    archived_votes.extend(external_votes.clone());
+                    let finalization_ctx =
+                        FinalizationContext::External(ExternalFinalizationContext {
+                            round,
+                            block: proposal,
+                            previous_block,
+                            archived_votes,
+                        });
+                    match self.finalize_block(finalization_ctx)? {
+                        FinalizationOutcome::Sealed { block, tip_height } => {
+                            let _ = (block, tip_height);
+                        }
+                        FinalizationOutcome::AwaitingQuorum => {}
+                    }
+                    return Ok(());
                 }
             } else {
                 info!(
@@ -2295,9 +2523,195 @@ impl NodeInner {
         &self,
         ctx: ExternalFinalizationContext,
     ) -> ChainResult<FinalizationOutcome> {
-        let _ = ctx;
-        warn!("external block finalization is not yet implemented");
-        Ok(FinalizationOutcome::AwaitingQuorum)
+        let ExternalFinalizationContext {
+            round,
+            mut block,
+            mut previous_block,
+            archived_votes,
+        } = ctx;
+
+        if !round.commit_reached() {
+            warn!("quorum not reached for commit");
+            return Ok(FinalizationOutcome::AwaitingQuorum);
+        }
+
+        let height = block.header.height;
+        if previous_block.is_none() && height > 0 {
+            previous_block = self.storage.read_block(height - 1)?;
+        }
+
+        let proposer_key = self.ledger.validator_public_key(&block.header.proposer)?;
+
+        let mut recorded_votes = block.bft_votes.clone();
+        let mut vote_index = HashSet::new();
+        for vote in &recorded_votes {
+            vote_index.insert((
+                vote.vote.voter.clone(),
+                vote.vote.kind,
+                vote.vote.round,
+                vote.vote.height,
+                vote.vote.block_hash.clone(),
+            ));
+        }
+        for vote in archived_votes {
+            let key = (
+                vote.vote.voter.clone(),
+                vote.vote.kind,
+                vote.vote.round,
+                vote.vote.height,
+                vote.vote.block_hash.clone(),
+            );
+            if vote_index.insert(key) {
+                recorded_votes.push(vote);
+            }
+        }
+        block.bft_votes = recorded_votes;
+
+        block.verify(previous_block.as_ref(), &proposer_key)?;
+
+        self.ledger.sync_epoch_for_height(height);
+
+        let participants = round.commit_participants();
+        self.ledger
+            .record_consensus_witness(height, round.round(), participants);
+
+        for request in &block.identities {
+            self.ledger.register_identity(
+                request,
+                height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )?;
+        }
+
+        let mut total_fees: u64 = 0;
+        for tx in &block.transactions {
+            total_fees = total_fees.saturating_add(self.ledger.apply_transaction(tx)?);
+        }
+
+        for proof in &block.uptime_proofs {
+            if let Err(err) = self.ledger.apply_uptime_proof(proof) {
+                match err {
+                    ChainError::Transaction(message)
+                        if message == "uptime proof does not extend the recorded online window" =>
+                    {
+                        debug!(
+                            identity = %proof.wallet_address,
+                            "skipping previously applied uptime proof"
+                        );
+                    }
+                    other => return Err(other),
+                }
+            }
+        }
+
+        let block_reward = BASE_BLOCK_REWARD.saturating_add(total_fees);
+        self.ledger.distribute_consensus_rewards(
+            &block.header.proposer,
+            round.validators(),
+            block_reward,
+            LEADER_BONUS_PERCENT,
+        )?;
+
+        let produced_witnesses = self.ledger.drain_module_witnesses();
+        let produced_bytes =
+            bincode::serialize(&produced_witnesses).map_err(ChainError::Serialization)?;
+        let block_bytes =
+            bincode::serialize(&block.module_witnesses).map_err(ChainError::Serialization)?;
+        if produced_bytes != block_bytes {
+            return Err(ChainError::Config(
+                "module witness bundle mismatch for external block".into(),
+            ));
+        }
+        let module_artifacts = self.ledger.stage_module_witnesses(&produced_witnesses)?;
+        for artifact in module_artifacts {
+            if !block.proof_artifacts.iter().any(|existing| {
+                existing.module == artifact.module
+                    && existing.commitment == artifact.commitment
+                    && existing.proof == artifact.proof
+            }) {
+                return Err(ChainError::Config(
+                    "external block missing module proof artifact".into(),
+                ));
+            }
+        }
+
+        let mut touched_identities: HashSet<Address> = HashSet::new();
+        for tx in &block.transactions {
+            touched_identities.insert(tx.payload.from.clone());
+            touched_identities.insert(tx.payload.to.clone());
+        }
+        for identity in &block.identities {
+            touched_identities.insert(identity.declaration.genesis.wallet_addr.clone());
+        }
+        for update in &block.timetoke_updates {
+            touched_identities.insert(update.identity.clone());
+        }
+        let mut expected_reputation = Vec::new();
+        for identity in touched_identities {
+            if let Some(audit) = self.ledger.reputation_audit(&identity)? {
+                expected_reputation.push(ReputationUpdate::from(audit));
+            }
+        }
+        expected_reputation.sort_by(|a, b| a.identity.cmp(&b.identity));
+        let expected_bytes =
+            bincode::serialize(&expected_reputation).map_err(ChainError::Serialization)?;
+        let provided_bytes =
+            bincode::serialize(&block.reputation_updates).map_err(ChainError::Serialization)?;
+        if expected_bytes != provided_bytes {
+            return Err(ChainError::Config(
+                "external block reputation updates mismatch ledger state".into(),
+            ));
+        }
+
+        let state_proof_artifact = block.stark.state_proof.clone();
+        self.ledger.sync_epoch_for_height(height.saturating_add(1));
+        let receipt = self.persist_accounts(height)?;
+        let encoded_new_root = hex::encode(receipt.new_root);
+        if encoded_new_root != block.header.state_root {
+            return Err(ChainError::Config(
+                "firewood state root does not match block header".into(),
+            ));
+        }
+
+        let lifecycle = StateLifecycle::new(&self.storage);
+        lifecycle.verify_transition(
+            &state_proof_artifact,
+            &receipt.previous_root,
+            &receipt.new_root,
+        )?;
+
+        let mut metadata = BlockMetadata::from(&block);
+        metadata.previous_state_root = hex::encode(receipt.previous_root);
+        metadata.new_state_root = encoded_new_root;
+        metadata.pruning_root = receipt
+            .pruning_proof
+            .as_ref()
+            .map(|proof| hex::encode(proof.root));
+        self.storage.store_block(&block, &metadata)?;
+        if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
+            let _ = self.storage.prune_block_payload(block.header.height - 1)?;
+        }
+
+        let mut tip = self.chain_tip.write();
+        tip.height = block.header.height;
+        tip.last_hash = block.block_hash();
+        info!(
+            height = tip.height,
+            proposer = %block.header.proposer,
+            "sealed external block"
+        );
+        drop(tip);
+
+        self.evidence_pool
+            .write()
+            .prune_below(block.header.height.saturating_add(1));
+        self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
+
+        Ok(FinalizationOutcome::Sealed {
+            tip_height: block.header.height,
+            block,
+        })
     }
 
     fn persist_accounts(&self, block_height: u64) -> ChainResult<StateTransitionReceipt> {
