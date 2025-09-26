@@ -15,6 +15,10 @@ pub struct P2pConfig {
     pub bootstrap_peers: Vec<String>,
     pub heartbeat_interval_ms: u64,
     pub gossip_enabled: bool,
+    #[serde(default = "default_peerstore_path")]
+    pub peerstore_path: PathBuf,
+    #[serde(default = "default_gossip_state_path")]
+    pub gossip_path: Option<PathBuf>,
 }
 
 impl Default for P2pConfig {
@@ -24,6 +28,8 @@ impl Default for P2pConfig {
             bootstrap_peers: Vec::new(),
             heartbeat_interval_ms: 5_000,
             gossip_enabled: true,
+            peerstore_path: default_peerstore_path(),
+            gossip_path: default_gossip_state_path(),
         }
     }
 }
@@ -82,6 +88,18 @@ fn default_p2p_key_path() -> PathBuf {
     PathBuf::from("./keys/p2p.toml")
 }
 
+fn default_peerstore_path() -> PathBuf {
+    PathBuf::from("./data/p2p/peerstore.json")
+}
+
+fn default_gossip_path() -> PathBuf {
+    PathBuf::from("./data/p2p/gossip.json")
+}
+
+fn default_gossip_state_path() -> Option<PathBuf> {
+    Some(default_gossip_path())
+}
+
 fn default_max_proof_size_bytes() -> usize {
     4 * 1024 * 1024
 }
@@ -115,12 +133,23 @@ impl NodeConfig {
         }
         fs::create_dir_all(&self.snapshot_dir)?;
         fs::create_dir_all(&self.proof_cache_dir)?;
+        if let Some(parent) = self.p2p.peerstore_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Some(path) = self.p2p.gossip_path.as_ref() {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+        }
         Ok(())
     }
 }
 
 impl Default for NodeConfig {
     fn default() -> Self {
+        let mut p2p = P2pConfig::default();
+        p2p.peerstore_path = default_peerstore_path();
+        p2p.gossip_path = default_gossip_state_path();
         Self {
             data_dir: PathBuf::from("./data"),
             key_path: PathBuf::from("./keys/node.toml"),
@@ -137,7 +166,7 @@ impl Default for NodeConfig {
             target_validator_count: default_target_validator_count(),
             max_proof_size_bytes: default_max_proof_size_bytes(),
             rollout: RolloutConfig::default(),
-            p2p: P2pConfig::default(),
+            p2p,
             genesis: GenesisConfig::default(),
         }
     }

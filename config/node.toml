@@ -15,6 +15,14 @@ epoch_length = 1440
 target_validator_count = 100
 max_proof_size_bytes = 4194304
 
+[p2p]
+listen_addr = "/ip4/0.0.0.0/tcp/7600"
+bootstrap_peers = []
+heartbeat_interval_ms = 5000
+gossip_enabled = true
+peerstore_path = "./data/p2p/peerstore.json"
+gossip_path = "./data/p2p/gossip.json"
+
 [rollout]
 release_channel = "development"
 
