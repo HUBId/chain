@@ -141,7 +141,7 @@ impl From<ReputationAudit> for ReputationUpdate {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProofSystem {
     Stwo,
     Plonky3,
@@ -294,10 +294,10 @@ impl PruningProof {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecursiveProof {
     pub system: ProofSystem,
-    pub proof_commitment: String,
-    pub previous_proof_commitment: String,
-    pub previous_chain_commitment: String,
-    pub chain_commitment: String,
+    pub commitment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_commitment: Option<String>,
+    pub proof: ChainProof,
 }
 
 impl RecursiveProof {
@@ -305,44 +305,103 @@ impl RecursiveProof {
         hex::encode::<[u8; 32]>(Blake2sHasher::hash(RECURSIVE_ANCHOR_SEED).into())
     }
 
-    fn fold_chain(previous_chain: &str, header: &BlockHeader, pruning: &PruningProof) -> String {
-        let mut data = Vec::new();
-        data.extend_from_slice(previous_chain.as_bytes());
-        data.extend_from_slice(&header.hash());
-        data.extend_from_slice(pruning.witness_commitment.as_bytes());
-        data.extend_from_slice(header.state_root.as_bytes());
-        hex::encode::<[u8; 32]>(Blake2sHasher::hash(&data).into())
+    pub fn genesis(
+        header: &BlockHeader,
+        pruning: &PruningProof,
+        proof: &ChainProof,
+    ) -> ChainResult<Self> {
+        Self::from_proof(header, pruning, None, proof)
     }
 
-    fn fold_proof(chain_commitment: &str, previous_proof: &str) -> String {
-        let mut data = Vec::new();
-        data.extend_from_slice(chain_commitment.as_bytes());
-        data.extend_from_slice(previous_proof.as_bytes());
-        hex::encode::<[u8; 32]>(Blake2sHasher::hash(&data).into())
-    }
-
-    pub fn genesis(header: &BlockHeader, pruning: &PruningProof) -> Self {
-        let anchor = Self::anchor();
-        let chain_commitment = Self::fold_chain(&anchor, header, pruning);
-        let proof_commitment = Self::fold_proof(&chain_commitment, &anchor);
-        Self {
-            system: ProofSystem::default(),
-            proof_commitment,
-            previous_proof_commitment: anchor.clone(),
-            previous_chain_commitment: anchor,
-            chain_commitment,
+    pub fn from_parts(
+        system: ProofSystem,
+        commitment: String,
+        previous_commitment: Option<String>,
+        proof: ChainProof,
+    ) -> ChainResult<Self> {
+        #[cfg(not(feature = "backend-plonky3"))]
+        if matches!(system, ProofSystem::Plonky3) {
+            return Err(ChainError::Crypto(
+                "Plonky3 backend not enabled for recursive proof verification".into(),
+            ));
         }
+
+        let derived = match &proof {
+            ChainProof::Stwo(_) => ProofSystem::Stwo,
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+        };
+
+        if derived != system {
+            return Err(ChainError::Crypto(
+                "recursive proof system does not match embedded artifact".into(),
+            ));
+        }
+
+        let expected = Self::extract_commitment(&proof)?;
+        if expected != commitment {
+            return Err(ChainError::Crypto(
+                "recursive proof commitment does not match embedded proof".into(),
+            ));
+        }
+
+        Ok(Self {
+            system,
+            commitment,
+            previous_commitment,
+            proof,
+        })
     }
 
-    pub fn extend(previous: &RecursiveProof, header: &BlockHeader, pruning: &PruningProof) -> Self {
-        let chain_commitment = Self::fold_chain(&previous.chain_commitment, header, pruning);
-        let proof_commitment = Self::fold_proof(&chain_commitment, &previous.proof_commitment);
-        Self {
-            system: previous.system.clone(),
-            proof_commitment,
-            previous_proof_commitment: previous.proof_commitment.clone(),
-            previous_chain_commitment: previous.chain_commitment.clone(),
-            chain_commitment,
+    pub fn extend(
+        previous: &RecursiveProof,
+        header: &BlockHeader,
+        pruning: &PruningProof,
+        proof: &ChainProof,
+    ) -> ChainResult<Self> {
+        Self::from_proof(header, pruning, Some(previous), proof)
+    }
+
+    fn from_proof(
+        header: &BlockHeader,
+        pruning: &PruningProof,
+        previous: Option<&RecursiveProof>,
+        proof: &ChainProof,
+    ) -> ChainResult<Self> {
+        let commitment = Self::extract_commitment(proof)?;
+        let previous_commitment = previous.map(|proof| proof.commitment.clone());
+        let previous_commitment = if header.height == 0 {
+            Some(Self::anchor())
+        } else {
+            previous_commitment
+        };
+        let system = match proof {
+            ChainProof::Stwo(_) => ProofSystem::Stwo,
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+        };
+        let instance = Self {
+            system,
+            commitment,
+            previous_commitment,
+            proof: proof.clone(),
+        };
+        instance.verify(header, pruning, previous)?;
+        Ok(instance)
+    }
+
+    fn extract_commitment(proof: &ChainProof) -> ChainResult<String> {
+        match proof {
+            ChainProof::Stwo(inner) => Ok(inner.commitment.clone()),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(value) => value
+                .get("payload")
+                .and_then(|payload| payload.get("commitment"))
+                .and_then(|commitment| commitment.as_str())
+                .map(|commitment| commitment.to_string())
+                .ok_or_else(|| {
+                    ChainError::Crypto("plonky3 recursive proof payload missing commitment".into())
+                }),
         }
     }
 
@@ -352,47 +411,193 @@ impl RecursiveProof {
         pruning: &PruningProof,
         previous: Option<&RecursiveProof>,
     ) -> ChainResult<()> {
-        if header.height == 0 {
-            let anchor = Self::anchor();
-            if self.previous_chain_commitment != anchor || self.previous_proof_commitment != anchor
-            {
-                return Err(ChainError::Crypto("recursive proof anchor mismatch".into()));
-            }
-        }
+        self.ensure_system_matches()?;
+        self.verify_previous_link(previous)?;
+        self.verify_commitment_matches_proof()?;
+        match self.system {
+            ProofSystem::Stwo => self.verify_stwo(header, pruning, previous),
+            ProofSystem::Plonky3 => self.verify_plonky3(previous),
+        }?;
+        Ok(())
+    }
 
-        if let Some(previous_proof) = previous {
-            if self.previous_chain_commitment != previous_proof.chain_commitment {
-                return Err(ChainError::Crypto(
-                    "recursive proof does not link to previous chain commitment".into(),
-                ));
-            }
-            if self.previous_proof_commitment != previous_proof.proof_commitment {
-                return Err(ChainError::Crypto(
-                    "recursive proof does not link to previous proof commitment".into(),
-                ));
-            }
-        }
-
-        let base_chain = previous
-            .map(|proof| proof.chain_commitment.as_str())
-            .unwrap_or(&self.previous_chain_commitment);
-        let expected_chain = Self::fold_chain(base_chain, header, pruning);
-        if expected_chain != self.chain_commitment {
+    fn ensure_system_matches(&self) -> ChainResult<()> {
+        let derived = match &self.proof {
+            ChainProof::Stwo(_) => ProofSystem::Stwo,
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+        };
+        if derived != self.system {
             return Err(ChainError::Crypto(
-                "recursive proof chain commitment mismatch".into(),
-            ));
-        }
-
-        let proof_seed = previous
-            .map(|proof| proof.proof_commitment.as_str())
-            .unwrap_or(&self.previous_proof_commitment);
-        let expected_proof = Self::fold_proof(&self.chain_commitment, proof_seed);
-        if expected_proof != self.proof_commitment {
-            return Err(ChainError::Crypto(
-                "recursive proof commitment mismatch".into(),
+                "recursive proof system does not match embedded artifact".into(),
             ));
         }
         Ok(())
+    }
+
+    fn verify_previous_link(&self, previous: Option<&RecursiveProof>) -> ChainResult<()> {
+        match previous {
+            Some(prev) => {
+                let expected = &prev.commitment;
+                match self.previous_commitment.as_deref() {
+                    Some(actual) if actual == expected => Ok(()),
+                    Some(_) => Err(ChainError::Crypto(
+                        "recursive proof previous commitment mismatch".into(),
+                    )),
+                    None => Err(ChainError::Crypto(
+                        "recursive proof missing previous commitment".into(),
+                    )),
+                }
+            }
+            None => match self.previous_commitment.as_deref() {
+                Some(previous) => {
+                    if previous != Self::anchor() {
+                        Err(ChainError::Crypto("recursive proof anchor mismatch".into()))
+                    } else {
+                        Ok(())
+                    }
+                }
+                None => Err(ChainError::Crypto(
+                    "recursive proof missing anchor commitment".into(),
+                )),
+            },
+        }
+    }
+
+    fn verify_commitment_matches_proof(&self) -> ChainResult<()> {
+        let expected = Self::extract_commitment(&self.proof)?;
+        if expected != self.commitment {
+            return Err(ChainError::Crypto(
+                "recursive proof commitment does not match embedded proof".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "backend-stwo")]
+    fn verify_stwo(
+        &self,
+        header: &BlockHeader,
+        pruning: &PruningProof,
+        previous: Option<&RecursiveProof>,
+    ) -> ChainResult<()> {
+        #[cfg(not(test))]
+        {
+            use crate::proof_system::ProofVerifier;
+            use crate::stwo::verifier::NodeVerifier;
+            let verifier = NodeVerifier::new();
+            verifier.verify_recursive(&self.proof)?;
+        }
+
+        let stark = self.proof.expect_stwo()?;
+        let witness = match &stark.payload {
+            ProofPayload::Recursive(witness) => witness,
+            _ => {
+                return Err(ChainError::Crypto(
+                    "recursive proof missing recursive witness payload".into(),
+                ));
+            }
+        };
+
+        if witness.aggregated_commitment != self.commitment {
+            return Err(ChainError::Crypto(
+                "recursive witness aggregated commitment mismatch".into(),
+            ));
+        }
+
+        match (previous, witness.previous_commitment.as_deref()) {
+            (Some(prev), Some(actual)) if actual == prev.commitment => {}
+            (Some(_), Some(_)) => {
+                return Err(ChainError::Crypto(
+                    "recursive witness previous commitment mismatch".into(),
+                ));
+            }
+            (Some(_), None) => {
+                return Err(ChainError::Crypto(
+                    "recursive witness missing previous commitment".into(),
+                ));
+            }
+            (None, Some(actual)) => {
+                if actual != Self::anchor() {
+                    return Err(ChainError::Crypto(
+                        "recursive witness anchor mismatch".into(),
+                    ));
+                }
+            }
+            (None, None) => {
+                return Err(ChainError::Crypto(
+                    "recursive witness missing anchor".into(),
+                ));
+            }
+        }
+
+        if witness.pruning_commitment != pruning.witness_commitment {
+            return Err(ChainError::Crypto(
+                "recursive witness pruning commitment mismatch".into(),
+            ));
+        }
+
+        let expected_state = [
+            (
+                &witness.global_state_root,
+                &header.state_root,
+                "global state root",
+            ),
+            (&witness.utxo_root, &header.utxo_root, "utxo root"),
+            (
+                &witness.reputation_root,
+                &header.reputation_root,
+                "reputation root",
+            ),
+            (
+                &witness.timetoke_root,
+                &header.timetoke_root,
+                "timetoke root",
+            ),
+            (&witness.zsi_root, &header.zsi_root, "zsi root"),
+            (&witness.proof_root, &header.proof_root, "proof root"),
+        ];
+        for (actual, expected, label) in expected_state {
+            if actual != expected {
+                return Err(ChainError::Crypto(format!(
+                    "recursive witness {label} mismatch"
+                )));
+            }
+        }
+
+        if witness.block_height != header.height {
+            return Err(ChainError::Crypto(
+                "recursive witness block height mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "backend-stwo"))]
+    fn verify_stwo(
+        &self,
+        _header: &BlockHeader,
+        _pruning: &PruningProof,
+        _previous: Option<&RecursiveProof>,
+    ) -> ChainResult<()> {
+        Err(ChainError::Crypto(
+            "STWO backend not enabled for recursive proof verification".into(),
+        ))
+    }
+
+    #[cfg(feature = "backend-plonky3")]
+    fn verify_plonky3(&self, _previous: Option<&RecursiveProof>) -> ChainResult<()> {
+        use crate::plonky3::verifier::Plonky3Verifier;
+
+        let verifier = Plonky3Verifier::default();
+        verifier.verify_recursive(&self.proof)
+    }
+
+    #[cfg(not(feature = "backend-plonky3"))]
+    fn verify_plonky3(&self, _previous: Option<&RecursiveProof>) -> ChainResult<()> {
+        Err(ChainError::Crypto(
+            "Plonky3 backend not enabled for recursive proof verification".into(),
+        ))
     }
 }
 
@@ -1055,23 +1260,11 @@ impl StoredBlock {
     }
 
     pub fn aggregated_commitment(&self) -> ChainResult<String> {
-        let proof = self.envelope.stark.recursive_proof.expect_stwo()?;
-        match &proof.payload {
-            ProofPayload::Recursive(witness) => Ok(witness.aggregated_commitment.clone()),
-            _ => Err(ChainError::Config(
-                "stored recursive proof missing recursive witness payload".into(),
-            )),
-        }
+        Ok(self.envelope.recursive_proof.commitment.clone())
     }
 
     pub fn previous_recursive_commitment(&self) -> ChainResult<Option<String>> {
-        let proof = self.envelope.stark.recursive_proof.expect_stwo()?;
-        match &proof.payload {
-            ProofPayload::Recursive(witness) => Ok(witness.previous_commitment.clone()),
-            _ => Err(ChainError::Config(
-                "stored recursive proof missing recursive witness payload".into(),
-            )),
-        }
+        Ok(self.envelope.recursive_proof.previous_commitment.clone())
     }
 }
 
@@ -1097,6 +1290,43 @@ mod tests {
     use ed25519_dalek::{Keypair, Signature, Signer};
     use rand::rngs::OsRng;
 
+    fn dummy_recursive_chain_proof(
+        header: &BlockHeader,
+        pruning: &PruningProof,
+        previous: Option<String>,
+    ) -> ChainProof {
+        let aggregated_commitment = "77".repeat(32);
+        ChainProof::Stwo(StarkProof {
+            kind: ProofKind::Recursive,
+            commitment: aggregated_commitment.clone(),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::Recursive(RecursiveWitness {
+                previous_commitment: previous.or_else(|| Some(RecursiveProof::anchor())),
+                aggregated_commitment,
+                identity_commitments: Vec::new(),
+                tx_commitments: Vec::new(),
+                uptime_commitments: Vec::new(),
+                consensus_commitments: Vec::new(),
+                state_commitment: header.state_root.clone(),
+                global_state_root: header.state_root.clone(),
+                utxo_root: header.utxo_root.clone(),
+                reputation_root: header.reputation_root.clone(),
+                timetoke_root: header.timetoke_root.clone(),
+                zsi_root: header.zsi_root.clone(),
+                proof_root: header.proof_root.clone(),
+                pruning_commitment: pruning.witness_commitment.clone(),
+                block_height: header.height,
+            }),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            fri_proof: FriProof {
+                commitments: Vec::new(),
+                challenges: Vec::new(),
+            },
+        })
+    }
+
     fn dummy_proof(kind: ProofKind) -> StarkProof {
         let payload = match kind {
             ProofKind::State => ProofPayload::State(StateWitness {
@@ -1116,7 +1346,7 @@ mod tests {
                 removed_transactions: vec!["55".repeat(32)],
             }),
             ProofKind::Recursive => ProofPayload::Recursive(RecursiveWitness {
-                previous_commitment: Some("66".repeat(32)),
+                previous_commitment: Some(RecursiveProof::anchor()),
                 aggregated_commitment: "77".repeat(32),
                 identity_commitments: vec!["88".repeat(32)],
                 tx_commitments: vec!["99".repeat(32)],
@@ -1213,12 +1443,15 @@ mod tests {
             0,
         );
         let prev_pruning = PruningProof::genesis(&state_root);
-        let prev_recursive = RecursiveProof::genesis(&prev_header, &prev_pruning);
+        let prev_recursive_chain = dummy_recursive_chain_proof(&prev_header, &prev_pruning, None);
+        let prev_recursive =
+            RecursiveProof::genesis(&prev_header, &prev_pruning, &prev_recursive_chain)
+                .expect("recursive genesis");
         let prev_stark = BlockProofBundle::new(
             Vec::new(),
             ChainProof::Stwo(dummy_proof(ProofKind::State)),
             ChainProof::Stwo(dummy_proof(ProofKind::Pruning)),
-            ChainProof::Stwo(dummy_proof(ProofKind::Recursive)),
+            prev_recursive_chain.clone(),
         );
         let prev_block = Block::new(
             prev_header,
@@ -1306,13 +1539,23 @@ mod tests {
         };
 
         let pruning_proof = PruningProof::from_previous(Some(&prev_block), &header);
-        let recursive_proof =
-            RecursiveProof::extend(&prev_block.recursive_proof, &header, &pruning_proof);
+        let recursive_chain = dummy_recursive_chain_proof(
+            &header,
+            &pruning_proof,
+            Some(prev_block.recursive_proof.commitment.clone()),
+        );
+        let recursive_proof = RecursiveProof::extend(
+            &prev_block.recursive_proof,
+            &header,
+            &pruning_proof,
+            &recursive_chain,
+        )
+        .expect("recursive extend");
         let stark_bundle = BlockProofBundle::new(
             Vec::new(),
             ChainProof::Stwo(dummy_proof(ProofKind::State)),
             ChainProof::Stwo(dummy_proof(ProofKind::Pruning)),
-            ChainProof::Stwo(dummy_proof(ProofKind::Recursive)),
+            recursive_chain,
         );
         let mut witnesses = ModuleWitnessBundle::default();
         witnesses.record_consensus(ConsensusWitness::new(1, 1, vec![address.clone()]));
@@ -1383,12 +1626,14 @@ mod tests {
             0,
         );
         let pruning_proof = PruningProof::genesis(&state_root);
-        let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof);
+        let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
+        let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
+            .expect("recursive genesis");
         let stark_bundle = BlockProofBundle::new(
             Vec::new(),
             ChainProof::Stwo(dummy_proof(ProofKind::State)),
             ChainProof::Stwo(dummy_proof(ProofKind::Pruning)),
-            ChainProof::Stwo(dummy_proof(ProofKind::Recursive)),
+            recursive_chain.clone(),
         );
         let signature = Signature::from_bytes(&[0u8; 64]).expect("signature bytes");
         let consensus = ConsensusCertificate::genesis();
@@ -1458,10 +1703,10 @@ pub struct BlockMetadata {
     #[serde(default)]
     pub pruning_root: Option<String>,
     pub pruning_commitment: String,
-    pub proof_commitment: String,
-    pub previous_proof_commitment: String,
-    pub chain_commitment: String,
-    pub previous_chain_commitment: String,
+    pub recursive_commitment: String,
+    #[serde(default)]
+    pub recursive_previous_commitment: Option<String>,
+    pub recursive_system: ProofSystem,
     #[serde(default = "recursive_anchor_default")]
     pub recursive_anchor: String,
 }
@@ -1476,10 +1721,9 @@ impl BlockMetadata {
             new_state_root: block.header.state_root.clone(),
             pruning_root: None,
             pruning_commitment: block.pruning_proof.witness_commitment.clone(),
-            proof_commitment: block.recursive_proof.proof_commitment.clone(),
-            previous_proof_commitment: block.recursive_proof.previous_proof_commitment.clone(),
-            chain_commitment: block.recursive_proof.chain_commitment.clone(),
-            previous_chain_commitment: block.recursive_proof.previous_chain_commitment.clone(),
+            recursive_commitment: block.recursive_proof.commitment.clone(),
+            recursive_previous_commitment: block.recursive_proof.previous_commitment.clone(),
+            recursive_system: block.recursive_proof.system.clone(),
             recursive_anchor: RecursiveProof::anchor(),
         }
     }

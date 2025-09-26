@@ -8,8 +8,8 @@ use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
 use crate::storage::{STORAGE_SCHEMA_VERSION, Storage};
 use crate::types::{
-    Block, BlockHeader, BlockProofBundle, IdentityDeclaration, PruningProof, RecursiveProof,
-    ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
+    Block, BlockHeader, BlockProofBundle, IdentityDeclaration, ProofSystem, PruningProof,
+    RecursiveProof, ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
 };
 
 /// Outcome of executing storage migrations.
@@ -87,7 +87,7 @@ fn migrate_block_records(kv: &mut FirewoodKv, dry_run: bool) -> ChainResult<(usi
         }
 
         let legacy: LegacyBlockV0 = bincode::deserialize(&value)?;
-        let block = legacy.into_block();
+        let block = legacy.into_block()?;
         if !dry_run {
             let stored = StoredBlock::from_block(&block);
             let bytes = bincode::serialize(&stored)?;
@@ -118,6 +118,15 @@ struct LegacyBlockHeaderV0 {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+struct LegacyRecursiveProof {
+    pub system: ProofSystem,
+    pub proof_commitment: String,
+    pub previous_proof_commitment: String,
+    pub previous_chain_commitment: String,
+    pub chain_commitment: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct LegacyBlockV0 {
     pub header: LegacyBlockHeaderV0,
     pub identities: Vec<IdentityDeclaration>,
@@ -133,7 +142,7 @@ struct LegacyBlockV0 {
     pub module_witnesses: ModuleWitnessBundle,
     pub proof_artifacts: Vec<ProofArtifact>,
     pub pruning_proof: PruningProof,
-    pub recursive_proof: RecursiveProof,
+    pub recursive_proof: LegacyRecursiveProof,
     pub stark: BlockProofBundle,
     pub signature: String,
     pub consensus: ConsensusCertificate,
@@ -143,7 +152,7 @@ struct LegacyBlockV0 {
 }
 
 impl LegacyBlockV0 {
-    fn into_block(self) -> Block {
+    fn into_block(self) -> ChainResult<Block> {
         let LegacyBlockV0 {
             header,
             identities,
@@ -183,7 +192,15 @@ impl LegacyBlockV0 {
             leader_timetoke: 0,
         };
 
-        Block {
+        let previous_commitment = Some(recursive_proof.previous_chain_commitment.clone());
+        let recursive = RecursiveProof::from_parts(
+            recursive_proof.system,
+            recursive_proof.chain_commitment,
+            previous_commitment,
+            stark.recursive_proof.clone(),
+        )?;
+
+        Ok(Block {
             header,
             identities,
             transactions,
@@ -194,14 +211,14 @@ impl LegacyBlockV0 {
             module_witnesses,
             proof_artifacts,
             pruning_proof,
-            recursive_proof,
+            recursive_proof: recursive,
             consensus_proof: None,
             stark,
             signature,
             consensus,
             hash,
             pruned,
-        }
+        })
     }
 }
 
@@ -236,6 +253,43 @@ mod tests {
     use ed25519_dalek::Signer;
     use tempfile::tempdir;
 
+    fn dummy_recursive_chain_proof(
+        header: &BlockHeader,
+        pruning: &PruningProof,
+        previous: Option<String>,
+    ) -> ChainProof {
+        let aggregated_commitment = "77".repeat(32);
+        ChainProof::Stwo(StarkProof {
+            kind: ProofKind::Recursive,
+            commitment: aggregated_commitment.clone(),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::Recursive(RecursiveWitness {
+                previous_commitment: previous.or_else(|| Some(RecursiveProof::anchor())),
+                aggregated_commitment,
+                identity_commitments: Vec::new(),
+                tx_commitments: Vec::new(),
+                uptime_commitments: Vec::new(),
+                consensus_commitments: Vec::new(),
+                state_commitment: header.state_root.clone(),
+                global_state_root: header.state_root.clone(),
+                utxo_root: header.utxo_root.clone(),
+                reputation_root: header.reputation_root.clone(),
+                timetoke_root: header.timetoke_root.clone(),
+                zsi_root: header.zsi_root.clone(),
+                proof_root: header.proof_root.clone(),
+                pruning_commitment: pruning.witness_commitment.clone(),
+                block_height: header.height,
+            }),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            fri_proof: FriProof {
+                commitments: Vec::new(),
+                challenges: Vec::new(),
+            },
+        })
+    }
+
     fn dummy_proof(kind: ProofKind) -> StarkProof {
         let payload = match kind {
             ProofKind::State => ProofPayload::State(StateWitness {
@@ -255,7 +309,7 @@ mod tests {
                 removed_transactions: vec!["55".repeat(32)],
             }),
             ProofKind::Recursive => ProofPayload::Recursive(RecursiveWitness {
-                previous_commitment: Some("66".repeat(32)),
+                previous_commitment: Some(RecursiveProof::anchor()),
                 aggregated_commitment: "77".repeat(32),
                 identity_commitments: vec!["88".repeat(32)],
                 tx_commitments: vec!["99".repeat(32)],
@@ -339,28 +393,45 @@ mod tests {
             proposer: "validator-1".into(),
         };
         let pruning = PruningProof::genesis(&header.state_root);
-        let recursive = RecursiveProof::genesis(
-            &BlockHeader {
-                height: header.height,
-                previous_hash: header.previous_hash.clone(),
-                tx_root: header.tx_root.clone(),
-                state_root: header.state_root.clone(),
-                utxo_root: header.state_root.clone(),
-                reputation_root: header.state_root.clone(),
-                timetoke_root: header.state_root.clone(),
-                zsi_root: header.state_root.clone(),
-                proof_root: header.state_root.clone(),
-                total_stake: header.total_stake.clone(),
-                randomness: header.randomness.clone(),
-                vrf_public_key: String::new(),
-                vrf_proof: header.vrf_proof.clone(),
-                timestamp: header.timestamp,
-                proposer: header.proposer.clone(),
-                leader_tier: "Committed".into(),
-                leader_timetoke: 0,
-            },
-            &pruning,
-        );
+        let converted_header = BlockHeader {
+            height: header.height,
+            previous_hash: header.previous_hash.clone(),
+            tx_root: header.tx_root.clone(),
+            state_root: header.state_root.clone(),
+            utxo_root: header.state_root.clone(),
+            reputation_root: header.state_root.clone(),
+            timetoke_root: header.state_root.clone(),
+            zsi_root: header.state_root.clone(),
+            proof_root: header.state_root.clone(),
+            total_stake: header.total_stake.clone(),
+            randomness: header.randomness.clone(),
+            vrf_public_key: String::new(),
+            vrf_proof: header.vrf_proof.clone(),
+            timestamp: header.timestamp,
+            proposer: header.proposer.clone(),
+            leader_tier: "Committed".into(),
+            leader_timetoke: 0,
+        };
+        let recursive_chain_proof = dummy_recursive_chain_proof(&converted_header, &pruning, None);
+        let previous_commitment = RecursiveProof::anchor();
+        let proof_commitment = match &recursive_chain_proof {
+            ChainProof::Stwo(proof) => proof.commitment.clone(),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(value) => value
+                .get("payload")
+                .and_then(|payload| payload.get("commitment"))
+                .and_then(|commitment| commitment.as_str())
+                .map(|commitment| commitment.to_string())
+                .expect("plonky3 recursive payload commitment"),
+        };
+        let chain_commitment = proof_commitment.clone();
+        let legacy_recursive = LegacyRecursiveProof {
+            system: ProofSystem::Stwo,
+            proof_commitment: proof_commitment.clone(),
+            previous_proof_commitment: proof_commitment,
+            previous_chain_commitment: previous_commitment.clone(),
+            chain_commitment,
+        };
         let signature = keypair.sign(b"legacy");
         LegacyBlockV0 {
             header,
@@ -378,12 +449,12 @@ mod tests {
                 verification_key: None,
             }],
             pruning_proof: pruning,
-            recursive_proof: recursive,
+            recursive_proof: legacy_recursive,
             stark: BlockProofBundle {
                 transaction_proofs: vec![ChainProof::Stwo(dummy_proof(ProofKind::Transaction))],
                 state_proof: ChainProof::Stwo(dummy_proof(ProofKind::State)),
                 pruning_proof: ChainProof::Stwo(dummy_proof(ProofKind::Pruning)),
-                recursive_proof: ChainProof::Stwo(dummy_proof(ProofKind::Recursive)),
+                recursive_proof: recursive_chain_proof,
             },
             signature: signature_to_hex(&signature),
             consensus: ConsensusCertificate::genesis(),
