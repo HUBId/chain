@@ -372,6 +372,7 @@ pub fn verify_vrf(
 
 #[derive(Clone, Debug)]
 pub struct ConsensusRound {
+    height: u64,
     round: u64,
     seed: [u8; 32],
     validators: Vec<ValidatorProfile>,
@@ -395,6 +396,7 @@ pub struct ConsensusRound {
 
 impl ConsensusRound {
     pub fn new(
+        height: u64,
         round: u64,
         seed: [u8; 32],
         target_validator_count: usize,
@@ -464,6 +466,7 @@ impl ConsensusRound {
         validators.sort_by(|a, b| a.address.cmp(&b.address));
         let quorum = quorum_threshold(&total_power);
         Self {
+            height,
             round,
             seed,
             validators,
@@ -488,6 +491,10 @@ impl ConsensusRound {
 
     pub fn round(&self) -> u64 {
         self.round
+    }
+
+    pub fn height(&self) -> u64 {
+        self.height
     }
 
     pub fn seed(&self) -> &[u8; 32] {
@@ -583,7 +590,7 @@ impl ConsensusRound {
                 "vote references incorrect consensus round".into(),
             ));
         }
-        if vote.vote.height != self.round {
+        if vote.vote.height != self.height {
             return Err(ChainError::Crypto(
                 "vote references incorrect block height".into(),
             ));
@@ -681,8 +688,10 @@ mod tests {
     use ed25519_dalek::{Keypair, Signer};
     use rand::rngs::OsRng;
 
-    fn validator_round_with_target(
+    fn validator_round_with_params(
         target_validator_count: usize,
+        height: u64,
+        round_number: u64,
     ) -> (ConsensusRound, Keypair, Address, String) {
         let mut rng = OsRng;
         let keypair = Keypair::generate(&mut rng);
@@ -707,7 +716,8 @@ mod tests {
         };
         vrf::submit_vrf(&mut pool, submission);
         let mut round = ConsensusRound::new(
-            1,
+            height,
+            round_number,
             [0u8; 32],
             target_validator_count,
             validators,
@@ -719,6 +729,12 @@ mod tests {
         (round, keypair, address, block_hash)
     }
 
+    fn validator_round_with_target(
+        target_validator_count: usize,
+    ) -> (ConsensusRound, Keypair, Address, String) {
+        validator_round_with_params(target_validator_count, 1, 0)
+    }
+
     fn validator_round() -> (ConsensusRound, Keypair, Address, String) {
         validator_round_with_target(100)
     }
@@ -728,7 +744,7 @@ mod tests {
         let (mut round, keypair, address, block_hash) = validator_round();
         let prevote = BftVote {
             round: round.round(),
-            height: round.round(),
+            height: round.height(),
             block_hash: block_hash.clone(),
             voter: address.clone(),
             kind: BftVoteKind::PreVote,
@@ -760,11 +776,37 @@ mod tests {
     }
 
     #[test]
+    fn consensus_round_accepts_higher_round_votes() {
+        let height = 5;
+        let round_number = 3;
+        let (mut round, keypair, address, block_hash) =
+            validator_round_with_params(100, height, round_number);
+        assert_eq!(round.round(), round_number);
+        assert_eq!(round.height(), height);
+
+        let vote = BftVote {
+            round: round_number,
+            height,
+            block_hash: block_hash.clone(),
+            voter: address.clone(),
+            kind: BftVoteKind::PreVote,
+        };
+        let signature = keypair.sign(&vote.message_bytes());
+        let signed_vote = SignedBftVote {
+            vote,
+            public_key: hex::encode(keypair.public.to_bytes()),
+            signature: hex::encode(signature.to_bytes()),
+        };
+
+        round.register_prevote(&signed_vote).unwrap();
+    }
+
+    #[test]
     fn consensus_round_rejects_mismatched_vote() {
         let (mut round, keypair, address, block_hash) = validator_round();
         let mismatched_vote = BftVote {
             round: round.round(),
-            height: round.round(),
+            height: round.height(),
             block_hash: block_hash,
             voter: address.clone(),
             kind: BftVoteKind::PreVote,
