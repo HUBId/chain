@@ -16,7 +16,7 @@ use serde_json;
 use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
 use crate::consensus::{
     BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
-    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
+    EvidenceRecord, SignedBftVote, ValidatorCandidate, ValidatorProfile, aggregate_total_stake,
     classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
@@ -251,6 +251,21 @@ struct RecordedUptimeProof {
 #[derive(Clone)]
 struct VerifiedProposal {
     block: Block,
+}
+
+enum FinalizationContext {
+    Local {
+        block: Block,
+        participants: Vec<Address>,
+        votes: Vec<SignedBftVote>,
+        module_witnesses: ModuleWitnessBundle,
+    },
+    External {
+        block: Block,
+        participants: Vec<Address>,
+        votes: Vec<SignedBftVote>,
+        module_witnesses: ModuleWitnessBundle,
+    },
 }
 
 impl Node {
@@ -1623,6 +1638,194 @@ impl NodeInner {
         matched
     }
 
+    fn restore_pending_operations(
+        &self,
+        identities: &[AttestedIdentityRequest],
+        transactions: &[TransactionProofBundle],
+        uptimes: &[RecordedUptimeProof],
+    ) {
+        {
+            let mut mempool = self.identity_mempool.write();
+            for request in identities.iter().rev() {
+                mempool.push_front(request.clone());
+            }
+        }
+        {
+            let mut mempool = self.mempool.write();
+            for bundle in transactions.iter().rev() {
+                mempool.push_front(bundle.clone());
+            }
+        }
+        {
+            let mut mempool = self.uptime_mempool.write();
+            for proof in uptimes.iter().rev() {
+                mempool.push_front(proof.clone());
+            }
+        }
+    }
+
+    fn clear_finalized_operations(&self, block: &Block, votes: &[SignedBftVote]) {
+        let transaction_hashes: HashSet<String> = block
+            .transactions
+            .iter()
+            .map(|tx| hex::encode(tx.hash()))
+            .collect();
+        {
+            let mut mempool = self.mempool.write();
+            mempool.retain(|bundle| !transaction_hashes.contains(&bundle.hash()));
+        }
+
+        let identity_commitments: HashSet<String> = block
+            .identities
+            .iter()
+            .map(|request| request.declaration.commitment().to_string())
+            .collect();
+        {
+            let mut mempool = self.identity_mempool.write();
+            mempool.retain(|request| {
+                let commitment = request.declaration.commitment().to_string();
+                !identity_commitments.contains(&commitment)
+            });
+        }
+
+        let uptime_keys: HashSet<(String, u64, u64)> = block
+            .uptime_proofs
+            .iter()
+            .map(|proof| {
+                (
+                    proof.wallet_address.clone(),
+                    proof.window_start,
+                    proof.window_end,
+                )
+            })
+            .collect();
+        {
+            let mut mempool = self.uptime_mempool.write();
+            mempool.retain(|record| {
+                let key = (
+                    record.proof.wallet_address.clone(),
+                    record.proof.window_start,
+                    record.proof.window_end,
+                );
+                !uptime_keys.contains(&key)
+            });
+        }
+
+        let vote_hashes: HashSet<String> = votes.iter().map(|vote| vote.hash()).collect();
+        if !vote_hashes.is_empty() {
+            let mut mempool = self.vote_mempool.write();
+            mempool.retain(|vote| !vote_hashes.contains(&vote.hash()));
+        }
+    }
+
+    fn apply_external_block_operations(
+        &self,
+        block: &Block,
+        validators: &[ValidatorProfile],
+    ) -> ChainResult<()> {
+        for request in &block.identities {
+            self.ledger.register_identity(
+                request,
+                block.header.height,
+                IDENTITY_ATTESTATION_QUORUM,
+                IDENTITY_ATTESTATION_GOSSIP_MIN,
+            )?;
+        }
+
+        let mut total_fees: u64 = 0;
+        for transaction in &block.transactions {
+            total_fees = total_fees.saturating_add(transaction.payload.fee);
+            self.ledger.apply_transaction(transaction)?;
+        }
+
+        for proof in &block.uptime_proofs {
+            let _ = self.ledger.apply_uptime_proof(proof)?;
+        }
+
+        let block_reward = BASE_BLOCK_REWARD.saturating_add(total_fees);
+        self.ledger.distribute_consensus_rewards(
+            &block.header.proposer,
+            validators,
+            block_reward,
+            LEADER_BONUS_PERCENT,
+        )?;
+
+        Ok(())
+    }
+
+    fn finalize_block(&self, context: FinalizationContext) -> ChainResult<()> {
+        let (block, _participants, votes, module_witnesses) = match context {
+            FinalizationContext::Local {
+                block,
+                participants,
+                votes,
+                module_witnesses,
+            }
+            | FinalizationContext::External {
+                block,
+                participants,
+                votes,
+                module_witnesses,
+            } => (block, participants, votes, module_witnesses),
+        };
+
+        let height = block.header.height;
+        let previous_block = if height == 0 {
+            None
+        } else {
+            self.storage.read_block(height - 1)?
+        };
+        let proposer_key = self.ledger.validator_public_key(&block.header.proposer)?;
+        block.verify(previous_block.as_ref(), &proposer_key)?;
+
+        self.ledger.stage_module_witnesses(&module_witnesses)?;
+
+        self.ledger.sync_epoch_for_height(height.saturating_add(1));
+        let receipt = self.persist_accounts(height)?;
+        let encoded_new_root = hex::encode(receipt.new_root);
+        if encoded_new_root != block.header.state_root {
+            return Err(ChainError::Config(
+                "firewood state root does not match block header".into(),
+            ));
+        }
+
+        let lifecycle = StateLifecycle::new(&self.storage);
+        lifecycle.verify_transition(
+            &block.stark.state_proof,
+            &receipt.previous_root,
+            &receipt.new_root,
+        )?;
+
+        let mut metadata = BlockMetadata::from(&block);
+        metadata.previous_state_root = hex::encode(receipt.previous_root);
+        metadata.new_state_root = encoded_new_root;
+        metadata.pruning_root = receipt
+            .pruning_proof
+            .as_ref()
+            .map(|proof| hex::encode(proof.root));
+
+        self.storage.store_block(&block, &metadata)?;
+        if self.config.rollout.feature_gates.pruning && height > 0 {
+            let _ = self.storage.prune_block_payload(height - 1)?;
+        }
+
+        {
+            let mut tip = self.chain_tip.write();
+            tip.height = block.header.height;
+            tip.last_hash = block.block_hash();
+        }
+        *self.telemetry_last_height.write() = Some(block.header.height);
+        info!(height = block.header.height, "sealed block");
+
+        self.evidence_pool
+            .write()
+            .prune_below(block.header.height.saturating_add(1));
+        self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
+
+        self.clear_finalized_operations(&block, &votes);
+
+        Ok(())
+    }
     fn current_consensus_round(&self, height: u64) -> u64 {
         self.consensus_rounds
             .read()
@@ -1799,6 +2002,7 @@ impl NodeInner {
             }
         };
         if selection.proposer != self.address {
+            self.restore_pending_operations(&identity_pending, &pending, &uptime_pending);
             if let Some(proposal) = self.take_verified_proposal(height, &selection.proposer) {
                 info!(
                     proposer = %selection.proposer,
@@ -1849,9 +2053,29 @@ impl NodeInner {
                         }
                     }
                 }
+                let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
+                recorded_votes.extend(external_votes.clone());
                 if round.commit_reached() {
-                    info!(height, proposer = %selection.proposer, "commit quorum observed externally");
-                    self.evidence_pool.write().prune_below(height);
+                    info!(
+                        height,
+                        proposer = %selection.proposer,
+                        "commit quorum observed externally"
+                    );
+                    self.apply_external_block_operations(&proposal, round.validators())?;
+                    let participants = round.commit_participants();
+                    self.ledger.record_consensus_witness(
+                        height,
+                        round.round(),
+                        participants.clone(),
+                    );
+                    let module_witnesses = self.ledger.drain_module_witnesses();
+                    let context = FinalizationContext::External {
+                        block: proposal,
+                        participants,
+                        votes: recorded_votes,
+                        module_witnesses,
+                    };
+                    self.finalize_block(context)?;
                 }
             } else {
                 info!(
@@ -1868,14 +2092,14 @@ impl NodeInner {
         }
 
         let mut accepted_identities: Vec<AttestedIdentityRequest> = Vec::new();
-        for request in identity_pending {
+        for request in &identity_pending {
             match self.ledger.register_identity(
-                &request,
+                request,
                 height,
                 IDENTITY_ATTESTATION_QUORUM,
                 IDENTITY_ATTESTATION_GOSSIP_MIN,
             ) {
-                Ok(_) => accepted_identities.push(request),
+                Ok(_) => accepted_identities.push(request.clone()),
                 Err(err) => {
                     warn!(?err, "dropping invalid identity declaration");
                     if self.config.rollout.feature_gates.consensus_enforcement {
@@ -1897,11 +2121,11 @@ impl NodeInner {
 
         let mut accepted: Vec<TransactionProofBundle> = Vec::new();
         let mut total_fees: u64 = 0;
-        for bundle in pending {
+        for bundle in &pending {
             match self.ledger.apply_transaction(&bundle.transaction) {
                 Ok(fee) => {
                     total_fees = total_fees.saturating_add(fee);
-                    accepted.push(bundle);
+                    accepted.push(bundle.clone());
                 }
                 Err(err) => warn!(?err, "dropping invalid transaction"),
             }
@@ -1931,18 +2155,14 @@ impl NodeInner {
 
         let mut uptime_proofs = Vec::new();
         let mut timetoke_updates = Vec::new();
-        for record in uptime_pending {
-            let RecordedUptimeProof {
-                proof,
-                credited_hours,
-            } = record;
+        for record in &uptime_pending {
             timetoke_updates.push(TimetokeUpdate {
-                identity: proof.wallet_address.clone(),
-                window_start: proof.window_start,
-                window_end: proof.window_end,
-                credited_hours,
+                identity: record.proof.wallet_address.clone(),
+                window_start: record.proof.window_start,
+                window_end: record.proof.window_end,
+                credited_hours: record.credited_hours,
             });
-            uptime_proofs.push(proof);
+            uptime_proofs.push(record.proof.clone());
         }
 
         let mut touched_identities: HashSet<Address> = HashSet::new();
@@ -2043,6 +2263,7 @@ impl NodeInner {
 
         let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
         recorded_votes.extend(external_votes.clone());
+        let votes_for_cleanup = recorded_votes.clone();
 
         let previous_block = self.storage.read_block(tip_snapshot.height)?;
         let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
@@ -2078,12 +2299,15 @@ impl NodeInner {
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
         if !round.commit_reached() {
             warn!("quorum not reached for commit");
+            self.restore_pending_operations(&identity_pending, &pending, &uptime_pending);
+            self.ledger.drain_module_witnesses();
             return Ok(());
         }
         let participants = round.commit_participants();
         self.ledger
-            .record_consensus_witness(height, round.round(), participants);
+            .record_consensus_witness(height, round.round(), participants.clone());
         let module_witnesses = self.ledger.drain_module_witnesses();
+        let module_witnesses_clone = module_witnesses.clone();
         let module_artifacts = self.ledger.stage_module_witnesses(&module_witnesses)?;
         let consensus_certificate = round.certificate();
         let consensus_witness =
@@ -2128,7 +2352,6 @@ impl NodeInner {
                 RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)?
             }
         };
-        let state_proof_artifact = stark_bundle.state_proof.clone();
         let mut proof_artifacts =
             Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;
         proof_artifacts.extend(module_artifacts);
@@ -2149,41 +2372,13 @@ impl NodeInner {
             consensus_certificate,
             Some(consensus_proof),
         );
-        block.verify(previous_block.as_ref(), &self.keypair.public)?;
-        self.ledger.sync_epoch_for_height(height.saturating_add(1));
-        let receipt = self.persist_accounts(height)?;
-        let encoded_new_root = hex::encode(receipt.new_root);
-        if encoded_new_root != block.header.state_root {
-            return Err(ChainError::Config(
-                "firewood state root does not match block header".into(),
-            ));
-        }
-        let lifecycle = StateLifecycle::new(&self.storage);
-        lifecycle.verify_transition(
-            &state_proof_artifact,
-            &receipt.previous_root,
-            &receipt.new_root,
-        )?;
-        let mut metadata = BlockMetadata::from(&block);
-        metadata.previous_state_root = hex::encode(receipt.previous_root);
-        metadata.new_state_root = encoded_new_root;
-        metadata.pruning_root = receipt
-            .pruning_proof
-            .as_ref()
-            .map(|proof| hex::encode(proof.root));
-        self.storage.store_block(&block, &metadata)?;
-        if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
-            let _ = self.storage.prune_block_payload(block.header.height - 1)?;
-        }
-        let mut tip = self.chain_tip.write();
-        tip.height = block.header.height;
-        tip.last_hash = block.block_hash();
-        info!(height = tip.height, "sealed block");
-        self.evidence_pool
-            .write()
-            .prune_below(block.header.height.saturating_add(1));
-        self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
-        Ok(())
+        let context = FinalizationContext::Local {
+            block,
+            participants,
+            votes: votes_for_cleanup,
+            module_witnesses: module_witnesses_clone,
+        };
+        self.finalize_block(context)
     }
 
     fn persist_accounts(&self, block_height: u64) -> ChainResult<StateTransitionReceipt> {
