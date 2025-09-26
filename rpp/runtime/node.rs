@@ -17,7 +17,8 @@ use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, Te
 use crate::consensus::{
     BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
     EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
-    classify_participants, evaluate_vrf,
+    classify_participants, evaluate_vrf, gossip_threshold, quorum_threshold,
+    validator_voting_power_map,
 };
 use crate::crypto::{
     VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
@@ -51,8 +52,6 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
-const IDENTITY_QUORUM_THRESHOLD: usize = 3;
-const IDENTITY_GOSSIP_THRESHOLD: usize = 2;
 
 #[derive(Clone, Copy)]
 struct ChainTip {
@@ -924,8 +923,20 @@ impl NodeInner {
         expected_height: u64,
     ) -> ChainResult<()> {
         request.declaration.verify()?;
+        let accounts_snapshot = self.ledger.accounts_snapshot();
+        let (validator_candidates, _) = classify_participants(&accounts_snapshot);
+        let (voting_power, total_power) = validator_voting_power_map(&validator_candidates);
+        let quorum = quorum_threshold(&total_power);
+        if voting_power.is_empty() || quorum == Natural::from(0u32) {
+            return Err(ChainError::Transaction(
+                "insufficient validator power available for identity attestation".into(),
+            ));
+        }
+        let gossip_required = gossip_threshold(validator_candidates.len());
+
         let identity_hash = request.identity_hash()?;
         let mut voters = HashSet::new();
+        let mut attested_power = Natural::from(0u32);
         for vote in &request.attested_votes {
             if let Err(err) = vote.verify() {
                 self.punish_invalid_identity(
@@ -966,17 +977,40 @@ impl NodeInner {
                     "duplicate attestation vote detected for identity request".into(),
                 ));
             }
+            let Some(weight) = voting_power.get(&vote.vote.voter) else {
+                self.punish_invalid_identity(
+                    &vote.vote.voter,
+                    "identity attestation submitted by non-validator",
+                );
+                return Err(ChainError::Transaction(
+                    "identity attestation vote submitted by non-validator".into(),
+                ));
+            };
+            attested_power += weight.clone();
         }
-        if voters.len() < IDENTITY_QUORUM_THRESHOLD {
+        if attested_power < quorum {
             return Err(ChainError::Transaction(
                 "insufficient quorum power for identity attestation".into(),
             ));
         }
         let mut gossip = HashSet::new();
         for address in &request.gossip_confirmations {
-            gossip.insert(address.clone());
+            if !voting_power.contains_key(address) {
+                self.punish_invalid_identity(
+                    address,
+                    "identity attestation gossip submitted by non-validator",
+                );
+                return Err(ChainError::Transaction(
+                    "identity attestation gossip submitted by non-validator".into(),
+                ));
+            }
+            if !gossip.insert(address.clone()) {
+                return Err(ChainError::Transaction(
+                    "duplicate gossip confirmation detected for identity attestation".into(),
+                ));
+            }
         }
-        if gossip.len() < IDENTITY_GOSSIP_THRESHOLD {
+        if gossip.len() < gossip_required {
             return Err(ChainError::Transaction(
                 "insufficient gossip confirmations for identity attestation".into(),
             ));
