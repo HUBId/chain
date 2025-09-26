@@ -239,6 +239,14 @@ impl ConsensusCertificate {
 
 const MAX_TIMETOKE_HOURS: u64 = 24 * 30;
 
+fn calculate_voting_power(stake: &Stake, reputation_score: f64, timetoke_hours: u64) -> Natural {
+    let base_multiplier = (reputation_score * 1000.0).round() as i64 + 1000;
+    let base_multiplier = base_multiplier.max(1) as u128;
+    let timetoke_bonus = (timetoke_hours.min(MAX_TIMETOKE_HOURS) + 1) as u128;
+    let multiplier = Natural::from(base_multiplier) * Natural::from(timetoke_bonus);
+    stake.as_natural().clone() * multiplier
+}
+
 #[derive(Clone, Debug)]
 pub struct ValidatorCandidate {
     pub address: Address,
@@ -261,11 +269,13 @@ pub struct ValidatorProfile {
 
 impl ValidatorProfile {
     pub fn voting_power(&self) -> Natural {
-        let base_multiplier = (self.reputation_score * 1000.0).round() as i64 + 1000;
-        let base_multiplier = base_multiplier.max(1) as u128;
-        let timetoke_bonus = (self.timetoke_hours.min(MAX_TIMETOKE_HOURS) + 1) as u128;
-        let multiplier = Natural::from(base_multiplier) * Natural::from(timetoke_bonus);
-        self.stake.as_natural().clone() * multiplier
+        calculate_voting_power(&self.stake, self.reputation_score, self.timetoke_hours)
+    }
+}
+
+impl ValidatorCandidate {
+    pub fn voting_power(&self) -> Natural {
+        calculate_voting_power(&self.stake, self.reputation_score, self.timetoke_hours)
     }
 }
 
@@ -302,7 +312,28 @@ pub fn classify_participants(
     (validators, observers)
 }
 
-fn quorum_threshold(total: &Natural) -> Natural {
+pub fn validator_voting_power_map(
+    validators: &[ValidatorCandidate],
+) -> (HashMap<Address, Natural>, Natural) {
+    let mut voting_power = HashMap::new();
+    let mut total = Natural::from(0u32);
+    for validator in validators {
+        let power = validator.voting_power();
+        total += power.clone();
+        voting_power.insert(validator.address.clone(), power);
+    }
+    (voting_power, total)
+}
+
+pub fn gossip_threshold(validator_count: usize) -> usize {
+    if validator_count == 0 {
+        return 0;
+    }
+    let threshold = (validator_count * 2) / 3;
+    threshold.max(1)
+}
+
+pub fn quorum_threshold(total: &Natural) -> Natural {
     if *total == Natural::from(0u32) {
         return Natural::from(0u32);
     }
@@ -892,5 +923,75 @@ mod tests {
         assert!(pool.record_vote(&signed).is_none());
         pool.prune_below(6);
         assert!(pool.record_vote(&signed).is_none());
+    }
+
+    #[test]
+    fn validator_candidate_voting_power_matches_profile() {
+        let mut account = Account::new("validator-a".into(), 0, Stake::from_u128(500));
+        account.reputation.tier = Tier::Tl3;
+        account.reputation.score = 1.25;
+        account.reputation.timetokes.hours_online = 72;
+
+        let (validators, _) = classify_participants(&[account.clone()]);
+        let candidate = validators.first().expect("validator candidate");
+
+        let profile = ValidatorProfile {
+            address: candidate.address.clone(),
+            stake: candidate.stake.clone(),
+            reputation_score: candidate.reputation_score,
+            tier: candidate.tier.clone(),
+            timetoke_hours: candidate.timetoke_hours,
+            vrf: VrfProof {
+                randomness: Natural::from(0u32),
+                proof: String::new(),
+            },
+            randomness: Natural::from(0u32),
+        };
+
+        assert_eq!(candidate.voting_power(), profile.voting_power());
+    }
+
+    #[test]
+    fn gossip_threshold_scales_with_validator_count() {
+        assert_eq!(gossip_threshold(0), 0);
+        assert_eq!(gossip_threshold(1), 1);
+        assert_eq!(gossip_threshold(2), 1);
+        assert_eq!(gossip_threshold(3), 2);
+        assert_eq!(gossip_threshold(4), 2);
+        assert_eq!(gossip_threshold(5), 3);
+    }
+
+    #[test]
+    fn weighted_quorum_requires_majority_power() {
+        let mut strong = Account::new("validator-strong".into(), 0, Stake::from_u128(2_000));
+        strong.reputation.tier = Tier::Tl3;
+        strong.reputation.score = 2.0;
+        strong.reputation.timetokes.hours_online = MAX_TIMETOKE_HOURS;
+
+        let mut weak = Account::new("validator-weak".into(), 0, Stake::from_u128(200));
+        weak.reputation.tier = Tier::Tl3;
+        weak.reputation.score = 0.5;
+        weak.reputation.timetokes.hours_online = 1;
+
+        let strong_addr = strong.address.clone();
+        let weak_addr = weak.address.clone();
+        let accounts = vec![strong, weak];
+        let (validators, _) = classify_participants(&accounts);
+        let (power_map, total_power) = validator_voting_power_map(&validators);
+        let quorum = quorum_threshold(&total_power);
+
+        let strong_weight = power_map.get(&strong_addr).expect("strong weight");
+        let weak_weight = power_map.get(&weak_addr).expect("weak weight");
+
+        assert!(
+            weak_weight < &quorum,
+            "weak validator alone should not reach quorum"
+        );
+        assert!(
+            strong_weight >= &quorum,
+            "strong validator should reach quorum by itself"
+        );
+        let combined = strong_weight.clone() + weak_weight.clone();
+        assert!(combined >= quorum);
     }
 }
