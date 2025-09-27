@@ -240,22 +240,36 @@ pub struct WalletConfig {
     pub key_path: PathBuf,
     #[serde(default = "default_wallet_rpc_listen")]
     pub rpc_listen: SocketAddr,
+    #[serde(default)]
+    pub node: WalletNodeRuntimeConfig,
 }
 
 fn default_wallet_rpc_listen() -> SocketAddr {
     "127.0.0.1:9090".parse().expect("valid socket addr")
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletNodeRuntimeConfig {
+    /// Enable an embedded node alongside the wallet runtime.
+    pub embedded: bool,
+    /// Gossip peers the wallet should connect to when running in client mode.
+    pub gossip_endpoints: Vec<String>,
+}
+
 impl WalletConfig {
     pub fn load(path: &Path) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
-        toml::from_str(&content)
-            .map_err(|err| ChainError::Config(format!("unable to parse wallet config: {err}")))
+        let config: Self = toml::from_str(&content)
+            .map_err(|err| ChainError::Config(format!("unable to parse wallet config: {err}")))?;
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn save(&self, path: &Path) -> ChainResult<()> {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
+        self.validate()?;
         let encoded = toml::to_string_pretty(self)
             .map_err(|err| ChainError::Config(format!("unable to encode wallet config: {err}")))?;
         fs::write(path, encoded)?;
@@ -269,6 +283,26 @@ impl WalletConfig {
         }
         Ok(())
     }
+
+    fn validate(&self) -> ChainResult<()> {
+        if !self.node.embedded && self.node.gossip_endpoints.is_empty() {
+            return Err(ChainError::Config(
+                "wallet node runtime requires gossip endpoints when embedded node is disabled"
+                    .into(),
+            ));
+        }
+        if self
+            .node
+            .gossip_endpoints
+            .iter()
+            .any(|endpoint| endpoint.trim().is_empty())
+        {
+            return Err(ChainError::Config(
+                "wallet node runtime gossip endpoints must not be empty".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl Default for WalletConfig {
@@ -277,6 +311,10 @@ impl Default for WalletConfig {
             data_dir: PathBuf::from("./data"),
             key_path: PathBuf::from("./keys/wallet.toml"),
             rpc_listen: default_wallet_rpc_listen(),
+            node: WalletNodeRuntimeConfig {
+                embedded: false,
+                gossip_endpoints: vec!["/ip4/127.0.0.1/tcp/7600".to_string()],
+            },
         }
     }
 }
