@@ -269,10 +269,15 @@ impl PipelineOrchestrator {
             ));
         }
         let hash = workflow.bundle.hash();
+        let expected_balance = workflow
+            .sender_post_utxos
+            .iter()
+            .map(|utxo| utxo.value)
+            .sum();
         let metrics = FlowMetrics::new(
             sender.clone(),
             workflow.nonce,
-            workflow.sender_post_utxo.value,
+            expected_balance,
             Instant::now(),
         );
         self.metrics.register(hash.clone(), metrics).await;
