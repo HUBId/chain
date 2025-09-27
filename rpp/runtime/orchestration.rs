@@ -3,16 +3,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hex;
-use tokio::sync::{Mutex, mpsc, watch};
+use serde_json;
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::time;
 use tracing::{debug, info, warn};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::node::NodeHandle;
 use crate::reputation::Tier;
-use crate::runtime::node_runtime::NodeHandle as P2pHandle;
-use crate::types::{Address, Block};
+use crate::runtime::node_runtime::{NodeEvent, NodeHandle as P2pHandle};
+use crate::types::{Address, Block, TransactionProofBundle};
 use crate::wallet::workflows::TransactionWorkflow;
+use rpp_p2p::GossipTopic;
 
 /// Default buffer size for the gossip → mempool proof channel.
 const DEFAULT_QUEUE_DEPTH: usize = 64;
@@ -190,7 +192,6 @@ impl PipelineMetrics {
 #[derive(Clone)]
 pub struct PipelineOrchestrator {
     node: NodeHandle,
-    #[allow(dead_code)]
     p2p: Option<P2pHandle>,
     metrics: Arc<PipelineMetrics>,
     submissions: mpsc::Sender<PipelineSubmission>,
@@ -234,9 +235,20 @@ impl PipelineOrchestrator {
 
         let observe_node = self.node.clone();
         let observe_metrics = self.metrics.clone();
+        let observe_shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
-            PipelineOrchestrator::observe_loop(observe_node, observe_metrics, shutdown_rx).await;
+            PipelineOrchestrator::observe_loop(observe_node, observe_metrics, observe_shutdown)
+                .await;
         });
+
+        if let Some(handle) = self.p2p.clone() {
+            let gossip_metrics = self.metrics.clone();
+            let gossip_shutdown = shutdown_rx;
+            tokio::spawn(async move {
+                let events = handle.subscribe();
+                PipelineOrchestrator::gossip_loop(gossip_metrics, events, gossip_shutdown).await;
+            });
+        }
     }
 
     /// Submit a transaction workflow into the orchestrated pipeline.
@@ -264,6 +276,19 @@ impl PipelineOrchestrator {
             Instant::now(),
         );
         self.metrics.register(hash.clone(), metrics).await;
+        if let Some(handle) = &self.p2p {
+            let payload = serde_json::to_vec(&workflow.bundle).map_err(|err| {
+                ChainError::Config(format!(
+                    "failed to serialise proofs bundle for {hash}: {err}"
+                ))
+            })?;
+            handle
+                .publish_gossip(GossipTopic::Proofs, payload)
+                .await
+                .map_err(|err| {
+                    ChainError::Config(format!("failed to publish proofs gossip for {hash}: {err}"))
+                })?;
+        }
         let submission = PipelineSubmission {
             workflow,
             received_at: Instant::now(),
@@ -459,6 +484,57 @@ impl PipelineOrchestrator {
             }
         }
         Ok(())
+    }
+
+    async fn gossip_loop(
+        metrics: Arc<PipelineMetrics>,
+        mut events: broadcast::Receiver<NodeEvent>,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) {
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        debug!("pipeline gossip loop shutting down");
+                        break;
+                    }
+                }
+                event = events.recv() => {
+                    match event {
+                        Ok(NodeEvent::Gossip { topic, data, .. }) => {
+                            if topic != GossipTopic::Proofs {
+                                continue;
+                            }
+                            match serde_json::from_slice::<TransactionProofBundle>(&data) {
+                                Ok(bundle) => {
+                                    let hash = bundle.hash();
+                                    if metrics.hashes().await.iter().any(|tracked| tracked == &hash) {
+                                        metrics
+                                            .record_stage(
+                                                &hash,
+                                                PipelineStage::GossipReceived,
+                                                Instant::now(),
+                                            )
+                                            .await;
+                                    }
+                                }
+                                Err(err) => {
+                                    warn!(?err, "invalid proofs gossip payload");
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(skipped, "lagged on gossip event stream");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            debug!("p2p event stream closed");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
