@@ -215,15 +215,9 @@ mod tests {
             index: 1,
         };
 
-        state.insert(
-            highest_outpoint.clone(),
-            StoredUtxo::new(owner.clone(), 30),
-        );
+        state.insert(highest_outpoint.clone(), StoredUtxo::new(owner.clone(), 30));
         state.insert(lowest_outpoint.clone(), StoredUtxo::new(owner.clone(), 45));
-        state.insert(
-            spent_outpoint.clone(),
-            StoredUtxo::new(owner.clone(), 25),
-        );
+        state.insert(spent_outpoint.clone(), StoredUtxo::new(owner.clone(), 25));
         state.insert(peer_outpoint.clone(), StoredUtxo::new(peer.clone(), 99));
 
         assert!(state.remove_spent(&spent_outpoint));
@@ -256,9 +250,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected_order
         );
-        assert!(account_snapshot
-            .iter()
-            .all(|(_, stored)| !stored.is_spent()));
+        assert!(
+            account_snapshot
+                .iter()
+                .all(|(_, stored)| !stored.is_spent())
+        );
 
         assert_eq!(
             deterministic_inputs
@@ -281,10 +277,12 @@ mod tests {
         assert_eq!(peer_records[0].outpoint, peer_outpoint);
 
         let snapshot: BTreeMap<_, _> = state.snapshot().into_iter().collect();
-        assert!(snapshot
-            .get(&spent_outpoint)
-            .expect("spent entry present in snapshot")
-            .is_spent());
+        assert!(
+            snapshot
+                .get(&spent_outpoint)
+                .expect("spent entry present in snapshot")
+                .is_spent()
+        );
     }
 
     #[test]
@@ -387,10 +385,7 @@ mod tests {
         state_a.insert(low.clone(), StoredUtxo::new(owner.clone(), 40));
         state_a.insert(mid.clone(), StoredUtxo::new(owner.clone(), 25));
         state_a.insert(high.clone(), StoredUtxo::new(owner.clone(), 31));
-        state_a.insert(
-            peer_outpoint.clone(),
-            StoredUtxo::new(peer.clone(), 77),
-        );
+        state_a.insert(peer_outpoint.clone(), StoredUtxo::new(peer.clone(), 77));
         assert!(state_a.remove_spent(&mid));
         state_a.insert(mid.clone(), StoredUtxo::new(owner.clone(), 26));
 
@@ -404,7 +399,9 @@ mod tests {
         let snapshot_a = state_a.snapshot();
         let snapshot_b = state_b.snapshot();
 
-        fn summarize(snapshot: &[(UtxoOutpoint, StoredUtxo)]) -> Vec<(UtxoOutpoint, (Address, u128, bool))> {
+        fn summarize(
+            snapshot: &[(UtxoOutpoint, StoredUtxo)],
+        ) -> Vec<(UtxoOutpoint, (Address, u128, bool))> {
             snapshot
                 .iter()
                 .map(|(outpoint, stored)| {

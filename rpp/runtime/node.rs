@@ -2278,7 +2278,11 @@ impl NodeInner {
         let mut accepted: Vec<TransactionProofBundle> = Vec::new();
         let mut total_fees: u64 = 0;
         for bundle in pending {
-            match self.ledger.apply_transaction(&bundle.transaction) {
+            match self
+                .ledger
+                .select_inputs_for_transaction(&bundle.transaction)
+                .and_then(|inputs| self.ledger.apply_transaction(&bundle.transaction, &inputs))
+            {
                 Ok(fee) => {
                     total_fees = total_fees.saturating_add(fee);
                     accepted.push(bundle);
@@ -2692,7 +2696,11 @@ impl NodeInner {
 
         let mut total_fees: u64 = 0;
         for tx in &block.transactions {
-            total_fees = total_fees.saturating_add(self.ledger.apply_transaction(tx)?);
+            let fee = self
+                .ledger
+                .select_inputs_for_transaction(tx)
+                .and_then(|inputs| self.ledger.apply_transaction(tx, &inputs))?;
+            total_fees = total_fees.saturating_add(fee);
         }
 
         for proof in &block.uptime_proofs {
