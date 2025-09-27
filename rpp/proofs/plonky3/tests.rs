@@ -1,6 +1,7 @@
 use ed25519_dalek::{Keypair, Signer};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
+use serde_json::Value;
 use serde_json::json;
 
 use crate::crypto::address_from_public_key;
@@ -19,6 +20,53 @@ fn sample_transaction() -> SignedTransaction {
     let tx = Transaction::new(from.clone(), from.clone(), 42, 1, 0, None);
     let signature = keypair.sign(&tx.canonical_bytes());
     SignedTransaction::new(tx, signature, &keypair.public)
+}
+
+#[test]
+fn compute_commitment_is_stable_for_map_ordering() {
+    let first: Value = serde_json::from_str(
+        r#"{
+            "outer": {
+                "alpha": 1,
+                "beta": {
+                    "gamma": [
+                        {"key": "value", "number": 7},
+                        {"number": 8, "key": "other"}
+                    ],
+                    "delta": true
+                }
+            },
+            "array": [
+                {"x": 1, "y": 2},
+                {"y": 3, "x": 4}
+            ]
+        }"#,
+    )
+    .unwrap();
+    let second: Value = serde_json::from_str(
+        r#"{
+            "array": [
+                {"y": 2, "x": 1},
+                {"x": 4, "y": 3}
+            ],
+            "outer": {
+                "beta": {
+                    "delta": true,
+                    "gamma": [
+                        {"number": 7, "key": "value"},
+                        {"key": "other", "number": 8}
+                    ]
+                },
+                "alpha": 1
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let first_commitment = crypto::compute_commitment(&first).unwrap();
+    let second_commitment = crypto::compute_commitment(&second).unwrap();
+
+    assert_eq!(first_commitment, second_commitment);
 }
 
 #[test]
