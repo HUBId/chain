@@ -37,6 +37,9 @@ jobs:
 
   sim-smoke:
     runs-on: ubuntu-latest
+    env:
+      RPP_SIM_STATIC_KEY_SEED: ci-smoke
+      RPP_SIM_REQUIRE_DETERMINISTIC: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
