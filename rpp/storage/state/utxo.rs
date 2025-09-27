@@ -193,35 +193,98 @@ mod tests {
     }
 
     #[test]
-    fn get_for_account_prefers_lowest_index() {
+    fn multi_output_helpers_are_consistent() {
         let state = UtxoState::new();
-        let first_outpoint = UtxoOutpoint {
+        let owner = "carol".to_string();
+        let peer = "dave".to_string();
+
+        let lowest_outpoint = UtxoOutpoint {
             tx_id: [3u8; 32],
-            index: 1,
-        };
-        let second_outpoint = UtxoOutpoint {
-            tx_id: [4u8; 32],
             index: 0,
         };
+        let spent_outpoint = UtxoOutpoint {
+            tx_id: [4u8; 32],
+            index: 2,
+        };
+        let highest_outpoint = UtxoOutpoint {
+            tx_id: [5u8; 32],
+            index: 7,
+        };
+        let peer_outpoint = UtxoOutpoint {
+            tx_id: [6u8; 32],
+            index: 1,
+        };
+
         state.insert(
-            first_outpoint.clone(),
-            StoredUtxo::new("carol".to_string(), 10),
+            highest_outpoint.clone(),
+            StoredUtxo::new(owner.clone(), 30),
         );
+        state.insert(lowest_outpoint.clone(), StoredUtxo::new(owner.clone(), 45));
         state.insert(
-            second_outpoint.clone(),
-            StoredUtxo::new("carol".to_string(), 20),
+            spent_outpoint.clone(),
+            StoredUtxo::new(owner.clone(), 25),
         );
-        let fetched = state.get_for_account(&"carol".to_string());
-        assert_eq!(fetched.len(), 2);
-        assert_eq!(fetched[0].outpoint, second_outpoint);
-        assert_eq!(fetched[0].value, 20);
-        assert_eq!(fetched[1].outpoint, first_outpoint);
-        let inputs = state.select_inputs_for_owner(&"carol".to_string());
-        assert_eq!(inputs.len(), 2);
-        assert_eq!(inputs[0].0, second_outpoint);
-        assert_eq!(inputs[0].1.amount, 20);
-        assert_eq!(inputs[1].0, first_outpoint);
-        assert_eq!(inputs[1].1.amount, 10);
+        state.insert(peer_outpoint.clone(), StoredUtxo::new(peer.clone(), 99));
+
+        assert!(state.remove_spent(&spent_outpoint));
+
+        let account_records = state.get_for_account(&owner);
+        let account_snapshot = state.snapshot_for_account(&owner);
+        let deterministic_inputs = state.select_inputs_for_owner(&owner);
+        let unspent_outputs = state.unspent_outputs_for_owner(&owner);
+
+        assert_eq!(account_records.len(), 2);
+        assert_eq!(account_snapshot.len(), 2);
+        assert_eq!(deterministic_inputs.len(), 2);
+        assert_eq!(unspent_outputs.len(), 2);
+
+        let expected_order = vec![lowest_outpoint.clone(), highest_outpoint.clone()];
+
+        assert_eq!(
+            account_records
+                .iter()
+                .map(|record| record.outpoint.clone())
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+        assert!(account_records.iter().all(|record| record.value > 0));
+
+        assert_eq!(
+            account_snapshot
+                .iter()
+                .map(|(outpoint, _)| outpoint.clone())
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+        assert!(account_snapshot
+            .iter()
+            .all(|(_, stored)| !stored.is_spent()));
+
+        assert_eq!(
+            deterministic_inputs
+                .iter()
+                .map(|(outpoint, _)| outpoint.clone())
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+
+        assert_eq!(
+            unspent_outputs
+                .iter()
+                .map(|record| record.outpoint.clone())
+                .collect::<Vec<_>>(),
+            expected_order
+        );
+
+        let peer_records = state.get_for_account(&peer);
+        assert_eq!(peer_records.len(), 1);
+        assert_eq!(peer_records[0].outpoint, peer_outpoint);
+
+        let snapshot: BTreeMap<_, _> = state.snapshot().into_iter().collect();
+        assert!(snapshot
+            .get(&spent_outpoint)
+            .expect("spent entry present in snapshot")
+            .is_spent());
     }
 
     #[test]
@@ -302,36 +365,81 @@ mod tests {
         let state_a = UtxoState::new();
         let state_b = UtxoState::new();
         let owner = "harry".to_string();
-        let first_outpoint = UtxoOutpoint {
+        let peer = "ivy".to_string();
+
+        let low = UtxoOutpoint {
             tx_id: [11u8; 32],
             index: 0,
         };
-        let second_outpoint = UtxoOutpoint {
+        let mid = UtxoOutpoint {
             tx_id: [12u8; 32],
-            index: 5,
+            index: 3,
+        };
+        let high = UtxoOutpoint {
+            tx_id: [13u8; 32],
+            index: 9,
+        };
+        let peer_outpoint = UtxoOutpoint {
+            tx_id: [14u8; 32],
+            index: 1,
         };
 
-        state_a.insert(first_outpoint.clone(), StoredUtxo::new(owner.clone(), 40));
-        state_a.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 25));
-        assert!(state_a.remove_spent(&second_outpoint));
-        state_a.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 26));
+        state_a.insert(low.clone(), StoredUtxo::new(owner.clone(), 40));
+        state_a.insert(mid.clone(), StoredUtxo::new(owner.clone(), 25));
+        state_a.insert(high.clone(), StoredUtxo::new(owner.clone(), 31));
+        state_a.insert(
+            peer_outpoint.clone(),
+            StoredUtxo::new(peer.clone(), 77),
+        );
+        assert!(state_a.remove_spent(&mid));
+        state_a.insert(mid.clone(), StoredUtxo::new(owner.clone(), 26));
 
-        state_b.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 25));
-        state_b.insert(first_outpoint.clone(), StoredUtxo::new(owner.clone(), 40));
-        assert!(state_b.remove_spent(&second_outpoint));
-        state_b.insert(second_outpoint.clone(), StoredUtxo::new(owner.clone(), 26));
+        state_b.insert(peer_outpoint.clone(), StoredUtxo::new(peer.clone(), 77));
+        state_b.insert(high.clone(), StoredUtxo::new(owner.clone(), 31));
+        state_b.insert(low.clone(), StoredUtxo::new(owner.clone(), 40));
+        assert!(state_b.remove_spent(&high));
+        state_b.insert(high.clone(), StoredUtxo::new(owner.clone(), 31));
+        state_b.insert(mid.clone(), StoredUtxo::new(owner.clone(), 26));
+
+        let snapshot_a = state_a.snapshot();
+        let snapshot_b = state_b.snapshot();
+
+        fn summarize(snapshot: &[(UtxoOutpoint, StoredUtxo)]) -> Vec<(UtxoOutpoint, (Address, u128, bool))> {
+            snapshot
+                .iter()
+                .map(|(outpoint, stored)| {
+                    (
+                        outpoint.clone(),
+                        (stored.owner.clone(), stored.amount, stored.is_spent()),
+                    )
+                })
+                .collect()
+        }
+
+        assert_eq!(summarize(&snapshot_a), summarize(&snapshot_b));
 
         let commitment_a = state_a.commitment();
         let commitment_b = state_b.commitment();
         assert_eq!(commitment_a, commitment_b);
 
-        let snapshot = state_a.snapshot();
-        let bytes = bincode::serialize(&snapshot).expect("serialize snapshot");
-        let restored: Vec<(UtxoOutpoint, StoredUtxo)> =
-            bincode::deserialize(&bytes).expect("deserialize snapshot");
-        assert_eq!(restored.len(), snapshot.len());
+        fn recompute(snapshot: &[(UtxoOutpoint, StoredUtxo)]) -> [u8; 32] {
+            let mut leaves: Vec<[u8; 32]> = snapshot
+                .iter()
+                .filter(|(_, stored)| !stored.is_spent())
+                .map(|(outpoint, stored)| {
+                    let payload =
+                        bincode::serialize(&(outpoint.clone(), stored.clone())).expect("encode");
+                    Blake2sHasher::hash(&payload).into()
+                })
+                .collect();
+            compute_merkle_root(&mut leaves)
+        }
+
+        assert_eq!(commitment_a, recompute(&snapshot_a));
+        assert_eq!(commitment_b, recompute(&snapshot_b));
+
         let mirror = UtxoState::new();
-        for (outpoint, stored) in restored.iter() {
+        for (outpoint, stored) in snapshot_a.iter() {
             mirror.insert(outpoint.clone(), stored.clone());
         }
         assert_eq!(mirror.commitment(), commitment_a);
