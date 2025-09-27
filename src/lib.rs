@@ -27,6 +27,8 @@ pub mod orchestration;
 #[cfg(feature = "backend-plonky3")]
 #[path = "../rpp/proofs/plonky3/mod.rs"]
 pub mod plonky3;
+#[path = "../rpp/proofs/backend.rs"]
+pub mod proof_backend;
 #[path = "../rpp/proofs/proof_system/mod.rs"]
 pub mod proof_system;
 #[path = "../rpp/reputation/mod.rs"]

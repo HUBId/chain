@@ -2,15 +2,27 @@ use std::collections::BTreeMap;
 
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
+use crate::proof_backend::{WitnessBytes, WitnessHeader};
 use crate::state::{StoredUtxo, merkle::compute_merkle_root};
 use crate::types::Address;
 
 /// 32-byte digest representing a commitment root.
 pub type CommitmentDigest = [u8; 32];
+
+const CIRCUIT_TRANSACTIONS: &str = "rpp.bundle.transactions";
+const CIRCUIT_TIMETOKE: &str = "rpp.bundle.timetoke";
+const CIRCUIT_REPUTATION: &str = "rpp.bundle.reputation";
+const CIRCUIT_ZSI: &str = "rpp.bundle.zsi";
+const CIRCUIT_BLOCK: &str = "rpp.bundle.block";
+const CIRCUIT_CONSENSUS: &str = "rpp.bundle.consensus";
+
+fn encode_witness_payload<T: Serialize>(circuit: &str, payload: &T) -> ChainResult<Vec<u8>> {
+    let header = WitnessHeader::new(ProofSystemKind::Stwo, circuit);
+    WitnessBytes::encode(&header, payload).map(WitnessBytes::into_inner)
+}
 
 /// Enumeration of all state modules that participate in the recursive pruning proof pipeline.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -701,41 +713,49 @@ impl ModuleWitnessBundle {
         let mut artifacts = Vec::new();
         artifacts.push((
             ProofModule::UtxoWitness,
-            self.namespaced_commitment(Self::UTXO_DOMAIN, &self.transactions)?,
-            serde_json::to_vec(&self.transactions)
+            self.namespaced_commitment(
+                Self::UTXO_DOMAIN,
+                &self.transactions,
+                CIRCUIT_TRANSACTIONS,
+            )?,
+            encode_witness_payload(CIRCUIT_TRANSACTIONS, &self.transactions)
                 .map_err(|err| ChainError::Config(format!("serialize utxo witnesses: {err}")))?,
         ));
         artifacts.push((
             ProofModule::TimetokeWitness,
-            self.namespaced_commitment(Self::TIMETOKE_DOMAIN, &self.timetoke)?,
-            serde_json::to_vec(&self.timetoke).map_err(|err| {
+            self.namespaced_commitment(Self::TIMETOKE_DOMAIN, &self.timetoke, CIRCUIT_TIMETOKE)?,
+            encode_witness_payload(CIRCUIT_TIMETOKE, &self.timetoke).map_err(|err| {
                 ChainError::Config(format!("serialize timetoke witnesses: {err}"))
             })?,
         ));
         artifacts.push((
             ProofModule::ReputationWitness,
-            self.namespaced_commitment(Self::REPUTATION_DOMAIN, &self.reputation)?,
-            serde_json::to_vec(&self.reputation).map_err(|err| {
+            self.namespaced_commitment(
+                Self::REPUTATION_DOMAIN,
+                &self.reputation,
+                CIRCUIT_REPUTATION,
+            )?,
+            encode_witness_payload(CIRCUIT_REPUTATION, &self.reputation).map_err(|err| {
                 ChainError::Config(format!("serialize reputation witnesses: {err}"))
             })?,
         ));
         artifacts.push((
             ProofModule::ZsiWitness,
-            self.namespaced_commitment(Self::ZSI_DOMAIN, &self.zsi)?,
-            serde_json::to_vec(&self.zsi)
+            self.namespaced_commitment(Self::ZSI_DOMAIN, &self.zsi, CIRCUIT_ZSI)?,
+            encode_witness_payload(CIRCUIT_ZSI, &self.zsi)
                 .map_err(|err| ChainError::Config(format!("serialize zsi witnesses: {err}")))?,
         ));
         artifacts.push((
             ProofModule::BlockWitness,
-            self.namespaced_commitment(Self::BLOCK_DOMAIN, &[self])?,
-            serde_json::to_vec(self).map_err(|err| {
+            self.namespaced_commitment(Self::BLOCK_DOMAIN, &[self], CIRCUIT_BLOCK)?,
+            encode_witness_payload(CIRCUIT_BLOCK, self).map_err(|err| {
                 ChainError::Config(format!("serialize block witness bundle: {err}"))
             })?,
         ));
         artifacts.push((
             ProofModule::ConsensusWitness,
-            self.namespaced_commitment(Self::CONSENSUS_DOMAIN, &self.consensus)?,
-            serde_json::to_vec(&self.consensus).map_err(|err| {
+            self.namespaced_commitment(Self::CONSENSUS_DOMAIN, &self.consensus, CIRCUIT_CONSENSUS)?,
+            encode_witness_payload(CIRCUIT_CONSENSUS, &self.consensus).map_err(|err| {
                 ChainError::Config(format!("serialize consensus witnesses: {err}"))
             })?,
         ));
@@ -746,6 +766,7 @@ impl ModuleWitnessBundle {
         &self,
         domain: &[u8],
         items: &[T],
+        circuit: &str,
     ) -> ChainResult<CommitmentDigest>
     where
         T: Serialize,
@@ -756,8 +777,10 @@ impl ModuleWitnessBundle {
             let mut leaves = items
                 .iter()
                 .map(|item| {
-                    let bytes = serde_json::to_vec(item).map_err(|err| {
-                        ChainError::Config(format!("serialize witness leaf: {err}"))
+                    let bytes = encode_witness_payload(circuit, item).map_err(|err| {
+                        ChainError::Config(format!(
+                            "serialize witness leaf for merkle commitment: {err}"
+                        ))
                     })?;
                     let digest: [u8; 32] = Blake2sHasher::hash(&bytes).into();
                     Ok(digest)
@@ -1788,7 +1811,11 @@ mod tests {
             .find(|(module, _, _)| *module == ProofModule::ConsensusWitness)
             .expect("consensus witness artifact");
         let consensus_commitment = bundle
-            .namespaced_commitment(b"rpp-consensus-witness", &bundle.consensus)
+            .namespaced_commitment(
+                b"rpp-consensus-witness",
+                &bundle.consensus,
+                CIRCUIT_CONSENSUS,
+            )
             .expect("consensus commitment");
         assert_eq!(consensus_artifact.1, consensus_commitment);
 
@@ -1797,7 +1824,7 @@ mod tests {
             .find(|(module, _, _)| *module == ProofModule::BlockWitness)
             .expect("block witness artifact");
         let block_commitment = bundle
-            .namespaced_commitment(b"rpp-block-witness", &[bundle.clone()])
+            .namespaced_commitment(b"rpp-block-witness", &[bundle.clone()], CIRCUIT_BLOCK)
             .expect("block commitment");
         assert_eq!(block_artifact.1, block_commitment);
     }
