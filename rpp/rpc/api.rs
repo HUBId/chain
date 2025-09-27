@@ -21,7 +21,6 @@ use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, Pipe
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
 use crate::runtime::RuntimeMode;
-use crate::runtime::node_runtime::NodeHandle as P2pHandle;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
@@ -37,8 +36,6 @@ use parking_lot::RwLock;
 pub struct ApiContext {
     mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
-    #[allow(dead_code)]
-    p2p: Option<P2pHandle>,
     wallet: Option<Arc<Wallet>>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
 }
@@ -47,14 +44,12 @@ impl ApiContext {
     pub fn new(
         mode: Arc<RwLock<RuntimeMode>>,
         node: Option<NodeHandle>,
-        p2p: Option<P2pHandle>,
         wallet: Option<Arc<Wallet>>,
         orchestrator: Option<Arc<PipelineOrchestrator>>,
     ) -> Self {
         Self {
             mode,
             node,
-            p2p,
             wallet,
             orchestrator,
         }

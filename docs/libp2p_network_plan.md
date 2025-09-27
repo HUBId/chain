@@ -2,6 +2,8 @@
 
 Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Liefergegenstände mit definierten Abhängigkeiten, Qualitätskriterien und Tests. Jeder Abschnitt endet mit „Definition of Done“ (DoD), damit Fortschritt messbar bleibt.
 
+> **Aktueller Stand:** Die öffentliche RPC-Schnittstelle verwaltet keinen Libp2p-Knoten. Runtime-Handles werden ausschließlich innerhalb der Runtime verwendet und nicht via `ApiContext` exponiert. Operator-Steuerung des Netzwerks bleibt damit ausdrücklich Teil der nachstehenden Deliverables.
+
 ## Phase 0 – Grundlagen & Infrastruktur
 1. **Libp2p-Abhängigkeiten und Runtime integrieren**
    - `libp2p`-, `tokio`- und `futures`-Versionen wählen, die mit dem bestehenden Async-Stack kompatibel sind.

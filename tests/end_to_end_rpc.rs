@@ -49,7 +49,6 @@ impl RpcTestHarness {
         let addr = primary.config.rpc_listen;
         let node_handle = primary.node_handle.clone();
         let runtime_handle = node_handle.clone();
-        let p2p_handle = primary.p2p_handle.clone();
         let wallet = primary.wallet.clone();
         let orchestrator = primary.orchestrator.clone();
 
@@ -57,7 +56,6 @@ impl RpcTestHarness {
         let context = api::ApiContext::new(
             runtime_mode,
             Some(runtime_handle),
-            Some(p2p_handle),
             Some(wallet),
             Some(orchestrator),
         );

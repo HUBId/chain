@@ -193,7 +193,6 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let context = api::ApiContext::new(
         runtime_mode.clone(),
         node_handle.clone(),
-        p2p_handle.clone(),
         wallet_instance.clone(),
         orchestrator_instance.clone(),
     );
