@@ -8,6 +8,7 @@ use crate::tier::TierLevel;
 
 pub const HANDSHAKE_PROTOCOL: &str = "/rpp/handshake/1.0.0";
 pub const VRF_HANDSHAKE_CONTEXT: &[u8] = b"rpp.handshake.vrf";
+pub const MAX_HANDSHAKE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandshakePayload {
@@ -128,7 +129,21 @@ impl libp2p::request_response::Codec for HandshakeCodec {
         T: AsyncRead + Unpin + Send,
     {
         let mut buf = Vec::new();
-        io.read_to_end(&mut buf).await?;
+        let mut limited = io.take(MAX_HANDSHAKE_BYTES as u64);
+        limited.read_to_end(&mut buf).await?;
+        let limit_reached = limited.limit() == 0;
+        drop(limited);
+
+        if limit_reached {
+            let mut extra = [0u8; 1];
+            if io.read(&mut extra).await? != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "handshake message too large",
+                ));
+            }
+        }
+
         serde_json::from_slice(&buf).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
@@ -141,7 +156,21 @@ impl libp2p::request_response::Codec for HandshakeCodec {
         T: AsyncRead + Unpin + Send,
     {
         let mut buf = Vec::new();
-        io.read_to_end(&mut buf).await?;
+        let mut limited = io.take(MAX_HANDSHAKE_BYTES as u64);
+        limited.read_to_end(&mut buf).await?;
+        let limit_reached = limited.limit() == 0;
+        drop(limited);
+
+        if limit_reached {
+            let mut extra = [0u8; 1];
+            if io.read(&mut extra).await? != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "handshake message too large",
+                ));
+            }
+        }
+
         serde_json::from_slice(&buf).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
@@ -179,6 +208,9 @@ impl libp2p::request_response::Codec for HandshakeCodec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
+    use futures::io::Cursor;
+    use libp2p::request_response::Codec;
     use proptest::prelude::*;
 
     proptest! {
@@ -207,5 +239,59 @@ mod tests {
             let decoded: HandshakePayload = serde_json::from_slice(&encoded).expect("decode");
             prop_assert_eq!(signed, decoded);
         }
+    }
+
+    #[test]
+    fn oversized_handshakes_are_rejected() {
+        let protocol = HANDSHAKE_PROTOCOL.to_string();
+
+        let mut large_payload = HandshakePayload::new("oversized", None, None, TierLevel::Tl0)
+            .with_signature(vec![0u8; MAX_HANDSHAKE_BYTES]);
+        // Ensure the serialized payload exceeds the maximum size limit.
+        let mut encoded = serde_json::to_vec(&large_payload).expect("encode");
+        if encoded.len() <= MAX_HANDSHAKE_BYTES {
+            // Pad the signature to exceed the limit if necessary.
+            let extra = MAX_HANDSHAKE_BYTES - encoded.len() + 1;
+            large_payload
+                .signature
+                .extend(std::iter::repeat(0u8).take(extra));
+            encoded = serde_json::to_vec(&large_payload).expect("encode");
+        }
+        assert!(encoded.len() > MAX_HANDSHAKE_BYTES);
+
+        let mut request_codec = HandshakeCodec::default();
+        let mut request_reader = Cursor::new(encoded.clone());
+        let err = block_on(request_codec.read_request(&protocol, &mut request_reader))
+            .expect_err("oversized request should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        let mut response_codec = HandshakeCodec::default();
+        let mut response_reader = Cursor::new(encoded);
+        let err = block_on(response_codec.read_response(&protocol, &mut response_reader))
+            .expect_err("oversized response should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn normal_handshakes_are_accepted() {
+        let protocol = HANDSHAKE_PROTOCOL.to_string();
+
+        let payload = HandshakePayload::new("normal", None, None, TierLevel::Tl1)
+            .with_signature(vec![1, 2, 3, 4]);
+        let encoded = serde_json::to_vec(&payload).expect("encode");
+        assert!(encoded.len() <= MAX_HANDSHAKE_BYTES);
+
+        let mut request_codec = HandshakeCodec::default();
+        let mut request_reader = Cursor::new(encoded.clone());
+        let decoded_request = block_on(request_codec.read_request(&protocol, &mut request_reader))
+            .expect("normal request should succeed");
+        assert_eq!(decoded_request, payload);
+
+        let mut response_codec = HandshakeCodec::default();
+        let mut response_reader = Cursor::new(encoded);
+        let decoded_response =
+            block_on(response_codec.read_response(&protocol, &mut response_reader))
+                .expect("normal response should succeed");
+        assert_eq!(decoded_response, payload);
     }
 }
