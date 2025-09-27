@@ -9,6 +9,8 @@ use storage_firewood::kv::FirewoodKv;
 use storage_firewood::pruning::{FirewoodPruner, PruningProof as FirewoodPruningProof};
 
 use crate::errors::{ChainError, ChainResult};
+use crate::rpp::UtxoOutpoint;
+use crate::state::StoredUtxo;
 use crate::types::{Account, Block, BlockMetadata, StoredBlock};
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
@@ -21,6 +23,7 @@ const TIP_HASH_KEY: &[u8] = b"tip_hash";
 const TIP_TIMESTAMP_KEY: &[u8] = b"tip_timestamp";
 const TIP_METADATA_KEY: &[u8] = b"tip_metadata";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
+const WALLET_UTXO_SNAPSHOT_KEY: &[u8] = b"wallet_utxo_snapshot";
 
 const SCHEMA_ACCOUNTS: &str = "accounts";
 
@@ -152,6 +155,23 @@ impl Storage {
         kv.delete(&metadata_key(key));
         kv.commit()?;
         Ok(())
+    }
+
+    pub fn persist_utxo_snapshot(
+        &self,
+        snapshot: &[(UtxoOutpoint, StoredUtxo)],
+    ) -> ChainResult<()> {
+        let encoded = bincode::serialize(snapshot)?;
+        self.write_metadata_blob(WALLET_UTXO_SNAPSHOT_KEY, encoded)
+    }
+
+    pub fn load_utxo_snapshot(&self) -> ChainResult<Option<Vec<(UtxoOutpoint, StoredUtxo)>>> {
+        let maybe_bytes = self.read_metadata_blob(WALLET_UTXO_SNAPSHOT_KEY)?;
+        let Some(bytes) = maybe_bytes else {
+            return Ok(None);
+        };
+        let snapshot = bincode::deserialize(&bytes)?;
+        Ok(Some(snapshot))
     }
 
     fn schema_key(&self, schema: &str, key: Vec<u8>) -> ChainResult<Vec<u8>> {

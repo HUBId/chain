@@ -154,7 +154,11 @@ impl Ledger {
         ledger
     }
 
-    pub fn load(initial: Vec<Account>, epoch_length: u64) -> Self {
+    pub fn load(
+        initial: Vec<Account>,
+        utxo_snapshots: Vec<(UtxoOutpoint, StoredUtxo)>,
+        epoch_length: u64,
+    ) -> Self {
         let ledger = Ledger::new(epoch_length);
         let mut tree = ledger.identity_tree.write();
         for account in initial {
@@ -167,6 +171,9 @@ impl Ledger {
             ledger.index_account_modules(&account);
         }
         drop(tree);
+        for (outpoint, stored) in utxo_snapshots {
+            ledger.utxo_state.insert(outpoint, stored);
+        }
         ledger.sync_epoch_for_height(0);
         ledger
     }

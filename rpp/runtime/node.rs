@@ -330,7 +330,8 @@ impl Node {
             for account in &accounts {
                 storage.persist_account(account)?;
             }
-            let ledger = Ledger::load(accounts.clone(), config.epoch_length);
+            let utxo_snapshot = storage.load_utxo_snapshot()?.unwrap_or_default();
+            let ledger = Ledger::load(accounts.clone(), utxo_snapshot, config.epoch_length);
             let module_witnesses = ledger.drain_module_witnesses();
             let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
             let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
@@ -431,7 +432,8 @@ impl Node {
             accounts = storage.load_accounts()?;
         }
 
-        let ledger = Ledger::load(accounts, config.epoch_length);
+        let utxo_snapshot = storage.load_utxo_snapshot()?.unwrap_or_default();
+        let ledger = Ledger::load(accounts, utxo_snapshot, config.epoch_length);
 
         let node_pk_hex = hex::encode(keypair.public.to_bytes());
         if ledger.get_account(&address).is_none() {

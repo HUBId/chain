@@ -21,7 +21,8 @@ use crate::node::NodeHandle;
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::proof_system::ProofProver;
 use crate::reputation::Tier;
-use crate::rpp::UtxoRecord;
+use crate::rpp::{UtxoOutpoint, UtxoRecord};
+use crate::state::StoredUtxo;
 use crate::storage::Storage;
 use crate::stwo::prover::WalletProver;
 use crate::types::{
@@ -93,6 +94,20 @@ impl Wallet {
 
     fn stark_prover(&self) -> WalletProver<'_> {
         WalletProver::new(&self.storage)
+    }
+
+    pub(crate) fn load_ledger_from_accounts(
+        &self,
+        accounts: Vec<Account>,
+    ) -> ChainResult<(Ledger, bool)> {
+        let utxo_snapshot = self.storage.load_utxo_snapshot()?;
+        let has_snapshot = utxo_snapshot.is_some();
+        let ledger = Ledger::load(
+            accounts,
+            utxo_snapshot.unwrap_or_default(),
+            DEFAULT_EPOCH_LENGTH,
+        );
+        Ok((ledger, has_snapshot))
     }
 
     pub fn address(&self) -> &Address {
@@ -277,7 +292,7 @@ impl Wallet {
         if let Some(metadata) = self.storage.tip()? {
             tip_height = metadata.height.saturating_add(1);
         }
-        let ledger = Ledger::load(accounts.clone(), DEFAULT_EPOCH_LENGTH);
+        let (ledger, _) = self.load_ledger_from_accounts(accounts)?;
         ledger.sync_epoch_for_height(tip_height);
         let epoch_nonce = ledger.current_epoch_nonce();
         let state_root = hex::encode(ledger.state_root());
@@ -339,11 +354,18 @@ impl Wallet {
         self.storage.load_accounts()
     }
 
+    pub fn persist_utxo_snapshot(
+        &self,
+        snapshot: &[(UtxoOutpoint, StoredUtxo)],
+    ) -> ChainResult<()> {
+        self.storage.persist_utxo_snapshot(snapshot)
+    }
+
     pub fn unspent_utxos(&self, owner: &Address) -> ChainResult<Vec<UtxoRecord>> {
         let accounts = self.storage.load_accounts()?;
-        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        let (ledger, has_snapshot) = self.load_ledger_from_accounts(accounts)?;
         let mut records = ledger.utxos_for_owner(owner);
-        if records.is_empty() {
+        if records.is_empty() && !has_snapshot {
             if let Some(account) = ledger.get_account(owner) {
                 records = synthetic_account_utxos(owner, account.balance);
             }
@@ -434,7 +456,7 @@ impl Wallet {
         };
 
         let accounts = self.storage.load_accounts()?;
-        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        let (ledger, _) = self.load_ledger_from_accounts(accounts)?;
         ledger.sync_epoch_for_height(tip_height);
         let epoch = ledger.current_epoch();
 

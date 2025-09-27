@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
+use crate::ledger::Ledger;
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::utxo::{StoredUtxo, UtxoState};
@@ -217,11 +217,13 @@ impl<'a> WalletWorkflows<'a> {
             ));
         }
         let accounts = self.wallet.accounts_snapshot()?;
-        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        let (ledger, has_snapshot) = self.wallet.load_ledger_from_accounts(accounts)?;
         let mut sender_pre_utxos = ledger.utxos_for_owner(self.wallet.address());
         if sender_pre_utxos.is_empty() {
-            sender_pre_utxos =
-                synthetic_account_utxos(self.wallet.address(), sender_account.balance);
+            if !has_snapshot {
+                sender_pre_utxos =
+                    synthetic_account_utxos(self.wallet.address(), sender_account.balance);
+            }
             if sender_pre_utxos.is_empty() {
                 return Err(ChainError::Transaction(
                     "wallet inputs unavailable for requested owner".into(),
@@ -282,7 +284,7 @@ impl<'a> WalletWorkflows<'a> {
                 .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
         }
         let mut recipient_pre_utxos = ledger.utxos_for_owner(&to);
-        if recipient_pre_utxos.is_empty() {
+        if recipient_pre_utxos.is_empty() && !has_snapshot {
             if let Some(ref account) = recipient_account {
                 recipient_pre_utxos = synthetic_account_utxos(&account.address, account.balance);
             }
@@ -315,7 +317,8 @@ impl<'a> WalletWorkflows<'a> {
         };
         let state_root = self.wallet.firewood_state_root()?;
         let ledger_commitment = ledger.global_commitments().utxo_root;
-        let (reconstructed_commitment, synthetic_used) = rebuild_utxo_commitment(&ledger);
+        let (reconstructed_commitment, synthetic_used) =
+            rebuild_utxo_commitment(&ledger, !has_snapshot);
         if !synthetic_used && ledger_commitment != reconstructed_commitment {
             return Err(ChainError::Config(
                 "wallet utxo snapshot mismatches ledger commitment".into(),
@@ -476,12 +479,12 @@ fn project_post_utxos(
     remaining
 }
 
-fn rebuild_utxo_commitment(ledger: &Ledger) -> ([u8; 32], bool) {
+fn rebuild_utxo_commitment(ledger: &Ledger, allow_synthetic: bool) -> ([u8; 32], bool) {
     let mirror = UtxoState::new();
     let mut synthetic_used = false;
     for account in ledger.accounts_snapshot() {
         let mut records = ledger.utxos_for_owner(&account.address);
-        if records.is_empty() && account.balance > 0 {
+        if records.is_empty() && allow_synthetic && account.balance > 0 {
             records = synthetic_account_utxos(&account.address, account.balance);
             synthetic_used = true;
         }
@@ -508,7 +511,53 @@ mod tests {
     use rand::rngs::OsRng;
     use tempfile::tempdir;
 
-    fn wallet_fixture(balance: u128) -> (Wallet, Address, Storage, tempfile::TempDir) {
+    fn wallet_fixture_with_utxos(
+        balance: u128,
+        utxo_values: &[u128],
+    ) -> (
+        Wallet,
+        Address,
+        Storage,
+        tempfile::TempDir,
+        Vec<(UtxoOutpoint, StoredUtxo)>,
+    ) {
+        let tempdir = tempdir().expect("temp dir");
+        let storage = Storage::open(tempdir.path()).expect("open storage");
+        let mut rng = OsRng;
+        let keypair = Keypair::generate(&mut rng);
+        let address = address_from_public_key(&keypair.public);
+        let mut account = Account::new(address.clone(), balance, Stake::default());
+        account.reputation.tier = Tier::Tl5;
+        account.reputation.score = 10.0;
+        account.reputation.timetokes = TimetokeBalance {
+            hours_online: 10_000,
+            ..TimetokeBalance::default()
+        };
+        account.reputation.zsi.validate("proof");
+        storage.persist_account(&account).expect("persist account");
+        let snapshot: Vec<_> = utxo_values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let mut tx_id = [0u8; 32];
+                tx_id[0] = (index as u8).wrapping_add(1);
+                (
+                    UtxoOutpoint {
+                        tx_id,
+                        index: index as u32,
+                    },
+                    StoredUtxo::new(address.clone(), *value),
+                )
+            })
+            .collect();
+        storage
+            .persist_utxo_snapshot(&snapshot)
+            .expect("persist utxo snapshot");
+        let wallet = Wallet::new(storage.clone(), keypair);
+        (wallet, address, storage, tempdir, snapshot)
+    }
+
+    fn wallet_fixture_legacy(balance: u128) -> (Wallet, Address, Storage, tempfile::TempDir) {
         let tempdir = tempdir().expect("temp dir");
         let storage = Storage::open(tempdir.path()).expect("open storage");
         let mut rng = OsRng;
@@ -527,33 +576,57 @@ mod tests {
         (wallet, address, storage, tempdir)
     }
 
+    fn snapshot_records(snapshot: &[(UtxoOutpoint, StoredUtxo)]) -> Vec<UtxoRecord> {
+        snapshot
+            .iter()
+            .map(|(outpoint, stored)| stored.to_record(outpoint))
+            .collect()
+    }
+
     #[test]
     fn wallet_utxo_view_matches_ledger() {
-        let (wallet, address, storage, _tempdir) = wallet_fixture(75_000);
+        let utxo_values = [30_000, 25_000, 20_000];
+        let (wallet, address, storage, _tempdir, snapshot) =
+            wallet_fixture_with_utxos(75_000, &utxo_values);
+        let expected = snapshot_records(&snapshot);
         let wallet_utxos = wallet.unspent_utxos(&address).expect("wallet utxo query");
-        assert_eq!(wallet_utxos.len(), 3);
-        let expected = synthetic_account_utxos(&address, 75_000);
         assert_eq!(wallet_utxos.len(), expected.len());
-        for (actual, projected) in wallet_utxos.iter().zip(expected.iter()) {
-            assert_eq!(actual.outpoint, projected.outpoint);
-            assert_eq!(actual.owner, projected.owner);
-            assert_eq!(actual.value, projected.value);
+        for (actual, record) in wallet_utxos.iter().zip(expected.iter()) {
+            assert_eq!(actual.outpoint, record.outpoint);
+            assert_eq!(actual.owner, record.owner);
+            assert_eq!(actual.value, record.value);
         }
 
         let accounts = storage.load_accounts().expect("load accounts");
-        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
-        let (commitment, _) = rebuild_utxo_commitment(&ledger);
+        let utxo_snapshot = storage
+            .load_utxo_snapshot()
+            .expect("load utxo snapshot")
+            .expect("snapshot present");
+        let ledger = Ledger::load(accounts, utxo_snapshot, DEFAULT_EPOCH_LENGTH);
+        let (commitment, synthetic_used) = rebuild_utxo_commitment(&ledger, false);
+        assert!(!synthetic_used);
         let reconstructed = hex::encode(commitment);
         let workflow = wallet
             .workflows()
             .transaction_bundle(address.clone(), 25_000, 100, None)
             .expect("self-transfer bundle");
         assert_eq!(workflow.utxo_commitment, reconstructed);
+        let expected_inputs =
+            select_input_outpoints(&expected, 25_000 + 100).expect("select expected inputs");
+        let actual_inputs: Vec<_> = workflow
+            .utxo_inputs
+            .iter()
+            .map(|record| record.outpoint.clone())
+            .collect();
+        assert_eq!(actual_inputs, expected_inputs);
     }
 
     #[test]
     fn wallet_rejects_conflicting_transaction_bundle() {
-        let (wallet, address, storage, _tempdir) = wallet_fixture(80_000);
+        let utxo_values = [20_000, 30_000, 30_000];
+        let (wallet, address, storage, _tempdir, snapshot) =
+            wallet_fixture_with_utxos(80_000, &utxo_values);
+        let expected_records = snapshot_records(&snapshot);
         let recipient = "recipient-address".to_string();
         let first_amount = 30_000u128;
         let fee = 100u64;
@@ -563,11 +636,9 @@ mod tests {
             .transaction_bundle(recipient.clone(), first_amount, fee, None)
             .expect("initial bundle");
         assert_eq!(workflow.utxo_inputs.len(), 2);
-        let expected_inputs = select_input_outpoints(
-            &synthetic_account_utxos(&address, 80_000),
-            first_amount + u128::from(fee),
-        )
-        .expect("select inputs");
+        let expected_inputs =
+            select_input_outpoints(&expected_records, first_amount + u128::from(fee))
+                .expect("select inputs");
         let actual_inputs: Vec<_> = workflow
             .utxo_inputs
             .iter()
@@ -583,8 +654,13 @@ mod tests {
         );
 
         let accounts = storage.load_accounts().expect("load accounts");
-        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
-        let (expected_commitment, _) = rebuild_utxo_commitment(&ledger);
+        let utxo_snapshot = storage
+            .load_utxo_snapshot()
+            .expect("load utxo snapshot")
+            .expect("snapshot present");
+        let ledger = Ledger::load(accounts, utxo_snapshot, DEFAULT_EPOCH_LENGTH);
+        let (expected_commitment, synthetic_used) = rebuild_utxo_commitment(&ledger, false);
+        assert!(!synthetic_used);
         assert_eq!(workflow.utxo_commitment, hex::encode(expected_commitment));
 
         let mut account = storage
@@ -604,5 +680,26 @@ mod tests {
             result,
             Err(ChainError::Transaction(message)) if message.contains("insufficient")
         ));
+    }
+
+    #[test]
+    fn wallet_legacy_state_uses_synthetic_utxos() {
+        let (wallet, address, storage, _tempdir) = wallet_fixture_legacy(60_000);
+        assert!(
+            storage
+                .load_utxo_snapshot()
+                .expect("load snapshot")
+                .is_none()
+        );
+        let utxos = wallet
+            .unspent_utxos(&address)
+            .expect("wallet utxos fallback");
+        let expected = synthetic_account_utxos(&address, 60_000);
+        assert_eq!(utxos.len(), expected.len());
+        for (actual, record) in utxos.iter().zip(expected.iter()) {
+            assert_eq!(actual.outpoint, record.outpoint);
+            assert_eq!(actual.owner, record.owner);
+            assert_eq!(actual.value, record.value);
+        }
     }
 }
