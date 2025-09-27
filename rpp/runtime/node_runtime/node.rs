@@ -542,6 +542,7 @@ mod tests {
                 timeout_ms: 50,
                 retry_max: 0,
                 sample_interval_secs: 1,
+                redact_logs: true,
             },
             identity: None,
             proof_storage_path,
