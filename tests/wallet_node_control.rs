@@ -65,7 +65,7 @@ async fn wallet_node_can_start_and_stop_multiple_times() -> Result<()> {
         // Allow the runtime to produce at least one block.
         sleep(Duration::from_millis(500)).await;
 
-        let status = runtime.handle().node_status()?;
+        let status = runtime.node_status_async().await?;
         assert_eq!(
             status.last_hash.len(),
             64,
