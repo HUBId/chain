@@ -6,10 +6,10 @@ use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
-use rpp_chain::consensus::SignedBftVote;
-use rpp_chain::node::NodeHandle;
-use rpp_chain::runtime::node_runtime::node::NodeEvent;
-use rpp_chain::types::{Block, TransactionProofBundle};
+use crate::consensus::SignedBftVote;
+use crate::node::NodeHandle;
+use crate::runtime::node_runtime::node::NodeEvent;
+use crate::types::{Block, TransactionProofBundle};
 
 /// Processes decoded gossip payloads for downstream pipelines.
 pub trait GossipProcessor: Send + Sync + 'static {
