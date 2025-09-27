@@ -4,9 +4,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
+use parking_lot::RwLock;
 use serde::{Serialize, de::DeserializeOwned};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use tokio::sync::Mutex;
 
+use crate::config::NodeConfig;
 use crate::consensus::evaluate_vrf;
 use crate::crypto::{
     StoredVrfKeypair, VrfKeypair, address_from_public_key, generate_vrf_keypair, sign_message,
@@ -14,6 +17,7 @@ use crate::crypto::{
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
+use crate::node::NodeHandle;
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::proof_system::ProofProver;
 use crate::reputation::Tier;
@@ -26,17 +30,28 @@ use crate::types::{
 };
 
 use super::workflows::synthetic_account_utxos;
+use super::{WalletNodeRuntime, start_node};
 
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
 const IDENTITY_WORKFLOW_KEY: &[u8] = b"wallet_identity_workflow";
 const IDENTITY_VRF_KEY: &[u8] = b"wallet_identity_vrf_keypair";
+const NODE_RUNTIME_CONFIG_KEY: &[u8] = b"wallet_node_runtime_config";
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletNodeRuntimeStatus {
+    pub running: bool,
+    pub config: Option<NodeConfig>,
+    pub address: Option<Address>,
+}
 
 #[derive(Clone)]
 pub struct Wallet {
     storage: Storage,
     keypair: Arc<Keypair>,
     address: Address,
+    node_runtime: Arc<Mutex<Option<WalletNodeRuntime>>>,
+    node_handle: Arc<RwLock<Option<NodeHandle>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -71,6 +86,8 @@ impl Wallet {
             storage,
             keypair: Arc::new(keypair),
             address,
+            node_runtime: Arc::new(Mutex::new(None)),
+            node_handle: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -84,6 +101,108 @@ impl Wallet {
 
     pub fn firewood_state_root(&self) -> ChainResult<String> {
         Ok(hex::encode(self.storage.state_root()?))
+    }
+
+    pub fn persist_node_runtime_config(&self, config: &NodeConfig) -> ChainResult<()> {
+        let mut encoded = serde_json::to_vec(config).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to encode wallet node runtime config for persistence: {err}"
+            ))
+        })?;
+        if encoded.is_empty() {
+            encoded = b"{}".to_vec();
+        }
+        self.storage
+            .write_metadata_blob(NODE_RUNTIME_CONFIG_KEY, encoded)
+    }
+
+    pub fn configure_node_runtime(&self, config: &NodeConfig) -> ChainResult<()> {
+        config.ensure_directories()?;
+        self.persist_node_runtime_config(config)
+    }
+
+    pub fn load_node_runtime_config(&self) -> ChainResult<Option<NodeConfig>> {
+        let maybe_bytes = self.storage.read_metadata_blob(NODE_RUNTIME_CONFIG_KEY)?;
+        let Some(bytes) = maybe_bytes else {
+            return Ok(None);
+        };
+        let config: NodeConfig = serde_json::from_slice(&bytes).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to decode wallet node runtime config: {err}"
+            ))
+        })?;
+        Ok(Some(config))
+    }
+
+    pub async fn start_node_runtime(&self) -> ChainResult<WalletNodeRuntimeStatus> {
+        let mut guard = self.node_runtime.lock().await;
+        if let Some(runtime) = guard.as_ref() {
+            return Ok(WalletNodeRuntimeStatus {
+                running: true,
+                config: Some(runtime.config().clone()),
+                address: Some(runtime.address().to_string()),
+            });
+        }
+
+        let config = self.load_node_runtime_config()?.ok_or_else(|| {
+            ChainError::Config("wallet node runtime configuration not found".into())
+        })?;
+        config.ensure_directories()?;
+        let runtime = start_node(config.clone()).await?;
+        let handle = runtime.node_handle();
+        *self.node_handle.write() = Some(handle);
+        let address = runtime.address().to_string();
+        let status = WalletNodeRuntimeStatus {
+            running: true,
+            config: Some(config.clone()),
+            address: Some(address),
+        };
+        *guard = Some(runtime);
+        Ok(status)
+    }
+
+    pub async fn stop_node_runtime(&self) -> ChainResult<WalletNodeRuntimeStatus> {
+        let mut guard = self.node_runtime.lock().await;
+        let Some(runtime) = guard.take() else {
+            let config = self.load_node_runtime_config()?;
+            return Ok(WalletNodeRuntimeStatus {
+                running: false,
+                config,
+                address: None,
+            });
+        };
+        let config = runtime.config().clone();
+        *self.node_handle.write() = None;
+        runtime.shutdown().await?;
+        Ok(WalletNodeRuntimeStatus {
+            running: false,
+            config: Some(config),
+            address: None,
+        })
+    }
+
+    pub fn node_runtime_running(&self) -> bool {
+        self.node_handle.read().is_some()
+    }
+
+    pub fn node_runtime_handle(&self) -> Option<NodeHandle> {
+        self.node_handle.read().clone()
+    }
+
+    pub fn node_runtime_status(&self) -> ChainResult<WalletNodeRuntimeStatus> {
+        let config = self.load_node_runtime_config()?;
+        if let Some(handle) = self.node_handle.read().clone() {
+            return Ok(WalletNodeRuntimeStatus {
+                running: true,
+                config,
+                address: Some(handle.address().to_string()),
+            });
+        }
+        Ok(WalletNodeRuntimeStatus {
+            running: false,
+            config,
+            address: None,
+        })
     }
 
     pub fn persist_identity_workflow_state<T: Serialize>(&self, state: &T) -> ChainResult<()> {

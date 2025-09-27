@@ -64,8 +64,21 @@ impl ApiContext {
         *self.mode.read()
     }
 
+    fn wallet_node_running(&self) -> bool {
+        self.wallet
+            .as_ref()
+            .map(|wallet| wallet.node_runtime_running())
+            .unwrap_or(false)
+    }
+
+    fn wallet_node_handle(&self) -> Option<NodeHandle> {
+        self.wallet
+            .as_ref()
+            .and_then(|wallet| wallet.node_runtime_handle())
+    }
+
     fn node_available(&self) -> bool {
-        self.node.is_some()
+        self.node.is_some() || self.wallet_node_running()
     }
 
     fn wallet_available(&self) -> bool {
@@ -89,7 +102,11 @@ impl ApiContext {
     }
 
     fn node_handle(&self) -> Option<NodeHandle> {
-        self.node.clone()
+        if let Some(handle) = self.node.clone() {
+            Some(handle)
+        } else {
+            self.wallet_node_handle()
+        }
     }
 
     fn wallet_handle(&self) -> Option<Arc<Wallet>> {

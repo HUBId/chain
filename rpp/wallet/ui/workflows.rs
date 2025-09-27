@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
+use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::utxo::{StoredUtxo, UtxoState};
@@ -220,10 +220,8 @@ impl<'a> WalletWorkflows<'a> {
         let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
         let mut sender_pre_utxos = ledger.utxos_for_owner(self.wallet.address());
         if sender_pre_utxos.is_empty() {
-            sender_pre_utxos = synthetic_account_utxos(
-                self.wallet.address(),
-                sender_account.balance,
-            );
+            sender_pre_utxos =
+                synthetic_account_utxos(self.wallet.address(), sender_account.balance);
             if sender_pre_utxos.is_empty() {
                 return Err(ChainError::Transaction(
                     "wallet inputs unavailable for requested owner".into(),
@@ -304,7 +302,12 @@ impl<'a> WalletWorkflows<'a> {
             recipient_pre_utxos = sender_pre_utxos.clone();
             sender_post_utxos.clone()
         } else {
-            project_post_utxos(&recipient_pre_utxos, &spent_outpoints, &planned_outputs, &to)
+            project_post_utxos(
+                &recipient_pre_utxos,
+                &spent_outpoints,
+                &planned_outputs,
+                &to,
+            )
         };
         let policy = TransactionPolicy {
             required_tier: Tier::Tl0,
@@ -398,10 +401,7 @@ pub(crate) fn synthetic_account_utxos(address: &Address, balance: u128) -> Vec<U
     outputs
 }
 
-fn select_input_outpoints(
-    records: &[UtxoRecord],
-    target: u128,
-) -> ChainResult<Vec<UtxoOutpoint>> {
+fn select_input_outpoints(records: &[UtxoRecord], target: u128) -> ChainResult<Vec<UtxoOutpoint>> {
     let mut total = 0u128;
     let mut selected = Vec::new();
     for record in records {
@@ -574,11 +574,13 @@ mod tests {
             .map(|record| record.outpoint.clone())
             .collect();
         assert_eq!(actual_inputs, expected_inputs);
-        assert!(workflow
-            .planned_outputs
-            .iter()
-            .enumerate()
-            .all(|(index, record)| record.outpoint.index == index as u32));
+        assert!(
+            workflow
+                .planned_outputs
+                .iter()
+                .enumerate()
+                .all(|(index, record)| record.outpoint.index == index as u32)
+        );
 
         let accounts = storage.load_accounts().expect("load accounts");
         let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
