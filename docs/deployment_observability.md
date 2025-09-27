@@ -44,7 +44,8 @@ production.
    payloads and tracks the last height observed.【F:src/node.rs†L455-L517】
 3. **Scrape structured logs.** Configure log aggregation to capture the
    `telemetry` target; payloads contain release channel, active feature gates,
-   and health snapshots for dashboards.【F:src/node.rs†L489-L517】
+   and health snapshots for dashboards, including the live `timetoke_params`
+   (minimum window, accrual cap, decay cadence) for uptime tuning.【F:rpp/runtime/node.rs†L208-L214】【F:rpp/runtime/node.rs†L1207-L1218】
 4. **Track VRF participation.** The node status snapshot includes `vrf_metrics`
    with submission counts, accepted validators, rejection totals, and fallback
    usage so dashboards can alert on declining VRF participation or repeated

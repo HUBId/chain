@@ -194,6 +194,16 @@ impl Default for TimetokeParams {
     }
 }
 
+impl TimetokeParams {
+    pub fn validate_for_accrual(&self) -> bool {
+        self.minimum_window_secs > 0 && self.accrual_cap_hours > 0
+    }
+
+    pub fn validate_for_decay(&self) -> bool {
+        self.decay_interval_secs > 0 && self.decay_step_hours > 0
+    }
+}
+
 impl Default for ReputationWeights {
     fn default() -> Self {
         Self::new(0.4, 0.2, 0.2, 0.15, 0.05).expect("default weights must be valid")
@@ -325,6 +335,9 @@ impl TimetokeBalance {
         window_end: u64,
         params: &TimetokeParams,
     ) -> Option<u64> {
+        if !params.validate_for_accrual() {
+            return None;
+        }
         if window_end <= window_start {
             return None;
         }
@@ -365,7 +378,7 @@ impl TimetokeBalance {
     }
 
     pub fn apply_decay(&mut self, now: u64, params: &TimetokeParams) -> Option<u64> {
-        if params.decay_interval_secs == 0 || params.decay_step_hours == 0 {
+        if !params.validate_for_decay() {
             return None;
         }
         if self.last_decay_timestamp == 0 {
@@ -620,6 +633,98 @@ mod tests {
             tier4_min_consensus_success: 7,
             tier5_min_score: 0.8,
         }
+    }
+
+    #[test]
+    fn record_proof_ignores_overlapping_windows() {
+        let mut balance = TimetokeBalance::default();
+        let params = TimetokeParams::default();
+
+        let credited = balance.record_proof(0, 7_200, &params);
+        assert_eq!(credited, Some(2));
+        assert_eq!(balance.hours_online, 2);
+
+        let credited = balance.record_proof(3_600, 10_800, &params);
+        assert_eq!(credited, Some(1));
+        assert_eq!(balance.hours_online, 3);
+
+        assert_eq!(balance.record_proof(0, 7_200, &params), None);
+    }
+
+    #[test]
+    fn record_proof_respects_accrual_cap() {
+        let mut balance = TimetokeBalance::default();
+        let mut params = TimetokeParams::default();
+        params.accrual_cap_hours = 5;
+
+        let credited = balance.record_proof(0, 21_600, &params);
+        assert_eq!(credited, Some(5));
+        assert_eq!(balance.hours_online, 5);
+
+        let credited = balance.record_proof(21_600, 28_800, &params);
+        assert_eq!(credited, Some(0));
+        assert_eq!(balance.hours_online, 5);
+    }
+
+    #[test]
+    fn apply_decay_consumes_multiple_intervals() {
+        let mut balance = TimetokeBalance {
+            hours_online: 10,
+            last_proof_timestamp: 3_600,
+            last_decay_timestamp: 3_600,
+            last_sync_timestamp: 0,
+        };
+        let mut params = TimetokeParams::default();
+        params.decay_interval_secs = 3_600;
+        params.decay_step_hours = 2;
+
+        let removed = balance.apply_decay(14_400, &params);
+        assert_eq!(removed, Some(6));
+        assert_eq!(balance.hours_online, 4);
+        assert_eq!(balance.last_decay_timestamp, 14_400);
+    }
+
+    #[test]
+    fn should_sync_respects_toggle_and_intervals() {
+        let mut balance = TimetokeBalance::default();
+        let params = TimetokeParams::default();
+
+        assert!(!balance.should_sync(0, &params));
+
+        balance.hours_online = 1;
+        assert!(balance.should_sync(0, &params));
+
+        balance.mark_synced(100);
+        assert!(!balance.should_sync(100, &params));
+        assert!(!balance.should_sync(100 + params.sync_interval_secs - 1, &params));
+        assert!(balance.should_sync(100 + params.sync_interval_secs, &params));
+
+        let mut disabled = params.clone();
+        disabled.sync_interval_secs = 0;
+        assert!(!balance.should_sync(1_000, &disabled));
+    }
+
+    #[test]
+    fn invalid_parameters_short_circuit_accrual_and_decay() {
+        let mut balance = TimetokeBalance::default();
+        let mut params = TimetokeParams::default();
+        params.minimum_window_secs = 0;
+        assert_eq!(balance.record_proof(0, 3_600, &params), None);
+
+        params.minimum_window_secs = 3_600;
+        params.accrual_cap_hours = 0;
+        assert_eq!(balance.record_proof(0, 7_200, &params), None);
+
+        balance.hours_online = 5;
+        balance.last_decay_timestamp = 1;
+
+        let mut decay_params = TimetokeParams::default();
+        decay_params.decay_interval_secs = 0;
+        assert_eq!(balance.apply_decay(10, &decay_params), None);
+
+        decay_params.decay_interval_secs = 100;
+        decay_params.decay_step_hours = 0;
+        assert_eq!(balance.apply_decay(200, &decay_params), None);
     }
 
     #[test]

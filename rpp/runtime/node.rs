@@ -32,7 +32,7 @@ use crate::ledger::{
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_system::{ProofProver, ProofVerifierRegistry};
-use crate::reputation::Tier;
+use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
@@ -211,6 +211,7 @@ pub struct NodeTelemetrySnapshot {
     pub node: NodeStatus,
     pub consensus: ConsensusStatus,
     pub mempool: MempoolStatus,
+    pub timetoke_params: TimetokeParams,
 }
 
 pub struct Node {
@@ -1213,6 +1214,7 @@ impl NodeInner {
             node,
             consensus,
             mempool,
+            timetoke_params: self.ledger.timetoke_params(),
         })
     }
 
@@ -2984,7 +2986,8 @@ pub(super) async fn dispatch_telemetry_snapshot(
 mod telemetry_tests {
     use super::{
         ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
-        ReleaseChannel, TelemetryConfig, dispatch_telemetry_snapshot, send_telemetry_with_tracking,
+        ReleaseChannel, TelemetryConfig, TimetokeParams, dispatch_telemetry_snapshot,
+        send_telemetry_with_tracking,
     };
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
@@ -3125,6 +3128,7 @@ mod telemetry_tests {
                 votes: Vec::new(),
                 uptime_proofs: Vec::new(),
             },
+            timetoke_params: TimetokeParams::default(),
         }
     }
 
