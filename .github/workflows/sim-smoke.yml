@@ -1,0 +1,37 @@
+name: sim-smoke
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  sim-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run deterministic smoke scenario
+        run: |
+          cargo test -p rpp-sim --test sim_smoke -- --ignored
+          cargo run -p rpp-sim -- --scenario scenarios/small_world_smoke.toml --output target/sim-smoke/summary.json
+          python3 - <<'PY'
+import json
+from pathlib import Path
+summary_path = Path('target/sim-smoke/summary.json')
+if not summary_path.exists():
+    raise SystemExit('summary file missing')
+with summary_path.open() as fh:
+    data = json.load(fh)
+required = ['total_publishes', 'total_receives', 'duplicates', 'propagation']
+for key in required:
+    if key not in data:
+        raise SystemExit(f'missing key {key} in summary json')
+prop = data['propagation']
+if prop is None:
+    raise SystemExit('propagation percentiles missing')
+p95 = prop['p95_ms']
+if not (10000.0 <= p95 <= 60000.0):
+    raise SystemExit(f'p95 out of corridor: {p95}')
+print('Smoke checks passed with p95', p95)
+PY

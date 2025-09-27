@@ -1,0 +1,22 @@
+[sim]
+seed = 2024
+duration_ms = 10000
+
+[topology]
+type = "small_world"
+n = 30
+k = 6
+rewire_p = 0.1
+
+[traffic.tx]
+publisher_bias = { type = "uniform" }
+
+[[traffic.tx.phases]]
+name = "steady"
+duration_ms = 10000
+model = "poisson"
+lambda_per_sec = 8.0
+
+[metrics]
+json = "target/sim-smoke/summary.json"
+csv = "target/sim-smoke/summary.csv"

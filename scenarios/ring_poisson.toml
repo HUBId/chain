@@ -1,0 +1,58 @@
+[sim]
+seed = 42
+duration_ms = 10000
+
+[topology]
+type = "ring"
+n = 8
+k = 2
+
+[regions]
+assignments = ["EU", "US", "EU", "US", "EU", "US", "EU", "US"]
+
+[links]
+intra = { delay_ms = 10, jitter_ms = 1, loss = 0.0 }
+EU-US = { delay_ms = 75, jitter_ms = 12, loss = 0.5 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.1 }
+
+[metrics]
+json = "output/ring_poisson_summary.json"
+csv = "output/ring_poisson_summary.csv"
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 3000
+model = "poisson"
+lambda_per_sec = 5.0
+
+[[traffic.tx.phases]]
+name = "burst"
+duration_ms = 4000
+model = "on_off_bursty"
+on_lambda_per_sec = 22.0
+on_duration_ms = 1200
+off_duration_ms = 600
+
+[[traffic.tx.phases]]
+name = "cooldown"
+duration_ms = 3000
+model = "poisson"
+lambda_per_sec = 6.0
+
+[faults.partition]
+start_ms = 2000
+duration_ms = 3000
+group_a = "EU"
+group_b = "US"
+
+[faults.churn]
+start_ms = 1000
+rate_per_min = 120.0
+restart_after_ms = 500
+
+[faults.byzantine]
+start_ms = 1500
+spam_factor = 3
+publishers = [0]
