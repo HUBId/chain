@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
-use crate::reputation::{ReputationParams, TierThresholds};
+use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds};
 use crate::types::Stake;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -184,11 +184,17 @@ impl Default for NodeConfig {
 #[serde(default)]
 pub struct ReputationConfig {
     pub tier_thresholds: TierThresholds,
+    pub weights: Option<ReputationWeights>,
 }
 
 impl ReputationConfig {
     pub fn reputation_params(&self) -> ReputationParams {
+        let weights = self
+            .weights
+            .clone()
+            .unwrap_or_else(ReputationWeights::default);
         ReputationParams {
+            weights,
             tier_thresholds: self.tier_thresholds.clone(),
             ..ReputationParams::default()
         }
@@ -199,7 +205,32 @@ impl Default for ReputationConfig {
     fn default() -> Self {
         Self {
             tier_thresholds: TierThresholds::default(),
+            weights: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reputation_config_applies_weight_overrides() {
+        let custom = ReputationWeights::new(0.5, 0.2, 0.2, 0.05, 0.05).unwrap();
+        let config = ReputationConfig {
+            weights: Some(custom.clone()),
+            ..Default::default()
+        };
+
+        let params = config.reputation_params();
+        assert!((params.weights.validation() - custom.validation()).abs() < f64::EPSILON);
+        assert!((params.weights.decay() - custom.decay()).abs() < f64::EPSILON);
+
+        let default_params = ReputationConfig::default().reputation_params();
+        assert!(
+            (default_params.weights.validation() - ReputationWeights::default().validation()).abs()
+                < f64::EPSILON
+        );
     }
 }
 
