@@ -92,3 +92,20 @@ impl BlockProofBundle {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "backend-plonky3")]
+    mod plonky3 {
+        use super::super::{ChainProof, ProofSystemKind};
+        use crate::errors::ChainError;
+
+        #[test]
+        fn chain_proof_reports_backend() {
+            let proof = ChainProof::Plonky3(serde_json::json!({"commitment": "abc"}));
+            assert_eq!(proof.system(), ProofSystemKind::Plonky3);
+            assert!(matches!(proof.expect_stwo(), Err(ChainError::Crypto(_))));
+            assert!(matches!(proof.clone().into_stwo(), Err(ChainError::Crypto(_))));
+        }
+    }
+}

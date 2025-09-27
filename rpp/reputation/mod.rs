@@ -475,7 +475,7 @@ pub struct ReputationProfile {
 
 impl ReputationProfile {
     pub fn new(identity_hint: &str) -> Self {
-        Self {
+        let mut profile = Self {
             zsi: ZsiIdentity::new(identity_hint),
             timetokes: TimetokeBalance::default(),
             consensus_success: 0,
@@ -483,7 +483,9 @@ impl ReputationProfile {
             last_decay_timestamp: current_timestamp(),
             score: 0.0,
             tier: Tier::default(),
-        }
+        };
+        profile.update_tier();
+        profile
     }
 
     /// Marks the profile as having a validated genesis identity while keeping

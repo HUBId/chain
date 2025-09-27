@@ -30,11 +30,11 @@ impl GlobalState {
         state
     }
 
-    pub fn read_accounts(&self) -> RwLockReadGuard<HashMap<Address, Account>> {
+    pub fn read_accounts(&self) -> RwLockReadGuard<'_, HashMap<Address, Account>> {
         self.accounts.read()
     }
 
-    pub fn write_accounts(&self) -> RwLockWriteGuard<HashMap<Address, Account>> {
+    pub fn write_accounts(&self) -> RwLockWriteGuard<'_, HashMap<Address, Account>> {
         self.accounts.write()
     }
 

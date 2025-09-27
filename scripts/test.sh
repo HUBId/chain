@@ -39,7 +39,6 @@ PROFILE_ARGS=()
 FEATURE_ARGS=()
 PASSTHROUGH_ARGS=()
 FEATURE_SET_SELECTED=""
-CUSTOM_FEATURES=false
 SUITES_SELECTED=()
 BACKENDS=()
 
@@ -110,7 +109,7 @@ while [[ $# -gt 0 ]]; do
         echo "error: --feature-set requires a value" >&2
         exit 1
       fi
-      if [[ -n "$FEATURE_SET_SELECTED" || $CUSTOM_FEATURES == true ]]; then
+      if [[ -n "$FEATURE_SET_SELECTED" ]]; then
         echo "error: feature set already specified" >&2
         exit 1
       fi
@@ -140,12 +139,10 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       FEATURE_ARGS+=("--features" "$2")
-      CUSTOM_FEATURES=true
       shift 2
       ;;
     --no-default-features|--all-features)
       FEATURE_ARGS+=("$1")
-      CUSTOM_FEATURES=true
       shift
       ;;
     --target|--package|--bin|--example|--test|--bench)
@@ -180,11 +177,6 @@ if [[ ${#BACKENDS[@]} -eq 0 ]]; then
   BACKENDS=(default)
 fi
 
-if [[ $CUSTOM_FEATURES == true && ${#BACKENDS[@]} -gt 1 ]]; then
-  echo "error: custom feature flags cannot be combined with multiple backends" >&2
-  exit 1
-fi
-
 run_suite() {
   local suite="$1"
   local backend="$2"
@@ -198,7 +190,7 @@ run_suite() {
       backend_args=("--no-default-features" "--features" "backend-stwo")
       ;;
     plonky3)
-      backend_args=("--no-default-features" "--features" "backend-plonky3")
+      backend_args=("--features" "backend-plonky3")
       ;;
     *)
       echo "error: unsupported backend '$backend'" >&2
@@ -206,11 +198,7 @@ run_suite() {
       ;;
   esac
 
-  if [[ $CUSTOM_FEATURES == true ]]; then
-    backend_args=("${FEATURE_ARGS[@]}")
-  else
-    backend_args+=("${FEATURE_ARGS[@]}")
-  fi
+  backend_args+=("${FEATURE_ARGS[@]}")
 
   local -a command=(cargo test "${PROFILE_ARGS[@]}" "${backend_args[@]}" "${PASSTHROUGH_ARGS[@]}")
 
