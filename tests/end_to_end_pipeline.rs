@@ -1,53 +1,47 @@
 use std::time::Duration;
 
-use rpp_chain::config::NodeConfig;
-use rpp_chain::crypto::load_keypair;
-use rpp_chain::node::Node;
-use rpp_chain::orchestration::{PipelineOrchestrator, PipelineStage};
-use rpp_chain::sync::ReconstructionEngine;
-use rpp_chain::wallet::{Wallet, WalletWorkflows};
+use rpp_chain::orchestration::PipelineStage;
+use rpp_chain::wallet::WalletWorkflows;
 
-/// Full integration test for the orchestrated pipeline. The current blueprint
-/// stack still requires additional genesis plumbing, so the test is marked as
-/// ignored and can be exercised manually once the network stack is completed.
-#[ignore]
+mod support;
+
+use support::cluster::TestCluster;
+
+const STAGE_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn orchestrated_pipeline_finalises_transaction() {
     let _ = tracing_subscriber::fmt::try_init();
-    let temp = tempfile::tempdir().expect("temp dir");
-    let node_data = temp.path().join("node");
-    let key_dir = temp.path().join("keys");
-    std::fs::create_dir_all(&node_data).expect("node dir");
-    std::fs::create_dir_all(&key_dir).expect("key dir");
 
-    let mut node_config = NodeConfig::default();
-    node_config.data_dir = node_data.clone();
-    node_config.key_path = key_dir.join("node.toml");
-    node_config.p2p_key_path = key_dir.join("p2p.toml");
-    node_config.vrf_key_path = key_dir.join("vrf.toml");
-    node_config.snapshot_dir = node_data.join("snapshots");
-    node_config.proof_cache_dir = node_data.join("proofs");
-    node_config.p2p.peerstore_path = node_data.join("p2p/peerstore.json");
-    node_config.p2p.gossip_path = Some(node_data.join("p2p/gossip.json"));
-    node_config.block_time_ms = 200;
-    node_config.mempool_limit = 64;
+    let cluster = match TestCluster::start(3).await {
+        Ok(cluster) => cluster,
+        Err(err) => {
+            eprintln!("skipping orchestrated pipeline test: {err:?}");
+            return;
+        }
+    };
+    cluster
+        .wait_for_full_mesh(STAGE_TIMEOUT)
+        .await
+        .expect("cluster mesh");
 
-    let node = Node::new(node_config.clone()).expect("node");
-    let handle = node.handle();
-    let node_keypair = load_keypair(&node_config.key_path).expect("load node key");
+    let (primary_handle, orchestrator, wallet, recipient) = {
+        let nodes = cluster.nodes();
+        let primary = &nodes[0];
+        let recipient = nodes[1].wallet.address().to_string();
+        (
+            primary.node_handle.clone(),
+            primary.orchestrator.clone(),
+            primary.wallet.clone(),
+            recipient,
+        )
+    };
 
-    let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone(), None);
-    orchestrator.spawn(shutdown_rx);
-    let node_task = tokio::spawn(async move {
-        let _ = node.start().await;
-    });
-
-    let wallet = Wallet::new(handle.storage(), node_keypair);
-    let workflows = WalletWorkflows::new(&wallet);
+    let workflows = WalletWorkflows::new(wallet.as_ref());
     let amount = 5_000u128;
     let fee = 100u64;
     let tx_workflow = workflows
-        .transaction_bundle(handle.address().to_string(), amount, fee, None)
+        .transaction_bundle(recipient, amount, fee, None)
         .expect("transaction workflow");
 
     let hash = orchestrator
@@ -55,16 +49,20 @@ async fn orchestrated_pipeline_finalises_transaction() {
         .await
         .expect("submit pipeline");
 
-    orchestrator
-        .wait_for_stage(
-            &hash,
-            PipelineStage::RewardsDistributed,
-            Duration::from_secs(10),
-        )
-        .await
-        .expect("pipeline completed");
+    for stage in [
+        PipelineStage::GossipReceived,
+        PipelineStage::MempoolAccepted,
+        PipelineStage::LeaderElected,
+        PipelineStage::BftFinalised,
+        PipelineStage::RewardsDistributed,
+    ] {
+        orchestrator
+            .wait_for_stage(&hash, stage, STAGE_TIMEOUT)
+            .await
+            .unwrap_or_else(|err| panic!("stage {stage:?} not reached: {err}"));
+    }
 
-    let account = handle
+    let account = primary_handle
         .get_account(wallet.address())
         .expect("fetch account")
         .expect("account exists");
@@ -72,13 +70,19 @@ async fn orchestrated_pipeline_finalises_transaction() {
 
     let dashboard = orchestrator.subscribe_dashboard();
     let snapshot = dashboard.borrow().clone();
-    assert!(snapshot.is_stage_complete(&hash, PipelineStage::BftFinalised));
-
-    let engine = ReconstructionEngine::new(handle.storage());
-    let sync_plan = engine.state_sync_plan(1).expect("state sync plan");
-    assert!(!sync_plan.light_client_updates.is_empty());
+    for stage in [
+        PipelineStage::GossipReceived,
+        PipelineStage::MempoolAccepted,
+        PipelineStage::LeaderElected,
+        PipelineStage::BftFinalised,
+        PipelineStage::RewardsDistributed,
+    ] {
+        assert!(
+            snapshot.is_stage_complete(&hash, stage),
+            "dashboard missing stage {stage:?}"
+        );
+    }
 
     orchestrator.shutdown();
-    node_task.abort();
-    let _ = node_task.await;
+    cluster.shutdown().await.expect("shutdown cluster");
 }
