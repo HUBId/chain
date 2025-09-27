@@ -164,7 +164,7 @@ impl Ledger {
             )
             .expect("genesis identity commitment");
             ledger.global_state.upsert(account.clone());
-            ledger.index_account_modules(&account, None);
+            ledger.index_account_modules(&account);
         }
         drop(tree);
         ledger.sync_epoch_for_height(0);
@@ -178,7 +178,7 @@ impl Ledger {
             .global_state
             .upsert(account.clone())
             .map(|existing| existing.reputation.zsi.public_key_commitment);
-        self.index_account_modules(&account, None);
+        self.index_account_modules(&account);
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(&address, previous_commitment.as_deref(), &new_commitment)?;
         Ok(())
@@ -244,7 +244,7 @@ impl Ledger {
         }
         drop(accounts);
         for account in &touched {
-            self.index_account_modules(account, None);
+            self.index_account_modules(account);
         }
         records.sort_by(|a, b| a.identity.cmp(&b.identity));
         records
@@ -267,7 +267,7 @@ impl Ledger {
         }
         drop(accounts);
         for account in &updated_accounts {
-            self.index_account_modules(account, None);
+            self.index_account_modules(account);
         }
         Ok(updated_accounts
             .into_iter()
@@ -278,11 +278,15 @@ impl Ledger {
     fn module_records(&self, address: &str) -> ModuleRecordSnapshots {
         let address = address.to_string();
         ModuleRecordSnapshots {
-            utxo: self.utxo_state.snapshot_for_account(&address),
+            utxo: self.utxo_snapshots_for(&address),
             reputation: self.reputation_state.get(&address),
             timetoke: self.timetoke_state.get(&address),
             zsi: self.zsi_registry.get(&address),
         }
+    }
+
+    fn utxo_snapshots_for(&self, address: &Address) -> Vec<(UtxoOutpoint, StoredUtxo)> {
+        self.utxo_state.snapshot_for_account(address)
     }
 
     pub fn stake_snapshot(&self) -> Vec<(Address, Stake)> {
@@ -306,7 +310,7 @@ impl Ledger {
         let WalletBindingChange { previous, current } = binding_change;
         let mut tree = self.identity_tree.write();
         tree.replace_commitment(address, previous.as_deref(), &current)?;
-        self.index_account_modules(&updated_account, None);
+        self.index_account_modules(&updated_account);
         Ok(())
     }
 
@@ -335,7 +339,7 @@ impl Ledger {
             penalty_percent: reason.penalty_percent(),
             timestamp,
         });
-        self.index_account_modules(&updated_account, None);
+        self.index_account_modules(&updated_account);
         let module_after = self.module_records(address);
         if let Some(reputation_after) = module_after.reputation.clone() {
             let mut book = self.module_witnesses.write();
@@ -555,7 +559,7 @@ impl Ledger {
             account.reputation.update_decay_reference(now);
             (credited, account.clone())
         };
-        self.index_account_modules(&updated_account, None);
+        self.index_account_modules(&updated_account);
         let module_after = self.module_records(&proof.wallet_address);
         {
             let mut book = self.module_witnesses.write();
@@ -723,11 +727,12 @@ impl Ledger {
             recipient_after.balance,
             recipient_after.nonce,
         );
-        let to_utxo_snapshot = |snapshots: &[(UtxoOutpoint, StoredUtxo)]| {
+        let to_utxo_snapshots = |snapshots: &[(UtxoOutpoint, StoredUtxo)]| {
             snapshots
-                .first()
+                .iter()
                 .cloned()
                 .map(|(outpoint, utxo)| TransactionUtxoSnapshot::new(outpoint, utxo))
+                .collect::<Vec<_>>()
         };
         let tx_witness = TransactionWitness::new(
             tx_id,
@@ -736,10 +741,10 @@ impl Ledger {
             sender_after_witness,
             recipient_before_witness,
             recipient_after_witness,
-            to_utxo_snapshot(&module_sender_before.utxo),
-            to_utxo_snapshot(&sender_modules_after.utxo),
-            to_utxo_snapshot(&module_recipient_before.utxo),
-            to_utxo_snapshot(&recipient_modules_after.utxo),
+            to_utxo_snapshots(&module_sender_before.utxo),
+            to_utxo_snapshots(&sender_modules_after.utxo),
+            to_utxo_snapshots(&module_recipient_before.utxo),
+            to_utxo_snapshots(&recipient_modules_after.utxo),
         );
 
         let sender_reputation_witness = sender_modules_after.reputation.clone().map(|after| {
@@ -806,7 +811,7 @@ impl Ledger {
                 }
             }
         };
-        self.index_account_modules(&updated_account, None);
+        self.index_account_modules(&updated_account);
         let module_after = self.module_records(address);
         if let Some(reputation_after) = module_after.reputation.clone() {
             let mut book = self.module_witnesses.write();
@@ -999,14 +1004,10 @@ impl Ledger {
         }))
     }
 
-    fn index_account_modules(&self, account: &Account, utxo_tx_id: Option<[u8; 32]>) {
+    fn index_account_modules(&self, account: &Account) {
         self.reputation_state.upsert_from_account(account);
         self.timetoke_state.upsert_from_account(account);
         self.zsi_registry.upsert_from_account(account);
-        match utxo_tx_id {
-            Some(tx_id) => self.utxo_state.upsert_with_transaction(account, tx_id),
-            None => self.utxo_state.upsert_from_account(account),
-        }
     }
 }
 
@@ -1378,13 +1379,9 @@ mod tests {
         );
 
         let initial_commitment = ledger.utxo_state.commitment();
-        let canonical_before = ledger
-            .utxo_state
-            .snapshot_for_account(&sender_address)
-            .into_iter()
-            .next()
-            .expect("sender utxo before");
-        assert_eq!(canonical_before.0, input_outpoint);
+        let canonical_before = ledger.utxo_state.snapshot_for_account(&sender_address);
+        assert_eq!(canonical_before.len(), 2);
+        assert_eq!(canonical_before[0].0, input_outpoint);
 
         let tx = Transaction::new(
             sender_address.clone(),
@@ -1445,20 +1442,13 @@ mod tests {
         }
         assert_eq!(mirror.commitment(), ledger.utxo_state.commitment());
 
-        let sender_snapshot = ledger
-            .utxo_state
-            .snapshot_for_account(&sender_address)
-            .into_iter()
-            .next()
-            .expect("sender snapshot after");
-        assert_eq!(sender_snapshot.0, sender_change_outpoint);
-        let recipient_snapshot = ledger
-            .utxo_state
-            .snapshot_for_account(&recipient_address)
-            .into_iter()
-            .next()
-            .expect("recipient snapshot after");
-        assert_eq!(recipient_snapshot.0, recipient_outpoint);
+        let sender_snapshot = ledger.utxo_state.snapshot_for_account(&sender_address);
+        assert_eq!(sender_snapshot.len(), 2);
+        assert_eq!(sender_snapshot[0].0, sender_change_outpoint);
+        assert_eq!(sender_snapshot[1].0, extra_outpoint);
+        let recipient_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
+        assert_eq!(recipient_snapshot.len(), 1);
+        assert_eq!(recipient_snapshot[0].0, recipient_outpoint);
     }
 
     #[test]
@@ -1481,14 +1471,17 @@ mod tests {
             .upsert_account(recipient_account.clone())
             .expect("insert recipient");
         let recipient_existing_tx_id = [4u8; 32];
-        ledger.index_account_modules(&recipient_account, Some(recipient_existing_tx_id));
+        let recipient_existing = UtxoOutpoint {
+            tx_id: recipient_existing_tx_id,
+            index: 0,
+        };
+        ledger.utxo_state.insert(
+            recipient_existing.clone(),
+            StoredUtxo::new(recipient_address.clone(), recipient_account.balance),
+        );
 
         let sender_input = UtxoOutpoint {
             tx_id: [3u8; 32],
-            index: 0,
-        };
-        let recipient_existing = UtxoOutpoint {
-            tx_id: recipient_existing_tx_id,
             index: 0,
         };
         ledger.utxo_state.insert(
@@ -1496,13 +1489,9 @@ mod tests {
             StoredUtxo::new(sender_address.clone(), 700),
         );
 
-        let recipient_before_snapshot = ledger
-            .utxo_state
-            .snapshot_for_account(&recipient_address)
-            .into_iter()
-            .next()
-            .expect("recipient snapshot before");
-        assert_eq!(recipient_before_snapshot.0, recipient_existing);
+        let recipient_before_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
+        assert_eq!(recipient_before_snapshot.len(), 1);
+        assert_eq!(recipient_before_snapshot[0].0, recipient_existing);
 
         let tx = Transaction::new(
             sender_address.clone(),
@@ -1542,13 +1531,9 @@ mod tests {
         assert_eq!(recipient_entry.owner, recipient_address);
         assert!(!recipient_entry.is_spent());
 
-        let recipient_snapshot = ledger
-            .utxo_state
-            .snapshot_for_account(&recipient_address)
-            .into_iter()
-            .next()
-            .expect("recipient snapshot after");
-        assert_eq!(recipient_snapshot.0, recipient_outpoint);
+        let recipient_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
+        assert_eq!(recipient_snapshot.len(), 1);
+        assert_eq!(recipient_snapshot[0].0, recipient_outpoint);
     }
 
     #[test]
@@ -1566,19 +1551,18 @@ mod tests {
             .expect("insert account");
 
         let existing_tx_id = [5u8; 32];
-        ledger.index_account_modules(&account, Some(existing_tx_id));
         let existing_outpoint = UtxoOutpoint {
             tx_id: existing_tx_id,
             index: 0,
         };
+        ledger.utxo_state.insert(
+            existing_outpoint.clone(),
+            StoredUtxo::new(address.clone(), account.balance),
+        );
 
-        let before_snapshot = ledger
-            .utxo_state
-            .snapshot_for_account(&address)
-            .into_iter()
-            .next()
-            .expect("snapshot before self transfer");
-        assert_eq!(before_snapshot.0, existing_outpoint);
+        let before_snapshot = ledger.utxo_state.snapshot_for_account(&address);
+        assert_eq!(before_snapshot.len(), 1);
+        assert_eq!(before_snapshot[0].0, existing_outpoint);
 
         let tx = Transaction::new(
             address.clone(),
@@ -1618,13 +1602,9 @@ mod tests {
                 .is_none()
         );
 
-        let snapshot_for_account = ledger
-            .utxo_state
-            .snapshot_for_account(&address)
-            .into_iter()
-            .next()
-            .expect("account snapshot after self transfer");
-        assert_eq!(snapshot_for_account.0, new_outpoint);
+        let snapshot_for_account = ledger.utxo_state.snapshot_for_account(&address);
+        assert_eq!(snapshot_for_account.len(), 1);
+        assert_eq!(snapshot_for_account[0].0, new_outpoint);
     }
 
     #[test]
@@ -1971,10 +1951,10 @@ mod tests {
             sender_after,
             Some(recipient_before),
             recipient_after,
-            None,
-            None,
-            None,
-            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
         bundle.record_transaction(tx_witness);
 

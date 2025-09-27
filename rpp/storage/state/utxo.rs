@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::merkle::compute_merkle_root;
-use crate::types::{Account, Address};
+use crate::types::Address;
 
 /// Stored representation of a UTXO tracked by the ledger state.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -131,29 +131,6 @@ impl UtxoState {
         self.unspent_pairs_for_owner(owner)
     }
 
-    pub fn upsert_from_account(&self, account: &Account) {
-        self.upsert_from_account_with_tx(account, None);
-    }
-
-    pub fn upsert_with_transaction(&self, account: &Account, tx_id: [u8; 32]) {
-        self.upsert_from_account_with_tx(account, Some(tx_id));
-    }
-
-    fn upsert_from_account_with_tx(&self, account: &Account, tx_id: Option<[u8; 32]>) {
-        let mut entries = self.entries.blocking_write();
-        let existing_tx_id = entries
-            .iter()
-            .find(|(outpoint, stored)| stored.owner == account.address && outpoint.index == 0)
-            .map(|(outpoint, _)| outpoint.tx_id);
-        let tx_id = tx_id.or(existing_tx_id).unwrap_or([0u8; 32]);
-
-        entries.retain(|_, stored| stored.owner != account.address);
-
-        let aggregated_outpoint = UtxoOutpoint { tx_id, index: 0 };
-        let stored = StoredUtxo::new(account.address.clone(), account.balance);
-        entries.insert(aggregated_outpoint, stored);
-    }
-
     pub fn unspent_outputs_for_owner(&self, owner: &Address) -> Vec<UtxoRecord> {
         self.unspent_pairs_for_owner(owner)
             .into_iter()
@@ -182,11 +159,6 @@ impl UtxoState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Stake;
-
-    fn sample_account(address: &str, balance: u128) -> Account {
-        Account::new(address.to_string(), balance, Stake::default())
-    }
 
     #[test]
     fn insert_and_get_round_trip() {
@@ -250,19 +222,6 @@ mod tests {
         assert_eq!(inputs[0].1.amount, 20);
         assert_eq!(inputs[1].0, first_outpoint);
         assert_eq!(inputs[1].1.amount, 10);
-    }
-
-    #[test]
-    fn upsert_from_account_rebuilds_record() {
-        let state = UtxoState::new();
-        let account = sample_account("dave", 100);
-        state.upsert_from_account(&account);
-        let records = state.get_for_account(&account.address);
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.owner, account.address);
-        assert_eq!(record.value, account.balance);
-        assert_eq!(record.outpoint.index, 0);
     }
 
     #[test]
