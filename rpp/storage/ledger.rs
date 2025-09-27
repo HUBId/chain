@@ -584,9 +584,9 @@ impl Ledger {
     /// Adds an outpoint to the spend queue if it has not already been marked for removal.
     fn queue_unique_spent_outpoint(
         spent_outpoints: &mut Vec<UtxoOutpoint>,
-        snapshot: &Option<(UtxoOutpoint, StoredUtxo)>,
+        snapshots: &[(UtxoOutpoint, StoredUtxo)],
     ) {
-        if let Some((outpoint, _)) = snapshot.as_ref() {
+        if let Some((outpoint, _)) = snapshots.first() {
             if !spent_outpoints.iter().any(|queued| queued == outpoint) {
                 spent_outpoints.push(outpoint.clone());
             }
@@ -723,9 +723,10 @@ impl Ledger {
             recipient_after.balance,
             recipient_after.nonce,
         );
-        let to_utxo_snapshot = |snapshot: &Option<(UtxoOutpoint, StoredUtxo)>| {
-            snapshot
-                .clone()
+        let to_utxo_snapshot = |snapshots: &[(UtxoOutpoint, StoredUtxo)]| {
+            snapshots
+                .first()
+                .cloned()
                 .map(|(outpoint, utxo)| TransactionUtxoSnapshot::new(outpoint, utxo))
         };
         let tx_witness = TransactionWitness::new(
@@ -1011,7 +1012,7 @@ impl Ledger {
 
 #[derive(Default, Clone)]
 struct ModuleRecordSnapshots {
-    utxo: Option<(UtxoOutpoint, StoredUtxo)>,
+    utxo: Vec<(UtxoOutpoint, StoredUtxo)>,
     reputation: Option<ReputationRecord>,
     timetoke: Option<TimetokeRecord>,
     zsi: Option<ZsiRecord>,
@@ -1380,6 +1381,8 @@ mod tests {
         let canonical_before = ledger
             .utxo_state
             .snapshot_for_account(&sender_address)
+            .into_iter()
+            .next()
             .expect("sender utxo before");
         assert_eq!(canonical_before.0, input_outpoint);
 
@@ -1401,14 +1404,15 @@ mod tests {
         assert_eq!(fee, 5);
 
         let snapshot_after = ledger.utxo_state.snapshot();
+        let snapshot_map: BTreeMap<_, _> = snapshot_after.iter().cloned().collect();
         assert!(
-            snapshot_after
+            snapshot_map
                 .get(&input_outpoint)
                 .expect("spent input entry")
                 .is_spent()
         );
         assert!(
-            !snapshot_after
+            !snapshot_map
                 .get(&extra_outpoint)
                 .expect("secondary output")
                 .is_spent()
@@ -1417,13 +1421,13 @@ mod tests {
         let recipient_outpoint = UtxoOutpoint { tx_id, index: 0 };
         let sender_change_outpoint = UtxoOutpoint { tx_id, index: 1 };
 
-        let recipient_entry = snapshot_after
+        let recipient_entry = snapshot_map
             .get(&recipient_outpoint)
             .expect("recipient output");
         assert_eq!(recipient_entry.owner, recipient_address);
         assert!(!recipient_entry.is_spent());
 
-        let sender_entry = snapshot_after
+        let sender_entry = snapshot_map
             .get(&sender_change_outpoint)
             .expect("sender change output");
         assert_eq!(sender_entry.owner, sender_address);
@@ -1432,7 +1436,7 @@ mod tests {
         assert_ne!(initial_commitment, ledger.utxo_state.commitment());
 
         let serialized = bincode::serialize(&snapshot_after).expect("serialize utxo snapshot");
-        let restored: BTreeMap<UtxoOutpoint, StoredUtxo> =
+        let restored: Vec<(UtxoOutpoint, StoredUtxo)> =
             bincode::deserialize(&serialized).expect("deserialize utxo snapshot");
         assert_eq!(restored.len(), snapshot_after.len());
         let mirror = UtxoState::new();
@@ -1444,11 +1448,15 @@ mod tests {
         let sender_snapshot = ledger
             .utxo_state
             .snapshot_for_account(&sender_address)
+            .into_iter()
+            .next()
             .expect("sender snapshot after");
         assert_eq!(sender_snapshot.0, sender_change_outpoint);
         let recipient_snapshot = ledger
             .utxo_state
             .snapshot_for_account(&recipient_address)
+            .into_iter()
+            .next()
             .expect("recipient snapshot after");
         assert_eq!(recipient_snapshot.0, recipient_outpoint);
     }
@@ -1491,6 +1499,8 @@ mod tests {
         let recipient_before_snapshot = ledger
             .utxo_state
             .snapshot_for_account(&recipient_address)
+            .into_iter()
+            .next()
             .expect("recipient snapshot before");
         assert_eq!(recipient_before_snapshot.0, recipient_existing);
 
@@ -1511,21 +1521,22 @@ mod tests {
             .expect("apply transaction with existing recipient utxo");
 
         let snapshot_after = ledger.utxo_state.snapshot();
+        let snapshot_map: BTreeMap<_, _> = snapshot_after.iter().cloned().collect();
         assert!(
-            snapshot_after
+            snapshot_map
                 .get(&sender_input)
                 .expect("sender input marked")
                 .is_spent()
         );
         assert!(
-            snapshot_after
+            snapshot_map
                 .get(&recipient_existing)
                 .expect("recipient prior output")
                 .is_spent()
         );
 
         let recipient_outpoint = UtxoOutpoint { tx_id, index: 0 };
-        let recipient_entry = snapshot_after
+        let recipient_entry = snapshot_map
             .get(&recipient_outpoint)
             .expect("new recipient output");
         assert_eq!(recipient_entry.owner, recipient_address);
@@ -1534,6 +1545,8 @@ mod tests {
         let recipient_snapshot = ledger
             .utxo_state
             .snapshot_for_account(&recipient_address)
+            .into_iter()
+            .next()
             .expect("recipient snapshot after");
         assert_eq!(recipient_snapshot.0, recipient_outpoint);
     }
@@ -1562,6 +1575,8 @@ mod tests {
         let before_snapshot = ledger
             .utxo_state
             .snapshot_for_account(&address)
+            .into_iter()
+            .next()
             .expect("snapshot before self transfer");
         assert_eq!(before_snapshot.0, existing_outpoint);
 
@@ -1582,22 +1597,23 @@ mod tests {
             .expect("self transfer applies");
 
         let snapshot_after = ledger.utxo_state.snapshot();
+        let snapshot_map: BTreeMap<_, _> = snapshot_after.iter().cloned().collect();
         assert!(
-            snapshot_after
+            snapshot_map
                 .get(&existing_outpoint)
                 .expect("existing outpoint")
                 .is_spent()
         );
 
         let new_outpoint = UtxoOutpoint { tx_id, index: 0 };
-        let new_entry = snapshot_after
+        let new_entry = snapshot_map
             .get(&new_outpoint)
             .expect("new consolidated output");
         assert_eq!(new_entry.owner, address);
         assert!(!new_entry.is_spent());
 
         assert!(
-            snapshot_after
+            snapshot_map
                 .get(&UtxoOutpoint { tx_id, index: 1 })
                 .is_none()
         );
@@ -1605,6 +1621,8 @@ mod tests {
         let snapshot_for_account = ledger
             .utxo_state
             .snapshot_for_account(&address)
+            .into_iter()
+            .next()
             .expect("account snapshot after self transfer");
         assert_eq!(snapshot_for_account.0, new_outpoint);
     }
