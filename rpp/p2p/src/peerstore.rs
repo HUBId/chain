@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use libp2p::Multiaddr;
 use libp2p::PeerId;
 use libp2p::{identity, multihash::Multihash};
@@ -11,8 +13,9 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::handshake::HandshakePayload;
+use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 use crate::tier::TierLevel;
+use schnorrkel::{Signature, keys::PublicKey as Sr25519PublicKey};
 
 #[derive(Debug, Error)]
 pub enum PeerstoreError {
@@ -30,11 +33,16 @@ pub enum PeerstoreError {
     InvalidVrf { peer: PeerId, reason: String },
 }
 
+pub trait IdentityVerifier: Send + Sync {
+    fn expected_vrf_public_key(&self, zsi_id: &str) -> Option<Vec<u8>>;
+}
+
 #[derive(Debug, Clone)]
 pub struct PeerRecord {
     pub peer_id: PeerId,
     pub addresses: Vec<Multiaddr>,
     pub zsi_id: Option<String>,
+    pub vrf_public_key: Option<Vec<u8>>,
     pub vrf_proof: Option<Vec<u8>>,
     pub tier: TierLevel,
     pub reputation: f64,
@@ -49,6 +57,7 @@ impl PeerRecord {
             peer_id,
             addresses: Vec::new(),
             zsi_id: None,
+            vrf_public_key: None,
             vrf_proof: None,
             tier: TierLevel::Tl0,
             reputation: 0.0,
@@ -60,6 +69,7 @@ impl PeerRecord {
 
     fn apply_handshake(&mut self, payload: &HandshakePayload) {
         self.zsi_id = Some(payload.zsi_id.clone());
+        self.vrf_public_key = payload.vrf_public_key.clone();
         self.vrf_proof = payload.vrf_proof.clone();
         self.tier = payload.tier;
         self.last_seen = Some(SystemTime::now());
@@ -123,6 +133,7 @@ struct StoredPeerRecord {
     peer_id: String,
     addresses: Vec<String>,
     zsi_id: Option<String>,
+    vrf_public_key: Option<String>,
     vrf_proof: Option<String>,
     tier: TierLevel,
     reputation: f64,
@@ -137,6 +148,10 @@ impl From<&PeerRecord> for StoredPeerRecord {
             peer_id: record.peer_id.to_base58(),
             addresses: record.addresses.iter().map(|a| a.to_string()).collect(),
             zsi_id: record.zsi_id.clone(),
+            vrf_public_key: record
+                .vrf_public_key
+                .as_ref()
+                .map(|bytes| hex::encode(bytes)),
             vrf_proof: record.vrf_proof.as_ref().map(|bytes| hex::encode(bytes)),
             tier: record.tier,
             reputation: record.reputation,
@@ -173,6 +188,10 @@ impl TryFrom<StoredPeerRecord> for PeerRecord {
             .filter_map(|addr| addr.parse().ok())
             .collect();
         record.zsi_id = value.zsi_id;
+        record.vrf_public_key = value
+            .vrf_public_key
+            .map(|hex| hex::decode(hex).map_err(|err| PeerstoreError::Encoding(err.to_string())))
+            .transpose()?;
         record.vrf_proof = value
             .vrf_proof
             .map(|hex| hex::decode(hex).map_err(|err| PeerstoreError::Encoding(err.to_string())))
@@ -207,27 +226,53 @@ pub struct ReputationSnapshot {
     pub banned_until: Option<SystemTime>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PeerstoreConfig {
     path: Option<PathBuf>,
+    identity_verifier: Option<Arc<dyn IdentityVerifier>>,
+}
+
+impl fmt::Debug for PeerstoreConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerstoreConfig")
+            .field("path", &self.path)
+            .finish()
+    }
 }
 
 impl PeerstoreConfig {
     pub fn memory() -> Self {
-        Self { path: None }
+        Self {
+            path: None,
+            identity_verifier: None,
+        }
     }
 
     pub fn persistent(path: impl Into<PathBuf>) -> Self {
         Self {
             path: Some(path.into()),
+            identity_verifier: None,
         }
+    }
+
+    pub fn with_identity_verifier(mut self, verifier: Arc<dyn IdentityVerifier>) -> Self {
+        self.identity_verifier = Some(verifier);
+        self
     }
 }
 
-#[derive(Debug)]
 pub struct Peerstore {
     config: PeerstoreConfig,
     peers: RwLock<HashMap<PeerId, PeerRecord>>,
+    identity_verifier: Option<Arc<dyn IdentityVerifier>>,
+}
+
+impl fmt::Debug for Peerstore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Peerstore")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Peerstore {
@@ -255,6 +300,7 @@ impl Peerstore {
         };
 
         Ok(Self {
+            identity_verifier: config.identity_verifier.clone(),
             config,
             peers: RwLock::new(peers),
         })
@@ -287,7 +333,7 @@ impl Peerstore {
     ) -> Result<(), PeerstoreError> {
         let public_key = self.resolve_public_key(peer_id)?;
         self.verify_signature(peer_id, payload, &public_key)?;
-        self.verify_vrf(peer_id, payload, &public_key)?;
+        self.verify_vrf(peer_id, payload)?;
 
         {
             let mut guard = self.peers.write();
@@ -475,23 +521,71 @@ impl Peerstore {
         &self,
         peer_id: PeerId,
         payload: &HandshakePayload,
-        public_key: &identity::PublicKey,
     ) -> Result<(), PeerstoreError> {
-        let Some(proof) = payload.vrf_proof.as_ref() else {
-            return Ok(());
+        let requires_proof = payload.tier >= TierLevel::Tl1;
+        let Some(public_key_bytes) = payload.vrf_public_key.as_ref() else {
+            return if requires_proof {
+                Err(PeerstoreError::InvalidVrf {
+                    peer: peer_id,
+                    reason: "missing vrf public key".into(),
+                })
+            } else {
+                Ok(())
+            };
         };
-        if proof.is_empty() {
+        let Some(proof_bytes) = payload.vrf_proof.as_ref() else {
+            return if requires_proof {
+                Err(PeerstoreError::InvalidVrf {
+                    peer: peer_id,
+                    reason: "missing vrf proof".into(),
+                })
+            } else {
+                Ok(())
+            };
+        };
+        if public_key_bytes.is_empty() || proof_bytes.is_empty() {
             return Err(PeerstoreError::InvalidVrf {
                 peer: peer_id,
-                reason: "empty proof".into(),
+                reason: "empty vrf material".into(),
             });
         }
-        if !public_key.verify(&payload.vrf_message(), proof) {
-            return Err(PeerstoreError::InvalidVrf {
+
+        if let Some(verifier) = &self.identity_verifier {
+            match verifier.expected_vrf_public_key(&payload.zsi_id) {
+                Some(expected) => {
+                    if expected.as_slice() != public_key_bytes.as_slice() {
+                        return Err(PeerstoreError::InvalidVrf {
+                            peer: peer_id,
+                            reason: "public key mismatch".into(),
+                        });
+                    }
+                }
+                None => {
+                    return Err(PeerstoreError::InvalidVrf {
+                        peer: peer_id,
+                        reason: "unknown identity".into(),
+                    });
+                }
+            }
+        }
+
+        let public_key = Sr25519PublicKey::from_bytes(public_key_bytes).map_err(|err| {
+            PeerstoreError::InvalidVrf {
                 peer: peer_id,
-                reason: "verification failed".into(),
-            });
-        }
+                reason: format!("invalid vrf public key: {err}"),
+            }
+        })?;
+        let signature =
+            Signature::from_bytes(proof_bytes).map_err(|err| PeerstoreError::InvalidVrf {
+                peer: peer_id,
+                reason: format!("invalid vrf proof bytes: {err}"),
+            })?;
+        public_key
+            .verify_simple(VRF_HANDSHAKE_CONTEXT, &payload.vrf_message(), &signature)
+            .map_err(|err| PeerstoreError::InvalidVrf {
+                peer: peer_id,
+                reason: format!("verification failed: {err}"),
+            })?;
         Ok(())
     }
 
@@ -524,19 +618,60 @@ fn derive_public_key(peer_id: &PeerId) -> Option<identity::PublicKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handshake::VRF_HANDSHAKE_CONTEXT;
     use libp2p::identity;
+    use rand::rngs::OsRng;
+    use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use tempfile::tempdir;
+
+    #[derive(Default)]
+    struct StaticVerifier {
+        expected: HashMap<String, Vec<u8>>,
+    }
+
+    impl StaticVerifier {
+        fn new(entries: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
+            Self {
+                expected: entries.into_iter().collect(),
+            }
+        }
+    }
+
+    impl IdentityVerifier for StaticVerifier {
+        fn expected_vrf_public_key(&self, zsi_id: &str) -> Option<Vec<u8>> {
+            self.expected.get(zsi_id).cloned()
+        }
+    }
+
+    fn sign_vrf_message(secret: &MiniSecretKey, payload: &HandshakePayload) -> Vec<u8> {
+        let keypair = secret.expand_to_keypair(ExpansionMode::Uniform);
+        keypair
+            .sign_simple(VRF_HANDSHAKE_CONTEXT, &payload.vrf_message())
+            .to_bytes()
+            .to_vec()
+    }
 
     fn signed_handshake(
         keypair: &identity::Keypair,
         zsi: &str,
         tier: TierLevel,
-        include_vrf: bool,
+        vrf_secret: Option<&MiniSecretKey>,
     ) -> HandshakePayload {
-        let base = HandshakePayload::new(zsi.to_string(), None, tier);
-        let vrf_proof = include_vrf
-            .then(|| keypair.sign(&base.vrf_message()).expect("vrf proof"));
-        let template = HandshakePayload::new(zsi.to_string(), vrf_proof, tier);
+        let (vrf_public_key, vrf_proof) = if let Some(secret) = vrf_secret {
+            let public = secret
+                .expand_to_keypair(ExpansionMode::Uniform)
+                .public
+                .to_bytes()
+                .to_vec();
+            let template = HandshakePayload::new(zsi.to_string(), Some(public.clone()), None, tier);
+            let proof = sign_vrf_message(secret, &template);
+            (Some(public), Some(proof))
+        } else {
+            (None, None)
+        };
+        let template = HandshakePayload::new(zsi.to_string(), vrf_public_key, vrf_proof, tier);
         template.signed(keypair).expect("sign handshake")
     }
 
@@ -544,21 +679,38 @@ mod tests {
     fn records_and_persists_peer_metadata() {
         let dir = tempdir().expect("tmp");
         let path = dir.path().join("peerstore.json");
-        let store = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("open");
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+        let verifier = Arc::new(StaticVerifier::new(vec![(
+            "zsi".to_string(),
+            public.clone(),
+        )]));
+        let store = Peerstore::open(
+            PeerstoreConfig::persistent(&path).with_identity_verifier(verifier.clone()),
+        )
+        .expect("open");
         let keypair = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
         let addr: Multiaddr = "/ip4/127.0.0.1/tcp/1234".parse().unwrap();
-        let payload = signed_handshake(&keypair, "zsi", TierLevel::Tl3, true);
+        let payload = signed_handshake(&keypair, "zsi", TierLevel::Tl3, Some(&secret));
 
         store.record_address(peer_id, addr.clone()).expect("addr");
         store
             .record_handshake(peer_id, &payload)
             .expect("handshake");
 
-        let loaded = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("reload");
+        let loaded =
+            Peerstore::open(PeerstoreConfig::persistent(&path).with_identity_verifier(verifier))
+                .expect("reload");
         let record = loaded.get(&peer_id).expect("record exists");
         assert_eq!(record.addresses, vec![addr]);
         assert_eq!(record.zsi_id.as_deref(), Some("zsi"));
+        assert_eq!(record.vrf_public_key, payload.vrf_public_key);
         assert_eq!(record.vrf_proof, payload.vrf_proof);
         assert_eq!(record.tier, TierLevel::Tl3);
     }
@@ -567,10 +719,24 @@ mod tests {
     fn updates_reputation_and_ban_state_across_restart() {
         let dir = tempdir().expect("tmp");
         let path = dir.path().join("peerstore.json");
-        let store = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("open");
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+        let verifier = Arc::new(StaticVerifier::new(vec![(
+            "peer".to_string(),
+            public.clone(),
+        )]));
+        let store = Peerstore::open(
+            PeerstoreConfig::persistent(&path).with_identity_verifier(verifier.clone()),
+        )
+        .expect("open");
         let keypair = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
-        let payload = signed_handshake(&keypair, "peer", TierLevel::Tl1, false);
+        let payload = signed_handshake(&keypair, "peer", TierLevel::Tl1, Some(&secret));
 
         store
             .record_handshake(peer_id, &payload)
@@ -587,10 +753,11 @@ mod tests {
 
         drop(store);
 
-        let reloaded = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("reload");
-        let snapshot = reloaded
-            .reputation_snapshot(&peer_id)
-            .expect("snapshot");
+        let reloaded = Peerstore::open(
+            PeerstoreConfig::persistent(&path).with_identity_verifier(verifier.clone()),
+        )
+        .expect("reload");
+        let snapshot = reloaded.reputation_snapshot(&peer_id).expect("snapshot");
         assert_eq!(snapshot.tier, TierLevel::Tl2);
         assert_eq!(snapshot.reputation, 2.4);
         let banned_until = snapshot.banned_until.expect("ban persisted");
@@ -607,19 +774,28 @@ mod tests {
         reloaded.unban_peer(peer_id).expect("unban");
         drop(reloaded);
 
-        let clean = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("clean");
-        let snapshot = clean
-            .reputation_snapshot(&peer_id)
-            .expect("snapshot");
+        let clean =
+            Peerstore::open(PeerstoreConfig::persistent(&path).with_identity_verifier(verifier))
+                .expect("clean");
+        let snapshot = clean.reputation_snapshot(&peer_id).expect("snapshot");
         assert!(snapshot.banned_until.is_none());
     }
 
     #[test]
     fn rejects_invalid_handshake_signature() {
-        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+        let verifier = Arc::new(StaticVerifier::new(vec![("peer".to_string(), public)]));
+        let store = Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+            .expect("open");
         let keypair = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
-        let mut payload = signed_handshake(&keypair, "peer", TierLevel::Tl2, false);
+        let mut payload = signed_handshake(&keypair, "peer", TierLevel::Tl2, Some(&secret));
         payload.signature[0] ^= 0x01;
 
         let result = store.record_handshake(peer_id, &payload);
@@ -631,13 +807,21 @@ mod tests {
 
     #[test]
     fn rejects_invalid_vrf_proof() {
-        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+        let verifier = Arc::new(StaticVerifier::new(vec![("peer".to_string(), public)]));
+        let store = Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+            .expect("open");
         let keypair = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
-        let mut payload = signed_handshake(&keypair, "peer", TierLevel::Tl3, true);
-        if let Some(proof) = payload.vrf_proof.as_mut() {
-            proof[0] ^= 0xFF;
-        }
+        let mut payload = signed_handshake(&keypair, "peer", TierLevel::Tl3, Some(&secret));
+        let proof = payload.vrf_proof.as_mut().expect("proof");
+        proof[0] ^= 0xFF;
         payload = payload.signed(&keypair).expect("resign");
 
         let result = store.record_handshake(peer_id, &payload);
@@ -645,5 +829,74 @@ mod tests {
             result,
             Err(PeerstoreError::InvalidVrf { peer, .. }) if peer == peer_id
         ));
+    }
+
+    #[test]
+    fn rejects_mismatched_vrf_identity() {
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let advertised_public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+        let fake_secret = MiniSecretKey::generate_with(&mut rng);
+        let verifier = Arc::new(StaticVerifier::new(vec![(
+            "peer".to_string(),
+            advertised_public.clone(),
+        )]));
+        let store = Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+            .expect("open");
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer_id = PeerId::from(keypair.public());
+        let payload = signed_handshake(&keypair, "peer", TierLevel::Tl2, Some(&fake_secret));
+
+        let result = store.record_handshake(peer_id, &payload);
+        assert!(matches!(
+            result,
+            Err(PeerstoreError::InvalidVrf { peer, .. }) if peer == peer_id
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_vrf_for_high_tier() {
+        let verifier = Arc::new(StaticVerifier::default());
+        let store = Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+            .expect("open");
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer_id = PeerId::from(keypair.public());
+        let payload = signed_handshake(&keypair, "peer", TierLevel::Tl2, None);
+
+        let result = store.record_handshake(peer_id, &payload);
+        assert!(matches!(
+            result,
+            Err(PeerstoreError::InvalidVrf { peer, .. }) if peer == peer_id
+        ));
+    }
+
+    #[test]
+    fn accepts_low_tier_without_vrf_proof() {
+        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer_id = PeerId::from(keypair.public());
+        let payload = signed_handshake(&keypair, "peer", TierLevel::Tl0, None);
+
+        store
+            .record_handshake(peer_id, &payload)
+            .expect("handshake should be accepted");
+    }
+
+    #[test]
+    fn accepts_valid_vrf_without_identity_verifier() {
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer_id = PeerId::from(keypair.public());
+        let payload = signed_handshake(&keypair, "peer", TierLevel::Tl3, Some(&secret));
+
+        store
+            .record_handshake(peer_id, &payload)
+            .expect("handshake should be accepted");
     }
 }

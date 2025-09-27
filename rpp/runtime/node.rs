@@ -51,7 +51,7 @@ use crate::types::{
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
-use rpp_p2p::{HandshakePayload, NodeIdentity, TierLevel};
+use rpp_p2p::{HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -299,6 +299,7 @@ struct VerifiedProposal {
 pub struct NetworkIdentityProfile {
     pub zsi_id: String,
     pub tier: TierLevel,
+    pub vrf_public_key: Vec<u8>,
     pub vrf_proof: Vec<u8>,
 }
 
@@ -2867,14 +2868,20 @@ impl NodeInner {
             .ok_or_else(|| ChainError::Config("node account missing in ledger".into()))?;
         let tier_level = tier_to_level(&account.reputation.tier);
         let zsi_id = account.reputation.zsi.public_key_commitment.clone();
-        let template = HandshakePayload::new(zsi_id.clone(), None, tier_level);
-        let keypair = self.p2p_identity.clone_keypair();
-        let vrf_proof = keypair.sign(&template.vrf_message()).map_err(|err| {
-            ChainError::Config(format!("failed to sign handshake vrf proof: {err}"))
-        })?;
+        let vrf_public_key = self.vrf_keypair.public.to_bytes().to_vec();
+        let template = HandshakePayload::new(
+            zsi_id.clone(),
+            Some(vrf_public_key.clone()),
+            None,
+            tier_level,
+        );
+        let sr_keypair = self.vrf_keypair.secret.expand_to_keypair();
+        let signature = sr_keypair.sign_simple(VRF_HANDSHAKE_CONTEXT, &template.vrf_message());
+        let vrf_proof = signature.to_bytes().to_vec();
         Ok(NetworkIdentityProfile {
             zsi_id,
             tier: tier_level,
+            vrf_public_key,
             vrf_proof,
         })
     }

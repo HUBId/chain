@@ -19,6 +19,7 @@ tracing = "0.1"
 blake3 = "1.5"
 blake2 = "0.10"
 rand = { version = "0.8", features = ["std"] }
+schnorrkel = "0.11"
 
 [dev-dependencies]
 tempfile = "3.10"

@@ -97,6 +97,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
 pub struct IdentityProfile {
     pub zsi_id: String,
     pub tier: TierLevel,
+    pub vrf_public_key: Vec<u8>,
     pub vrf_proof: Vec<u8>,
 }
 
@@ -105,6 +106,7 @@ impl From<NetworkIdentityProfile> for IdentityProfile {
         Self {
             zsi_id: profile.zsi_id,
             tier: profile.tier,
+            vrf_public_key: profile.vrf_public_key,
             vrf_proof: profile.vrf_proof,
         }
     }
@@ -321,7 +323,12 @@ impl NodeInner {
             NodeCommand::UpdateIdentity { profile, response } => {
                 let result = self
                     .network
-                    .update_identity(profile.zsi_id, profile.tier, profile.vrf_proof)
+                    .update_identity(
+                        profile.zsi_id,
+                        profile.tier,
+                        profile.vrf_public_key,
+                        profile.vrf_proof,
+                    )
                     .map_err(NodeError::from);
                 let _ = response.send(result);
                 Ok(false)
