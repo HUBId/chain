@@ -18,6 +18,10 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
    * `tier_thresholds` – Score-Grenzen für Tier 3+, konfigurierbar via
      `reputation.tier_thresholds` in `config/node.toml` für operatorseitige
      Anpassungen.【F:config/node.toml†L39-L43】
+   * `weights` – Gewichtung der Bewertungsquellen (Validierung, Uptime,
+     Konsens, Peer-Feedback, Decay). Alle Werte müssen im Bereich `[0.0, 1.0]`
+     liegen und sich zu `1.0` normalisieren; anpassbar per
+     `[reputation.weights]` im Node-/Governance-Config.【F:config/node.toml†L45-L51】
    * `timetoke_decay_rate`, `timetoke_accrual_rate`, `timetoke_cap` – Stabilisierung der Uptime-Gewichtung.
    * `snapshot_interval`, `max_snapshot_age` – Synchronisationsfenster.
 3. **Rewards & Slashing**

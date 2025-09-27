@@ -6,18 +6,124 @@ use crate::rpp::TimetokeRecord;
 use crate::types::Address;
 
 use hex;
+use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use thiserror::Error;
 
 /// Configuration weights used to evaluate the reputation score. The values
 /// mirror the blueprint defaults but can be tuned through governance.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ReputationWeights {
-    pub w_v: f64,
-    pub w_u: f64,
-    pub w_c: f64,
-    pub w_p: f64,
-    pub w_d: f64,
+    w_v: f64,
+    w_u: f64,
+    w_c: f64,
+    w_p: f64,
+    w_d: f64,
+}
+
+/// Errors that can occur when validating [`ReputationWeights`].
+#[derive(Clone, Debug, Error, PartialEq)]
+pub enum ReputationWeightsError {
+    #[error("weight `{field}` must be within [0, 1], got {value}")]
+    OutOfRange { field: &'static str, value: f64 },
+    #[error("weights must sum to 1.0 within tolerance {tolerance}, got {sum}")]
+    NotNormalized { sum: f64, tolerance: f64 },
+}
+
+impl ReputationWeights {
+    pub const NORMALIZATION_TOLERANCE: f64 = 1e-6;
+
+    pub fn new(
+        w_v: f64,
+        w_u: f64,
+        w_c: f64,
+        w_p: f64,
+        w_d: f64,
+    ) -> Result<Self, ReputationWeightsError> {
+        let raw = Self {
+            w_v,
+            w_u,
+            w_c,
+            w_p,
+            w_d,
+        };
+        raw.validate()?;
+        Ok(raw)
+    }
+
+    pub fn validation(&self) -> f64 {
+        self.w_v
+    }
+
+    pub fn uptime(&self) -> f64 {
+        self.w_u
+    }
+
+    pub fn consensus(&self) -> f64 {
+        self.w_c
+    }
+
+    pub fn peer_feedback(&self) -> f64 {
+        self.w_p
+    }
+
+    pub fn decay(&self) -> f64 {
+        self.w_d
+    }
+
+    pub fn validate(&self) -> Result<(), ReputationWeightsError> {
+        for (field, value) in self.iter() {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(ReputationWeightsError::OutOfRange { field, value });
+            }
+        }
+
+        let sum: f64 = self.iter().map(|(_, value)| value).sum();
+        if (sum - 1.0).abs() > Self::NORMALIZATION_TOLERANCE {
+            return Err(ReputationWeightsError::NotNormalized {
+                sum,
+                tolerance: Self::NORMALIZATION_TOLERANCE,
+            });
+        }
+
+        Ok(())
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&'static str, f64)> + '_ {
+        [
+            ("w_v", self.w_v),
+            ("w_u", self.w_u),
+            ("w_c", self.w_c),
+            ("w_p", self.w_p),
+            ("w_d", self.w_d),
+        ]
+        .into_iter()
+    }
+}
+
+impl<'de> Deserialize<'de> for ReputationWeights {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawWeights {
+            #[serde(alias = "validation")]
+            w_v: f64,
+            #[serde(alias = "uptime")]
+            w_u: f64,
+            #[serde(alias = "consensus")]
+            w_c: f64,
+            #[serde(alias = "peer_feedback")]
+            w_p: f64,
+            #[serde(alias = "decay")]
+            w_d: f64,
+        }
+
+        let raw = RawWeights::deserialize(deserializer)?;
+        ReputationWeights::new(raw.w_v, raw.w_u, raw.w_c, raw.w_p, raw.w_d).map_err(DeError::custom)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -90,13 +196,7 @@ impl Default for TimetokeParams {
 
 impl Default for ReputationWeights {
     fn default() -> Self {
-        Self {
-            w_v: 0.4,
-            w_u: 0.2,
-            w_c: 0.2,
-            w_p: 0.15,
-            w_d: 0.05,
-        }
+        Self::new(0.4, 0.2, 0.2, 0.15, 0.05).expect("default weights must be valid")
     }
 }
 
@@ -433,8 +533,11 @@ impl ReputationProfile {
         let c = Self::saturating_curve(self.consensus_success as f64, 128.0);
         let p = Self::saturating_curve(self.peer_feedback.max(0) as f64, 50.0);
         let decay = self.decay_penalty(now);
-        self.score = weights.w_v * v + weights.w_u * u + weights.w_c * c + weights.w_p * p
-            - weights.w_d * decay;
+        self.score = weights.validation() * v
+            + weights.uptime() * u
+            + weights.consensus() * c
+            + weights.peer_feedback() * p
+            - weights.decay() * decay;
         self.score = self.score.clamp(0.0, 1.0);
         self.update_tier_with(&params.tier_thresholds);
     }
@@ -517,6 +620,51 @@ mod tests {
             tier4_min_consensus_success: 7,
             tier5_min_score: 0.8,
         }
+    }
+
+    #[test]
+    fn reputation_weights_reject_negative_components() {
+        let err = ReputationWeights::new(-0.1, 0.5, 0.5, 0.1, 0.0).unwrap_err();
+        assert!(matches!(
+            err,
+            ReputationWeightsError::OutOfRange { field: "w_v", .. }
+        ));
+    }
+
+    #[test]
+    fn reputation_weights_require_normalized_sum() {
+        let err = ReputationWeights::new(0.5, 0.3, 0.3, 0.1, 0.0).unwrap_err();
+        assert!(matches!(err, ReputationWeightsError::NotNormalized { .. }));
+    }
+
+    #[test]
+    fn reputation_weights_allow_small_rounding_errors() {
+        let weights = ReputationWeights::new(0.4000002, 0.1999999, 0.2, 0.15, 0.05).unwrap();
+        let sum: f64 = weights.validation()
+            + weights.uptime()
+            + weights.consensus()
+            + weights.peer_feedback()
+            + weights.decay();
+        assert!((sum - 1.0).abs() < ReputationWeights::NORMALIZATION_TOLERANCE);
+    }
+
+    #[test]
+    fn weight_overrides_change_scoring_components() {
+        let now = 1_000;
+        let mut profile = validated_profile();
+        profile.timetokes.hours_online = 48;
+        profile.consensus_success = 200;
+        profile.peer_feedback = 150;
+        profile.last_decay_timestamp = now;
+
+        let weights_validation = ReputationWeights::new(1.0, 0.0, 0.0, 0.0, 0.0).unwrap();
+        profile.recompute_score(&weights_validation, now);
+        assert!((profile.score - 1.0).abs() < 1e-9);
+
+        let weights_peer = ReputationWeights::new(0.0, 0.0, 0.0, 1.0, 0.0).unwrap();
+        profile.peer_feedback = 0;
+        profile.recompute_score(&weights_peer, now);
+        assert!((profile.score - 0.0).abs() < 1e-9);
     }
 
     fn validated_profile() -> ReputationProfile {

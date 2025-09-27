@@ -42,6 +42,14 @@ tier3_min_consensus_success = 10
 tier4_min_consensus_success = 100
 tier5_min_score = 0.75
 
+[reputation.weights]
+# All reputation weights must be between 0.0 and 1.0 and sum to 1.0.
+validation = 0.4
+uptime = 0.2
+consensus = 0.2
+peer_feedback = 0.15
+decay = 0.05
+
 [genesis]
 chain_id = "rpp-local"
 
