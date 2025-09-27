@@ -158,7 +158,18 @@ impl Default for LinksSection {
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct MetricsSection {
+    /// Deprecated shorthand for `json`.
     pub output: Option<PathBuf>,
+    #[serde(default)]
+    pub json: Option<PathBuf>,
+    #[serde(default)]
+    pub csv: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MetricsOutputs {
+    pub json: Option<PathBuf>,
+    pub csv: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -354,10 +365,15 @@ impl Scenario {
         Ok(())
     }
 
-    pub fn metrics_output(&self) -> Option<PathBuf> {
-        self.metrics
-            .as_ref()
-            .and_then(|metrics| metrics.output.clone())
+    pub fn metrics_outputs(&self) -> MetricsOutputs {
+        let Some(section) = self.metrics.as_ref() else {
+            return MetricsOutputs::default();
+        };
+        let json_path = section.json.clone().or_else(|| section.output.clone());
+        MetricsOutputs {
+            json: json_path,
+            csv: section.csv.clone(),
+        }
     }
 
     pub fn node_regions(&self) -> Vec<String> {

@@ -17,6 +17,10 @@ EU-US = { delay_ms = 75, jitter_ms = 12, loss = 0.5 }
 [traffic.tx]
 publisher_bias = { type = "zipf", s = 1.1 }
 
+[metrics]
+json = "output/ring_poisson_summary.json"
+csv = "output/ring_poisson_summary.csv"
+
 [[traffic.tx.phases]]
 name = "warmup"
 duration_ms = 3000

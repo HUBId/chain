@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use rpp_sim::metrics::SimulationSummary;
+use rpp_sim::reporters::cli;
 use rpp_sim::scenario::Scenario;
 use rpp_sim::SimHarness;
-use serde_json::json;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run rpp network simulations", long_about = None)]
@@ -25,6 +25,7 @@ fn main() -> Result<()> {
     let summary: SimulationSummary = if let Some(output) = cli.output.clone() {
         let mut scenario = Scenario::from_path(&cli.scenario)?;
         let mut metrics = scenario.metrics.clone().unwrap_or_default();
+        metrics.json = Some(output.clone());
         metrics.output = Some(output);
         scenario.metrics = Some(metrics);
         harness.run_scenario(scenario)?
@@ -32,12 +33,7 @@ fn main() -> Result<()> {
         harness.run_from_path(&cli.scenario)?
     };
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "summary": summary
-        }))?
-    );
+    println!("{}", cli::render_compact(&summary));
 
     Ok(())
 }

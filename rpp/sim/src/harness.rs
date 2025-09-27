@@ -321,8 +321,12 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
         .into_inner();
     let summary = collector.finalize();
 
-    if let Some(output_path) = scenario.metrics_output() {
+    let metrics_outputs = scenario.metrics_outputs();
+    if let Some(output_path) = metrics_outputs.json {
         exporters::export_json(output_path, &summary)?;
+    }
+    if let Some(csv_path) = metrics_outputs.csv {
+        exporters::export_csv(csv_path, &summary)?;
     }
 
     Ok(summary)
