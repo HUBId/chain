@@ -4,6 +4,8 @@ use anyhow::{anyhow, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
+use super::TrafficStep;
+
 #[derive(Debug, Clone)]
 pub struct PoissonTraffic {
     rate_per_ms: f64,
@@ -22,18 +24,22 @@ impl PoissonTraffic {
         })
     }
 
-    pub fn next_arrival(&mut self) -> Duration {
-        let u = self.rng.gen::<f64>().clamp(f64::MIN_POSITIVE, 1.0);
-        let delta_ms = -u.ln() / self.rate_per_ms;
-        Duration::from_secs_f64(delta_ms / 1_000.0)
-    }
-
-    pub fn pick_publisher(&mut self, n: usize) -> usize {
-        if n == 0 {
-            return 0;
+    pub fn next_step(&mut self) -> TrafficStep {
+        let wait = sample_exponential(self.rate_per_ms, &mut self.rng);
+        TrafficStep {
+            wait,
+            publish: true,
         }
-        self.rng.gen_range(0, n)
     }
+}
+
+pub(crate) fn sample_exponential(rate_per_ms: f64, rng: &mut StdRng) -> Duration {
+    let u = rng
+        .gen::<f64>()
+        .clamp(f64::MIN_POSITIVE, 1.0 - f64::EPSILON);
+    let delta_ms = -u.ln() / rate_per_ms;
+    let nanos = (delta_ms * 1_000_000.0).max(1.0);
+    Duration::from_nanos(nanos as u64)
 }
 
 #[cfg(test)]
@@ -45,8 +51,7 @@ mod tests {
         let mut a = PoissonTraffic::new(5.0, 7).unwrap();
         let mut b = PoissonTraffic::new(5.0, 7).unwrap();
         for _ in 0..10 {
-            assert_eq!(a.next_arrival(), b.next_arrival());
-            assert_eq!(a.pick_publisher(5), b.pick_publisher(5));
+            assert_eq!(a.next_step(), b.next_step());
         }
     }
 }

@@ -21,7 +21,6 @@ use crate::topology::{
     annotate_links, AnnotatedLink, ErdosRenyiTopology, KRegularTopology, RingTopology,
     ScaleFreeTopology, SmallWorldTopology, Topology,
 };
-use crate::traffic::PoissonTraffic;
 
 pub struct SimHarness;
 
@@ -230,25 +229,45 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let mut traffic = PoissonTraffic::new(scenario.traffic.tx.lambda_per_sec, scenario.sim.seed)?;
+    let mut traffic = scenario.traffic_program()?;
     let total_duration = Duration::from_millis(scenario.sim.duration_ms);
     let mut elapsed = Duration::ZERO;
     let mut message_counter: u64 = 0;
 
     while elapsed < total_duration {
-        let wait = traffic.next_arrival();
-        elapsed += wait;
-        if elapsed > total_duration {
+        let step = match traffic.next_step() {
+            Some(step) => step,
+            None => {
+                let remaining = total_duration.saturating_sub(elapsed);
+                if remaining > Duration::ZERO {
+                    tokio::time::sleep(remaining).await;
+                    elapsed += remaining;
+                }
+                break;
+            }
+        };
+        let wait = step.wait;
+        if elapsed + wait > total_duration {
+            let remaining = total_duration - elapsed;
+            if remaining > Duration::ZERO {
+                tokio::time::sleep(remaining).await;
+                elapsed += remaining;
+            }
             break;
         }
         tokio::time::sleep(wait).await;
+        elapsed += wait;
+        if !step.publish {
+            continue;
+        }
         let publisher_idx = {
             let nodes = active_nodes.lock().await;
             if nodes.is_empty() {
                 None
             } else {
-                let selected = traffic.pick_publisher(nodes.len());
-                Some(nodes[selected])
+                traffic
+                    .pick_publisher(nodes.len())
+                    .map(|selected| nodes[selected])
             }
         };
         let Some(publisher_idx) = publisher_idx else {
@@ -490,6 +509,9 @@ assignments = ["EU", "US", "EU", "US"]
 default = { delay_ms = 0, jitter_ms = 0, loss = 0.0 }
 
 [traffic.tx]
+
+[[traffic.tx.phases]]
+duration_ms = 600
 model = "poisson"
 lambda_per_sec = 40.0
 
@@ -530,6 +552,9 @@ k = 2
 default = { delay_ms = 0, jitter_ms = 0, loss = 0.0 }
 
 [traffic.tx]
+
+[[traffic.tx.phases]]
+duration_ms = 800
 model = "poisson"
 lambda_per_sec = 35.0
 
@@ -566,6 +591,9 @@ k = 2
 default = { delay_ms = 0, jitter_ms = 0, loss = 0.0 }
 
 [traffic.tx]
+
+[[traffic.tx.phases]]
+duration_ms = 500
 model = "poisson"
 lambda_per_sec = 20.0
 

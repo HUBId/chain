@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::faults::{ByzantineFault, ChurnFault, PartitionFault};
+use crate::traffic::{
+    OnOffBursty, PoissonTraffic, PublisherSelectorBuilder, TrafficModelState, TrafficPhaseConfig,
+    TrafficProgram,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct Scenario {
@@ -60,10 +64,41 @@ pub struct TrafficSection {
     pub tx: TxTraffic,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TxTraffic {
-    pub model: String,
-    pub lambda_per_sec: f64,
+    #[serde(default)]
+    pub phases: Vec<TrafficPhase>,
+    #[serde(default)]
+    pub publisher_bias: Option<PublisherBiasConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct TrafficPhase {
+    #[serde(default)]
+    pub name: Option<String>,
+    pub duration_ms: u64,
+    #[serde(flatten)]
+    pub model: TrafficModelConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "model", rename_all = "snake_case")]
+pub enum TrafficModelConfig {
+    Poisson {
+        lambda_per_sec: f64,
+    },
+    OnOffBursty {
+        on_lambda_per_sec: f64,
+        on_duration_ms: u64,
+        off_duration_ms: u64,
+    },
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PublisherBiasConfig {
+    Uniform,
+    Zipf { s: f64 },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -170,10 +205,54 @@ impl Scenario {
     }
 
     fn validate(&self) -> Result<()> {
-        if self.traffic.tx.model != "poisson" {
+        if self.traffic.tx.phases.is_empty() {
+            return Err(anyhow!("at least one traffic phase must be specified"));
+        }
+        for (idx, phase) in self.traffic.tx.phases.iter().enumerate() {
+            if phase.duration_ms == 0 {
+                return Err(anyhow!("traffic phase {idx} duration must be positive"));
+            }
+            match &phase.model {
+                TrafficModelConfig::Poisson { lambda_per_sec } => {
+                    if *lambda_per_sec <= 0.0 {
+                        return Err(anyhow!(
+                            "traffic phase {idx} lambda_per_sec must be positive"
+                        ));
+                    }
+                }
+                TrafficModelConfig::OnOffBursty {
+                    on_lambda_per_sec,
+                    on_duration_ms,
+                    off_duration_ms,
+                } => {
+                    if *on_lambda_per_sec <= 0.0 {
+                        return Err(anyhow!(
+                            "traffic phase {idx} on_lambda_per_sec must be positive"
+                        ));
+                    }
+                    if *on_duration_ms == 0 {
+                        return Err(anyhow!(
+                            "traffic phase {idx} on_duration_ms must be positive"
+                        ));
+                    }
+                    if *off_duration_ms == 0 {
+                        return Err(anyhow!(
+                            "traffic phase {idx} off_duration_ms must be positive"
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(PublisherBiasConfig::Zipf { s }) = &self.traffic.tx.publisher_bias {
+            if *s <= 0.0 {
+                return Err(anyhow!("zipf bias parameter s must be positive"));
+            }
+        }
+        let total_phase_duration: u64 = self.traffic.tx.phases.iter().map(|p| p.duration_ms).sum();
+        if total_phase_duration > self.sim.duration_ms {
             return Err(anyhow!(
-                "only poisson traffic is currently supported (got {})",
-                self.traffic.tx.model
+                "sum of traffic phase durations ({total_phase_duration}) exceeds simulation duration ({})",
+                self.sim.duration_ms
             ));
         }
         if let Some(k) = self.topology.k {
@@ -318,5 +397,52 @@ impl Scenario {
                 cfg.publishers.clone(),
             )
         })
+    }
+
+    pub fn traffic_program(&self) -> Result<TrafficProgram> {
+        self.traffic.tx.build_program(self.sim.seed)
+    }
+}
+
+impl TxTraffic {
+    pub fn build_program(&self, seed: u64) -> Result<TrafficProgram> {
+        let mut phases = Vec::with_capacity(self.phases.len());
+        for (idx, phase) in self.phases.iter().enumerate() {
+            let phase_seed = seed ^ ((idx as u64 + 1) * 0x9E37_79B9_7F4A_7C15);
+            let model = phase.model.build(phase_seed)?;
+            phases.push(TrafficPhaseConfig {
+                name: phase.name.clone(),
+                duration: Duration::from_millis(phase.duration_ms),
+                model,
+            });
+        }
+        let selector_seed = seed ^ 0xA5A5_A5A5_A5A5_A5A5;
+        let publisher = match &self.publisher_bias {
+            Some(PublisherBiasConfig::Zipf { s }) => {
+                PublisherSelectorBuilder::zipf(selector_seed, *s)?
+            }
+            _ => PublisherSelectorBuilder::uniform(selector_seed),
+        };
+        Ok(TrafficProgram::new(phases, publisher))
+    }
+}
+
+impl TrafficModelConfig {
+    fn build(&self, seed: u64) -> Result<TrafficModelState> {
+        match self {
+            TrafficModelConfig::Poisson { lambda_per_sec } => Ok(TrafficModelState::Poisson(
+                PoissonTraffic::new(*lambda_per_sec, seed)?,
+            )),
+            TrafficModelConfig::OnOffBursty {
+                on_lambda_per_sec,
+                on_duration_ms,
+                off_duration_ms,
+            } => Ok(TrafficModelState::OnOff(OnOffBursty::new(
+                *on_lambda_per_sec,
+                *on_duration_ms,
+                *off_duration_ms,
+                seed,
+            )?)),
+        }
     }
 }

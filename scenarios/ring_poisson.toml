@@ -15,8 +15,27 @@ intra = { delay_ms = 10, jitter_ms = 1, loss = 0.0 }
 EU-US = { delay_ms = 75, jitter_ms = 12, loss = 0.5 }
 
 [traffic.tx]
+publisher_bias = { type = "zipf", s = 1.1 }
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 3000
 model = "poisson"
 lambda_per_sec = 5.0
+
+[[traffic.tx.phases]]
+name = "burst"
+duration_ms = 4000
+model = "on_off_bursty"
+on_lambda_per_sec = 22.0
+on_duration_ms = 1200
+off_duration_ms = 600
+
+[[traffic.tx.phases]]
+name = "cooldown"
+duration_ms = 3000
+model = "poisson"
+lambda_per_sec = 6.0
 
 [faults.partition]
 start_ms = 2000
