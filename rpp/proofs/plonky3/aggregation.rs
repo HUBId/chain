@@ -7,7 +7,7 @@ use serde_json::json;
 use crate::errors::{ChainError, ChainResult};
 use crate::types::ChainProof;
 
-use super::proof::Plonky3Proof;
+use super::{crypto, proof::Plonky3Proof};
 
 /// Minimal recursive aggregator placeholder used until the Plonky3 circuits
 /// are wired up.
@@ -34,22 +34,17 @@ impl RecursiveAggregator {
     pub fn finalize(self) -> ChainResult<Plonky3Proof> {
         let mut aggregated = Vec::new();
         for proof in self.commitments {
-            match proof {
-                ChainProof::Plonky3(value) => {
-                    let inner = Plonky3Proof::from_value(&value)?;
-                    aggregated.push(inner.commitment);
+            let value = match proof {
+                ChainProof::Plonky3(value) => value,
+                ChainProof::Stwo(_) => {
+                    return Err(ChainError::Crypto(
+                        "cannot aggregate STWO proof inside Plonky3 recursion".into(),
+                    ));
                 }
-                ChainProof::Stwo(stark) => {
-                    let encoded = serde_json::to_vec(&stark).map_err(|err| {
-                        ChainError::Crypto(format!(
-                            "failed to encode STWO proof for recursive commitment: {err}"
-                        ))
-                    })?;
-                    let mut hasher = Hasher::new();
-                    hasher.update(&encoded);
-                    aggregated.push(hasher.finalize().to_hex().to_string());
-                }
-            }
+            };
+            let inner = Plonky3Proof::from_value(&value)?;
+            crypto::verify_transcript(&inner)?;
+            aggregated.push(inner.commitment);
         }
         let mut accumulator_hasher = Hasher::new();
         for commitment in &aggregated {
@@ -61,6 +56,8 @@ impl RecursiveAggregator {
             "commitments": aggregated,
             "accumulator": accumulator,
         });
-        Plonky3Proof::new("recursive", public_inputs)
+        let proof = Plonky3Proof::new("recursive", public_inputs)?;
+        crypto::verify_transcript(&proof)?;
+        Ok(proof)
     }
 }
