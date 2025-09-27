@@ -158,6 +158,10 @@ impl Ledger {
         self.reputation_params = params;
     }
 
+    pub fn timetoke_params(&self) -> TimetokeParams {
+        self.timetoke_params.clone()
+    }
+
     pub fn load(
         initial: Vec<Account>,
         utxo_snapshots: Vec<(UtxoOutpoint, StoredUtxo)>,
