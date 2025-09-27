@@ -1,3 +1,4 @@
+pub mod faults;
 pub mod harness;
 pub mod metrics;
 pub mod node_adapter;

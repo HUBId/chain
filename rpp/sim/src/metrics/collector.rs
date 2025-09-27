@@ -28,6 +28,11 @@ pub enum SimEvent {
         action: MeshAction,
         timestamp: Instant,
     },
+    Fault {
+        kind: FaultEvent,
+        detail: Option<String>,
+        timestamp: Instant,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +52,13 @@ pub struct MeshChangeRecord {
     pub timestamp_ms: f64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FaultRecord {
+    pub kind: String,
+    pub detail: Option<String>,
+    pub timestamp_ms: f64,
+}
+
 pub struct Collector {
     start: Instant,
     publications: HashMap<String, Instant>,
@@ -55,6 +67,7 @@ pub struct Collector {
     total_receives: usize,
     duplicates: usize,
     mesh_changes: Vec<MeshChangeRecord>,
+    faults: Vec<FaultRecord>,
 }
 
 impl Collector {
@@ -67,6 +80,7 @@ impl Collector {
             total_receives: 0,
             duplicates: 0,
             mesh_changes: Vec::new(),
+            faults: Vec::new(),
         }
     }
 
@@ -114,6 +128,18 @@ impl Collector {
                     timestamp_ms,
                 });
             }
+            SimEvent::Fault {
+                kind,
+                detail,
+                timestamp,
+            } => {
+                let timestamp_ms = timestamp.duration_since(self.start).as_secs_f64() * 1_000.0;
+                self.faults.push(FaultRecord {
+                    kind: fault_event_label(kind).to_string(),
+                    detail,
+                    timestamp_ms,
+                });
+            }
         }
     }
 
@@ -127,6 +153,7 @@ impl Collector {
             duplicates: self.duplicates,
             propagation,
             mesh_changes: self.mesh_changes,
+            faults: self.faults,
         }
     }
 }
@@ -137,5 +164,24 @@ fn mesh_action_label(action: MeshAction) -> &'static str {
         MeshAction::Prune => "prune",
         MeshAction::Subscribe => "subscribe",
         MeshAction::Unsubscribe => "unsubscribe",
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FaultEvent {
+    PartitionStart,
+    PartitionEnd,
+    ChurnDown,
+    ChurnUp,
+    ByzantineSpam,
+}
+
+fn fault_event_label(event: FaultEvent) -> &'static str {
+    match event {
+        FaultEvent::PartitionStart => "partition_start",
+        FaultEvent::PartitionEnd => "partition_end",
+        FaultEvent::ChurnDown => "churn_down",
+        FaultEvent::ChurnUp => "churn_up",
+        FaultEvent::ByzantineSpam => "byzantine_spam",
     }
 }

@@ -1,10 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 
 use serde::Deserialize;
+
+use crate::faults::{ByzantineFault, ChurnFault, PartitionFault};
 
 #[derive(Debug, Deserialize)]
 pub struct Scenario {
@@ -17,6 +20,8 @@ pub struct Scenario {
     pub links: LinksSection,
     #[serde(default)]
     pub metrics: Option<MetricsSection>,
+    #[serde(default)]
+    pub faults: FaultsSection,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +126,37 @@ pub struct MetricsSection {
     pub output: Option<PathBuf>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct FaultsSection {
+    pub partition: Option<PartitionFaultConfig>,
+    pub churn: Option<ChurnFaultConfig>,
+    pub byzantine: Option<ByzantineFaultConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct PartitionFaultConfig {
+    pub start_ms: u64,
+    pub duration_ms: u64,
+    pub group_a: String,
+    pub group_b: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ChurnFaultConfig {
+    #[serde(default)]
+    pub start_ms: Option<u64>,
+    pub rate_per_min: f64,
+    pub restart_after_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ByzantineFaultConfig {
+    #[serde(default)]
+    pub start_ms: Option<u64>,
+    pub spam_factor: u64,
+    pub publishers: Vec<usize>,
+}
+
 impl Scenario {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -182,6 +218,60 @@ impl Scenario {
         {
             return Err(anyhow!("small-world topology requires rewire_p parameter"));
         }
+        if let Some(partition) = &self.faults.partition {
+            if self.regions.assignments.is_empty() {
+                return Err(anyhow!(
+                    "region assignments are required when configuring a partition fault"
+                ));
+            }
+            if !self
+                .regions
+                .assignments
+                .iter()
+                .any(|r| r == &partition.group_a)
+            {
+                return Err(anyhow!(
+                    "partition group_a ({}) missing from region assignments",
+                    partition.group_a
+                ));
+            }
+            if !self
+                .regions
+                .assignments
+                .iter()
+                .any(|r| r == &partition.group_b)
+            {
+                return Err(anyhow!(
+                    "partition group_b ({}) missing from region assignments",
+                    partition.group_b
+                ));
+            }
+            if partition.duration_ms == 0 {
+                return Err(anyhow!("partition duration must be positive"));
+            }
+        }
+        if let Some(churn) = &self.faults.churn {
+            if churn.rate_per_min <= 0.0 {
+                return Err(anyhow!("churn rate_per_min must be positive"));
+            }
+            if churn.restart_after_ms == 0 {
+                return Err(anyhow!("churn restart_after_ms must be positive"));
+            }
+        }
+        if let Some(byzantine) = &self.faults.byzantine {
+            for &idx in &byzantine.publishers {
+                if idx >= self.topology.n {
+                    return Err(anyhow!(
+                        "byzantine publisher index {} out of range (n = {})",
+                        idx,
+                        self.topology.n
+                    ));
+                }
+            }
+            if byzantine.spam_factor == 0 {
+                return Err(anyhow!("byzantine spam_factor must be positive"));
+            }
+        }
         Ok(())
     }
 
@@ -199,7 +289,34 @@ impl Scenario {
         }
     }
 
-    pub fn link_params_for(&self, key: &str) -> Option<&LinkParams> {
-        self.links.entries.get(key)
+    pub fn partition_fault(&self) -> Option<PartitionFault> {
+        self.faults.partition.as_ref().map(|cfg| {
+            PartitionFault::new(
+                Duration::from_millis(cfg.start_ms),
+                Duration::from_millis(cfg.duration_ms),
+                cfg.group_a.clone(),
+                cfg.group_b.clone(),
+            )
+        })
+    }
+
+    pub fn churn_fault(&self) -> Option<ChurnFault> {
+        self.faults.churn.as_ref().map(|cfg| {
+            ChurnFault::new(
+                Duration::from_millis(cfg.start_ms.unwrap_or(0)),
+                cfg.rate_per_min,
+                Duration::from_millis(cfg.restart_after_ms),
+            )
+        })
+    }
+
+    pub fn byzantine_fault(&self) -> Option<ByzantineFault> {
+        self.faults.byzantine.as_ref().map(|cfg| {
+            ByzantineFault::new(
+                Duration::from_millis(cfg.start_ms.unwrap_or(0)),
+                cfg.spam_factor,
+                cfg.publishers.clone(),
+            )
+        })
     }
 }

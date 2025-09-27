@@ -17,3 +17,19 @@ EU-US = { delay_ms = 75, jitter_ms = 12, loss = 0.5 }
 [traffic.tx]
 model = "poisson"
 lambda_per_sec = 5.0
+
+[faults.partition]
+start_ms = 2000
+duration_ms = 3000
+group_a = "EU"
+group_b = "US"
+
+[faults.churn]
+start_ms = 1000
+rate_per_min = 120.0
+restart_after_ms = 500
+
+[faults.byzantine]
+start_ms = 1500
+spam_factor = 3
+publishers = [0]

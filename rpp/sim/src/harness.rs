@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,9 +10,11 @@ use rand::{Rng, SeedableRng};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::metrics::{exporters, Collector, SimulationSummary};
+use crate::faults::PartitionFault;
+use crate::metrics::{exporters, Collector, FaultEvent, SimEvent, SimulationSummary};
 use crate::node_adapter::{spawn_node, Node, NodeHandle};
 use crate::scenario::{LinkParams, Scenario, TopologyType};
 use crate::topology::{
@@ -56,6 +59,7 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
 
     let mut handles = Vec::with_capacity(node_count);
     let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let harness_event_tx = event_tx.clone();
     let mut forwarders = Vec::new();
 
     for Node { handle, mut events } in nodes.into_iter() {
@@ -86,7 +90,143 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
     let edges = build_topology_edges(&scenario, node_count, &mut rng)?;
     let regions = scenario.node_regions();
     let annotated = annotate_links(&edges, &regions, &scenario.links)?;
-    establish_links(&handles, &annotated, &mut rng).await?;
+    let adjacency = build_adjacency(node_count, &annotated);
+    dial_links(&handles, &annotated, &mut rng).await?;
+
+    let partition_fault = scenario.partition_fault();
+    let churn_fault = scenario.churn_fault();
+    let byzantine_fault = scenario.byzantine_fault();
+    let partition_active = Arc::new(AtomicBool::new(false));
+    let active_nodes = Arc::new(Mutex::new((0..handles.len()).collect::<Vec<_>>()));
+    let mut fault_tasks: Vec<JoinHandle<()>> = Vec::new();
+
+    if let Some(partition) = partition_fault.clone() {
+        let handles_clone = handles.clone();
+        let events = harness_event_tx.clone();
+        let partition_active_flag = Arc::clone(&partition_active);
+        let links: Vec<AnnotatedLink> = annotated
+            .iter()
+            .filter(|link| link_crosses_partition(&partition, &regions, link))
+            .cloned()
+            .collect();
+        if !links.is_empty() {
+            fault_tasks.push(tokio::spawn(async move {
+                tokio::time::sleep(partition.start).await;
+                partition_active_flag.store(true, Ordering::SeqCst);
+                let detail = Some(format!("{}-{}", partition.group_a, partition.group_b));
+                let _ = events.send(SimEvent::Fault {
+                    kind: FaultEvent::PartitionStart,
+                    detail: detail.clone(),
+                    timestamp: Instant::now(),
+                });
+                if let Err(err) = disconnect_links(&handles_clone, &links).await {
+                    tracing::warn!(
+                        target = "rpp::sim::harness",
+                        "partition disconnect failed: {err:?}"
+                    );
+                }
+                tokio::time::sleep(partition.duration).await;
+                partition_active_flag.store(false, Ordering::SeqCst);
+                let mut rng =
+                    StdRng::seed_from_u64(0x7061_7274 ^ partition.start.as_millis() as u64);
+                if let Err(err) = dial_links(&handles_clone, &links, &mut rng).await {
+                    tracing::warn!(
+                        target = "rpp::sim::harness",
+                        "partition reconnect failed: {err:?}"
+                    );
+                }
+                let _ = events.send(SimEvent::Fault {
+                    kind: FaultEvent::PartitionEnd,
+                    detail,
+                    timestamp: Instant::now(),
+                });
+            }));
+        }
+    }
+
+    if let Some(churn) = churn_fault.clone() {
+        if let Some(interval) = churn.interval() {
+            let handles_clone = handles.clone();
+            let annotated_clone = annotated.clone();
+            let adjacency_clone = adjacency.clone();
+            let regions_clone = regions.clone();
+            let active_nodes_clone = Arc::clone(&active_nodes);
+            let events = harness_event_tx.clone();
+            let partition_flag = Arc::clone(&partition_active);
+            let partition_for_churn = partition_fault.clone();
+            let seed = scenario.sim.seed ^ 0x4355_524e;
+            fault_tasks.push(tokio::spawn(async move {
+                if churn.start > Duration::ZERO {
+                    tokio::time::sleep(churn.start).await;
+                }
+                let mut rng = StdRng::seed_from_u64(seed);
+                loop {
+                    tokio::time::sleep(interval).await;
+                    let node_idx = {
+                        let mut nodes = active_nodes_clone.lock().await;
+                        if nodes.is_empty() {
+                            None
+                        } else {
+                            let choice = rng.gen_range(0, nodes.len());
+                            Some(nodes.remove(choice))
+                        }
+                    };
+                    let Some(node_idx) = node_idx else {
+                        continue;
+                    };
+                    let detail = Some(format!("node:{node_idx}"));
+                    let _ = events.send(SimEvent::Fault {
+                        kind: FaultEvent::ChurnDown,
+                        detail: detail.clone(),
+                        timestamp: Instant::now(),
+                    });
+                    let link_indices = adjacency_clone.get(node_idx).cloned().unwrap_or_default();
+                    let mut node_links = Vec::with_capacity(link_indices.len());
+                    for link_idx in link_indices {
+                        node_links.push(annotated_clone[link_idx].clone());
+                    }
+                    if let Err(err) = disconnect_links(&handles_clone, &node_links).await {
+                        tracing::warn!(
+                            target = "rpp::sim::harness",
+                            "churn disconnect failed: {err:?}"
+                        );
+                    }
+                    tokio::time::sleep(churn.restart_after).await;
+                    {
+                        let mut nodes = active_nodes_clone.lock().await;
+                        if !nodes.contains(&node_idx) {
+                            nodes.push(node_idx);
+                            nodes.sort_unstable();
+                        }
+                    }
+                    let _ = events.send(SimEvent::Fault {
+                        kind: FaultEvent::ChurnUp,
+                        detail: detail.clone(),
+                        timestamp: Instant::now(),
+                    });
+                    let mut rng_local = StdRng::seed_from_u64(seed ^ (node_idx as u64 + 1));
+                    let mut to_restore = Vec::new();
+                    for link in node_links.iter() {
+                        if partition_flag.load(Ordering::SeqCst) {
+                            if let Some(partition) = &partition_for_churn {
+                                if link_crosses_partition(partition, &regions_clone, link) {
+                                    continue;
+                                }
+                            }
+                        }
+                        to_restore.push(link.clone());
+                    }
+                    if let Err(err) = dial_links(&handles_clone, &to_restore, &mut rng_local).await
+                    {
+                        tracing::warn!(
+                            target = "rpp::sim::harness",
+                            "churn reconnect failed: {err:?}"
+                        );
+                    }
+                }
+            }));
+        }
+    }
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -102,16 +242,50 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
             break;
         }
         tokio::time::sleep(wait).await;
-        let publisher_idx = traffic.pick_publisher(handles.len());
+        let publisher_idx = {
+            let nodes = active_nodes.lock().await;
+            if nodes.is_empty() {
+                None
+            } else {
+                let selected = traffic.pick_publisher(nodes.len());
+                Some(nodes[selected])
+            }
+        };
+        let Some(publisher_idx) = publisher_idx else {
+            continue;
+        };
         let payload = format!("{{\"message\":{message_counter}}}").into_bytes();
         handles[publisher_idx]
-            .publish(payload)
+            .publish(payload.clone())
             .await
             .context("publish failed")?;
+        if let Some(byzantine) = &byzantine_fault {
+            if elapsed >= byzantine.start && byzantine.is_publisher(publisher_idx) {
+                let detail = Some(format!("node:{publisher_idx}"));
+                let _ = harness_event_tx.send(SimEvent::Fault {
+                    kind: FaultEvent::ByzantineSpam,
+                    detail: detail.clone(),
+                    timestamp: Instant::now(),
+                });
+                for _ in 1..byzantine.spam_factor {
+                    handles[publisher_idx]
+                        .publish(payload.clone())
+                        .await
+                        .context("byzantine publish failed")?;
+                }
+            }
+        }
         message_counter += 1;
     }
 
     tokio::time::sleep(Duration::from_millis(1_000)).await;
+
+    for task in fault_tasks {
+        task.abort();
+        let _ = task.await;
+    }
+
+    drop(harness_event_tx);
 
     for handle in &handles {
         let _ = handle.shutdown().await;
@@ -185,7 +359,7 @@ fn build_topology_edges(
     }
 }
 
-async fn establish_links(
+async fn dial_links(
     handles: &[NodeHandle],
     annotated: &[AnnotatedLink],
     rng: &mut StdRng,
@@ -218,6 +392,33 @@ async fn establish_links(
     Ok(())
 }
 
+async fn disconnect_links(handles: &[NodeHandle], annotated: &[AnnotatedLink]) -> Result<()> {
+    let mut tasks = Vec::new();
+    for link in annotated {
+        if handles.get(link.a).is_none() || handles.get(link.b).is_none() {
+            return Err(anyhow!("link references out of range node"));
+        }
+        let handle_a = handles[link.a].clone();
+        let peer_b = handles[link.b].peer_id.clone();
+        tasks.push(tokio::spawn(async move {
+            if let Err(err) = handle_a.disconnect(peer_b).await {
+                tracing::warn!(target = "rpp::sim::harness", "disconnect failed: {err:?}");
+            }
+        }));
+        let handle_b = handles[link.b].clone();
+        let peer_a = handles[link.a].peer_id.clone();
+        tasks.push(tokio::spawn(async move {
+            if let Err(err) = handle_b.disconnect(peer_a).await {
+                tracing::warn!(target = "rpp::sim::harness", "disconnect failed: {err:?}");
+            }
+        }));
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+    Ok(())
+}
+
 fn jittered_delay(params: &LinkParams, rng: &mut StdRng) -> Duration {
     let base = Duration::from_millis(params.delay_ms);
     if params.jitter_ms == 0 {
@@ -229,5 +430,157 @@ fn jittered_delay(params: &LinkParams, rng: &mut StdRng) -> Duration {
         base + Duration::from_millis(offset as u64)
     } else {
         base.saturating_sub(Duration::from_millis((-offset) as u64))
+    }
+}
+
+fn build_adjacency(n: usize, links: &[AnnotatedLink]) -> Vec<Vec<usize>> {
+    let mut adjacency = vec![Vec::new(); n];
+    for (idx, link) in links.iter().enumerate() {
+        adjacency[link.a].push(idx);
+        adjacency[link.b].push(idx);
+    }
+    adjacency
+}
+
+fn link_crosses_partition(
+    partition: &PartitionFault,
+    regions: &[String],
+    link: &AnnotatedLink,
+) -> bool {
+    let region_a = regions.get(link.a).map(|s| s.as_str()).unwrap_or("");
+    let region_b = regions.get(link.b).map(|s| s.as_str()).unwrap_or("");
+    partition.affects(region_a, region_b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::scenario::Scenario;
+    use std::sync::{Mutex as StdMutex, OnceLock};
+
+    fn scenario_from_str(toml: &str) -> Scenario {
+        let mut scenario: Scenario = toml::from_str(toml).expect("valid scenario");
+        scenario.links = scenario.links.with_defaults();
+        scenario
+    }
+
+    fn harness_lock() -> &'static StdMutex<()> {
+        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| StdMutex::new(()))
+    }
+
+    #[test]
+    fn partition_fault_records_events() {
+        let scenario = scenario_from_str(
+            r#"
+[sim]
+seed = 7
+duration_ms = 600
+
+[topology]
+type = "ring"
+n = 4
+k = 2
+
+[regions]
+assignments = ["EU", "US", "EU", "US"]
+
+[links]
+default = { delay_ms = 0, jitter_ms = 0, loss = 0.0 }
+
+[traffic.tx]
+model = "poisson"
+lambda_per_sec = 40.0
+
+[faults.partition]
+start_ms = 10
+duration_ms = 100
+group_a = "EU"
+group_b = "US"
+            "#,
+        );
+        let _guard = harness_lock().lock().unwrap();
+        let harness = SimHarness;
+        let summary = harness
+            .run_scenario(scenario)
+            .expect("partition scenario executes");
+        let kinds: Vec<_> = summary.faults.iter().map(|f| f.kind.clone()).collect();
+        let start_pos = kinds.iter().position(|k| k == "partition_start");
+        let end_pos = kinds.iter().position(|k| k == "partition_end");
+        assert!(start_pos.is_some(), "partition_start missing");
+        assert!(end_pos.is_some(), "partition_end missing");
+        assert!(start_pos.unwrap() < end_pos.unwrap());
+    }
+
+    #[test]
+    fn churn_fault_emits_down_and_up() {
+        let scenario = scenario_from_str(
+            r#"
+[sim]
+seed = 9
+duration_ms = 800
+
+[topology]
+type = "ring"
+n = 3
+k = 2
+
+[links]
+default = { delay_ms = 0, jitter_ms = 0, loss = 0.0 }
+
+[traffic.tx]
+model = "poisson"
+lambda_per_sec = 35.0
+
+[faults.churn]
+start_ms = 50
+rate_per_min = 600.0
+restart_after_ms = 100
+            "#,
+        );
+        let _guard = harness_lock().lock().unwrap();
+        let harness = SimHarness;
+        let summary = harness
+            .run_scenario(scenario)
+            .expect("churn scenario executes");
+        let kinds: Vec<_> = summary.faults.iter().map(|f| f.kind.as_str()).collect();
+        assert!(kinds.contains(&"churn_down"));
+        assert!(kinds.contains(&"churn_up"));
+    }
+
+    #[test]
+    fn byzantine_spam_is_logged() {
+        let scenario = scenario_from_str(
+            r#"
+[sim]
+seed = 11
+duration_ms = 500
+
+[topology]
+type = "ring"
+n = 1
+k = 2
+
+[links]
+default = { delay_ms = 0, jitter_ms = 0, loss = 0.0 }
+
+[traffic.tx]
+model = "poisson"
+lambda_per_sec = 20.0
+
+[faults.byzantine]
+start_ms = 0
+spam_factor = 3
+publishers = [0]
+            "#,
+        );
+        let _guard = harness_lock().lock().unwrap();
+        let harness = SimHarness;
+        let summary = harness
+            .run_scenario(scenario)
+            .expect("byzantine scenario executes");
+        let kinds: Vec<_> = summary.faults.iter().map(|f| f.kind.as_str()).collect();
+        assert!(kinds.contains(&"byzantine_spam"));
     }
 }

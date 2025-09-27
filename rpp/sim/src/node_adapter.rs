@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
@@ -22,6 +23,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::metrics::collector::{MeshAction, SimEvent};
+
+static NEXT_MEMORY_PORT: AtomicU64 = AtomicU64::new(1);
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "SimBehaviourEvent")]
@@ -59,6 +62,7 @@ impl From<identify::Event> for SimBehaviourEvent {
 enum NodeCommand {
     Dial { peer_id: PeerId, addr: Multiaddr },
     Publish { data: Vec<u8> },
+    Disconnect { peer_id: PeerId },
     Shutdown,
 }
 
@@ -88,6 +92,13 @@ impl NodeHandle {
             .context("node command channel closed")
     }
 
+    pub async fn disconnect(&self, peer_id: PeerId) -> Result<()> {
+        self.command_tx
+            .send(NodeCommand::Disconnect { peer_id })
+            .await
+            .context("node command channel closed")
+    }
+
     pub async fn shutdown(&self) -> Result<()> {
         self.command_tx
             .send(NodeCommand::Shutdown)
@@ -101,7 +112,7 @@ pub struct Node {
     pub events: mpsc::UnboundedReceiver<SimEvent>,
 }
 
-pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
+pub fn spawn_node(_node_index: usize, topic: IdentTopic) -> Result<Node> {
     let keypair = identity::Keypair::generate_ed25519();
     let peer_id = PeerId::from(keypair.public());
 
@@ -147,7 +158,8 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
         .subscribe(&topic)
         .map_err(|err| anyhow!("failed to subscribe to simulation topic: {err}"))?;
 
-    let listen_addr = Multiaddr::from(Protocol::Memory((node_index as u64) + 1));
+    let listen_port = NEXT_MEMORY_PORT.fetch_add(1, Ordering::Relaxed);
+    let listen_addr = Multiaddr::from(Protocol::Memory(listen_port));
     Swarm::listen_on(&mut swarm, listen_addr.clone()).context("failed to listen")?;
 
     let (command_tx, mut command_rx) = mpsc::channel(32);
@@ -185,6 +197,15 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
                                 Err(err) => {
                                     warn!(target = "rpp::sim::node", "publish error: {err:?}");
                                 }
+                            }
+                        }
+                        Some(NodeCommand::Disconnect { peer_id: target }) => {
+                            if let Err(err) = Swarm::disconnect_peer_id(&mut swarm, target) {
+                                warn!(
+                                    target = "rpp::sim::node",
+                                    peer = %target,
+                                    "disconnect error: {err:?}"
+                                );
                             }
                         }
                         Some(NodeCommand::Shutdown) => break,

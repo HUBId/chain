@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::collector::MeshChangeRecord;
+use super::collector::{FaultRecord, MeshChangeRecord};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct PropagationPercentiles {
@@ -15,6 +15,7 @@ pub struct SimulationSummary {
     pub duplicates: usize,
     pub propagation: Option<PropagationPercentiles>,
     pub mesh_changes: Vec<MeshChangeRecord>,
+    pub faults: Vec<FaultRecord>,
 }
 
 pub fn calculate_percentiles(samples: &[f64]) -> Option<PropagationPercentiles> {
