@@ -518,10 +518,10 @@ pub struct TransactionWitness {
     pub sender_after: AccountBalanceWitness,
     pub recipient_before: Option<AccountBalanceWitness>,
     pub recipient_after: AccountBalanceWitness,
-    pub sender_utxo_before: Option<TransactionUtxoSnapshot>,
-    pub sender_utxo_after: Option<TransactionUtxoSnapshot>,
-    pub recipient_utxo_before: Option<TransactionUtxoSnapshot>,
-    pub recipient_utxo_after: Option<TransactionUtxoSnapshot>,
+    pub sender_utxos_before: Vec<TransactionUtxoSnapshot>,
+    pub sender_utxos_after: Vec<TransactionUtxoSnapshot>,
+    pub recipient_utxos_before: Vec<TransactionUtxoSnapshot>,
+    pub recipient_utxos_after: Vec<TransactionUtxoSnapshot>,
 }
 
 impl TransactionWitness {
@@ -533,10 +533,10 @@ impl TransactionWitness {
         sender_after: AccountBalanceWitness,
         recipient_before: Option<AccountBalanceWitness>,
         recipient_after: AccountBalanceWitness,
-        sender_utxo_before: Option<TransactionUtxoSnapshot>,
-        sender_utxo_after: Option<TransactionUtxoSnapshot>,
-        recipient_utxo_before: Option<TransactionUtxoSnapshot>,
-        recipient_utxo_after: Option<TransactionUtxoSnapshot>,
+        sender_utxos_before: Vec<TransactionUtxoSnapshot>,
+        sender_utxos_after: Vec<TransactionUtxoSnapshot>,
+        recipient_utxos_before: Vec<TransactionUtxoSnapshot>,
+        recipient_utxos_after: Vec<TransactionUtxoSnapshot>,
     ) -> Self {
         Self {
             tx_id,
@@ -545,10 +545,10 @@ impl TransactionWitness {
             sender_after,
             recipient_before,
             recipient_after,
-            sender_utxo_before,
-            sender_utxo_after,
-            recipient_utxo_before,
-            recipient_utxo_after,
+            sender_utxos_before,
+            sender_utxos_after,
+            recipient_utxos_before,
+            recipient_utxos_after,
         }
     }
 }
@@ -1638,10 +1638,10 @@ mod tests {
             sender_after,
             Some(recipient_before),
             recipient_after,
-            None,
-            None,
-            None,
-            None,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
         bundle.record_transaction(tx_witness);
 
