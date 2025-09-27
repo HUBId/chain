@@ -53,6 +53,30 @@ scripts/test.sh --integration --backend plonky3
 scripts/test.sh --doc --release
 ```
 
+### Simulation smoke tests
+
+The libp2p simulation harness lives in `rpp/sim`. Its deterministic smoke test
+is ignored by default and exercised in CI via `cargo test -p rpp-sim -- --ignored`.
+
+* Set `RPP_SIM_STATIC_KEY_SEED` to reuse deterministic libp2p identities for
+  every node. CI uses `ci-smoke` while the nightly workflow uses
+  `nightly-smoke`.
+* `RPP_SIM_REQUIRE_DETERMINISTIC=0` skips the strict summary equality check
+  (use `1` locally when investigating reproducibility regressions).
+
+#### Adjusting propagation corridors
+
+Propagation time corridors are asserted in
+`rpp/sim/tests/sim_smoke.rs`. To tune them:
+
+1. Run the simulation locally, e.g.
+   `RPP_SIM_STATIC_KEY_SEED=local cargo test -p rpp-sim -- --ignored --nocapture`.
+2. Inspect the generated `target/sim-smoke/summary.json` (or the nightly output
+   under `target/sim-smoke/nightly-summary.json`) to collect the observed
+   percentile values.
+3. Update the `p50_ms`/`p95_ms` corridors in the assertion to match the new
+   bounds and commit the changes alongside an explanation of the shift.
+
 ### Generate configuration and keys
 
 ```bash

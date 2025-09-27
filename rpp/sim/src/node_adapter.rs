@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
@@ -11,6 +12,7 @@ use libp2p::gossipsub::{
 };
 use libp2p::identify;
 use libp2p::identity;
+use libp2p::identity::ed25519;
 use libp2p::multiaddr::Protocol;
 use libp2p::ping;
 use libp2p::plaintext;
@@ -23,8 +25,28 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::metrics::collector::{MeshAction, SimEvent};
+use sha2::{Digest, Sha256};
 
 static NEXT_MEMORY_PORT: AtomicU64 = AtomicU64::new(1);
+static STATIC_KEY_SEED: OnceLock<Option<String>> = OnceLock::new();
+
+fn node_keypair(node_index: usize) -> identity::Keypair {
+    match STATIC_KEY_SEED.get_or_init(|| std::env::var("RPP_SIM_STATIC_KEY_SEED").ok()) {
+        Some(seed) => {
+            let mut hasher = Sha256::new();
+            hasher.update(seed.as_bytes());
+            hasher.update(node_index.to_le_bytes());
+            let digest = hasher.finalize();
+            let mut secret_bytes = [0u8; 32];
+            secret_bytes.copy_from_slice(&digest[..32]);
+            let secret = ed25519::SecretKey::try_from_bytes(secret_bytes)
+                .expect("hashed seed provides valid ed25519 secret key");
+            let keypair = ed25519::Keypair::from(secret);
+            identity::Keypair::from(keypair)
+        }
+        None => identity::Keypair::generate_ed25519(),
+    }
+}
 
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "SimBehaviourEvent")]
@@ -112,8 +134,8 @@ pub struct Node {
     pub events: mpsc::UnboundedReceiver<SimEvent>,
 }
 
-pub fn spawn_node(_node_index: usize, topic: IdentTopic) -> Result<Node> {
-    let keypair = identity::Keypair::generate_ed25519();
+pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
+    let keypair = node_keypair(node_index);
     let peer_id = PeerId::from(keypair.public());
 
     let transport = MemoryTransport::new()

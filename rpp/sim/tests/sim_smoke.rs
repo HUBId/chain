@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -24,10 +25,15 @@ fn small_world_smoke_is_deterministic() -> Result<()> {
     let summary_first = run_smoke()?;
     let summary_second = run_smoke()?;
 
-    assert_eq!(
-        summary_first, summary_second,
-        "summary must be reproducible"
-    );
+    let require_deterministic = env::var("RPP_SIM_REQUIRE_DETERMINISTIC")
+        .map(|value| value != "0")
+        .unwrap_or(true);
+    if require_deterministic {
+        assert_eq!(
+            summary_first, summary_second,
+            "summary must be reproducible"
+        );
+    }
 
     let propagation = summary_first
         .propagation

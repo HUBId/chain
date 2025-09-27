@@ -3207,6 +3207,7 @@ dependencies = [
  "rand 0.7.3",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "toml",
