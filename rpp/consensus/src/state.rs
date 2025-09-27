@@ -5,11 +5,11 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::bft_loop::ConsensusMessage;
-use crate::leader::{elect_leader, LeaderContext};
+use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal};
 use crate::rewards::{distribute_rewards, RewardDistribution};
 use crate::validator::{select_validators, VRFOutput, Validator, ValidatorId, ValidatorSet};
-use crate::ConsensusError;
+use crate::{ConsensusError, ConsensusResult};
 
 static MESSAGE_SENDER: OnceLock<Mutex<Option<UnboundedSender<ConsensusMessage>>>> = OnceLock::new();
 
@@ -108,6 +108,8 @@ pub struct ConsensusState {
     pub pending_proposals: VecDeque<Proposal>,
     pending_prevotes: HashMap<String, VoteTally>,
     pending_precommits: HashMap<String, VoteTally>,
+    pub pending_prevote_messages: Vec<PreVote>,
+    pub pending_precommit_messages: Vec<PreCommit>,
     pub pending_commits: VecDeque<Commit>,
     pub pending_proofs: Vec<ConsensusProof>,
     pub pending_evidence: Vec<crate::evidence::EvidenceRecord>,
@@ -135,6 +137,8 @@ impl ConsensusState {
             pending_proposals: VecDeque::new(),
             pending_prevotes: HashMap::new(),
             pending_precommits: HashMap::new(),
+            pending_prevote_messages: Vec::new(),
+            pending_precommit_messages: Vec::new(),
             pending_commits: VecDeque::new(),
             pending_proofs: Vec::new(),
             pending_evidence: Vec::new(),
@@ -167,6 +171,13 @@ impl ConsensusState {
             Some(validator) => validator.clone(),
             None => return false,
         };
+        if !self.pending_prevote_messages.iter().any(|existing| {
+            existing.validator_id == vote.validator_id
+                && existing.block_hash == vote.block_hash
+                && existing.round == vote.round
+        }) {
+            self.pending_prevote_messages.push(vote.clone());
+        }
         let tally = self
             .pending_prevotes
             .entry(block_hash)
@@ -180,6 +191,13 @@ impl ConsensusState {
             Some(validator) => validator.clone(),
             None => return false,
         };
+        if !self.pending_precommit_messages.iter().any(|existing| {
+            existing.validator_id == vote.validator_id
+                && existing.block_hash == vote.block_hash
+                && existing.round == vote.round
+        }) {
+            self.pending_precommit_messages.push(vote.clone());
+        }
         let tally = self
             .pending_precommits
             .entry(block_hash)
@@ -248,6 +266,7 @@ impl ConsensusState {
     }
 
     pub fn apply_commit(&mut self, commit: Commit) {
+        let committed_hash = commit.block.hash();
         self.block_height = commit.block.height;
         self.record_proof(commit.proof.clone());
         if let Some(leader) = self.current_leader.clone() {
@@ -264,7 +283,46 @@ impl ConsensusState {
         self.pending_precommits.clear();
         self.pending_proposals.clear();
         self.pending_commits.clear();
+        self.pending_prevote_messages
+            .retain(|vote| vote.block_hash != committed_hash);
+        self.pending_precommit_messages
+            .retain(|vote| vote.block_hash != committed_hash);
         self.mark_activity();
+    }
+
+    pub fn broadcast_pending_messages(&self) -> ConsensusResult<()> {
+        for proposal in &self.pending_proposals {
+            self._message_tx
+                .send(ConsensusMessage::Proposal(proposal.clone()))
+                .map_err(|_| ConsensusError::ChannelClosed)?;
+        }
+        for vote in &self.pending_prevote_messages {
+            self._message_tx
+                .send(ConsensusMessage::PreVote(vote.clone()))
+                .map_err(|_| ConsensusError::ChannelClosed)?;
+        }
+        for vote in &self.pending_precommit_messages {
+            self._message_tx
+                .send(ConsensusMessage::PreCommit(vote.clone()))
+                .map_err(|_| ConsensusError::ChannelClosed)?;
+        }
+        Ok(())
+    }
+
+    pub fn broadcast_proposal(&self, proposal: &Proposal) -> ConsensusResult<()> {
+        self._message_tx
+            .send(ConsensusMessage::Proposal(proposal.clone()))
+            .map_err(|_| ConsensusError::ChannelClosed)
+    }
+
+    pub fn build_current_leader_proposal(&self) -> Option<Proposal> {
+        let leader = self.current_leader.clone()?;
+        let leader = Leader::new(leader);
+        let context = LeaderContext {
+            epoch: self.epoch,
+            round: self.round,
+        };
+        Some(leader.build_proposal(self, context))
     }
 
     pub fn recompute_totals(&mut self) {

@@ -86,7 +86,11 @@ async fn run_loop(state: &mut ConsensusState) {
 
 async fn handle_timeout(state: &mut ConsensusState) {
     if state.should_timeout(Instant::now()) {
+        let _ = state.broadcast_pending_messages();
         state.next_round();
+        if let Some(proposal) = state.build_current_leader_proposal() {
+            let _ = state.broadcast_proposal(&proposal);
+        }
     }
 }
 
