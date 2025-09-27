@@ -7,8 +7,9 @@ use libp2p::PeerId;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rpp_p2p::{
-    GossipTopic, HandshakePayload, MetaTelemetry, NetworkError, NetworkEvent, NodeIdentity,
-    TierLevel,
+    BasicRecursiveProofVerifier, GossipTopic, HandshakePayload, JsonProofValidator,
+    LightClientSync, MetaTelemetry, NetworkError, NetworkEvent, NodeIdentity,
+    PersistentProofStorage, PipelineError, ProofMempool, TierLevel,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -77,6 +78,7 @@ pub struct NodeRuntimeConfig {
     pub p2p: P2pConfig,
     pub telemetry: TelemetryConfig,
     pub identity: Option<IdentityProfile>,
+    pub proof_storage_path: PathBuf,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -86,6 +88,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             p2p: config.p2p.clone(),
             telemetry: config.rollout.telemetry.clone(),
             identity: None,
+            proof_storage_path: config.proof_cache_dir.join("gossip_proofs.json"),
         }
     }
 }
@@ -133,10 +136,90 @@ pub enum NodeError {
     NetworkSetup(#[from] NetworkSetupError),
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
+    #[error("pipeline error: {0}")]
+    Pipeline(#[from] PipelineError),
     #[error("command channel closed")]
     CommandChannelClosed,
     #[error("gossip propagation disabled")]
     GossipDisabled,
+}
+
+struct GossipPipelines {
+    proofs: ProofMempool,
+    light_client: LightClientSync,
+}
+
+impl GossipPipelines {
+    fn initialise(config: &NodeRuntimeConfig) -> Result<Self, PipelineError> {
+        let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
+        let validator = Arc::new(JsonProofValidator::default());
+        let proofs = ProofMempool::new(validator, storage)?;
+        let verifier = Arc::new(BasicRecursiveProofVerifier::default());
+        let light_client = LightClientSync::new(verifier);
+        Ok(Self {
+            proofs,
+            light_client,
+        })
+    }
+
+    fn handle_gossip(&mut self, peer: PeerId, topic: GossipTopic, data: Vec<u8>) {
+        match topic {
+            GossipTopic::Proofs => self.handle_proofs(peer, data),
+            GossipTopic::Snapshots => self.handle_snapshots(&data),
+            _ => {}
+        }
+    }
+
+    fn handle_proofs(&mut self, peer: PeerId, data: Vec<u8>) {
+        match self.proofs.ingest(peer, GossipTopic::Proofs, data) {
+            Ok(_) => while self.proofs.pop().is_some() {},
+            Err(PipelineError::Duplicate) => {
+                debug!(target: "node", "duplicate proof gossip ignored");
+            }
+            Err(err) => {
+                warn!(
+                    target: "node",
+                    "failed to ingest proof gossip: {err:?}"
+                );
+            }
+        }
+    }
+
+    fn handle_snapshots(&mut self, payload: &[u8]) {
+        if self.light_client.ingest_plan(payload).is_ok() {
+            return;
+        }
+
+        let chunk_result = self.light_client.ingest_chunk(payload);
+        match chunk_result {
+            Ok(()) => return,
+            Err(PipelineError::Duplicate) => {
+                debug!(target: "node", "duplicate snapshot chunk ignored");
+                return;
+            }
+            Err(_) => {}
+        }
+
+        match self.light_client.ingest_light_client_update(payload) {
+            Ok(()) => {
+                if let Err(err) = self.light_client.verify() {
+                    warn!(
+                        target: "node",
+                        "light client verification failed: {err:?}"
+                    );
+                }
+            }
+            Err(PipelineError::Duplicate) => {
+                debug!(target: "node", "duplicate light client update ignored");
+            }
+            Err(err) => {
+                warn!(
+                    target: "node",
+                    "failed to ingest snapshot gossip: {err:?}"
+                );
+            }
+        }
+    }
 }
 
 /// Node runtime internals responsible for coordinating networking and telemetry.
@@ -152,6 +235,7 @@ pub struct NodeInner {
     meta_telemetry: MetaTelemetry,
     heartbeat_interval: Duration,
     gossip_enabled: bool,
+    pipelines: GossipPipelines,
 }
 
 impl NodeInner {
@@ -169,6 +253,7 @@ impl NodeInner {
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, _) = broadcast::channel(256);
         let metrics = Arc::new(RwLock::new(NodeMetrics::default()));
+        let pipelines = GossipPipelines::initialise(&config)?;
         let handle = NodeHandle {
             commands: command_tx.clone(),
             metrics: metrics.clone(),
@@ -187,6 +272,7 @@ impl NodeInner {
             meta_telemetry: MetaTelemetry::new(),
             heartbeat_interval: network_config.heartbeat_interval(),
             gossip_enabled: network_config.gossip_enabled(),
+            pipelines,
         };
         Ok((inner, handle))
     }
@@ -269,6 +355,10 @@ impl NodeInner {
                         self.meta_telemetry
                             .record(peer, version.clone(), Duration::from_millis(0));
                     }
+                    let peer_for_pipeline = peer.clone();
+                    let data_for_pipeline = data.clone();
+                    self.pipelines
+                        .handle_gossip(peer_for_pipeline, topic, data_for_pipeline);
                     let _ = self.events.send(NodeEvent::Gossip { peer, topic, data });
                 }
             }
@@ -418,11 +508,18 @@ mod tests {
     use tokio::task::{self, LocalSet};
     use tokio::time::timeout;
 
+    use serde_json::json;
+
     fn test_config(
         identity_path: PathBuf,
         listen: String,
         bootstrap: Vec<String>,
     ) -> NodeRuntimeConfig {
+        let proof_storage_path = identity_path
+            .parent()
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("proofs.json");
         let mut p2p = P2pConfig::default();
         p2p.listen_addr = listen;
         p2p.bootstrap_peers = bootstrap;
@@ -440,6 +537,7 @@ mod tests {
                 sample_interval_secs: 1,
             },
             identity: None,
+            proof_storage_path,
         }
     }
 
@@ -509,6 +607,66 @@ mod tests {
                 handle_two.shutdown().await.expect("shutdown2");
                 let _ = task_one.await;
                 let _ = task_two.await;
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn proof_gossip_persists_to_storage() {
+        let local = LocalSet::new();
+        local
+            .run_until(async {
+                let dir = tempdir().expect("tempdir");
+                let (listen, _) = random_listen_addr();
+                let identity_path = dir.path().join("node.key");
+                let config = test_config(identity_path, listen, Vec::new());
+                let proof_path = config.proof_storage_path.clone();
+                let (mut node, _handle) = NodeInner::new(config).expect("node runtime");
+
+                let payload = json!({
+                    "transaction": {
+                        "id": "00000000-0000-0000-0000-000000000000",
+                        "payload": {
+                            "from": "addr1",
+                            "to": "addr2",
+                            "amount": 1,
+                            "fee": 1,
+                            "nonce": 0,
+                            "memo": null,
+                            "timestamp": 0
+                        },
+                        "signature": "00",
+                        "public_key": "00"
+                    },
+                    "proof": {
+                        "stwo": {
+                            "kind": "Transaction",
+                            "commitment": hex::encode([0x11u8; 32]),
+                            "public_inputs": [],
+                            "payload": {"Transaction": {"dummy": true}},
+                            "trace": {"rows": 0, "columns": 0},
+                            "fri_proof": {"commitments": [], "challenges": []}
+                        }
+                    }
+                });
+                let data = serde_json::to_vec(&payload).expect("encode payload");
+                let peer = PeerId::random();
+
+                node.handle_network_event(NetworkEvent::GossipMessage {
+                    peer,
+                    topic: GossipTopic::Proofs,
+                    data,
+                });
+
+                let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
+                let records: serde_json::Value =
+                    serde_json::from_str(&stored).expect("decode stored proofs");
+                assert!(
+                    records
+                        .as_array()
+                        .map(|array| !array.is_empty())
+                        .unwrap_or(false)
+                );
             })
             .await;
     }
