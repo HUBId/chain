@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     body::Body,
     extract::{Path, State},
-    http::{header::CONTENT_TYPE, Method, Request, StatusCode},
+    http::{Method, Request, StatusCode, header::CONTENT_TYPE},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -35,10 +35,7 @@ async fn status_returns_node_status() {
 
     assert_eq!(payload["role"].as_str(), Some("node"));
     assert_eq!(payload["height"].as_u64(), Some(2));
-    assert_eq!(
-        payload["latest_commitment"].as_str(),
-        Some("state-root-2"),
-    );
+    assert_eq!(payload["latest_commitment"].as_str(), Some("state-root-2"),);
 }
 
 #[tokio::test]
