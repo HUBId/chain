@@ -37,11 +37,60 @@ pub trait ProofValidator: std::fmt::Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default, Clone)]
-#[allow(dead_code)]
-pub struct NoopProofValidator;
+pub struct JsonProofValidator;
 
-impl ProofValidator for NoopProofValidator {
-    fn validate(&self, _peer: &PeerId, _payload: &[u8]) -> Result<(), PipelineError> {
+fn is_hex_digest(value: &str) -> bool {
+    value.len() == 64 && value.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+impl ProofValidator for JsonProofValidator {
+    fn validate(&self, _peer: &PeerId, payload: &[u8]) -> Result<(), PipelineError> {
+        if payload.is_empty() {
+            return Err(PipelineError::Validation("empty proof payload".into()));
+        }
+        let value: serde_json::Value = serde_json::from_slice(payload).map_err(|err| {
+            PipelineError::Validation(format!("invalid proof payload encoding: {err}"))
+        })?;
+        let bundle = value
+            .as_object()
+            .ok_or_else(|| PipelineError::Validation("proof payload must be an object".into()))?;
+        if !bundle.contains_key("transaction") {
+            return Err(PipelineError::Validation(
+                "proof payload missing transaction".into(),
+            ));
+        }
+        let proof_value = bundle
+            .get("proof")
+            .ok_or_else(|| PipelineError::Validation("proof payload missing proof field".into()))?;
+        let proof_obj = proof_value.as_object().ok_or_else(|| {
+            PipelineError::Validation("proof field must be an object".into())
+        })?;
+        let stwo = proof_obj.get("stwo").ok_or_else(|| {
+            PipelineError::Validation("unsupported proof backend".into())
+        })?;
+        let commitment = stwo
+            .get("commitment")
+            .and_then(|value| value.as_str())
+            .ok_or_else(|| {
+                PipelineError::Validation("proof payload missing commitment".into())
+            })?;
+        if !is_hex_digest(commitment) {
+            return Err(PipelineError::Validation(
+                "proof commitment must be a 32-byte hex digest".into(),
+            ));
+        }
+        if let Some(previous) = stwo.get("previous_commitment") {
+            let Some(previous_commitment) = previous.as_str() else {
+                return Err(PipelineError::Validation(
+                    "previous commitment must be a string".into(),
+                ));
+            };
+            if !is_hex_digest(previous_commitment) {
+                return Err(PipelineError::Validation(
+                    "previous commitment must be a 32-byte hex digest".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -551,15 +600,30 @@ pub trait RecursiveProofVerifier: std::fmt::Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug, Default)]
-pub struct NoopRecursiveProofVerifier;
+pub struct BasicRecursiveProofVerifier;
 
-impl RecursiveProofVerifier for NoopRecursiveProofVerifier {
+impl RecursiveProofVerifier for BasicRecursiveProofVerifier {
     fn verify_recursive(
         &self,
-        _proof: &[u8],
-        _expected_commitment: &str,
-        _previous_commitment: Option<&str>,
+        proof: &[u8],
+        expected_commitment: &str,
+        previous_commitment: Option<&str>,
     ) -> Result<(), PipelineError> {
+        if proof.is_empty() {
+            return Err(PipelineError::Validation("recursive proof payload is empty".into()));
+        }
+        if !is_hex_digest(expected_commitment) {
+            return Err(PipelineError::Validation(
+                "expected commitment must be a 32-byte hex digest".into(),
+            ));
+        }
+        if let Some(previous) = previous_commitment {
+            if !is_hex_digest(previous) {
+                return Err(PipelineError::Validation(
+                    "previous commitment must be a 32-byte hex digest".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -574,7 +638,7 @@ pub struct LightClientSync {
 
 impl Default for LightClientSync {
     fn default() -> Self {
-        Self::new(Arc::new(NoopRecursiveProofVerifier))
+        Self::new(Arc::new(BasicRecursiveProofVerifier::default()))
     }
 }
 
