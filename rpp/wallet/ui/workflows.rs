@@ -331,22 +331,26 @@ fn ledger_snapshot_utxo(
     value: u128,
     tx_id_override: Option<[u8; 32]>,
 ) -> UtxoRecord {
-    let mut record = state.get_for_account(address).unwrap_or_else(|| {
-        let mut script_seed = address.as_bytes().to_vec();
-        script_seed.extend_from_slice(&0u32.to_be_bytes());
-        let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
-        UtxoRecord {
-            outpoint: UtxoOutpoint {
-                tx_id: tx_id_override.unwrap_or([0u8; 32]),
-                index: 0,
-            },
-            owner: address.clone(),
-            value,
-            asset_type: AssetType::Native,
-            script_hash,
-            timelock: None,
-        }
-    });
+    let mut record = state
+        .get_for_account(address)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| {
+            let mut script_seed = address.as_bytes().to_vec();
+            script_seed.extend_from_slice(&0u32.to_be_bytes());
+            let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+            UtxoRecord {
+                outpoint: UtxoOutpoint {
+                    tx_id: tx_id_override.unwrap_or([0u8; 32]),
+                    index: 0,
+                },
+                owner: address.clone(),
+                value,
+                asset_type: AssetType::Native,
+                script_hash,
+                timelock: None,
+            }
+        });
     if let Some(tx_id) = tx_id_override {
         record.outpoint.tx_id = tx_id;
     }

@@ -84,36 +84,51 @@ impl UtxoState {
             .map(|stored| stored.to_record(outpoint))
     }
 
-    fn canonical_entry_for_account(&self, address: &Address) -> Option<(UtxoOutpoint, StoredUtxo)> {
-        self.entries
-            .blocking_read()
-            .iter()
-            .filter(|(_, stored)| stored.owner == *address && !stored.is_spent())
-            .min_by(|(left_outpoint, _), (right_outpoint, _)| {
-                left_outpoint
-                    .index
-                    .cmp(&right_outpoint.index)
-                    .then_with(|| left_outpoint.cmp(right_outpoint))
-            })
-            .map(|(outpoint, stored)| (outpoint.clone(), stored.clone()))
+    fn sort_pairs(pairs: &mut Vec<(UtxoOutpoint, StoredUtxo)>) {
+        pairs.sort_by(|(left_outpoint, _), (right_outpoint, _)| {
+            left_outpoint
+                .index
+                .cmp(&right_outpoint.index)
+                .then_with(|| left_outpoint.cmp(right_outpoint))
+        });
+    }
+
+    fn collect_pairs<F>(&self, mut predicate: F) -> Vec<(UtxoOutpoint, StoredUtxo)>
+    where
+        F: FnMut(&UtxoOutpoint, &StoredUtxo) -> bool,
+    {
+        let entries = self.entries.blocking_read();
+        let mut pairs = Vec::new();
+        for (outpoint, stored) in entries.iter() {
+            if predicate(outpoint, stored) {
+                pairs.push((outpoint.clone(), stored.clone()));
+            }
+        }
+        drop(entries);
+        Self::sort_pairs(&mut pairs);
+        pairs
+    }
+
+    fn unspent_pairs_for_owner(&self, owner: &Address) -> Vec<(UtxoOutpoint, StoredUtxo)> {
+        self.collect_pairs(|_, stored| stored.owner == *owner && !stored.is_spent())
     }
 
     /// Return the canonical UTXO associated with the provided account.
-    pub fn get_for_account(&self, address: &Address) -> Option<UtxoRecord> {
-        self.canonical_entry_for_account(address)
+    pub fn get_for_account(&self, address: &Address) -> Vec<UtxoRecord> {
+        self.unspent_pairs_for_owner(address)
+            .into_iter()
             .map(|(outpoint, stored)| stored.to_record(&outpoint))
+            .collect()
     }
 
     /// Snapshot the canonical UTXO and its outpoint for the provided account.
-    pub fn snapshot_for_account(&self, address: &Address) -> Option<(UtxoOutpoint, StoredUtxo)> {
-        self.canonical_entry_for_account(address)
+    pub fn snapshot_for_account(&self, address: &Address) -> Vec<(UtxoOutpoint, StoredUtxo)> {
+        self.unspent_pairs_for_owner(address)
     }
 
     /// Select deterministic inputs for the provided owner.
     pub fn select_inputs_for_owner(&self, owner: &Address) -> Vec<(UtxoOutpoint, StoredUtxo)> {
-        self.canonical_entry_for_account(owner)
-            .into_iter()
-            .collect()
+        self.unspent_pairs_for_owner(owner)
     }
 
     pub fn upsert_from_account(&self, account: &Account) {
@@ -140,30 +155,23 @@ impl UtxoState {
     }
 
     pub fn unspent_outputs_for_owner(&self, owner: &Address) -> Vec<UtxoRecord> {
-        let mut outputs: Vec<UtxoRecord> = self
-            .entries
-            .blocking_read()
-            .iter()
-            .filter(|(_, stored)| stored.owner == *owner && !stored.is_spent())
-            .map(|(outpoint, stored)| stored.to_record(outpoint))
-            .collect();
-        outputs.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
-        outputs
+        self.unspent_pairs_for_owner(owner)
+            .into_iter()
+            .map(|(outpoint, stored)| stored.to_record(&outpoint))
+            .collect()
     }
 
-    pub fn snapshot(&self) -> BTreeMap<UtxoOutpoint, StoredUtxo> {
-        self.entries.blocking_read().clone()
+    pub fn snapshot(&self) -> Vec<(UtxoOutpoint, StoredUtxo)> {
+        self.collect_pairs(|_, _| true)
     }
 
     pub fn commitment(&self) -> [u8; 32] {
         let mut leaves: Vec<[u8; 32]> = self
-            .entries
-            .blocking_read()
-            .iter()
-            .filter(|(_, stored)| !stored.is_spent())
+            .collect_pairs(|_, stored| !stored.is_spent())
+            .into_iter()
             .map(|(outpoint, stored)| {
-                let payload = bincode::serialize(&(outpoint.clone(), stored.clone()))
-                    .expect("serialize utxo snapshot entry");
+                let payload =
+                    bincode::serialize(&(outpoint, stored)).expect("serialize utxo snapshot entry");
                 Blake2sHasher::hash(&payload).into()
             })
             .collect();
@@ -175,7 +183,6 @@ impl UtxoState {
 mod tests {
     use super::*;
     use crate::types::Stake;
-    use std::collections::BTreeMap;
 
     fn sample_account(address: &str, balance: u128) -> Account {
         Account::new(address.to_string(), balance, Stake::default())
@@ -206,8 +213,11 @@ mod tests {
         assert!(state.remove_spent(&outpoint));
         assert!(state.get(&outpoint).is_none());
         let snapshot = state.snapshot();
-        let stored = snapshot.get(&outpoint).expect("entry exists in snapshot");
-        assert!(stored.is_spent());
+        let stored = snapshot
+            .iter()
+            .find(|(candidate, _)| candidate == &outpoint)
+            .expect("entry exists in snapshot");
+        assert!(stored.1.is_spent());
     }
 
     #[test]
@@ -229,15 +239,17 @@ mod tests {
             second_outpoint.clone(),
             StoredUtxo::new("carol".to_string(), 20),
         );
-        let fetched = state
-            .get_for_account(&"carol".to_string())
-            .expect("carol utxo");
-        assert_eq!(fetched.outpoint, second_outpoint);
-        assert_eq!(fetched.value, 20);
+        let fetched = state.get_for_account(&"carol".to_string());
+        assert_eq!(fetched.len(), 2);
+        assert_eq!(fetched[0].outpoint, second_outpoint);
+        assert_eq!(fetched[0].value, 20);
+        assert_eq!(fetched[1].outpoint, first_outpoint);
         let inputs = state.select_inputs_for_owner(&"carol".to_string());
-        assert_eq!(inputs.len(), 1);
+        assert_eq!(inputs.len(), 2);
         assert_eq!(inputs[0].0, second_outpoint);
         assert_eq!(inputs[0].1.amount, 20);
+        assert_eq!(inputs[1].0, first_outpoint);
+        assert_eq!(inputs[1].1.amount, 10);
     }
 
     #[test]
@@ -245,9 +257,9 @@ mod tests {
         let state = UtxoState::new();
         let account = sample_account("dave", 100);
         state.upsert_from_account(&account);
-        let record = state
-            .get_for_account(&account.address)
-            .expect("utxo record");
+        let records = state.get_for_account(&account.address);
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
         assert_eq!(record.owner, account.address);
         assert_eq!(record.value, account.balance);
         assert_eq!(record.outpoint.index, 0);
@@ -264,8 +276,9 @@ mod tests {
         assert!(state.remove_spent(&outpoint));
         let snapshot = state.snapshot();
         assert_eq!(snapshot.len(), 1);
-        let stored = snapshot.get(&outpoint).expect("stored utxo");
-        assert!(stored.is_spent());
+        let stored = &snapshot[0];
+        assert_eq!(stored.0, outpoint);
+        assert!(stored.1.is_spent());
     }
 
     #[test]
@@ -290,19 +303,17 @@ mod tests {
         assert_eq!(outputs[1].value, 30);
 
         let snapshot = state.snapshot();
-        let snapshot_pairs: Vec<(UtxoOutpoint, StoredUtxo)> = snapshot
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        let encoded = serde_json::to_string(&snapshot_pairs).expect("serialize snapshot");
+        let encoded = serde_json::to_string(&snapshot).expect("serialize snapshot");
         let decoded: Vec<(UtxoOutpoint, StoredUtxo)> =
             serde_json::from_str(&encoded).expect("deserialize snapshot");
-        assert_eq!(decoded.len(), snapshot_pairs.len());
-        let decoded_map: BTreeMap<UtxoOutpoint, StoredUtxo> = decoded.into_iter().collect();
-        let decoded_first = decoded_map.get(&second_outpoint).expect("decoded entry");
-        assert_eq!(decoded_first.owner, owner);
-        assert_eq!(decoded_first.amount, 45);
-        assert!(!decoded_first.is_spent());
+        assert_eq!(decoded.len(), snapshot.len());
+        let decoded_first = decoded
+            .iter()
+            .find(|(outpoint, _)| *outpoint == second_outpoint)
+            .expect("decoded entry");
+        assert_eq!(decoded_first.1.owner, owner);
+        assert_eq!(decoded_first.1.amount, 45);
+        assert!(!decoded_first.1.is_spent());
     }
 
     #[test]
@@ -315,7 +326,11 @@ mod tests {
         state.insert(outpoint.clone(), StoredUtxo::new("ginny".to_string(), 12));
         assert!(state.remove_spent(&outpoint));
         let snapshot = state.snapshot();
-        assert!(snapshot.get(&outpoint).expect("snapshot entry").is_spent());
+        let refreshed = snapshot
+            .iter()
+            .find(|(candidate, _)| candidate == &outpoint)
+            .expect("snapshot entry");
+        assert!(refreshed.1.is_spent());
         assert!(!state.remove_spent(&outpoint));
         state.insert(outpoint.clone(), StoredUtxo::new("ginny".to_string(), 21));
         let refreshed = state.get(&outpoint).expect("reinserted utxo");
@@ -353,7 +368,7 @@ mod tests {
 
         let snapshot = state_a.snapshot();
         let bytes = bincode::serialize(&snapshot).expect("serialize snapshot");
-        let restored: BTreeMap<UtxoOutpoint, StoredUtxo> =
+        let restored: Vec<(UtxoOutpoint, StoredUtxo)> =
             bincode::deserialize(&bytes).expect("deserialize snapshot");
         assert_eq!(restored.len(), snapshot.len());
         let mirror = UtxoState::new();
