@@ -110,13 +110,16 @@ fn default_max_proof_size_bytes() -> usize {
 impl NodeConfig {
     pub fn load(path: &Path) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
-        toml::from_str(&content)
-            .map_err(|err| ChainError::Config(format!("unable to parse config: {err}")))
+        let config: Self = toml::from_str(&content)
+            .map_err(|err| ChainError::Config(format!("unable to parse config: {err}")))?;
+        config.validate()?;
+        Ok(config)
     }
 
     pub fn save(&self, path: &Path) -> ChainResult<()> {
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
+        self.validate()?;
         let encoded = toml::to_string_pretty(self)
             .map_err(|err| ChainError::Config(format!("unable to encode config: {err}")))?;
         fs::write(path, encoded)?;
@@ -149,6 +152,46 @@ impl NodeConfig {
 
     pub fn reputation_params(&self) -> ReputationParams {
         self.reputation.reputation_params()
+    }
+
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.block_time_ms == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires block_time_ms to be greater than 0".into(),
+            ));
+        }
+        if self.max_block_transactions == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires max_block_transactions to be greater than 0".into(),
+            ));
+        }
+        if self.max_block_identity_registrations == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires max_block_identity_registrations to be greater than 0"
+                    .into(),
+            ));
+        }
+        if self.mempool_limit == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires mempool_limit to be greater than 0".into(),
+            ));
+        }
+        if self.epoch_length == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires epoch_length to be greater than 0".into(),
+            ));
+        }
+        if self.target_validator_count == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires target_validator_count to be greater than 0".into(),
+            ));
+        }
+        if self.max_proof_size_bytes == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires max_proof_size_bytes to be greater than 0".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -231,6 +274,46 @@ mod tests {
             (default_params.weights.validation() - ReputationWeights::default().validation()).abs()
                 < f64::EPSILON
         );
+    }
+
+    #[test]
+    fn node_config_validation_accepts_defaults() {
+        let config = NodeConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn node_config_validation_rejects_zero_block_time() {
+        let mut config = NodeConfig::default();
+        config.block_time_ms = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("block_time_ms"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_zero_mempool_limit() {
+        let mut config = NodeConfig::default();
+        config.mempool_limit = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("mempool_limit"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 }
 

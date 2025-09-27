@@ -325,7 +325,9 @@ fn migrate_storage(config_path: PathBuf, dry_run: bool) -> Result<()> {
 
 fn load_or_init_node_config(path: &Path) -> Result<NodeConfig> {
     if path.exists() {
-        Ok(NodeConfig::load(path)?)
+        let config = NodeConfig::load(path)?;
+        config.validate()?;
+        Ok(config)
     } else {
         let config = NodeConfig::default();
         config.save(path)?;

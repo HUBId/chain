@@ -306,6 +306,7 @@ pub struct NetworkIdentityProfile {
 
 impl Node {
     pub fn new(config: NodeConfig) -> ChainResult<Self> {
+        config.validate()?;
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
         let vrf_keypair = load_or_generate_vrf_keypair(&config.vrf_key_path)?;
