@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use blake3::Hasher;
 use once_cell::sync::OnceCell;
-use serde::Deserialize;
+use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::error;
 
@@ -73,7 +74,7 @@ pub fn verifying_key(circuit: &str) -> ChainResult<[u8; 32]> {
 }
 
 pub fn compute_commitment(public_inputs: &Value) -> ChainResult<String> {
-    let encoded = serde_json::to_vec(public_inputs).map_err(|err| {
+    let encoded = encode_canonical_json(public_inputs).map_err(|err| {
         ChainError::Crypto(format!(
             "failed to encode Plonky3 public inputs for commitment: {err}"
         ))
@@ -89,7 +90,7 @@ pub fn compute_proof(
     public_inputs: &Value,
     verifying_key: &[u8; 32],
 ) -> ChainResult<Vec<u8>> {
-    let encoded_inputs = serde_json::to_vec(public_inputs).map_err(|err| {
+    let encoded_inputs = encode_canonical_json(public_inputs).map_err(|err| {
         ChainError::Crypto(format!(
             "failed to encode Plonky3 public inputs for proof transcript: {err}"
         ))
@@ -100,6 +101,48 @@ pub fn compute_proof(
     transcript.extend_from_slice(&encoded_inputs);
     let digest = blake3::keyed_hash(verifying_key, &transcript);
     Ok(digest.as_bytes().to_vec())
+}
+
+fn encode_canonical_json(value: &Value) -> serde_json::Result<Vec<u8>> {
+    let canonical = CanonicalValue(value);
+    let mut buffer = Vec::new();
+    {
+        let mut serializer = serde_json::Serializer::new(&mut buffer);
+        canonical.serialize(&mut serializer)?;
+    }
+    Ok(buffer)
+}
+
+struct CanonicalValue<'a>(&'a Value);
+
+impl<'a> Serialize for CanonicalValue<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.0 {
+            Value::Null => serializer.serialize_unit(),
+            Value::Bool(value) => serializer.serialize_bool(*value),
+            Value::Number(value) => value.serialize(serializer),
+            Value::String(value) => serializer.serialize_str(value),
+            Value::Array(values) => {
+                let mut seq = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    seq.serialize_element(&CanonicalValue(value))?;
+                }
+                seq.end()
+            }
+            Value::Object(map) => {
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                let mut object = serializer.serialize_map(Some(entries.len()))?;
+                for (key, value) in entries {
+                    object.serialize_entry(key, &CanonicalValue(value))?;
+                }
+                object.end()
+            }
+        }
+    }
 }
 
 pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::proof::Plonky3Proof> {
