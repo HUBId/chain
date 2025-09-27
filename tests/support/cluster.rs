@@ -3,11 +3,11 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use libp2p::PeerId;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep};
 
@@ -15,7 +15,7 @@ use rpp_chain::config::{GenesisAccount, NodeConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
-use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
+use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
@@ -63,7 +63,9 @@ impl TestClusterNode {
         }
     }
 
-    fn spawn_connection_tracker(handle: &P2pHandle) -> (Arc<RwLock<HashSet<PeerId>>>, JoinHandle<()>) {
+    fn spawn_connection_tracker(
+        handle: &P2pHandle,
+    ) -> (Arc<RwLock<HashSet<PeerId>>>, JoinHandle<()>) {
         let peers = Arc::new(RwLock::new(HashSet::new()));
         let mut events = handle.subscribe();
         let tracker_peers = peers.clone();
@@ -125,6 +127,10 @@ impl TestCluster {
             config.rpc_listen = rpc_socket(index)?;
             let (listen_addr, _) = random_listen_addr()?;
             config.p2p.listen_addr = listen_addr.clone();
+            config.rollout.feature_gates.pruning = false;
+            config.rollout.feature_gates.recursive_proofs = false;
+            config.rollout.feature_gates.reconstruction = false;
+            config.rollout.feature_gates.consensus_enforcement = false;
 
             let keypair = load_or_generate_keypair(&config.key_path)
                 .with_context(|| format!("failed to initialise node key for node {index}"))?;
@@ -164,8 +170,13 @@ impl TestCluster {
                     }
                 })
                 .collect();
-            let node = Node::new(config.clone())
-                .with_context(|| format!("failed to construct node runtime for node {index}"))?;
+            let node = tokio::task::spawn_blocking({
+                let config = config.clone();
+                move || Node::new(config)
+            })
+            .await
+            .context("node runtime initialisation task panicked")?
+            .with_context(|| format!("failed to construct node runtime for node {index}"))?;
             let node_handle = node.handle();
             let network_identity = node
                 .network_identity_profile()
@@ -175,7 +186,8 @@ impl TestCluster {
             let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config)
                 .with_context(|| format!("failed to initialise libp2p runtime for node {index}"))?;
 
-            let (connected_peers, connection_task) = TestClusterNode::spawn_connection_tracker(&p2p_handle);
+            let (connected_peers, connection_task) =
+                TestClusterNode::spawn_connection_tracker(&p2p_handle);
 
             let (orchestrator, shutdown_rx) =
                 PipelineOrchestrator::new(node_handle.clone(), Some(p2p_handle.clone()));
@@ -228,7 +240,10 @@ impl TestCluster {
             });
         }
 
-        Ok(Self { nodes, genesis_accounts })
+        Ok(Self {
+            nodes,
+            genesis_accounts,
+        })
     }
 
     /// Returns references to the running cluster nodes.
@@ -256,8 +271,7 @@ impl TestCluster {
             node.orchestrator.shutdown();
         }
         for node in &self.nodes {
-            node
-                .p2p_handle
+            node.p2p_handle
                 .shutdown()
                 .await
                 .map_err(|err| anyhow!("failed to stop libp2p node {0}: {1}", node.index, err))?;
@@ -277,7 +291,9 @@ impl TestCluster {
 
 fn random_listen_addr() -> Result<(String, u16)> {
     let listener = TcpListener::bind("127.0.0.1:0").context("failed to bind random port")?;
-    let addr = listener.local_addr().context("failed to read listener addr")?;
+    let addr = listener
+        .local_addr()
+        .context("failed to read listener addr")?;
     drop(listener);
     Ok((format!("/ip4/127.0.0.1/tcp/{}", addr.port()), addr.port()))
 }
