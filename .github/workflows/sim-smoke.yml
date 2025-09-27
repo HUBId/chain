@@ -11,6 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Ensure documentation builds
+        run: cargo doc --no-deps --workspace
       - name: Run deterministic smoke scenario
         run: |
           cargo test -p rpp-sim --test sim_smoke -- --ignored

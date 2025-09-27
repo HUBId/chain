@@ -1,3 +1,12 @@
+//! High-level orchestrator connecting the runtime node with wallet workflows and
+//! gossip interfaces.
+//!
+//! [`PipelineOrchestrator`] supervises asynchronous tasks that bridge the
+//! consensus engine, mempool, and external clients. It is responsible for
+//! coordinating transaction submission, gossip fan-out, and system health
+//! monitoring. Channels created here have bounded capacity to prevent unbounded
+//! backpressure on gossip ingress, and all spawned tasks are tracked so they can
+//! be cancelled during shutdown via [`NodeHandle`].
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

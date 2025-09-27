@@ -1,3 +1,18 @@
+//! Stateful runtime node coordinating consensus, storage, and external services.
+//!
+//! The [`Node`] type wraps the chain runtime, orchestrating mempool management,
+//! block production, and proof generation. Invariants maintained here include:
+//!
+//! * The in-memory tip (`ChainTip`) always reflects the latest committed block
+//!   stored in [`Storage`].
+//! * VRF submissions are validated against the current epoch before they are
+//!   admitted to consensus queues.
+//! * Side-effectful subsystems (telemetry, gossip, prover tasks) are spawned and
+//!   owned by [`NodeHandle`], which ensures graceful shutdown via the async
+//!   join handles it tracks.
+//!
+//! Public status/reporting structs are defined alongside the runtime to expose
+//! snapshot views without leaking internal locks.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr;
 use std::sync::Arc;
