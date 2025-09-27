@@ -453,6 +453,8 @@ pub struct TelemetryConfig {
     pub retry_max: u64,
     #[serde(default = "default_sample_interval_secs")]
     pub sample_interval_secs: u64,
+    #[serde(default = "default_redact_logs")]
+    pub redact_logs: bool,
 }
 
 impl Default for TelemetryConfig {
@@ -464,6 +466,7 @@ impl Default for TelemetryConfig {
             timeout_ms: default_timeout_ms(),
             retry_max: default_retry_max(),
             sample_interval_secs: default_sample_interval_secs(),
+            redact_logs: default_redact_logs(),
         }
     }
 }
@@ -478,6 +481,10 @@ fn default_retry_max() -> u64 {
 
 fn default_sample_interval_secs() -> u64 {
     30
+}
+
+fn default_redact_logs() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

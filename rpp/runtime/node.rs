@@ -3027,6 +3027,7 @@ mod telemetry_tests {
             timeout_ms: 5_000,
             retry_max: 3,
             sample_interval_secs: 1,
+            redact_logs: true,
         };
         let client = Client::new();
         let snapshot = sample_snapshot(42);
@@ -3053,6 +3054,7 @@ mod telemetry_tests {
             timeout_ms: 5_000,
             retry_max: 3,
             sample_interval_secs: 1,
+            redact_logs: true,
         };
         let client = Client::new();
         let snapshot = sample_snapshot(24);
@@ -3077,6 +3079,7 @@ mod telemetry_tests {
             timeout_ms: 5_000,
             retry_max: 3,
             sample_interval_secs: 1,
+            redact_logs: true,
         };
         let client = Client::new();
         let snapshot = sample_snapshot(7);

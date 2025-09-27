@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 use log::{error, info, warn};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
+use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::config::TelemetryConfig;
@@ -106,7 +107,7 @@ impl TelemetryWorker {
 
     async fn process_snapshot(&self, snapshot: TelemetrySnapshot) {
         if !self.config.enabled {
-            self.log_snapshot("telemetry disabled", &snapshot);
+            self.log_minimal_snapshot("telemetry disabled", &snapshot);
             return;
         }
 
@@ -127,11 +128,35 @@ impl TelemetryWorker {
     }
 
     fn log_snapshot(&self, reason: &str, snapshot: &TelemetrySnapshot) {
-        match serde_json::to_string(snapshot) {
+        self.log_snapshot_internal(reason, snapshot, self.config.redact_logs);
+    }
+
+    fn log_minimal_snapshot(&self, reason: &str, snapshot: &TelemetrySnapshot) {
+        self.log_snapshot_internal(reason, snapshot, true);
+    }
+
+    fn log_snapshot_internal(&self, reason: &str, snapshot: &TelemetrySnapshot, redacted: bool) {
+        let payload = if redacted {
+            json!({
+                "reason": reason,
+                "telemetry": {
+                    "block_height": snapshot.block_height,
+                    "transaction_count": snapshot.transaction_count,
+                    "peer_count": snapshot.peer_count,
+                }
+            })
+        } else {
+            json!({
+                "reason": reason,
+                "telemetry": snapshot,
+            })
+        };
+
+        match serde_json::to_string(&payload) {
             Ok(payload) => {
                 info!(
                     target: "telemetry",
-                    "{reason}: {payload}"
+                    "{payload}"
                 );
             }
             Err(err) => {
@@ -204,6 +229,8 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_configuration_only_logs() {
+        let logger = init_test_logger();
+        logger.drain();
         let (addr, counter, shutdown) = spawn_test_server().await;
         let config = TelemetryConfig {
             enabled: false,
@@ -212,6 +239,7 @@ mod tests {
             timeout_ms: 50,
             retry_max: 2,
             sample_interval_secs: 1,
+            redact_logs: true,
         };
         let handle = TelemetryHandle::spawn(config);
         let snapshot = sample_snapshot();
@@ -220,6 +248,11 @@ mod tests {
         sleep(TokioDuration::from_millis(200)).await;
 
         assert_eq!(counter.lock().unwrap().len(), 0);
+        let logs = logger.drain().join("\n");
+        assert!(logs.contains("\"reason\":\"telemetry disabled\""));
+        assert!(!logs.contains("node-1"));
+        assert!(!logs.contains("0xdeadbeef"));
+        assert!(!logs.contains("block_hash"));
         handle.shutdown().await.expect("shutdown");
         let _ = shutdown.send(());
     }
@@ -235,6 +268,7 @@ mod tests {
             timeout_ms: 100,
             retry_max: 1,
             sample_interval_secs: 1,
+            redact_logs: false,
         };
         let handle = TelemetryHandle::spawn(config);
         let snapshot = sample_snapshot();
@@ -276,6 +310,7 @@ mod tests {
             timeout_ms: 50,
             retry_max: 2,
             sample_interval_secs: 1,
+            redact_logs: true,
         };
         let handle = TelemetryHandle::spawn(config);
         let snapshot = sample_snapshot();
