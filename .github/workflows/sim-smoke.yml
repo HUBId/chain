@@ -1,5 +1,9 @@
 name: sim-smoke
 
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
 on:
   push:
     branches: [ main ]

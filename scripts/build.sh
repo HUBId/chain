@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -z "${RUSTFLAGS:-}" ]]; then
+  export RUSTFLAGS="-D warnings"
+elif [[ " ${RUSTFLAGS} " != *" -D warnings "* ]]; then
+  export RUSTFLAGS="${RUSTFLAGS} -D warnings"
+fi
+
+: "${CARGO_TERM_COLOR:=always}"
+export CARGO_TERM_COLOR
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/build.sh [options] [-- <cargo build args>]

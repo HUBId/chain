@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -z "${RUSTFLAGS:-}" ]]; then
+  export RUSTFLAGS="-D warnings"
+elif [[ " ${RUSTFLAGS} " != *" -D warnings "* ]]; then
+  export RUSTFLAGS="${RUSTFLAGS} -D warnings"
+fi
+
+: "${CARGO_TERM_COLOR:=always}"
+export CARGO_TERM_COLOR
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/test.sh [options] [-- <cargo test args>]
@@ -32,8 +41,6 @@ Backends:
   plonky3   Force the `backend-plonky3` feature only
 USAGE
 }
-
-export RUSTFLAGS="${RUSTFLAGS:-} -D warnings"
 
 PROFILE_ARGS=()
 FEATURE_ARGS=()
