@@ -12,6 +12,7 @@ Options:
   --release                 Build artifacts in release mode (alias for --profile release)
   --profile <name>          Build with the named cargo profile
   --feature-set <name>      Use a predefined feature matrix (default|minimal|full)
+  --backend <name>          Build for a specific backend (default|stwo|plonky3)
   --features <features>     Pass a custom feature list to cargo
   --no-default-features     Disable default features
   --all-features            Enable all features
@@ -33,7 +34,7 @@ PROFILE_ARGS=()
 FEATURE_ARGS=()
 PASSTHROUGH_ARGS=()
 FEATURE_SET_SELECTED=""
-CUSTOM_FEATURES=false
+BACKEND="default"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,7 +63,7 @@ while [[ $# -gt 0 ]]; do
         echo "error: --feature-set requires a value" >&2
         exit 1
       fi
-      if [[ -n "$FEATURE_SET_SELECTED" || $CUSTOM_FEATURES == true ]]; then
+      if [[ -n "$FEATURE_SET_SELECTED" ]]; then
         echo "error: feature set already specified" >&2
         exit 1
       fi
@@ -92,13 +93,27 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       FEATURE_ARGS+=("--features" "$2")
-      CUSTOM_FEATURES=true
       shift 2
       ;;
     --no-default-features|--all-features)
       FEATURE_ARGS+=("$1")
-      CUSTOM_FEATURES=true
       shift
+      ;;
+    --backend)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --backend requires a value" >&2
+        exit 1
+      fi
+      case "$2" in
+        default|stwo|plonky3)
+          BACKEND="$2"
+          ;;
+        *)
+          echo "error: unknown backend '$2'" >&2
+          exit 1
+          ;;
+      esac
+      shift 2
       ;;
     --target|--package|--bin|--example)
       if [[ $# -lt 2 ]]; then
@@ -124,4 +139,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-cargo build "${PROFILE_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
+case "$BACKEND" in
+  default)
+    BACKEND_ARGS=()
+    ;;
+  stwo)
+    BACKEND_ARGS=("--no-default-features" "--features" "backend-stwo")
+    ;;
+  plonky3)
+    BACKEND_ARGS=("--features" "backend-plonky3")
+    ;;
+  *)
+    echo "error: unsupported backend '$BACKEND'" >&2
+    exit 1
+    ;;
+esac
+
+cargo build "${PROFILE_ARGS[@]}" "${BACKEND_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
