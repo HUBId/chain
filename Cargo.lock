@@ -3160,6 +3160,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpp-node"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "rpp-p2p"
 version = "0.1.0"
 dependencies = [
@@ -3195,6 +3206,7 @@ dependencies = [
  "rand 0.7.3",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "tracing",

@@ -13,8 +13,10 @@ use crate::traffic::{
     TrafficProgram,
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Scenario {
+    #[serde(skip)]
+    source_path: Option<PathBuf>,
     pub sim: SimSection,
     pub topology: TopologySection,
     pub traffic: TrafficSection,
@@ -28,7 +30,7 @@ pub struct Scenario {
     pub faults: FaultsSection,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct SimSection {
     pub seed: u64,
     pub duration_ms: u64,
@@ -36,7 +38,7 @@ pub struct SimSection {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TopologyType {
     Ring,
@@ -46,7 +48,7 @@ pub enum TopologyType {
     ScaleFree,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TopologySection {
     #[serde(rename = "type")]
     pub topology_type: TopologyType,
@@ -59,7 +61,7 @@ pub struct TopologySection {
     pub rewire_p: Option<f64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TrafficSection {
     pub tx: TxTraffic,
 }
@@ -211,8 +213,13 @@ impl Scenario {
         let mut scenario: Scenario = toml::from_str(&contents)
             .with_context(|| format!("failed to parse scenario file {path:?}"))?;
         scenario.links = scenario.links.with_defaults();
+        scenario.source_path = Some(path.to_path_buf());
         scenario.validate()?;
         Ok(scenario)
+    }
+
+    pub fn source_path(&self) -> Option<&Path> {
+        self.source_path.as_deref()
     }
 
     fn validate(&self) -> Result<()> {

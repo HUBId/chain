@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use libp2p::PeerId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::metrics::reduce::{calculate_percentiles, SimulationSummary};
 
@@ -43,7 +43,7 @@ pub enum MeshAction {
     Unsubscribe,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeshChangeRecord {
     pub node: String,
     pub peer: String,
@@ -52,7 +52,7 @@ pub struct MeshChangeRecord {
     pub timestamp_ms: f64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FaultRecord {
     pub kind: String,
     pub detail: Option<String>,
@@ -154,6 +154,7 @@ impl Collector {
             propagation,
             mesh_changes: self.mesh_changes,
             faults: self.faults,
+            comparison: None,
         }
     }
 }

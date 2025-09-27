@@ -53,6 +53,7 @@ libp2p = { version = "0.54", default-features = false, features = [
 [workspace]
 members = [
     ".",
+    "rpp/node",
     "rpp/sim",
 ]
 resolver = "2"

@@ -88,6 +88,7 @@ mod tests {
             }),
             mesh_changes: Vec::new(),
             faults: Vec::new(),
+            comparison: None,
         }
     }
 

@@ -15,6 +15,7 @@ use tracing::info;
 
 use crate::faults::PartitionFault;
 use crate::metrics::{exporters, Collector, FaultEvent, SimEvent, SimulationSummary};
+use crate::multiprocess;
 use crate::node_adapter::{spawn_node, Node, NodeHandle};
 use crate::scenario::{LinkParams, Scenario, TopologyType};
 use crate::topology::{
@@ -35,11 +36,26 @@ impl SimHarness {
             .enable_all()
             .build()
             .context("failed to build tokio runtime")?;
-        runtime.block_on(run_simulation(scenario))
+        runtime.block_on(async {
+            match scenario.sim.mode.as_deref() {
+                Some(mode)
+                    if mode.eq_ignore_ascii_case("multiprocess")
+                        || mode.eq_ignore_ascii_case("multi-process")
+                        || mode.eq_ignore_ascii_case("compare") =>
+                {
+                    multiprocess::run(scenario).await
+                }
+                Some(mode) if mode.eq_ignore_ascii_case("inprocess") => {
+                    run_in_process(scenario).await
+                }
+                Some(other) => Err(anyhow!("unknown simulation mode: {other}")),
+                None => run_in_process(scenario).await,
+            }
+        })
     }
 }
 
-async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
+pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSummary> {
     tracing_subscriber::fmt::try_init().ok();
 
     let topic = IdentTopic::new("/rpp/sim/tx");
