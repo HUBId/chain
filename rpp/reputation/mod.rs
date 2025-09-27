@@ -505,3 +505,116 @@ impl Default for ReputationProfile {
         Self::new("default-reputation")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_thresholds() -> TierThresholds {
+        TierThresholds {
+            tier2_min_uptime_hours: 12,
+            tier3_min_consensus_success: 4,
+            tier4_min_consensus_success: 7,
+            tier5_min_score: 0.8,
+        }
+    }
+
+    fn validated_profile() -> ReputationProfile {
+        let mut profile = ReputationProfile::new("validator");
+        profile.zsi.validate("proof");
+        profile
+    }
+
+    #[test]
+    fn validation_controls_tier_promotions_and_demotions() {
+        let thresholds = base_thresholds();
+        let mut profile = validated_profile();
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours;
+        profile.consensus_success = thresholds.tier4_min_consensus_success;
+        profile.score = thresholds.tier5_min_score;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl5);
+
+        profile.zsi.invalidate();
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl0);
+    }
+
+    #[test]
+    fn uptime_boundary_moves_between_tier1_and_tier2() {
+        let thresholds = base_thresholds();
+        let mut profile = validated_profile();
+        profile.consensus_success = thresholds.tier3_min_consensus_success - 1;
+        profile.score = thresholds.tier5_min_score;
+
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours - 1;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl1);
+
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl2);
+
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours - 1;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl1);
+    }
+
+    #[test]
+    fn consensus_boundary_moves_between_tier2_and_tier3() {
+        let thresholds = base_thresholds();
+        let mut profile = validated_profile();
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours;
+        profile.consensus_success = thresholds.tier3_min_consensus_success - 1;
+        profile.score = thresholds.tier5_min_score;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl2);
+
+        profile.consensus_success = thresholds.tier3_min_consensus_success;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl3);
+
+        profile.consensus_success = thresholds.tier3_min_consensus_success - 1;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl2);
+    }
+
+    #[test]
+    fn high_consensus_boundary_moves_between_tier3_and_tier4() {
+        let thresholds = base_thresholds();
+        let mut profile = validated_profile();
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours;
+        profile.consensus_success = thresholds.tier4_min_consensus_success - 1;
+        profile.score = thresholds.tier5_min_score - 0.01;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl3);
+
+        profile.consensus_success = thresholds.tier4_min_consensus_success;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl4);
+
+        profile.consensus_success = thresholds.tier4_min_consensus_success - 1;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl3);
+    }
+
+    #[test]
+    fn score_boundary_moves_between_tier4_and_tier5() {
+        let thresholds = base_thresholds();
+        let mut profile = validated_profile();
+        profile.timetokes.hours_online = thresholds.tier2_min_uptime_hours;
+        profile.consensus_success = thresholds.tier4_min_consensus_success;
+
+        profile.score = thresholds.tier5_min_score - 0.01;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl4);
+
+        profile.score = thresholds.tier5_min_score;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl5);
+
+        profile.score = thresholds.tier5_min_score - 0.01;
+        profile.update_tier_with(&thresholds);
+        assert_eq!(profile.tier, Tier::Tl4);
+    }
+}

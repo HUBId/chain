@@ -154,6 +154,10 @@ impl Ledger {
         ledger
     }
 
+    pub fn set_reputation_params(&mut self, params: ReputationParams) {
+        self.reputation_params = params;
+    }
+
     pub fn load(
         initial: Vec<Account>,
         utxo_snapshots: Vec<(UtxoOutpoint, StoredUtxo)>,

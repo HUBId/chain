@@ -313,6 +313,7 @@ impl Node {
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
         );
         let address = address_from_public_key(&keypair.public);
+        let reputation_params = config.reputation.reputation_params();
         let db_path = config.data_dir.join("db");
         let storage = Storage::open(&db_path)?;
         let mut accounts = storage.load_accounts()?;
@@ -332,7 +333,8 @@ impl Node {
                 storage.persist_account(account)?;
             }
             let utxo_snapshot = storage.load_utxo_snapshot()?.unwrap_or_default();
-            let ledger = Ledger::load(accounts.clone(), utxo_snapshot, config.epoch_length);
+            let mut ledger = Ledger::load(accounts.clone(), utxo_snapshot, config.epoch_length);
+            ledger.set_reputation_params(reputation_params.clone());
             let module_witnesses = ledger.drain_module_witnesses();
             let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
             let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
@@ -434,7 +436,8 @@ impl Node {
         }
 
         let utxo_snapshot = storage.load_utxo_snapshot()?.unwrap_or_default();
-        let ledger = Ledger::load(accounts, utxo_snapshot, config.epoch_length);
+        let mut ledger = Ledger::load(accounts, utxo_snapshot, config.epoch_length);
+        ledger.set_reputation_params(reputation_params);
 
         let node_pk_hex = hex::encode(keypair.public.to_bytes());
         if ledger.get_account(&address).is_none() {

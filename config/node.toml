@@ -36,6 +36,12 @@ consensus_enforcement = true
 enabled = false
 sample_interval_secs = 30
 
+[reputation.tier_thresholds]
+tier2_min_uptime_hours = 24
+tier3_min_consensus_success = 10
+tier4_min_consensus_success = 100
+tier5_min_score = 0.75
+
 [genesis]
 chain_id = "rpp-local"
 
