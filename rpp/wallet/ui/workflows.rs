@@ -7,6 +7,7 @@ use stwo::core::vcs::blake2_hash::Blake2sHasher;
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
+use crate::state::utxo::StoredUtxo;
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -83,9 +84,9 @@ pub struct TransactionWorkflow {
     pub bundle: TransactionProofBundle,
     pub utxo_inputs: Vec<UtxoRecord>,
     pub planned_outputs: Vec<UtxoRecord>,
-    pub sender_post_utxo: UtxoRecord,
-    pub recipient_pre_utxo: Option<UtxoRecord>,
-    pub recipient_post_utxo: UtxoRecord,
+    pub sender_post_utxos: Vec<UtxoRecord>,
+    pub recipient_pre_utxos: Vec<UtxoRecord>,
+    pub recipient_post_utxos: Vec<UtxoRecord>,
     pub total_input_value: u128,
     pub total_output_value: u128,
     pub fee: u64,
@@ -238,27 +239,31 @@ impl<'a> WalletWorkflows<'a> {
             ));
         }
         let recipient_account = self.wallet.account_by_address(&to)?;
-        let (recipient_pre_utxo, recipient_balance_before) = match recipient_account {
+        let (recipient_pre_utxos, recipient_balance_before) = match recipient_account {
             Some(ref account) => (
-                Some(ledger_snapshot_utxo(
-                    &account.address,
-                    account.balance,
-                    None,
-                )),
+                ledger_snapshot_utxos(self.wallet, &account.address, account.balance, 0, None)?,
                 account.balance,
             ),
-            None => (None, 0u128),
+            None => (Vec::new(), 0u128),
         };
         let recipient_balance_after = recipient_balance_before
             .checked_add(amount)
             .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
-        let recipient_post_utxo =
-            ledger_snapshot_utxo(&to, recipient_balance_after, Some(tx_hash_bytes));
-        let sender_post_utxo = ledger_snapshot_utxo(
+        let is_self_transfer = self.wallet.address() == &to;
+        let recipient_post_utxos = ledger_snapshot_utxos(
+            self.wallet,
+            &to,
+            recipient_balance_after,
+            0,
+            Some(tx_hash_bytes),
+        )?;
+        let sender_post_utxos = ledger_snapshot_utxos(
+            self.wallet,
             self.wallet.address(),
             sender_account.balance - total_debit,
+            if is_self_transfer { 0 } else { 1 },
             Some(tx_hash_bytes),
-        );
+        )?;
         let policy = TransactionPolicy {
             required_tier: Tier::Tl0,
             status,
@@ -269,9 +274,9 @@ impl<'a> WalletWorkflows<'a> {
             bundle,
             utxo_inputs,
             planned_outputs,
-            sender_post_utxo,
-            recipient_pre_utxo,
-            recipient_post_utxo,
+            sender_post_utxos,
+            recipient_pre_utxos,
+            recipient_post_utxos,
             total_input_value,
             total_output_value,
             fee,
@@ -313,30 +318,41 @@ fn status_from_account(account: &Account) -> ReputationStatus {
     }
 }
 
-fn ledger_snapshot_utxo(
+fn ledger_snapshot_utxos(
+    wallet: &Wallet,
     address: &Address,
     value: u128,
+    fallback_index: u32,
     tx_id_override: Option<[u8; 32]>,
-) -> UtxoRecord {
-    let mut script_seed = address.as_bytes().to_vec();
-    script_seed.extend_from_slice(&0u32.to_be_bytes());
-    let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
-    let mut record = UtxoRecord {
-        outpoint: UtxoOutpoint {
-            tx_id: tx_id_override.unwrap_or([0u8; 32]),
-            index: 0,
-        },
-        owner: address.clone(),
-        value,
-        asset_type: AssetType::Native,
-        script_hash,
-        timelock: None,
-    };
+) -> ChainResult<Vec<UtxoRecord>> {
     if let Some(tx_id) = tx_id_override {
-        record.outpoint.tx_id = tx_id;
+        if value == 0 {
+            return Ok(Vec::new());
+        }
+        let stored = StoredUtxo::new(address.clone(), value);
+        let outpoint = UtxoOutpoint {
+            tx_id,
+            index: fallback_index,
+        };
+        return Ok(vec![stored.to_record(&outpoint)]);
     }
-    record.value = value;
-    record
+
+    let mut records = wallet.unspent_utxos(address)?;
+    if records.is_empty() {
+        if value == 0 {
+            return Ok(records);
+        }
+        let stored = StoredUtxo::new(address.clone(), value);
+        let outpoint = UtxoOutpoint {
+            tx_id: [0u8; 32],
+            index: fallback_index,
+        };
+        records.push(stored.to_record(&outpoint));
+        return Ok(records);
+    }
+
+    records.sort_by(|left, right| left.outpoint.cmp(&right.outpoint));
+    Ok(records)
 }
 
 fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {
