@@ -6,6 +6,8 @@ use std::time::Duration;
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
+use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, info, warn};
 
@@ -215,7 +217,7 @@ pub struct Node {
     inner: Arc<NodeInner>,
 }
 
-struct NodeInner {
+pub(crate) struct NodeInner {
     config: NodeConfig,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
@@ -237,6 +239,9 @@ struct NodeInner {
     telemetry_last_height: RwLock<Option<u64>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
+    shutdown: broadcast::Sender<()>,
+    worker_tasks: Mutex<Vec<JoinHandle<()>>>,
+    completion: Notify,
 }
 
 enum FinalizationContext {
@@ -443,6 +448,7 @@ impl Node {
         ledger.sync_epoch_for_height(next_height);
         let epoch_manager = VrfEpochManager::new(config.epoch_length, ledger.current_epoch());
 
+        let (shutdown, _shutdown_rx) = broadcast::channel(1);
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -468,6 +474,9 @@ impl Node {
             telemetry_last_height: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             verifiers: ProofVerifierRegistry::default(),
+            shutdown,
+            worker_tasks: Mutex::new(Vec::new()),
+            completion: Notify::new(),
         });
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
@@ -481,7 +490,9 @@ impl Node {
     }
 
     pub async fn start(self) -> ChainResult<()> {
-        self.inner.clone().run().await
+        let join = self.inner.spawn_runtime();
+        join.await
+            .map_err(|err| ChainError::Config(format!("node runtime join error: {err}")))
     }
 
     pub fn network_identity_profile(&self) -> ChainResult<NetworkIdentityProfile> {
@@ -906,6 +917,10 @@ mod tests {
 }
 
 impl NodeHandle {
+    pub async fn stop(&self) -> ChainResult<()> {
+        self.inner.stop().await
+    }
+
     pub fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
         self.inner.submit_transaction(bundle)
     }
@@ -1042,7 +1057,42 @@ impl NodeHandle {
 }
 
 impl NodeInner {
-    async fn run(self: Arc<Self>) -> ChainResult<()> {
+    fn spawn_runtime(self: &Arc<Self>) -> JoinHandle<()> {
+        let runner = Arc::clone(self);
+        let shutdown = runner.subscribe_shutdown();
+        let run_task = tokio::spawn(async move { runner.run(shutdown).await });
+
+        let completion = Arc::clone(self);
+        tokio::spawn(async move {
+            match run_task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    warn!(?err, "node runtime exited with error");
+                }
+                Err(err) => {
+                    warn!(?err, "node runtime join error");
+                }
+            }
+            completion.drain_worker_tasks().await;
+            completion.completion.notify_waiters();
+        })
+    }
+
+    pub async fn start(config: NodeConfig) -> ChainResult<(NodeHandle, JoinHandle<()>)> {
+        let node = Node::new(config)?;
+        let handle = node.handle();
+        let join = handle.inner.spawn_runtime();
+        Ok((handle, join))
+    }
+
+    pub async fn stop(&self) -> ChainResult<()> {
+        self.signal_shutdown();
+        self.completion.notified().await;
+        self.drain_worker_tasks().await;
+        Ok(())
+    }
+
+    async fn run(self: Arc<Self>, mut shutdown: broadcast::Receiver<()>) -> ChainResult<()> {
         info!(
             address = %self.address,
             channel = ?self.config.rollout.release_channel,
@@ -1053,29 +1103,85 @@ impl NodeInner {
         if self.config.rollout.telemetry.enabled {
             let config = self.config.rollout.telemetry.clone();
             let worker = self.clone();
-            tokio::spawn(async move {
-                worker.telemetry_loop(config).await;
-            });
+            let telemetry_shutdown = self.shutdown.subscribe();
+            self.spawn_worker(tokio::spawn(async move {
+                worker.telemetry_loop(config, telemetry_shutdown).await;
+            }))
+            .await;
         }
         let mut ticker = time::interval(self.block_interval);
         loop {
-            ticker.tick().await;
-            if let Err(err) = self.produce_block() {
-                warn!(?err, "block production failed");
+            tokio::select! {
+                _ = ticker.tick() => {
+                    if let Err(err) = self.produce_block() {
+                        warn!(?err, "block production failed");
+                    }
+                }
+                result = shutdown.recv() => {
+                    match result {
+                        Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {
+                            info!("node shutdown signal received");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            info!("node shutdown channel closed");
+                        }
+                    }
+                    break;
+                }
             }
         }
+        Ok(())
     }
 
-    async fn telemetry_loop(self: Arc<Self>, config: TelemetryConfig) {
+    async fn telemetry_loop(
+        self: Arc<Self>,
+        config: TelemetryConfig,
+        mut shutdown: broadcast::Receiver<()>,
+    ) {
         let interval = Duration::from_secs(config.sample_interval_secs.max(1));
         let mut ticker = time::interval(interval);
         let client = reqwest::Client::new();
         loop {
-            ticker.tick().await;
-            if let Err(err) = self.emit_telemetry(&client, &config).await {
-                warn!(?err, "failed to emit telemetry snapshot");
+            tokio::select! {
+                _ = ticker.tick() => {
+                    if let Err(err) = self.emit_telemetry(&client, &config).await {
+                        warn!(?err, "failed to emit telemetry snapshot");
+                    }
+                }
+                result = shutdown.recv() => {
+                    if let Err(err) = result {
+                        if !matches!(err, broadcast::error::RecvError::Lagged(_)) {
+                            debug!(?err, "telemetry shutdown channel closed");
+                        }
+                    }
+                    break;
+                }
             }
         }
+    }
+
+    async fn spawn_worker(&self, handle: JoinHandle<()>) {
+        let mut workers = self.worker_tasks.lock().await;
+        workers.push(handle);
+    }
+
+    async fn drain_worker_tasks(&self) {
+        let mut workers = self.worker_tasks.lock().await;
+        while let Some(handle) = workers.pop() {
+            if let Err(err) = handle.await {
+                if !err.is_cancelled() {
+                    warn!(?err, "node worker task terminated unexpectedly");
+                }
+            }
+        }
+    }
+
+    fn subscribe_shutdown(&self) -> broadcast::Receiver<()> {
+        self.shutdown.subscribe()
+    }
+
+    fn signal_shutdown(&self) {
+        let _ = self.shutdown.send(());
     }
 
     async fn emit_telemetry(
