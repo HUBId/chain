@@ -9,7 +9,8 @@ use crate::plonky3::prover::Plonky3Prover;
 use crate::plonky3::verifier::Plonky3Verifier;
 use crate::plonky3::{crypto, proof::Plonky3Proof};
 use crate::proof_system::{ProofProver, ProofVerifier};
-use crate::types::{BlockProofBundle, ChainProof, SignedTransaction, Transaction};
+use crate::rpp::GlobalStateCommitments;
+use crate::types::{BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction};
 
 fn sample_transaction() -> SignedTransaction {
     let mut rng = StdRng::from_seed([7u8; 32]);
@@ -41,6 +42,28 @@ fn transaction_proof_roundtrip() {
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness =
         serde_json::from_value(public_inputs.get("witness").unwrap().clone()).unwrap();
     assert_eq!(decoded.transaction, tx);
+}
+
+#[test]
+fn recursive_aggregator_rejects_tampered_inputs() {
+    let prover = Plonky3Prover::new();
+    let tx = sample_transaction();
+    let good_proof = prover
+        .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
+        .unwrap();
+
+    let mut tampered = good_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("commitment".into(), json!("deadbeef"));
+        }
+    }
+
+    let aggregator = RecursiveAggregator::new(1, vec![tampered]);
+    assert!(aggregator.finalize().is_err());
+
+    let aggregator = RecursiveAggregator::new(1, vec![good_proof]);
+    assert!(aggregator.finalize().is_ok());
 }
 
 #[test]
@@ -100,4 +123,69 @@ fn recursive_bundle_verification_detects_tampering() {
         tampered,
     );
     assert!(verifier.verify_bundle(&tampered_bundle, None).is_err());
+}
+
+#[test]
+fn recursive_roundtrip_spans_state_and_transactions() {
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+
+    let tx = sample_transaction();
+    let transaction_proof = prover
+        .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
+        .unwrap();
+
+    let state_witness = prover
+        .build_state_witness("prev", "next", &[], &[tx.clone()])
+        .unwrap();
+    let state_proof = prover.prove_state_transition(state_witness).unwrap();
+
+    let pruning = PruningProof::genesis("prev");
+    let pruning_witness = prover
+        .build_pruning_witness(&[], &[], &pruning, Vec::new())
+        .unwrap();
+    let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
+
+    let recursive_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &[transaction_proof.clone()],
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            &pruning_proof,
+            7,
+        )
+        .unwrap();
+    let recursive_proof = prover.prove_recursive(recursive_witness).unwrap();
+
+    verifier.verify_transaction(&transaction_proof).unwrap();
+    verifier.verify_state(&state_proof).unwrap();
+    verifier.verify_pruning(&pruning_proof).unwrap();
+    verifier.verify_recursive(&recursive_proof).unwrap();
+
+    let bundle = BlockProofBundle::new(
+        vec![transaction_proof.clone()],
+        state_proof.clone(),
+        pruning_proof.clone(),
+        recursive_proof.clone(),
+    );
+    verifier.verify_bundle(&bundle, None).unwrap();
+
+    // Tampering with any sub-proof now causes the bundle verification to fail.
+    let mut broken_state = state_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut broken_state {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("proof".into(), json!("ZG9nZ29nb28="));
+        }
+    }
+    let broken_bundle = BlockProofBundle::new(
+        vec![transaction_proof],
+        broken_state,
+        pruning_proof,
+        recursive_proof,
+    );
+    assert!(verifier.verify_bundle(&broken_bundle, None).is_err());
 }

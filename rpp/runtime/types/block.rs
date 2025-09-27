@@ -592,6 +592,7 @@ impl RecursiveProof {
     #[cfg(feature = "backend-plonky3")]
     fn verify_plonky3(&self, _previous: Option<&RecursiveProof>) -> ChainResult<()> {
         use crate::plonky3::verifier::Plonky3Verifier;
+        use crate::proof_system::ProofVerifier;
 
         let verifier = Plonky3Verifier::default();
         verifier.verify_recursive(&self.proof)
