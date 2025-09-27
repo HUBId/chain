@@ -1,3 +1,14 @@
+//! Consensus node logic responsible for VRF leader election and BFT voting.
+//!
+//! This module encapsulates proposer selection, vote validation, and
+//! misbehavior evidence tracking. Core invariants:
+//!
+//! * [`EvidencePool`] de-duplicates votes by `(height, round, kind, voter)` to
+//!   detect equivocation.
+//! * All [`BftVote`] values must carry signatures that validate against the
+//!   submitter's public key prior to acceptance.
+//! * VRF submissions are filtered through [`VrfSubmissionPool`] so that
+//!   proposer randomness is both unbiased and replay-safe across epochs.
 use std::collections::{HashMap, HashSet};
 
 use malachite::Natural;

@@ -1,3 +1,15 @@
+//! Core crate wiring together the RPP blockchain runtime.
+//!
+//! The crate re-exports modules that live in the `rpp` workspace so that
+//! consumers can interact with the system through a single entry point. The
+//! `runtime`, `consensus`, and `node` modules compose the node lifecycle, while
+//! `storage` and `ledger` encapsulate persistent state management. Proof system
+//! integrations are exposed under `proof_system`, `stwo`, and `plonky3`, and
+//! wallet/UI integrations live in `wallet`.
+//!
+//! Applications typically depend on [`config::NodeConfig`] to bootstrap a node,
+//! [`node::Node`] and [`node::NodeHandle`] to operate it, and the supporting modules for consensus,
+//! networking, proofs, and state synchronization.
 #[path = "../rpp/rpc/api.rs"]
 pub mod api;
 #[path = "../rpp/proofs/blueprint/mod.rs"]
