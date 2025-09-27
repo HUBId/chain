@@ -1,13 +1,14 @@
-use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
+use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
 use crate::reputation::Tier;
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::utxo::StoredUtxo;
+use crate::state::utxo::{StoredUtxo, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 
 use super::tabs::SendPreview;
@@ -92,6 +93,7 @@ pub struct TransactionWorkflow {
     pub fee: u64,
     pub policy: TransactionPolicy,
     pub state_root: String,
+    pub utxo_commitment: String,
     pub tx_hash: String,
     pub nonce: u64,
 }
@@ -214,20 +216,56 @@ impl<'a> WalletWorkflows<'a> {
                 "insufficient balance for requested transfer".into(),
             ));
         }
-        let utxo_inputs = select_inputs_from_available(
-            self.wallet.unspent_utxos(self.wallet.address())?,
-            total_debit,
-        )?;
+        let accounts = self.wallet.accounts_snapshot()?;
+        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        let mut sender_pre_utxos = ledger.utxos_for_owner(self.wallet.address());
+        if sender_pre_utxos.is_empty() {
+            sender_pre_utxos = synthetic_account_utxos(
+                self.wallet.address(),
+                sender_account.balance,
+            );
+            if sender_pre_utxos.is_empty() {
+                return Err(ChainError::Transaction(
+                    "wallet inputs unavailable for requested owner".into(),
+                ));
+            }
+        }
+        sender_pre_utxos.sort_by(|a, b| {
+            a.outpoint
+                .index
+                .cmp(&b.outpoint.index)
+                .then_with(|| a.outpoint.tx_id.cmp(&b.outpoint.tx_id))
+        });
+        let ledger_inputs = select_input_outpoints(&sender_pre_utxos, total_debit)?;
+        let sender_pre_map: BTreeMap<_, _> = sender_pre_utxos
+            .iter()
+            .cloned()
+            .map(|record| (record.outpoint.clone(), record))
+            .collect();
+        let mut utxo_inputs = Vec::new();
+        for outpoint in &ledger_inputs {
+            let record = sender_pre_map.get(outpoint).ok_or_else(|| {
+                ChainError::Transaction("ledger selected input not present in snapshot".into())
+            })?;
+            utxo_inputs.push(record.clone());
+        }
         let total_input_value = sum_values(&utxo_inputs)?;
         let remaining = total_input_value
             .checked_sub(total_debit)
             .ok_or_else(|| ChainError::Transaction("selected inputs insufficient".into()))?;
         let mut planned_outputs = Vec::new();
-        planned_outputs.push(planned_utxo(&tx_hash_bytes, 0, &to, amount));
+        if amount > 0 {
+            planned_outputs.push(planned_utxo(
+                &tx_hash_bytes,
+                planned_outputs.len() as u32,
+                &to,
+                amount,
+            ));
+        }
         if remaining > 0 {
             planned_outputs.push(planned_utxo(
                 &tx_hash_bytes,
-                1,
+                planned_outputs.len() as u32,
                 self.wallet.address(),
                 remaining,
             ));
@@ -239,36 +277,48 @@ impl<'a> WalletWorkflows<'a> {
             ));
         }
         let recipient_account = self.wallet.account_by_address(&to)?;
-        let (recipient_pre_utxos, recipient_balance_before) = match recipient_account {
-            Some(ref account) => (
-                ledger_snapshot_utxos(self.wallet, &account.address, account.balance, 0, None)?,
-                account.balance,
-            ),
-            None => (Vec::new(), 0u128),
-        };
-        let recipient_balance_after = recipient_balance_before
-            .checked_add(amount)
-            .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
+        if let Some(ref account) = recipient_account {
+            account
+                .balance
+                .checked_add(amount)
+                .ok_or_else(|| ChainError::Transaction("recipient balance overflow".into()))?;
+        }
+        let mut recipient_pre_utxos = ledger.utxos_for_owner(&to);
+        if recipient_pre_utxos.is_empty() {
+            if let Some(ref account) = recipient_account {
+                recipient_pre_utxos = synthetic_account_utxos(&account.address, account.balance);
+            }
+        }
         let is_self_transfer = self.wallet.address() == &to;
-        let recipient_post_utxos = ledger_snapshot_utxos(
-            self.wallet,
-            &to,
-            recipient_balance_after,
-            0,
-            Some(tx_hash_bytes),
-        )?;
-        let sender_post_utxos = ledger_snapshot_utxos(
-            self.wallet,
+        if recipient_account.is_none() {
+            recipient_pre_utxos.clear();
+        }
+        let spent_outpoints: BTreeSet<_> = ledger_inputs.into_iter().collect();
+        let sender_post_utxos = project_post_utxos(
+            &sender_pre_utxos,
+            &spent_outpoints,
+            &planned_outputs,
             self.wallet.address(),
-            sender_account.balance - total_debit,
-            if is_self_transfer { 0 } else { 1 },
-            Some(tx_hash_bytes),
-        )?;
+        );
+        let recipient_post_utxos = if is_self_transfer {
+            recipient_pre_utxos = sender_pre_utxos.clone();
+            sender_post_utxos.clone()
+        } else {
+            project_post_utxos(&recipient_pre_utxos, &spent_outpoints, &planned_outputs, &to)
+        };
         let policy = TransactionPolicy {
             required_tier: Tier::Tl0,
             status,
         };
         let state_root = self.wallet.firewood_state_root()?;
+        let ledger_commitment = ledger.global_commitments().utxo_root;
+        let (reconstructed_commitment, synthetic_used) = rebuild_utxo_commitment(&ledger);
+        if !synthetic_used && ledger_commitment != reconstructed_commitment {
+            return Err(ChainError::Config(
+                "wallet utxo snapshot mismatches ledger commitment".into(),
+            ));
+        }
+        let utxo_commitment = hex::encode(reconstructed_commitment);
         Ok(TransactionWorkflow {
             preview,
             bundle,
@@ -282,6 +332,7 @@ impl<'a> WalletWorkflows<'a> {
             fee,
             policy,
             state_root,
+            utxo_commitment,
             tx_hash,
             nonce: transaction.nonce,
         })
@@ -318,41 +369,56 @@ fn status_from_account(account: &Account) -> ReputationStatus {
     }
 }
 
-fn ledger_snapshot_utxos(
-    wallet: &Wallet,
-    address: &Address,
-    value: u128,
-    fallback_index: u32,
-    tx_id_override: Option<[u8; 32]>,
-) -> ChainResult<Vec<UtxoRecord>> {
-    if let Some(tx_id) = tx_id_override {
-        if value == 0 {
-            return Ok(Vec::new());
-        }
-        let stored = StoredUtxo::new(address.clone(), value);
-        let outpoint = UtxoOutpoint {
-            tx_id,
-            index: fallback_index,
-        };
-        return Ok(vec![stored.to_record(&outpoint)]);
-    }
+const SYNTHETIC_UTXO_CHUNK: u128 = 25_000;
 
-    let mut records = wallet.unspent_utxos(address)?;
-    if records.is_empty() {
-        if value == 0 {
-            return Ok(records);
-        }
-        let stored = StoredUtxo::new(address.clone(), value);
-        let outpoint = UtxoOutpoint {
-            tx_id: [0u8; 32],
-            index: fallback_index,
-        };
-        records.push(stored.to_record(&outpoint));
-        return Ok(records);
+pub(crate) fn synthetic_account_utxos(address: &Address, balance: u128) -> Vec<UtxoRecord> {
+    if balance == 0 {
+        return Vec::new();
     }
+    let mut remaining = balance;
+    let mut index = 0u32;
+    let mut outputs = Vec::new();
+    while remaining > 0 {
+        let chunk = remaining.min(SYNTHETIC_UTXO_CHUNK);
+        let mut seed = address.as_bytes().to_vec();
+        seed.extend_from_slice(&index.to_be_bytes());
+        let tx_id: [u8; 32] = Blake2sHasher::hash(&seed).into();
+        let outpoint = UtxoOutpoint { tx_id, index };
+        let stored = StoredUtxo::new(address.clone(), chunk);
+        outputs.push(stored.to_record(&outpoint));
+        remaining = remaining.saturating_sub(chunk);
+        index = index.saturating_add(1);
+    }
+    outputs.sort_by(|a, b| {
+        a.outpoint
+            .index
+            .cmp(&b.outpoint.index)
+            .then_with(|| a.outpoint.tx_id.cmp(&b.outpoint.tx_id))
+    });
+    outputs
+}
 
-    records.sort_by(|left, right| left.outpoint.cmp(&right.outpoint));
-    Ok(records)
+fn select_input_outpoints(
+    records: &[UtxoRecord],
+    target: u128,
+) -> ChainResult<Vec<UtxoOutpoint>> {
+    let mut total = 0u128;
+    let mut selected = Vec::new();
+    for record in records {
+        total = total
+            .checked_add(record.value)
+            .ok_or_else(|| ChainError::Transaction("input value overflow".into()))?;
+        selected.push(record.outpoint.clone());
+        if total >= target {
+            break;
+        }
+    }
+    if total < target {
+        return Err(ChainError::Transaction(
+            "insufficient input liquidity for requested amount".into(),
+        ));
+    }
+    Ok(selected)
 }
 
 fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) -> UtxoRecord {
@@ -372,39 +438,6 @@ fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) ->
     }
 }
 
-fn select_inputs_from_available(
-    mut available: Vec<UtxoRecord>,
-    target: u128,
-) -> ChainResult<Vec<UtxoRecord>> {
-    if available.is_empty() {
-        return Err(ChainError::Transaction(
-            "wallet inputs unavailable for requested owner".into(),
-        ));
-    }
-    available.sort_by(|a, b| match b.value.cmp(&a.value) {
-        Ordering::Equal => a.outpoint.cmp(&b.outpoint),
-        other => other,
-    });
-    let mut selected = Vec::new();
-    let mut total = 0u128;
-    for record in available {
-        if total >= target {
-            break;
-        }
-        total = total
-            .checked_add(record.value)
-            .ok_or_else(|| ChainError::Transaction("input value overflow".into()))?;
-        selected.push(record);
-    }
-    if total < target {
-        return Err(ChainError::Transaction(
-            "insufficient input liquidity for requested amount".into(),
-        ));
-    }
-    selected.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
-    Ok(selected)
-}
-
 fn sum_values(records: &[UtxoRecord]) -> ChainResult<u128> {
     let mut total = 0u128;
     for record in records {
@@ -420,6 +453,46 @@ fn credited_hours(proof: &UptimeProof) -> u64 {
         return 0;
     }
     proof.window_end.saturating_sub(proof.window_start) / 3600
+}
+
+fn project_post_utxos(
+    pre: &[UtxoRecord],
+    spent: &BTreeSet<UtxoOutpoint>,
+    planned: &[UtxoRecord],
+    owner: &Address,
+) -> Vec<UtxoRecord> {
+    let mut remaining: Vec<UtxoRecord> = pre
+        .iter()
+        .filter(|record| !spent.contains(&record.outpoint))
+        .cloned()
+        .collect();
+    remaining.extend(
+        planned
+            .iter()
+            .filter(|record| record.owner == *owner)
+            .cloned(),
+    );
+    remaining.sort_by(|a, b| a.outpoint.cmp(&b.outpoint));
+    remaining
+}
+
+fn rebuild_utxo_commitment(ledger: &Ledger) -> ([u8; 32], bool) {
+    let mirror = UtxoState::new();
+    let mut synthetic_used = false;
+    for account in ledger.accounts_snapshot() {
+        let mut records = ledger.utxos_for_owner(&account.address);
+        if records.is_empty() && account.balance > 0 {
+            records = synthetic_account_utxos(&account.address, account.balance);
+            synthetic_used = true;
+        }
+        for record in records {
+            mirror.insert(
+                record.outpoint.clone(),
+                StoredUtxo::new(record.owner.clone(), record.value),
+            );
+        }
+    }
+    (mirror.commitment(), synthetic_used)
 }
 
 #[cfg(test)]
@@ -458,15 +531,24 @@ mod tests {
     fn wallet_utxo_view_matches_ledger() {
         let (wallet, address, storage, _tempdir) = wallet_fixture(75_000);
         let wallet_utxos = wallet.unspent_utxos(&address).expect("wallet utxo query");
+        assert_eq!(wallet_utxos.len(), 3);
+        let expected = synthetic_account_utxos(&address, 75_000);
+        assert_eq!(wallet_utxos.len(), expected.len());
+        for (actual, projected) in wallet_utxos.iter().zip(expected.iter()) {
+            assert_eq!(actual.outpoint, projected.outpoint);
+            assert_eq!(actual.owner, projected.owner);
+            assert_eq!(actual.value, projected.value);
+        }
+
         let accounts = storage.load_accounts().expect("load accounts");
         let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
-        let ledger_utxos = ledger.utxos_for_owner(&address);
-        assert_eq!(wallet_utxos.len(), ledger_utxos.len());
-        for (wallet_record, ledger_record) in wallet_utxos.iter().zip(ledger_utxos.iter()) {
-            assert_eq!(wallet_record.outpoint, ledger_record.outpoint);
-            assert_eq!(wallet_record.owner, ledger_record.owner);
-            assert_eq!(wallet_record.value, ledger_record.value);
-        }
+        let (commitment, _) = rebuild_utxo_commitment(&ledger);
+        let reconstructed = hex::encode(commitment);
+        let workflow = wallet
+            .workflows()
+            .transaction_bundle(address.clone(), 25_000, 100, None)
+            .expect("self-transfer bundle");
+        assert_eq!(workflow.utxo_commitment, reconstructed);
     }
 
     #[test]
@@ -480,7 +562,28 @@ mod tests {
             .workflows()
             .transaction_bundle(recipient.clone(), first_amount, fee, None)
             .expect("initial bundle");
-        assert!(!workflow.utxo_inputs.is_empty());
+        assert_eq!(workflow.utxo_inputs.len(), 2);
+        let expected_inputs = select_input_outpoints(
+            &synthetic_account_utxos(&address, 80_000),
+            first_amount + u128::from(fee),
+        )
+        .expect("select inputs");
+        let actual_inputs: Vec<_> = workflow
+            .utxo_inputs
+            .iter()
+            .map(|record| record.outpoint.clone())
+            .collect();
+        assert_eq!(actual_inputs, expected_inputs);
+        assert!(workflow
+            .planned_outputs
+            .iter()
+            .enumerate()
+            .all(|(index, record)| record.outpoint.index == index as u32));
+
+        let accounts = storage.load_accounts().expect("load accounts");
+        let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
+        let (expected_commitment, _) = rebuild_utxo_commitment(&ledger);
+        assert_eq!(workflow.utxo_commitment, hex::encode(expected_commitment));
 
         let mut account = storage
             .read_account(&address)
