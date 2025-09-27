@@ -15,7 +15,9 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
    * `vrf_threshold_curve` – Funktionsdefinition zur Ableitung der Schwelle aus der Timetoke-Balance.
    * `epoch_duration`, `round_timeout`, `max_round_extensions` – Steuerung des Konsens-Tempos.
 2. **Reputation & Timetoke**
-   * `tier_thresholds` – Score-Grenzen für Tier 3+.
+   * `tier_thresholds` – Score-Grenzen für Tier 3+, konfigurierbar via
+     `reputation.tier_thresholds` in `config/node.toml` für operatorseitige
+     Anpassungen.【F:config/node.toml†L39-L43】
    * `timetoke_decay_rate`, `timetoke_accrual_rate`, `timetoke_cap` – Stabilisierung der Uptime-Gewichtung.
    * `snapshot_interval`, `max_snapshot_age` – Synchronisationsfenster.
 3. **Rewards & Slashing**

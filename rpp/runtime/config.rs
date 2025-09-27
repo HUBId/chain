@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
+use crate::reputation::{ReputationParams, TierThresholds};
 use crate::types::Stake;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +63,8 @@ pub struct NodeConfig {
     #[serde(default)]
     pub p2p: P2pConfig,
     pub genesis: GenesisConfig,
+    #[serde(default)]
+    pub reputation: ReputationConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -143,6 +146,10 @@ impl NodeConfig {
         }
         Ok(())
     }
+
+    pub fn reputation_params(&self) -> ReputationParams {
+        self.reputation.reputation_params()
+    }
 }
 
 impl Default for NodeConfig {
@@ -168,6 +175,30 @@ impl Default for NodeConfig {
             rollout: RolloutConfig::default(),
             p2p,
             genesis: GenesisConfig::default(),
+            reputation: ReputationConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReputationConfig {
+    pub tier_thresholds: TierThresholds,
+}
+
+impl ReputationConfig {
+    pub fn reputation_params(&self) -> ReputationParams {
+        ReputationParams {
+            tier_thresholds: self.tier_thresholds.clone(),
+            ..ReputationParams::default()
+        }
+    }
+}
+
+impl Default for ReputationConfig {
+    fn default() -> Self {
+        Self {
+            tier_thresholds: TierThresholds::default(),
         }
     }
 }

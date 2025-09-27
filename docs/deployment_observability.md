@@ -13,7 +13,7 @@ production.
 2. **Toggle blueprint capabilities with feature gates.** Keep pruning,
    recursive proofs, reconstruction, and consensus enforcement disabled until
    the deployment reaches the appropriate phase; these gates are controlled by
-   the shared `rollout.feature_gates` map in node configuration.【F:config/node.toml†L15-L23】
+   the shared `rollout.feature_gates` map in node configuration.【F:config/node.toml†L29-L33】
 3. **Protect RPC and proof limits.** Bound incoming proof artifacts with the
    `max_proof_size_bytes` limit and size mempool/identity queues to match the
    target environment before opening endpoints to the public.【F:config/node.toml†L3-L13】
@@ -25,8 +25,11 @@ production.
    recursive proofs survive restarts.【F:config/node.toml†L3-L7】
 2. **Distribute genesis state.** Ensure the same genesis accounts, balances,
    and stakes are shipped to every validator; mismatches will prevent
-   state-transition proofs from verifying.【F:config/node.toml†L28-L34】
-3. **Run storage migrations prior to rollout.** Execute `cargo run -- migrate`
+    state-transition proofs from verifying.【F:config/node.toml†L45-L51】
+3. **Calibrate reputation tiers.** Tune `reputation.tier_thresholds` to match
+   the promotion/demotion policy for your environment; higher values slow tier
+   ascension while lower values welcome new validators faster.【F:config/node.toml†L39-L43】【F:rpp/runtime/config.rs†L40-L204】
+4. **Run storage migrations prior to rollout.** Execute `cargo run -- migrate`
    against production data before switching binaries to guarantee the RocksDB
    schema matches the proof bundle format.【F:README.md†L96-L107】
 
@@ -34,7 +37,7 @@ production.
 
 1. **Enable telemetry sampling.** Flip `rollout.telemetry.enabled` and tune the
    sampling interval to emit snapshots with node, consensus, and mempool
-   metrics.【F:config/node.toml†L24-L26】【F:src/config.rs†L141-L171】
+   metrics.【F:config/node.toml†L35-L37】【F:src/config.rs†L141-L171】
 2. **Stream snapshots to your collector.** Set `rollout.telemetry.endpoint`
    (empty means log-only) and confirm the async telemetry task is running; the
    node spawns a background loop that periodically publishes encoded telemetry
