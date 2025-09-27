@@ -25,8 +25,32 @@ Ensure Rust (1.79+) is installed. Firewood sources (KV engine, WAL, pruner) are 
 
 ### Build & Test
 
+Use the helper scripts to keep build and test invocations consistent across
+the workspace.
+
 ```bash
-cargo test
+# Build the default debug artifacts
+scripts/build.sh
+
+# Build in release mode
+scripts/build.sh --release
+
+# Build the minimal feature surface (disables default features)
+scripts/build.sh --feature-set minimal
+```
+
+Run targeted test suites via `scripts/test.sh` – it enforces `-D warnings` and
+supports backend-specific feature matrices.
+
+```bash
+# Run unit and integration tests (default behaviour)
+scripts/test.sh
+
+# Run only the integration tests using the Plonky3 backend
+scripts/test.sh --integration --backend plonky3
+
+# Execute documentation tests with the release profile
+scripts/test.sh --doc --release
 ```
 
 ### Generate configuration and keys
