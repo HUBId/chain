@@ -1382,6 +1382,17 @@ mod tests {
         let canonical_before = ledger.utxo_state.snapshot_for_account(&sender_address);
         assert_eq!(canonical_before.len(), 2);
         assert_eq!(canonical_before[0].0, input_outpoint);
+        assert_eq!(canonical_before[1].0, extra_outpoint);
+        assert!(
+            canonical_before
+                .iter()
+                .all(|(_, stored)| !stored.is_spent())
+        );
+
+        let owner_unspent_before = ledger.utxos_for_owner(&sender_address);
+        assert_eq!(owner_unspent_before.len(), 2);
+        assert_eq!(owner_unspent_before[0].outpoint, input_outpoint);
+        assert_eq!(owner_unspent_before[1].outpoint, extra_outpoint);
 
         let tx = Transaction::new(
             sender_address.clone(),
@@ -1429,6 +1440,27 @@ mod tests {
             .expect("sender change output");
         assert_eq!(sender_entry.owner, sender_address);
         assert!(!sender_entry.is_spent());
+
+        let sender_unspent_after = ledger.utxos_for_owner(&sender_address);
+        assert_eq!(sender_unspent_after.len(), 2);
+        assert_eq!(sender_unspent_after[0].outpoint, sender_change_outpoint);
+        assert_eq!(sender_unspent_after[1].outpoint, extra_outpoint);
+
+        let sender_snapshot = ledger.utxo_state.snapshot_for_account(&sender_address);
+        assert_eq!(sender_snapshot.len(), 2);
+        assert_eq!(sender_snapshot[0].0, sender_change_outpoint);
+        assert_eq!(sender_snapshot[1].0, extra_outpoint);
+        assert!(sender_snapshot
+            .iter()
+            .all(|(_, stored)| !stored.is_spent()));
+
+        let recipient_unspent_after = ledger.utxos_for_owner(&recipient_address);
+        assert_eq!(recipient_unspent_after.len(), 1);
+        assert_eq!(recipient_unspent_after[0].outpoint, recipient_outpoint);
+
+        let recipient_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
+        assert_eq!(recipient_snapshot.len(), 1);
+        assert_eq!(recipient_snapshot[0].0, recipient_outpoint);
 
         assert_ne!(initial_commitment, ledger.utxo_state.commitment());
 
