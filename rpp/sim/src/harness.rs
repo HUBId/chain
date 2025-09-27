@@ -4,15 +4,20 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use libp2p::gossipsub::IdentTopic;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::metrics::{exporters, Collector, SimulationSummary};
-use crate::node_adapter::{spawn_node, Node};
-use crate::scenario::Scenario;
-use crate::topology::RingTopology;
+use crate::node_adapter::{spawn_node, Node, NodeHandle};
+use crate::scenario::{LinkParams, Scenario, TopologyType};
+use crate::topology::{
+    annotate_links, AnnotatedLink, ErdosRenyiTopology, KRegularTopology, RingTopology,
+    ScaleFreeTopology, SmallWorldTopology, Topology,
+};
 use crate::traffic::PoissonTraffic;
 
 pub struct SimHarness;
@@ -36,7 +41,6 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
     tracing_subscriber::fmt::try_init().ok();
 
     let topic = IdentTopic::new("/rpp/sim/tx");
-    let ring = RingTopology::new(scenario.topology.k)?;
     let node_count = scenario.topology.n;
 
     info!(
@@ -78,15 +82,11 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
         })
     };
 
-    let edges = ring.build(node_count);
-    for (a, b) in edges {
-        let target_peer = handles[b].peer_id.clone();
-        let target_addr = handles[b].listen_addr().clone();
-        handles[a]
-            .dial(target_peer, target_addr)
-            .await
-            .context("dial failed")?;
-    }
+    let mut rng = StdRng::seed_from_u64(scenario.sim.seed);
+    let edges = build_topology_edges(&scenario, node_count, &mut rng)?;
+    let regions = scenario.node_regions();
+    let annotated = annotate_links(&edges, &regions, &scenario.links)?;
+    establish_links(&handles, &annotated, &mut rng).await?;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -133,4 +133,101 @@ async fn run_simulation(scenario: Scenario) -> Result<SimulationSummary> {
     }
 
     Ok(summary)
+}
+
+fn build_topology_edges(
+    scenario: &Scenario,
+    n: usize,
+    rng: &mut StdRng,
+) -> Result<Vec<(usize, usize)>> {
+    match scenario.topology.topology_type {
+        TopologyType::Ring => {
+            let k = scenario
+                .topology
+                .k
+                .ok_or_else(|| anyhow!("ring topology requires k parameter"))?;
+            let topo = RingTopology::new(k)?;
+            topo.build(n, rng)
+        }
+        TopologyType::ErdosRenyi => {
+            let p = scenario
+                .topology
+                .p
+                .ok_or_else(|| anyhow!("erdos-renyi topology requires p parameter"))?;
+            let topo = ErdosRenyiTopology::new(p)?;
+            topo.build(n, rng)
+        }
+        TopologyType::KRegular => {
+            let k = scenario
+                .topology
+                .k
+                .ok_or_else(|| anyhow!("k-regular topology requires k parameter"))?;
+            let topo = KRegularTopology::new(k)?;
+            topo.build(n, rng)
+        }
+        TopologyType::SmallWorld => {
+            let k = scenario
+                .topology
+                .k
+                .ok_or_else(|| anyhow!("small-world topology requires k parameter"))?;
+            let rewire = scenario
+                .topology
+                .rewire_p
+                .ok_or_else(|| anyhow!("small-world topology requires rewire_p parameter"))?;
+            let topo = SmallWorldTopology::new(k, rewire)?;
+            topo.build(n, rng)
+        }
+        TopologyType::ScaleFree => {
+            let k = scenario.topology.k.unwrap_or(2);
+            let topo = ScaleFreeTopology::new(k)?;
+            topo.build(n, rng)
+        }
+    }
+}
+
+async fn establish_links(
+    handles: &[NodeHandle],
+    annotated: &[AnnotatedLink],
+    rng: &mut StdRng,
+) -> Result<()> {
+    let mut tasks = Vec::new();
+    for link in annotated {
+        if handles.get(link.a).is_none() || handles.get(link.b).is_none() {
+            return Err(anyhow!("link references out of range node"));
+        }
+        let drop_chance = rng.gen::<f64>() * 100.0;
+        if drop_chance < link.params.loss {
+            continue;
+        }
+        let delay = jittered_delay(&link.params, rng);
+        let handle = handles[link.a].clone();
+        let target_peer = handles[link.b].peer_id.clone();
+        let target_addr = handles[link.b].listen_addr().clone();
+        tasks.push(tokio::spawn(async move {
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+            if let Err(err) = handle.dial(target_peer, target_addr).await {
+                tracing::warn!(target = "rpp::sim::harness", "dial failed: {err:?}");
+            }
+        }));
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+    Ok(())
+}
+
+fn jittered_delay(params: &LinkParams, rng: &mut StdRng) -> Duration {
+    let base = Duration::from_millis(params.delay_ms);
+    if params.jitter_ms == 0 {
+        return base;
+    }
+    let jitter = params.jitter_ms as i64;
+    let offset = rng.gen_range(-jitter, jitter + 1);
+    if offset >= 0 {
+        base + Duration::from_millis(offset as u64)
+    } else {
+        base.saturating_sub(Duration::from_millis((-offset) as u64))
+    }
 }
