@@ -25,6 +25,8 @@ use crate::types::{
     Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
 
+use super::workflows::synthetic_account_utxos;
+
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
 const IDENTITY_WORKFLOW_KEY: &[u8] = b"wallet_identity_workflow";
@@ -221,7 +223,13 @@ impl Wallet {
     pub fn unspent_utxos(&self, owner: &Address) -> ChainResult<Vec<UtxoRecord>> {
         let accounts = self.storage.load_accounts()?;
         let ledger = Ledger::load(accounts, DEFAULT_EPOCH_LENGTH);
-        Ok(ledger.utxos_for_owner(owner))
+        let mut records = ledger.utxos_for_owner(owner);
+        if records.is_empty() {
+            if let Some(account) = ledger.get_account(owner) {
+                records = synthetic_account_utxos(owner, account.balance);
+            }
+        }
+        Ok(records)
     }
 
     pub fn build_transaction(
