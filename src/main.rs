@@ -11,8 +11,6 @@ use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-mod gossip;
-
 use rpp_chain::api;
 use rpp_chain::config::{NodeConfig, WalletConfig};
 use rpp_chain::crypto::{
@@ -28,7 +26,7 @@ use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
-use crate::gossip::{NodeGossipProcessor, spawn_node_event_worker};
+use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 
 #[derive(Parser)]
 #[command(author, version, about = "Production-ready RPP blockchain node")]

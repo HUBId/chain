@@ -10,6 +10,8 @@ pub mod consensus;
 pub mod crypto;
 #[path = "../rpp/runtime/errors.rs"]
 pub mod errors;
+#[path = "gossip.rs"]
+pub mod gossip;
 #[path = "../rpp/storage/identity_tree.rs"]
 pub mod identity_tree;
 #[path = "../rpp/rpc/interfaces.rs"]
