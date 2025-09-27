@@ -5,6 +5,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use rpp_chain::crypto::address_from_public_key;
+use rpp_chain::plonky3::crypto;
 use rpp_chain::plonky3::proof::Plonky3Proof;
 use rpp_chain::plonky3::prover::Plonky3Prover;
 use rpp_chain::plonky3::verifier::Plonky3Verifier;
@@ -74,6 +75,12 @@ fn plonky3_recursive_flow_roundtrip() {
 
     // Recursive proof must reference all commitments from the bundle.
     if let ChainProof::Plonky3(value) = &bundle.recursive_proof {
+        let parsed = Plonky3Proof::from_value(value).unwrap();
+        assert_eq!(parsed.proof.len(), 32);
+        assert_eq!(
+            parsed.verifying_key,
+            crypto::verifying_key("recursive").unwrap()
+        );
         let commitments = value
             .get("public_inputs")
             .and_then(|inputs| inputs.get("commitments"))

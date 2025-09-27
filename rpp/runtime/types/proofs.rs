@@ -105,7 +105,10 @@ mod tests {
             let proof = ChainProof::Plonky3(serde_json::json!({"commitment": "abc"}));
             assert_eq!(proof.system(), ProofSystemKind::Plonky3);
             assert!(matches!(proof.expect_stwo(), Err(ChainError::Crypto(_))));
-            assert!(matches!(proof.clone().into_stwo(), Err(ChainError::Crypto(_))));
+            assert!(matches!(
+                proof.clone().into_stwo(),
+                Err(ChainError::Crypto(_))
+            ));
         }
     }
 }

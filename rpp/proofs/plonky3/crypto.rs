@@ -2,8 +2,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use blake3::Hasher;
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
@@ -89,33 +87,43 @@ pub fn compute_proof(
     circuit: &str,
     commitment: &str,
     public_inputs: &Value,
-) -> ChainResult<String> {
+    verifying_key: &[u8; 32],
+) -> ChainResult<Vec<u8>> {
     let encoded_inputs = serde_json::to_vec(public_inputs).map_err(|err| {
         ChainError::Crypto(format!(
             "failed to encode Plonky3 public inputs for proof transcript: {err}"
         ))
     })?;
-    let key = verifying_key(circuit)?;
     let mut transcript = Vec::new();
     transcript.extend_from_slice(circuit.as_bytes());
     transcript.extend_from_slice(commitment.as_bytes());
     transcript.extend_from_slice(&encoded_inputs);
-    let digest = blake3::keyed_hash(&key, &transcript);
-    Ok(BASE64_STANDARD.encode(digest.as_bytes()))
+    let digest = blake3::keyed_hash(verifying_key, &transcript);
+    Ok(digest.as_bytes().to_vec())
 }
 
 pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::proof::Plonky3Proof> {
+    let verifying_key = verifying_key(&circuit)?;
     let commitment = compute_commitment(&public_inputs)?;
-    let proof = compute_proof(&circuit, &commitment, &public_inputs)?;
+    let proof = compute_proof(&circuit, &commitment, &public_inputs, &verifying_key)?;
     Ok(super::proof::Plonky3Proof {
         circuit,
         commitment,
         public_inputs,
         proof,
+        verifying_key,
     })
 }
 
 pub fn verify_transcript(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
+    let expected_key = verifying_key(&proof.circuit)?;
+    if proof.verifying_key != expected_key {
+        return Err(ChainError::Crypto(format!(
+            "plonky3 verifying key mismatch: expected {}, found {}",
+            hex::encode(expected_key),
+            hex::encode(proof.verifying_key)
+        )));
+    }
     let expected_commitment = compute_commitment(&proof.public_inputs)?;
     if proof.commitment != expected_commitment {
         return Err(ChainError::Crypto(format!(
@@ -123,7 +131,12 @@ pub fn verify_transcript(proof: &super::proof::Plonky3Proof) -> ChainResult<()> 
             proof.commitment
         )));
     }
-    let expected_proof = compute_proof(&proof.circuit, &expected_commitment, &proof.public_inputs)?;
+    let expected_proof = compute_proof(
+        &proof.circuit,
+        &expected_commitment,
+        &proof.public_inputs,
+        &expected_key,
+    )?;
     if proof.proof != expected_proof {
         return Err(ChainError::Crypto(
             "plonky3 proof transcript does not match verifying key".into(),

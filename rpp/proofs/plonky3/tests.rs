@@ -31,16 +31,25 @@ fn transaction_proof_roundtrip() {
 
     verifier.verify_transaction(&proof).unwrap();
 
-    let value = match &proof {
-        ChainProof::Plonky3(value) => value,
+    let parsed = match &proof {
+        ChainProof::Plonky3(value) => Plonky3Proof::from_value(value).unwrap(),
         ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
     };
-    let commitment = value.get("commitment").and_then(|v| v.as_str()).unwrap();
-    let public_inputs = value.get("public_inputs").unwrap();
-    let computed = crypto::compute_commitment(public_inputs).unwrap();
-    assert_eq!(commitment, computed);
-    let decoded: crate::plonky3::circuit::transaction::TransactionWitness =
-        serde_json::from_value(public_inputs.get("witness").unwrap().clone()).unwrap();
+    assert_eq!(
+        parsed.verifying_key,
+        crypto::verifying_key("transaction").unwrap()
+    );
+    assert_eq!(parsed.proof.len(), 32);
+    let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
+    assert_eq!(parsed.commitment, computed);
+    let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(
+        parsed
+            .public_inputs
+            .get("witness")
+            .cloned()
+            .expect("transaction witness"),
+    )
+    .unwrap();
     assert_eq!(decoded.transaction, tx);
 }
 
@@ -109,6 +118,14 @@ fn recursive_bundle_verification_detects_tampering() {
         recursive_proof.clone(),
     );
     verifier.verify_bundle(&bundle, None).unwrap();
+
+    let mut bad_key_bundle = bundle.clone();
+    if let ChainProof::Plonky3(value) = &mut bad_key_bundle.recursive_proof {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("verifying_key".into(), json!("00"));
+        }
+    }
+    assert!(verifier.verify_bundle(&bad_key_bundle, None).is_err());
 
     let mut tampered = recursive_proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
