@@ -48,6 +48,13 @@ The Digital Value Network fork extends Electrum/Electrs principles to the RPP bl
 
 The `rppd` binary exposes subcommands for node lifecycle (start, keygen, migrate) while wallet workflows link directly against the same library, enabling a single binary distribution for both roles. Library consumers can instantiate the `Wallet` with the same storage the node uses, providing a seamless hybrid runtime.【F:src/main.rs†L16-L160】【F:src/wallet/wallet.rs†L25-L347】【F:src/node.rs†L167-L199】
 
+### Wallet Runtime Configuration
+
+* **`data_dir` & `key_path`** – mirror the node defaults so wallets persist RocksDB state and signing material alongside hybrid deployments.【F:rpp/runtime/config.rs†L247-L274】
+* **`rpc_listen`** – binds the unified Axum server for wallet and optional node control APIs.【F:rpp/runtime/config.rs†L242-L270】
+* **`[node] embedded`** – toggles an embedded node runtime when the wallet should shoulder consensus duties locally; disabled wallets must supply gossip peers instead.【F:rpp/runtime/config.rs†L231-L274】
+* **`[node] gossip_endpoints`** – enumerates gossip peers for client-mode wallets and is validated to be non-empty when the embedded node is off, ensuring the wallet can still sync blocks and proofs.【F:rpp/runtime/config.rs†L231-L274】【F:config/wallet.toml†L1-L6】
+
 ## 6. ZSI-Genesis-Validierung
 
 Wallets derive ZSI IDs by hashing their keys, binding VRF tags to the current epoch and verifying vacant Merkle slots before emitting identity declarations and proofs. Verification enforces zero initial reputation and correct commitments, ensuring every identity enters consensus with a validated profile.【F:src/wallet/wallet.rs†L75-L116】【F:src/types/identity.rs†L50-L173】

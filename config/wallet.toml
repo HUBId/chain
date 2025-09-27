@@ -1,3 +1,7 @@
 data_dir = "./data"
 key_path = "./keys/wallet.toml"
 rpc_listen = "127.0.0.1:9090"
+
+[node]
+embedded = false
+gossip_endpoints = ["/ip4/127.0.0.1/tcp/7600"]
