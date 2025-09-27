@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::mem;
 
 use parking_lot::RwLock;
@@ -200,6 +200,39 @@ impl Ledger {
         self.utxo_state.unspent_outputs_for_owner(address)
     }
 
+    pub fn select_inputs_for_transaction(
+        &self,
+        tx: &SignedTransaction,
+    ) -> ChainResult<Vec<UtxoOutpoint>> {
+        let required_value = tx
+            .payload
+            .amount
+            .checked_add(tx.payload.fee as u128)
+            .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
+        let mut total: u128 = 0;
+        let mut selected = Vec::new();
+        for record in self.utxo_state.unspent_outputs_for_owner(&tx.payload.from) {
+            total = total
+                .checked_add(record.value)
+                .ok_or_else(|| ChainError::Transaction("transaction input overflow".into()))?;
+            selected.push(record.outpoint.clone());
+            if total >= required_value {
+                break;
+            }
+        }
+        if total < required_value {
+            return Err(ChainError::Transaction(
+                "insufficient input value for transaction".into(),
+            ));
+        }
+        if selected.is_empty() {
+            return Err(ChainError::Transaction(
+                "transaction requires available inputs".into(),
+            ));
+        }
+        Ok(selected)
+    }
+
     pub fn validator_public_key(&self, address: &str) -> ChainResult<PublicKey> {
         let account = self.get_account(address).ok_or_else(|| {
             ChainError::Crypto("validator account missing for signature verification".into())
@@ -278,15 +311,11 @@ impl Ledger {
     fn module_records(&self, address: &str) -> ModuleRecordSnapshots {
         let address = address.to_string();
         ModuleRecordSnapshots {
-            utxo: self.utxo_snapshots_for(&address),
+            utxo: TransactionUtxoSets::default(),
             reputation: self.reputation_state.get(&address),
             timetoke: self.timetoke_state.get(&address),
             zsi: self.zsi_registry.get(&address),
         }
-    }
-
-    fn utxo_snapshots_for(&self, address: &Address) -> Vec<(UtxoOutpoint, StoredUtxo)> {
-        self.utxo_state.snapshot_for_account(address)
     }
 
     pub fn stake_snapshot(&self) -> Vec<(Address, Stake)> {
@@ -585,26 +614,61 @@ impl Ledger {
         Ok(credited_hours)
     }
 
-    /// Adds an outpoint to the spend queue if it has not already been marked for removal.
-    fn queue_unique_spent_outpoint(
-        spent_outpoints: &mut Vec<UtxoOutpoint>,
-        snapshots: &[(UtxoOutpoint, StoredUtxo)],
-    ) {
-        if let Some((outpoint, _)) = snapshots.first() {
-            if !spent_outpoints.iter().any(|queued| queued == outpoint) {
-                spent_outpoints.push(outpoint.clone());
-            }
-        }
-    }
-
-    pub fn apply_transaction(&self, tx: &SignedTransaction) -> ChainResult<u64> {
+    pub fn apply_transaction(
+        &self,
+        tx: &SignedTransaction,
+        inputs: &[UtxoOutpoint],
+    ) -> ChainResult<u64> {
         tx.verify()?;
         let tx_id = tx.hash();
-        let module_sender_before = self.module_records(&tx.payload.from);
-        let module_recipient_before = self.module_records(&tx.payload.to);
-        let mut spent_outpoints = Vec::new();
-        Self::queue_unique_spent_outpoint(&mut spent_outpoints, &module_sender_before.utxo);
-        Self::queue_unique_spent_outpoint(&mut spent_outpoints, &module_recipient_before.utxo);
+        let mut unique_inputs = BTreeSet::new();
+        let mut sender_inputs = Vec::new();
+        let mut total_input_value: u128 = 0;
+        for outpoint in inputs {
+            if !unique_inputs.insert(outpoint.clone()) {
+                return Err(ChainError::Transaction(
+                    "duplicate transaction input".into(),
+                ));
+            }
+            let record = self
+                .utxo_state
+                .get(outpoint)
+                .ok_or_else(|| ChainError::Transaction("transaction input not found".into()))?;
+            if record.owner != tx.payload.from {
+                return Err(ChainError::Transaction(
+                    "transaction input not owned by sender".into(),
+                ));
+            }
+            total_input_value = total_input_value
+                .checked_add(record.value)
+                .ok_or_else(|| ChainError::Transaction("transaction input overflow".into()))?;
+            sender_inputs.push(TransactionUtxoSnapshot::new(
+                outpoint.clone(),
+                StoredUtxo::new(record.owner.clone(), record.value),
+            ));
+        }
+        if sender_inputs.is_empty() {
+            return Err(ChainError::Transaction(
+                "transaction requires at least one input".into(),
+            ));
+        }
+
+        let required_value = tx
+            .payload
+            .amount
+            .checked_add(tx.payload.fee as u128)
+            .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
+        if total_input_value < required_value {
+            return Err(ChainError::Transaction(
+                "transaction inputs do not cover amount and fee".into(),
+            ));
+        }
+        let change_value = total_input_value - required_value;
+
+        let mut module_sender_before = self.module_records(&tx.payload.from);
+        module_sender_before.utxo = TransactionUtxoSets::with_inputs(sender_inputs.clone());
+        let mut module_recipient_before = self.module_records(&tx.payload.to);
+        module_recipient_before.utxo = TransactionUtxoSets::default();
         let now = crate::reputation::current_timestamp();
         let (binding_change, sender_before, sender_after, recipient_before, recipient_after) = {
             let mut accounts = self.global_state.write_accounts();
@@ -616,16 +680,11 @@ impl Ledger {
                 if sender.nonce + 1 != tx.payload.nonce {
                     return Err(ChainError::Transaction("invalid nonce".into()));
                 }
-                let total = tx
-                    .payload
-                    .amount
-                    .checked_add(tx.payload.fee as u128)
-                    .ok_or_else(|| ChainError::Transaction("transaction amount overflow".into()))?;
-                if sender.balance < total {
+                if sender.balance < required_value {
                     return Err(ChainError::Transaction("insufficient balance".into()));
                 }
                 let before = sender.clone();
-                sender.balance -= total;
+                sender.balance -= required_value;
                 sender.nonce += 1;
                 sender
                     .reputation
@@ -665,7 +724,7 @@ impl Ledger {
                 recipient_after,
             )
         };
-        for outpoint in &spent_outpoints {
+        for outpoint in inputs {
             if !self.utxo_state.remove_spent(outpoint) {
                 return Err(ChainError::Transaction(
                     "transaction input already spent".into(),
@@ -687,27 +746,42 @@ impl Ledger {
         }
 
         let mut utxo_outputs: Vec<(UtxoOutpoint, StoredUtxo)> = Vec::new();
-        if sender_after.address == recipient_after.address {
+        if tx.payload.amount > 0 {
             utxo_outputs.push((
-                UtxoOutpoint { tx_id, index: 0 },
-                StoredUtxo::new(sender_after.address.clone(), sender_after.balance),
-            ));
-        } else {
-            utxo_outputs.push((
-                UtxoOutpoint { tx_id, index: 0 },
-                StoredUtxo::new(recipient_after.address.clone(), recipient_after.balance),
-            ));
-            utxo_outputs.push((
-                UtxoOutpoint { tx_id, index: 1 },
-                StoredUtxo::new(sender_after.address.clone(), sender_after.balance),
+                UtxoOutpoint {
+                    tx_id,
+                    index: utxo_outputs.len() as u32,
+                },
+                StoredUtxo::new(recipient_after.address.clone(), tx.payload.amount),
             ));
         }
-        for (outpoint, stored) in utxo_outputs {
-            self.utxo_state.insert(outpoint, stored);
+        if change_value > 0 {
+            utxo_outputs.push((
+                UtxoOutpoint {
+                    tx_id,
+                    index: utxo_outputs.len() as u32,
+                },
+                StoredUtxo::new(sender_after.address.clone(), change_value),
+            ));
+        }
+        let mut sender_outputs = Vec::new();
+        let mut recipient_outputs = Vec::new();
+        for (outpoint, stored) in &utxo_outputs {
+            self.utxo_state.insert(outpoint.clone(), stored.clone());
+            let snapshot = TransactionUtxoSnapshot::new(outpoint.clone(), stored.clone());
+            if stored.owner == sender_after.address {
+                sender_outputs.push(snapshot.clone());
+            }
+            if stored.owner == recipient_after.address {
+                recipient_outputs.push(snapshot);
+            }
         }
 
-        let sender_modules_after = self.module_records(&tx.payload.from);
-        let recipient_modules_after = self.module_records(&tx.payload.to);
+        let mut sender_modules_after = self.module_records(&tx.payload.from);
+        sender_modules_after.utxo =
+            TransactionUtxoSets::new(sender_inputs.clone(), sender_outputs.clone());
+        let mut recipient_modules_after = self.module_records(&tx.payload.to);
+        recipient_modules_after.utxo = TransactionUtxoSets::with_outputs(recipient_outputs.clone());
 
         let sender_before_witness = AccountBalanceWitness::new(
             sender_before.address.clone(),
@@ -727,13 +801,6 @@ impl Ledger {
             recipient_after.balance,
             recipient_after.nonce,
         );
-        let to_utxo_snapshots = |snapshots: &[(UtxoOutpoint, StoredUtxo)]| {
-            snapshots
-                .iter()
-                .cloned()
-                .map(|(outpoint, utxo)| TransactionUtxoSnapshot::new(outpoint, utxo))
-                .collect::<Vec<_>>()
-        };
         let tx_witness = TransactionWitness::new(
             tx_id,
             tx.payload.fee,
@@ -741,12 +808,11 @@ impl Ledger {
             sender_after_witness,
             recipient_before_witness,
             recipient_after_witness,
-            to_utxo_snapshots(&module_sender_before.utxo),
-            to_utxo_snapshots(&sender_modules_after.utxo),
-            to_utxo_snapshots(&module_recipient_before.utxo),
-            to_utxo_snapshots(&recipient_modules_after.utxo),
+            module_sender_before.utxo.inputs.clone(),
+            sender_modules_after.utxo.outputs.clone(),
+            module_recipient_before.utxo.inputs.clone(),
+            recipient_modules_after.utxo.outputs.clone(),
         );
-
         let sender_reputation_witness = sender_modules_after.reputation.clone().map(|after| {
             ReputationWitness::new(
                 sender_after.address.clone(),
@@ -1013,13 +1079,37 @@ impl Ledger {
 
 #[derive(Default, Clone)]
 struct ModuleRecordSnapshots {
-    utxo: Vec<(UtxoOutpoint, StoredUtxo)>,
+    utxo: TransactionUtxoSets,
     reputation: Option<ReputationRecord>,
     timetoke: Option<TimetokeRecord>,
     zsi: Option<ZsiRecord>,
 }
 
-impl ModuleRecordSnapshots {}
+#[derive(Default, Clone)]
+struct TransactionUtxoSets {
+    inputs: Vec<TransactionUtxoSnapshot>,
+    outputs: Vec<TransactionUtxoSnapshot>,
+}
+
+impl TransactionUtxoSets {
+    fn new(inputs: Vec<TransactionUtxoSnapshot>, outputs: Vec<TransactionUtxoSnapshot>) -> Self {
+        Self { inputs, outputs }
+    }
+
+    fn with_inputs(inputs: Vec<TransactionUtxoSnapshot>) -> Self {
+        Self {
+            inputs,
+            outputs: Vec::new(),
+        }
+    }
+
+    fn with_outputs(outputs: Vec<TransactionUtxoSnapshot>) -> Self {
+        Self {
+            inputs: Vec::new(),
+            outputs,
+        }
+    }
+}
 
 #[derive(Default)]
 struct ModuleWitnessBook {
@@ -1331,7 +1421,16 @@ mod tests {
         let tx = Transaction::new(address.clone(), recipient.clone(), 100, 1, 1, None);
         let signature = keypair.sign(&tx.canonical_bytes());
         let signed = SignedTransaction::new(tx, signature, &keypair.public);
-        ledger.apply_transaction(&signed).unwrap();
+        let input = UtxoOutpoint {
+            tx_id: [9u8; 32],
+            index: 0,
+        };
+        ledger
+            .utxo_state
+            .insert(input.clone(), StoredUtxo::new(address.clone(), 150));
+        ledger
+            .apply_transaction(&signed, &[input])
+            .expect("transaction applies");
 
         let account = ledger.get_account(&address).unwrap();
         assert_eq!(
@@ -1407,7 +1506,7 @@ mod tests {
         let tx_id = signed.hash();
 
         let fee = ledger
-            .apply_transaction(&signed)
+            .apply_transaction(&signed, &[input_outpoint.clone()])
             .expect("apply transaction");
         assert_eq!(fee, 5);
 
@@ -1433,12 +1532,14 @@ mod tests {
             .get(&recipient_outpoint)
             .expect("recipient output");
         assert_eq!(recipient_entry.owner, recipient_address);
+        assert_eq!(recipient_entry.amount, 150);
         assert!(!recipient_entry.is_spent());
 
         let sender_entry = snapshot_map
             .get(&sender_change_outpoint)
             .expect("sender change output");
         assert_eq!(sender_entry.owner, sender_address);
+        assert_eq!(sender_entry.amount, 445);
         assert!(!sender_entry.is_spent());
 
         let sender_unspent_after = ledger.utxos_for_owner(&sender_address);
@@ -1450,9 +1551,7 @@ mod tests {
         assert_eq!(sender_snapshot.len(), 2);
         assert_eq!(sender_snapshot[0].0, sender_change_outpoint);
         assert_eq!(sender_snapshot[1].0, extra_outpoint);
-        assert!(sender_snapshot
-            .iter()
-            .all(|(_, stored)| !stored.is_spent()));
+        assert!(sender_snapshot.iter().all(|(_, stored)| !stored.is_spent()));
 
         let recipient_unspent_after = ledger.utxos_for_owner(&recipient_address);
         assert_eq!(recipient_unspent_after.len(), 1);
@@ -1477,14 +1576,17 @@ mod tests {
         let sender_snapshot = ledger.utxo_state.snapshot_for_account(&sender_address);
         assert_eq!(sender_snapshot.len(), 2);
         assert_eq!(sender_snapshot[0].0, sender_change_outpoint);
+        assert_eq!(sender_snapshot[0].1.amount, 445);
         assert_eq!(sender_snapshot[1].0, extra_outpoint);
+        assert_eq!(sender_snapshot[1].1.amount, 75);
         let recipient_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
         assert_eq!(recipient_snapshot.len(), 1);
         assert_eq!(recipient_snapshot[0].0, recipient_outpoint);
+        assert_eq!(recipient_snapshot[0].1.amount, 150);
     }
 
     #[test]
-    fn apply_transaction_marks_existing_recipient_utxo_as_spent() {
+    fn apply_transaction_preserves_existing_recipient_utxos() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let sender_kp = deterministic_keypair();
         let sender_address = address_from_public_key(&sender_kp.public);
@@ -1538,7 +1640,7 @@ mod tests {
         let tx_id = signed.hash();
 
         ledger
-            .apply_transaction(&signed)
+            .apply_transaction(&signed, &[sender_input.clone()])
             .expect("apply transaction with existing recipient utxo");
 
         let snapshot_after = ledger.utxo_state.snapshot();
@@ -1550,7 +1652,7 @@ mod tests {
                 .is_spent()
         );
         assert!(
-            snapshot_map
+            !snapshot_map
                 .get(&recipient_existing)
                 .expect("recipient prior output")
                 .is_spent()
@@ -1561,15 +1663,25 @@ mod tests {
             .get(&recipient_outpoint)
             .expect("new recipient output");
         assert_eq!(recipient_entry.owner, recipient_address);
+        assert_eq!(recipient_entry.amount, 200);
         assert!(!recipient_entry.is_spent());
 
         let recipient_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
-        assert_eq!(recipient_snapshot.len(), 1);
-        assert_eq!(recipient_snapshot[0].0, recipient_outpoint);
+        assert_eq!(recipient_snapshot.len(), 2);
+        assert!(
+            recipient_snapshot
+                .iter()
+                .any(|(outpoint, stored)| outpoint == &recipient_existing && stored.amount == 300)
+        );
+        assert!(
+            recipient_snapshot
+                .iter()
+                .any(|(outpoint, stored)| outpoint == &recipient_outpoint && stored.amount == 200)
+        );
     }
 
     #[test]
-    fn apply_transaction_self_transfer_deduplicates_spent_outpoints() {
+    fn apply_transaction_self_transfer_produces_change_output() {
         let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
         let keypair = deterministic_keypair();
         let address = address_from_public_key(&keypair.public);
@@ -1609,7 +1721,7 @@ mod tests {
         let tx_id = signed.hash();
 
         ledger
-            .apply_transaction(&signed)
+            .apply_transaction(&signed, &[existing_outpoint.clone()])
             .expect("self transfer applies");
 
         let snapshot_after = ledger.utxo_state.snapshot();
@@ -1621,22 +1733,24 @@ mod tests {
                 .is_spent()
         );
 
-        let new_outpoint = UtxoOutpoint { tx_id, index: 0 };
-        let new_entry = snapshot_map
-            .get(&new_outpoint)
-            .expect("new consolidated output");
-        assert_eq!(new_entry.owner, address);
-        assert!(!new_entry.is_spent());
+        let payment_outpoint = UtxoOutpoint { tx_id, index: 0 };
+        let payment_entry = snapshot_map.get(&payment_outpoint).expect("payment output");
+        assert_eq!(payment_entry.owner, address);
+        assert_eq!(payment_entry.amount, 120);
+        assert!(!payment_entry.is_spent());
 
-        assert!(
-            snapshot_map
-                .get(&UtxoOutpoint { tx_id, index: 1 })
-                .is_none()
-        );
+        let change_outpoint = UtxoOutpoint { tx_id, index: 1 };
+        let change_entry = snapshot_map.get(&change_outpoint).expect("change output");
+        assert_eq!(change_entry.owner, address);
+        assert_eq!(change_entry.amount, 772);
+        assert!(!change_entry.is_spent());
 
         let snapshot_for_account = ledger.utxo_state.snapshot_for_account(&address);
-        assert_eq!(snapshot_for_account.len(), 1);
-        assert_eq!(snapshot_for_account[0].0, new_outpoint);
+        assert_eq!(snapshot_for_account.len(), 2);
+        assert_eq!(snapshot_for_account[0].0, payment_outpoint);
+        assert_eq!(snapshot_for_account[0].1.amount, 120);
+        assert_eq!(snapshot_for_account[1].0, change_outpoint);
+        assert_eq!(snapshot_for_account[1].1.amount, 772);
     }
 
     #[test]
