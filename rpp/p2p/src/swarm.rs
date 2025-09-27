@@ -246,9 +246,10 @@ impl Network {
         &mut self,
         zsi_id: String,
         tier: TierLevel,
+        vrf_public_key: Vec<u8>,
         vrf_proof: Vec<u8>,
     ) -> Result<(), NetworkError> {
-        self.handshake = HandshakePayload::new(zsi_id, Some(vrf_proof), tier);
+        self.handshake = HandshakePayload::new(zsi_id, Some(vrf_public_key), Some(vrf_proof), tier);
         let signed = self.sign_handshake()?;
         let peer_id = self.local_peer_id();
         self.peerstore.record_handshake(peer_id, &signed)?;
@@ -620,11 +621,13 @@ impl Network {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handshake::HandshakePayload;
+    use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
     use crate::peerstore::PeerstoreConfig;
     use crate::persistence::GossipStateStore;
-    use std::time::Duration as StdDuration;
     use libp2p::identity;
+    use rand::rngs::OsRng;
+    use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
+    use std::time::Duration as StdDuration;
     use tempfile::tempdir;
     use tokio::time::timeout;
 
@@ -632,17 +635,42 @@ mod tests {
         Arc::new(NodeIdentity::load_or_generate(path).expect("identity"))
     }
 
+    fn template_handshake(zsi: &str, tier: TierLevel) -> HandshakePayload {
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let keypair = secret.expand_to_keypair(ExpansionMode::Uniform);
+        let public = keypair.public.to_bytes().to_vec();
+        let template = HandshakePayload::new(zsi.to_string(), Some(public.clone()), None, tier);
+        let proof = keypair
+            .sign_simple(VRF_HANDSHAKE_CONTEXT, &template.vrf_message())
+            .to_bytes()
+            .to_vec();
+        HandshakePayload::new(zsi.to_string(), Some(public), Some(proof), tier)
+    }
+
+    fn signed_remote_handshake(
+        keypair: &identity::Keypair,
+        zsi: &str,
+        tier: TierLevel,
+    ) -> HandshakePayload {
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let sr = secret.expand_to_keypair(ExpansionMode::Uniform);
+        let public = sr.public.to_bytes().to_vec();
+        let template = HandshakePayload::new(zsi.to_string(), Some(public.clone()), None, tier);
+        let proof = sr
+            .sign_simple(VRF_HANDSHAKE_CONTEXT, &template.vrf_message())
+            .to_bytes()
+            .to_vec();
+        let template = HandshakePayload::new(zsi.to_string(), Some(public), Some(proof), tier);
+        template.signed(keypair).expect("handshake")
+    }
+
     async fn init_network(dir: &tempfile::TempDir, name: &str, tier: TierLevel) -> Network {
         let key_path = dir.path().join(format!("{name}.key"));
         let identity = temp_identity(&key_path);
         let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
-        Network::new(
-            identity,
-            peerstore,
-            HandshakePayload::new(name, None, tier),
-            None,
-        )
-        .expect("network")
+        Network::new(identity, peerstore, template_handshake(name, tier), None).expect("network")
     }
 
     #[test]
@@ -667,7 +695,7 @@ mod tests {
         let network = Network::new(
             identity,
             peerstore,
-            HandshakePayload::new("node", None, TierLevel::Tl3),
+            template_handshake("node", TierLevel::Tl3),
             Some(store.clone()),
         )
         .expect("network");
@@ -821,9 +849,7 @@ mod tests {
         let mut network = init_network(&dir, "node", TierLevel::Tl3).await;
         let keypair = identity::Keypair::generate_ed25519();
         let peer = PeerId::from(keypair.public());
-        let handshake = HandshakePayload::new("peer", None, TierLevel::Tl3)
-            .signed(&keypair)
-            .expect("sign");
+        let handshake = signed_remote_handshake(&keypair, "peer", TierLevel::Tl3);
 
         network
             .peerstore

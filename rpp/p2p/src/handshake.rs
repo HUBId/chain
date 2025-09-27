@@ -7,11 +7,13 @@ use serde::{Deserialize, Serialize};
 use crate::tier::TierLevel;
 
 pub const HANDSHAKE_PROTOCOL: &str = "/rpp/handshake/1.0.0";
-const VRF_DOMAIN: &[u8] = b"rpp.handshake.vrf";
+pub const VRF_HANDSHAKE_CONTEXT: &[u8] = b"rpp.handshake.vrf";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandshakePayload {
     pub zsi_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vrf_public_key: Option<Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vrf_proof: Option<Vec<u8>>,
     pub tier: TierLevel,
@@ -22,11 +24,13 @@ pub struct HandshakePayload {
 impl HandshakePayload {
     pub fn new(
         zsi_id: impl Into<String>,
+        vrf_public_key: Option<Vec<u8>>,
         vrf_proof: Option<Vec<u8>>,
         tier: TierLevel,
     ) -> Self {
         Self {
             zsi_id: zsi_id.into(),
+            vrf_public_key,
             vrf_proof,
             tier,
             signature: Vec::new(),
@@ -38,7 +42,10 @@ impl HandshakePayload {
         self
     }
 
-    pub fn signed(&self, signer: &libp2p::identity::Keypair) -> Result<Self, libp2p::identity::SigningError> {
+    pub fn signed(
+        &self,
+        signer: &libp2p::identity::Keypair,
+    ) -> Result<Self, libp2p::identity::SigningError> {
         let mut payload = self.clone();
         let digest = payload.digest();
         payload.signature = signer.sign(&digest)?;
@@ -46,15 +53,22 @@ impl HandshakePayload {
     }
 
     pub fn digest(&self) -> [u8; 32] {
-        Self::digest_parts(&self.zsi_id, self.vrf_proof.as_deref(), self.tier)
+        Self::digest_parts(
+            &self.zsi_id,
+            self.vrf_public_key.as_deref(),
+            self.vrf_proof.as_deref(),
+            self.tier,
+        )
     }
 
     pub fn vrf_message(&self) -> Vec<u8> {
-        let mut message = Vec::with_capacity(VRF_DOMAIN.len() + 32);
-        message.extend_from_slice(VRF_DOMAIN);
-        let digest = Self::digest_parts(&self.zsi_id, None, self.tier);
-        message.extend_from_slice(&digest);
-        message
+        let digest = Self::digest_parts(
+            &self.zsi_id,
+            self.vrf_public_key.as_deref(),
+            None,
+            self.tier,
+        );
+        digest.to_vec()
     }
 
     pub fn verify_signature_with(&self, public_key: &libp2p::identity::PublicKey) -> bool {
@@ -64,13 +78,26 @@ impl HandshakePayload {
         public_key.verify(&self.digest(), &self.signature)
     }
 
-    fn digest_parts(zsi_id: &str, vrf_proof: Option<&[u8]>, tier: TierLevel) -> [u8; 32] {
+    fn digest_parts(
+        zsi_id: &str,
+        vrf_public_key: Option<&[u8]>,
+        vrf_proof: Option<&[u8]>,
+        tier: TierLevel,
+    ) -> [u8; 32] {
         use blake2::digest::Digest;
 
         let mut hasher = blake2::Blake2s256::new();
         let id_bytes = zsi_id.as_bytes();
         hasher.update((id_bytes.len() as u32).to_le_bytes());
         hasher.update(id_bytes);
+        match vrf_public_key {
+            Some(public_key) => {
+                hasher.update([1u8]);
+                hasher.update((public_key.len() as u32).to_le_bytes());
+                hasher.update(public_key);
+            }
+            None => hasher.update([0u8]),
+        }
         match vrf_proof {
             Some(proof) => {
                 hasher.update([1u8]);
@@ -156,7 +183,12 @@ mod tests {
 
     proptest! {
         #[test]
-        fn handshake_roundtrips(zsi in "[a-zA-Z0-9]{0,16}", tier in any::<u8>(), proof in prop::collection::vec(any::<u8>(), 0..64)) {
+        fn handshake_roundtrips(
+            zsi in "[a-zA-Z0-9]{0,16}",
+            tier in any::<u8>(),
+            public in prop::collection::vec(any::<u8>(), 0..64),
+            proof in prop::collection::vec(any::<u8>(), 0..64)
+        ) {
             let tier = match tier % 6 {
                 0 => TierLevel::Tl0,
                 1 => TierLevel::Tl1,
@@ -166,7 +198,9 @@ mod tests {
                 _ => TierLevel::Tl5,
             };
             let keypair = libp2p::identity::Keypair::generate_ed25519();
-            let template = HandshakePayload::new(zsi.clone(), Some(proof.clone()), tier);
+            let vrf_public_key = (!public.is_empty()).then(|| public.clone());
+            let vrf_proof = (!proof.is_empty()).then(|| proof.clone());
+            let template = HandshakePayload::new(zsi.clone(), vrf_public_key, vrf_proof, tier);
             let signed = template.signed(&keypair).expect("sign");
             prop_assert!(signed.verify_signature_with(&keypair.public()));
             let encoded = serde_json::to_vec(&signed).expect("encode");

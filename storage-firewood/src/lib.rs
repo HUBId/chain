@@ -63,7 +63,10 @@ mod tests {
         } else {
             proof.commitment_root[0] ^= 0xFF;
         }
-        assert!(!FirewoodPruner::verify_pruned_state(commitment_root, &proof));
+        assert!(!FirewoodPruner::verify_pruned_state(
+            commitment_root,
+            &proof
+        ));
     }
 
     #[test]

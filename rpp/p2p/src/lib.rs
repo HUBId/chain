@@ -14,7 +14,7 @@ mod tier;
 mod topics;
 
 pub use admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
-pub use handshake::HandshakePayload;
+pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, NodeIdentity};
 pub use peerstore::{PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError};
 pub use persistence::{GossipStateError, GossipStateStore};

@@ -99,6 +99,7 @@ impl NetworkResources {
             (
                 HandshakePayload::new(
                     profile.zsi_id.clone(),
+                    Some(profile.vrf_public_key.clone()),
                     Some(profile.vrf_proof.clone()),
                     profile.tier,
                 ),
@@ -106,13 +107,18 @@ impl NetworkResources {
             )
         } else {
             (
-                HandshakePayload::new(node_label, None, TierLevel::Tl0),
+                HandshakePayload::new(node_label, None, None, TierLevel::Tl0),
                 None,
             )
         };
         let mut network = Network::new(identity.clone(), peerstore, handshake, gossip_state)?;
         if let Some(profile) = profile {
-            network.update_identity(profile.zsi_id, profile.tier, profile.vrf_proof)?;
+            network.update_identity(
+                profile.zsi_id,
+                profile.tier,
+                profile.vrf_public_key,
+                profile.vrf_proof,
+            )?;
         }
         network.listen_on(config.listen_addr().clone())?;
         for addr in config.bootstrap_peers() {

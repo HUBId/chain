@@ -206,23 +206,77 @@ impl AdmissionControl {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::handshake::HandshakePayload;
-    use crate::peerstore::PeerstoreConfig;
-    use proptest::prelude::*;
+    use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
+    use crate::peerstore::{IdentityVerifier, PeerstoreConfig};
     use libp2p::identity;
+    use proptest::prelude::*;
+    use rand::rngs::OsRng;
+    use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[derive(Default)]
+    struct StaticVerifier {
+        expected: HashMap<String, Vec<u8>>,
+    }
+
+    impl StaticVerifier {
+        fn new(entries: impl IntoIterator<Item = (String, Vec<u8>)>) -> Self {
+            Self {
+                expected: entries.into_iter().collect(),
+            }
+        }
+    }
+
+    impl IdentityVerifier for StaticVerifier {
+        fn expected_vrf_public_key(&self, zsi_id: &str) -> Option<Vec<u8>> {
+            self.expected.get(zsi_id).cloned()
+        }
+    }
+
+    fn sign_vrf_message(secret: &MiniSecretKey, payload: &HandshakePayload) -> Vec<u8> {
+        let keypair = secret.expand_to_keypair(ExpansionMode::Uniform);
+        keypair
+            .sign_simple(VRF_HANDSHAKE_CONTEXT, &payload.vrf_message())
+            .to_bytes()
+            .to_vec()
+    }
 
     fn signed_handshake(
         keypair: &identity::Keypair,
         tier: TierLevel,
+        vrf_secret: Option<&MiniSecretKey>,
     ) -> HandshakePayload {
-        HandshakePayload::new("peer", None, tier)
-            .signed(keypair)
-            .expect("handshake")
+        let (vrf_public_key, vrf_proof) = if let Some(secret) = vrf_secret {
+            let public = secret
+                .expand_to_keypair(ExpansionMode::Uniform)
+                .public
+                .to_bytes()
+                .to_vec();
+            let template = HandshakePayload::new("peer", Some(public.clone()), None, tier);
+            let proof = sign_vrf_message(secret, &template);
+            (Some(public), Some(proof))
+        } else {
+            (None, None)
+        };
+        let template = HandshakePayload::new("peer", vrf_public_key, vrf_proof, tier);
+        template.signed(keypair).expect("handshake")
     }
 
     #[test]
     fn enforces_tier_requirements() {
-        let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("open"));
+        let mut rng = OsRng;
+        let secret = MiniSecretKey::generate_with(&mut rng);
+        let public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+        let verifier = Arc::new(StaticVerifier::new(vec![("peer".to_string(), public)]));
+        let store = Arc::new(
+            Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+                .expect("open"),
+        );
         let control = AdmissionControl::new(store.clone());
         let keypair = identity::Keypair::generate_ed25519();
         let peer = PeerId::from(keypair.public());
@@ -230,7 +284,7 @@ mod tests {
         store
             .record_handshake(
                 peer,
-                &signed_handshake(&keypair, TierLevel::Tl1),
+                &signed_handshake(&keypair, TierLevel::Tl1, Some(&secret)),
             )
             .expect("handshake");
 
@@ -248,14 +302,25 @@ mod tests {
     proptest! {
         #[test]
         fn tier_gating_matches_threshold(score in 0.0f64..10.0) {
-            let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("open"));
+            let mut rng = OsRng;
+            let secret = MiniSecretKey::generate_with(&mut rng);
+        let public = secret
+            .expand_to_keypair(ExpansionMode::Uniform)
+            .public
+            .to_bytes()
+            .to_vec();
+            let verifier = Arc::new(StaticVerifier::new(vec![("peer".to_string(), public)]));
+            let store = Arc::new(
+                Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+                    .expect("open"),
+            );
             let control = AdmissionControl::new(store.clone());
             let keypair = identity::Keypair::generate_ed25519();
             let peer = PeerId::from(keypair.public());
             let tier = TierLevel::from_reputation(score);
 
             store
-                .record_handshake(peer, &signed_handshake(&keypair, tier))
+                .record_handshake(peer, &signed_handshake(&keypair, tier, Some(&secret)))
                 .expect("handshake");
             store
                 .set_reputation(peer, score)

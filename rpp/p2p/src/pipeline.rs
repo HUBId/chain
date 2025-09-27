@@ -62,18 +62,16 @@ impl ProofValidator for JsonProofValidator {
         let proof_value = bundle
             .get("proof")
             .ok_or_else(|| PipelineError::Validation("proof payload missing proof field".into()))?;
-        let proof_obj = proof_value.as_object().ok_or_else(|| {
-            PipelineError::Validation("proof field must be an object".into())
-        })?;
-        let stwo = proof_obj.get("stwo").ok_or_else(|| {
-            PipelineError::Validation("unsupported proof backend".into())
-        })?;
+        let proof_obj = proof_value
+            .as_object()
+            .ok_or_else(|| PipelineError::Validation("proof field must be an object".into()))?;
+        let stwo = proof_obj
+            .get("stwo")
+            .ok_or_else(|| PipelineError::Validation("unsupported proof backend".into()))?;
         let commitment = stwo
             .get("commitment")
             .and_then(|value| value.as_str())
-            .ok_or_else(|| {
-                PipelineError::Validation("proof payload missing commitment".into())
-            })?;
+            .ok_or_else(|| PipelineError::Validation("proof payload missing commitment".into()))?;
         if !is_hex_digest(commitment) {
             return Err(PipelineError::Validation(
                 "proof commitment must be a 32-byte hex digest".into(),
@@ -610,7 +608,9 @@ impl RecursiveProofVerifier for BasicRecursiveProofVerifier {
         previous_commitment: Option<&str>,
     ) -> Result<(), PipelineError> {
         if proof.is_empty() {
-            return Err(PipelineError::Validation("recursive proof payload is empty".into()));
+            return Err(PipelineError::Validation(
+                "recursive proof payload is empty".into(),
+            ));
         }
         if !is_hex_digest(expected_commitment) {
             return Err(PipelineError::Validation(
@@ -662,10 +662,7 @@ impl LightClientSync {
         Ok(())
     }
 
-    pub fn ingest_light_client_update(
-        &mut self,
-        payload: &[u8],
-    ) -> Result<(), PipelineError> {
+    pub fn ingest_light_client_update(&mut self, payload: &[u8]) -> Result<(), PipelineError> {
         let update: NetworkLightClientUpdate = serde_json::from_slice(payload)
             .map_err(|err| PipelineError::Validation(format!("invalid update payload: {err}")))?;
         let plan = self
@@ -748,11 +745,7 @@ impl LightClientSync {
             .plan
             .as_ref()
             .ok_or_else(|| PipelineError::SnapshotVerification("no active plan".into()))?;
-        let Some(index) = plan
-            .chunk_index_by_start
-            .get(&chunk.start_height)
-            .copied()
-        else {
+        let Some(index) = plan.chunk_index_by_start.get(&chunk.start_height).copied() else {
             return Err(PipelineError::SnapshotVerification(format!(
                 "unexpected chunk starting at {}",
                 chunk.start_height
@@ -931,7 +924,10 @@ impl TryFrom<NetworkStateSyncPlan> for ActivePlan {
                     update.height
                 )));
             }
-            if update_index_by_height.insert(update.height, index).is_some() {
+            if update_index_by_height
+                .insert(update.height, index)
+                .is_some()
+            {
                 return Err(PipelineError::SnapshotVerification(format!(
                     "duplicate light client height {}",
                     update.height
@@ -977,8 +973,8 @@ fn decode_hex_digest(value: &str) -> Result<[u8; 32], PipelineError> {
 }
 
 fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
-    use blake2::digest::Digest;
     use blake2::Blake2s256;
+    use blake2::digest::Digest;
 
     if leaves.is_empty() {
         let mut hasher = Blake2s256::new();
@@ -1259,10 +1255,7 @@ mod tests {
             start_height: 0,
             end_height: 1,
             requests: plan.chunks[0].requests.clone(),
-            proofs: vec![
-                hex::encode(aggregated_one),
-                hex::encode(aggregated_two),
-            ],
+            proofs: vec![hex::encode(aggregated_one), hex::encode(aggregated_two)],
         })
         .expect("chunk encode");
         client.ingest_chunk(&chunk_payload).expect("chunk");

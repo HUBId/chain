@@ -3184,6 +3184,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "rand 0.8.5",
+ "schnorrkel",
  "serde",
  "serde_json",
  "tempfile",
