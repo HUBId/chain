@@ -52,6 +52,10 @@ impl FieldElement {
     pub fn to_bytes(self) -> [u8; 16] {
         self.0.to_be_bytes()
     }
+
+    pub fn as_u128(self) -> u128 {
+        self.0
+    }
 }
 
 impl From<u128> for FieldElement {

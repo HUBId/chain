@@ -34,7 +34,7 @@ fn verify_witness(
         return false;
     }
     let fri_inputs = fri_inputs_from_trace(&witness_trace);
-    FriProver::verify(&fri_inputs, &proof.fri_proof)
+    FriProver::verify(&fri_inputs, &proof.fri_proof, &proof.config).is_ok()
 }
 
 pub fn verify_tx(tx: &Transaction, proof: &Proof) -> bool {

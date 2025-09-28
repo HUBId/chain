@@ -95,8 +95,9 @@ where
     let config = StwoConfig::default();
     let public_inputs = witness.to_json();
     let trace = witness.trace_commitments();
-    let fri_inputs = witness.fri_values();
-    let fri_proof = FriProver::prove(&fri_inputs);
+    let fri_values = witness.fri_values();
+    let fri_proof = FriProver::prove(&fri_values, &config)
+        .expect("fri prover should generate a proof for the witness");
 
     Proof {
         circuit,
