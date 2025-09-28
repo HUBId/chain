@@ -1,11 +1,11 @@
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::circuits::identity::{IdentityGenesis, IdentityWitness};
 use crate::circuits::pruning::{PruningInputs, PruningWitness};
 use crate::circuits::reputation::{ReputationState, ReputationWitness};
 use crate::circuits::transaction::{Transaction, TransactionWitness, UtxoState};
 use crate::circuits::{CircuitTrace, CircuitWitness};
-use crate::params::{FieldElement, StwoConfig};
+use crate::params::FieldElement;
 use crate::recursion::RecursiveProof;
 use crate::utils::fri::{FriProof, FriProver};
 use crate::utils::poseidon;
@@ -14,8 +14,8 @@ use crate::utils::poseidon;
 /// the enum leaves space for a binary format when needed.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ProofFormat {
-    Json,
-    Binary,
+    Json(serde_json::Value),
+    Binary(Vec<u8>),
 }
 
 /// Enumeration of circuits handled by the prover.
@@ -31,9 +31,9 @@ pub enum ProofCircuit {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Proof {
     pub circuit: ProofCircuit,
-    pub format: ProofFormat,
-    pub config: StwoConfig,
-    pub public_inputs: serde_json::Value,
+    pub payload: ProofFormat,
+    pub commitment: String,
+    pub public_inputs: Vec<String>,
     pub trace: CircuitTrace,
     pub fri_proof: FriProof,
 }
@@ -53,13 +53,16 @@ impl Proof {
 trait WitnessExt: CircuitWitness {
     fn trace_commitments(&self) -> CircuitTrace;
 
-    fn fri_values(&self) -> Vec<FieldElement> {
-        let trace = self.trace_commitments();
-        let mut values = Vec::new();
-        values.push(FieldElement::from_bytes(&trace.trace_commitment[..16]));
-        values.push(FieldElement::from_bytes(&trace.trace_commitment[16..]));
-        values.push(FieldElement::from_bytes(&trace.constraint_commitment[..16]));
-        values.push(FieldElement::from_bytes(&trace.constraint_commitment[16..]));
+    fn public_input_elements(&self) -> Vec<FieldElement>;
+
+    fn payload(&self) -> ProofFormat {
+        ProofFormat::Json(self.to_json())
+    }
+
+    fn fri_values(&self, trace: &CircuitTrace) -> Vec<FieldElement> {
+        let mut values = self.public_input_elements();
+        values.extend(commitment_elements(&trace.trace_commitment));
+        values.extend(commitment_elements(&trace.constraint_commitment));
         values
     }
 }
@@ -68,11 +71,29 @@ impl WitnessExt for TransactionWitness {
     fn trace_commitments(&self) -> CircuitTrace {
         self.trace()
     }
+
+    fn public_input_elements(&self) -> Vec<FieldElement> {
+        vec![
+            FieldElement::from_bytes(self.tx.tx_id.as_bytes()),
+            FieldElement::from_bytes(self.state.root.as_bytes()),
+            FieldElement::from(self.tx.tier as u128),
+            FieldElement::from(self.balance_sum),
+        ]
+    }
 }
 
 impl WitnessExt for ReputationWitness {
     fn trace_commitments(&self) -> CircuitTrace {
         self.trace()
+    }
+
+    fn public_input_elements(&self) -> Vec<FieldElement> {
+        vec![
+            FieldElement::from_bytes(self.state.participant.as_bytes()),
+            FieldElement::from(self.state.score as u128),
+            FieldElement::from(self.state.tier as u128),
+            FieldElement::from(self.timetoken as u128),
+        ]
     }
 }
 
@@ -80,29 +101,59 @@ impl WitnessExt for IdentityWitness {
     fn trace_commitments(&self) -> CircuitTrace {
         self.trace()
     }
+
+    fn public_input_elements(&self) -> Vec<FieldElement> {
+        vec![
+            FieldElement::from_bytes(self.genesis.wallet_address.as_bytes()),
+            FieldElement::from_bytes(self.genesis.genesis_block.as_bytes()),
+        ]
+    }
 }
 
 impl WitnessExt for PruningWitness {
     fn trace_commitments(&self) -> CircuitTrace {
         self.trace()
     }
+
+    fn public_input_elements(&self) -> Vec<FieldElement> {
+        vec![
+            FieldElement::from_bytes(self.inputs.utxo_root.as_bytes()),
+            FieldElement::from_bytes(self.inputs.reputation_root.as_bytes()),
+            FieldElement::from_bytes(&self.inputs.previous_proof_digest[..16]),
+            FieldElement::from_bytes(&self.inputs.previous_proof_digest[16..]),
+        ]
+    }
+}
+
+fn commitment_elements(commitment: &[u8; 32]) -> [FieldElement; 2] {
+    [
+        FieldElement::from_bytes(&commitment[..16]),
+        FieldElement::from_bytes(&commitment[16..]),
+    ]
+}
+
+fn encode_inputs(inputs: &[FieldElement]) -> Vec<String> {
+    inputs
+        .iter()
+        .map(|element| hex::encode(element.to_bytes()))
+        .collect()
 }
 
 fn build_proof<W>(circuit: ProofCircuit, witness: &W) -> Proof
 where
     W: WitnessExt,
 {
-    let config = StwoConfig::default();
-    let public_inputs = witness.to_json();
     let trace = witness.trace_commitments();
-    let fri_inputs = witness.fri_values();
+    let public_inputs = witness.public_input_elements();
+    let fri_inputs = witness.fri_values(&trace);
     let fri_proof = FriProver::prove(&fri_inputs);
+    let commitment = hex::encode(poseidon::hash_elements(&public_inputs));
 
     Proof {
         circuit,
-        format: ProofFormat::Json,
-        config,
-        public_inputs,
+        payload: witness.payload(),
+        commitment,
+        public_inputs: encode_inputs(&public_inputs),
         trace,
         fri_proof,
     }
@@ -156,5 +207,92 @@ pub fn to_recursive_proof(proof: &Proof) -> RecursiveProof {
     RecursiveProof {
         aggregate_digest: proof.digest(),
         proof: proof.clone(),
+    }
+}
+
+impl ProofFormat {
+    pub(crate) fn decode_json<T: DeserializeOwned>(&self) -> Option<T> {
+        match self {
+            ProofFormat::Json(value) => serde_json::from_value(value.clone()).ok(),
+            ProofFormat::Binary(bytes) => serde_json::from_slice(bytes).ok(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuits::identity::IdentityGenesis;
+    use crate::circuits::reputation::ReputationState;
+    use crate::circuits::transaction::{Transaction, UtxoState};
+    use crate::verifier::{verify_block, verify_identity, verify_reputation, verify_tx};
+
+    fn sample_transaction() -> (Transaction, UtxoState) {
+        let tx = Transaction {
+            tx_id: "tx-001".into(),
+            inputs: vec!["input-a".into()],
+            outputs: vec!["output-b".into()],
+            tier: 2,
+        };
+        let state = UtxoState {
+            root: "root-1234".into(),
+            height: 7,
+        };
+        (tx, state)
+    }
+
+    fn sample_reputation() -> ReputationState {
+        ReputationState {
+            participant: "alice".into(),
+            score: 42,
+            tier: 3,
+            epochs_participated: 11,
+        }
+    }
+
+    fn sample_identity() -> (String, IdentityGenesis) {
+        let genesis = IdentityGenesis {
+            wallet_address: "wallet-xyz".into(),
+            genesis_block: "block-1".into(),
+        };
+        ("wallet-pk".into(), genesis)
+    }
+
+    fn sample_block() -> Block {
+        Block {
+            height: 9,
+            tx_root: "tx-root".into(),
+            reputation_root: "rep-root".into(),
+        }
+    }
+
+    #[test]
+    fn transaction_roundtrip() {
+        let (tx, state) = sample_transaction();
+        let proof = prove_tx(&tx, &state);
+        assert!(verify_tx(&tx, &proof));
+    }
+
+    #[test]
+    fn reputation_roundtrip() {
+        let state = sample_reputation();
+        let proof = prove_reputation(&state);
+        assert!(verify_reputation(&state, &proof));
+    }
+
+    #[test]
+    fn identity_roundtrip() {
+        let (wallet_key, genesis) = sample_identity();
+        let proof = prove_identity(&wallet_key, &genesis);
+        assert!(verify_identity(&genesis, &proof));
+    }
+
+    #[test]
+    fn block_roundtrip() {
+        let (wallet_key, genesis) = sample_identity();
+        let prev_proof = prove_identity(&wallet_key, &genesis);
+        let block = sample_block();
+        let proof = prove_block(&block, &prev_proof);
+        assert!(verify_block(&block, &proof));
     }
 }
