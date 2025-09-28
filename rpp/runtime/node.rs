@@ -24,7 +24,7 @@ use parking_lot::RwLock;
 use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use hex;
 use serde::Serialize;
@@ -1307,7 +1307,13 @@ impl NodeInner {
             ));
         }
         let engine = ReconstructionEngine::new(self.storage.clone());
-        engine.verify_proof_chain()
+        match engine.verify_proof_chain() {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                warn!(?err, "proof chain verification failed");
+                Err(err)
+            }
+        }
     }
 
     fn reconstruct_block<P: PayloadProvider>(
@@ -1356,7 +1362,10 @@ impl NodeInner {
     fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
         bundle.transaction.verify()?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            self.verifiers.verify_transaction(&bundle.proof)?;
+            if let Err(err) = self.verifiers.verify_transaction(&bundle.proof) {
+                warn!(?err, "transaction proof rejected by verifier");
+                return Err(err);
+            }
             Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
         }
         let mut mempool = self.mempool.write();
@@ -1420,8 +1429,17 @@ impl NodeInner {
         let next_height = self.chain_tip.read().height.saturating_add(1);
         self.ledger.sync_epoch_for_height(next_height);
         if self.config.rollout.feature_gates.recursive_proofs {
-            self.verifiers
-                .verify_identity(&request.declaration.proof.zk_proof)?;
+            if let Err(err) = self
+                .verifiers
+                .verify_identity(&request.declaration.proof.zk_proof)
+            {
+                warn!(
+                    wallet = %request.declaration.genesis.wallet_addr,
+                    ?err,
+                    "identity proof rejected by verifier"
+                );
+                return Err(err);
+            }
         }
         self.validate_identity_attestation(&request, next_height)?;
         let declaration = &request.declaration;
@@ -1579,6 +1597,17 @@ impl NodeInner {
                 "failed to slash validator for invalid identity attestation"
             );
         }
+    }
+
+    fn punish_invalid_proof(&self, address: &Address, height: u64, round: u64) {
+        if !self.config.rollout.feature_gates.consensus_enforcement {
+            return;
+        }
+        let evidence = {
+            let mut pool = self.evidence_pool.write();
+            pool.record_invalid_proof(address, height, round)
+        };
+        self.apply_evidence(evidence);
     }
 
     fn submit_block_proposal(&self, block: Block) -> ChainResult<String> {
@@ -2521,6 +2550,17 @@ impl NodeInner {
             &transactions,
         )?;
         let state_proof = prover.prove_state_transition(state_witness)?;
+        if self.config.rollout.feature_gates.recursive_proofs {
+            if let Err(err) = self.verifiers.verify_state(&state_proof) {
+                error!(
+                    height,
+                    block_hash = %block_hash,
+                    ?err,
+                    "local state proof rejected by verifier"
+                );
+                return Err(err);
+            }
+        }
 
         let previous_transactions = previous_block
             .as_ref()
@@ -2537,6 +2577,17 @@ impl NodeInner {
             Vec::new(),
         )?;
         let pruning_stark = prover.prove_pruning(pruning_witness)?;
+        if self.config.rollout.feature_gates.recursive_proofs {
+            if let Err(err) = self.verifiers.verify_pruning(&pruning_stark) {
+                error!(
+                    height,
+                    block_hash = %block_hash,
+                    ?err,
+                    "local pruning proof rejected by verifier"
+                );
+                return Err(err);
+            }
+        }
 
         let previous_recursive_stark = previous_block
             .as_ref()
@@ -2551,6 +2602,17 @@ impl NodeInner {
         let consensus_witness =
             prover.build_consensus_witness(&block_hash, &consensus_certificate)?;
         let consensus_proof = prover.prove_consensus(consensus_witness)?;
+        if self.config.rollout.feature_gates.recursive_proofs {
+            if let Err(err) = self.verifiers.verify_consensus(&consensus_proof) {
+                error!(
+                    height,
+                    block_hash = %block_hash,
+                    ?err,
+                    "local consensus proof rejected by verifier"
+                );
+                return Err(err);
+            }
+        }
         let uptime_chain_proofs: Vec<ChainProof> = uptime_proofs
             .iter()
             .map(|proof| {
@@ -2572,6 +2634,17 @@ impl NodeInner {
             header.height,
         )?;
         let recursive_stark = prover.prove_recursive(recursive_witness)?;
+        if self.config.rollout.feature_gates.recursive_proofs {
+            if let Err(err) = self.verifiers.verify_recursive(&recursive_stark) {
+                error!(
+                    height,
+                    block_hash = %block_hash,
+                    ?err,
+                    "local recursive proof rejected by verifier"
+                );
+                return Err(err);
+            }
+        }
 
         let stark_bundle = BlockProofBundle::new(
             transaction_proofs,
@@ -2701,7 +2774,64 @@ impl NodeInner {
         }
         block.bft_votes = recorded_votes;
 
-        block.verify(previous_block.as_ref(), &proposer_key)?;
+        block.verify_without_stark(previous_block.as_ref(), &proposer_key)?;
+
+        if self.config.rollout.feature_gates.recursive_proofs {
+            let round_number = round.round();
+            if let Err(err) = self.verifiers.verify_state(&block.stark.state_proof) {
+                warn!(
+                    height,
+                    round = round_number,
+                    proposer = %block.header.proposer,
+                    ?err,
+                    proof_kind = "state",
+                    "external block proof verification failed"
+                );
+                self.punish_invalid_proof(&block.header.proposer, height, round_number);
+                return Err(err);
+            }
+            if let Err(err) = self.verifiers.verify_pruning(&block.stark.pruning_proof) {
+                warn!(
+                    height,
+                    round = round_number,
+                    proposer = %block.header.proposer,
+                    ?err,
+                    proof_kind = "pruning",
+                    "external block proof verification failed"
+                );
+                self.punish_invalid_proof(&block.header.proposer, height, round_number);
+                return Err(err);
+            }
+            if let Err(err) = self
+                .verifiers
+                .verify_recursive(&block.stark.recursive_proof)
+            {
+                warn!(
+                    height,
+                    round = round_number,
+                    proposer = %block.header.proposer,
+                    ?err,
+                    proof_kind = "recursive",
+                    "external block proof verification failed"
+                );
+                self.punish_invalid_proof(&block.header.proposer, height, round_number);
+                return Err(err);
+            }
+            if let Some(proof) = &block.consensus_proof {
+                if let Err(err) = self.verifiers.verify_consensus(proof) {
+                    warn!(
+                        height,
+                        round = round_number,
+                        proposer = %block.header.proposer,
+                        ?err,
+                        proof_kind = "consensus",
+                        "external block proof verification failed"
+                    );
+                    self.punish_invalid_proof(&block.header.proposer, height, round_number);
+                    return Err(err);
+                }
+            }
+        }
 
         self.ledger.sync_epoch_for_height(height);
 
