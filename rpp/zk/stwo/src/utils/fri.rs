@@ -1,4 +1,4 @@
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::params::FieldElement;
 
@@ -46,10 +46,19 @@ impl FriQuery {
 }
 
 /// Deterministic wrapper that serialises official STWO FRI proofs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct FriProof {
-    encoded: Vec<u8>,
+    proof: OfficialFriProof<Blake2sMerkleHasher>,
 }
+
+impl PartialEq for FriProof {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes() == other.bytes()
+    }
+}
+
+impl Eq for FriProof {}
 
 impl FriProof {
     /// Create an empty proof wrapper.
@@ -59,13 +68,14 @@ impl FriProof {
 
     /// Construct a wrapper from an official proof.
     pub fn from_official(proof: &OfficialFriProof<Blake2sMerkleHasher>) -> Self {
-        let encoded = serde_json::to_vec(proof).expect("official FRI proof serialises");
-        Self { encoded }
+        Self {
+            proof: proof.clone(),
+        }
     }
 
     /// Deserialize the wrapper back into the official proof object.
     pub fn to_official(&self) -> OfficialFriProof<Blake2sMerkleHasher> {
-        serde_json::from_slice(&self.encoded).expect("official FRI proof deserialises")
+        self.proof.clone()
     }
 
     /// Build a deterministic placeholder proof based on the supplied field elements.
@@ -74,28 +84,8 @@ impl FriProof {
         Self::from_official(&proof)
     }
 
-    pub(crate) fn bytes(&self) -> &[u8] {
-        &self.encoded
-    }
-}
-
-impl Serialize for FriProof {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(&self.encoded))
-    }
-}
-
-impl<'de> Deserialize<'de> for FriProof {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let encoded = String::deserialize(deserializer)?;
-        let bytes = hex::decode(&encoded).map_err(DeError::custom)?;
-        Ok(Self { encoded: bytes })
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(&self.proof).expect("official FRI proof serialises")
     }
 }
 
@@ -116,7 +106,8 @@ impl FriProver {
 }
 
 pub fn compress_proof(proof: &FriProof) -> [u8; 32] {
-    digest_bytes(proof.bytes()).0
+    let encoded = proof.bytes();
+    digest_bytes(&encoded).0
 }
 
 fn digest_bytes(data: &[u8]) -> OfficialBlake2sHash {

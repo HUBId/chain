@@ -32,8 +32,8 @@ pub enum ProofCircuit {
 pub struct Proof {
     pub circuit: ProofCircuit,
     pub payload: ProofFormat,
-    pub commitment: String,
-    pub public_inputs: Vec<String>,
+    pub commitment: [u8; 32],
+    pub public_inputs: Vec<FieldElement>,
     pub trace: CircuitTrace,
     pub fri_proof: FriProof,
 }
@@ -132,13 +132,6 @@ fn commitment_elements(commitment: &[u8; 32]) -> [FieldElement; 2] {
     ]
 }
 
-fn encode_inputs(inputs: &[FieldElement]) -> Vec<String> {
-    inputs
-        .iter()
-        .map(|element| hex::encode(element.to_bytes()))
-        .collect()
-}
-
 fn build_proof<W>(circuit: ProofCircuit, witness: &W) -> Proof
 where
     W: WitnessExt,
@@ -147,13 +140,13 @@ where
     let public_inputs = witness.public_input_elements();
     let fri_inputs = witness.fri_values(&trace);
     let fri_proof = FriProver::prove(&fri_inputs);
-    let commitment = hex::encode(poseidon::hash_elements(&public_inputs));
+    let commitment = poseidon::hash_elements(&public_inputs);
 
     Proof {
         circuit,
         payload: witness.payload(),
         commitment,
-        public_inputs: encode_inputs(&public_inputs),
+        public_inputs,
         trace,
         fri_proof,
     }
@@ -225,7 +218,9 @@ mod tests {
     use crate::circuits::identity::IdentityGenesis;
     use crate::circuits::reputation::ReputationState;
     use crate::circuits::transaction::{Transaction, UtxoState};
-    use crate::verifier::{verify_block, verify_identity, verify_reputation, verify_tx};
+    use crate::verifier::{
+        verify_block, verify_identity, verify_reputation, verify_tx, VerificationError,
+    };
 
     fn sample_transaction() -> (Transaction, UtxoState) {
         let tx = Transaction {
@@ -270,21 +265,21 @@ mod tests {
     fn transaction_roundtrip() {
         let (tx, state) = sample_transaction();
         let proof = prove_tx(&tx, &state);
-        assert!(verify_tx(&tx, &proof));
+        assert!(verify_tx(&tx, &proof).is_ok());
     }
 
     #[test]
     fn reputation_roundtrip() {
         let state = sample_reputation();
         let proof = prove_reputation(&state);
-        assert!(verify_reputation(&state, &proof));
+        assert!(verify_reputation(&state, &proof).is_ok());
     }
 
     #[test]
     fn identity_roundtrip() {
         let (wallet_key, genesis) = sample_identity();
         let proof = prove_identity(&wallet_key, &genesis);
-        assert!(verify_identity(&genesis, &proof));
+        assert!(verify_identity(&genesis, &proof).is_ok());
     }
 
     #[test]
@@ -293,6 +288,29 @@ mod tests {
         let prev_proof = prove_identity(&wallet_key, &genesis);
         let block = sample_block();
         let proof = prove_block(&block, &prev_proof);
-        assert!(verify_block(&block, &proof));
+        assert!(verify_block(&block, &proof).is_ok());
+    }
+
+    #[test]
+    fn transaction_witness_mismatch() {
+        let (tx, state) = sample_transaction();
+        let mut other_tx = tx.clone();
+        other_tx.tx_id = "tx-002".into();
+        let proof = prove_tx(&tx, &state);
+        let err = verify_tx(&other_tx, &proof).expect_err("witness mismatch");
+        assert_eq!(
+            err,
+            VerificationError::WitnessMismatch("transaction payload")
+        );
+    }
+
+    #[test]
+    fn tampered_commitment_fails() {
+        let (tx, state) = sample_transaction();
+        let proof = prove_tx(&tx, &state);
+        let mut tampered = proof.clone();
+        tampered.commitment[0] ^= 0x01;
+        let err = verify_tx(&tx, &tampered).expect_err("commitment mismatch");
+        assert_eq!(err, VerificationError::CommitmentMismatch);
     }
 }
