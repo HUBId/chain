@@ -11,6 +11,7 @@ default = []
 official = ["dep:stwo-official"]
 prover = ["official", "stwo-official/prover"]
 fri = ["prover"]
+scaffold = []
 
 [dependencies]
 blake2 = "0.10"
