@@ -17,7 +17,8 @@ pub use messages::{Block, Commit, ConsensusProof, PreCommit, PreVote, Proposal, 
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};
 pub use validator::{
-    select_leader, select_validators, VRFOutput, Validator, ValidatorId, ValidatorSet,
+    select_leader, select_validators, VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry,
+    ValidatorSet,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
