@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime};
 use log::{error, info, warn};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
+use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::config::TelemetryConfig;
@@ -106,7 +107,7 @@ impl TelemetryWorker {
 
     async fn process_snapshot(&self, snapshot: TelemetrySnapshot) {
         if !self.config.enabled {
-            self.log_snapshot("telemetry disabled", &snapshot);
+            self.log_redacted("telemetry disabled");
             return;
         }
 
@@ -127,6 +128,10 @@ impl TelemetryWorker {
     }
 
     fn log_snapshot(&self, reason: &str, snapshot: &TelemetrySnapshot) {
+        if self.config.redact_logs.unwrap_or(false) {
+            self.log_redacted(reason);
+            return;
+        }
         match serde_json::to_string(snapshot) {
             Ok(payload) => {
                 info!(
@@ -138,6 +143,14 @@ impl TelemetryWorker {
                 error!(target: "telemetry", "failed to encode telemetry snapshot: {err}");
             }
         }
+    }
+
+    fn log_redacted(&self, reason: &str) {
+        let payload = json!({
+            "reason": reason,
+            "redacted": true,
+        });
+        info!(target: "telemetry", "{}", payload);
     }
 
     async fn dispatch_http(
@@ -196,14 +209,23 @@ mod tests {
     use axum::{Json, Router};
     use serde_json::Value;
     use std::collections::VecDeque;
-    use std::sync::Arc;
-    use std::sync::Mutex;
-    use std::sync::OnceLock;
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
     use tokio::sync::oneshot;
     use tokio::time::{Duration as TokioDuration, sleep};
 
+    fn acquire_log_guard() -> MutexGuard<'static, ()> {
+        static LOG_SERIAL_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
+        LOG_SERIAL_GUARD
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("log guard")
+    }
+
     #[tokio::test]
     async fn disabled_configuration_only_logs() {
+        let _guard = acquire_log_guard();
+        let logger = init_test_logger();
+        logger.drain();
         let (addr, counter, shutdown) = spawn_test_server().await;
         let config = TelemetryConfig {
             enabled: false,
@@ -212,6 +234,7 @@ mod tests {
             timeout_ms: 50,
             retry_max: 2,
             sample_interval_secs: 1,
+            redact_logs: Some(true),
         };
         let handle = TelemetryHandle::spawn(config);
         let snapshot = sample_snapshot();
@@ -220,12 +243,23 @@ mod tests {
         sleep(TokioDuration::from_millis(200)).await;
 
         assert_eq!(counter.lock().unwrap().len(), 0);
+        let logs = logger.drain();
+        assert!(
+            logs.iter()
+                .any(|entry| entry.contains("\"reason\":\"telemetry disabled\"")),
+            "expected a minimal telemetry log entry"
+        );
+        for entry in logs {
+            assert!(!entry.contains("0xdeadbeef"));
+            assert!(!entry.contains("node-1"));
+        }
         handle.shutdown().await.expect("shutdown");
         let _ = shutdown.send(());
     }
 
     #[tokio::test]
     async fn enabled_configuration_posts_json_payload() {
+        let _guard = acquire_log_guard();
         let (addr, counter, shutdown) = spawn_test_server().await;
         let endpoint = format!("http://{addr}");
         let config = TelemetryConfig {
@@ -235,6 +269,7 @@ mod tests {
             timeout_ms: 100,
             retry_max: 1,
             sample_interval_secs: 1,
+            redact_logs: None,
         };
         let handle = TelemetryHandle::spawn(config);
         let snapshot = sample_snapshot();
@@ -265,8 +300,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_endpoint_retries_and_logs() {
+    async fn redaction_flag_hides_snapshot_contents() {
+        let _guard = acquire_log_guard();
         let logger = init_test_logger();
+        logger.drain();
+        let config = TelemetryConfig {
+            enabled: true,
+            endpoint: None,
+            auth_token: None,
+            timeout_ms: 50,
+            retry_max: 0,
+            sample_interval_secs: 1,
+            redact_logs: Some(true),
+        };
+        let handle = TelemetryHandle::spawn(config);
+        let snapshot = sample_snapshot();
+
+        handle.send(snapshot).await.expect("snapshot queued");
+        sleep(TokioDuration::from_millis(200)).await;
+
+        let logs = logger.drain();
+        assert!(
+            logs.iter()
+                .any(|entry| entry.contains("\"reason\":\"no endpoint configured\"")),
+            "expected redacted log entry"
+        );
+        for entry in logs {
+            assert!(!entry.contains("0xdeadbeef"));
+            assert!(!entry.contains("node-1"));
+        }
+
+        handle.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn failed_endpoint_retries_and_logs() {
+        let _guard = acquire_log_guard();
+        let logger = init_test_logger();
+        logger.drain();
         let port = find_unused_port();
         let endpoint = format!("http://127.0.0.1:{port}");
         let config = TelemetryConfig {
@@ -276,6 +347,7 @@ mod tests {
             timeout_ms: 50,
             retry_max: 2,
             sample_interval_secs: 1,
+            redact_logs: None,
         };
         let handle = TelemetryHandle::spawn(config);
         let snapshot = sample_snapshot();
