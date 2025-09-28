@@ -7,7 +7,7 @@ use crate::circuits::transaction::{Transaction, TransactionWitness, UtxoState};
 use crate::circuits::{CircuitTrace, CircuitWitness};
 use crate::params::FieldElement;
 use crate::recursion::RecursiveProof;
-use crate::utils::fri::{compress_proof, FriProof, FriProver};
+use crate::utils::fri::{FriProof, FriProver};
 use crate::utils::poseidon;
 
 /// Supported proof encodings.  The prover currently emits JSON by default but
@@ -40,12 +40,12 @@ pub struct Proof {
 
 impl Proof {
     pub fn digest(&self) -> [u8; 32] {
-        let mut elements = self.public_inputs.clone();
-        elements.push(FieldElement::from_bytes(&self.commitment[..16]));
-        elements.push(FieldElement::from_bytes(&self.commitment[16..]));
-        let fri_digest = compress_proof(&self.fri_proof);
-        elements.push(FieldElement::from_bytes(&fri_digest[..16]));
-        elements.push(FieldElement::from_bytes(&fri_digest[16..]));
+        let encoded = bincode::serialize(self).expect("proof is serialisable");
+        let mut elements = Vec::with_capacity((encoded.len() + 15) / 16 + 1);
+        elements.push(FieldElement::from(encoded.len() as u128));
+        for chunk in encoded.chunks(16) {
+            elements.push(FieldElement::from_bytes(chunk));
+        }
         poseidon::hash_elements(&elements)
     }
 }
@@ -142,7 +142,10 @@ where
     let public_inputs = witness.public_input_elements();
     let fri_inputs = witness.fri_values(&trace);
     let fri_proof = FriProver::prove(&fri_inputs);
-    let commitment = poseidon::hash_elements(&public_inputs);
+    let mut commitment_inputs = public_inputs.clone();
+    commitment_inputs.extend(commitment_elements(&trace.trace_commitment));
+    commitment_inputs.extend(commitment_elements(&trace.constraint_commitment));
+    let commitment = poseidon::hash_elements(&commitment_inputs);
 
     Proof {
         circuit,
@@ -223,6 +226,29 @@ mod tests {
     use crate::verifier::{
         verify_block, verify_identity, verify_reputation, verify_tx, VerificationError,
     };
+    use serde_json::json;
+
+    #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+    struct DummyWitness {
+        inputs: Vec<FieldElement>,
+        trace: CircuitTrace,
+    }
+
+    impl CircuitWitness for DummyWitness {
+        fn label(&self) -> &'static str {
+            "dummy"
+        }
+    }
+
+    impl WitnessExt for DummyWitness {
+        fn trace_commitments(&self) -> CircuitTrace {
+            self.trace.clone()
+        }
+
+        fn public_input_elements(&self) -> Vec<FieldElement> {
+            self.inputs.clone()
+        }
+    }
 
     fn sample_transaction() -> (Transaction, UtxoState) {
         let tx = Transaction {
@@ -261,6 +287,69 @@ mod tests {
             tx_root: "tx-root".into(),
             reputation_root: "rep-root".into(),
         }
+    }
+
+    #[test]
+    fn commitment_includes_trace_commitments() {
+        let base_inputs = vec![FieldElement::from(7u128)];
+        let trace_a = CircuitTrace::new([0x11; 32], [0x22; 32], json!({"trace": "a"}));
+        let trace_b = CircuitTrace::new([0x33; 32], [0x44; 32], json!({"trace": "b"}));
+
+        let witness_a = DummyWitness {
+            inputs: base_inputs.clone(),
+            trace: trace_a,
+        };
+        let witness_b = DummyWitness {
+            inputs: base_inputs,
+            trace: trace_b,
+        };
+
+        let proof_a = build_proof(ProofCircuit::Transaction, &witness_a);
+        let proof_b = build_proof(ProofCircuit::Transaction, &witness_b);
+
+        assert_ne!(proof_a.commitment, proof_b.commitment);
+    }
+
+    #[test]
+    fn digest_distinguishes_payloads_with_shared_boundaries() {
+        let (tx, state) = sample_transaction();
+        let proof = prove_tx(&tx, &state);
+
+        let mut proof_a = proof.clone();
+        proof_a.payload = ProofFormat::Binary(b"prefix-AAAA-suffix".to_vec());
+
+        let mut proof_b = proof.clone();
+        proof_b.payload = ProofFormat::Binary(b"prefix-BBBB-suffix".to_vec());
+
+        assert_ne!(proof_a.digest(), proof_b.digest());
+    }
+
+    #[test]
+    fn digest_distinguishes_long_witness_inputs() {
+        let prefix = "prefix-123456789";
+        let suffix = "-suffix-xyz";
+        let tx_id_a = format!("{}-AAAA-{}", prefix, suffix);
+        let tx_id_b = format!("{}-BBBB-{}", prefix, suffix);
+
+        assert_eq!(&tx_id_a[..16], &tx_id_b[..16]);
+        assert_ne!(tx_id_a, tx_id_b);
+
+        let (base_tx, state) = sample_transaction();
+        let mut tx_a = base_tx.clone();
+        tx_a.tx_id = tx_id_a;
+        let mut tx_b = base_tx;
+        tx_b.tx_id = tx_id_b;
+
+        let mut proof_a = prove_tx(&tx_a, &state);
+        let proof_b = prove_tx(&tx_b, &state);
+
+        proof_a.fri_proof = proof_b.fri_proof.clone();
+        proof_a.commitment = proof_b.commitment;
+        proof_a.public_inputs = proof_b.public_inputs.clone();
+        proof_a.trace = proof_b.trace.clone();
+
+        assert_ne!(proof_a.payload, proof_b.payload);
+        assert_ne!(proof_a.digest(), proof_b.digest());
     }
 
     #[test]
