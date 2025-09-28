@@ -1,65 +1,214 @@
-use rand::{Rng, SeedableRng};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::core::vcs::blake2_hash::Blake2sHasher;
 use crate::params::FieldElement;
-use crate::utils::poseidon;
 
-/// Minimal representation of a FRI query.  The randomness is deterministic for
-/// repeatability during testing.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+use stwo_official::core::fields::m31::BaseField;
+use stwo_official::core::fields::qm31::{SecureField, SECURE_EXTENSION_DEGREE};
+use stwo_official::core::fri::{
+    FriLayerProof as OfficialFriLayerProof, FriProof as OfficialFriProof,
+};
+use stwo_official::core::poly::line::LinePoly;
+use stwo_official::core::queries::Queries as OfficialQueries;
+use stwo_official::core::vcs::blake2_hash::{
+    Blake2sHash as OfficialBlake2sHash, Blake2sHasher as OfficialBlake2sHasher,
+};
+use stwo_official::core::vcs::blake2_merkle::Blake2sMerkleHasher;
+use stwo_official::core::vcs::verifier::MerkleDecommitment;
+
+/// Wrapper around the official `Queries` structure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FriQuery {
-    pub index: usize,
-    pub value: FieldElement,
+    pub log_domain_size: u32,
+    pub positions: Vec<usize>,
 }
 
-/// Proof object returned by the simplified FRI protocol.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+impl FriQuery {
+    pub fn new(log_domain_size: u32, positions: Vec<usize>) -> Self {
+        Self {
+            log_domain_size,
+            positions,
+        }
+    }
+
+    pub fn to_official(&self) -> OfficialQueries {
+        OfficialQueries {
+            positions: self.positions.clone(),
+            log_domain_size: self.log_domain_size,
+        }
+    }
+
+    pub fn from_official(queries: OfficialQueries) -> Self {
+        Self {
+            log_domain_size: queries.log_domain_size,
+            positions: queries.positions,
+        }
+    }
+}
+
+/// Deterministic wrapper that serialises official STWO FRI proofs.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FriProof {
-    pub commitment: [u8; 32],
-    pub queries: Vec<FriQuery>,
+    encoded: Vec<u8>,
+}
+
+impl FriProof {
+    /// Create an empty proof wrapper.
+    pub fn empty() -> Self {
+        Self::from_elements(&[])
+    }
+
+    /// Construct a wrapper from an official proof.
+    pub fn from_official(proof: &OfficialFriProof<Blake2sMerkleHasher>) -> Self {
+        let encoded = serde_json::to_vec(proof).expect("official FRI proof serialises");
+        Self { encoded }
+    }
+
+    /// Deserialize the wrapper back into the official proof object.
+    pub fn to_official(&self) -> OfficialFriProof<Blake2sMerkleHasher> {
+        serde_json::from_slice(&self.encoded).expect("official FRI proof deserialises")
+    }
+
+    /// Build a deterministic placeholder proof based on the supplied field elements.
+    pub fn from_elements(values: &[FieldElement]) -> Self {
+        let proof = placeholder_proof(values);
+        Self::from_official(&proof)
+    }
+
+    pub(crate) fn bytes(&self) -> &[u8] {
+        &self.encoded
+    }
+}
+
+impl Serialize for FriProof {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(&self.encoded))
+    }
+}
+
+impl<'de> Deserialize<'de> for FriProof {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&encoded).map_err(DeError::custom)?;
+        Ok(Self { encoded: bytes })
+    }
 }
 
 pub struct FriProver;
 
 impl FriProver {
     pub fn commit(values: &[FieldElement]) -> [u8; 32] {
-        poseidon::hash_elements(values)
+        digest_elements(values).0
     }
 
     pub fn prove(values: &[FieldElement]) -> FriProof {
-        let commitment = Self::commit(values);
-        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        let queries: Vec<FriQuery> = values
-            .iter()
-            .enumerate()
-            .take(4)
-            .map(|(index, value)| FriQuery {
-                index: (index + rng.gen::<usize>()) % values.len().max(1),
-                value: value.clone(),
-            })
-            .collect();
-        FriProof {
-            commitment,
-            queries,
-        }
+        FriProof::from_elements(values)
     }
 
     pub fn verify(values: &[FieldElement], proof: &FriProof) -> bool {
-        let expected_commitment = Self::commit(values);
-        if expected_commitment != proof.commitment {
-            return false;
-        }
-        proof.queries.iter().all(|query| {
-            values
-                .get(query.index % values.len().max(1))
-                .map(|v| v == &query.value)
-                .unwrap_or(false)
-        })
+        &FriProof::from_elements(values) == proof
     }
 }
 
 pub fn compress_proof(proof: &FriProof) -> [u8; 32] {
-    let encoded = serde_json::to_vec(proof).expect("fri proof is serialisable");
-    Blake2sHasher::hash(&encoded).0
+    digest_bytes(proof.bytes()).0
+}
+
+fn digest_bytes(data: &[u8]) -> OfficialBlake2sHash {
+    OfficialBlake2sHasher::hash(data)
+}
+
+fn digest_elements(values: &[FieldElement]) -> OfficialBlake2sHash {
+    let mut buffer = Vec::with_capacity(values.len() * 16);
+    for value in values {
+        buffer.extend_from_slice(&value.to_bytes());
+    }
+    OfficialBlake2sHasher::hash(&buffer)
+}
+
+fn placeholder_proof(values: &[FieldElement]) -> OfficialFriProof<Blake2sMerkleHasher> {
+    let first_layer = OfficialFriLayerProof {
+        fri_witness: values.iter().map(field_to_secure).collect(),
+        decommitment: MerkleDecommitment {
+            hash_witness: Vec::new(),
+            column_witness: values.iter().map(field_to_base).collect(),
+        },
+        commitment: digest_elements(values),
+    };
+
+    let sum = values
+        .iter()
+        .copied()
+        .fold(FieldElement::zero(), |acc, value| acc + value);
+    let tail = SecureField::from(values.len() as u32);
+    let last_layer_poly = LinePoly::new(vec![field_to_secure(&sum), tail]);
+
+    OfficialFriProof {
+        first_layer,
+        inner_layers: Vec::new(),
+        last_layer_poly,
+    }
+}
+
+fn field_to_secure(value: &FieldElement) -> SecureField {
+    let mut bytes = [0u8; 16];
+    let repr = value.to_bytes();
+    let copy_len = repr.len().min(bytes.len());
+    let start = bytes.len() - copy_len;
+    bytes[start..].copy_from_slice(&repr[repr.len() - copy_len..]);
+
+    let mut limbs = [BaseField::from(0u32); SECURE_EXTENSION_DEGREE];
+    for (idx, chunk) in bytes.chunks(4).take(SECURE_EXTENSION_DEGREE).enumerate() {
+        limbs[idx] = BaseField::from(u32::from_be_bytes(chunk.try_into().unwrap()));
+    }
+    SecureField::from_m31_array(limbs)
+}
+
+fn field_to_base(value: &FieldElement) -> BaseField {
+    let bytes = value.to_bytes();
+    let last = bytes
+        .iter()
+        .rev()
+        .take(4)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut padded = [0u8; 4];
+    let offset = 4 - last.len();
+    padded[offset..].copy_from_slice(&last);
+    BaseField::from(u32::from_be_bytes(padded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placeholder_depends_on_values() {
+        let values = vec![FieldElement::one(), FieldElement::from(7u128)];
+        let different = vec![FieldElement::one(), FieldElement::from(11u128)];
+        assert_ne!(FriProver::prove(&values), FriProver::prove(&different));
+    }
+
+    #[test]
+    fn official_proof_roundtrip() {
+        let values = vec![FieldElement::from(3u128), FieldElement::from(17u128)];
+        let official = placeholder_proof(&values);
+
+        let wrapped = FriProof::from_official(&official);
+        let json = serde_json::to_string(&wrapped).unwrap();
+        let decoded: FriProof = serde_json::from_str(&json).unwrap();
+        assert_eq!(wrapped, decoded);
+
+        let recovered = decoded.to_official();
+        let recovered_bytes = serde_json::to_vec(&recovered).unwrap();
+        let official_bytes = serde_json::to_vec(&official).unwrap();
+        assert_eq!(recovered_bytes, official_bytes);
+        assert!(FriProver::verify(&values, &decoded));
+    }
 }

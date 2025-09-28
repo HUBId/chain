@@ -277,10 +277,7 @@ mod tests {
     }
 
     fn dummy_fri_proof() -> FriProof {
-        FriProof {
-            commitments: Vec::new(),
-            challenges: Vec::new(),
-        }
+        FriProof::empty()
     }
 
     fn make_proof(

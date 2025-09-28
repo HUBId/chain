@@ -294,10 +294,7 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof {
-                commitments: Vec::new(),
-                challenges: Vec::new(),
-            },
+            fri_proof: FriProof::empty(),
         })
     }
 
@@ -383,10 +380,7 @@ mod tests {
                 TraceSegment::new("dummy", vec!["column".to_string()], Vec::new()).unwrap(),
             )
             .unwrap(),
-            fri_proof: FriProof {
-                commitments: Vec::new(),
-                challenges: Vec::new(),
-            },
+            fri_proof: FriProof::empty(),
         }
     }
 
