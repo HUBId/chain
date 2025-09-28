@@ -62,6 +62,12 @@ impl ReputationWitness {
         trace_bytes.extend(self.adjustment.to_be_bytes());
         let trace_commitment = Blake2sHasher::hash(&trace_bytes).0;
 
-        CircuitTrace::new(trace_commitment, constraint_commitment)
+        let trace_data = serde_json::json!({
+            "state": self.state.clone(),
+            "timetoken": self.timetoken,
+            "adjustment": self.adjustment,
+        });
+
+        CircuitTrace::new(trace_commitment, constraint_commitment, trace_data)
     }
 }

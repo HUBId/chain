@@ -11,6 +11,7 @@ pub mod reputation;
 pub mod transaction;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Marker trait implemented by all circuit witnesses.
 pub trait CircuitWitness: Serialize + for<'de> Deserialize<'de> {
@@ -30,13 +31,20 @@ pub struct CircuitTrace {
     pub trace_commitment: [u8; 32],
     /// Additional domain specific commitment, typically Poseidon based.
     pub constraint_commitment: [u8; 32],
+    /// Full trace data used during proving for deterministic verification.
+    pub trace_data: Value,
 }
 
 impl CircuitTrace {
-    pub fn new(trace_commitment: [u8; 32], constraint_commitment: [u8; 32]) -> Self {
+    pub fn new(
+        trace_commitment: [u8; 32],
+        constraint_commitment: [u8; 32],
+        trace_data: Value,
+    ) -> Self {
         Self {
             trace_commitment,
             constraint_commitment,
+            trace_data,
         }
     }
 }

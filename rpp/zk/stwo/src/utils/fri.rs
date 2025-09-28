@@ -1,178 +1,229 @@
+use rand::{rngs::OsRng, rngs::StdRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
+use crate::core::vcs::blake2_hash::Blake2sHasher;
 use crate::params::FieldElement;
 
-use stwo_official::core::fields::m31::BaseField;
-use stwo_official::core::fields::qm31::{SecureField, SECURE_EXTENSION_DEGREE};
-use stwo_official::core::fri::{
-    FriLayerProof as OfficialFriLayerProof, FriProof as OfficialFriProof,
-};
-use stwo_official::core::poly::line::LinePoly;
-use stwo_official::core::queries::Queries as OfficialQueries;
-use stwo_official::core::vcs::blake2_hash::{
-    Blake2sHash as OfficialBlake2sHash, Blake2sHasher as OfficialBlake2sHasher,
-};
-use stwo_official::core::vcs::blake2_merkle::Blake2sMerkleHasher;
-use stwo_official::core::vcs::verifier::MerkleDecommitment;
+/// Number of random queries sampled for the lightweight FRI proof.
+const FRI_QUERY_COUNT: usize = 8;
 
-/// Wrapper around the official `Queries` structure.
+/// Authentication query for a Merkle opening.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FriQuery {
-    pub log_domain_size: u32,
-    pub positions: Vec<usize>,
+    pub position: usize,
+    pub authentication_path: Vec<[u8; 32]>,
 }
 
-impl FriQuery {
-    pub fn new(log_domain_size: u32, positions: Vec<usize>) -> Self {
-        Self {
-            log_domain_size,
-            positions,
-        }
-    }
-
-    pub fn to_official(&self) -> OfficialQueries {
-        OfficialQueries {
-            positions: self.positions.clone(),
-            log_domain_size: self.log_domain_size,
-        }
-    }
-
-    pub fn from_official(queries: OfficialQueries) -> Self {
-        Self {
-            log_domain_size: queries.log_domain_size,
-            positions: queries.positions,
-        }
-    }
-}
-
-/// Deterministic wrapper that serialises official STWO FRI proofs.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(transparent)]
+/// Lightweight FRI proof consisting of a Merkle commitment and random queries.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FriProof {
-    proof: OfficialFriProof<Blake2sMerkleHasher>,
+    seed: [u8; 32],
+    commitment: [u8; 32],
+    queries: Vec<FriQuery>,
 }
-
-impl PartialEq for FriProof {
-    fn eq(&self, other: &Self) -> bool {
-        self.bytes() == other.bytes()
-    }
-}
-
-impl Eq for FriProof {}
 
 impl FriProof {
-    /// Create an empty proof wrapper.
+    /// Create an empty proof wrapper used by tests and default values.
     pub fn empty() -> Self {
-        Self::from_elements(&[])
-    }
-
-    /// Construct a wrapper from an official proof.
-    pub fn from_official(proof: &OfficialFriProof<Blake2sMerkleHasher>) -> Self {
         Self {
-            proof: proof.clone(),
+            seed: [0u8; 32],
+            commitment: empty_hash(),
+            queries: Vec::new(),
         }
-    }
-
-    /// Deserialize the wrapper back into the official proof object.
-    pub fn to_official(&self) -> OfficialFriProof<Blake2sMerkleHasher> {
-        self.proof.clone()
-    }
-
-    /// Build a deterministic placeholder proof based on the supplied field elements.
-    pub fn from_elements(values: &[FieldElement]) -> Self {
-        let proof = placeholder_proof(values);
-        Self::from_official(&proof)
     }
 
     pub(crate) fn bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(&self.proof).expect("official FRI proof serialises")
+        serde_json::to_vec(self).expect("fri proof is serialisable")
     }
 }
 
 pub struct FriProver;
 
 impl FriProver {
+    /// Commit to a list of field elements by hashing them into a Merkle tree.
     pub fn commit(values: &[FieldElement]) -> [u8; 32] {
-        digest_elements(values).0
+        let leaves: Vec<[u8; 32]> = values.iter().map(hash_leaf).collect();
+        merkle_root(&leaves)
     }
 
+    /// Produce a proof by sampling random query positions and returning their authentication paths.
     pub fn prove(values: &[FieldElement]) -> FriProof {
-        FriProof::from_elements(values)
+        let seed = random_seed();
+        let leaves: Vec<[u8; 32]> = values.iter().map(hash_leaf).collect();
+        let tree = build_merkle_tree(&leaves);
+        let commitment = tree.last().unwrap()[0];
+        let query_count = desired_query_count(values.len());
+        let positions = sample_positions(seed, values.len(), query_count);
+        let queries = positions
+            .into_iter()
+            .map(|position| FriQuery {
+                position,
+                authentication_path: authentication_path(&tree, position),
+            })
+            .collect();
+
+        FriProof {
+            seed,
+            commitment,
+            queries,
+        }
     }
 
+    /// Verify a proof by recomputing the expected commitment and checking all Merkle openings.
     pub fn verify(values: &[FieldElement], proof: &FriProof) -> bool {
-        &FriProof::from_elements(values) == proof
+        let expected_commitment = Self::commit(values);
+        if proof.commitment != expected_commitment {
+            return false;
+        }
+
+        let query_count = desired_query_count(values.len());
+        if proof.queries.len() != query_count {
+            return false;
+        }
+
+        let expected_positions = sample_positions(proof.seed, values.len(), query_count);
+        for (query, expected_position) in proof.queries.iter().zip(expected_positions.iter()) {
+            if query.position != *expected_position || query.position >= values.len() {
+                return false;
+            }
+            if !verify_path(
+                &values[query.position],
+                query.position,
+                &proof.commitment,
+                &query.authentication_path,
+            ) {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
+/// Compress a proof by hashing its serialised representation.
 pub fn compress_proof(proof: &FriProof) -> [u8; 32] {
     let encoded = proof.bytes();
-    digest_bytes(&encoded).0
+    Blake2sHasher::hash(&encoded).0
 }
 
-fn digest_bytes(data: &[u8]) -> OfficialBlake2sHash {
-    OfficialBlake2sHasher::hash(data)
+fn desired_query_count(len: usize) -> usize {
+    len.min(FRI_QUERY_COUNT)
 }
 
-fn digest_elements(values: &[FieldElement]) -> OfficialBlake2sHash {
-    let mut buffer = Vec::with_capacity(values.len() * 16);
-    for value in values {
-        buffer.extend_from_slice(&value.to_bytes());
+fn random_seed() -> [u8; 32] {
+    let mut seed = [0u8; 32];
+    OsRng.fill_bytes(&mut seed);
+    seed
+}
+
+fn empty_hash() -> [u8; 32] {
+    Blake2sHasher::hash(b"stwo-empty").0
+}
+
+fn hash_leaf(value: &FieldElement) -> [u8; 32] {
+    Blake2sHasher::hash(&value.to_bytes()).0
+}
+
+fn hash_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut buffer = [0u8; 64];
+    buffer[..32].copy_from_slice(left);
+    buffer[32..].copy_from_slice(right);
+    Blake2sHasher::hash(&buffer).0
+}
+
+fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return empty_hash();
     }
-    OfficialBlake2sHasher::hash(&buffer)
-}
-
-fn placeholder_proof(values: &[FieldElement]) -> OfficialFriProof<Blake2sMerkleHasher> {
-    let first_layer = OfficialFriLayerProof {
-        fri_witness: values.iter().map(field_to_secure).collect(),
-        decommitment: MerkleDecommitment {
-            hash_witness: Vec::new(),
-            column_witness: values.iter().map(field_to_base).collect(),
-        },
-        commitment: digest_elements(values),
-    };
-
-    let sum = values
-        .iter()
-        .copied()
-        .fold(FieldElement::zero(), |acc, value| acc + value);
-    let tail = SecureField::from(values.len() as u32);
-    let last_layer_poly = LinePoly::new(vec![field_to_secure(&sum), tail]);
-
-    OfficialFriProof {
-        first_layer,
-        inner_layers: Vec::new(),
-        last_layer_poly,
+    let mut level = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity((level.len() + 1) / 2);
+        for chunk in level.chunks(2) {
+            let left = chunk[0];
+            let right = if chunk.len() == 2 {
+                chunk[1]
+            } else {
+                empty_hash()
+            };
+            next.push(hash_pair(&left, &right));
+        }
+        level = next;
     }
+    level[0]
 }
 
-fn field_to_secure(value: &FieldElement) -> SecureField {
-    let mut bytes = [0u8; 16];
-    let repr = value.to_bytes();
-    let copy_len = repr.len().min(bytes.len());
-    let start = bytes.len() - copy_len;
-    bytes[start..].copy_from_slice(&repr[repr.len() - copy_len..]);
-
-    let mut limbs = [BaseField::from(0u32); SECURE_EXTENSION_DEGREE];
-    for (idx, chunk) in bytes.chunks(4).take(SECURE_EXTENSION_DEGREE).enumerate() {
-        limbs[idx] = BaseField::from(u32::from_be_bytes(chunk.try_into().unwrap()));
+fn build_merkle_tree(leaves: &[[u8; 32]]) -> Vec<Vec<[u8; 32]>> {
+    if leaves.is_empty() {
+        return vec![vec![empty_hash()]];
     }
-    SecureField::from_m31_array(limbs)
+
+    let mut levels = Vec::new();
+    let mut current = leaves.to_vec();
+    levels.push(current.clone());
+
+    while current.len() > 1 {
+        let mut next = Vec::with_capacity((current.len() + 1) / 2);
+        for chunk in current.chunks(2) {
+            let left = chunk[0];
+            let right = if chunk.len() == 2 {
+                chunk[1]
+            } else {
+                empty_hash()
+            };
+            next.push(hash_pair(&left, &right));
+        }
+        current = next;
+        levels.push(current.clone());
+    }
+
+    levels
 }
 
-fn field_to_base(value: &FieldElement) -> BaseField {
-    let bytes = value.to_bytes();
-    let last = bytes
-        .iter()
-        .rev()
-        .take(4)
-        .rev()
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut padded = [0u8; 4];
-    let offset = 4 - last.len();
-    padded[offset..].copy_from_slice(&last);
-    BaseField::from(u32::from_be_bytes(padded))
+fn authentication_path(levels: &[Vec<[u8; 32]>], mut index: usize) -> Vec<[u8; 32]> {
+    if levels.len() <= 1 {
+        return Vec::new();
+    }
+
+    let mut path = Vec::with_capacity(levels.len() - 1);
+    for level in levels.iter().take(levels.len() - 1) {
+        let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
+        let sibling = if sibling_index < level.len() {
+            level[sibling_index]
+        } else {
+            empty_hash()
+        };
+        path.push(sibling);
+        index /= 2;
+    }
+    path
+}
+
+fn verify_path(value: &FieldElement, mut index: usize, root: &[u8; 32], path: &[[u8; 32]]) -> bool {
+    let mut node = hash_leaf(value);
+    for sibling in path {
+        if index % 2 == 0 {
+            node = hash_pair(&node, sibling);
+        } else {
+            node = hash_pair(sibling, &node);
+        }
+        index /= 2;
+    }
+    node == *root
+}
+
+fn sample_positions(seed: [u8; 32], domain: usize, count: usize) -> Vec<usize> {
+    if domain == 0 || count == 0 {
+        return Vec::new();
+    }
+
+    let mut rng = StdRng::from_seed(seed);
+    let mut positions = BTreeSet::new();
+    while positions.len() < count {
+        let draw = (rng.next_u64() as usize) % domain;
+        positions.insert(draw);
+    }
+    positions.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -180,26 +231,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn placeholder_depends_on_values() {
-        let values = vec![FieldElement::one(), FieldElement::from(7u128)];
-        let different = vec![FieldElement::one(), FieldElement::from(11u128)];
-        assert_ne!(FriProver::prove(&values), FriProver::prove(&different));
+    fn proof_roundtrip_succeeds() {
+        let values = vec![FieldElement::from(5u128), FieldElement::from(42u128)];
+        let proof = FriProver::prove(&values);
+        assert!(FriProver::verify(&values, &proof));
     }
 
     #[test]
-    fn official_proof_roundtrip() {
-        let values = vec![FieldElement::from(3u128), FieldElement::from(17u128)];
-        let official = placeholder_proof(&values);
+    fn proof_detects_tampering() {
+        let values = vec![FieldElement::from(7u128), FieldElement::from(11u128)];
+        let mut proof = FriProver::prove(&values);
+        assert!(FriProver::verify(&values, &proof));
 
-        let wrapped = FriProof::from_official(&official);
-        let json = serde_json::to_string(&wrapped).unwrap();
-        let decoded: FriProof = serde_json::from_str(&json).unwrap();
-        assert_eq!(wrapped, decoded);
+        // Corrupt one authentication path entry.
+        if let Some(first_query) = proof.queries.first_mut() {
+            if let Some(first_hash) = first_query.authentication_path.first_mut() {
+                first_hash[0] ^= 0xFF;
+            }
+        }
+        assert!(!FriProver::verify(&values, &proof));
+    }
 
-        let recovered = decoded.to_official();
-        let recovered_bytes = serde_json::to_vec(&recovered).unwrap();
-        let official_bytes = serde_json::to_vec(&official).unwrap();
-        assert_eq!(recovered_bytes, official_bytes);
-        assert!(FriProver::verify(&values, &decoded));
+    #[test]
+    fn proofs_use_random_seeds() {
+        let values = vec![FieldElement::from(3u128), FieldElement::from(9u128)];
+        let proof_a = FriProver::prove(&values);
+        let proof_b = FriProver::prove(&values);
+        assert_ne!(proof_a.seed, proof_b.seed);
     }
 }

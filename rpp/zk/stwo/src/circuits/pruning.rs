@@ -55,6 +55,17 @@ impl PruningWitness {
         trace_bytes.extend(merkle_root);
         let trace_commitment = Blake2sHasher::hash(&trace_bytes).0;
 
-        CircuitTrace::new(trace_commitment, constraint_commitment)
+        let trace_data = serde_json::json!({
+            "inputs": self.inputs.clone(),
+            "previous_digest": hex::encode(self.inputs.previous_proof_digest),
+            "leaf_hashes": self
+                .leaf_hashes
+                .iter()
+                .map(|leaf| hex::encode(leaf))
+                .collect::<Vec<_>>(),
+            "merkle_root": hex::encode(merkle_root),
+        });
+
+        CircuitTrace::new(trace_commitment, constraint_commitment, trace_data)
     }
 }

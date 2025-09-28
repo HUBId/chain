@@ -79,6 +79,15 @@ impl TransactionWitness {
         trace_bytes.extend(self.ownership_seal.as_bytes());
         let trace_commitment = Blake2sHasher::hash(&trace_bytes).0;
 
-        CircuitTrace::new(trace_commitment, constraint_commitment)
+        let trace_data = serde_json::json!({
+            "transaction": self.tx.clone(),
+            "utxo_state": self.state.clone(),
+            "inputs": self.tx.inputs.clone(),
+            "outputs": self.tx.outputs.clone(),
+            "balance_sum": self.balance_sum,
+            "ownership_seal": self.ownership_seal.clone(),
+        });
+
+        CircuitTrace::new(trace_commitment, constraint_commitment, trace_data)
     }
 }
