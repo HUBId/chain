@@ -544,13 +544,14 @@ mod tests {
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
-    use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
     use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
     use stwo::core::vcs::blake2_hash::Blake2sHasher;
     use tempfile::tempdir;
+    use tracing_test::traced_test;
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
@@ -936,6 +937,207 @@ mod tests {
             block.header.state_root
         );
         assert_eq!(node_b.inner.chain_tip.read().height, block.header.height);
+    }
+
+    #[test]
+    #[traced_test]
+    fn rejects_external_block_with_tampered_state_fri_proof() {
+        let (_tmp_a, mut config_a) = temp_config();
+        let (_tmp_b, mut config_b) = temp_config();
+
+        config_a.rollout.feature_gates.pruning = false;
+        config_b.rollout.feature_gates.pruning = false;
+        config_a.rollout.feature_gates.consensus_enforcement = false;
+        config_b.rollout.feature_gates.consensus_enforcement = false;
+
+        let key_a = load_or_generate_keypair(&config_a.key_path).expect("generate key a");
+        let key_b = load_or_generate_keypair(&config_b.key_path).expect("generate key b");
+        let address_a = address_from_public_key(&key_a.public);
+        let address_b = address_from_public_key(&key_b.public);
+
+        let genesis_accounts = vec![
+            GenesisAccount {
+                address: address_a.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            },
+            GenesisAccount {
+                address: address_b.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            },
+        ];
+        config_a.genesis.accounts = genesis_accounts.clone();
+        config_b.genesis.accounts = genesis_accounts;
+
+        let node_a = Node::new(config_a).expect("node a");
+        let node_b = Node::new(config_b).expect("node b");
+
+        let height = node_a.inner.chain_tip.read().height + 1;
+        let request = attested_request(&node_a.inner.ledger, height);
+        node_a
+            .inner
+            .submit_identity(request)
+            .expect("submit identity");
+        node_a.inner.produce_block().expect("produce block");
+
+        let block = node_a
+            .inner
+            .storage
+            .read_block(height)
+            .expect("read block")
+            .expect("block exists");
+        assert_eq!(block.header.proposer, address_a);
+
+        let previous_hash_bytes =
+            hex::decode(&block.header.previous_hash).expect("decode prev hash");
+        let mut seed = [0u8; 32];
+        if !previous_hash_bytes.is_empty() {
+            seed.copy_from_slice(&previous_hash_bytes);
+        }
+
+        let accounts_snapshot = node_b.inner.ledger.accounts_snapshot();
+        let (validators, observers) = classify_participants(&accounts_snapshot);
+        let proposer_candidate = validators
+            .iter()
+            .find(|candidate| candidate.address == block.header.proposer)
+            .expect("proposer candidate")
+            .clone();
+
+        node_b
+            .inner
+            .ledger
+            .sync_epoch_for_height(block.header.height);
+        let epoch = node_b.inner.ledger.current_epoch();
+
+        let tier = match block.header.leader_tier.as_str() {
+            "New" => Tier::Tl0,
+            "Validated" => Tier::Tl1,
+            "Available" => Tier::Tl2,
+            "Committed" => Tier::Tl3,
+            "Reliable" => Tier::Tl4,
+            "Trusted" => Tier::Tl5,
+            other => panic!("unexpected leader tier: {other}"),
+        };
+        let tier_seed = vrf::derive_tier_seed(
+            &proposer_candidate.address,
+            proposer_candidate.timetoke_hours,
+        );
+        let input = PoseidonVrfInput::new(seed, epoch, tier_seed);
+        let randomness = Natural::from_str(&block.header.randomness).expect("parse randomness");
+        let proof = VrfProof {
+            randomness,
+            preoutput: block.header.vrf_preoutput.clone(),
+            proof: block.header.vrf_proof.clone(),
+        };
+        let public_key = if block.header.vrf_public_key.trim().is_empty() {
+            None
+        } else {
+            Some(vrf_public_key_from_hex(&block.header.vrf_public_key).expect("vrf key"))
+        };
+        let mut pool = VrfSubmissionPool::new();
+        pool.insert(VrfSubmission {
+            address: block.header.proposer.clone(),
+            public_key,
+            input,
+            proof,
+            tier,
+            timetoke_hours: block.header.leader_timetoke,
+        });
+
+        let mut round = ConsensusRound::new(
+            block.header.height,
+            block.consensus.round,
+            seed,
+            node_b.inner.config.target_validator_count,
+            validators,
+            observers,
+            &pool,
+        );
+        round.set_block_hash(block.hash.clone());
+        for record in &block.consensus.pre_votes {
+            round
+                .register_prevote(&record.vote)
+                .expect("register prevote");
+        }
+        for record in &block.consensus.pre_commits {
+            round
+                .register_precommit(&record.vote)
+                .expect("register precommit");
+        }
+        assert!(round.commit_reached());
+
+        let mut tampered_block = block.clone();
+        let tampered_state_proof = match tampered_block.stark.state_proof.clone() {
+            ChainProof::Stwo(mut stark) => {
+                stark.fri_proof = FriProof::empty();
+                ChainProof::Stwo(stark)
+            }
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => panic!("expected STWO state proof"),
+        };
+        tampered_block.stark.state_proof = tampered_state_proof;
+
+        let previous_block = if tampered_block.header.height == 0 {
+            None
+        } else {
+            node_b
+                .inner
+                .storage
+                .read_block(tampered_block.header.height - 1)
+                .expect("read previous block")
+        };
+
+        let tip_before = node_b.inner.storage.tip().expect("tip before");
+        let chain_tip_before = *node_b.inner.chain_tip.read();
+        let epoch_before = node_b.inner.ledger.current_epoch();
+
+        let result = node_b.inner.finalize_block(FinalizationContext::External(
+            ExternalFinalizationContext {
+                round,
+                block: tampered_block.clone(),
+                previous_block,
+                archived_votes: tampered_block.bft_votes.clone(),
+            },
+        ));
+
+        let err = match result {
+            Err(err) => err,
+            Ok(_) => panic!("expected tampered block to be rejected"),
+        };
+        match err {
+            ChainError::Crypto(message) => {
+                assert!(message.contains("fri proof mismatch"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert!(logs_contain("external block proof verification failed"));
+
+        let tip_after = node_b.inner.storage.tip().expect("tip after");
+        match (tip_before, tip_after) {
+            (None, None) => {}
+            (Some(before), Some(after)) => {
+                assert_eq!(after.height, before.height);
+                assert_eq!(after.new_state_root, before.new_state_root);
+            }
+            (before, after) => {
+                panic!("tip changed after failed finalization: before={before:?} after={after:?}")
+            }
+        }
+
+        let chain_tip_after = *node_b.inner.chain_tip.read();
+        assert_eq!(chain_tip_after.height, chain_tip_before.height);
+        assert_eq!(chain_tip_after.last_hash, chain_tip_before.last_hash);
+
+        assert_eq!(node_b.inner.ledger.current_epoch(), epoch_before);
+
+        let missing = node_b
+            .inner
+            .storage
+            .read_block(tampered_block.header.height)
+            .expect("read tampered height");
+        assert!(missing.is_none());
     }
 }
 
