@@ -160,10 +160,7 @@ fn sample_transaction_bundle(to: &str) -> TransactionProofBundle {
         trace: ExecutionTrace {
             segments: Vec::new(),
         },
-        fri_proof: FriProof {
-            commitments: Vec::new(),
-            challenges: Vec::new(),
-        },
+        fri_proof: FriProof::empty(),
     };
 
     TransactionProofBundle::new(signed_tx, ChainProof::Stwo(proof))

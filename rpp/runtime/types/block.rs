@@ -1549,10 +1549,7 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof {
-                commitments: Vec::new(),
-                challenges: Vec::new(),
-            },
+            fri_proof: FriProof::empty(),
         })
     }
 
@@ -1688,10 +1685,7 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof {
-                commitments: Vec::new(),
-                challenges: Vec::new(),
-            },
+            fri_proof: FriProof::empty(),
         }
     }
 

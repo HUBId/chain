@@ -1,34 +1,146 @@
 //! Common proof artifacts emitted by the STWO scaffolding.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 
 use super::circuit::ExecutionTrace;
 use super::params::FieldElement;
 use super::params::{PoseidonHasher, StarkParameters};
 
-/// Authentication query associated with a polynomial evaluation.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+use stwo::stwo_official::core::fields::m31::BaseField;
+use stwo::stwo_official::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
+use stwo::stwo_official::core::fri::FriProof as OfficialFriProof;
+use stwo::stwo_official::core::poly::line::LinePoly;
+use stwo::stwo_official::core::vcs::blake2_hash::{
+    Blake2sHash as OfficialBlake2sHash, Blake2sHasher as OfficialBlake2sHasher,
+};
+use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleHasher;
+use stwo::stwo_official::core::vcs::verifier::MerkleDecommitment;
+
+/// Wrapper around the official `Queries` structure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FriQuery {
-    pub index: usize,
-    pub evaluation: FieldElement,
-    pub auth_path: Vec<FieldElement>,
+    pub log_domain_size: u32,
+    pub positions: Vec<usize>,
 }
 
-/// Commitment to a single execution-trace column.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PolynomialCommitment {
-    pub segment: String,
-    pub column: String,
-    pub domain_size: usize,
-    pub merkle_root: FieldElement,
-    pub queries: Vec<FriQuery>,
+impl FriQuery {
+    pub fn new(log_domain_size: u32, positions: Vec<usize>) -> Self {
+        Self {
+            log_domain_size,
+            positions,
+        }
+    }
 }
 
 /// Deterministic FRI-style proof emitted by the prover scaffold.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FriProof {
-    pub commitments: Vec<PolynomialCommitment>,
-    pub challenges: Vec<FieldElement>,
+    encoded: Vec<u8>,
+}
+
+impl FriProof {
+    pub fn empty() -> Self {
+        Self::from_elements(&[])
+    }
+
+    pub fn from_official(proof: &OfficialFriProof<Blake2sMerkleHasher>) -> Self {
+        let encoded = serde_json::to_vec(proof).expect("official FRI proof serialises");
+        Self { encoded }
+    }
+
+    pub fn to_official(&self) -> OfficialFriProof<Blake2sMerkleHasher> {
+        serde_json::from_slice(&self.encoded).expect("official FRI proof deserialises")
+    }
+
+    pub fn from_elements(values: &[FieldElement]) -> Self {
+        let proof = placeholder_proof(values);
+        Self::from_official(&proof)
+    }
+}
+
+impl Serialize for FriProof {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(&self.encoded))
+    }
+}
+
+impl<'de> Deserialize<'de> for FriProof {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&encoded).map_err(DeError::custom)?;
+        Ok(Self { encoded: bytes })
+    }
+}
+
+fn placeholder_proof(values: &[FieldElement]) -> OfficialFriProof<Blake2sMerkleHasher> {
+    let first_layer = stwo::stwo_official::core::fri::FriLayerProof {
+        fri_witness: values.iter().map(field_to_secure).collect(),
+        decommitment: MerkleDecommitment {
+            hash_witness: Vec::new(),
+            column_witness: values.iter().map(field_to_base).collect(),
+        },
+        commitment: digest_elements(values),
+    };
+
+    let sum_secure = sum_values(values)
+        .map(|value| field_to_secure(&value))
+        .unwrap_or_else(|| SecureField::from(0u32));
+    let len_secure = SecureField::from(values.len() as u32);
+    let last_layer_poly = LinePoly::new(vec![sum_secure, len_secure]);
+
+    OfficialFriProof {
+        first_layer,
+        inner_layers: Vec::new(),
+        last_layer_poly,
+    }
+}
+
+fn digest_elements(values: &[FieldElement]) -> OfficialBlake2sHash {
+    let mut buffer = Vec::new();
+    for value in values {
+        buffer.extend_from_slice(&field_bytes(value));
+    }
+    OfficialBlake2sHasher::hash(&buffer)
+}
+
+fn field_to_secure(value: &FieldElement) -> SecureField {
+    let bytes = field_bytes(value);
+    let mut limbs = [BaseField::from(0u32); SECURE_EXTENSION_DEGREE];
+    for (idx, chunk) in bytes.chunks(4).take(SECURE_EXTENSION_DEGREE).enumerate() {
+        limbs[idx] = BaseField::from(u32::from_be_bytes(chunk.try_into().unwrap()));
+    }
+    SecureField::from_m31_array(limbs)
+}
+
+fn field_to_base(value: &FieldElement) -> BaseField {
+    let bytes = field_bytes(value);
+    BaseField::from(u32::from_be_bytes(
+        bytes[bytes.len() - 4..].try_into().unwrap(),
+    ))
+}
+
+fn field_bytes(value: &FieldElement) -> [u8; 16] {
+    let mut bytes = [0u8; 16];
+    let repr = value.to_bytes();
+    let copy_len = repr.len().min(bytes.len());
+    let start = bytes.len() - copy_len;
+    bytes[start..].copy_from_slice(&repr[repr.len() - copy_len..]);
+    bytes
+}
+
+fn sum_values(values: &[FieldElement]) -> Option<FieldElement> {
+    let mut iter = values.iter();
+    let mut acc = iter.next()?.clone();
+    for value in iter {
+        acc = acc.add(value).expect("field moduli match");
+    }
+    Some(acc)
 }
 
 /// Enumeration describing which circuit produced a proof artifact.

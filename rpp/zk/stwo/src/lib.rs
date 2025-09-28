@@ -17,3 +17,6 @@ pub mod verifier;
 pub use prover::{prove_block, prove_identity, prove_reputation, prove_tx, Proof, ProofFormat};
 pub use recursion::{link_proofs, RecursiveProof};
 pub use verifier::{verify_block, verify_identity, verify_reputation, verify_tx};
+
+#[cfg(feature = "official")]
+pub use stwo_official;
