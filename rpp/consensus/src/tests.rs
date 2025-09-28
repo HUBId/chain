@@ -7,7 +7,9 @@ use libp2p::PeerId;
 
 use super::bft_loop::{run_bft_loop, shutdown, submit_precommit, submit_prevote, submit_proposal};
 use super::evidence::EvidenceType;
-use super::messages::{Block, BlockId, ConsensusProof, PreCommit, PreVote, Proposal};
+use super::messages::{
+    Block, BlockId, ConsensusProof, PreCommit, PreVote, ProofVerificationError, Proposal,
+};
 use super::state::{ConsensusConfig, GenesisConfig};
 
 use super::validator::{
@@ -133,6 +135,19 @@ fn build_precommit(
     }
 }
 
+fn build_consensus_proof(label: &str) -> ConsensusProof {
+    let commitments = vec![
+        format!("{label}-validator-a"),
+        format!("{label}-validator-b"),
+    ];
+    ConsensusProof::new(
+        format!("commitment-{label}"),
+        format!("witness-{label}"),
+        commitments.len() as u32,
+        commitments,
+    )
+}
+
 fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -181,12 +196,7 @@ fn bft_flow_reaches_commit() {
             payload: serde_json::json!({"tx": []}),
             timestamp: 0,
         },
-        proof: ConsensusProof {
-            commitment: "commitment-1".into(),
-            witness_hash: "witness-1".into(),
-            recursion_depth: 0,
-            valid: true,
-        },
+        proof: build_consensus_proof("bft-1"),
         leader_id: leader.id.clone(),
     };
 
@@ -271,12 +281,7 @@ fn detects_conflicting_prevotes_triggers_slash() {
             payload: serde_json::json!({"tx": [1]}),
             timestamp: 10,
         },
-        proof: ConsensusProof {
-            commitment: "commitment-a".into(),
-            witness_hash: "witness-a".into(),
-            recursion_depth: 0,
-            valid: true,
-        },
+        proof: build_consensus_proof("double-a"),
         leader_id: leader.id.clone(),
     };
 
@@ -287,12 +292,7 @@ fn detects_conflicting_prevotes_triggers_slash() {
             payload: serde_json::json!({"tx": [2]}),
             timestamp: 20,
         },
-        proof: ConsensusProof {
-            commitment: "commitment-b".into(),
-            witness_hash: "witness-b".into(),
-            recursion_depth: 0,
-            valid: true,
-        },
+        proof: build_consensus_proof("double-b"),
         leader_id: leader.id.clone(),
     };
 
@@ -391,12 +391,7 @@ fn timeout_triggers_new_proposal_flow() {
             payload: serde_json::json!({"tx": []}),
             timestamp: 0,
         },
-        proof: ConsensusProof {
-            commitment: "manual-commitment".into(),
-            witness_hash: "manual-witness".into(),
-            recursion_depth: 0,
-            valid: true,
-        },
+        proof: build_consensus_proof("manual"),
         leader_id: leader.id.clone(),
     };
     let manual_hash = manual_proposal.block_hash();
@@ -447,6 +442,36 @@ fn select_validators_rejects_manipulated_proof() {
     let set = select_validators(epoch, &outputs, &ledger);
     assert_eq!(set.validators.len(), 1);
     assert_eq!(set.validators[0].id, "validator-1");
+}
+
+#[test]
+fn consensus_proof_rejects_tampered_commitment() {
+    let mut proof = build_consensus_proof("tamper");
+    proof.commitments[0].push('x');
+
+    assert_eq!(
+        proof.verify(),
+        Err(ProofVerificationError::InvalidAggregationSignature)
+    );
+}
+
+#[test]
+fn consensus_proof_rejects_tampered_signature() {
+    let mut proof = build_consensus_proof("tamper-sig");
+    proof.aggregated_signature[0] ^= 0xFF;
+
+    assert_eq!(
+        proof.verify(),
+        Err(ProofVerificationError::InvalidAggregationSignature)
+    );
+}
+
+#[test]
+fn consensus_proof_rejects_tampered_hmac() {
+    let mut proof = build_consensus_proof("tamper-mac");
+    proof.hmac[0] ^= 0xFF;
+
+    assert_eq!(proof.verify(), Err(ProofVerificationError::InvalidMac));
 }
 
 #[test]
