@@ -47,6 +47,10 @@ pub struct NodeConfig {
     #[serde(default = "default_proof_cache_dir")]
     pub proof_cache_dir: PathBuf,
     pub rpc_listen: SocketAddr,
+    #[serde(default)]
+    pub rpc_auth_token: Option<String>,
+    #[serde(default)]
+    pub rpc_allowed_origin: Option<String>,
     pub block_time_ms: u64,
     pub max_block_transactions: usize,
     #[serde(default = "default_max_block_identity_registrations")]
@@ -191,6 +195,20 @@ impl NodeConfig {
                 "node configuration requires max_proof_size_bytes to be greater than 0".into(),
             ));
         }
+        if let Some(token) = &self.rpc_auth_token {
+            if token.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "node configuration rpc_auth_token must not be empty".into(),
+                ));
+            }
+        }
+        if let Some(origin) = &self.rpc_allowed_origin {
+            if origin.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "node configuration rpc_allowed_origin must not be empty".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -208,6 +226,8 @@ impl Default for NodeConfig {
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
             rpc_listen: "127.0.0.1:7070".parse().expect("valid socket addr"),
+            rpc_auth_token: None,
+            rpc_allowed_origin: None,
             block_time_ms: 5_000,
             max_block_transactions: 512,
             max_block_identity_registrations: default_max_block_identity_registrations(),

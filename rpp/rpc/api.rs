@@ -2,8 +2,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::{Path, Query, Request, State};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -191,6 +194,43 @@ impl ApiContext {
         }
         *self.mode.write() = mode;
         Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct ApiSecurity {
+    auth_token: Option<Arc<String>>,
+    allowed_origin: Option<HeaderValue>,
+}
+
+impl ApiSecurity {
+    fn new(auth_token: Option<String>, allowed_origin: Option<String>) -> ChainResult<Self> {
+        let allowed_origin = match allowed_origin {
+            Some(origin) => {
+                let trimmed = origin.trim();
+                if trimmed.is_empty() {
+                    return Err(ChainError::Config(
+                        "invalid rpc allowed origin: value must not be empty".into(),
+                    ));
+                }
+                Some(HeaderValue::from_str(trimmed).map_err(|err| {
+                    ChainError::Config(format!("invalid rpc allowed origin: {err}"))
+                })?)
+            }
+            None => None,
+        };
+        Ok(Self {
+            auth_token: auth_token.map(Arc::new),
+            allowed_origin,
+        })
+    }
+
+    fn auth_enabled(&self) -> bool {
+        self.auth_token.is_some()
+    }
+
+    fn cors_enabled(&self) -> bool {
+        self.allowed_origin.is_some()
     }
 }
 
@@ -385,8 +425,74 @@ struct PipelineShutdownResponse {
     status: &'static str,
 }
 
-pub async fn serve(context: ApiContext, addr: SocketAddr) -> ChainResult<()> {
-    let router = Router::new()
+fn apply_cors_headers(headers: &mut HeaderMap, origin: &HeaderValue) {
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization,content-type"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET,POST,OPTIONS"),
+    );
+}
+
+async fn cors_middleware(
+    State(security): State<ApiSecurity>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(origin) = security.allowed_origin.clone() {
+        if request.method() == Method::OPTIONS {
+            let mut response = Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Body::empty())
+                .expect("failed to build CORS preflight response");
+            apply_cors_headers(response.headers_mut(), &origin);
+            return Ok(response);
+        }
+        let mut response = next.run(request).await;
+        apply_cors_headers(response.headers_mut(), &origin);
+        Ok(response)
+    } else {
+        Ok(next.run(request).await)
+    }
+}
+
+async fn auth_middleware(
+    State(security): State<ApiSecurity>,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if let Some(expected) = security.auth_token.as_ref() {
+        if request.method() == Method::OPTIONS {
+            return Ok(next.run(request).await);
+        }
+        let header_value = request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or(StatusCode::UNAUTHORIZED)?;
+        let token = header_value
+            .strip_prefix("Bearer ")
+            .unwrap_or(header_value)
+            .trim();
+        if token != expected.as_str() {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+    }
+    Ok(next.run(request).await)
+}
+
+pub async fn serve(
+    context: ApiContext,
+    addr: SocketAddr,
+    auth_token: Option<String>,
+    allowed_origin: Option<String>,
+) -> ChainResult<()> {
+    let security = ApiSecurity::new(auth_token, allowed_origin)?;
+
+    let mut router = Router::new()
         .route("/health", get(health))
         .route("/runtime/mode", get(runtime_mode).post(update_runtime_mode))
         .route("/ui/history", get(ui_history))
@@ -433,8 +539,22 @@ pub async fn serve(context: ApiContext, addr: SocketAddr) -> ChainResult<()> {
         .route("/wallet/uptime/submit", post(wallet_submit_uptime))
         .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
         .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
-        .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown))
-        .with_state(context);
+        .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
+
+    if security.cors_enabled() {
+        router = router.layer(middleware::from_fn_with_state(
+            security.clone(),
+            cors_middleware,
+        ));
+    }
+    if security.auth_enabled() {
+        router = router.layer(middleware::from_fn_with_state(
+            security.clone(),
+            auth_middleware,
+        ));
+    }
+
+    let router = router.with_state(context);
 
     let listener = TcpListener::bind(addr).await?;
     info!(?addr, "RPC server listening");

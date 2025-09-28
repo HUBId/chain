@@ -3,8 +3,13 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
-    http::{Method, Request, StatusCode, header::CONTENT_TYPE},
+    extract::{Path, Request as AxumRequest, State},
+    http::{
+        Method, Request as HttpRequest, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE},
+    },
+    middleware::{self, Next},
+    response::Response,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -17,7 +22,7 @@ async fn status_returns_node_status() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::GET)
                 .uri("/status")
                 .body(Body::empty())
@@ -44,7 +49,7 @@ async fn status_rejects_offline_mode() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::GET)
                 .uri("/status")
                 .body(Body::empty())
@@ -57,12 +62,49 @@ async fn status_rejects_offline_mode() {
 }
 
 #[tokio::test]
+async fn status_rejects_missing_auth_token_when_required() {
+    let app = build_app_with_auth(Mode::Node, Some("secret-token".to_string()));
+
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn status_rejects_invalid_auth_token_when_required() {
+    let app = build_app_with_auth(Mode::Node, Some("secret-token".to_string()));
+
+    let response = app
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/status")
+                .header(AUTHORIZATION, "Bearer wrong-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn ledger_returns_snapshot_for_height() {
     let app = build_app(Mode::Node);
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::GET)
                 .uri("/ledger/2")
                 .body(Body::empty())
@@ -93,7 +135,7 @@ async fn ledger_rejects_non_numeric_height() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::GET)
                 .uri("/ledger/not-a-height")
                 .body(Body::empty())
@@ -111,7 +153,7 @@ async fn consensus_validators_returns_active_list() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::GET)
                 .uri("/consensus/validators")
                 .body(Body::empty())
@@ -138,7 +180,7 @@ async fn consensus_validators_rejects_without_node_mode() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::GET)
                 .uri("/consensus/validators")
                 .body(Body::empty())
@@ -161,7 +203,7 @@ async fn tx_submit_accepts_transaction() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::POST)
                 .uri("/tx/submit")
                 .header(CONTENT_TYPE, "application/json")
@@ -193,7 +235,7 @@ async fn tx_submit_rejects_without_node_mode() {
 
     let response = app
         .oneshot(
-            Request::builder()
+            HttpRequest::builder()
                 .method(Method::POST)
                 .uri("/tx/submit")
                 .header(CONTENT_TYPE, "application/json")
@@ -207,12 +249,24 @@ async fn tx_submit_rejects_without_node_mode() {
 }
 
 fn build_app(mode: Mode) -> Router {
-    Router::new()
+    build_app_with_auth(mode, None)
+}
+
+fn build_app_with_auth(mode: Mode, auth_token: Option<String>) -> Router {
+    let mut router = Router::new()
         .route("/status", get(status))
         .route("/ledger/{height}", get(ledger_at_height))
         .route("/consensus/validators", get(active_validators))
-        .route("/tx/submit", post(submit_transaction))
-        .with_state(RpcState::new(mode))
+        .route("/tx/submit", post(submit_transaction));
+
+    if let Some(token) = auth_token {
+        router = router.layer(middleware::from_fn_with_state(
+            TestAuthState { token },
+            test_auth_middleware,
+        ));
+    }
+
+    router.with_state(RpcState::new(mode))
 }
 
 #[derive(Clone)]
@@ -225,6 +279,36 @@ struct RpcStateInner {
     ledger: mock_ledger::MockLedger,
     consensus: mock_consensus::MockConsensus,
     wallet: mock_wallet::MockWallet,
+}
+
+#[derive(Clone)]
+struct TestAuthState {
+    token: String,
+}
+
+async fn test_auth_middleware(
+    State(state): State<TestAuthState>,
+    request: AxumRequest,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if request.method() == Method::OPTIONS {
+        return Ok(next.run(request).await);
+    }
+
+    let header_value = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(StatusCode::UNAUTHORIZED)?;
+    let token = header_value
+        .strip_prefix("Bearer ")
+        .unwrap_or(header_value)
+        .trim();
+    if token != state.token {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    Ok(next.run(request).await)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
