@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bft_loop::ConsensusMessage;
 use crate::state::register_message_sender;
-use crate::validator::ValidatorId;
+use crate::validator::{StakeInfo, ValidatorId};
 use crate::{ConsensusError, ConsensusResult};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub fn slash(accused: &ValidatorId, amount: u64, state: &mut crate::state::Conse
     {
         validator.timetoken_balance = validator.timetoken_balance.saturating_sub(amount);
         validator.reputation_tier = validator.reputation_tier.saturating_sub(1);
-        validator.update_weight();
+        validator.update_weight(StakeInfo::new(validator.stake));
         state.recompute_totals();
     }
 }

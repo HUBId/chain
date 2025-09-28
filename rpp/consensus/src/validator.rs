@@ -22,6 +22,23 @@ pub struct ValidatorLedgerEntry {
     pub reputation_score: f64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StakeInfo {
+    pub stake: u64,
+}
+
+impl StakeInfo {
+    pub fn new(stake: u64) -> Self {
+        Self { stake }
+    }
+}
+
+impl From<&ValidatorLedgerEntry> for StakeInfo {
+    fn from(entry: &ValidatorLedgerEntry) -> Self {
+        Self { stake: entry.stake }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Validator {
     pub id: ValidatorId,
@@ -38,11 +55,28 @@ impl Validator {
         self.weight
     }
 
-    pub fn update_weight(&mut self) {
-        let tier_multiplier = (self.reputation_tier.max(1) as u64) * 100;
-        let score_multiplier = (self.reputation_score * 1000.0).round().max(1.0) as u64;
+    pub fn update_weight(&mut self, stake_info: StakeInfo) {
+        self.stake = stake_info.stake;
+
+        let tier_multiplier = u64::from(self.reputation_tier.max(1)).saturating_mul(100);
+
+        let score_multiplier = {
+            let rounded = (self.reputation_score * 1000.0).round();
+            let clamped = if rounded.is_finite() {
+                rounded.max(1.0).min(u64::MAX as f64)
+            } else {
+                u64::MAX as f64
+            };
+            clamped as u64
+        };
+
         let timetoken_bonus = (self.timetoken_balance / 1_000_000).max(1);
-        self.weight = tier_multiplier * score_multiplier * timetoken_bonus * self.stake.max(1);
+        let effective_stake = stake_info.stake;
+
+        self.weight = tier_multiplier
+            .saturating_mul(score_multiplier)
+            .saturating_mul(timetoken_bonus)
+            .saturating_mul(effective_stake);
     }
 }
 
@@ -54,9 +88,21 @@ pub struct ValidatorSet {
 }
 
 impl ValidatorSet {
-    pub fn new(mut validators: Vec<Validator>) -> Self {
+    pub fn new(validators: Vec<Validator>) -> Self {
+        Self::with_stake_lookup(validators, |_| None)
+    }
+
+    pub fn with_stake_lookup<F>(mut validators: Vec<Validator>, mut stake_lookup: F) -> Self
+    where
+        F: FnMut(&ValidatorId) -> Option<StakeInfo>,
+    {
         for validator in &mut validators {
-            validator.update_weight();
+            let stake_info = stake_lookup(&validator.id).unwrap_or_else(|| {
+                // Fall back to the validator's current stake if no external
+                // information is provided.
+                StakeInfo::new(validator.stake)
+            });
+            validator.update_weight(stake_info);
         }
         validators.sort_by(|a, b| a.id.cmp(&b.id));
         let total_voting_power = validators.iter().map(|v| v.voting_power()).sum();
@@ -119,7 +165,7 @@ pub fn select_validators(
     }
 
     eligible.sort_by(|a, b| a.vrf_output.cmp(&b.vrf_output));
-    ValidatorSet::new(eligible)
+    ValidatorSet::with_stake_lookup(eligible, |id| ledger_entries.get(id).map(StakeInfo::from))
 }
 
 pub fn select_leader(validators: &ValidatorSet) -> Option<Validator> {
