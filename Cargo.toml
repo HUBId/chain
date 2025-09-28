@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = ["backend-stwo"]
-backend-stwo = ["dep:stwo"]
+backend-stwo = ["dep:stwo", "stwo/official"]
 backend-plonky3 = []
 
 [dependencies]
@@ -55,6 +55,9 @@ members = [
     ".",
     "rpp/node",
     "rpp/sim",
+]
+exclude = [
+    "rpp/zk/stwo/vendor/stwo-dev/crates/stwo",
 ]
 resolver = "2"
 
