@@ -87,7 +87,7 @@ fn transaction_proof_roundtrip() {
         parsed.verifying_key,
         crypto::verifying_key("transaction").unwrap()
     );
-    assert_eq!(parsed.proof.len(), 32);
+    assert_eq!(parsed.proof.len(), 64);
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.commitment, computed);
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(

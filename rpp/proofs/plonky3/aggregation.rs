@@ -43,7 +43,7 @@ impl RecursiveAggregator {
                 }
             };
             let inner = Plonky3Proof::from_value(&value)?;
-            crypto::verify_transcript(&inner)?;
+            crypto::verify_proof(&inner)?;
             aggregated.push(inner.commitment);
         }
         let mut accumulator_hasher = Hasher::new();
@@ -57,7 +57,7 @@ impl RecursiveAggregator {
             "accumulator": accumulator,
         });
         let proof = Plonky3Proof::new("recursive", public_inputs)?;
-        crypto::verify_transcript(&proof)?;
+        crypto::verify_proof(&proof)?;
         Ok(proof)
     }
 }

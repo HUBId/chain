@@ -1,0 +1,6 @@
+{
+  "circuit": "recursive",
+  "constraints": "ed25519-signature",
+  "proving_key": "0429f37282a7958655e30dde8db59b75852ed0fb569b92382e86ffaf2972bc53",
+  "verifying_key": "3cc5a2c33f9c7da19f716c4b3709aed43d69c55cf0d59213fa43841647dfd19b"
+}

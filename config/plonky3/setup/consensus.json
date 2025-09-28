@@ -1,0 +1,6 @@
+{
+  "circuit": "consensus",
+  "constraints": "ed25519-signature",
+  "proving_key": "2b324ac334a2d5a437bcd4ba84503639a6f622cfec0edee440bb7ea3e4e199c8",
+  "verifying_key": "55e471e76201315fa94e50c23e5f139a335c3380f7fdd3ff3a90cb859a78f576"
+}

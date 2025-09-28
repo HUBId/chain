@@ -71,7 +71,7 @@ impl Plonky3Backend {
     ) -> ChainResult<Plonky3Proof> {
         let public_inputs = self.encode_public_inputs(circuit, witness, block_height)?;
         let proof = Plonky3Proof::new(circuit, public_inputs)?;
-        crypto::verify_transcript(&proof)?;
+        crypto::verify_proof(&proof)?;
         Ok(proof)
     }
 }
