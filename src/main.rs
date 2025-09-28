@@ -113,6 +113,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut p2p_handle: Option<P2pHandle> = None;
     let mut p2p_task: Option<JoinHandle<Result<()>>> = None;
     let mut rpc_addr = None;
+    let mut rpc_auth_token: Option<String> = None;
+    let mut rpc_allowed_origin: Option<String> = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
     let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
     let mut gossip_task: Option<JoinHandle<Result<()>>> = None;
@@ -120,6 +122,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path)?;
         let addr = config.rpc_listen;
+        rpc_auth_token = config.rpc_auth_token.clone();
+        rpc_allowed_origin = config.rpc_allowed_origin.clone();
         let node = Node::new(config.clone())?;
         let network_identity = node
             .network_identity_profile()
@@ -197,9 +201,14 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         orchestrator_instance.clone(),
     );
     let api_task = tokio::spawn(async move {
-        api::serve(context, rpc_addr)
-            .await
-            .map_err(|err| anyhow!(err))
+        api::serve(
+            context,
+            rpc_addr,
+            rpc_auth_token.clone(),
+            rpc_allowed_origin.clone(),
+        )
+        .await
+        .map_err(|err| anyhow!(err))
     });
 
     if let Some(wallet) = &wallet_instance {

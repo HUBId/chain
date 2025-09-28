@@ -59,7 +59,7 @@ impl RpcTestHarness {
             Some(wallet),
             Some(orchestrator),
         );
-        let rpc_task = tokio::spawn(async move { api::serve(context, addr).await });
+        let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None).await });
 
         let client = Client::builder()
             .build()
