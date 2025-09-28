@@ -1,0 +1,6 @@
+{
+  "circuit": "identity",
+  "constraints": "ed25519-signature",
+  "proving_key": "3ceccb19a646bf5f5ae3c285737166903d72570e0d9692bfcdccfe36a573c5f9",
+  "verifying_key": "6db65084e277b2d3a95ec70af6b2ff12b89292224f5cc07aca4626e754eb9f87"
+}

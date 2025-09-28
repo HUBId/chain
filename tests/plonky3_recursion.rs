@@ -76,7 +76,7 @@ fn plonky3_recursive_flow_roundtrip() {
     // Recursive proof must reference all commitments from the bundle.
     if let ChainProof::Plonky3(value) = &bundle.recursive_proof {
         let parsed = Plonky3Proof::from_value(value).unwrap();
-        assert_eq!(parsed.proof.len(), 32);
+        assert_eq!(parsed.proof.len(), 64);
         assert_eq!(
             parsed.verifying_key,
             crypto::verifying_key("recursive").unwrap()

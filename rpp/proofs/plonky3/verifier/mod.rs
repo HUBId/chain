@@ -31,8 +31,8 @@ impl Plonky3Verifier {
             error!("{message}");
             return Err(ChainError::Crypto(message));
         }
-        if let Err(err) = crypto::verify_transcript(&parsed) {
-            error!("plonky3 transcript verification failed for {expected}: {err}");
+        if let Err(err) = crypto::verify_proof(&parsed) {
+            error!("plonky3 proof verification failed for {expected}: {err}");
             return Err(err);
         }
         Ok(parsed)

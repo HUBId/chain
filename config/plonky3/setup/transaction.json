@@ -1,0 +1,6 @@
+{
+  "circuit": "transaction",
+  "constraints": "ed25519-signature",
+  "proving_key": "7613c23f7ed6201636c5afb7c855e4fb46bd61f2e2a3d67dc69879e773d06c6f",
+  "verifying_key": "22df25e2cb36c47067f89b0fd981a3df3dcb44eb66f5631876971556b0f8d4f6"
+}

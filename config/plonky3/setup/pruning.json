@@ -1,0 +1,6 @@
+{
+  "circuit": "pruning",
+  "constraints": "ed25519-signature",
+  "proving_key": "9bef69acca2111efd623ee8a90f65d528d6ed5081b9dfbda8de40c909f2190bf",
+  "verifying_key": "70c69613f4d8cb577435bfd522c6f638e9defdcb61f8a132e008da6c96353a46"
+}

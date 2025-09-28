@@ -1,0 +1,6 @@
+{
+  "circuit": "uptime",
+  "constraints": "ed25519-signature",
+  "proving_key": "416f7974e162793b6ddc3eb1cccc7e9382be6d5bfb24b1b4cf5d12088e2a93ab",
+  "verifying_key": "0180ca01a5a1c1cd1e44e25fffaf3a78888041c0d8ec2635e36d677720e606a5"
+}
