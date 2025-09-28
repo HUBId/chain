@@ -32,12 +32,18 @@ impl Leader {
             timestamp: current_timestamp(),
         };
 
-        let proof = ConsensusProof {
-            commitment: format!("stwo-commitment-{}", block.height),
-            witness_hash: format!("stwo-witness-{}", block.height),
-            recursion_depth: state.pending_proofs.len() as u32,
-            valid: true,
-        };
+        let inherited_commitments = state
+            .pending_proofs
+            .iter()
+            .map(|proof| proof.commitment.clone())
+            .collect();
+
+        let proof = ConsensusProof::new(
+            format!("stwo-commitment-{}", block.height),
+            format!("stwo-witness-{}", block.height),
+            state.pending_proofs.len() as u32,
+            inherited_commitments,
+        );
 
         Proposal {
             block,
