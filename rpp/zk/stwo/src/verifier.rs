@@ -8,19 +8,46 @@ use crate::prover::{Block, Proof, ProofCircuit};
 use crate::utils::fri::FriProver;
 use crate::utils::poseidon;
 
-fn commitment_from_inputs(inputs: &[FieldElement]) -> String {
-    hex::encode(poseidon::hash_elements(inputs))
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum VerificationError {
+    CircuitMismatch,
+    PayloadDecode,
+    WitnessMismatch(&'static str),
+    PublicInputMismatch,
+    CommitmentMismatch,
+    TraceMismatch,
+    FriMismatch,
+}
+
+impl core::fmt::Display for VerificationError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        use VerificationError::*;
+        match self {
+            CircuitMismatch => write!(f, "proof circuit mismatch"),
+            PayloadDecode => write!(f, "proof payload could not be decoded"),
+            WitnessMismatch(ctx) => write!(f, "witness mismatch: {ctx}"),
+            PublicInputMismatch => write!(f, "public inputs mismatch"),
+            CommitmentMismatch => write!(f, "commitment mismatch"),
+            TraceMismatch => write!(f, "trace mismatch"),
+            FriMismatch => write!(f, "fri proof mismatch"),
+        }
+    }
+}
+
+impl VerificationError {
+    fn witness(label: &'static str) -> Self {
+        VerificationError::WitnessMismatch(label)
+    }
+}
+
+pub type VerificationResult<T> = Result<T, VerificationError>;
+
+fn commitment_from_inputs(inputs: &[FieldElement]) -> [u8; 32] {
+    poseidon::hash_elements(inputs)
 }
 
 fn decode_witness<T: serde::de::DeserializeOwned>(proof: &Proof) -> Option<T> {
     proof.payload.decode_json()
-}
-
-fn encode_inputs(inputs: &[FieldElement]) -> Vec<String> {
-    inputs
-        .iter()
-        .map(|element| hex::encode(element.to_bytes()))
-        .collect()
 }
 
 fn commitment_elements(commitment: &[u8; 32]) -> [FieldElement; 2] {
@@ -37,14 +64,14 @@ fn fri_inputs(trace: &crate::circuits::CircuitTrace, inputs: &[FieldElement]) ->
     values
 }
 
-fn verify_generic<W>(proof: &Proof, expected_circuit: ProofCircuit) -> Option<W>
+fn verify_witness<W>(proof: &Proof, expected_circuit: ProofCircuit) -> VerificationResult<W>
 where
     W: CircuitWitness + Clone + PartialEq,
 {
     if proof.circuit != expected_circuit {
-        return None;
+        return Err(VerificationError::CircuitMismatch);
     }
-    decode_witness::<W>(proof)
+    decode_witness::<W>(proof).ok_or(VerificationError::PayloadDecode)
 }
 
 fn transaction_inputs(witness: &TransactionWitness) -> Vec<FieldElement> {
@@ -81,103 +108,106 @@ fn pruning_inputs(witness: &PruningWitness) -> Vec<FieldElement> {
     ]
 }
 
-pub fn verify_tx(tx: &crate::circuits::transaction::Transaction, proof: &Proof) -> bool {
-    let witness: TransactionWitness = match verify_generic(proof, ProofCircuit::Transaction) {
-        Some(witness) => witness,
-        None => return false,
-    };
+pub fn verify_tx(
+    tx: &crate::circuits::transaction::Transaction,
+    proof: &Proof,
+) -> VerificationResult<()> {
+    let witness: TransactionWitness = verify_witness(proof, ProofCircuit::Transaction)?;
     if witness.tx != *tx {
-        return false;
+        return Err(VerificationError::witness("transaction payload"));
     }
     let expected_inputs = transaction_inputs(&witness);
-    if encode_inputs(&expected_inputs) != proof.public_inputs {
-        return false;
+    if proof.public_inputs != expected_inputs {
+        return Err(VerificationError::PublicInputMismatch);
     }
     if commitment_from_inputs(&expected_inputs) != proof.commitment {
-        return false;
+        return Err(VerificationError::CommitmentMismatch);
     }
     let expected_trace = witness.trace();
     if proof.trace != expected_trace {
-        return false;
+        return Err(VerificationError::TraceMismatch);
     }
     let fri_values = fri_inputs(&expected_trace, &expected_inputs);
-    FriProver::verify(&fri_values, &proof.fri_proof)
+    if !FriProver::verify(&fri_values, &proof.fri_proof) {
+        return Err(VerificationError::FriMismatch);
+    }
+    Ok(())
 }
 
 pub fn verify_reputation(
     state: &crate::circuits::reputation::ReputationState,
     proof: &Proof,
-) -> bool {
-    let witness: ReputationWitness = match verify_generic(proof, ProofCircuit::Reputation) {
-        Some(witness) => witness,
-        None => return false,
-    };
+) -> VerificationResult<()> {
+    let witness: ReputationWitness = verify_witness(proof, ProofCircuit::Reputation)?;
     if witness.state != *state {
-        return false;
+        return Err(VerificationError::witness("reputation state"));
     }
     let expected_inputs = reputation_inputs(&witness);
-    if encode_inputs(&expected_inputs) != proof.public_inputs {
-        return false;
+    if proof.public_inputs != expected_inputs {
+        return Err(VerificationError::PublicInputMismatch);
     }
     if commitment_from_inputs(&expected_inputs) != proof.commitment {
-        return false;
+        return Err(VerificationError::CommitmentMismatch);
     }
     let expected_trace = witness.trace();
     if proof.trace != expected_trace {
-        return false;
+        return Err(VerificationError::TraceMismatch);
     }
     let fri_values = fri_inputs(&expected_trace, &expected_inputs);
-    FriProver::verify(&fri_values, &proof.fri_proof)
+    if !FriProver::verify(&fri_values, &proof.fri_proof) {
+        return Err(VerificationError::FriMismatch);
+    }
+    Ok(())
 }
 
-pub fn verify_block(block: &Block, proof: &Proof) -> bool {
-    let witness: PruningWitness = match verify_generic(proof, ProofCircuit::Block) {
-        Some(witness) => witness,
-        None => return false,
-    };
+pub fn verify_block(block: &Block, proof: &Proof) -> VerificationResult<()> {
+    let witness: PruningWitness = verify_witness(proof, ProofCircuit::Block)?;
     if witness.inputs.utxo_root != block.tx_root {
-        return false;
+        return Err(VerificationError::witness("utxo root"));
     }
     if witness.inputs.reputation_root != block.reputation_root {
-        return false;
+        return Err(VerificationError::witness("reputation root"));
     }
     let expected_inputs = pruning_inputs(&witness);
-    if encode_inputs(&expected_inputs) != proof.public_inputs {
-        return false;
+    if proof.public_inputs != expected_inputs {
+        return Err(VerificationError::PublicInputMismatch);
     }
     if commitment_from_inputs(&expected_inputs) != proof.commitment {
-        return false;
+        return Err(VerificationError::CommitmentMismatch);
     }
     let expected_trace = witness.trace();
     if proof.trace != expected_trace {
-        return false;
+        return Err(VerificationError::TraceMismatch);
     }
     let fri_values = fri_inputs(&expected_trace, &expected_inputs);
-    FriProver::verify(&fri_values, &proof.fri_proof)
+    if !FriProver::verify(&fri_values, &proof.fri_proof) {
+        return Err(VerificationError::FriMismatch);
+    }
+    Ok(())
 }
 
 pub fn verify_identity(
     genesis: &crate::circuits::identity::IdentityGenesis,
     proof: &Proof,
-) -> bool {
-    let witness: IdentityWitness = match verify_generic(proof, ProofCircuit::Identity) {
-        Some(witness) => witness,
-        None => return false,
-    };
+) -> VerificationResult<()> {
+    let witness: IdentityWitness = verify_witness(proof, ProofCircuit::Identity)?;
     if witness.genesis != *genesis {
-        return false;
+        return Err(VerificationError::witness("identity genesis"));
     }
     let expected_inputs = identity_inputs(&witness);
-    if encode_inputs(&expected_inputs) != proof.public_inputs {
-        return false;
+    if proof.public_inputs != expected_inputs {
+        return Err(VerificationError::PublicInputMismatch);
     }
     if commitment_from_inputs(&expected_inputs) != proof.commitment {
-        return false;
+        return Err(VerificationError::CommitmentMismatch);
     }
     let expected_trace = witness.trace();
     if proof.trace != expected_trace {
-        return false;
+        return Err(VerificationError::TraceMismatch);
     }
     let fri_values = fri_inputs(&expected_trace, &expected_inputs);
-    FriProver::verify(&fri_values, &proof.fri_proof)
+    if !FriProver::verify(&fri_values, &proof.fri_proof) {
+        return Err(VerificationError::FriMismatch);
+    }
+    Ok(())
 }
