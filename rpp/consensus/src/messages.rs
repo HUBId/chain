@@ -1,8 +1,30 @@
 use blake3::Hasher;
+use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::validator::ValidatorId;
+
+mod peer_id_serde {
+    use libp2p::PeerId;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn serialize<S>(peer_id: &PeerId, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&peer_id.to_base58())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PeerId, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        PeerId::from_str(&value).map_err(|err| serde::de::Error::custom(err.to_string()))
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct BlockId(pub String);
@@ -59,6 +81,10 @@ pub struct PreVote {
     pub block_hash: BlockId,
     pub proof_valid: bool,
     pub validator_id: ValidatorId,
+    #[serde(with = "peer_id_serde")]
+    pub peer_id: PeerId,
+    pub signature: Vec<u8>,
+    pub height: u64,
     pub round: u64,
 }
 
@@ -66,13 +92,19 @@ pub struct PreVote {
 pub struct PreCommit {
     pub block_hash: BlockId,
     pub validator_id: ValidatorId,
+    #[serde(with = "peer_id_serde")]
+    pub peer_id: PeerId,
+    pub signature: Vec<u8>,
+    pub height: u64,
     pub round: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Signature {
     pub validator_id: ValidatorId,
-    pub signature: String,
+    #[serde(with = "peer_id_serde")]
+    pub peer_id: PeerId,
+    pub signature: Vec<u8>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

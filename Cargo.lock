@@ -3154,6 +3154,7 @@ name = "rpp-consensus"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "libp2p",
  "serde",
  "serde_json",
  "tokio",

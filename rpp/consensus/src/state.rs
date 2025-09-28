@@ -1,12 +1,14 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+use libp2p::PeerId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::bft_loop::ConsensusMessage;
+use crate::evidence::{EvidenceRecord, EvidenceType};
 use crate::leader::{elect_leader, Leader, LeaderContext};
-use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal};
+use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal, Signature};
 use crate::rewards::{distribute_rewards, RewardDistribution};
 use crate::validator::{
     select_validators, VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry, ValidatorSet,
@@ -77,29 +79,80 @@ impl GenesisConfig {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum VoteRecordOutcome {
+    Counted { quorum_reached: bool },
+    Duplicate,
+    InvalidSignature,
+    UnknownValidator,
+    Conflict { evidence: EvidenceRecord },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum VotePhase {
+    Prevote,
+    Precommit,
+}
+
+#[derive(Hash, Clone, Debug, PartialEq, Eq)]
+struct VoteKey {
+    height: u64,
+    round: u64,
+    phase: VotePhase,
+    validator: ValidatorId,
+}
+
+impl VoteKey {
+    fn new(height: u64, round: u64, phase: VotePhase, validator: ValidatorId) -> Self {
+        Self {
+            height,
+            round,
+            phase,
+            validator,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct VoteFingerprint {
+    block_hash: String,
+    peer_id: PeerId,
+    signature: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VoteReceipt {
+    pub peer_id: PeerId,
+    pub signature: Vec<u8>,
+}
+
 #[derive(Default, Clone, Debug)]
 struct VoteTally {
     pub power: u64,
-    pub voters: HashSet<ValidatorId>,
+    pub voters: HashMap<ValidatorId, VoteReceipt>,
 }
 
 impl VoteTally {
     fn new() -> Self {
         Self {
             power: 0,
-            voters: HashSet::new(),
+            voters: HashMap::new(),
         }
     }
 
-    fn insert(&mut self, validator: &Validator, threshold: u64) -> bool {
-        if self.voters.insert(validator.id.clone()) {
+    fn insert(&mut self, validator: &Validator, receipt: VoteReceipt, threshold: u64) -> bool {
+        if !self.voters.contains_key(&validator.id) {
             self.power = self.power.saturating_add(validator.voting_power());
+            self.voters.insert(validator.id.clone(), receipt);
         }
         self.power >= threshold
     }
 
-    fn voters(&self) -> Vec<ValidatorId> {
-        self.voters.iter().cloned().collect()
+    fn receipts(&self) -> Vec<(ValidatorId, VoteReceipt)> {
+        self.voters
+            .iter()
+            .map(|(id, receipt)| (id.clone(), receipt.clone()))
+            .collect()
     }
 }
 
@@ -117,13 +170,14 @@ pub struct ConsensusState {
     pub pending_precommit_messages: Vec<PreCommit>,
     pub pending_commits: VecDeque<Commit>,
     pub pending_proofs: Vec<ConsensusProof>,
-    pub pending_evidence: Vec<crate::evidence::EvidenceRecord>,
+    pub pending_evidence: Vec<EvidenceRecord>,
     pub pending_rewards: Vec<RewardDistribution>,
     pub reputation_root: String,
     message_rx: Option<UnboundedReceiver<ConsensusMessage>>,
     _message_tx: UnboundedSender<ConsensusMessage>,
     pub last_activity: Instant,
     pub halted: bool,
+    recorded_votes: HashMap<VoteKey, VoteFingerprint>,
 }
 
 impl ConsensusState {
@@ -157,6 +211,7 @@ impl ConsensusState {
             _message_tx: sender,
             last_activity: Instant::now(),
             halted: false,
+            recorded_votes: HashMap::new(),
         };
 
         state.update_leader();
@@ -174,50 +229,148 @@ impl ConsensusState {
         self.mark_activity();
     }
 
-    pub fn record_prevote(&mut self, vote: PreVote) -> bool {
-        let block_hash = vote.block_hash.0.clone();
-        let validator = match self.validator_set.get(&vote.validator_id) {
-            Some(validator) => validator.clone(),
-            None => return false,
-        };
-        if !self.pending_prevote_messages.iter().any(|existing| {
-            existing.validator_id == vote.validator_id
-                && existing.block_hash == vote.block_hash
-                && existing.round == vote.round
-        }) {
-            self.pending_prevote_messages.push(vote.clone());
+    pub fn record_prevote(&mut self, vote: PreVote) -> VoteRecordOutcome {
+        if vote.signature.is_empty() {
+            return VoteRecordOutcome::InvalidSignature;
         }
-        let tally = self
-            .pending_prevotes
-            .entry(block_hash)
-            .or_insert_with(VoteTally::new);
-        tally.insert(&validator, self.validator_set.quorum_threshold)
+
+        let block_hash = vote.block_hash.0.clone();
+        let Some(validator) = self.validator_set.get(&vote.validator_id).cloned() else {
+            return VoteRecordOutcome::UnknownValidator;
+        };
+
+        let key = VoteKey::new(
+            vote.height,
+            vote.round,
+            VotePhase::Prevote,
+            vote.validator_id.clone(),
+        );
+
+        match self.ensure_unique_vote(&key, &block_hash, &vote.signature, &vote.peer_id) {
+            Ok(true) => {
+                if !self
+                    .pending_prevote_messages
+                    .iter()
+                    .any(|existing| existing.signature == vote.signature)
+                {
+                    self.pending_prevote_messages.push(vote.clone());
+                }
+
+                let tally = self
+                    .pending_prevotes
+                    .entry(block_hash)
+                    .or_insert_with(VoteTally::new);
+                let receipt = VoteReceipt {
+                    peer_id: vote.peer_id.clone(),
+                    signature: vote.signature.clone(),
+                };
+                let quorum = tally.insert(&validator, receipt, self.validator_set.quorum_threshold);
+                self.mark_activity();
+                VoteRecordOutcome::Counted {
+                    quorum_reached: quorum,
+                }
+            }
+            Ok(false) => VoteRecordOutcome::Duplicate,
+            Err(evidence) => VoteRecordOutcome::Conflict { evidence },
+        }
     }
 
-    pub fn record_precommit(&mut self, vote: PreCommit) -> bool {
-        let block_hash = vote.block_hash.0.clone();
-        let validator = match self.validator_set.get(&vote.validator_id) {
-            Some(validator) => validator.clone(),
-            None => return false,
-        };
-        if !self.pending_precommit_messages.iter().any(|existing| {
-            existing.validator_id == vote.validator_id
-                && existing.block_hash == vote.block_hash
-                && existing.round == vote.round
-        }) {
-            self.pending_precommit_messages.push(vote.clone());
+    pub fn record_precommit(&mut self, vote: PreCommit) -> VoteRecordOutcome {
+        if vote.signature.is_empty() {
+            return VoteRecordOutcome::InvalidSignature;
         }
-        let tally = self
-            .pending_precommits
-            .entry(block_hash)
-            .or_insert_with(VoteTally::new);
-        tally.insert(&validator, self.validator_set.quorum_threshold)
+
+        let block_hash = vote.block_hash.0.clone();
+        let Some(validator) = self.validator_set.get(&vote.validator_id).cloned() else {
+            return VoteRecordOutcome::UnknownValidator;
+        };
+
+        let key = VoteKey::new(
+            vote.height,
+            vote.round,
+            VotePhase::Precommit,
+            vote.validator_id.clone(),
+        );
+
+        match self.ensure_unique_vote(&key, &block_hash, &vote.signature, &vote.peer_id) {
+            Ok(true) => {
+                if !self
+                    .pending_precommit_messages
+                    .iter()
+                    .any(|existing| existing.signature == vote.signature)
+                {
+                    self.pending_precommit_messages.push(vote.clone());
+                }
+
+                let tally = self
+                    .pending_precommits
+                    .entry(block_hash)
+                    .or_insert_with(VoteTally::new);
+                let receipt = VoteReceipt {
+                    peer_id: vote.peer_id.clone(),
+                    signature: vote.signature.clone(),
+                };
+                let quorum = tally.insert(&validator, receipt, self.validator_set.quorum_threshold);
+                self.mark_activity();
+                VoteRecordOutcome::Counted {
+                    quorum_reached: quorum,
+                }
+            }
+            Ok(false) => VoteRecordOutcome::Duplicate,
+            Err(evidence) => VoteRecordOutcome::Conflict { evidence },
+        }
     }
 
-    pub fn precommit_voters(&self, block_hash: &str) -> Vec<ValidatorId> {
+    fn ensure_unique_vote(
+        &mut self,
+        key: &VoteKey,
+        block_hash: &str,
+        signature: &[u8],
+        peer_id: &PeerId,
+    ) -> Result<bool, EvidenceRecord> {
+        if let Some(existing) = self.recorded_votes.get(key) {
+            if existing.block_hash != block_hash {
+                let evidence = EvidenceRecord {
+                    reporter: key.validator.clone(),
+                    accused: key.validator.clone(),
+                    evidence: EvidenceType::DoubleSign { height: key.height },
+                };
+                return Err(evidence);
+            }
+
+            if existing.signature == signature && existing.peer_id == *peer_id {
+                return Ok(false);
+            }
+
+            return Ok(false);
+        }
+
+        self.recorded_votes.insert(
+            key.clone(),
+            VoteFingerprint {
+                block_hash: block_hash.to_string(),
+                peer_id: peer_id.clone(),
+                signature: signature.to_vec(),
+            },
+        );
+
+        Ok(true)
+    }
+
+    pub fn precommit_signatures(&self, block_hash: &str) -> Vec<Signature> {
         self.pending_precommits
             .get(block_hash)
-            .map(|tally| tally.voters())
+            .map(|tally| {
+                tally
+                    .receipts()
+                    .into_iter()
+                    .map(|(validator_id, receipt)| Signature {
+                        validator_id,
+                        peer_id: receipt.peer_id,
+                        signature: receipt.signature,
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -239,6 +392,8 @@ impl ConsensusState {
         self.update_leader();
         self.pending_prevotes.clear();
         self.pending_precommits.clear();
+        self.recorded_votes
+            .retain(|key, _| key.round >= self.round && key.height >= self.block_height);
         self.mark_activity();
     }
 
@@ -263,7 +418,7 @@ impl ConsensusState {
         self.pending_rewards.push(reward);
     }
 
-    pub fn record_evidence(&mut self, evidence: crate::evidence::EvidenceRecord) {
+    pub fn record_evidence(&mut self, evidence: EvidenceRecord) {
         self.pending_evidence.push(evidence);
     }
 
@@ -296,6 +451,7 @@ impl ConsensusState {
             .retain(|vote| vote.block_hash != committed_hash);
         self.pending_precommit_messages
             .retain(|vote| vote.block_hash != committed_hash);
+        self.recorded_votes.clear();
         self.mark_activity();
     }
 
