@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -8,7 +8,9 @@ use crate::bft_loop::ConsensusMessage;
 use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal};
 use crate::rewards::{distribute_rewards, RewardDistribution};
-use crate::validator::{select_validators, VRFOutput, Validator, ValidatorId, ValidatorSet};
+use crate::validator::{
+    select_validators, VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry, ValidatorSet,
+};
 use crate::{ConsensusError, ConsensusResult};
 
 static MESSAGE_SENDER: OnceLock<Mutex<Option<UnboundedSender<ConsensusMessage>>>> = OnceLock::new();
@@ -52,6 +54,7 @@ impl ConsensusConfig {
 pub struct GenesisConfig {
     pub epoch: u64,
     pub validator_outputs: Vec<VRFOutput>,
+    pub validator_ledger: BTreeMap<ValidatorId, ValidatorLedgerEntry>,
     pub reputation_root: String,
     pub config: ConsensusConfig,
 }
@@ -60,12 +63,14 @@ impl GenesisConfig {
     pub fn new(
         epoch: u64,
         validator_outputs: Vec<VRFOutput>,
+        validator_ledger: BTreeMap<ValidatorId, ValidatorLedgerEntry>,
         reputation_root: String,
         config: ConsensusConfig,
     ) -> Self {
         Self {
             epoch,
             validator_outputs,
+            validator_ledger,
             reputation_root,
             config,
         }
@@ -123,7 +128,11 @@ pub struct ConsensusState {
 
 impl ConsensusState {
     pub fn new(genesis: GenesisConfig) -> Result<Self, ConsensusError> {
-        let validator_set = select_validators(genesis.epoch, &genesis.validator_outputs);
+        let validator_set = select_validators(
+            genesis.epoch,
+            &genesis.validator_outputs,
+            &genesis.validator_ledger,
+        );
         let (sender, receiver) = unbounded_channel();
         register_message_sender(Some(sender.clone()));
 
@@ -340,6 +349,7 @@ impl ConsensusState {
 pub fn initialize_state(
     epoch: u64,
     vrf_outputs: Vec<VRFOutput>,
+    validator_ledger: BTreeMap<ValidatorId, ValidatorLedgerEntry>,
     reputation_root: String,
     view_timeout_ms: u64,
     precommit_timeout_ms: u64,
@@ -352,6 +362,12 @@ pub fn initialize_state(
         base_reward,
         leader_bonus,
     );
-    let genesis = GenesisConfig::new(epoch, vrf_outputs, reputation_root, config);
+    let genesis = GenesisConfig::new(
+        epoch,
+        vrf_outputs,
+        validator_ledger,
+        reputation_root,
+        config,
+    );
     ConsensusState::new(genesis)
 }
