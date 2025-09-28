@@ -211,3 +211,55 @@ pub fn verify_identity(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::circuits::transaction::{Transaction, UtxoState};
+    use crate::prover::prove_tx;
+
+    fn sample_transaction() -> (Transaction, UtxoState) {
+        (
+            Transaction {
+                tx_id: "tx-123".into(),
+                inputs: vec!["in-1".into(), "in-2".into()],
+                outputs: vec!["out-1".into()],
+                tier: 1,
+            },
+            UtxoState {
+                root: "root-abc".into(),
+                height: 42,
+            },
+        )
+    }
+
+    #[test]
+    fn tampered_trace_is_rejected() {
+        let (tx, state) = sample_transaction();
+        let proof = prove_tx(&tx, &state);
+        assert!(verify_tx(&tx, &proof).is_ok());
+
+        let mut tampered = proof.clone();
+        tampered.trace.trace_data = serde_json::json!({"tampered": true});
+
+        assert_eq!(
+            verify_tx(&tx, &tampered),
+            Err(VerificationError::TraceMismatch)
+        );
+    }
+
+    #[test]
+    fn tampered_fri_is_rejected() {
+        let (tx, state) = sample_transaction();
+        let proof = prove_tx(&tx, &state);
+        assert!(verify_tx(&tx, &proof).is_ok());
+
+        let mut tampered = proof.clone();
+        tampered.fri_proof = crate::utils::fri::FriProver::prove(&[]);
+
+        assert_eq!(
+            verify_tx(&tx, &tampered),
+            Err(VerificationError::FriMismatch)
+        );
+    }
+}

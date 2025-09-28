@@ -59,6 +59,12 @@ impl IdentityWitness {
         trace_bytes.extend(self.vote_signature.as_bytes());
         let trace_commitment = Blake2sHasher::hash(&trace_bytes).0;
 
-        CircuitTrace::new(trace_commitment, constraint_commitment)
+        let trace_data = serde_json::json!({
+            "genesis": self.genesis.clone(),
+            "wallet_public_key": self.wallet_public_key.clone(),
+            "vote_signature": self.vote_signature.clone(),
+        });
+
+        CircuitTrace::new(trace_commitment, constraint_commitment, trace_data)
     }
 }
