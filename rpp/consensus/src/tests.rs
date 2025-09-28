@@ -7,7 +7,9 @@ use super::messages::{Block, ConsensusProof, PreVote, Proposal};
 use super::state::{ConsensusConfig, GenesisConfig};
 use std::collections::BTreeMap;
 
-use super::validator::{select_leader, select_validators, VRFOutput, ValidatorLedgerEntry};
+use super::validator::{
+    select_leader, select_validators, StakeInfo, VRFOutput, Validator, ValidatorLedgerEntry,
+};
 
 fn sample_public_key(id: &str) -> Vec<u8> {
     format!("pk-{id}").into_bytes()
@@ -274,4 +276,62 @@ fn select_validators_applies_stake_weights() {
     let weight_b = set.voting_power(&"validator-b".to_string());
     assert!(weight_b > weight_a);
     assert_eq!(weight_b, weight_a * 2);
+}
+
+#[test]
+fn validator_weight_saturates_for_extreme_stake() {
+    let mut validator = Validator {
+        id: "validator-heavy".into(),
+        reputation_tier: u8::MAX,
+        reputation_score: 10_000_000.0,
+        stake: 0,
+        timetoken_balance: u64::MAX,
+        vrf_output: [0; 32],
+        weight: 0,
+    };
+
+    validator.update_weight(StakeInfo::new(u64::MAX));
+    assert_eq!(validator.weight, u64::MAX);
+}
+
+#[test]
+fn validator_weight_handles_zero_stake() {
+    let mut validator = Validator {
+        id: "validator-zero".into(),
+        reputation_tier: 3,
+        reputation_score: 1.5,
+        stake: 0,
+        timetoken_balance: 500_000,
+        vrf_output: [0; 32],
+        weight: 0,
+    };
+
+    validator.update_weight(StakeInfo::new(0));
+    assert_eq!(validator.weight, 0);
+}
+
+#[test]
+fn validator_weight_reputation_edge_behaviour() {
+    let mut validator = Validator {
+        id: "validator-edge".into(),
+        reputation_tier: 0,
+        reputation_score: 0.0,
+        stake: 0,
+        timetoken_balance: 0,
+        vrf_output: [0; 32],
+        weight: 0,
+    };
+
+    validator.update_weight(StakeInfo::new(5));
+    let baseline = validator.weight;
+    assert_eq!(baseline, 500);
+
+    validator.reputation_score = 0.999;
+    validator.update_weight(StakeInfo::new(5));
+    assert!(validator.weight >= baseline);
+
+    validator.reputation_tier = 1;
+    validator.reputation_score = 1.0;
+    validator.update_weight(StakeInfo::new(5));
+    assert!(validator.weight > baseline);
 }
