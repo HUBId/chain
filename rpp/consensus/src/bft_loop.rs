@@ -5,8 +5,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::sleep;
 
 use crate::evidence::{slash, EvidenceRecord, EvidenceType};
-use crate::messages::{Commit, PreCommit, PreVote, Proposal, Signature};
-use crate::state::{register_message_sender, ConsensusState};
+use crate::messages::{Commit, PreCommit, PreVote, Proposal};
+use crate::state::{register_message_sender, ConsensusState, VoteRecordOutcome};
 use crate::{ConsensusError, ConsensusResult};
 
 #[derive(Clone, Debug)]
@@ -163,17 +163,14 @@ fn handle_prevote(state: &mut ConsensusState, vote: PreVote) {
         return;
     }
 
-    if state.record_prevote(vote.clone()) {
-        // Once quorum of prevotes reached, validators are expected to precommit.
-        if let Some(proposal) = state.find_proposal(&vote.block_hash.0).cloned() {
-            for validator in &state.validator_set.validators {
-                let precommit = PreCommit {
-                    block_hash: proposal.block_hash(),
-                    validator_id: validator.id.clone(),
-                    round: state.round,
-                };
-                let _ = submit_precommit(precommit);
-            }
+    match state.record_prevote(vote.clone()) {
+        VoteRecordOutcome::Counted { .. } => {}
+        VoteRecordOutcome::Duplicate => {}
+        VoteRecordOutcome::InvalidSignature => {}
+        VoteRecordOutcome::UnknownValidator => {}
+        VoteRecordOutcome::Conflict { evidence } => {
+            state.record_evidence(evidence.clone());
+            slash(&vote.validator_id, 1, state);
         }
     }
 }
@@ -183,22 +180,26 @@ fn handle_precommit(state: &mut ConsensusState, vote: PreCommit) {
         return;
     }
 
-    if state.record_precommit(vote.clone()) {
-        if let Some(proposal) = state.find_proposal(&vote.block_hash.0).cloned() {
-            let signatures = state
-                .precommit_voters(&vote.block_hash.0)
-                .into_iter()
-                .map(|validator_id| Signature {
-                    validator_id: validator_id.clone(),
-                    signature: format!("sig-{}", validator_id),
-                })
-                .collect();
-            let commit = Commit {
-                block: proposal.block,
-                proof: proposal.proof,
-                signatures,
-            };
-            let _ = finalize_block(commit);
+    match state.record_precommit(vote.clone()) {
+        VoteRecordOutcome::Counted { quorum_reached } => {
+            if quorum_reached {
+                if let Some(proposal) = state.find_proposal(&vote.block_hash.0).cloned() {
+                    let signatures = state.precommit_signatures(&vote.block_hash.0);
+                    let commit = Commit {
+                        block: proposal.block,
+                        proof: proposal.proof,
+                        signatures,
+                    };
+                    let _ = finalize_block(commit);
+                }
+            }
+        }
+        VoteRecordOutcome::Duplicate => {}
+        VoteRecordOutcome::InvalidSignature => {}
+        VoteRecordOutcome::UnknownValidator => {}
+        VoteRecordOutcome::Conflict { evidence } => {
+            state.record_evidence(evidence.clone());
+            slash(&vote.validator_id, 1, state);
         }
     }
 }
