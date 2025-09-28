@@ -7,7 +7,7 @@ use crate::circuits::transaction::{Transaction, TransactionWitness, UtxoState};
 use crate::circuits::{CircuitTrace, CircuitWitness};
 use crate::params::FieldElement;
 use crate::recursion::RecursiveProof;
-use crate::utils::fri::{FriProof, FriProver};
+use crate::utils::fri::{compress_proof, FriProof, FriProver};
 use crate::utils::poseidon;
 
 /// Supported proof encodings.  The prover currently emits JSON by default but
@@ -40,11 +40,13 @@ pub struct Proof {
 
 impl Proof {
     pub fn digest(&self) -> [u8; 32] {
-        let encoded = serde_json::to_vec(self).expect("proof is serialisable");
-        poseidon::hash_elements(&[
-            FieldElement::from_bytes(&encoded[..encoded.len().min(16)]),
-            FieldElement::from_bytes(&encoded[encoded.len().saturating_sub(16)..]),
-        ])
+        let mut elements = self.public_inputs.clone();
+        elements.push(FieldElement::from_bytes(&self.commitment[..16]));
+        elements.push(FieldElement::from_bytes(&self.commitment[16..]));
+        let fri_digest = compress_proof(&self.fri_proof);
+        elements.push(FieldElement::from_bytes(&fri_digest[..16]));
+        elements.push(FieldElement::from_bytes(&fri_digest[16..]));
+        poseidon::hash_elements(&elements)
     }
 }
 
