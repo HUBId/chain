@@ -8,7 +8,7 @@ use crate::types::Address;
 use hex;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 use thiserror::Error;
 
 /// Configuration weights used to evaluate the reputation score. The values

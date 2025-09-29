@@ -6,7 +6,7 @@ workspace and the contracts that tie them together.
 ## Workspace entry points
 
 The root crate `rpp-chain` exposes prover functionality behind feature flags.
-`backend-stwo` enables the nightly STWO integration, while `backend-mock`
+`prover-stwo` enables the nightly STWO integration, while `prover-mock`
 selects the stable mock implementation.  Both use the shared
 `prover-backend-interface` dependency, and the STWO backend is wired in via the
 `stwo` alias so existing modules can keep their imports.【F:Cargo.toml†L6-L33】

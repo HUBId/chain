@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::mem;
 
 use parking_lot::RwLock;
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
 use crate::crypto::public_key_from_hex;
@@ -1199,7 +1199,7 @@ mod tests {
     use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use std::collections::{BTreeMap, HashMap, HashSet};
-    use stwo::core::vcs::blake2_hash::Blake2sHasher;
+    use crate::proof_backend::Blake2sHasher;
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use parking_lot::RwLock;
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::rpp::ProofArtifact;
 use crate::state::merkle::compute_merkle_root;

@@ -6,6 +6,9 @@
 //! offers simple, pure-Rust stand-ins for the original StarkWare components so
 //! that tests and local development can run without external dependencies.
 
+#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
+compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
+
 pub mod backend;
 #[cfg(any(test, feature = "scaffold"))]
 pub mod circuits;

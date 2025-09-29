@@ -1,5 +1,35 @@
 use std::fmt;
 
+#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
+compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
+
+pub mod blake2s {
+    use blake2::{Blake2s256, Digest};
+
+    /// Simple Blake2s hasher mirroring the upstream STWO API.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct Blake2sHasher;
+
+    /// Wrapper returned by [`Blake2sHasher::hash`] to ease conversions.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Blake2sHash(pub [u8; 32]);
+
+    impl Blake2sHasher {
+        /// Hash an arbitrary byte slice using Blake2s-256.
+        pub fn hash(input: &[u8]) -> Blake2sHash {
+            Blake2sHash(Blake2s256::digest(input).into())
+        }
+    }
+
+    impl From<Blake2sHash> for [u8; 32] {
+        fn from(value: Blake2sHash) -> Self {
+            value.0
+        }
+    }
+}
+
+pub use blake2s::{Blake2sHash, Blake2sHasher};
+
 use bincode::Options;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};

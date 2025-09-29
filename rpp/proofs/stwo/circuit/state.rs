@@ -48,7 +48,7 @@ impl StateCircuit {
             .iter()
             .map(|account| {
                 let bytes = serde_json::to_vec(account).expect("serialize account");
-                <[u8; 32]>::from(stwo::core::vcs::blake2_hash::Blake2sHasher::hash(
+                <[u8; 32]>::from(crate::proof_backend::Blake2sHasher::hash(
                     bytes.as_slice(),
                 ))
             })

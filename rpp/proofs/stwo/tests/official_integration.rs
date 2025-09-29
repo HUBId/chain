@@ -1,4 +1,4 @@
-#![cfg(feature = "backend-stwo")]
+#![cfg(feature = "prover-stwo")]
 
 #[allow(unused_imports)]
 use super::*;

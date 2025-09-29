@@ -4,10 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["backend-stwo"]
-backend-stwo = ["dep:stwo", "stwo/prover"]
+default = ["prover-stwo"]
+prover-stwo = [
+    "dep:stwo",
+    "prover-backend-interface/prover-stwo",
+    "stwo/prover-stwo",
+]
+prover-mock = [
+    "dep:prover_mock_backend",
+    "prover-backend-interface/prover-mock",
+    "prover_mock_backend/prover-mock",
+]
 backend-plonky3 = []
-backend-mock = ["dep:prover_mock_backend"]
 
 [dependencies]
 anyhow = "1.0"

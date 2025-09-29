@@ -10,6 +10,9 @@
 //! Applications typically depend on [`config::NodeConfig`] to bootstrap a node,
 //! [`node::Node`] and [`node::NodeHandle`] to operate it, and the supporting modules for consensus,
 //! networking, proofs, and state synchronization.
+
+#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
+compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 #[path = "../rpp/rpc/api.rs"]
 pub mod api;
 #[path = "../rpp/proofs/blueprint/mod.rs"]

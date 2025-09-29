@@ -53,7 +53,7 @@ impl IdentityCircuit {
             ChainError::Transaction(format!("invalid wallet public key encoding: {err}"))
         })?;
         Ok(hex::encode::<[u8; 32]>(
-            stwo::core::vcs::blake2_hash::Blake2sHasher::hash(&pk_bytes).into(),
+            crate::proof_backend::Blake2sHasher::hash(&pk_bytes).into(),
         ))
     }
 

@@ -67,7 +67,7 @@ use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
 use rpp_p2p::{HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
@@ -551,7 +551,7 @@ mod tests {
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
-    use stwo::core::vcs::blake2_hash::Blake2sHasher;
+    use crate::proof_backend::Blake2sHasher;
     use tempfile::tempdir;
     use tracing_test::traced_test;
 

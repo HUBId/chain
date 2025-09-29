@@ -12,7 +12,7 @@ use hex;
 
 use super::Address;
 
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct IdentityBinding {

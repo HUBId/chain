@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::{ChainError, ChainResult};
 use hex;
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 /// Depth of the sparse identity commitment tree.
 pub const IDENTITY_TREE_DEPTH: usize = 32;

@@ -1,7 +1,7 @@
 mod adapter;
 
-#[cfg(feature = "backend-stwo")]
+#[cfg(feature = "prover-stwo")]
 mod official_integration;
 
-#[cfg(feature = "backend-stwo")]
+#[cfg(feature = "prover-stwo")]
 mod valid_proof;
