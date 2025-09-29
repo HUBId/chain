@@ -7,6 +7,7 @@ edition = "2024"
 default = ["backend-stwo"]
 backend-stwo = ["dep:stwo", "stwo/prover"]
 backend-plonky3 = []
+backend-mock = ["dep:prover_mock_backend"]
 
 [dependencies]
 anyhow = "1.0"
@@ -25,7 +26,9 @@ rand = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 storage-firewood = { path = "storage-firewood" }
-stwo = { path = "rpp/zk/stwo", optional = true }
+prover-backend-interface = { path = "rpp/zk/backend-interface" }
+prover_mock_backend = { path = "rpp/zk/prover_mock_backend", optional = true }
+stwo = { package = "prover_stwo_backend", path = "rpp/zk/prover_stwo_backend", optional = true }
 thiserror = "1.0"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 toml = "0.8"
@@ -57,7 +60,7 @@ members = [
     "rpp/sim",
 ]
 exclude = [
-    "rpp/zk/stwo/vendor/stwo-dev/crates/stwo",
+    "rpp/zk/prover_stwo_backend/vendor/stwo-dev/crates/stwo",
 ]
 resolver = "2"
 

@@ -3,14 +3,7 @@ use std::fmt;
 use bincode::Options;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-
-use crate::errors::{ChainError, ChainResult};
-use crate::rpp::ProofSystemKind;
-
-/// Canonical serialization version for witness containers.
-pub const WITNESS_FORMAT_VERSION: u16 = 1;
-/// Canonical serialization version for proof containers.
-pub const PROOF_FORMAT_VERSION: u16 = 1;
+use thiserror::Error;
 
 fn canonical_options() -> impl Options {
     bincode::DefaultOptions::new()
@@ -18,6 +11,18 @@ fn canonical_options() -> impl Options {
         .allow_trailing_bytes()
         .with_little_endian()
 }
+
+#[derive(Debug, Error)]
+pub enum BackendError {
+    #[error("serialization error: {0}")]
+    Serialization(#[from] bincode::Error),
+    #[error("backend functionality not implemented: {0}")]
+    Unsupported(&'static str),
+    #[error("backend failure: {0}")]
+    Failure(String),
+}
+
+pub type BackendResult<T> = Result<T, BackendError>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WitnessHeader {
@@ -52,6 +57,9 @@ impl ProofHeader {
         }
     }
 }
+
+pub const WITNESS_FORMAT_VERSION: u16 = 1;
+pub const PROOF_FORMAT_VERSION: u16 = 1;
 
 #[derive(Serialize)]
 struct WitnessEnvelope<'a, T> {
@@ -89,18 +97,18 @@ impl fmt::Debug for WitnessBytes {
 }
 
 impl WitnessBytes {
-    pub fn encode<T: Serialize>(header: &WitnessHeader, payload: &T) -> ChainResult<Self> {
+    pub fn encode<T: Serialize>(header: &WitnessHeader, payload: &T) -> BackendResult<Self> {
         let envelope = WitnessEnvelope { header, payload };
         let bytes = canonical_options()
             .serialize(&envelope)
-            .map_err(ChainError::Serialization)?;
+            .map_err(BackendError::from)?;
         Ok(Self(bytes))
     }
 
-    pub fn decode<T: DeserializeOwned>(&self) -> ChainResult<(WitnessHeader, T)> {
+    pub fn decode<T: DeserializeOwned>(&self) -> BackendResult<(WitnessHeader, T)> {
         let envelope: WitnessEnvelopeOwned<T> = canonical_options()
             .deserialize(&self.0)
-            .map_err(ChainError::Serialization)?;
+            .map_err(BackendError::from)?;
         Ok((envelope.header, envelope.payload))
     }
 
@@ -129,18 +137,18 @@ impl fmt::Debug for ProofBytes {
 }
 
 impl ProofBytes {
-    pub fn encode<T: Serialize>(header: &ProofHeader, payload: &T) -> ChainResult<Self> {
+    pub fn encode<T: Serialize>(header: &ProofHeader, payload: &T) -> BackendResult<Self> {
         let envelope = ProofEnvelope { header, payload };
         let bytes = canonical_options()
             .serialize(&envelope)
-            .map_err(ChainError::Serialization)?;
+            .map_err(BackendError::from)?;
         Ok(Self(bytes))
     }
 
-    pub fn decode<T: DeserializeOwned>(&self) -> ChainResult<(ProofHeader, T)> {
+    pub fn decode<T: DeserializeOwned>(&self) -> BackendResult<(ProofHeader, T)> {
         let envelope: ProofEnvelopeOwned<T> = canonical_options()
             .deserialize(&self.0)
-            .map_err(ChainError::Serialization)?;
+            .map_err(BackendError::from)?;
         Ok((envelope.header, envelope.payload))
     }
 
@@ -220,23 +228,28 @@ impl VerifyingKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ProofSystemKind {
+    Stwo,
+    Mock,
+    Plonky3,
+    Plonky2,
+    Halo2,
+}
+
 pub trait ProofBackend: Send + Sync + 'static {
     fn name(&self) -> &'static str;
 
-    fn setup_params(&self, _security: SecurityLevel) -> ChainResult<()> {
+    fn setup_params(&self, _security: SecurityLevel) -> BackendResult<()> {
         Ok(())
     }
 
-    fn keygen_tx(&self, _circuit: &TxCircuitDef) -> ChainResult<(ProvingKey, VerifyingKey)> {
-        Err(ChainError::Crypto(
-            "transaction keygen not implemented".into(),
-        ))
+    fn keygen_tx(&self, _circuit: &TxCircuitDef) -> BackendResult<(ProvingKey, VerifyingKey)> {
+        Err(BackendError::Unsupported("transaction keygen"))
     }
 
-    fn prove_tx(&self, _pk: &ProvingKey, _witness: &WitnessBytes) -> ChainResult<ProofBytes> {
-        Err(ChainError::Crypto(
-            "transaction proving not implemented".into(),
-        ))
+    fn prove_tx(&self, _pk: &ProvingKey, _witness: &WitnessBytes) -> BackendResult<ProofBytes> {
+        Err(BackendError::Unsupported("transaction proving"))
     }
 
     fn verify_tx(
@@ -244,16 +257,15 @@ pub trait ProofBackend: Send + Sync + 'static {
         _vk: &VerifyingKey,
         _proof: &ProofBytes,
         _public_inputs: &TxPublicInputs,
-    ) -> ChainResult<bool> {
-        Err(ChainError::Crypto(
-            "transaction verification not implemented".into(),
-        ))
+    ) -> BackendResult<bool> {
+        Err(BackendError::Unsupported("transaction verification"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]

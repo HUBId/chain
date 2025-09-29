@@ -3154,6 +3154,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "prover-backend-interface"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "blake3",
+ "hex",
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "prover_mock_backend"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "prover-backend-interface",
+ "serde",
+]
+
+[[package]]
+name = "prover_stwo_backend"
+version = "1.0.0"
+dependencies = [
+ "bincode",
+ "blake2",
+ "hex",
+ "prover-backend-interface",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "stwo-official",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3537,6 +3571,9 @@ dependencies = [
  "num-traits",
  "once_cell",
  "parking_lot",
+ "prover-backend-interface",
+ "prover_mock_backend",
+ "prover_stwo_backend",
  "rand 0.7.3",
  "reqwest",
  "rpp-consensus",
@@ -3545,7 +3582,6 @@ dependencies = [
  "serde",
  "serde_json",
  "storage-firewood",
- "stwo",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -4119,19 +4155,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "stwo"
-version = "1.0.0"
-dependencies = [
- "bincode",
- "blake2",
- "hex",
- "rand 0.8.5",
- "serde",
- "serde_json",
- "stwo-official",
-]
 
 [[package]]
 name = "stwo-official"
