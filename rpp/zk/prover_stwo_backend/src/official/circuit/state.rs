@@ -2,16 +2,18 @@
 
 use std::collections::HashMap;
 
-use crate::reputation::{ReputationWeights, Tier, current_timestamp};
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::StarkParameters;
+use crate::reputation::{current_timestamp, ReputationWeights, Tier};
 use crate::state::merkle::compute_merkle_root;
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::StarkParameters;
 use crate::types::{Account, AttestedIdentityRequest, SignedTransaction, Stake};
 use serde_json::to_vec;
 
 use super::{
-    CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field,
-    transaction::TransactionCircuit, transaction::TransactionWitness,
+    string_to_field, transaction::TransactionCircuit, transaction::TransactionWitness,
+    CircuitError, ExecutionTrace, StarkCircuit, TraceSegment,
 };
 
 /// Witness for the state transition circuit.
@@ -48,9 +50,7 @@ impl StateCircuit {
             .iter()
             .map(|account| {
                 let bytes = serde_json::to_vec(account).expect("serialize account");
-                <[u8; 32]>::from(crate::proof_backend::Blake2sHasher::hash(
-                    bytes.as_slice(),
-                ))
+                <[u8; 32]>::from(crate::proof_backend::Blake2sHasher::hash(bytes.as_slice()))
             })
             .collect::<Vec<_>>();
         hex::encode(compute_merkle_root(&mut leaves))

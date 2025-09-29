@@ -1,14 +1,14 @@
 //! Common proof artifacts emitted by the STWO scaffolding.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
+use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
 
 use super::circuit::ExecutionTrace;
 use super::params::FieldElement;
 use super::params::{PoseidonHasher, StarkParameters};
 
-use stwo::stwo_official::core::fri::FriProof as OfficialFriProof;
-use stwo::stwo_official::core::pcs::quotients::CommitmentSchemeProof as OfficialCommitmentSchemeProof;
-use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleHasher;
+use crate::stwo_official::core::fri::FriProof as OfficialFriProof;
+use crate::stwo_official::core::pcs::quotients::CommitmentSchemeProof as OfficialCommitmentSchemeProof;
+use crate::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleHasher;
 
 /// Wrapper around the official `Queries` structure.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

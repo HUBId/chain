@@ -2,8 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::stwo::air::{AirDefinition, ConstraintCompressor};
-use crate::stwo::params::{FieldElement, StarkParameters};
+use crate::official::air::{AirDefinition, ConstraintCompressor};
+use crate::official::params::{FieldElement, StarkParameters};
 
 pub mod consensus;
 pub mod identity;

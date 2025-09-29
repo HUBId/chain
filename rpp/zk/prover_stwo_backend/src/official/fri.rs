@@ -1,20 +1,20 @@
 //! Deterministic FRI proof generation backed by the official STWO prover.
 
-use crate::stwo::air::AirDefinition;
-use crate::stwo::circuit::ExecutionTrace;
-use crate::stwo::conversions::field_to_secure;
-use crate::stwo::official_adapter::BlueprintComponent;
-use crate::stwo::params::{FieldElement, StarkParameters};
-use crate::stwo::proof::{CommitmentSchemeProofData, FriProof};
+use crate::official::air::AirDefinition;
+use crate::official::circuit::ExecutionTrace;
+use crate::official::conversions::field_to_secure;
+use crate::official::official_adapter::BlueprintComponent;
+use crate::official::params::{FieldElement, StarkParameters};
+use crate::official::proof::{CommitmentSchemeProofData, FriProof};
 
-use stwo::stwo_official::core::channel::{Blake2sChannel, Channel};
-use stwo::stwo_official::core::pcs::PcsConfig;
-use stwo::stwo_official::core::poly::circle::CanonicCoset;
-use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
-use stwo::stwo_official::prover::ComponentProver;
-use stwo::stwo_official::prover::backend::cpu::CpuBackend;
-use stwo::stwo_official::prover::poly::circle::PolyOps;
-use stwo::stwo_official::prover::{CommitmentSchemeProver, prove};
+use crate::stwo_official::core::channel::{Blake2sChannel, Channel};
+use crate::stwo_official::core::pcs::PcsConfig;
+use crate::stwo_official::core::poly::circle::CanonicCoset;
+use crate::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
+use crate::stwo_official::prover::backend::cpu::CpuBackend;
+use crate::stwo_official::prover::poly::circle::PolyOps;
+use crate::stwo_official::prover::ComponentProver;
+use crate::stwo_official::prover::{prove, CommitmentSchemeProver};
 
 /// Helper encapsulating the deterministic FRI-style commitment process.
 pub struct FriProver<'a> {

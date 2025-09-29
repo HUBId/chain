@@ -1,8 +1,8 @@
 //! Shared helpers for converting blueprint field elements into official STWO representations.
 
 use super::params::FieldElement;
-use stwo::stwo_official::core::fields::m31::BaseField;
-use stwo::stwo_official::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
+use crate::stwo_official::core::fields::m31::BaseField;
+use crate::stwo_official::core::fields::qm31::{SecureField, SECURE_EXTENSION_DEGREE};
 
 /// Canonical 128-bit representation of a blueprint field element.
 pub fn field_bytes(value: &FieldElement) -> [u8; 16] {

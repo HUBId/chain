@@ -3,9 +3,9 @@
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::GlobalStateCommitments;
 
-use super::circuit::recursive::RecursiveWitness;
-use super::params::{FieldElement, PoseidonHasher, StarkParameters};
-use super::proof::{ProofKind, ProofPayload, StarkProof};
+use crate::stwo::circuit::recursive::RecursiveWitness;
+use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
+use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 
 /// Snapshot of the ledger commitments that must anchor the recursive witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -537,16 +537,12 @@ mod tests {
             .to_hex();
         let state_roots = sample_state_roots(2);
 
-        let previous_identity_commitments = vec![
-            hasher
-                .hash(&[params.element_from_u64(8), zero.clone(), zero.clone()])
-                .to_hex(),
-        ];
-        let previous_tx_commitments = vec![
-            hasher
-                .hash(&[params.element_from_u64(5), zero.clone(), zero.clone()])
-                .to_hex(),
-        ];
+        let previous_identity_commitments = vec![hasher
+            .hash(&[params.element_from_u64(8), zero.clone(), zero.clone()])
+            .to_hex()];
+        let previous_tx_commitments = vec![hasher
+            .hash(&[params.element_from_u64(5), zero.clone(), zero.clone()])
+            .to_hex()];
         let previous_state_commitment = hasher
             .hash(&[params.element_from_u64(6), zero.clone(), zero.clone()])
             .to_hex();
@@ -665,11 +661,9 @@ mod tests {
             .to_hex();
         let state_roots = sample_state_roots(3);
 
-        let previous_tx_commitments = vec![
-            hasher
-                .hash(&[params.element_from_u64(3), zero.clone(), zero.clone()])
-                .to_hex(),
-        ];
+        let previous_tx_commitments = vec![hasher
+            .hash(&[params.element_from_u64(3), zero.clone(), zero.clone()])
+            .to_hex()];
         let previous_identity_commitments = vec![identity_commitment.clone()];
         let previous_roots = sample_state_roots(2);
         let previous_aggregate = aggregator.aggregate_commitment(

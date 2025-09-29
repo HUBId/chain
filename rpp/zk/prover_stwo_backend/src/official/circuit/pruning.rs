@@ -2,11 +2,13 @@
 
 use std::collections::HashSet;
 
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::StarkParameters;
 use crate::state::merkle::compute_merkle_root;
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::StarkParameters;
 
-use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Witness for the pruning circuit describing the set of removed transactions.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

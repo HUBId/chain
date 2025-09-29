@@ -1,11 +1,13 @@
 //! Identity STARK constraints blueprint implementation.
 
 use crate::errors::{ChainError, ChainResult};
-use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::StarkParameters;
+use crate::identity_tree::{IdentityCommitmentProof, IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::StarkParameters;
 
-use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 use crate::vrf;
 
 /// Witness data required to validate an identity genesis declaration.

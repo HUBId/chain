@@ -3158,6 +3158,7 @@ name = "prover-backend-interface"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "blake2",
  "blake3",
  "hex",
  "serde",
@@ -3180,11 +3181,14 @@ dependencies = [
  "bincode",
  "blake2",
  "hex",
+ "num-bigint",
+ "num-traits",
  "prover-backend-interface",
  "rand 0.8.5",
  "serde",
  "serde_json",
  "stwo-official",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3599,6 +3603,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "libp2p",
+ "prover-backend-interface",
  "serde",
  "serde_json",
  "tokio",
@@ -3610,6 +3615,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "prover-backend-interface",
  "tokio",
  "tracing",
  "tracing-subscriber",

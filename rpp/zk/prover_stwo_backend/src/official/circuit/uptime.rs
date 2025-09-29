@@ -1,10 +1,12 @@
 //! Uptime (Timetoke) circuit implementation capturing node availability.
 
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::StarkParameters;
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::StarkParameters;
 use crate::types::UptimeProof;
 
-use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Witness attesting to a node's uptime within a given observation window.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

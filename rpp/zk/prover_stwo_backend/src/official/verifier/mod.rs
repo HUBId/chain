@@ -7,20 +7,20 @@ use crate::types::ChainProof;
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};
 use super::circuit::{
-    CircuitError, ExecutionTrace, StarkCircuit, consensus::ConsensusCircuit,
-    identity::IdentityCircuit, pruning::PruningCircuit, recursive::RecursiveCircuit,
-    state::StateCircuit, transaction::TransactionCircuit, uptime::UptimeCircuit,
+    consensus::ConsensusCircuit, identity::IdentityCircuit, pruning::PruningCircuit,
+    recursive::RecursiveCircuit, state::StateCircuit, transaction::TransactionCircuit,
+    uptime::UptimeCircuit, CircuitError, ExecutionTrace, StarkCircuit,
 };
 use super::conversions::field_to_secure;
 use super::official_adapter::{BlueprintComponent, Component};
 use super::params::{FieldElement, StarkParameters};
 use super::proof::{FriProof as BlueprintFriProof, ProofKind, ProofPayload, StarkProof};
 
-use stwo::stwo_official::core::channel::{Channel, MerkleChannel};
-use stwo::stwo_official::core::pcs::CommitmentSchemeVerifier;
-use stwo::stwo_official::core::proof::StarkProof as OfficialStarkProof;
-use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
-use stwo::stwo_official::core::verifier::{VerificationError, verify as stwo_verify};
+use crate::stwo_official::core::channel::{Channel, MerkleChannel};
+use crate::stwo_official::core::pcs::CommitmentSchemeVerifier;
+use crate::stwo_official::core::proof::StarkProof as OfficialStarkProof;
+use crate::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
+use crate::stwo_official::core::verifier::{verify as stwo_verify, VerificationError};
 
 fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
