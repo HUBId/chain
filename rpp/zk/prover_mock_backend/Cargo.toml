@@ -1,0 +1,11 @@
+[package]
+name = "prover_mock_backend"
+version = "0.1.0"
+edition = "2021"
+description = "Mock prover backend for stable toolchains"
+license = "MIT"
+
+[dependencies]
+bincode = "1.3"
+prover-backend-interface = { path = "../backend-interface" }
+serde = { version = "1.0", features = ["derive"] }

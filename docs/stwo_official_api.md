@@ -3,7 +3,7 @@
 This document records the results of running `cargo +nightly public-api` against the vendored `stwo-official` crate (commit/tag v0.1.1) to check for the types that the RPP toolchain expects to re-export.
 
 ```
-cargo +nightly public-api -p stwo-official --manifest-path rpp/zk/stwo/vendor/stwo-dev/crates/stwo/Cargo.toml > /tmp/stwo_public_api.txt
+cargo +nightly public-api -p stwo-official --manifest-path rpp/zk/prover_stwo_backend/vendor/stwo-dev/crates/stwo/Cargo.toml > /tmp/stwo_public_api.txt
 ```
 
 ## Summary of findings

@@ -6,6 +6,7 @@
 //! offers simple, pure-Rust stand-ins for the original StarkWare components so
 //! that tests and local development can run without external dependencies.
 
+pub mod backend;
 #[cfg(any(test, feature = "scaffold"))]
 pub mod circuits;
 pub mod core;

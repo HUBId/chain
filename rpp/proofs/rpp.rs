@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use stwo::core::vcs::blake2_hash::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
-use crate::proof_backend::{WitnessBytes, WitnessHeader};
+use crate::proof_backend::{
+    ProofSystemKind as BackendProofSystemKind, WitnessBytes, WitnessHeader,
+};
 use crate::state::{StoredUtxo, merkle::compute_merkle_root};
 use crate::types::Address;
 
@@ -20,8 +22,10 @@ const CIRCUIT_BLOCK: &str = "rpp.bundle.block";
 const CIRCUIT_CONSENSUS: &str = "rpp.bundle.consensus";
 
 fn encode_witness_payload<T: Serialize>(circuit: &str, payload: &T) -> ChainResult<Vec<u8>> {
-    let header = WitnessHeader::new(ProofSystemKind::Stwo, circuit);
-    WitnessBytes::encode(&header, payload).map(WitnessBytes::into_inner)
+    let header = WitnessHeader::new(BackendProofSystemKind::from(ProofSystemKind::Stwo), circuit);
+    WitnessBytes::encode(&header, payload)
+        .map_err(ChainError::from)
+        .map(WitnessBytes::into_inner)
 }
 
 /// Enumeration of all state modules that participate in the recursive pruning proof pipeline.
@@ -59,6 +63,17 @@ pub enum ProofSystemKind {
     Plonky3,
     Plonky2,
     Halo2,
+}
+
+impl From<ProofSystemKind> for BackendProofSystemKind {
+    fn from(kind: ProofSystemKind) -> Self {
+        match kind {
+            ProofSystemKind::Stwo => BackendProofSystemKind::Stwo,
+            ProofSystemKind::Plonky3 => BackendProofSystemKind::Plonky3,
+            ProofSystemKind::Plonky2 => BackendProofSystemKind::Plonky2,
+            ProofSystemKind::Halo2 => BackendProofSystemKind::Halo2,
+        }
+    }
 }
 
 /// Encoding used for witnesses that accompany commitment proofs.

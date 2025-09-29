@@ -2,6 +2,7 @@ use std::io;
 
 use storage_firewood::kv::KvError;
 use thiserror::Error;
+use prover_backend_interface::BackendError;
 
 #[derive(Debug, Error)]
 pub enum ChainError {
@@ -24,3 +25,14 @@ pub enum ChainError {
 }
 
 pub type ChainResult<T> = Result<T, ChainError>;
+
+impl From<BackendError> for ChainError {
+    fn from(err: BackendError) -> Self {
+        match err {
+            BackendError::Serialization(inner) => ChainError::Serialization(inner),
+            BackendError::Unsupported(msg) | BackendError::Failure(msg) => {
+                ChainError::Crypto(msg.into())
+            }
+        }
+    }
+}
