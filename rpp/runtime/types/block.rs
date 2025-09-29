@@ -1331,7 +1331,9 @@ mod tests {
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
-    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{
+        CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
     use crate::types::{
         AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
         IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
@@ -1420,13 +1422,17 @@ mod tests {
         ];
         let hasher = parameters.poseidon_hasher();
         let fri_prover = FriProver::new(&parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let air = circuit
+            .define_air(&parameters, &trace)
+            .expect("air definition");
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         let proof = StarkProof::new(
             ProofKind::Identity,
             ProofPayload::Identity(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         );
         IdentityDeclaration {
@@ -1549,7 +1555,8 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         })
     }
 
@@ -1685,7 +1692,8 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         }
     }
 

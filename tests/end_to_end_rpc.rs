@@ -15,7 +15,9 @@ use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::circuit::transaction::TransactionWitness;
-use rpp_chain::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+use rpp_chain::stwo::proof::{
+    CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+};
 use rpp_chain::types::{
     Account, ChainProof, SignedTransaction, Stake, Transaction, TransactionProofBundle,
 };
@@ -160,7 +162,8 @@ fn sample_transaction_bundle(to: &str) -> TransactionProofBundle {
         trace: ExecutionTrace {
             segments: Vec::new(),
         },
-        fri_proof: FriProof::empty(),
+        commitment_proof: CommitmentSchemeProofData::default(),
+        fri_proof: FriProof::default(),
     };
 
     TransactionProofBundle::new(signed_tx, ChainProof::Stwo(proof))

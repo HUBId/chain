@@ -98,13 +98,17 @@ fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
     ];
     let hasher = parameters.poseidon_hasher();
     let prover = FriProver::new(&parameters);
-    let proof = prover.prove(&trace, &inputs);
+    let air = circuit
+        .define_air(&parameters, &trace)
+        .expect("air definition");
+    let proof = prover.prove(&air, &trace, &inputs);
     let stark = StarkProof::new(
         ProofKind::Identity,
         ProofPayload::Identity(witness),
         inputs,
         trace,
-        proof,
+        proof.commitment_proof,
+        proof.fri_proof,
         &hasher,
     );
     IdentityDeclaration {

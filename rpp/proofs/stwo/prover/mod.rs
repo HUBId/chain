@@ -460,6 +460,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let tx = &witness.signed_tx.payload;
         let inputs = vec![
             string_to_field(&self.parameters, &tx.from),
@@ -470,13 +473,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::Transaction,
             ProofPayload::Transaction(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }
@@ -490,6 +494,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let inputs = vec![
             string_to_field(&self.parameters, &witness.wallet_addr),
             string_to_field(&self.parameters, &witness.vrf_tag),
@@ -498,13 +505,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::Identity,
             ProofPayload::Identity(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }
@@ -518,6 +526,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let inputs = vec![
             string_to_field(&self.parameters, &witness.prev_state_root),
             string_to_field(&self.parameters, &witness.new_state_root),
@@ -526,13 +537,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::State,
             ProofPayload::State(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }
@@ -546,6 +558,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let inputs = vec![
             string_to_field(&self.parameters, &witness.previous_tx_root),
             string_to_field(&self.parameters, &witness.pruned_tx_root),
@@ -554,13 +569,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::Pruning,
             ProofPayload::Pruning(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }
@@ -574,6 +590,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let prev = witness.previous_commitment.clone().unwrap_or_default();
         let inputs = vec![
             string_to_field(&self.parameters, &prev),
@@ -583,13 +602,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::Recursive,
             ProofPayload::Recursive(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }
@@ -603,6 +623,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let inputs = vec![
             string_to_field(&self.parameters, &witness.wallet_address),
             self.parameters.element_from_u64(witness.node_clock),
@@ -614,13 +637,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::Uptime,
             ProofPayload::Uptime(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }
@@ -634,6 +658,9 @@ impl<'a> WalletProver<'a> {
         circuit
             .verify_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
+        let air = circuit
+            .define_air(&self.parameters, &trace)
+            .map_err(map_circuit_error)?;
         let inputs = vec![
             string_to_field(&self.parameters, &witness.block_hash),
             self.parameters.element_from_u64(witness.round),
@@ -642,13 +669,14 @@ impl<'a> WalletProver<'a> {
         ];
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         Ok(StarkProof::new(
             ProofKind::Consensus,
             ProofPayload::Consensus(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         ))
     }

@@ -99,7 +99,9 @@ mod tests {
         use super::super::ChainProof;
         use crate::stwo::circuit::ExecutionTrace;
         use crate::stwo::circuit::recursive::RecursiveWitness;
-        use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+        use crate::stwo::proof::{
+            CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+        };
 
         fn sample_stwo_proof() -> StarkProof {
             let witness = RecursiveWitness {
@@ -127,7 +129,8 @@ mod tests {
                 trace: ExecutionTrace {
                     segments: Vec::new(),
                 },
-                fri_proof: FriProof::empty(),
+                commitment_proof: CommitmentSchemeProofData::default(),
+                fri_proof: FriProof::default(),
             }
         }
 

@@ -265,7 +265,9 @@ mod tests {
     use crate::stwo::circuit::transaction::TransactionWitness;
     use crate::stwo::circuit::uptime::UptimeWitness;
     use crate::stwo::circuit::{ExecutionTrace, TraceSegment};
-    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{
+        CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
     use crate::types::{Account, SignedTransaction, Stake, Transaction};
     use uuid::Uuid;
 
@@ -277,7 +279,7 @@ mod tests {
     }
 
     fn dummy_fri_proof() -> FriProof {
-        FriProof::empty()
+        FriProof::default()
     }
 
     fn make_proof(
@@ -292,6 +294,7 @@ mod tests {
             public_inputs: Vec::new(),
             payload,
             trace: dummy_trace(parameters),
+            commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: dummy_fri_proof(),
         }
     }

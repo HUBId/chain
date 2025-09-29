@@ -485,7 +485,9 @@ mod tests {
     use crate::stwo::circuit::{
         ExecutionTrace, pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness,
     };
-    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{
+        CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
     use crate::types::{
         Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
         RecursiveProof,
@@ -512,7 +514,8 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         }
     }
 
@@ -530,7 +533,8 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         }
     }
 
@@ -565,7 +569,8 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         }
     }
 

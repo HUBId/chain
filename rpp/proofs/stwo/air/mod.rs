@@ -94,6 +94,18 @@ pub struct ColumnReference {
     offset: isize,
 }
 
+impl ColumnReference {
+    /// Returns the column referenced by the expression.
+    pub fn column(&self) -> &AirColumn {
+        &self.column
+    }
+
+    /// Returns the relative row offset associated with the reference.
+    pub fn offset(&self) -> isize {
+        self.offset
+    }
+}
+
 /// Trait abstracting sources that can provide column values with row offsets.
 pub trait TraceEvaluator {
     fn value(
@@ -135,7 +147,7 @@ impl AirExpression {
         Self::Sub(Box::new(lhs), Box::new(rhs))
     }
 
-    fn evaluate<E: TraceEvaluator>(
+    pub(crate) fn evaluate<E: TraceEvaluator>(
         &self,
         view: &E,
         row: usize,
@@ -191,7 +203,7 @@ pub enum ConstraintDomain {
 }
 
 impl ConstraintDomain {
-    fn rows(&self, length: usize) -> Vec<usize> {
+    pub(crate) fn rows(&self, length: usize) -> Vec<usize> {
         match self {
             ConstraintDomain::AllRows => (0..length).collect(),
             ConstraintDomain::FirstRow => {

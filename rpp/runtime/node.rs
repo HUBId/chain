@@ -544,7 +544,9 @@ mod tests {
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
-    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{
+        CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
     use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
@@ -633,13 +635,17 @@ mod tests {
         ];
         let hasher = parameters.poseidon_hasher();
         let fri_prover = FriProver::new(&parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let air = circuit
+            .define_air(&parameters, &trace)
+            .expect("air definition");
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         let proof = StarkProof::new(
             ProofKind::Identity,
             ProofPayload::Identity(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         );
         IdentityDeclaration {
@@ -1070,7 +1076,8 @@ mod tests {
         let mut tampered_block = block.clone();
         let tampered_state_proof = match tampered_block.stark.state_proof.clone() {
             ChainProof::Stwo(mut stark) => {
-                stark.fri_proof = FriProof::empty();
+                stark.commitment_proof = CommitmentSchemeProofData::default();
+                stark.fri_proof = FriProof::default();
                 ChainProof::Stwo(stark)
             }
             #[cfg(feature = "backend-plonky3")]
