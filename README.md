@@ -21,6 +21,15 @@ It integrates:
 
 This workspace is pinned to `nightly-2024-06-20` via `rust-toolchain.toml`. Install the matching toolchain along with the bundled `rustfmt` and `clippy` components before building locally to ensure consistent formatting and lint coverage.
 
+## Build Matrix
+
+| Channel | Status | Notes |
+| --- | --- | --- |
+| Nightly (`nightly-2024-06-20`) | ✅ Required today | CI, dev tooling, and docs expect this toolchain until the stable transition lands. |
+| Stable (target `1.79`) | 🚧 Target for tomorrow | Migration checklists and experiments should validate readiness for switching the workspace default. |
+
+> ℹ️ Keep running validation passes against both channels so that the nightly dependency can be safely removed when the stable target is promoted.
+
 ## Getting Started
 
 ### Prerequisites
