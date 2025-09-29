@@ -38,7 +38,11 @@ use num_traits::Zero;
 #[cfg(feature = "stwo/prover")]
 use stwo::stwo_official::core::channel::MerkleChannel;
 #[cfg(feature = "stwo/prover")]
-use stwo::stwo_official::core::poly::circle::CanonicCoset;
+use stwo::stwo_official::core::poly::circle::{CanonicCoset, CircleDomain};
+#[cfg(feature = "stwo/prover")]
+use stwo::stwo_official::core::utils::{
+    bit_reverse_index, offset_bit_reversed_circle_domain_index,
+};
 /// Re-export prover-side structures when the upstream dependency exposes them.
 #[cfg(feature = "stwo/prover")]
 pub use stwo::stwo_official::prover::{
@@ -49,6 +53,7 @@ pub use stwo::stwo_official::prover::{
 use stwo::stwo_official::prover::{
     backend::cpu::{CpuCircleEvaluation, CpuCirclePoly},
     pcs::CommitmentSchemeProver,
+    poly::twiddles::TwiddleTree,
     poly::{BitReversedOrder, NaturalOrder},
 };
 
@@ -327,6 +332,156 @@ impl<'a, 'm> TraceEvaluator for MaskTraceView<'a, 'm> {
 }
 
 #[cfg(feature = "stwo/prover")]
+enum ColumnDomainValues<'a> {
+    Borrowed(&'a [BaseField]),
+    Owned(Vec<BaseField>),
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a> ColumnDomainValues<'a> {
+    fn len(&self) -> usize {
+        match self {
+            ColumnDomainValues::Borrowed(values) => values.len(),
+            ColumnDomainValues::Owned(values) => values.len(),
+        }
+    }
+
+    fn value(&self, index: usize) -> BaseField {
+        match self {
+            ColumnDomainValues::Borrowed(values) => values[index],
+            ColumnDomainValues::Owned(values) => values[index],
+        }
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+struct SegmentDomainValues<'a, 't> {
+    descriptor: &'a SegmentDescriptor<'a>,
+    log_size: u32,
+    columns: Vec<ColumnDomainValues<'t>>,
+}
+
+#[cfg(feature = "stwo/prover")]
+struct DomainTraceView<'a, 't> {
+    component: &'a BlueprintComponent<'a>,
+    parameters: &'a StarkParameters,
+    eval_log_size: u32,
+    segments: Vec<SegmentDomainValues<'a, 't>>,
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a, 't> DomainTraceView<'a, 't> {
+    fn new(
+        component: &'a BlueprintComponent<'a>,
+        parameters: &'a StarkParameters,
+        trace: &'t Trace<'t, CpuBackend>,
+        eval_log_size: u32,
+        eval_domain: Option<CircleDomain>,
+        twiddles: Option<&TwiddleTree<CpuBackend>>,
+        expected_len: usize,
+    ) -> Self {
+        let mut segments = Vec::with_capacity(component.segments.len());
+        for (segment_index, descriptor) in component.segments.iter().enumerate() {
+            let tree_index = segment_tree_index(segment_index);
+            let mut columns = Vec::with_capacity(descriptor.column_count);
+            for column_index in 0..descriptor.column_count {
+                let eval_ref = trace.evals[tree_index][column_index];
+                let values = if let Some(domain) = eval_domain {
+                    if eval_ref.domain == domain {
+                        ColumnDomainValues::Borrowed(eval_ref.values.as_slice())
+                    } else {
+                        let twiddles = twiddles.expect("evaluation twiddles available");
+                        let poly = trace.polys[tree_index][column_index];
+                        let extended = poly.evaluate_with_twiddles(domain, twiddles);
+                        ColumnDomainValues::Owned(extended.values)
+                    }
+                } else {
+                    ColumnDomainValues::Borrowed(eval_ref.values.as_slice())
+                };
+                if eval_domain.is_some() {
+                    debug_assert_eq!(values.len(), expected_len);
+                }
+                columns.push(values);
+            }
+            segments.push(SegmentDomainValues {
+                descriptor,
+                log_size: descriptor.log_size.max(1),
+                columns,
+            });
+        }
+        Self {
+            component,
+            parameters,
+            eval_log_size,
+            segments,
+        }
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a, 't> TraceEvaluator for DomainTraceView<'a, 't> {
+    fn value(
+        &self,
+        column: &AirColumn,
+        row: usize,
+        offset: isize,
+    ) -> Result<FieldElement, super::air::AirError> {
+        let segment_name = column.segment();
+        let segment_index = *self
+            .component
+            .segment_lookup
+            .get(segment_name)
+            .ok_or_else(|| super::air::AirError::MissingSegment(segment_name.to_owned()))?;
+        let segment = &self.segments[segment_index];
+        let descriptor = segment.descriptor;
+        let column_name = column.column();
+        let column_index = *descriptor.column_indices.get(column_name).ok_or_else(|| {
+            super::air::AirError::MissingColumn {
+                segment: segment_name.to_owned(),
+                column: column_name.to_owned(),
+            }
+        })?;
+        let values = &segment.columns[column_index];
+        let len = values.len();
+        let index = map_domain_index(row, offset, segment.log_size, self.eval_log_size, len)
+            .ok_or_else(|| super::air::AirError::RowOutOfBounds {
+                segment: segment_name.to_owned(),
+                column: column_name.to_owned(),
+                row,
+                offset,
+            })?;
+        let base_value = values.value(index);
+        Ok(self.parameters.element_from_u64(base_value.0 as u64))
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+fn map_domain_index(
+    row: usize,
+    offset: isize,
+    domain_log_size: u32,
+    eval_log_size: u32,
+    len: usize,
+) -> Option<usize> {
+    if offset == 0 {
+        return (row < len).then_some(row);
+    }
+    if eval_log_size == domain_log_size {
+        let natural = bit_reverse_index(row, eval_log_size);
+        let domain_size = 1usize << domain_log_size;
+        let target = natural as isize + offset;
+        if !(0..domain_size as isize).contains(&target) {
+            return None;
+        }
+        Some(bit_reverse_index(target as usize, eval_log_size))
+    } else {
+        let index =
+            offset_bit_reversed_circle_domain_index(row, domain_log_size, eval_log_size, offset);
+        (index < len).then_some(index)
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
 fn domain_vanishing(
     descriptor: &SegmentDescriptor<'_>,
     domain: &ConstraintDomain,
@@ -559,6 +714,91 @@ impl<'a> Component for BlueprintComponent<'a> {
     }
 }
 
+#[cfg(feature = "stwo/prover")]
+impl<'a> ComponentProver<CpuBackend> for BlueprintComponent<'a> {
+    fn evaluate_constraint_quotients_on_domain(
+        &self,
+        trace: &Trace<'_, CpuBackend>,
+        evaluation_accumulator: &mut DomainEvaluationAccumulator<CpuBackend>,
+    ) {
+        if self.n_constraints() == 0 {
+            return;
+        }
+
+        let max_log = self.max_constraint_log_degree_bound();
+        let (eval_domain, mut twiddles, eval_size) = if max_log == 0 {
+            (None, None, 1usize)
+        } else {
+            let domain = CanonicCoset::new(max_log).circle_domain();
+            let size = domain.size();
+            let twiddles = CpuBackend::precompute_twiddles(domain.half_coset);
+            (Some(domain), Some(twiddles), size)
+        };
+        let domain_log_size = eval_domain
+            .map(|domain| domain.log_size())
+            .unwrap_or(max_log);
+
+        let [mut accum] = evaluation_accumulator.columns([(max_log, self.n_constraints())]);
+        accum.random_coeff_powers.reverse();
+
+        let trace_view = DomainTraceView::new(
+            self,
+            self.parameters,
+            trace,
+            domain_log_size,
+            eval_domain,
+            twiddles.as_ref(),
+            eval_size,
+        );
+
+        for row in 0..eval_size {
+            let mut row_value = SecureField::zero();
+            let eval_point = eval_domain
+                .map(|domain| domain.at(row).into_ef())
+                .unwrap_or_else(CirclePoint::<SecureField>::zero);
+            for (constraint_idx, constraint) in self.air.constraints().iter().enumerate() {
+                let numerator_field = constraint
+                    .expression
+                    .evaluate(&trace_view, row, self.parameters)
+                    .unwrap_or_else(|err| {
+                        panic!("failed to evaluate constraint '{}': {err}", constraint.name)
+                    });
+                let numerator = field_to_secure(&numerator_field);
+                if numerator.is_zero() {
+                    continue;
+                }
+
+                let segment_index = *self
+                    .segment_lookup
+                    .get(constraint.segment.as_str())
+                    .expect("segment registered");
+                let descriptor = &self.segments[segment_index];
+                let denominator = domain_vanishing(descriptor, &constraint.domain, eval_point);
+                if denominator.is_zero() {
+                    // Single-row segments (log_size = 0) are evaluated on the same coset as the
+                    // committed trace, so their vanishing polynomial evaluates to zero. The
+                    // corresponding constraints must already vanish on that row; otherwise the
+                    // trace is invalid and we stop early.
+                    debug_assert_eq!(
+                        descriptor.log_size, 0,
+                        "vanishing denominator on multi-row segment"
+                    );
+                    panic!(
+                        "constraint '{}' produced non-zero value on single-row segment",
+                        constraint.name
+                    );
+                }
+                let quotient = numerator * denominator.inverse();
+                let coeff = accum.random_coeff_powers[constraint_idx].clone();
+                row_value += coeff * quotient;
+            }
+            if !row_value.is_zero() {
+                accum.accumulate(row, row_value);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +845,55 @@ mod tests {
             evaluation.values[evaluation.values.len() - 1],
             BaseField::zero()
         );
+    }
+
+    #[cfg(feature = "stwo/prover")]
+    #[test]
+    fn component_handles_single_row_segments() {
+        use stwo::stwo_official::core::fields::qm31::SecureField;
+        use stwo::stwo_official::prover::{
+            DomainEvaluationAccumulator, air::component_prover::Trace,
+        };
+
+        let params = StarkParameters::blueprint_default();
+        let segment = sample_segment("single", 1, 1);
+        let trace = ExecutionTrace::single(segment.clone()).expect("trace");
+        let column = AirColumn::new(segment.name.clone(), segment.columns[0].clone());
+        let constraint = AirConstraint::new(
+            "single_row_zero",
+            segment.name.clone(),
+            ConstraintDomain::AllRows,
+            AirExpression::from(column),
+        );
+        let air = AirDefinition::new(vec![constraint]);
+        let component = BlueprintComponent::new(&air, &trace, &params).expect("component");
+
+        let descriptor = &component.segments[0];
+        let circle_evals = segment_to_circle_evals(&segment, descriptor);
+        let circle_polys: Vec<_> = circle_evals
+            .iter()
+            .cloned()
+            .map(|eval| eval.interpolate())
+            .collect();
+        let eval_refs: Vec<&CpuCircleEvaluation<BaseField, BitReversedOrder>> =
+            circle_evals.iter().collect();
+        let poly_refs: Vec<&CpuCirclePoly> = circle_polys.iter().collect();
+        let trace_for_prover = Trace {
+            polys: TreeVec(vec![Vec::new(), poly_refs]),
+            evals: TreeVec(vec![Vec::new(), eval_refs]),
+        };
+
+        let mut accumulator = DomainEvaluationAccumulator::new(
+            SecureField::from(3u32),
+            component.max_constraint_log_degree_bound(),
+            component.n_constraints(),
+        );
+        component.evaluate_constraint_quotients_on_domain(&trace_for_prover, &mut accumulator);
+
+        let composition = accumulator.finalize();
+        for poly in composition.0.iter() {
+            assert!(poly.coeffs.iter().all(|coeff| *coeff == BaseField::zero()));
+        }
     }
 
     #[test]
