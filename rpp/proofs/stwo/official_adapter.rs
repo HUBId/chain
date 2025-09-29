@@ -38,13 +38,13 @@ use num_traits::{One, Zero};
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::channel::MerkleChannel;
 #[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::core::fields::FieldExpOps;
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::poly::circle::{CanonicCoset, CircleDomain};
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::utils::{
     bit_reverse_index, offset_bit_reversed_circle_domain_index,
 };
-#[cfg(feature = "backend-stwo")]
-use stwo::stwo_official::core::fields::FieldExpOps;
 #[cfg(feature = "backend-stwo")]
 pub use stwo::stwo_official::prover::poly::circle::CircleEvaluation;
 /// Re-export prover-side structures when the upstream dependency exposes them.
@@ -54,13 +54,13 @@ pub use stwo::stwo_official::prover::{
     DomainEvaluationAccumulator, Trace, TreeBuilder, backend::cpu::CpuBackend,
 };
 #[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::prover::{backend::BackendForChannel, poly::circle::PolyOps};
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::{
     backend::cpu::{CpuCircleEvaluation, CpuCirclePoly},
     poly::twiddles::TwiddleTree,
     poly::{BitReversedOrder, NaturalOrder},
 };
-#[cfg(feature = "backend-stwo")]
-use stwo::stwo_official::prover::{backend::BackendForChannel, poly::circle::PolyOps};
 
 /// Errors that can be raised while validating execution trace descriptors.
 #[derive(Debug, Error)]
@@ -179,6 +179,12 @@ impl<'a> BlueprintComponent<'a> {
             #[cfg(feature = "backend-stwo")]
             column_masks,
         })
+    }
+
+    /// Returns a list of verifier components referencing the underlying AIR
+    /// definition and execution trace data.
+    pub fn verifier_components(&'a self) -> Vec<&'a dyn Component> {
+        vec![self as &dyn Component]
     }
 }
 
@@ -811,11 +817,11 @@ mod tests {
     use crate::stwo::circuit::TraceSegment;
     use crate::stwo::conversions::column_to_secure;
     #[cfg(feature = "backend-stwo")]
+    use stwo::stwo_official::core::fields::m31::BaseField;
+    #[cfg(feature = "backend-stwo")]
     use stwo::stwo_official::core::fields::qm31::SecureField;
     #[cfg(feature = "backend-stwo")]
     use stwo::stwo_official::prover::{DomainEvaluationAccumulator, Trace};
-    #[cfg(feature = "backend-stwo")]
-    use stwo::stwo_official::core::fields::m31::BaseField;
 
     fn sample_segment(name: &str, columns: usize, rows: usize) -> TraceSegment {
         let params = StarkParameters::blueprint_default();

@@ -11,9 +11,15 @@ use super::circuit::{
     identity::IdentityCircuit, pruning::PruningCircuit, recursive::RecursiveCircuit,
     state::StateCircuit, transaction::TransactionCircuit, uptime::UptimeCircuit,
 };
-use super::fri::FriProver;
+use super::conversions::field_to_secure;
+use super::official_adapter::{BlueprintComponent, Component};
 use super::params::{FieldElement, StarkParameters};
 use super::proof::{ProofKind, ProofPayload, StarkProof};
+
+use stwo::stwo_official::core::pcs::CommitmentSchemeVerifier;
+use stwo::stwo_official::core::proof::StarkProof as OfficialStarkProof;
+use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
+use stwo::stwo_official::core::verifier::{VerificationError, verify as stwo_verify};
 
 fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
@@ -22,6 +28,21 @@ fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
 
 fn map_circuit_error(err: CircuitError) -> ChainError {
     ChainError::Crypto(err.to_string())
+}
+
+fn map_verification_error(err: VerificationError) -> ChainError {
+    let message = match err {
+        VerificationError::InvalidStructure(msg) => {
+            format!("invalid proof structure: {msg}")
+        }
+        VerificationError::Merkle(inner) => {
+            format!("merkle verification failed: {inner}")
+        }
+        VerificationError::OodsNotMatching => "oods check failed".to_string(),
+        VerificationError::Fri(inner) => format!("fri verification failed: {inner}"),
+        VerificationError::ProofOfWork => "proof of work verification failed".to_string(),
+    };
+    ChainError::Crypto(message)
 }
 
 /// Lightweight verifier that recomputes commitments by replaying circuits.
@@ -72,16 +93,61 @@ impl NodeVerifier {
         trace: &ExecutionTrace,
         air: &super::air::AirDefinition,
     ) -> ChainResult<()> {
-        let fri_prover = FriProver::new(&self.parameters);
-        let expected = fri_prover.prove(air, trace, public_inputs);
-        if proof.fri_proof != expected.fri_proof
-            || proof.commitment_proof != expected.commitment_proof
-        {
-            return Err(ChainError::Crypto(
-                "fri or commitment proof mismatch".into(),
-            ));
+        let component = BlueprintComponent::new(air, trace, &self.parameters).map_err(|err| {
+            tracing::error!(error = %err, "failed to prepare verifier component");
+            ChainError::Crypto(format!("component adapter error: {err}"))
+        })?;
+
+        let mut commitment_proof = proof.commitment_proof.to_official().ok_or_else(|| {
+            tracing::error!("missing commitment scheme proof data");
+            ChainError::Crypto("missing commitment proof".into())
+        })?;
+
+        if let Some(fri_proof) = proof.fri_proof.to_official() {
+            if fri_proof != commitment_proof.fri_proof {
+                tracing::error!("embedded fri proof mismatch between payloads");
+                return Err(ChainError::Crypto("fri proof mismatch".into()));
+            }
         }
-        Ok(())
+
+        let mut channel = Blake2sMerkleChannel::C::default();
+        let secure_inputs = public_inputs
+            .iter()
+            .map(field_to_secure)
+            .collect::<Vec<_>>();
+        channel.mix_felts(&secure_inputs);
+        commitment_proof.config.mix_into(&mut channel);
+
+        let mut commitment_scheme =
+            CommitmentSchemeVerifier::<Blake2sMerkleChannel>::new(commitment_proof.config);
+
+        let log_sizes = component.trace_log_degree_bounds();
+        if commitment_proof.commitments.len() != log_sizes.len() {
+            tracing::error!(
+                commitments = commitment_proof.commitments.len(),
+                expected = log_sizes.len(),
+                "commitment tree count mismatch"
+            );
+            return Err(ChainError::Crypto("commitment tree count mismatch".into()));
+        }
+
+        for (commitment, sizes) in commitment_proof.commitments.iter().zip(log_sizes.iter()) {
+            commitment_scheme.commit(*commitment, sizes, &mut channel);
+        }
+
+        let components = component.verifier_components();
+        let stark_proof = OfficialStarkProof(commitment_proof);
+
+        stwo_verify(
+            &components,
+            &mut channel,
+            &mut commitment_scheme,
+            stark_proof,
+        )
+        .map_err(|err| {
+            tracing::error!(error = %err, "fri verification failed");
+            map_verification_error(err)
+        })
     }
 
     fn compute_recursive_commitment(
