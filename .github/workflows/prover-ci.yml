@@ -1,0 +1,79 @@
+name: prover-ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  nightly-prover-stwo:
+    name: nightly-prover-stwo
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: nightly-prover-stwo
+            toolchain: nightly
+            features: prover-stwo
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Cache cargo directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cargo/registry
+            target
+          key: ${{ runner.os }}-nightly-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-nightly-
+      - name: Build release artifacts
+        run: cargo build --release --workspace --features ${{ matrix.features }}
+      - name: Run tests
+        run: cargo test --workspace --features ${{ matrix.features }}
+      - name: Run benchmarks (scheduled only)
+        if: ${{ github.event_name == 'schedule' }}
+        run: cargo bench --workspace --features ${{ matrix.features }}
+
+  stable-prover-mock:
+    name: stable-prover-mock
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: stable-prover-mock
+            toolchain: stable
+            features: prover-mock
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo directories
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cargo/registry
+            target
+          key: ${{ runner.os }}-stable-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-stable-
+      - name: Smoke build
+        run: cargo build --workspace --features ${{ matrix.features }}
+      - name: Run tests
+        run: cargo test --workspace --features ${{ matrix.features }}
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --features ${{ matrix.features }} -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all -- --check
