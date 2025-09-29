@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::crypto::address_from_public_key;
+use crate::proof_system::ProofProver;
 use crate::reputation::Tier;
 use crate::storage::Storage;
 #[allow(unused_imports)]
@@ -16,10 +17,57 @@ use crate::stwo::fri::FriProver;
 use crate::stwo::official_adapter::{BlueprintComponent, Component, ComponentProver};
 #[allow(unused_imports)]
 use crate::stwo::params::{FieldElement, StarkParameters};
-use crate::types::{Account, SignedTransaction, Stake, Transaction};
+use crate::stwo::prover::WalletProver;
+use crate::types::{Account, ChainProof, SignedTransaction, Stake, Transaction};
 use ed25519_dalek::{Keypair, Signer};
+use once_cell::sync::Lazy;
 use rand::{SeedableRng, rngs::StdRng};
 use tempfile::tempdir;
+
+#[derive(Clone)]
+pub(super) struct RecordedTransaction {
+    pub signed_transaction: SignedTransaction,
+    pub proof: ChainProof,
+}
+
+pub(super) static RECORDED_TRANSACTION: Lazy<RecordedTransaction> = Lazy::new(|| {
+    let tx = sample_transaction();
+    let temp_dir = tempdir().expect("temporary directory");
+    let storage = Storage::open(temp_dir.path()).expect("open storage");
+    let (sender_account, _) = populate_wallet_state(&storage, &tx);
+
+    assert!(
+        tx.payload.timestamp >= sender_account.reputation.last_decay_timestamp,
+        "transaction timestamp must respect sender decay window",
+    );
+    assert_eq!(
+        tx.payload.nonce,
+        sender_account.nonce + 1,
+        "transaction nonce must advance sender state",
+    );
+
+    let prover = WalletProver::new(&storage)
+        .with_parameters(StarkParameters::blueprint_default())
+        .with_minimum_tier(Tier::Tl1);
+
+    let witness = prover
+        .derive_transaction_witness(&tx)
+        .expect("derive transaction witness");
+    let proof = prover
+        .prove_transaction(witness)
+        .expect("prove transaction");
+
+    assert!(matches!(proof, ChainProof::Stwo(_)), "expected STWO proof");
+
+    RecordedTransaction {
+        signed_transaction: tx,
+        proof,
+    }
+});
+
+pub(super) fn recorded_transaction_proof() -> RecordedTransaction {
+    RECORDED_TRANSACTION.clone()
+}
 
 fn sample_transaction() -> SignedTransaction {
     let mut rng = StdRng::from_seed([0x42; 32]);
@@ -81,8 +129,14 @@ fn populate_wallet_state(storage: &Storage, tx: &SignedTransaction) -> (Account,
 
 #[test]
 fn wallet_state_round_trip_is_deterministic() {
-    let tx = sample_transaction();
+    let fixture = recorded_transaction_proof();
     let temp_dir = tempdir().expect("temporary directory");
     let storage = Storage::open(temp_dir.path()).expect("open storage");
-    let _ = populate_wallet_state(&storage, &tx);
+    let _ = populate_wallet_state(&storage, &fixture.signed_transaction);
+}
+
+#[test]
+fn recorded_transaction_proof_generation_succeeds() {
+    let fixture = recorded_transaction_proof();
+    assert!(matches!(fixture.proof, ChainProof::Stwo(_)));
 }
