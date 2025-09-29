@@ -8,18 +8,26 @@
 //! subsequent trait implementations to bridge the lightweight blueprint models
 //! with the official prover APIs.
 
+#[cfg(feature = "stwo/prover")]
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use thiserror::Error;
 
 use super::{
-    air::AirDefinition,
+    air::{AirColumn, AirDefinition, AirExpression, ConstraintDomain, TraceEvaluator},
     circuit::{ExecutionTrace, TraceSegment},
-    conversions::{column_to_base, column_to_secure},
+    conversions::{column_to_base, column_to_secure, field_to_secure},
     params::{FieldElement, StarkParameters},
 };
 use stwo::stwo_official::core::fields::m31::BaseField;
-use stwo::stwo_official::core::fields::qm31::SecureField;
+use stwo::stwo_official::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
+#[cfg(feature = "stwo/prover")]
+use stwo::stwo_official::core::{
+    air::accumulation::PointEvaluationAccumulator,
+    circle::CirclePoint,
+    constraints::{coset_vanishing, point_vanishing},
+};
 
 /// Re-export key prover traits and types from the official STWO implementation
 /// so that downstream modules can rely on them without repetitive imports.
@@ -80,6 +88,41 @@ pub struct SegmentDescriptor<'a> {
     pub column_indices: HashMap<&'a str, usize>,
 }
 
+#[cfg(feature = "stwo/prover")]
+#[derive(Debug, Default)]
+struct ColumnMask {
+    offsets: Vec<isize>,
+    positions: HashMap<isize, usize>,
+}
+
+#[cfg(feature = "stwo/prover")]
+impl ColumnMask {
+    fn new(offsets: Vec<isize>) -> Self {
+        let mut unique = offsets;
+        if unique.len() > 1 {
+            unique.sort_unstable();
+            unique.dedup();
+        }
+        let positions = unique
+            .iter()
+            .enumerate()
+            .map(|(idx, &offset)| (offset, idx))
+            .collect();
+        Self {
+            offsets: unique,
+            positions,
+        }
+    }
+
+    fn offsets(&self) -> &[isize] {
+        &self.offsets
+    }
+
+    fn index_of(&self, offset: isize) -> Option<usize> {
+        self.positions.get(&offset).copied()
+    }
+}
+
 /// Component description tying together the blueprint AIR, trace and
 /// parameters with pre-computed segment descriptors.
 #[derive(Debug)]
@@ -94,6 +137,8 @@ pub struct BlueprintComponent<'a> {
     pub segments: Vec<SegmentDescriptor<'a>>,
     /// Quick lookup from segment name to descriptor index.
     pub segment_lookup: HashMap<&'a str, usize>,
+    #[cfg(feature = "stwo/prover")]
+    column_masks: Vec<Vec<ColumnMask>>,
 }
 
 impl<'a> BlueprintComponent<'a> {
@@ -112,13 +157,83 @@ impl<'a> BlueprintComponent<'a> {
             segments.push(build_descriptor(segment)?);
         }
 
+        #[cfg(feature = "stwo/prover")]
+        let column_masks = build_column_masks(air, &segments, &segment_lookup);
+
         Ok(Self {
             air,
             trace,
             parameters,
             segments,
             segment_lookup,
+            #[cfg(feature = "stwo/prover")]
+            column_masks,
         })
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+fn build_column_masks<'a>(
+    air: &'a AirDefinition,
+    segments: &[SegmentDescriptor<'a>],
+    segment_lookup: &HashMap<&'a str, usize>,
+) -> Vec<Vec<ColumnMask>> {
+    let mut offsets: Vec<Vec<BTreeSet<isize>>> = segments
+        .iter()
+        .map(|descriptor| vec![BTreeSet::new(); descriptor.column_count])
+        .collect();
+
+    for constraint in air.constraints() {
+        collect_expression_offsets(
+            &constraint.expression,
+            segments,
+            segment_lookup,
+            &mut offsets,
+        );
+    }
+
+    offsets
+        .into_iter()
+        .map(|segment_offsets| {
+            segment_offsets
+                .into_iter()
+                .map(|set| ColumnMask::new(set.into_iter().collect()))
+                .collect()
+        })
+        .collect()
+}
+
+#[cfg(feature = "stwo/prover")]
+fn collect_expression_offsets<'a>(
+    expression: &AirExpression,
+    segments: &[SegmentDescriptor<'a>],
+    segment_lookup: &HashMap<&'a str, usize>,
+    offsets: &mut [Vec<BTreeSet<isize>>],
+) {
+    match expression {
+        AirExpression::Constant(_) => {}
+        AirExpression::Column(reference) => {
+            let segment = reference.column.segment();
+            let column = reference.column.column();
+            let segment_index = *segment_lookup
+                .get(segment)
+                .unwrap_or_else(|| panic!("unknown segment '{segment}'"));
+            let descriptor = &segments[segment_index];
+            let column_index = *descriptor
+                .column_indices
+                .get(column)
+                .unwrap_or_else(|| panic!("unknown column '{column}' in segment '{segment}'"));
+            offsets[segment_index][column_index].insert(reference.offset);
+        }
+        AirExpression::Add(terms) | AirExpression::Mul(terms) => {
+            for term in terms {
+                collect_expression_offsets(term, segments, segment_lookup, offsets);
+            }
+        }
+        AirExpression::Sub(lhs, rhs) => {
+            collect_expression_offsets(lhs, segments, segment_lookup, offsets);
+            collect_expression_offsets(rhs, segments, segment_lookup, offsets);
+        }
     }
 }
 
@@ -134,6 +249,105 @@ where
     I: IntoIterator<Item = &'a FieldElement>,
 {
     column_to_secure(column)
+}
+
+#[cfg(feature = "stwo/prover")]
+fn segment_tree_index(segment_index: usize) -> usize {
+    segment_index + 1
+}
+
+#[cfg(feature = "stwo/prover")]
+fn secure_to_field(parameters: &StarkParameters, value: &SecureField) -> FieldElement {
+    let limbs = value.to_m31_array();
+    let mut bytes = [0u8; 4 * SECURE_EXTENSION_DEGREE];
+    for (idx, limb) in limbs.iter().enumerate() {
+        let limb_bytes = limb.0.to_be_bytes();
+        let start = idx * 4;
+        bytes[start..start + 4].copy_from_slice(&limb_bytes);
+    }
+    parameters.element_from_bytes(&bytes)
+}
+
+#[cfg(feature = "stwo/prover")]
+struct MaskTraceView<'a, 'm> {
+    component: &'a BlueprintComponent<'a>,
+    parameters: &'a StarkParameters,
+    mask: &'m TreeVec<ColumnVec<Vec<SecureField>>>,
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a, 'm> MaskTraceView<'a, 'm> {
+    fn new(
+        component: &'a BlueprintComponent<'a>,
+        parameters: &'a StarkParameters,
+        mask: &'m TreeVec<ColumnVec<Vec<SecureField>>>,
+    ) -> Self {
+        Self {
+            component,
+            parameters,
+            mask,
+        }
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a, 'm> TraceEvaluator for MaskTraceView<'a, 'm> {
+    fn value(
+        &self,
+        column: &AirColumn,
+        _row: usize,
+        offset: isize,
+    ) -> Result<FieldElement, super::air::AirError> {
+        let segment_name = column.segment();
+        let segment_index = *self
+            .component
+            .segment_lookup
+            .get(segment_name)
+            .ok_or_else(|| super::air::AirError::MissingSegment(segment_name.to_owned()))?;
+        let descriptor = &self.component.segments[segment_index];
+        let column_name = column.column();
+        let column_index = *descriptor.column_indices.get(column_name).ok_or_else(|| {
+            super::air::AirError::MissingColumn {
+                segment: segment_name.to_owned(),
+                column: column_name.to_owned(),
+            }
+        })?;
+        let mask = &self.component.column_masks[segment_index][column_index];
+        let offset_index =
+            mask.index_of(offset)
+                .ok_or_else(|| super::air::AirError::MissingMaskOffset {
+                    segment: segment_name.to_owned(),
+                    column: column_name.to_owned(),
+                    offset,
+                })?;
+        let tree_index = segment_tree_index(segment_index);
+        let secure_value = self.mask[tree_index][column_index][offset_index].clone();
+        Ok(secure_to_field(self.parameters, &secure_value))
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+fn domain_vanishing(
+    descriptor: &SegmentDescriptor<'_>,
+    domain: &ConstraintDomain,
+    point: CirclePoint<SecureField>,
+) -> SecureField {
+    let log_size = descriptor.log_size.max(1);
+    let coset = CanonicCoset::new(log_size);
+    match domain {
+        ConstraintDomain::AllRows => coset_vanishing(coset.coset(), point),
+        ConstraintDomain::FirstRow => point_vanishing(coset.at(0), point),
+        ConstraintDomain::LastRow => {
+            let last_row = descriptor.row_count.saturating_sub(1);
+            point_vanishing(coset.at(last_row), point)
+        }
+        ConstraintDomain::Range { .. } => {
+            let rows = domain.rows(descriptor.row_count);
+            rows.into_iter().fold(SecureField::one(), |acc, row| {
+                acc * point_vanishing(coset.at(row), point)
+            })
+        }
+    }
 }
 
 fn register_segment<'a>(
@@ -247,6 +461,102 @@ fn prepend_preprocessed_tree<T>(views: TreeVec<ColumnVec<T>>) -> TreeVec<ColumnV
     trees.push(Vec::new());
     trees.extend(views.0);
     TreeVec(trees)
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a> Component for BlueprintComponent<'a> {
+    fn n_constraints(&self) -> usize {
+        self.air.constraints().len()
+    }
+
+    fn max_constraint_log_degree_bound(&self) -> u32 {
+        let mut max_log = 1;
+        for constraint in self.air.constraints() {
+            let segment_index = *self
+                .segment_lookup
+                .get(constraint.segment.as_str())
+                .expect("segment registered");
+            let descriptor = &self.segments[segment_index];
+            let domain_len = match &constraint.domain {
+                ConstraintDomain::AllRows => {
+                    let log_size = descriptor.log_size.max(1);
+                    1usize << log_size
+                }
+                _ => {
+                    let rows = constraint.domain.rows(descriptor.row_count);
+                    let len = rows.len();
+                    if len == 0 { 1 } else { len }
+                }
+            };
+            let bound = ceil_log2(domain_len).max(1);
+            max_log = max_log.max(bound);
+        }
+        max_log
+    }
+
+    fn trace_log_degree_bounds(&self) -> TreeVec<ColumnVec<u32>> {
+        let mut trees = Vec::with_capacity(self.segments.len() + 1);
+        trees.push(Vec::new());
+        for descriptor in &self.segments {
+            let log_size = descriptor.log_size.max(1);
+            trees.push(vec![log_size; descriptor.column_count]);
+        }
+        TreeVec(trees)
+    }
+
+    fn mask_points(
+        &self,
+        point: CirclePoint<SecureField>,
+    ) -> TreeVec<ColumnVec<Vec<CirclePoint<SecureField>>>> {
+        let mut trees = Vec::with_capacity(self.segments.len() + 1);
+        trees.push(Vec::new());
+        for (descriptor, column_masks) in self.segments.iter().zip(&self.column_masks) {
+            let log_size = descriptor.log_size.max(1);
+            let step = CanonicCoset::new(log_size).step();
+            let columns = column_masks
+                .iter()
+                .map(|mask| {
+                    mask.offsets()
+                        .iter()
+                        .map(|&offset| point + step.mul_signed(offset).into_ef())
+                        .collect()
+                })
+                .collect();
+            trees.push(columns);
+        }
+        TreeVec(trees)
+    }
+
+    fn preprocessed_column_indices(&self) -> ColumnVec<usize> {
+        // Blueprint circuits currently do not define preprocessed trace columns.
+        vec![]
+    }
+
+    fn evaluate_constraint_quotients_at_point(
+        &self,
+        point: CirclePoint<SecureField>,
+        mask: &TreeVec<ColumnVec<Vec<SecureField>>>,
+        evaluation_accumulator: &mut PointEvaluationAccumulator,
+    ) {
+        let mask_view = MaskTraceView::new(self, self.parameters, mask);
+        for constraint in self.air.constraints() {
+            let segment_index = *self
+                .segment_lookup
+                .get(constraint.segment.as_str())
+                .expect("segment registered");
+            let descriptor = &self.segments[segment_index];
+            let numerator_field = constraint
+                .expression
+                .evaluate(&mask_view, 0, self.parameters)
+                .unwrap_or_else(|err| {
+                    panic!("failed to evaluate constraint '{}': {err}", constraint.name)
+                });
+            let numerator = field_to_secure(&numerator_field);
+            let denominator = domain_vanishing(descriptor, &constraint.domain, point);
+            let evaluation = numerator * denominator.inverse();
+            evaluation_accumulator.accumulate(evaluation);
+        }
+    }
 }
 
 #[cfg(test)]
