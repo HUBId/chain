@@ -3,18 +3,12 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 
 use super::circuit::ExecutionTrace;
-use super::conversions::{field_bytes, field_to_base, field_to_secure};
 use super::params::FieldElement;
 use super::params::{PoseidonHasher, StarkParameters};
 
-use stwo::stwo_official::core::fields::qm31::SecureField;
 use stwo::stwo_official::core::fri::FriProof as OfficialFriProof;
-use stwo::stwo_official::core::poly::line::LinePoly;
-use stwo::stwo_official::core::vcs::blake2_hash::{
-    Blake2sHash as OfficialBlake2sHash, Blake2sHasher as OfficialBlake2sHasher,
-};
+use stwo::stwo_official::core::pcs::quotients::CommitmentSchemeProof as OfficialCommitmentSchemeProof;
 use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleHasher;
-use stwo::stwo_official::core::vcs::verifier::MerkleDecommitment;
 
 /// Wrapper around the official `Queries` structure.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,29 +26,68 @@ impl FriQuery {
     }
 }
 
-/// Deterministic FRI-style proof emitted by the prover scaffold.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Wrapper around the official commitment scheme proof emitted by the prover.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CommitmentSchemeProofData {
+    encoded: Vec<u8>,
+}
+
+impl CommitmentSchemeProofData {
+    pub fn from_official(proof: &OfficialCommitmentSchemeProof<Blake2sMerkleHasher>) -> Self {
+        let encoded = bincode::serialize(proof).expect("official commitment proof serialises");
+        Self { encoded }
+    }
+
+    pub fn to_official(&self) -> Option<OfficialCommitmentSchemeProof<Blake2sMerkleHasher>> {
+        if self.encoded.is_empty() {
+            None
+        } else {
+            Some(
+                bincode::deserialize(&self.encoded)
+                    .expect("official commitment proof deserialises"),
+            )
+        }
+    }
+}
+
+impl Serialize for CommitmentSchemeProofData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(&self.encoded))
+    }
+}
+
+impl<'de> Deserialize<'de> for CommitmentSchemeProofData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        let bytes = hex::decode(&encoded).map_err(DeError::custom)?;
+        Ok(Self { encoded: bytes })
+    }
+}
+
+/// Deterministic FRI proof emitted by the prover scaffold.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct FriProof {
     encoded: Vec<u8>,
 }
 
 impl FriProof {
-    pub fn empty() -> Self {
-        Self::from_elements(&[])
-    }
-
     pub fn from_official(proof: &OfficialFriProof<Blake2sMerkleHasher>) -> Self {
-        let encoded = serde_json::to_vec(proof).expect("official FRI proof serialises");
+        let encoded = bincode::serialize(proof).expect("official FRI proof serialises");
         Self { encoded }
     }
 
-    pub fn to_official(&self) -> OfficialFriProof<Blake2sMerkleHasher> {
-        serde_json::from_slice(&self.encoded).expect("official FRI proof deserialises")
-    }
-
-    pub fn from_elements(values: &[FieldElement]) -> Self {
-        let proof = placeholder_proof(values);
-        Self::from_official(&proof)
+    pub fn to_official(&self) -> Option<OfficialFriProof<Blake2sMerkleHasher>> {
+        if self.encoded.is_empty() {
+            None
+        } else {
+            Some(bincode::deserialize(&self.encoded).expect("official FRI proof deserialises"))
+        }
     }
 }
 
@@ -76,46 +109,6 @@ impl<'de> Deserialize<'de> for FriProof {
         let bytes = hex::decode(&encoded).map_err(DeError::custom)?;
         Ok(Self { encoded: bytes })
     }
-}
-
-fn placeholder_proof(values: &[FieldElement]) -> OfficialFriProof<Blake2sMerkleHasher> {
-    let first_layer = stwo::stwo_official::core::fri::FriLayerProof {
-        fri_witness: values.iter().map(field_to_secure).collect(),
-        decommitment: MerkleDecommitment {
-            hash_witness: Vec::new(),
-            column_witness: values.iter().map(field_to_base).collect(),
-        },
-        commitment: digest_elements(values),
-    };
-
-    let sum_secure = sum_values(values)
-        .map(|value| field_to_secure(&value))
-        .unwrap_or_else(|| SecureField::from(0u32));
-    let len_secure = SecureField::from(values.len() as u32);
-    let last_layer_poly = LinePoly::new(vec![sum_secure, len_secure]);
-
-    OfficialFriProof {
-        first_layer,
-        inner_layers: Vec::new(),
-        last_layer_poly,
-    }
-}
-
-fn digest_elements(values: &[FieldElement]) -> OfficialBlake2sHash {
-    let mut buffer = Vec::new();
-    for value in values {
-        buffer.extend_from_slice(&field_bytes(value));
-    }
-    OfficialBlake2sHasher::hash(&buffer)
-}
-
-fn sum_values(values: &[FieldElement]) -> Option<FieldElement> {
-    let mut iter = values.iter();
-    let mut acc = iter.next()?.clone();
-    for value in iter {
-        acc = acc.add(value).expect("field moduli match");
-    }
-    Some(acc)
 }
 
 /// Enumeration describing which circuit produced a proof artifact.
@@ -153,6 +146,7 @@ pub struct StarkProof {
     pub public_inputs: Vec<String>,
     pub payload: ProofPayload,
     pub trace: ExecutionTrace,
+    pub commitment_proof: CommitmentSchemeProofData,
     pub fri_proof: FriProof,
 }
 
@@ -163,6 +157,7 @@ impl StarkProof {
         payload: ProofPayload,
         public_inputs: Vec<FieldElement>,
         trace: ExecutionTrace,
+        commitment_proof: CommitmentSchemeProofData,
         fri_proof: FriProof,
         hasher: &PoseidonHasher,
     ) -> Self {
@@ -178,6 +173,7 @@ impl StarkProof {
             public_inputs,
             payload,
             trace,
+            commitment_proof,
             fri_proof,
         }
     }
@@ -188,10 +184,19 @@ impl StarkProof {
         payload: ProofPayload,
         inputs: Vec<FieldElement>,
         trace: ExecutionTrace,
+        commitment_proof: CommitmentSchemeProofData,
         fri_proof: FriProof,
     ) -> Self {
         let params = StarkParameters::blueprint_default();
         let hasher = params.poseidon_hasher();
-        Self::new(kind, payload, inputs, trace, fri_proof, &hasher)
+        Self::new(
+            kind,
+            payload,
+            inputs,
+            trace,
+            commitment_proof,
+            fri_proof,
+            &hasher,
+        )
     }
 }

@@ -8,7 +8,7 @@
 //! subsequent trait implementations to bridge the lightweight blueprint models
 //! with the official prover APIs.
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 
@@ -17,12 +17,12 @@ use thiserror::Error;
 use super::{
     air::{AirColumn, AirDefinition, AirExpression, ConstraintDomain, TraceEvaluator},
     circuit::{ExecutionTrace, TraceSegment},
-    conversions::{column_to_base, column_to_secure, field_to_secure},
+    conversions::{column_to_base, field_to_secure},
     params::{FieldElement, StarkParameters},
 };
 use stwo::stwo_official::core::fields::m31::BaseField;
 use stwo::stwo_official::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::{
     air::accumulation::PointEvaluationAccumulator,
     circle::CirclePoint,
@@ -33,29 +33,34 @@ use stwo::stwo_official::core::{
 /// so that downstream modules can rely on them without repetitive imports.
 pub use stwo::stwo_official::core::{ColumnVec, air::Component, pcs::TreeVec};
 
-#[cfg(feature = "stwo/prover")]
-use num_traits::Zero;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
+use num_traits::{One, Zero};
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::channel::MerkleChannel;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::poly::circle::{CanonicCoset, CircleDomain};
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::utils::{
     bit_reverse_index, offset_bit_reversed_circle_domain_index,
 };
+#[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::core::fields::FieldExpOps;
+#[cfg(feature = "backend-stwo")]
+pub use stwo::stwo_official::prover::poly::circle::CircleEvaluation;
 /// Re-export prover-side structures when the upstream dependency exposes them.
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 pub use stwo::stwo_official::prover::{
-    air::component_prover::ComponentProver, backend::cpu::CpuBackend,
-    poly::circle::CircleEvaluation,
+    CommitmentSchemeProver, CommitmentTreeProver, ComponentProver, ComponentProvers,
+    DomainEvaluationAccumulator, Trace, TreeBuilder, backend::cpu::CpuBackend,
 };
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::{
     backend::cpu::{CpuCircleEvaluation, CpuCirclePoly},
-    pcs::CommitmentSchemeProver,
     poly::twiddles::TwiddleTree,
     poly::{BitReversedOrder, NaturalOrder},
 };
+#[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::prover::{backend::BackendForChannel, poly::circle::PolyOps};
 
 /// Errors that can be raised while validating execution trace descriptors.
 #[derive(Debug, Error)]
@@ -93,14 +98,14 @@ pub struct SegmentDescriptor<'a> {
     pub column_indices: HashMap<&'a str, usize>,
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 #[derive(Debug, Default)]
 struct ColumnMask {
     offsets: Vec<isize>,
     positions: HashMap<isize, usize>,
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl ColumnMask {
     fn new(offsets: Vec<isize>) -> Self {
         let mut unique = offsets;
@@ -142,7 +147,7 @@ pub struct BlueprintComponent<'a> {
     pub segments: Vec<SegmentDescriptor<'a>>,
     /// Quick lookup from segment name to descriptor index.
     pub segment_lookup: HashMap<&'a str, usize>,
-    #[cfg(feature = "stwo/prover")]
+    #[cfg(feature = "backend-stwo")]
     column_masks: Vec<Vec<ColumnMask>>,
 }
 
@@ -162,7 +167,7 @@ impl<'a> BlueprintComponent<'a> {
             segments.push(build_descriptor(segment)?);
         }
 
-        #[cfg(feature = "stwo/prover")]
+        #[cfg(feature = "backend-stwo")]
         let column_masks = build_column_masks(air, &segments, &segment_lookup);
 
         Ok(Self {
@@ -171,13 +176,13 @@ impl<'a> BlueprintComponent<'a> {
             parameters,
             segments,
             segment_lookup,
-            #[cfg(feature = "stwo/prover")]
+            #[cfg(feature = "backend-stwo")]
             column_masks,
         })
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn build_column_masks<'a>(
     air: &'a AirDefinition,
     segments: &[SegmentDescriptor<'a>],
@@ -208,7 +213,7 @@ fn build_column_masks<'a>(
         .collect()
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn collect_expression_offsets<'a>(
     expression: &AirExpression,
     segments: &[SegmentDescriptor<'a>],
@@ -218,8 +223,9 @@ fn collect_expression_offsets<'a>(
     match expression {
         AirExpression::Constant(_) => {}
         AirExpression::Column(reference) => {
-            let segment = reference.column.segment();
-            let column = reference.column.column();
+            let column_ref = reference.column();
+            let segment = column_ref.segment();
+            let column = column_ref.column();
             let segment_index = *segment_lookup
                 .get(segment)
                 .unwrap_or_else(|| panic!("unknown segment '{segment}'"));
@@ -228,7 +234,7 @@ fn collect_expression_offsets<'a>(
                 .column_indices
                 .get(column)
                 .unwrap_or_else(|| panic!("unknown column '{column}' in segment '{segment}'"));
-            offsets[segment_index][column_index].insert(reference.offset);
+            offsets[segment_index][column_index].insert(reference.offset());
         }
         AirExpression::Add(terms) | AirExpression::Mul(terms) => {
             for term in terms {
@@ -249,19 +255,12 @@ where
     column_to_base(column)
 }
 
-fn column_to_secure_field<'a, I>(column: I) -> Vec<SecureField>
-where
-    I: IntoIterator<Item = &'a FieldElement>,
-{
-    column_to_secure(column)
-}
-
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn segment_tree_index(segment_index: usize) -> usize {
     segment_index + 1
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn secure_to_field(parameters: &StarkParameters, value: &SecureField) -> FieldElement {
     let limbs = value.to_m31_array();
     let mut bytes = [0u8; 4 * SECURE_EXTENSION_DEGREE];
@@ -273,14 +272,14 @@ fn secure_to_field(parameters: &StarkParameters, value: &SecureField) -> FieldEl
     parameters.element_from_bytes(&bytes)
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 struct MaskTraceView<'a, 'm> {
     component: &'a BlueprintComponent<'a>,
     parameters: &'a StarkParameters,
     mask: &'m TreeVec<ColumnVec<Vec<SecureField>>>,
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a, 'm> MaskTraceView<'a, 'm> {
     fn new(
         component: &'a BlueprintComponent<'a>,
@@ -295,7 +294,7 @@ impl<'a, 'm> MaskTraceView<'a, 'm> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a, 'm> TraceEvaluator for MaskTraceView<'a, 'm> {
     fn value(
         &self,
@@ -331,13 +330,13 @@ impl<'a, 'm> TraceEvaluator for MaskTraceView<'a, 'm> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 enum ColumnDomainValues<'a> {
     Borrowed(&'a [BaseField]),
     Owned(Vec<BaseField>),
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a> ColumnDomainValues<'a> {
     fn len(&self) -> usize {
         match self {
@@ -354,14 +353,14 @@ impl<'a> ColumnDomainValues<'a> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 struct SegmentDomainValues<'a, 't> {
     descriptor: &'a SegmentDescriptor<'a>,
     log_size: u32,
     columns: Vec<ColumnDomainValues<'t>>,
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 struct DomainTraceView<'a, 't> {
     component: &'a BlueprintComponent<'a>,
     parameters: &'a StarkParameters,
@@ -369,7 +368,7 @@ struct DomainTraceView<'a, 't> {
     segments: Vec<SegmentDomainValues<'a, 't>>,
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a, 't> DomainTraceView<'a, 't> {
     fn new(
         component: &'a BlueprintComponent<'a>,
@@ -418,7 +417,7 @@ impl<'a, 't> DomainTraceView<'a, 't> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a, 't> TraceEvaluator for DomainTraceView<'a, 't> {
     fn value(
         &self,
@@ -455,7 +454,7 @@ impl<'a, 't> TraceEvaluator for DomainTraceView<'a, 't> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn map_domain_index(
     row: usize,
     offset: isize,
@@ -481,7 +480,7 @@ fn map_domain_index(
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn domain_vanishing(
     descriptor: &SegmentDescriptor<'_>,
     domain: &ConstraintDomain,
@@ -560,7 +559,7 @@ fn ceil_log2(value: usize) -> u32 {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn segment_to_circle_evals(
     segment: &TraceSegment,
     descriptor: &SegmentDescriptor<'_>,
@@ -579,20 +578,23 @@ fn segment_to_circle_evals(
         .collect()
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 #[derive(Debug)]
 pub struct TraceCommitmentViews<'a> {
     pub polynomials: TreeVec<ColumnVec<&'a CpuCirclePoly>>,
     pub evaluations: TreeVec<ColumnVec<&'a CpuCircleEvaluation<BaseField, BitReversedOrder>>>,
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a> BlueprintComponent<'a> {
     pub fn build_commitment_views<'b, 'c, MC: MerkleChannel>(
         &self,
         commitment_scheme: &'b mut CommitmentSchemeProver<'c, CpuBackend, MC>,
         channel: &mut MC::C,
-    ) -> TraceCommitmentViews<'b> {
+    ) -> TraceCommitmentViews<'b>
+    where
+        CpuBackend: BackendForChannel<MC>,
+    {
         for (segment, descriptor) in self.trace.segments.iter().zip(&self.segments) {
             let evaluations = segment_to_circle_evals(segment, descriptor);
             let mut builder = commitment_scheme.tree_builder();
@@ -610,7 +612,7 @@ impl<'a> BlueprintComponent<'a> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn prepend_preprocessed_tree<T>(views: TreeVec<ColumnVec<T>>) -> TreeVec<ColumnVec<T>> {
     let mut trees = Vec::with_capacity(views.len() + 1);
     trees.push(Vec::new());
@@ -618,7 +620,7 @@ fn prepend_preprocessed_tree<T>(views: TreeVec<ColumnVec<T>>) -> TreeVec<ColumnV
     TreeVec(trees)
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a> Component for BlueprintComponent<'a> {
     fn n_constraints(&self) -> usize {
         self.air.constraints().len()
@@ -714,7 +716,7 @@ impl<'a> Component for BlueprintComponent<'a> {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 impl<'a> ComponentProver<CpuBackend> for BlueprintComponent<'a> {
     fn evaluate_constraint_quotients_on_domain(
         &self,
@@ -726,7 +728,7 @@ impl<'a> ComponentProver<CpuBackend> for BlueprintComponent<'a> {
         }
 
         let max_log = self.max_constraint_log_degree_bound();
-        let (eval_domain, mut twiddles, eval_size) = if max_log == 0 {
+        let (eval_domain, twiddles, eval_size) = if max_log == 0 {
             (None, None, 1usize)
         } else {
             let domain = CanonicCoset::new(max_log).circle_domain();
@@ -802,8 +804,17 @@ impl<'a> ComponentProver<CpuBackend> for BlueprintComponent<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::{Component, ComponentProver};
+    use crate::stwo::air::{
+        AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+    };
     use crate::stwo::circuit::TraceSegment;
-    #[cfg(feature = "stwo/prover")]
+    use crate::stwo::conversions::column_to_secure;
+    #[cfg(feature = "backend-stwo")]
+    use stwo::stwo_official::core::fields::qm31::SecureField;
+    #[cfg(feature = "backend-stwo")]
+    use stwo::stwo_official::prover::{DomainEvaluationAccumulator, Trace};
+    #[cfg(feature = "backend-stwo")]
     use stwo::stwo_official::core::fields::m31::BaseField;
 
     fn sample_segment(name: &str, columns: usize, rows: usize) -> TraceSegment {
@@ -824,12 +835,12 @@ mod tests {
     fn column_conversion_preserves_lengths() {
         let segment = sample_segment("seg", 2, 3);
         let base_values = super::column_to_base_field(segment.rows.iter().map(|row| &row[0]));
-        let secure_values = super::column_to_secure_field(segment.rows.iter().map(|row| &row[0]));
+        let secure_values = column_to_secure(segment.rows.iter().map(|row| &row[0]));
         assert_eq!(base_values.len(), 3);
         assert_eq!(secure_values.len(), 3);
     }
 
-    #[cfg(feature = "stwo/prover")]
+    #[cfg(feature = "backend-stwo")]
     #[test]
     fn segment_evaluations_pad_to_power_of_two() {
         use num_traits::Zero;
@@ -847,14 +858,9 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "stwo/prover")]
+    #[cfg(feature = "backend-stwo")]
     #[test]
     fn component_handles_single_row_segments() {
-        use stwo::stwo_official::core::fields::qm31::SecureField;
-        use stwo::stwo_official::prover::{
-            DomainEvaluationAccumulator, air::component_prover::Trace,
-        };
-
         let params = StarkParameters::blueprint_default();
         let segment = sample_segment("single", 1, 1);
         let trace = ExecutionTrace::single(segment.clone()).expect("trace");

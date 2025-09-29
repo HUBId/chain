@@ -259,7 +259,9 @@ mod tests {
         state::StateWitness,
         uptime::UptimeWitness,
     };
-    use crate::stwo::proof::{FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{
+        CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
     use crate::types::ChainProof;
     use ed25519_dalek::Signer;
     use tempfile::tempdir;
@@ -294,7 +296,8 @@ mod tests {
             trace: ExecutionTrace {
                 segments: Vec::new(),
             },
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         })
     }
 
@@ -380,7 +383,8 @@ mod tests {
                 TraceSegment::new("dummy", vec!["column".to_string()], Vec::new()).unwrap(),
             )
             .unwrap(),
-            fri_proof: FriProof::empty(),
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
         }
     }
 

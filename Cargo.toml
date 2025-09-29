@@ -5,7 +5,7 @@ edition = "2024"
 
 [features]
 default = ["backend-stwo"]
-backend-stwo = ["dep:stwo", "stwo/official"]
+backend-stwo = ["dep:stwo", "stwo/prover"]
 backend-plonky3 = []
 
 [dependencies]

@@ -70,11 +70,16 @@ impl NodeVerifier {
         proof: &StarkProof,
         public_inputs: &[FieldElement],
         trace: &ExecutionTrace,
+        air: &super::air::AirDefinition,
     ) -> ChainResult<()> {
         let fri_prover = FriProver::new(&self.parameters);
-        let expected = fri_prover.prove(trace, public_inputs);
-        if proof.fri_proof != expected {
-            return Err(ChainError::Crypto("fri proof mismatch".into()));
+        let expected = fri_prover.prove(air, trace, public_inputs);
+        if proof.fri_proof != expected.fri_proof
+            || proof.commitment_proof != expected.commitment_proof
+        {
+            return Err(ChainError::Crypto(
+                "fri or commitment proof mismatch".into(),
+            ));
         }
         Ok(())
     }
@@ -118,8 +123,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto(
                 "transaction proof payload mismatch".into(),
@@ -139,8 +147,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto("identity proof payload mismatch".into()))
         }
@@ -158,8 +169,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto("state proof payload mismatch".into()))
         }
@@ -177,8 +191,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto("pruning proof payload mismatch".into()))
         }
@@ -196,8 +213,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto(
                 "recursive proof payload mismatch".into(),
@@ -217,8 +237,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto("uptime proof payload mismatch".into()))
         }
@@ -236,8 +259,11 @@ impl NodeVerifier {
             circuit
                 .verify_air(&self.parameters, &trace)
                 .map_err(map_circuit_error)?;
+            let air = circuit
+                .define_air(&self.parameters, &trace)
+                .map_err(map_circuit_error)?;
             self.check_trace(trace.clone(), proof)?;
-            self.check_fri(proof, &public_inputs, &trace)
+            self.check_fri(proof, &public_inputs, &trace, &air)
         } else {
             Err(ChainError::Crypto(
                 "consensus proof payload mismatch".into(),

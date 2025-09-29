@@ -2,29 +2,35 @@ use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, C
 use crate::stwo::circuit::{ExecutionTrace, TraceSegment};
 use crate::stwo::conversions::{field_to_base, field_to_secure};
 use crate::stwo::official_adapter::{BlueprintComponent, ColumnVec, TreeVec};
+#[cfg(feature = "backend-stwo")]
+use crate::stwo::official_adapter::{Component, ComponentProver};
 use crate::stwo::params::{FieldElement, StarkParameters};
 
-#[cfg(feature = "stwo/prover")]
-use num_traits::Zero;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
+use num_traits::{One, Zero};
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::air::accumulation::PointEvaluationAccumulator;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::circle::CirclePoint;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::constraints::point_vanishing;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::fields::m31::BaseField;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::fields::qm31::SecureField;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::core::fields::FieldExpOps;
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::poly::circle::CanonicCoset;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::DomainEvaluationAccumulator;
-#[cfg(feature = "stwo/prover")]
-use stwo::stwo_official::prover::air::component_prover::Trace;
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::prover::Trace;
+#[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::prover::poly::circle::PolyOps;
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::backend::cpu::{CpuBackend, CpuCircleEvaluation, CpuCirclePoly};
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::poly::{BitReversedOrder, NaturalOrder};
 
 fn constant_segment(
@@ -49,7 +55,7 @@ fn constant_segment(
     TraceSegment::new(name, columns, rows).expect("valid segment")
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 fn build_mask_values(
     trace: &ExecutionTrace,
     component: &BlueprintComponent,
@@ -76,7 +82,7 @@ fn build_mask_values(
     TreeVec(trees)
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 #[test]
 fn point_quotients_match_blueprint_evaluations() {
     let parameters = StarkParameters::blueprint_default();
@@ -126,7 +132,7 @@ fn point_quotients_match_blueprint_evaluations() {
     }
 }
 
-#[cfg(feature = "stwo/prover")]
+#[cfg(feature = "backend-stwo")]
 #[test]
 fn domain_quotients_align_with_blueprint_trace() {
     let parameters = StarkParameters::blueprint_default();
@@ -198,7 +204,7 @@ fn domain_quotients_align_with_blueprint_trace() {
     let eval_domain = CanonicCoset::new(composition.log_size()).circle_domain();
     let twiddles = CpuBackend::precompute_twiddles(eval_domain.half_coset);
     let aggregated = composition.evaluate_with_twiddles(eval_domain, &twiddles);
-    for value in aggregated.values.to_vec() {
+    for value in aggregated.values.to_cpu().to_vec() {
         assert_eq!(value, secure_zero);
     }
 

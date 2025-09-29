@@ -1302,13 +1302,17 @@ mod tests {
         ];
         let hasher = parameters.poseidon_hasher();
         let fri_prover = FriProver::new(&parameters);
-        let fri_proof = fri_prover.prove(&trace, &inputs);
+        let air = circuit
+            .define_air(&parameters, &trace)
+            .expect("air definition");
+        let fri_output = fri_prover.prove(&air, &trace, &inputs);
         let proof = StarkProof::new(
             ProofKind::Identity,
             ProofPayload::Identity(witness),
             inputs,
             trace,
-            fri_proof,
+            fri_output.commitment_proof,
+            fri_output.fri_proof,
             &hasher,
         );
         IdentityDeclaration {
