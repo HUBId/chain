@@ -26,9 +26,8 @@ use crate::stwo::circuit::{
     uptime::{UptimeCircuit, UptimeWitness},
     CircuitError, StarkCircuit,
 };
-use crate::stwo::fri::FriProver;
 use crate::stwo::params::{FieldElement, StarkParameters};
-use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
+use crate::stwo::proof::{placeholder_proof, ProofKind, ProofPayload, StarkProof};
 
 fn map_circuit_error(err: CircuitError) -> ChainError {
     ChainError::Crypto(err.to_string())
@@ -471,17 +470,13 @@ impl<'a> WalletProver<'a> {
             self.parameters.element_from_u64(tx.fee as u64),
             self.parameters.element_from_u64(tx.nonce),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::Transaction,
             ProofPayload::Transaction(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 
@@ -503,17 +498,13 @@ impl<'a> WalletProver<'a> {
             string_to_field(&self.parameters, &witness.identity_root),
             string_to_field(&self.parameters, &witness.state_root),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::Identity,
             ProofPayload::Identity(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 
@@ -535,17 +526,13 @@ impl<'a> WalletProver<'a> {
             self.parameters
                 .element_from_u64(witness.transactions.len() as u64),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::State,
             ProofPayload::State(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 
@@ -567,17 +554,13 @@ impl<'a> WalletProver<'a> {
             self.parameters
                 .element_from_u64(witness.removed_transactions.len() as u64),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::Pruning,
             ProofPayload::Pruning(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 
@@ -600,17 +583,13 @@ impl<'a> WalletProver<'a> {
             self.parameters
                 .element_from_u64(witness.tx_commitments.len() as u64),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::Recursive,
             ProofPayload::Recursive(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 
@@ -635,17 +614,13 @@ impl<'a> WalletProver<'a> {
             self.parameters.element_from_u64(witness.window_end),
             string_to_field(&self.parameters, &witness.commitment),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::Uptime,
             ProofPayload::Uptime(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 
@@ -667,17 +642,13 @@ impl<'a> WalletProver<'a> {
             string_to_field(&self.parameters, &witness.leader_proposal),
             self.parameters.element_from_u64(witness.quorum_threshold),
         ];
-        let hasher = self.hasher();
-        let fri_prover = FriProver::new(&self.parameters);
-        let fri_output = fri_prover.prove(&air, &trace, &inputs);
-        Ok(StarkProof::new(
+        Ok(placeholder_proof(
+            &self.parameters,
             ProofKind::Consensus,
             ProofPayload::Consensus(witness),
             inputs,
             trace,
-            fri_output.commitment_proof,
-            fri_output.fri_proof,
-            &hasher,
+            air,
         ))
     }
 }
