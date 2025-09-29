@@ -1,3 +1,14 @@
+//! Shared prover backend interface consumed across the workspace.
+//!
+//! # STWO feature toggles
+//! * `prover-stwo` exposes the STWO backend types.
+//! * `prover-stwo-simd` builds on the STWO backend and signals that the
+//!   accelerator-friendly SIMD pathway is allowed. Downstream crates forward
+//!   this flag to the STWO fork which enables the `parallel` implementation.
+//! * `prover-mock` exposes the lightweight mock backend for deterministic tests.
+//!
+//! Consumers opt in or out exclusively through Cargo features; no sample code is
+//! required to change the active backend.
 use std::fmt;
 
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]

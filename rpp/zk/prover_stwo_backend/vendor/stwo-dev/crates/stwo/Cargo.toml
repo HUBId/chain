@@ -26,30 +26,30 @@ tracing = []
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-blake2 = { version = "0.10.6", default-features = false }
-blake3 = { version = "1.5.0", default-features = false }
-bytemuck = { version = "1.14.3", default-features = false, features = ["derive", "extern_crate_alloc"] }
+blake2 = { version = "=0.10.6", default-features = false }
+blake3 = { version = "=1.8.2", default-features = false }
+bytemuck = { version = "=1.23.2", default-features = false, features = ["derive", "extern_crate_alloc"] }
 cfg-if = "1.0.0"
-educe = "0.5.0"
-hex = { version = "0.4.3", default-features = false, features = ["alloc"] }
-indexmap = { version = "2.10.0", default-features = false }
+educe = "=0.5.11"
+hex = { version = "=0.4.3", default-features = false, features = ["alloc"] }
+indexmap = { version = "=2.10.0", default-features = false }
 fnv = { version = "1.0.7", default-features = false }
-itertools = { version = "0.12", default-features = false, features = ["use_alloc"] }
-num-traits = { version = "0.2.19", default-features = false }
-rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
-starknet-crypto = { version = "0.6.2", default-features = false, features = [
+itertools = { version = "=0.12.1", default-features = false, features = ["use_alloc"] }
+num-traits = { version = "=0.2.19", default-features = false }
+rand = { version = "=0.8.5", default-features = false, features = ["small_rng"] }
+starknet-crypto = { version = "=0.6.2", default-features = false, features = [
     "alloc",
 ] }
-starknet-ff = { version = "0.3.7", default-features = false, features = [
+starknet-ff = { version = "=0.3.7", default-features = false, features = [
     "alloc",
     "serde",
 ] }
-thiserror = { version = "2.0.12", default-features = false }
-tracing = { version = "0.1.40", default-features = false }
-rayon = { version = "1.10.0", optional = true }
-serde = { version = "1.0", default-features = false, features = ["derive"] }
-tracing-subscriber = { version = "0.3.18", default-features = false }
-hashbrown = ">=0.15.2"
+thiserror = { version = "=2.0.12", default-features = false }
+tracing = { version = "=0.1.41", default-features = false }
+rayon = { version = "=1.11.0", optional = true }
+serde = { version = "=1.0.225", default-features = false, features = ["derive"] }
+tracing-subscriber = { version = "=0.3.20", default-features = false }
+hashbrown = "=0.15.5"
 std-shims = { path = "../std-shims", default-features = false }
 
 [dev-dependencies]

@@ -1,3 +1,16 @@
+//! Consensus engine coordinating the validator set and proof backends.
+//!
+//! # STWO feature toggles
+//! * `prover-stwo` enables the STWO backend for real proof verification.
+//! * `prover-stwo-simd` layers on `prover-stwo` and allows the STWO fork to use
+//!   its SIMD optimisations. Enable it when the runtime environment guarantees
+//!   the necessary vector extensions; omit it to rely on the portable scalar
+//!   implementation.
+//! * `prover-mock` replaces the prover with a mock implementation for
+//!   simulation-heavy workflows.
+//!
+//! Toggling these options only requires adjusting Cargo feature flags; no code
+//! snippets or manual wiring is needed.
 use std::fmt;
 
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]

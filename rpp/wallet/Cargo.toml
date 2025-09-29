@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = ["prover-stwo"]
 prover-stwo = ["prover-backend-interface/prover-stwo"]
+prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
 prover-mock = ["prover-backend-interface/prover-mock"]
 
 [dependencies]

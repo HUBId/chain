@@ -6,12 +6,13 @@ edition = "2021"
 [features]
 default = ["prover-stwo"]
 prover-stwo = ["prover-backend-interface/prover-stwo"]
+prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
 prover-mock = ["prover-backend-interface/prover-mock"]
 
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.37", features = ["macros", "rt", "signal", "time"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
+tracing = "=0.1.41"
+tracing-subscriber = { version = "=0.3.20", features = ["fmt"] }
 prover-backend-interface = { path = "../zk/backend-interface" }
