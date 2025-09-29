@@ -153,6 +153,11 @@ fn recorded_transaction_proof_generation_succeeds() {
     }
 }
 
+/// Rerun [`recorded_transaction_proof_generation_succeeds`] with
+/// `STWO_DUMP_VALID_PROOF=1` to regenerate
+/// `rpp/proofs/stwo/tests/vectors/valid_proof.json`. The helper constructs a
+/// deterministic prover environment so the refreshed fixture remains
+/// reproducible.
 fn dump_valid_proof_fixture(proof: &StarkProof) {
     const ENV_FLAG: &str = "STWO_DUMP_VALID_PROOF";
     if std::env::var_os(ENV_FLAG).is_none() {
