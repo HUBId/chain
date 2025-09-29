@@ -20,10 +20,10 @@ use super::{
     conversions::{column_to_base, field_to_secure},
     params::{FieldElement, StarkParameters},
 };
-use stwo::stwo_official::core::fields::m31::BaseField;
-use stwo::stwo_official::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
+use crate::stwo_official::core::fields::m31::BaseField;
+use crate::stwo_official::core::fields::qm31::{SecureField, SECURE_EXTENSION_DEGREE};
 #[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::core::{
+use crate::stwo_official::core::{
     air::accumulation::PointEvaluationAccumulator,
     circle::CirclePoint,
     constraints::{coset_vanishing, point_vanishing},
@@ -31,36 +31,36 @@ use stwo::stwo_official::core::{
 
 /// Re-export key prover traits and types from the official STWO implementation
 /// so that downstream modules can rely on them without repetitive imports.
-pub use stwo::stwo_official::core::{ColumnVec, air::Component, pcs::TreeVec};
+pub use crate::stwo_official::core::{air::Component, pcs::TreeVec, ColumnVec};
 
 #[cfg(feature = "prover-stwo")]
-use num_traits::{One, Zero};
+use crate::stwo_official::core::channel::MerkleChannel;
 #[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::core::channel::MerkleChannel;
+use crate::stwo_official::core::fields::FieldExpOps;
 #[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::core::fields::FieldExpOps;
+use crate::stwo_official::core::poly::circle::{CanonicCoset, CircleDomain};
 #[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::core::poly::circle::{CanonicCoset, CircleDomain};
-#[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::core::utils::{
+use crate::stwo_official::core::utils::{
     bit_reverse_index, offset_bit_reversed_circle_domain_index,
 };
 #[cfg(feature = "prover-stwo")]
-pub use stwo::stwo_official::prover::poly::circle::CircleEvaluation;
+pub use crate::stwo_official::prover::poly::circle::CircleEvaluation;
 /// Re-export prover-side structures when the upstream dependency exposes them.
 #[cfg(feature = "prover-stwo")]
-pub use stwo::stwo_official::prover::{
-    CommitmentSchemeProver, CommitmentTreeProver, ComponentProver, ComponentProvers,
-    DomainEvaluationAccumulator, Trace, TreeBuilder, backend::cpu::CpuBackend,
+pub use crate::stwo_official::prover::{
+    backend::cpu::CpuBackend, CommitmentSchemeProver, CommitmentTreeProver, ComponentProver,
+    ComponentProvers, DomainEvaluationAccumulator, Trace, TreeBuilder,
 };
 #[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::prover::{backend::BackendForChannel, poly::circle::PolyOps};
-#[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::prover::{
+use crate::stwo_official::prover::{
     backend::cpu::{CpuCircleEvaluation, CpuCirclePoly},
     poly::twiddles::TwiddleTree,
     poly::{BitReversedOrder, NaturalOrder},
 };
+#[cfg(feature = "prover-stwo")]
+use crate::stwo_official::prover::{backend::BackendForChannel, poly::circle::PolyOps};
+#[cfg(feature = "prover-stwo")]
+use num_traits::{One, Zero};
 
 /// Errors that can be raised while validating execution trace descriptors.
 #[derive(Debug, Error)]
@@ -648,7 +648,11 @@ impl<'a> Component for BlueprintComponent<'a> {
                 _ => {
                     let rows = constraint.domain.rows(descriptor.row_count);
                     let len = rows.len();
-                    if len == 0 { 1 } else { len }
+                    if len == 0 {
+                        1
+                    } else {
+                        len
+                    }
                 }
             };
             let bound = ceil_log2(domain_len).max(1);
@@ -811,17 +815,17 @@ impl<'a> ComponentProver<CpuBackend> for BlueprintComponent<'a> {
 mod tests {
     use super::*;
     use super::{Component, ComponentProver};
-    use crate::stwo::air::{
+    use crate::official::air::{
         AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
     };
-    use crate::stwo::circuit::TraceSegment;
-    use crate::stwo::conversions::column_to_secure;
+    use crate::official::circuit::TraceSegment;
+    use crate::official::conversions::column_to_secure;
     #[cfg(feature = "prover-stwo")]
-    use stwo::stwo_official::core::fields::m31::BaseField;
+    use crate::stwo_official::core::fields::m31::BaseField;
     #[cfg(feature = "prover-stwo")]
-    use stwo::stwo_official::core::fields::qm31::SecureField;
+    use crate::stwo_official::core::fields::qm31::SecureField;
     #[cfg(feature = "prover-stwo")]
-    use stwo::stwo_official::prover::{DomainEvaluationAccumulator, Trace};
+    use crate::stwo_official::prover::{DomainEvaluationAccumulator, Trace};
 
     fn sample_segment(name: &str, columns: usize, rows: usize) -> TraceSegment {
         let params = StarkParameters::blueprint_default();

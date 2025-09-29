@@ -2,10 +2,12 @@
 
 use std::collections::HashSet;
 
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::StarkParameters;
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::StarkParameters;
 
-use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Vote weight associated with a consensus participant.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::stwo::circuit::ExecutionTrace;
-use crate::stwo::params::{FieldElement, FieldError, StarkParameters};
+use crate::official::circuit::ExecutionTrace;
+use crate::official::params::{FieldElement, FieldError, StarkParameters};
 
 /// Errors that can be raised while manipulating AIR artifacts.
 #[derive(Debug, thiserror::Error)]
@@ -397,7 +397,7 @@ struct SegmentView<'a> {
 }
 
 impl<'a> SegmentView<'a> {
-    fn new(segment: &'a crate::stwo::circuit::TraceSegment) -> Self {
+    fn new(segment: &'a crate::official::circuit::TraceSegment) -> Self {
         let mut column_index = HashMap::new();
         for (idx, column) in segment.columns.iter().enumerate() {
             column_index.insert(column.as_str(), idx);

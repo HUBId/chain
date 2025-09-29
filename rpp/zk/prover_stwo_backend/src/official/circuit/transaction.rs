@@ -1,11 +1,13 @@
 //! Transaction STARK constraints blueprint implementation.
 
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::{FieldElement, StarkParameters};
 use crate::reputation::{ReputationWeights, Tier};
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::{FieldElement, StarkParameters};
 use crate::types::{Account, SignedTransaction};
 
-use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Witness data required to validate a transaction constraint system.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

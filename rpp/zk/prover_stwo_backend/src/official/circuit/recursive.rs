@@ -1,9 +1,11 @@
 //! Recursive proof aggregation circuit blueprint implementation.
 
-use crate::stwo::air::{AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain};
-use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
+use crate::official::air::{
+    AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
+};
+use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
 
-use super::{CircuitError, ExecutionTrace, StarkCircuit, TraceSegment, string_to_field};
+use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Witness connecting previous proof commitments with the latest aggregation.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]

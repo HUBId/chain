@@ -16,8 +16,7 @@ use crate::types::{
 };
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};
-use super::circuit::{
-    CircuitError, StarkCircuit,
+use crate::stwo::circuit::{
     consensus::{ConsensusCircuit, ConsensusWitness, VotePower},
     identity::{IdentityCircuit, IdentityWitness},
     pruning::{PruningCircuit, PruningWitness},
@@ -25,10 +24,11 @@ use super::circuit::{
     state::{StateCircuit, StateWitness},
     transaction::{TransactionCircuit, TransactionWitness},
     uptime::{UptimeCircuit, UptimeWitness},
+    CircuitError, StarkCircuit,
 };
-use super::fri::FriProver;
-use super::params::{FieldElement, StarkParameters};
-use super::proof::{ProofKind, ProofPayload, StarkProof};
+use crate::stwo::fri::FriProver;
+use crate::stwo::params::{FieldElement, StarkParameters};
+use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 
 fn map_circuit_error(err: CircuitError) -> ChainError {
     ChainError::Crypto(err.to_string())
@@ -67,7 +67,7 @@ impl<'a> WalletProver<'a> {
         self
     }
 
-    fn hasher(&self) -> super::params::PoseidonHasher {
+    fn hasher(&self) -> crate::stwo::params::PoseidonHasher {
         self.parameters.poseidon_hasher()
     }
 

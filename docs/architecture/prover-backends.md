@@ -38,6 +38,31 @@ is selected.【F:rpp/runtime/errors.rs†L1-L37】
 STWO modules.  This keeps the nightly dependencies isolated from consumers that
 only need the trait interface.【F:rpp/zk/prover_stwo_backend/src/backend.rs†L1-L43】
 
+Nightly-specific code now lives under `rpp/zk/prover_stwo_backend/src/official`,
+which mirrors the previous blueprint layout so downstream modules can keep their
+imports while picking up the re-exported modules from the backend crate.  The
+directory contains the relocated `air`, `circuit`, `conversions`, `fri`,
+`official_adapter`, `params`, `proof`, and `verifier` modules, isolating every
+`stwo_official` dependency behind the backend feature gate.【F:rpp/zk/prover_stwo_backend/src/official/mod.rs†L1-L8】
+The feature graph wires `prover-stwo` to `official`, ensuring that enabling the
+STWO backend automatically pulls in the nightly-only code path.【F:rpp/zk/prover_stwo_backend/Cargo.toml†L12-L23】
+
+For reference, the following files were moved from `rpp/proofs/stwo` into the
+backend crate:
+
+- `rpp/proofs/stwo/air/` → `rpp/zk/prover_stwo_backend/src/official/air/`
+- `rpp/proofs/stwo/circuit/` → `rpp/zk/prover_stwo_backend/src/official/circuit/`
+- `rpp/proofs/stwo/conversions.rs` → `rpp/zk/prover_stwo_backend/src/official/conversions.rs`
+- `rpp/proofs/stwo/fri.rs` → `rpp/zk/prover_stwo_backend/src/official/fri.rs`
+- `rpp/proofs/stwo/official_adapter.rs` → `rpp/zk/prover_stwo_backend/src/official/official_adapter.rs`
+- `rpp/proofs/stwo/params/` → `rpp/zk/prover_stwo_backend/src/official/params/`
+- `rpp/proofs/stwo/proof.rs` → `rpp/zk/prover_stwo_backend/src/official/proof.rs`
+- `rpp/proofs/stwo/verifier/` → `rpp/zk/prover_stwo_backend/src/official/verifier/`
+
+`rpp/proofs/stwo` now re-exports these backend modules and retains only the
+stable aggregation, FFI, and wallet prover code that integrates with the rest of
+the chain runtime.【F:rpp/proofs/stwo/mod.rs†L1-L12】【F:rpp/proofs/stwo/prover/mod.rs†L1-L73】
+
 ### Stable mock backend
 
 `rpp/zk/prover_mock_backend` offers a deterministic mock backend designed for
