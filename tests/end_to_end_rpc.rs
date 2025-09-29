@@ -11,6 +11,7 @@ use tokio::time::sleep;
 use rpp_chain::api;
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
 use rpp_chain::node::NodeHandle;
+use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::stwo::circuit::ExecutionTrace;

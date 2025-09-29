@@ -14,8 +14,9 @@ use super::circuit::{
 use super::conversions::field_to_secure;
 use super::official_adapter::{BlueprintComponent, Component};
 use super::params::{FieldElement, StarkParameters};
-use super::proof::{ProofKind, ProofPayload, StarkProof};
+use super::proof::{FriProof as BlueprintFriProof, ProofKind, ProofPayload, StarkProof};
 
+use stwo::stwo_official::core::channel::{Channel, MerkleChannel};
 use stwo::stwo_official::core::pcs::CommitmentSchemeVerifier;
 use stwo::stwo_official::core::proof::StarkProof as OfficialStarkProof;
 use stwo::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
@@ -86,7 +87,7 @@ impl NodeVerifier {
         Ok(())
     }
 
-    fn check_fri(
+    pub(crate) fn check_fri(
         &self,
         proof: &StarkProof,
         public_inputs: &[FieldElement],
@@ -98,19 +99,24 @@ impl NodeVerifier {
             ChainError::Crypto(format!("component adapter error: {err}"))
         })?;
 
-        let mut commitment_proof = proof.commitment_proof.to_official().ok_or_else(|| {
+        let commitment_proof = proof.commitment_proof.to_official().ok_or_else(|| {
             tracing::error!("missing commitment scheme proof data");
             ChainError::Crypto("missing commitment proof".into())
         })?;
 
-        if let Some(fri_proof) = proof.fri_proof.to_official() {
-            if fri_proof != commitment_proof.fri_proof {
+        if let Some(fri_proof) = proof
+            .fri_proof
+            .to_official()
+            .map(|official| BlueprintFriProof::from_official(&official))
+        {
+            let commitment_fri = BlueprintFriProof::from_official(&commitment_proof.fri_proof);
+            if fri_proof != commitment_fri {
                 tracing::error!("embedded fri proof mismatch between payloads");
                 return Err(ChainError::Crypto("fri proof mismatch".into()));
             }
         }
 
-        let mut channel = Blake2sMerkleChannel::C::default();
+        let mut channel = <Blake2sMerkleChannel as MerkleChannel>::C::default();
         let secure_inputs = public_inputs
             .iter()
             .map(field_to_secure)
