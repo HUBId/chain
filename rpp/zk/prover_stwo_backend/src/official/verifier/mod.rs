@@ -14,9 +14,10 @@ use super::circuit::{
 use super::conversions::field_to_secure;
 use super::official_adapter::{BlueprintComponent, Component};
 use super::params::{FieldElement, StarkParameters};
-use super::proof::{FriProof as BlueprintFriProof, ProofKind, ProofPayload, StarkProof};
+use super::proof::{ProofKind, ProofPayload, StarkProof};
 
 use crate::stwo_official::core::channel::{Channel, MerkleChannel};
+use crate::stwo_official::core::fri::FriProof as OfficialFriProof;
 use crate::stwo_official::core::pcs::CommitmentSchemeVerifier;
 use crate::stwo_official::core::proof::StarkProof as OfficialStarkProof;
 use crate::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
@@ -44,6 +45,25 @@ fn map_verification_error(err: VerificationError) -> ChainError {
         VerificationError::ProofOfWork => "proof of work verification failed".to_string(),
     };
     ChainError::Crypto(message)
+}
+
+fn encode_fri_proof(proof: &OfficialFriProof<Blake2sMerkleHasher>) -> ChainResult<Vec<u8>> {
+    bincode::serialize(proof).map_err(|err| {
+        ChainError::Crypto(format!("failed to encode fri proof for comparison: {err}"))
+    })
+}
+
+fn ensure_matching_fri(
+    commitment_fri: &OfficialFriProof<Blake2sMerkleHasher>,
+    provided_fri: &OfficialFriProof<Blake2sMerkleHasher>,
+) -> ChainResult<()> {
+    let commitment_bytes = encode_fri_proof(commitment_fri)?;
+    let provided_bytes = encode_fri_proof(provided_fri)?;
+    if commitment_bytes != provided_bytes {
+        tracing::error!("embedded fri proof mismatch between payloads");
+        return Err(ChainError::Crypto("fri proof mismatch".into()));
+    }
+    Ok(())
 }
 
 /// Lightweight verifier that recomputes commitments by replaying circuits.
@@ -104,16 +124,8 @@ impl NodeVerifier {
             ChainError::Crypto("missing commitment proof".into())
         })?;
 
-        if let Some(fri_proof) = proof
-            .fri_proof
-            .to_official()
-            .map(|official| BlueprintFriProof::from_official(&official))
-        {
-            let commitment_fri = BlueprintFriProof::from_official(&commitment_proof.fri_proof);
-            if fri_proof != commitment_fri {
-                tracing::error!("embedded fri proof mismatch between payloads");
-                return Err(ChainError::Crypto("fri proof mismatch".into()));
-            }
+        if let Some(fri_proof) = proof.fri_proof.to_official() {
+            ensure_matching_fri(&commitment_proof.fri_proof, &fri_proof)?;
         }
 
         let mut channel = <Blake2sMerkleChannel as MerkleChannel>::C::default();
