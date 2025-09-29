@@ -30,6 +30,13 @@ pub enum AirError {
         offset: isize,
     },
 
+    #[error("mask for column '{column}' in segment '{segment}' missing offset {offset}")]
+    MissingMaskOffset {
+        segment: String,
+        column: String,
+        offset: isize,
+    },
+
     #[error("field arithmetic error: {0}")]
     Field(#[from] FieldError),
 
@@ -87,6 +94,16 @@ pub struct ColumnReference {
     offset: isize,
 }
 
+/// Trait abstracting sources that can provide column values with row offsets.
+pub trait TraceEvaluator {
+    fn value(
+        &self,
+        column: &AirColumn,
+        row: usize,
+        offset: isize,
+    ) -> Result<FieldElement, AirError>;
+}
+
 /// Expression tree describing algebraic constraints over the execution trace.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum AirExpression {
@@ -118,9 +135,9 @@ impl AirExpression {
         Self::Sub(Box::new(lhs), Box::new(rhs))
     }
 
-    fn evaluate(
+    fn evaluate<E: TraceEvaluator>(
         &self,
-        view: &TraceView<'_>,
+        view: &E,
         row: usize,
         parameters: &StarkParameters,
     ) -> Result<FieldElement, AirError> {
@@ -433,5 +450,16 @@ impl<'a> TraceView<'a> {
             .segment(column.segment.as_str())
             .ok_or_else(|| AirError::MissingSegment(column.segment.clone()))?;
         segment.value(column.column.as_str(), row, offset)
+    }
+}
+
+impl<'a> TraceEvaluator for TraceView<'a> {
+    fn value(
+        &self,
+        column: &AirColumn,
+        row: usize,
+        offset: isize,
+    ) -> Result<FieldElement, AirError> {
+        TraceView::value(self, column, row, offset)
     }
 }
