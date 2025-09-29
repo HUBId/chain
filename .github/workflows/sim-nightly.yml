@@ -13,15 +13,28 @@ jobs:
       RPP_SIM_REQUIRE_DETERMINISTIC: "0"
       CARGO_TERM_COLOR: always
       RUSTFLAGS: -D warnings
+      CARGO_HOME: ${{ github.workspace }}/.cargo
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Audit deterministic cargo environment
+        run: |
+          expected="$GITHUB_WORKSPACE/.cargo"
+          if [ "${CARGO_HOME}" != "$expected" ]; then
+            echo "CARGO_HOME mismatch: ${CARGO_HOME} != $expected" >&2
+            exit 1
+          fi
+          if [ "${RUSTFLAGS:-}" != "-D warnings" ]; then
+            echo "RUSTFLAGS mismatch: ${RUSTFLAGS:-<unset>}" >&2
+            exit 1
+          fi
+          mkdir -p "$CARGO_HOME"
       - name: Cache cargo directories
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |

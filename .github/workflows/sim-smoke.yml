@@ -3,6 +3,7 @@ name: sim-smoke
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  CARGO_HOME: ${{ github.workspace }}/.cargo
 
 on:
   push:
@@ -18,14 +19,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Audit deterministic cargo environment
+        run: |
+          expected="$GITHUB_WORKSPACE/.cargo"
+          if [ "${CARGO_HOME}" != "$expected" ]; then
+            echo "CARGO_HOME mismatch: ${CARGO_HOME} != $expected" >&2
+            exit 1
+          fi
+          if [ "${RUSTFLAGS:-}" != "-D warnings" ]; then
+            echo "RUSTFLAGS mismatch: ${RUSTFLAGS:-<unset>}" >&2
+            exit 1
+          fi
+          mkdir -p "$CARGO_HOME"
       # Cache Cargo registry and build artifacts; updating Cargo.lock will bust the key.
       # Keep an eye on runtime after enabling the cache and tighten the path list if size grows.
       - name: Cache cargo directories
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
@@ -43,14 +56,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Audit deterministic cargo environment
+        run: |
+          expected="$GITHUB_WORKSPACE/.cargo"
+          if [ "${CARGO_HOME}" != "$expected" ]; then
+            echo "CARGO_HOME mismatch: ${CARGO_HOME} != $expected" >&2
+            exit 1
+          fi
+          if [ "${RUSTFLAGS:-}" != "-D warnings" ]; then
+            echo "RUSTFLAGS mismatch: ${RUSTFLAGS:-<unset>}" >&2
+            exit 1
+          fi
+          mkdir -p "$CARGO_HOME"
       # Share the same cache key so registry downloads and build output can be reused across jobs.
       # If cache misses start to dominate runtime, consider separating cargo registry vs target caches.
       - name: Cache cargo directories
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ${{ env.CARGO_HOME }}/registry
+            ${{ env.CARGO_HOME }}/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
