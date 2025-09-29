@@ -15,10 +15,10 @@ use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::circuit::transaction::TransactionWitness;
-use rpp_chain::stwo::verifier::NodeVerifier;
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
+use rpp_chain::stwo::verifier::NodeVerifier;
 use rpp_chain::types::{
     Account, ChainProof, SignedTransaction, Stake, Transaction, TransactionProofBundle,
 };
