@@ -1,3 +1,5 @@
+#![cfg(feature = "backend-stwo")]
+
 use crate::stwo::air::AirDefinition;
 use crate::stwo::circuit::{ExecutionTrace, StarkCircuit};
 use crate::stwo::circuit::transaction::TransactionCircuit;
