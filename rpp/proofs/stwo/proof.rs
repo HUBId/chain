@@ -3,11 +3,11 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 
 use super::circuit::ExecutionTrace;
+use super::conversions::{field_bytes, field_to_base, field_to_secure};
 use super::params::FieldElement;
 use super::params::{PoseidonHasher, StarkParameters};
 
-use stwo::stwo_official::core::fields::m31::BaseField;
-use stwo::stwo_official::core::fields::qm31::{SECURE_EXTENSION_DEGREE, SecureField};
+use stwo::stwo_official::core::fields::qm31::SecureField;
 use stwo::stwo_official::core::fri::FriProof as OfficialFriProof;
 use stwo::stwo_official::core::poly::line::LinePoly;
 use stwo::stwo_official::core::vcs::blake2_hash::{
@@ -107,31 +107,6 @@ fn digest_elements(values: &[FieldElement]) -> OfficialBlake2sHash {
         buffer.extend_from_slice(&field_bytes(value));
     }
     OfficialBlake2sHasher::hash(&buffer)
-}
-
-fn field_to_secure(value: &FieldElement) -> SecureField {
-    let bytes = field_bytes(value);
-    let mut limbs = [BaseField::from(0u32); SECURE_EXTENSION_DEGREE];
-    for (idx, chunk) in bytes.chunks(4).take(SECURE_EXTENSION_DEGREE).enumerate() {
-        limbs[idx] = BaseField::from(u32::from_be_bytes(chunk.try_into().unwrap()));
-    }
-    SecureField::from_m31_array(limbs)
-}
-
-fn field_to_base(value: &FieldElement) -> BaseField {
-    let bytes = field_bytes(value);
-    BaseField::from(u32::from_be_bytes(
-        bytes[bytes.len() - 4..].try_into().unwrap(),
-    ))
-}
-
-fn field_bytes(value: &FieldElement) -> [u8; 16] {
-    let mut bytes = [0u8; 16];
-    let repr = value.to_bytes();
-    let copy_len = repr.len().min(bytes.len());
-    let start = bytes.len() - copy_len;
-    bytes[start..].copy_from_slice(&repr[repr.len() - copy_len..]);
-    bytes
 }
 
 fn sum_values(values: &[FieldElement]) -> Option<FieldElement> {

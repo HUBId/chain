@@ -15,18 +15,33 @@ use thiserror::Error;
 use super::{
     air::AirDefinition,
     circuit::{ExecutionTrace, TraceSegment},
-    params::StarkParameters,
+    conversions::{column_to_base, column_to_secure},
+    params::{FieldElement, StarkParameters},
 };
+use stwo::stwo_official::core::fields::m31::BaseField;
+use stwo::stwo_official::core::fields::qm31::SecureField;
 
 /// Re-export key prover traits and types from the official STWO implementation
 /// so that downstream modules can rely on them without repetitive imports.
 pub use stwo::stwo_official::core::{ColumnVec, air::Component, pcs::TreeVec};
 
+#[cfg(feature = "stwo/prover")]
+use num_traits::Zero;
+#[cfg(feature = "stwo/prover")]
+use stwo::stwo_official::core::channel::MerkleChannel;
+#[cfg(feature = "stwo/prover")]
+use stwo::stwo_official::core::poly::circle::CanonicCoset;
 /// Re-export prover-side structures when the upstream dependency exposes them.
 #[cfg(feature = "stwo/prover")]
 pub use stwo::stwo_official::prover::{
     air::component_prover::ComponentProver, backend::cpu::CpuBackend,
     poly::circle::CircleEvaluation,
+};
+#[cfg(feature = "stwo/prover")]
+use stwo::stwo_official::prover::{
+    backend::cpu::{CpuCircleEvaluation, CpuCirclePoly},
+    pcs::CommitmentSchemeProver,
+    poly::{BitReversedOrder, NaturalOrder},
 };
 
 /// Errors that can be raised while validating execution trace descriptors.
@@ -107,6 +122,20 @@ impl<'a> BlueprintComponent<'a> {
     }
 }
 
+fn column_to_base_field<'a, I>(column: I) -> Vec<BaseField>
+where
+    I: IntoIterator<Item = &'a FieldElement>,
+{
+    column_to_base(column)
+}
+
+fn column_to_secure_field<'a, I>(column: I) -> Vec<SecureField>
+where
+    I: IntoIterator<Item = &'a FieldElement>,
+{
+    column_to_secure(column)
+}
+
 fn register_segment<'a>(
     segment: &'a TraceSegment,
     index: usize,
@@ -162,10 +191,70 @@ fn ceil_log2(value: usize) -> u32 {
     }
 }
 
+#[cfg(feature = "stwo/prover")]
+fn segment_to_circle_evals(
+    segment: &TraceSegment,
+    descriptor: &SegmentDescriptor<'_>,
+) -> ColumnVec<CpuCircleEvaluation<BaseField, BitReversedOrder>> {
+    let log_size = descriptor.log_size.max(1);
+    let domain = CanonicCoset::new(log_size).circle_domain();
+    let domain_size = domain.size();
+
+    (0..descriptor.column_count)
+        .map(|column_index| {
+            let column_iter = segment.rows.iter().map(|row| &row[column_index]);
+            let mut values = column_to_base_field(column_iter);
+            values.resize(domain_size, BaseField::zero());
+            CpuCircleEvaluation::<BaseField, NaturalOrder>::new(domain, values).bit_reverse()
+        })
+        .collect()
+}
+
+#[cfg(feature = "stwo/prover")]
+#[derive(Debug)]
+pub struct TraceCommitmentViews<'a> {
+    pub polynomials: TreeVec<ColumnVec<&'a CpuCirclePoly>>,
+    pub evaluations: TreeVec<ColumnVec<&'a CpuCircleEvaluation<BaseField, BitReversedOrder>>>,
+}
+
+#[cfg(feature = "stwo/prover")]
+impl<'a> BlueprintComponent<'a> {
+    pub fn build_commitment_views<'b, 'c, MC: MerkleChannel>(
+        &self,
+        commitment_scheme: &'b mut CommitmentSchemeProver<'c, CpuBackend, MC>,
+        channel: &mut MC::C,
+    ) -> TraceCommitmentViews<'b> {
+        for (segment, descriptor) in self.trace.segments.iter().zip(&self.segments) {
+            let evaluations = segment_to_circle_evals(segment, descriptor);
+            let mut builder = commitment_scheme.tree_builder();
+            builder.extend_evals(evaluations);
+            builder.commit(channel);
+        }
+
+        let polynomials = prepend_preprocessed_tree(commitment_scheme.polynomials());
+        let evaluations = prepend_preprocessed_tree(commitment_scheme.evaluations());
+
+        TraceCommitmentViews {
+            polynomials,
+            evaluations,
+        }
+    }
+}
+
+#[cfg(feature = "stwo/prover")]
+fn prepend_preprocessed_tree<T>(views: TreeVec<ColumnVec<T>>) -> TreeVec<ColumnVec<T>> {
+    let mut trees = Vec::with_capacity(views.len() + 1);
+    trees.push(Vec::new());
+    trees.extend(views.0);
+    TreeVec(trees)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::stwo::circuit::TraceSegment;
+    #[cfg(feature = "stwo/prover")]
+    use stwo::stwo_official::core::fields::m31::BaseField;
 
     fn sample_segment(name: &str, columns: usize, rows: usize) -> TraceSegment {
         let params = StarkParameters::blueprint_default();
@@ -179,6 +268,33 @@ mod tests {
         }
         TraceSegment::new(name, (0..columns).map(|i| format!("c{i}")).collect(), data)
             .expect("valid segment")
+    }
+
+    #[test]
+    fn column_conversion_preserves_lengths() {
+        let segment = sample_segment("seg", 2, 3);
+        let base_values = super::column_to_base_field(segment.rows.iter().map(|row| &row[0]));
+        let secure_values = super::column_to_secure_field(segment.rows.iter().map(|row| &row[0]));
+        assert_eq!(base_values.len(), 3);
+        assert_eq!(secure_values.len(), 3);
+    }
+
+    #[cfg(feature = "stwo/prover")]
+    #[test]
+    fn segment_evaluations_pad_to_power_of_two() {
+        use num_traits::Zero;
+
+        let segment = sample_segment("seg", 1, 3);
+        let descriptor = super::build_descriptor(&segment).expect("valid descriptor");
+        let evaluations = super::segment_to_circle_evals(&segment, &descriptor);
+        assert_eq!(evaluations.len(), 1);
+        let evaluation = &evaluations[0];
+        assert_eq!(evaluation.domain.size(), 1 << descriptor.log_size.max(1));
+        assert_eq!(evaluation.values.len(), evaluation.domain.size());
+        assert_eq!(
+            evaluation.values[evaluation.values.len() - 1],
+            BaseField::zero()
+        );
     }
 
     #[test]
