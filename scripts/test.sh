@@ -37,7 +37,7 @@ Build options:
 
 Backends:
   default   Use the workspace default backend configuration
-  stwo      Force the `backend-stwo` feature only
+  stwo      Force the `prover-stwo` feature only
   plonky3   Force the `backend-plonky3` feature only
 USAGE
 }
@@ -194,7 +194,7 @@ run_suite() {
       backend_args=()
       ;;
     stwo)
-      backend_args=("--no-default-features" "--features" "backend-stwo")
+      backend_args=("--no-default-features" "--features" "prover-stwo")
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")

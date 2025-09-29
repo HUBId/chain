@@ -1,4 +1,4 @@
-#![cfg(feature = "backend-stwo")]
+#![cfg(feature = "prover-stwo")]
 
 use crate::stwo::air::AirDefinition;
 use crate::stwo::circuit::{ExecutionTrace, StarkCircuit};

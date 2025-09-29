@@ -9,7 +9,7 @@ use schnorrkel::keys::{
     ExpansionMode, Keypair as VrfKeypairInner, MiniSecretKey, PublicKey as SrPublicKey,
 };
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 

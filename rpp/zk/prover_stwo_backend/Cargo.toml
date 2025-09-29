@@ -12,6 +12,8 @@ official = ["dep:stwo-official"]
 prover = ["official", "stwo-official/prover"]
 fri = ["prover"]
 scaffold = []
+prover-stwo = []
+prover-mock = []
 
 [dependencies]
 bincode = "1.3"

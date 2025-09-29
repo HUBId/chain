@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::consensus::{BftVoteKind, SignedBftVote};
 use crate::crypto::{VrfPublicKey, vrf_public_key_from_hex};

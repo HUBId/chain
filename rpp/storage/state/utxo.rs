@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 use tokio::sync::RwLock;
 
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};

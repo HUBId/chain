@@ -6,7 +6,7 @@ use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
 use serde::{Serialize, de::DeserializeOwned};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 use tokio::sync::Mutex;
 
 use crate::config::NodeConfig;

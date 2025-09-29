@@ -1,4 +1,4 @@
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 /// Compute a binary merkle root over the provided leaves.
 ///

@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use malachite::Natural;
 use malachite::base::num::arithmetic::traits::DivRem;
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::crypto::{
     VrfPublicKey, VrfSecretKey, address_from_public_key, public_key_from_hex, signature_from_hex,

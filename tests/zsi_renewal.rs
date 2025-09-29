@@ -42,9 +42,8 @@ fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
     ledger.sync_epoch_for_height(1);
     let pk_bytes = vec![1u8; 32];
     let pk_hex = hex::encode(&pk_bytes);
-    let wallet_addr = hex::encode::<[u8; 32]>(
-        stwo::core::vcs::blake2_hash::Blake2sHasher::hash(&pk_bytes).into(),
-    );
+    let wallet_addr =
+        hex::encode::<[u8; 32]>(rpp_chain::proof_backend::Blake2sHasher::hash(&pk_bytes).into());
     let vrf_keypair = generate_vrf_keypair().expect("generate vrf keypair");
     let vrf = rpp_chain::consensus::evaluate_vrf(
         &ledger.current_epoch_nonce(),

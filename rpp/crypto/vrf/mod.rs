@@ -18,7 +18,7 @@ use malachite::base::num::arithmetic::traits::DivRem;
 use schnorrkel::signing_context;
 use schnorrkel::vrf::{VRFPreOut, VRFProof};
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 use thiserror::Error;
 
 /// Poseidon domain separator used for deriving VRF inputs.

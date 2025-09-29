@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::proof_backend::{

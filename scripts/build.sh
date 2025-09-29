@@ -153,7 +153,7 @@ case "$BACKEND" in
     BACKEND_ARGS=()
     ;;
   stwo)
-    BACKEND_ARGS=("--no-default-features" "--features" "backend-stwo")
+    BACKEND_ARGS=("--no-default-features" "--features" "prover-stwo")
     ;;
   plonky3)
     BACKEND_ARGS=("--features" "backend-plonky3")

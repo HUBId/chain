@@ -8,7 +8,7 @@ use hex;
 use ed25519_dalek::{PublicKey, Signature};
 use malachite::Natural;
 use serde::{Deserialize, Serialize};
-use stwo::core::vcs::blake2_hash::Blake2sHasher;
+use crate::proof_backend::Blake2sHasher;
 
 use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, verify_vrf};
 use crate::crypto::{
@@ -478,7 +478,7 @@ impl RecursiveProof {
         Ok(())
     }
 
-    #[cfg(feature = "backend-stwo")]
+    #[cfg(feature = "prover-stwo")]
     fn verify_stwo(
         &self,
         header: &BlockHeader,
@@ -577,7 +577,7 @@ impl RecursiveProof {
         Ok(())
     }
 
-    #[cfg(not(feature = "backend-stwo"))]
+    #[cfg(not(feature = "prover-stwo"))]
     fn verify_stwo(
         &self,
         _header: &BlockHeader,
@@ -1340,7 +1340,7 @@ mod tests {
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
     use rand::rngs::OsRng;
-    use stwo::core::vcs::blake2_hash::Blake2sHasher;
+    use crate::proof_backend::Blake2sHasher;
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
