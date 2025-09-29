@@ -17,11 +17,15 @@ use crate::stwo::fri::FriProver;
 use crate::stwo::official_adapter::{BlueprintComponent, Component, ComponentProver};
 #[allow(unused_imports)]
 use crate::stwo::params::{FieldElement, StarkParameters};
+use crate::stwo::proof::StarkProof;
 use crate::stwo::prover::WalletProver;
+use crate::stwo::verifier::NodeVerifier;
 use crate::types::{Account, ChainProof, SignedTransaction, Stake, Transaction};
 use ed25519_dalek::{Keypair, Signer};
 use once_cell::sync::Lazy;
 use rand::{SeedableRng, rngs::StdRng};
+use std::fs;
+use std::path::PathBuf;
 use tempfile::tempdir;
 
 #[derive(Clone)]
@@ -138,5 +142,30 @@ fn wallet_state_round_trip_is_deterministic() {
 #[test]
 fn recorded_transaction_proof_generation_succeeds() {
     let fixture = recorded_transaction_proof();
-    assert!(matches!(fixture.proof, ChainProof::Stwo(_)));
+    let verifier = NodeVerifier::new();
+    verifier
+        .verify_transaction(&fixture.proof)
+        .expect("transaction proof should verify");
+
+    match &fixture.proof {
+        ChainProof::Stwo(proof) => dump_valid_proof_fixture(proof),
+        _ => panic!("expected STWO proof"),
+    }
+}
+
+fn dump_valid_proof_fixture(proof: &StarkProof) {
+    const ENV_FLAG: &str = "STWO_DUMP_VALID_PROOF";
+    if std::env::var_os(ENV_FLAG).is_none() {
+        return;
+    }
+
+    let mut output_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    output_path.push("rpp/proofs/stwo/tests/vectors/valid_proof.json");
+
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).expect("create proof fixture directory");
+    }
+
+    let serialized = serde_json::to_string_pretty(proof).expect("serialize STWO proof fixture");
+    fs::write(&output_path, serialized).expect("write STWO proof fixture");
 }
