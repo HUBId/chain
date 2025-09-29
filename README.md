@@ -17,6 +17,10 @@ It integrates:
 - Configurable block cadence, mempool sizing, and genesis allocation via TOML configuration.
 - Iterative rollout controls with feature gates and telemetry sampling for staged deployments.
 
+## Build Requirements
+
+This workspace is pinned to `nightly-2024-06-20` via `rust-toolchain.toml`. Install the matching toolchain along with the bundled `rustfmt` and `clippy` components before building locally to ensure consistent formatting and lint coverage.
+
 ## Getting Started
 
 ### Prerequisites
