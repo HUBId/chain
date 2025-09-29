@@ -3,6 +3,7 @@
 pub mod aggregation;
 pub mod air;
 pub mod circuit;
+pub mod conversions;
 pub mod ffi;
 pub mod fri;
 pub mod official_adapter;
