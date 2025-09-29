@@ -15,11 +15,11 @@ use stwo::stwo_official::core::circle::CirclePoint;
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::constraints::point_vanishing;
 #[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::core::fields::FieldExpOps;
+#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::fields::m31::BaseField;
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::fields::qm31::SecureField;
-#[cfg(feature = "backend-stwo")]
-use stwo::stwo_official::core::fields::FieldExpOps;
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::core::poly::circle::CanonicCoset;
 #[cfg(feature = "backend-stwo")]
@@ -27,9 +27,9 @@ use stwo::stwo_official::prover::DomainEvaluationAccumulator;
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::Trace;
 #[cfg(feature = "backend-stwo")]
-use stwo::stwo_official::prover::poly::circle::PolyOps;
-#[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::backend::cpu::{CpuBackend, CpuCircleEvaluation, CpuCirclePoly};
+#[cfg(feature = "backend-stwo")]
+use stwo::stwo_official::prover::poly::circle::PolyOps;
 #[cfg(feature = "backend-stwo")]
 use stwo::stwo_official::prover::poly::{BitReversedOrder, NaturalOrder};
 
