@@ -15,6 +15,7 @@ use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::circuit::transaction::TransactionWitness;
+use rpp_chain::stwo::verifier::NodeVerifier;
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
@@ -244,6 +245,16 @@ async fn submitting_valid_transaction_populates_mempool() -> Result<()> {
     let node_address = harness.node_address();
 
     let bundle = sample_transaction_bundle(&node_address);
+    let verifier = NodeVerifier::new();
+    if let ChainProof::Stwo(_) = &bundle.proof {
+        if let Err(err) = verifier.verify_transaction(&bundle.proof) {
+            panic!(
+                "expected STWO transaction verification pipeline success, but verification returned {err:?}"
+            );
+        }
+    } else {
+        panic!("expected STWO transaction proof in bundle");
+    }
     let expected_hash = bundle.hash();
 
     let response = client
