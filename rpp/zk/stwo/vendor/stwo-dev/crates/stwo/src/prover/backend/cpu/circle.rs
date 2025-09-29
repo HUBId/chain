@@ -20,7 +20,7 @@ impl PolyOps for CpuBackend {
         eval: CircleEvaluation<Self, BaseField, BitReversedOrder>,
         twiddles: &TwiddleTree<Self>,
     ) -> CirclePoly<Self> {
-        assert!(eval.domain.half_coset.is_doubling_of(twiddles.root_coset));
+        debug_assert!(eval.domain.half_coset.is_doubling_of(twiddles.root_coset));
 
         let mut values = eval.values;
 
@@ -100,7 +100,7 @@ impl PolyOps for CpuBackend {
         domain: CircleDomain,
         twiddles: &TwiddleTree<Self>,
     ) -> CircleEvaluation<Self, BaseField, BitReversedOrder> {
-        assert!(domain.half_coset.is_doubling_of(twiddles.root_coset));
+        debug_assert!(domain.half_coset.is_doubling_of(twiddles.root_coset));
 
         let mut values = poly.extend(domain.log_size()).coeffs;
 

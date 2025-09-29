@@ -4,7 +4,7 @@
 use super::*;
 
 use crate::crypto::address_from_public_key;
-use crate::proof_system::ProofProver;
+use crate::proof_system::{ProofProver, ProofVerifier};
 use crate::reputation::Tier;
 use crate::storage::Storage;
 #[allow(unused_imports)]
