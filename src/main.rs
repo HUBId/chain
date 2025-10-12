@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -118,6 +119,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
     let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
     let mut gossip_task: Option<JoinHandle<Result<()>>> = None;
+    let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path)?;
@@ -151,6 +153,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             node.start().await.map_err(|err| anyhow!(err))
         }));
         rpc_addr = Some(addr);
+        rpc_requests_per_minute = config.rpc_requests_per_minute.and_then(NonZeroU64::new);
 
         let (orchestrator, shutdown_rx) =
             PipelineOrchestrator::new(handle.clone(), p2p_handle.clone());
@@ -199,6 +202,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         node_handle.clone(),
         wallet_instance.clone(),
         orchestrator_instance.clone(),
+        rpc_requests_per_minute,
     );
     let api_task = tokio::spawn(async move {
         api::serve(

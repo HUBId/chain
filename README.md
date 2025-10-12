@@ -198,6 +198,7 @@ After adjusting gates, restart the node and inspect `GET /status/rollout` to con
 - `snapshot_dir`: directory where reconstructed state snapshots are materialized.
 - `proof_cache_dir`: location for cached recursive/STARK proof blobs.
 - `rpc_listen`: HTTP API address.
+- `rpc_requests_per_minute`: optional request-per-minute ceiling that returns HTTP 429 when exceeded.
 - `block_time_ms`: block production interval in milliseconds.
 - `max_block_transactions` / `mempool_limit`: throughput tuning knobs.
 - `epoch_length` / `target_validator_count`: consensus epoch duration and desired validator set size driving VRF thresholds.

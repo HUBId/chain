@@ -1,16 +1,20 @@
 use std::net::SocketAddr;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
+use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
-use axum::{Json, Router};
+use axum::{BoxError, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tower::limit::RateLimitLayer;
+use tower::ServiceBuilder;
 use tracing::info;
 
 use crate::consensus::SignedBftVote;
@@ -41,6 +45,7 @@ pub struct ApiContext {
     node: Option<NodeHandle>,
     wallet: Option<Arc<Wallet>>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
+    request_limit_per_minute: Option<NonZeroU64>,
 }
 
 impl ApiContext {
@@ -49,12 +54,14 @@ impl ApiContext {
         node: Option<NodeHandle>,
         wallet: Option<Arc<Wallet>>,
         orchestrator: Option<Arc<PipelineOrchestrator>>,
+        request_limit_per_minute: Option<NonZeroU64>,
     ) -> Self {
         Self {
             mode,
             node,
             wallet,
             orchestrator,
+            request_limit_per_minute,
         }
     }
 
@@ -194,6 +201,10 @@ impl ApiContext {
         }
         *self.mode.write() = mode;
         Ok(())
+    }
+
+    fn request_limit_per_minute(&self) -> Option<NonZeroU64> {
+        self.request_limit_per_minute
     }
 }
 
@@ -491,6 +502,7 @@ pub async fn serve(
     allowed_origin: Option<String>,
 ) -> ChainResult<()> {
     let security = ApiSecurity::new(auth_token, allowed_origin)?;
+    let request_limit_per_minute = context.request_limit_per_minute();
 
     let mut router = Router::new()
         .route("/health", get(health))
@@ -552,6 +564,15 @@ pub async fn serve(
             security.clone(),
             auth_middleware,
         ));
+    }
+    if let Some(limit) = request_limit_per_minute {
+        router = router.layer(
+            ServiceBuilder::new()
+                .layer(HandleErrorLayer::new(|_: BoxError| async move {
+                    StatusCode::TOO_MANY_REQUESTS
+                }))
+                .layer(RateLimitLayer::new(limit.get(), Duration::from_secs(60))),
+        );
     }
 
     let router = router.with_state(context);
