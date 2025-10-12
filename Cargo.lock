@@ -4279,6 +4279,7 @@ dependencies = [
  "blake3",
  "parking_lot",
  "serde",
+ "tempfile",
  "thiserror 1.0.69",
 ]
 
