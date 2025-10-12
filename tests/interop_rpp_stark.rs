@@ -1,6 +1,7 @@
 #![cfg(feature = "backend-rpp-stark")]
 
 use hex::FromHex;
+use std::convert::TryFrom;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -47,11 +48,16 @@ fn interop_verify_golden_vector_ok() -> anyhow::Result<()> {
     let report = verifier.verify_golden_vector(&params, &public_inputs, &proof)?;
     assert_eq!(report.backend(), verifier.backend_name());
     assert!(report.is_verified(), "golden proof should verify");
-    assert!(report.params_ok(), "params stage should succeed");
-    assert!(report.public_ok(), "public-input stage should succeed");
-    assert!(report.merkle_ok(), "merkle stage should succeed");
-    assert!(report.fri_ok(), "fri stage should succeed");
-    assert!(report.composition_ok(), "composition stage should succeed");
+    let flags = report.flags();
+    assert!(flags.params(), "params stage should succeed");
+    assert!(flags.public(), "public-input stage should succeed");
+    assert!(flags.merkle(), "merkle stage should succeed");
+    assert!(flags.fri(), "fri stage should succeed");
+    assert!(flags.composition(), "composition stage should succeed");
+    assert!(
+        flags.all_passed(),
+        "all stage flags should be set for golden proof"
+    );
     assert_eq!(
         report.total_bytes() as usize,
         proof.len(),
@@ -78,6 +84,28 @@ fn interop_indices_match_and_are_sorted_unique() -> anyhow::Result<()> {
     let unique: std::collections::BTreeSet<_> = indices.iter().copied().collect();
     assert_eq!(unique.len(), indices.len(), "indices must be unique");
 
+    let params = load_bytes("params.bin")?;
+    let public_inputs = load_bytes("public_inputs.bin")?;
+    let proof = load_bytes("proof.bin")?;
+
+    let verifier = RppStarkVerifier::new();
+    assert!(verifier.is_ready(), "backend wiring should be complete");
+    let report = verifier.verify_golden_vector(&params, &public_inputs, &proof)?;
+
+    if let Some(report_indices) = report.trace_query_indices() {
+        let expected: Vec<u32> = indices
+            .iter()
+            .map(|&index| {
+                u32::try_from(index)
+                    .expect("vector indices must fit into 32 bits for backend comparison")
+            })
+            .collect();
+        assert_eq!(
+            report_indices, expected,
+            "verifier report indices must match indices.json"
+        );
+    }
+
     Ok(())
 }
 
@@ -95,6 +123,19 @@ fn interop_repeatability_is_deterministic() -> anyhow::Result<()> {
     assert_eq!(
         digest_first, digest_second,
         "digest computations must be deterministic"
+    );
+
+    let params = load_bytes("params.bin")?;
+    let public_inputs = load_bytes("public_inputs.bin")?;
+    let proof = load_bytes("proof.bin")?;
+
+    let verifier = RppStarkVerifier::new();
+    assert!(verifier.is_ready(), "backend wiring should be complete");
+    let report_first = verifier.verify_golden_vector(&params, &public_inputs, &proof)?;
+    let report_second = verifier.verify_golden_vector(&params, &public_inputs, &proof)?;
+    assert_eq!(
+        report_first, report_second,
+        "verifier reports must be deterministic across runs"
     );
 
     Ok(())
