@@ -33,7 +33,7 @@ This workspace is pinned to `1.79.0` (stable) via `rust-toolchain.toml`. Install
 
 | Channel | Status | Notes |
 | --- | --- | --- |
-| Stable (`1.79.0`) | ✅ Required today | CI, dev tooling, and docs require this toolchain; clippy runs with `-D warnings`. |
+| Stable (`1.79.0`) | ✅ Required today | CI, dev tooling, and docs require this toolchain; clippy runs with `-D warnings`. The stable workflows build and test both the default feature set and `backend-rpp-stark`. |
 | Nightly (latest tested) | 🚧 Optional validation | Keep running the nightly scan workflow to flag regressions until the warn-mode gate becomes blocking. |
 
 > ℹ️ Keep running validation passes against both channels so that the nightly dependency can be safely removed when the stable target is promoted.

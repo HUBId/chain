@@ -11,86 +11,83 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
+    strategy:
+      matrix:
+        features: ["", "backend-rpp-stark"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Build workspace (stable)
+      - name: Build workspace (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
-          set +e
-          cargo +1.79.0 build --workspace --all-features
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable build failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+          if [ -n "$FEATURES" ]; then
+            cargo +1.79.0 build --workspace --features "$FEATURES"
           else
-            echo "Stable build succeeded on Rust 1.79.0."
+            cargo +1.79.0 build --workspace
           fi
-          exit 0
 
   test:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
+    strategy:
+      matrix:
+        features: ["", "backend-rpp-stark"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Test workspace (stable)
+      - name: Test workspace (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
-          set +e
-          cargo +1.79.0 test --workspace --all-features
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable test suite failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+          if [ -n "$FEATURES" ]; then
+            cargo +1.79.0 test --workspace --features "$FEATURES"
           else
-            echo "Stable test suite succeeded on Rust 1.79.0."
+            cargo +1.79.0 test --workspace
           fi
-          exit 0
 
   clippy:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
+    strategy:
+      matrix:
+        features: ["", "backend-rpp-stark"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Clippy (stable, warnings as errors)
+      - name: Clippy (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
-          set +e
-          cargo +1.79.0 clippy --workspace --all-features -D warnings
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable clippy failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+          if [ -n "$FEATURES" ]; then
+            cargo +1.79.0 clippy --workspace --features "$FEATURES" -D warnings
           else
-            echo "Stable clippy passed on Rust 1.79.0."
+            cargo +1.79.0 clippy --workspace -D warnings
           fi
-          exit 0
 
   fmt:
     runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
+    strategy:
+      matrix:
+        features: ["", "backend-rpp-stark"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Format check (stable)
-        run: |
-          set +e
-          cargo +1.79.0 fmt --all -- --check
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable fmt check failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
-          else
-            echo "Stable fmt check passed on Rust 1.79.0."
-          fi
-          exit 0
+      - name: Format check (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+        run: cargo +1.79.0 fmt --all -- --check
