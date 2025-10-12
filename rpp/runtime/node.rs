@@ -553,6 +553,8 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::types::RppStarkProof;
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
@@ -1343,11 +1345,11 @@ impl NodeInner {
             .verify_rpp_stark_with_report(proof, proof_kind)
         {
             Ok(report) => {
-                self.emit_rpp_stark_metrics(proof_kind, proof, &report, started.elapsed());
+                Self::emit_rpp_stark_metrics(proof_kind, proof, &report, started.elapsed());
                 Ok(report)
             }
             Err(err) => {
-                self.emit_rpp_stark_failure_metrics(proof_kind, proof, started.elapsed(), &err);
+                Self::emit_rpp_stark_failure_metrics(proof_kind, proof, started.elapsed(), &err);
                 Err(err)
             }
         }
@@ -1355,7 +1357,6 @@ impl NodeInner {
 
     #[cfg(feature = "backend-rpp-stark")]
     fn emit_rpp_stark_metrics(
-        &self,
         proof_kind: &'static str,
         proof: &ChainProof,
         report: &RppStarkVerificationReport,
@@ -1388,12 +1389,28 @@ impl NodeInner {
                 report = %report,
                 "rpp-stark proof verification"
             );
+            info!(
+                target = "telemetry",
+                proof_backend = "rpp-stark",
+                proof_kind,
+                valid = report.is_verified(),
+                params_ok = flags.params(),
+                public_ok = flags.public(),
+                merkle_ok = flags.merkle(),
+                fri_ok = flags.fri(),
+                composition_ok = flags.composition(),
+                proof_bytes = report.total_bytes(),
+                params_bytes,
+                public_inputs_bytes,
+                payload_bytes,
+                verify_duration_ms,
+                "rpp-stark proof verification"
+            );
         }
     }
 
     #[cfg(feature = "backend-rpp-stark")]
     fn emit_rpp_stark_failure_metrics(
-        &self,
         proof_kind: &'static str,
         proof: &ChainProof,
         duration: Duration,
@@ -1420,9 +1437,31 @@ impl NodeInner {
                 error = %error,
                 "rpp-stark proof verification failed"
             );
+            warn!(
+                target = "telemetry",
+                proof_backend = "rpp-stark",
+                proof_kind,
+                valid = false,
+                proof_bytes,
+                params_bytes,
+                public_inputs_bytes,
+                payload_bytes,
+                verify_duration_ms,
+                error = %error,
+                "rpp-stark proof verification failed"
+            );
         } else {
             warn!(
                 target = "proofs",
+                proof_backend = "rpp-stark",
+                proof_kind,
+                valid = false,
+                verify_duration_ms,
+                error = %error,
+                "rpp-stark proof verification failed"
+            );
+            warn!(
+                target = "telemetry",
                 proof_backend = "rpp-stark",
                 proof_kind,
                 valid = false,
@@ -3625,11 +3664,19 @@ mod telemetry_tests {
         MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
         TimetokeParams,
     };
+    #[cfg(feature = "backend-rpp-stark")]
+    use super::NodeInner;
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::errors::ChainError;
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
     use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
+    #[cfg(feature = "backend-rpp-stark")]
+    use std::time::Duration;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -3711,6 +3758,35 @@ mod telemetry_tests {
 
         assert_eq!(*last_height.read(), Some(7));
         assert!(logs_contain("telemetry snapshot"));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    #[traced_test]
+    fn rpp_stark_failure_emits_telemetry_metrics() {
+        let proof = ChainProof::RppStark(RppStarkProof::new(
+            vec![1, 2],
+            vec![3, 4, 5],
+            vec![6, 7, 8, 9],
+        ));
+        let error = ChainError::Crypto("verification failed".into());
+
+        NodeInner::emit_rpp_stark_failure_metrics(
+            "transaction",
+            &proof,
+            Duration::from_millis(37),
+            &error,
+        );
+
+        assert!(logs_contain("proof_backend=\"rpp-stark\""));
+        assert!(logs_contain("proof_kind=\"transaction\""));
+        assert!(logs_contain("valid=false"));
+        assert!(logs_contain("proof_bytes=9"));
+        assert!(logs_contain("params_bytes=2"));
+        assert!(logs_contain("public_inputs_bytes=3"));
+        assert!(logs_contain("payload_bytes=4"));
+        assert!(logs_contain("verify_duration_ms=37"));
+        assert!(logs_contain("error=\"cryptography error: verification failed\""));
     }
 
     #[tokio::test]
