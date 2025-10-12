@@ -80,8 +80,8 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 - **Observability:** Logs (structured), Tracing spans, Metrics.
 
 ## Abhängigkeiten & Milestones
-1. *Milestone A (Phasen 0–1):* Funktionsfähiger Gossip-Backbone mit Admission-Control.
-2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich.
+1. *Milestone A (Phasen 0–1):* Funktionsfähiger Gossip-Backbone mit Admission-Control. **Status:** ✅ Tier-basierte Zugriffslogik aktiv, abgesichert durch Integrationstests (`rpp/p2p/tests/access_control.rs`).
+2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich. **Status:** 🚧 Datenpfade folgen nach Abschluss der Gossip-Gating-Tests (`rpp/p2p/tests/access_control.rs`).
 3. *Milestone C (Phase 3):* Produktionsreife mit Security, Persistenz, Simulation.
 
 Jede Milestone-Abnahme setzt neben den DoD-Kriterien auch Peer-to-Peer-Tests über mindestens drei Knoten voraus.
