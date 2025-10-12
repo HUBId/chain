@@ -3,6 +3,7 @@ cargo-features = ["edition2024"]
 name = "storage-firewood"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.79"
 
 [dependencies]
 bincode = { version = "1.3", default-features = false }

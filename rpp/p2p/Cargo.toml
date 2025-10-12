@@ -3,6 +3,7 @@ cargo-features = ["edition2024"]
 name = "rpp-p2p"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.79"
 
 [dependencies]
 base64 = "=0.21.7"

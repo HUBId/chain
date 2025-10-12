@@ -2,17 +2,27 @@
 
 ## Toolchains & Local Workflows
 
-- **Nightly-first path (current default)**
-  - Ensure the repository's pinned `nightly-2024-06-20` toolchain is active. `rustup` selects it automatically via `rust-toolchain.toml`.
-  - Install the matching components with `rustup component add --toolchain nightly-2024-06-20 rustfmt clippy`.
-  - Use the helper scripts for consistency:
-    - `scripts/build.sh [--release|--feature-set ...]` to compile.
-    - `scripts/test.sh [flags]` to execute unit, integration, and doc tests.
-  - Run `cargo fmt --all` and `cargo clippy --all-targets --all-features -- -D warnings` before opening a PR.
-- **Stable validation path (migration prep)**
-  - Install the target stable release (currently `1.79`) with `rustup toolchain install 1.79.0`.
-  - Mirror the nightly commands by prefixing with `RUSTUP_TOOLCHAIN=1.79.0` (or using `rustup run 1.79.0 ...`) to detect nightly-only dependencies.
-  - Capture differences in output, formatting, or warnings and file migration issues in the tracking board referenced in `MIGRATION.md`.
+- **Stable default (required)**
+  - Install the pinned stable toolchain with `rustup toolchain install 1.79.0`.
+  - `rustup` will auto-select it through `rust-toolchain.toml`; ensure the `rustfmt` and `clippy` components are added (`rustup component add --toolchain 1.79.0 rustfmt clippy`).
+  - CI runs `cargo +1.79.0 clippy --workspace --all-features -D warnings`; mirror this locally before submitting a PR.
+- **Nightly scan (optional checks)**
+  - Run `scripts/ci/stable_scan` to generate `docs/STABLE_MIGRATION_REPORT.md` when auditing for regressions.
+  - The GitHub Actions workflow publishes the same report in warn mode; once it stays empty we will flip it to blocking.
+
+## Lokale Entwicklung
+
+Use the stable toolchain commands directly when iterating:
+
+```bash
+cargo +1.79.0 build --workspace --all-features
+cargo +1.79.0 test --workspace --all-features
+cargo +1.79.0 clippy --workspace --all-features -D warnings
+cargo +1.79.0 fmt --all -- --check
+```
+
+The helper scripts under `scripts/` remain available, but the explicit commands above match the new stable CI configuration.
+If these commands fail today, check `docs/STABLE_MIGRATION_REPORT.md`—crates such as `malachite` still require the `edition2024` cargo feature and keep the warn-mode CI jobs from going green.
 
 ## Backend Implementation Conventions
 
@@ -24,7 +34,6 @@
 ## Troubleshooting
 
 - **Toolchain mismatch errors**
-  - `error: toolchain 'nightly-2024-06-20' is not installed`: run `rustup toolchain install nightly-2024-06-20`.
-  - `error: component 'rustfmt' for target 'x86_64-unknown-linux-gnu' is unavailable`: install via `rustup component add --toolchain nightly-2024-06-20 rustfmt`.
-  - `error: toolchain '1.79.0' is not installed` when testing the stable path: run `rustup toolchain install 1.79.0` and retry with `RUSTUP_TOOLCHAIN=1.79.0`.
-- If builds succeed on nightly but fail on stable, cross-reference the checklist in `MIGRATION.md` and flag blocking nightly-only features.
+- `error: toolchain '1.79.0' is not installed`: run `rustup toolchain install 1.79.0`.
+- `error: component 'rustfmt' for target 'x86_64-unknown-linux-gnu' is unavailable`: run `rustup component add --toolchain 1.79.0 rustfmt clippy`.
+- If the stable scan reports new findings, investigate the referenced files and schedule a cleanup PR before promoting the warn gate to blocking.

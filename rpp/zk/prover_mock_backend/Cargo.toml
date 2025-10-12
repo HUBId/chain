@@ -2,6 +2,7 @@
 name = "prover_mock_backend"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.79"
 description = "Mock prover backend for stable toolchains"
 license = "MIT"
 
