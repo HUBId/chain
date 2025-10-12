@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        backend: [stwo, plonky3]
+        backend: [stwo, plonky3, rpp-stark]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -48,8 +48,8 @@ jobs:
             ${{ runner.os }}-cargo-
       - name: Build rpp-chain (${{ matrix.backend }})
         run: scripts/build.sh --package rpp-chain --backend ${{ matrix.backend }}
-      - name: Run rpp-chain unit tests (${{ matrix.backend }})
-        run: scripts/test.sh --unit --package rpp-chain --backend ${{ matrix.backend }}
+      - name: Run rpp-chain tests (${{ matrix.backend }})
+        run: scripts/test.sh --package rpp-chain --backend ${{ matrix.backend }}
 
   sim-smoke:
     runs-on: ubuntu-latest
