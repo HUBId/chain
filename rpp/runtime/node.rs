@@ -1152,6 +1152,36 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod double_spend_tests {
+    use super::is_double_spend;
+    use crate::errors::ChainError;
+
+    #[test]
+    fn detects_spent_input_error() {
+        let err = ChainError::Transaction("transaction input already spent".into());
+        assert!(is_double_spend(&err));
+    }
+
+    #[test]
+    fn detects_missing_input_error() {
+        let err = ChainError::Transaction("transaction input not found".into());
+        assert!(is_double_spend(&err));
+    }
+
+    #[test]
+    fn ignores_other_transaction_errors() {
+        let err = ChainError::Transaction("insufficient balance".into());
+        assert!(!is_double_spend(&err));
+    }
+
+    #[test]
+    fn ignores_non_transaction_errors() {
+        let err = ChainError::Config("some other error".into());
+        assert!(!is_double_spend(&err));
+    }
+}
+
 impl NodeHandle {
     pub async fn stop(&self) -> ChainResult<()> {
         self.inner.stop().await
@@ -1948,6 +1978,30 @@ impl NodeInner {
         let evidence = {
             let mut pool = self.evidence_pool.write();
             pool.record_invalid_proof(address, height, round)
+        };
+        self.apply_evidence(evidence);
+    }
+
+    fn record_double_spend_if_applicable(
+        &self,
+        block: &Block,
+        round: u64,
+        err: &ChainError,
+    ) {
+        if !self.config.rollout.feature_gates.consensus_enforcement {
+            return;
+        }
+        if !is_double_spend(err) {
+            return;
+        }
+        let evidence = {
+            let mut pool = self.evidence_pool.write();
+            pool.record_invalid_proposal(
+                &block.header.proposer,
+                block.header.height,
+                round,
+                Some(block.hash.clone()),
+            )
         };
         self.apply_evidence(evidence);
     }
@@ -3154,8 +3208,8 @@ impl NodeInner {
 
         block.verify_without_stark(previous_block.as_ref(), &proposer_key)?;
 
+        let round_number = round.round();
         if self.config.rollout.feature_gates.recursive_proofs {
-            let round_number = round.round();
             #[cfg(feature = "backend-rpp-stark")]
             let state_result = match &block.stark.state_proof {
                 ChainProof::RppStark(_) => self
@@ -3252,7 +3306,7 @@ impl NodeInner {
 
         let participants = round.commit_participants();
         self.ledger
-            .record_consensus_witness(height, round.round(), participants);
+            .record_consensus_witness(height, round_number, participants);
 
         for request in &block.identities {
             self.ledger.register_identity(
@@ -3265,10 +3319,20 @@ impl NodeInner {
 
         let mut total_fees: u64 = 0;
         for tx in &block.transactions {
-            let fee = self
-                .ledger
-                .select_inputs_for_transaction(tx)
-                .and_then(|inputs| self.ledger.apply_transaction(tx, &inputs))?;
+            let inputs = match self.ledger.select_inputs_for_transaction(tx) {
+                Ok(inputs) => inputs,
+                Err(err) => {
+                    self.record_double_spend_if_applicable(&block, round_number, &err);
+                    return Err(err);
+                }
+            };
+            let fee = match self.ledger.apply_transaction(tx, &inputs) {
+                Ok(fee) => fee,
+                Err(err) => {
+                    self.record_double_spend_if_applicable(&block, round_number, &err);
+                    return Err(err);
+                }
+            };
             total_fees = total_fees.saturating_add(fee);
         }
 
@@ -3451,6 +3515,17 @@ impl NodeInner {
             vrf_proof,
         })
     }
+}
+
+fn is_double_spend(err: &ChainError) -> bool {
+    matches!(
+        err,
+        ChainError::Transaction(message)
+            if matches!(
+                message.as_str(),
+                "transaction input already spent" | "transaction input not found"
+            )
+    )
 }
 
 fn tier_to_level(tier: &Tier) -> TierLevel {
