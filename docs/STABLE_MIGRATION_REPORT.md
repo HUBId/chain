@@ -1,7 +1,7 @@
 # Stable Migration Scan Report
 
-- Generated: 2025-10-12 11:38:08Z
-- Commit: 9288d892ee87bfa7a2e2bc9ae4462a740aef8a95
+- Generated: 2025-10-12 15:41:01Z
+- Commit: ed194db8fc74c826dc12fdddc75f78a35614f485
 - Mode: warn (non-blocking)
 
 ## Findings
@@ -16,16 +16,12 @@
 - Keine Funde.
 
 ### Cargo manifests using "edition2024" (cargo-features)
-- storage-firewood/Cargo.toml:cargo-features = ["edition2024"]
-- Cargo.toml:cargo-features = ["edition2024"]
-- rpp/p2p/Cargo.toml:cargo-features = ["edition2024"]
+- Keine Funde.
 
 ### Crates targeting edition = "2024"
-- storage-firewood/Cargo.toml:edition = "2024"
-- Cargo.toml:edition = "2024"
-- rpp/p2p/Cargo.toml:edition = "2024"
+- Keine Funde.
 
 ### Cargo.lock entries requiring edition2024
 - Keine Funde.
 
-Fazit: 6 Funde – Folge-PRs für: storage-firewood, rpp/p2p, repo-root.
+Fazit: 0 Funde – Stable-Toolchain vollständig nutzbar.

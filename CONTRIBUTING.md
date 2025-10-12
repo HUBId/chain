@@ -22,7 +22,7 @@ cargo +1.79.0 fmt --all -- --check
 ```
 
 The helper scripts under `scripts/` remain available, but the explicit commands above match the new stable CI configuration.
-If these commands fail today, check `docs/STABLE_MIGRATION_REPORT.md`—crates such as `malachite` still require the `edition2024` cargo feature and keep the warn-mode CI jobs from going green.
+If these commands fail today, check `docs/STABLE_MIGRATION_REPORT.md`—the report should stay empty now that the workspace builds on stable 1.79 without `edition2024` opt-ins.
 
 ## Backend Implementation Conventions
 

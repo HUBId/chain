@@ -1,8 +1,7 @@
-cargo-features = ["edition2024"]
 [package]
 name = "rpp-chain"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 rust-version = "1.79"
 
 [features]
