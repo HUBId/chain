@@ -7,7 +7,8 @@ It integrates:
 - **Stwo** for Blake2-based hashing and Merkle root construction.
 - **Malachite** for high precision arithmetic in stake-weighted consensus.
 - **Firewood** as the append-only storage stack with integrated WAL, Merkle commitments, and pruning proofs.
-- Adapter-Layer für rpp-stark (Felt/Digest/Hash/Public-Inputs) hinter Feature `backend-rpp-stark` vorhanden.
+- Adapter-Layer für rpp-stark (Felt/Digest/Hash/Public-Inputs) hinter Feature `backend-rpp-stark` vorhanden; die Bytes werden
+  gegen die vendorten Golden-Vektoren (`vendor/rpp-stark/vectors/stwo/mini`) getestet.
 
 ## Features
 
