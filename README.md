@@ -114,6 +114,8 @@ cargo run -- generate-wallet-config --path config/wallet.toml
 cargo run -- keygen --path keys/node.toml --vrf-path keys/vrf.toml
 ```
 
+Consult the [tooling guide](docs/development/tooling.md#config-keygen-troubleshooting) for common pitfalls and recovery steps when these commands fail or overwrite local files.【F:docs/development/tooling.md†L10-L55】
+
 ### Run storage migrations
 
 ```bash
