@@ -17,16 +17,22 @@ It integrates:
 - Configurable block cadence, mempool sizing, and genesis allocation via TOML configuration.
 - Iterative rollout controls with feature gates and telemetry sampling for staged deployments.
 
+## Toolchain & MSRV
+
+The workspace is pinned to the stable `1.79.0` toolchain via `rust-toolchain.toml`, establishing `1.79` as the minimum supported Rust version (MSRV).
+CI enforces `cargo clippy --all-features -D warnings` on this toolchain, so local development should use the same components (`rustfmt`, `clippy`) installed for 1.79.0.
+Nightly builds are no longer required for day-to-day work; use the stable scan workflow to monitor any regressions before we make the warning gate blocking.
+
 ## Build Requirements
 
-This workspace is pinned to `nightly-2024-06-20` via `rust-toolchain.toml`. Install the matching toolchain along with the bundled `rustfmt` and `clippy` components before building locally to ensure consistent formatting and lint coverage.
+This workspace is pinned to `1.79.0` (stable) via `rust-toolchain.toml`. Install the matching toolchain along with the bundled `rustfmt` and `clippy` components before building locally to ensure consistent formatting and lint coverage.
 
 ## Build Matrix
 
 | Channel | Status | Notes |
 | --- | --- | --- |
-| Nightly (`nightly-2024-06-20`) | ✅ Required today | CI, dev tooling, and docs expect this toolchain until the stable transition lands. |
-| Stable (target `1.79`) | 🚧 Target for tomorrow | Migration checklists and experiments should validate readiness for switching the workspace default. |
+| Stable (`1.79.0`) | ✅ Required today | CI, dev tooling, and docs require this toolchain; clippy runs with `-D warnings`. |
+| Nightly (latest tested) | 🚧 Optional validation | Keep running the nightly scan workflow to flag regressions until the warn-mode gate becomes blocking. |
 
 > ℹ️ Keep running validation passes against both channels so that the nightly dependency can be safely removed when the stable target is promoted.
 
@@ -34,7 +40,7 @@ This workspace is pinned to `nightly-2024-06-20` via `rust-toolchain.toml`. Inst
 
 ### Prerequisites
 
-Ensure Rust (1.79+) is installed. Firewood sources (KV engine, WAL, pruner) are built automatically by Cargo during the first compile.
+Ensure Rust (1.79.0 stable or newer) is installed. Firewood sources (KV engine, WAL, pruner) are built automatically by Cargo during the first compile.
 
 ### Build & Test
 

@@ -1,0 +1,60 @@
+name: Stable CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.79.0
+          components: clippy, rustfmt
+      - name: Build workspace (stable)
+        run: cargo +1.79.0 build --workspace --all-features
+
+  test:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.79.0
+          components: clippy, rustfmt
+      - name: Test workspace (stable)
+        run: cargo +1.79.0 test --workspace --all-features
+
+  clippy:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.79.0
+          components: clippy, rustfmt
+      - name: Clippy (stable, warnings as errors)
+        run: cargo +1.79.0 clippy --workspace --all-features -D warnings
+
+  fmt:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.79.0
+          components: clippy, rustfmt
+      - name: Format check (stable)
+        run: cargo +1.79.0 fmt --all -- --check

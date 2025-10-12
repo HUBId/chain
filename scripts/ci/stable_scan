@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Determine repository root relative to this script.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+cd "$REPO_ROOT"
+
+REPORT_PATH="${REPO_ROOT}/docs/STABLE_MIGRATION_REPORT.md"
+TIMESTAMP="$(date -u +"%Y-%m-%d %H:%M:%SZ")"
+COMMIT_ID="$(git rev-parse HEAD 2>/dev/null || echo "unknown")"
+
+RG_COMMON_ARGS=(
+  --hidden
+  --no-heading
+  --follow
+  --glob '!.git/*'
+  --glob '!target/**'
+  --glob '!vendor/**'
+  --glob '!rpp/zk/prover_stwo_backend/vendor/**'
+)
+
+mapfile -t feature_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob '*.rs' '#!\[feature' || true)
+mapfile -t zflag_hits < <(rg "${RG_COMMON_ARGS[@]}" '(^|\s)-Z[[:alnum:]_-]+' || true)
+mapfile -t unstable_feature_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob 'Cargo.toml' 'feature\s*=\s*"unstable"' || true)
+
+all_hits=("${feature_hits[@]}" "${zflag_hits[@]}" "${unstable_feature_hits[@]}")
+total_findings=${#all_hits[@]}
+
+# Collect impacted top-level paths for the summary.
+declare -A impacted=()
+for entry in "${all_hits[@]}"; do
+  file_path="${entry%%:*}"
+  file_path="${file_path#./}"
+  [[ -z "$file_path" ]] && continue
+  dir_part="$(dirname "$file_path")"
+  if [[ "$dir_part" == "." ]]; then
+    impacted[repo-root]=1
+    continue
+  fi
+  top_level="${dir_part%%/*}"
+  if [[ "$top_level" == "rpp" ]]; then
+    second_level="$(echo "$dir_part" | cut -d'/' -f1-2)"
+    impacted["$second_level"]=1
+  else
+    impacted["$top_level"]=1
+  fi
+done
+
+impact_summary=""
+if ((${#impacted[@]} > 0)); then
+  for key in "${!impacted[@]}"; do
+    impact_summary+="$key, "
+  done
+  impact_summary="${impact_summary%, }"
+fi
+
+mkdir -p "$(dirname "$REPORT_PATH")"
+
+{
+  echo "# Stable Migration Scan Report"
+  echo
+  echo "- Generated: ${TIMESTAMP}"
+  echo "- Commit: ${COMMIT_ID}"
+  echo "- Mode: warn (non-blocking)"
+  echo
+  echo "## Findings"
+  echo
+  echo "### Nightly Rust features (#![feature])"
+  if ((${#feature_hits[@]} == 0)); then
+    echo "- Keine Funde."
+  else
+    for hit in "${feature_hits[@]}"; do
+      echo "- ${hit}"
+    done
+  fi
+  echo
+  echo "### Unstable compiler or Cargo flags (-Z)"
+  if ((${#zflag_hits[@]} == 0)); then
+    echo "- Keine Funde."
+  else
+    for hit in "${zflag_hits[@]}"; do
+      echo "- ${hit}"
+    done
+  fi
+  echo
+  echo "### Cargo feature gates referencing \"unstable\""
+  if ((${#unstable_feature_hits[@]} == 0)); then
+    echo "- Keine Funde."
+  else
+    for hit in "${unstable_feature_hits[@]}"; do
+      echo "- ${hit}"
+    done
+  fi
+  echo
+  if (( total_findings == 0 )); then
+    echo "Fazit: 0 Funde – Stable-Toolchain vollständig nutzbar."
+  else
+    summary_targets=${impact_summary:-"betroffene Pfade unbekannt"}
+    echo "Fazit: ${total_findings} Funde – Folge-PRs für: ${summary_targets}."
+  fi
+} > "$REPORT_PATH"
+
+if (( total_findings == 0 )); then
+  echo "Stable scan: no nightly usages detected. Report written to ${REPORT_PATH}."
+else
+  echo "::warning::Stable scan found ${total_findings} mögliche Nightly-Fund(e). Siehe ${REPORT_PATH}."
+fi

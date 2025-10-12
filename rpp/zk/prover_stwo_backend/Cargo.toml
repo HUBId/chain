@@ -2,6 +2,7 @@
 name = "prover_stwo_backend"
 version = "1.0.0"
 edition = "2021"
+rust-version = "1.79"
 description = "Local STWO proof system fork for the RPP project"
 authors = ["RPP Labs <dev@rpp.example>"]
 license = "MIT"
