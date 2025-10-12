@@ -1,0 +1,45 @@
+[sim]
+seed = 4242
+duration_ms = 20000
+
+[topology]
+type = "small_world"
+n = 24
+k = 6
+rewire_p = 0.05
+
+[regions]
+assignments = [
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+]
+
+[links]
+intra = { delay_ms = 25, jitter_ms = 4, loss = 0.0 }
+A-B = { delay_ms = 120, jitter_ms = 30, loss = 0.03 }
+
+[traffic.tx]
+publisher_bias = { type = "uniform" }
+
+[[traffic.tx.phases]]
+name = "steady"
+duration_ms = 20000
+model = "poisson"
+lambda_per_sec = 6.0
+
+[metrics]
+json = "target/sim-smoke/partition-restart-summary.json"
+csv = "target/sim-smoke/partition-restart-summary.csv"
+
+[faults.partition]
+start_ms = 4000
+duration_ms = 6000
+group_a = "A"
+group_b = "B"
+
+[faults.churn]
+start_ms = 5000
+rate_per_min = 90.0
+restart_after_ms = 2000
