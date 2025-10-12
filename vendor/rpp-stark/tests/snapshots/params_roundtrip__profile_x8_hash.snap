@@ -1,0 +1,5 @@
+---
+source: tests/params_roundtrip.rs
+expression: "format!(\"{:02x?}\", profile_x8.params_hash())"
+---
+[68, fa, 4d, 06, dc, e5, ac, 8f, 0c, 02, 74, d4, 03, a5, ec, de, b8, da, a6, e2, 77, 53, d5, bb, 1a, 09, b4, dd, 3c, de, 0e, 2b]

@@ -45,7 +45,7 @@ storage-firewood = { path = "storage-firewood" }
 prover-backend-interface = { path = "rpp/zk/backend-interface" }
 prover_mock_backend = { path = "rpp/zk/prover_mock_backend", optional = true }
 stwo = { package = "prover_stwo_backend", path = "rpp/zk/prover_stwo_backend", optional = true }
-rpp-stark = { git = "https://github.com/dvn-labs/rpp-stark.git", tag = "rpp-stark-v1.0.0-beta", optional = true }
+rpp-stark = { path = "vendor/rpp-stark", optional = true }
 thiserror = "=2.0.12"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "signal", "sync", "time", "net"] }
 toml = "0.8"

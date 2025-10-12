@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  rust:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.79.0
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify changelog scaffold
+        run: |
+          test -f CHANGELOG.md
+          grep -q '^## \[Unreleased\]' CHANGELOG.md
+      - name: Cargo build
+        run: cargo build --locked
+      - name: Cargo build (backend feature)
+        run: cargo build --locked --features backend-rpp-stark
+      - name: Cargo clippy
+        run: cargo clippy --locked -- -D warnings
+      - name: Rustfmt (library & benches)
+        run: |
+          set -euo pipefail
+          FILES="$(git ls-files 'src/*.rs' 'src/**/*.rs' 'benches/*.rs' 'benches/**/*.rs' 'src/bin/*.rs')"
+          if [ -n "${FILES}" ]; then
+              rustfmt --edition 2021 --check ${FILES}
+          fi
+      - name: Cargo test
+        run: cargo test -p rpp-stark -- --nocapture
+      - name: Cargo test snapshot profiles
+        run: cargo test snapshot_profiles -- --exact
+      - name: Generate profile reports
+        env:
+          ENABLE_PROFILE_THR: "1"
+        run: cargo run --bin profile_reports -- --output reports --include-throughput
+      - name: Upload profile reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: profile-reports
+          path: reports

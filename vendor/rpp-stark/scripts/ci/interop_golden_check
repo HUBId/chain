@@ -1,0 +1,437 @@
+#!/usr/bin/env sh
+set -eu
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || printf '')
+if [ -z "$REPO_ROOT" ]; then
+    echo "error: unable to determine repository root" >&2
+    exit 1
+fi
+
+VECTORS_DIR="$REPO_ROOT/vectors/stwo/mini"
+REQUIRED_FILES="params.bin public_inputs.bin public_digest.hex proof.bin proof_report.json roots.json challenges.json indices.json"
+ERRORS=""
+
+append_error() {
+    if [ -z "$ERRORS" ]; then
+        ERRORS="$1"
+    else
+        ERRORS="$ERRORS
+$1"
+    fi
+}
+
+info() {
+    printf '%s\n' "$1"
+}
+
+ensure_tool() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        append_error "Required tool '$1' not found on PATH. Install it on the runner."
+    fi
+}
+
+ensure_tool jq
+
+if [ ! -d "$VECTORS_DIR" ]; then
+    append_error "Vectors directory '$VECTORS_DIR' is missing. Run 'cargo test --tests' to regenerate artifacts."
+fi
+
+for name in $REQUIRED_FILES; do
+    path="$VECTORS_DIR/$name"
+    if [ ! -f "$path" ]; then
+        append_error "Missing artifact $path. Regenerate golden vectors via 'cargo test --tests'."
+        continue
+    fi
+    if [ ! -s "$path" ]; then
+        append_error "Artifact $path is empty. Regenerate golden vectors via 'cargo test --tests'."
+    fi
+done
+
+if [ -n "$ERRORS" ]; then
+    printf 'Golden vector check FAILED:\n%s\n' "$ERRORS" >&2
+    exit 1
+fi
+
+public_digest_file="$VECTORS_DIR/public_digest.hex"
+public_digest=$(tr -d '\n\r\t ' < "$public_digest_file")
+if [ ${#public_digest} -ne 64 ]; then
+    append_error "public_digest.hex must contain exactly 64 hex characters."
+else
+    case "$public_digest" in
+        *[!0-9a-fA-F]*)
+            append_error "public_digest.hex contains non-hex characters."
+            ;;
+    esac
+fi
+
+collect_metadata() {
+    for name in $REQUIRED_FILES; do
+        path="$VECTORS_DIR/$name"
+        bytes=$(wc -c < "$path")
+        if command -v sha256sum >/dev/null 2>&1; then
+            hash=$(sha256sum "$path" | awk '{print $1}')
+        elif command -v shasum >/dev/null 2>&1; then
+            hash=$(shasum -a 256 "$path" | awk '{print $1}')
+        else
+            hash="(sha256 unavailable)"
+        fi
+        printf '%s|%s|%s\n' "$name" "$bytes" "$hash"
+    done
+}
+
+info "Golden vector file metadata (pre-test):"
+BEFORE_META=$(collect_metadata)
+printf '%s\n' "$BEFORE_META"
+
+TMPDIR=$(mktemp -d 2>/dev/null || mktemp -d -t interop_golden_check)
+cleanup() {
+    rm -rf "$TMPDIR"
+}
+trap cleanup EXIT INT TERM
+
+cat > "$TMPDIR/Cargo.toml" <<EOF2
+[package]
+name = "interop_golden_check_tmp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rpp-stark = { path = "$REPO_ROOT" }
+EOF2
+
+mkdir "$TMPDIR/src"
+cat <<'EOF2' > "$TMPDIR/src/main.rs"
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+use rpp_stark::config::{
+    compute_param_digest, CommonIdentifiers, ProfileConfig, PROFILE_HIGH_SECURITY_CONFIG,
+    PROFILE_STANDARD_ARITY4_CONFIG, PROFILE_STANDARD_CONFIG, PROFILE_THROUGHPUT_CONFIG,
+    COMMON_IDENTIFIERS, COMMON_IDENTIFIERS_ARITY4,
+};
+use rpp_stark::field::prime_field::CanonicalSerialize;
+use rpp_stark::params::{deserialize_params, params_hash, StarkParams};
+use rpp_stark::proof::params::canonical_stark_params;
+use rpp_stark::proof::ser::{compute_public_digest, deserialize_proof};
+use rpp_stark::proof::types::ProofHandles;
+use serde::Serialize;
+
+fn decode_hex(path: &PathBuf) -> Result<Vec<u8>, String> {
+    let content = fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let filtered: String = content.chars().filter(|c| !c.is_whitespace()).collect();
+    if filtered.len() % 2 != 0 {
+        return Err(format!("hex payload has odd length: {}", path.display()));
+    }
+    let mut bytes = Vec::with_capacity(filtered.len() / 2);
+    let chars: Vec<char> = filtered.chars().collect();
+    for chunk in chars.chunks(2) {
+        let hi = chunk[0].to_digit(16).ok_or_else(|| format!("invalid hex in {}", path.display()))?;
+        let lo = chunk[1].to_digit(16).ok_or_else(|| format!("invalid hex in {}", path.display()))?;
+        bytes.push(((hi << 4) | lo) as u8);
+    }
+    Ok(bytes)
+}
+
+fn hex_bytes(data: &[u8]) -> String {
+    data.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn identify_profile(params: &StarkParams) -> Result<(&'static str, [u8; 32], [u8; 32]), String> {
+    let observed_hash = params_hash(params);
+    let candidates: [(&'static str, &ProfileConfig, &CommonIdentifiers); 4] = [
+        ("standard", &PROFILE_STANDARD_CONFIG, &COMMON_IDENTIFIERS),
+        (
+            "standard_arity4",
+            &PROFILE_STANDARD_ARITY4_CONFIG,
+            &COMMON_IDENTIFIERS_ARITY4,
+        ),
+        ("high_security", &PROFILE_HIGH_SECURITY_CONFIG, &COMMON_IDENTIFIERS),
+        ("throughput", &PROFILE_THROUGHPUT_CONFIG, &COMMON_IDENTIFIERS),
+    ];
+
+    for (label, profile, ids) in candidates {
+        let canonical = canonical_stark_params(profile);
+        let canonical_hash = params_hash(&canonical);
+        if observed_hash == canonical_hash {
+            if params != &canonical {
+                return Err(format!(
+                    "params.bin deviates from canonical {} parameters despite matching hash",
+                    label
+                ));
+            }
+            let digest = compute_param_digest(profile, ids);
+            return Ok((label, *digest.as_bytes(), observed_hash));
+        }
+    }
+
+    Err("unknown parameter profile".to_string())
+}
+
+#[derive(Serialize)]
+struct Summary {
+    params_hash: String,
+    canonical_params_hash: String,
+    param_digest: String,
+    profile_label: String,
+    proof_params_hash: String,
+    computed_public_digest: String,
+    proof_public_digest: String,
+    trace_commit: String,
+    composition_commit: Option<String>,
+    fri_roots: Vec<String>,
+    proof_indices: Vec<u32>,
+    fri_fold_challenges: Vec<String>,
+    query_count: u16,
+    domain_log2: u16,
+    protocol_tag: String,
+    seed: String,
+    proof_total_bytes: usize,
+}
+
+fn main() -> Result<(), String> {
+    let mut args = env::args().skip(1);
+    let base = PathBuf::from(args.next().ok_or("missing vectors directory argument")?);
+
+    let params_path = base.join("params.bin");
+    let params_bytes = decode_hex(&params_path)?;
+    let params = deserialize_params(&params_bytes).map_err(|e| format!("failed to decode params: {e:?}"))?;
+    let params_hash_bytes = params_hash(&params);
+    let (profile_label, param_digest_bytes, canonical_params_hash) = identify_profile(&params)?;
+    if params_hash_bytes != canonical_params_hash {
+        return Err("params_hash derived from params.bin mismatches canonical profile hash".to_string());
+    }
+
+    let public_inputs_path = base.join("public_inputs.bin");
+    let public_inputs = decode_hex(&public_inputs_path)?;
+    let public_digest_bytes = compute_public_digest(&public_inputs);
+
+    let proof_path = base.join("proof.bin");
+    let proof_bytes = decode_hex(&proof_path)?;
+    let proof = deserialize_proof(&proof_bytes).map_err(|e| format!("failed to decode proof: {e:?}"))?;
+    let handles: ProofHandles = proof.clone_using_parts().into_handles();
+
+    let fri_roots: Vec<String> = handles
+        .merkle()
+        .fri_layer_roots()
+        .iter()
+        .map(|root| hex_bytes(root))
+        .collect();
+
+    let fold_challenges: Vec<String> = handles
+        .fri()
+        .fri_proof()
+        .fold_challenges
+        .iter()
+        .map(|felt| {
+            let bytes = felt
+                .to_bytes()
+                .expect("field elements serialize to bytes");
+            hex_bytes(&bytes)
+        })
+        .collect();
+
+    let indices: Vec<u32> = handles
+        .openings()
+        .trace()
+        .indices()
+        .iter()
+        .copied()
+        .collect();
+
+    let composition_commit = handles
+        .composition_commit()
+        .map(|digest| hex_bytes(&digest.bytes));
+
+    let summary = Summary {
+        params_hash: hex_bytes(&params_hash_bytes),
+        canonical_params_hash: hex_bytes(&canonical_params_hash),
+        param_digest: hex_bytes(&param_digest_bytes),
+        profile_label: profile_label.to_string(),
+        proof_params_hash: hex_bytes(handles.params_hash().as_bytes()),
+        computed_public_digest: hex_bytes(&public_digest_bytes),
+        proof_public_digest: hex_bytes(&handles.public_digest().bytes),
+        trace_commit: hex_bytes(&handles.trace_commit().bytes),
+        composition_commit,
+        fri_roots,
+        proof_indices: indices,
+        fri_fold_challenges: fold_challenges,
+        query_count: params.fri().queries,
+        domain_log2: params.fri().domain_log2,
+        protocol_tag: params.transcript().protocol_tag.to_string(),
+        seed: hex_bytes(&params.transcript().seed),
+        proof_total_bytes: proof_bytes.len(),
+    };
+
+    println!("{}", serde_json::to_string(&summary).map_err(|e| e.to_string())?);
+    Ok(())
+}
+EOF2
+
+SUMMARY_JSON=$(cargo run --quiet --manifest-path "$TMPDIR/Cargo.toml" -- "$VECTORS_DIR")
+
+profile_label=$(printf '%s' "$SUMMARY_JSON" | jq -r '.profile_label')
+info "Detected profile: $profile_label"
+
+trace_commit=$(printf '%s' "$SUMMARY_JSON" | jq -r '.trace_commit')
+if [ -z "$trace_commit" ] || [ "$trace_commit" = "null" ] || [ ${#trace_commit} -ne 64 ]; then
+    append_error "Proof header trace_commit must be a 32-byte hex digest."
+fi
+case "$trace_commit" in
+    *[!0-9a-f]*) append_error "Proof header trace_commit must be lowercase hex." ;;
+esac
+
+summary_comp_commit=$(printf '%s' "$SUMMARY_JSON" | jq -r '.composition_commit // empty')
+if [ -n "$summary_comp_commit" ]; then
+    if [ ${#summary_comp_commit} -ne 64 ]; then
+        append_error "Proof header composition_commit must be a 32-byte hex digest when present."
+    fi
+    case "$summary_comp_commit" in
+        *[!0-9a-f]*) append_error "Proof header composition_commit must be lowercase hex." ;;
+    esac
+fi
+
+param_digest=$(printf '%s' "$SUMMARY_JSON" | jq -r '.param_digest')
+proof_params_hash=$(printf '%s' "$SUMMARY_JSON" | jq -r '.proof_params_hash')
+if [ "$param_digest" != "$proof_params_hash" ]; then
+    append_error "Param digest derived from params.bin does not match proof header. Regenerate artifacts via 'cargo test --tests'."
+fi
+
+params_hash=$(printf '%s' "$SUMMARY_JSON" | jq -r '.params_hash')
+canonical_params_hash=$(printf '%s' "$SUMMARY_JSON" | jq -r '.canonical_params_hash')
+if [ "$params_hash" != "$canonical_params_hash" ]; then
+    append_error "params_hash derived from params.bin does not match canonical profile hash. Regenerate artifacts via 'cargo test --tests'."
+fi
+if [ ${#params_hash} -ne 64 ]; then
+    append_error "Derived params_hash has unexpected length."
+fi
+
+computed_public_digest=$(printf '%s' "$SUMMARY_JSON" | jq -r '.computed_public_digest')
+proof_public_digest=$(printf '%s' "$SUMMARY_JSON" | jq -r '.proof_public_digest')
+if [ "$computed_public_digest" != "$public_digest" ]; then
+    append_error "public_digest.hex differs from digest computed from public_inputs.bin."
+fi
+if [ "$computed_public_digest" != "$proof_public_digest" ]; then
+    append_error "Proof header public digest mismatch. Regenerate artifacts via 'cargo test --tests'."
+fi
+
+report_file="$VECTORS_DIR/proof_report.json"
+if ! jq -e '.params_ok and .public_ok and .merkle_ok and .fri_ok and (.composition_ok // true)' "$report_file" >/dev/null; then
+    append_error "proof_report.json contains a failing stage flag. Inspect verify() output and update vectors."
+fi
+report_total_bytes=$(jq -r '.total_bytes' "$report_file")
+summary_total_bytes=$(printf '%s' "$SUMMARY_JSON" | jq -r '.proof_total_bytes')
+if [ "$report_total_bytes" != "$summary_total_bytes" ]; then
+    append_error "proof_report.json total_bytes does not equal proof.bin length."
+fi
+report_params_hash=$(jq -r '.params_hash' "$report_file")
+if [ "$report_params_hash" != "$proof_params_hash" ]; then
+    append_error "proof_report.json params_hash mismatches proof header."
+fi
+report_public_digest=$(jq -r '.public_digest' "$report_file")
+if [ "$report_public_digest" != "$proof_public_digest" ]; then
+    append_error "proof_report.json public_digest mismatches proof header."
+fi
+
+fri_roots_len=$(printf '%s' "$SUMMARY_JSON" | jq '.fri_roots | length')
+if [ "$fri_roots_len" = "null" ]; then
+    append_error "Proof transcript must expose FRI roots."
+elif [ "$fri_roots_len" -lt 1 ]; then
+    append_error "Proof transcript must include at least one FRI layer root."
+fi
+
+indices_path="$VECTORS_DIR/indices.json"
+if ! jq -e '(. == (sort)) and (length == (unique | length))' "$indices_path" >/dev/null; then
+    append_error "indices.json must be strictly increasing without duplicates."
+fi
+indices_json=$(jq -c '.' "$indices_path")
+proof_indices=$(printf '%s' "$SUMMARY_JSON" | jq -c '.proof_indices')
+if [ "$indices_json" != "$proof_indices" ]; then
+    append_error "indices.json does not match proof openings indices. Rebuild transcript and regenerate vectors."
+fi
+
+roots_path="$VECTORS_DIR/roots.json"
+roots_trace=$(jq -r '.trace_commit' "$roots_path")
+summary_trace=$(printf '%s' "$SUMMARY_JSON" | jq -r '.trace_commit')
+if [ "$roots_trace" != "$summary_trace" ]; then
+    append_error "roots.json trace_commit mismatch with proof header."
+fi
+roots_comp=$(jq -r '.comp_commit // empty' "$roots_path")
+summary_comp=$(printf '%s' "$SUMMARY_JSON" | jq -r '.composition_commit // empty')
+if [ "$roots_comp" != "$summary_comp" ]; then
+    append_error "roots.json comp_commit mismatch with proof header."
+fi
+roots_array=$(jq -c '.fri_roots' "$roots_path")
+summary_roots=$(printf '%s' "$SUMMARY_JSON" | jq -c '.fri_roots')
+if [ "$roots_array" != "$summary_roots" ]; then
+    append_error "roots.json fri_roots mismatch with proof payload."
+fi
+
+if ! jq -e '.fri_roots | length >= 1' "$roots_path" >/dev/null; then
+    append_error "roots.json must contain at least one FRI layer root."
+fi
+if ! jq -e 'all(.fri_roots[]; (type == "string") and (length == 64) and test("^[0-9a-f]+$"))' "$roots_path" >/dev/null; then
+    append_error "roots.json fri_roots entries must be 32-byte lowercase hex digests."
+fi
+
+challenges_path="$VECTORS_DIR/challenges.json"
+challenge_folds=$(jq -c '.fri_fold_challenges' "$challenges_path")
+summary_folds=$(printf '%s' "$SUMMARY_JSON" | jq -c '.fri_fold_challenges')
+if [ "$challenge_folds" != "$summary_folds" ]; then
+    append_error "challenges.json fri_fold_challenges mismatch with transcript reconstruction."
+fi
+if ! jq -e --argjson fri_roots_len "$fri_roots_len" '.fri_fold_challenges | length == $fri_roots_len' "$challenges_path" >/dev/null; then
+    append_error "challenges.json fri_fold_challenges length must match fri_roots length."
+fi
+if ! jq -e '(.fri_fold_challenges | length) >= 1' "$challenges_path" >/dev/null; then
+    append_error "challenges.json must contain at least one FRI fold challenge."
+fi
+challenge_query=$(jq -r '.query_count' "$challenges_path")
+summary_query=$(printf '%s' "$SUMMARY_JSON" | jq -r '.query_count')
+if [ "$challenge_query" != "$summary_query" ]; then
+    append_error "challenges.json query_count mismatch with params."
+fi
+challenge_domain=$(jq -r '.domain_log2' "$challenges_path")
+summary_domain=$(printf '%s' "$SUMMARY_JSON" | jq -r '.domain_log2')
+if [ "$challenge_domain" != "$summary_domain" ]; then
+    append_error "challenges.json domain_log2 mismatch with params."
+fi
+challenge_protocol=$(jq -r '.protocol_tag' "$challenges_path")
+summary_protocol=$(printf '%s' "$SUMMARY_JSON" | jq -r '.protocol_tag')
+if [ "$challenge_protocol" != "$summary_protocol" ]; then
+    append_error "challenges.json protocol_tag mismatch with params."
+fi
+case "$challenge_protocol" in
+    ''|*[!0-9]*) append_error "challenges.json protocol_tag must be a decimal string." ;;
+esac
+challenge_seed=$(jq -r '.seed' "$challenges_path")
+summary_seed=$(printf '%s' "$SUMMARY_JSON" | jq -r '.seed')
+if [ "$challenge_seed" != "$summary_seed" ]; then
+    append_error "challenges.json seed mismatch with params."
+fi
+if [ ${#challenge_seed} -ne 64 ]; then
+    append_error "challenges.json seed must be 32 bytes encoded as lowercase hex."
+fi
+case "$challenge_seed" in
+    *[!0-9a-f]*) append_error "challenges.json seed must only contain lowercase hex characters." ;;
+esac
+
+info "Re-running cargo test --tests -q to confirm determinism"
+cargo test --tests -q >/dev/null
+
+info "Golden vector file metadata (post-test):"
+AFTER_META=$(collect_metadata)
+printf '%s\n' "$AFTER_META"
+
+if [ "$BEFORE_META" != "$AFTER_META" ]; then
+    append_error "Golden vector files changed after rerunning tests. Ensure fixtures are deterministic."
+fi
+
+if [ -n "$ERRORS" ]; then
+    printf 'Golden vector check FAILED:\n%s\n' "$ERRORS" >&2
+    exit 1
+fi
+
+info "Interop-Golden-Vector verifiziert"

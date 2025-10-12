@@ -1,0 +1,7 @@
+---
+source: tests/fail_matrix/fri.rs
+expression: error
+---
+MerkleVerifyFailed {
+    section: FriPath,
+}

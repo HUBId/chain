@@ -1,0 +1,6 @@
+---
+source: tests/merkle_roundtrip.rs
+assertion_line: 75
+expression: hex_bytes(root.as_bytes())
+---
+989bca6f2c39c961e469798525e5028b15340fd491674d74ea8c183c7f38ee6a

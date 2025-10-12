@@ -1,0 +1,22 @@
+---
+source: tests/fail_matrix/fri.rs
+assertion_line: 34
+expression: mutated.proof.fri_proof().fold_challenges.clone()
+---
+[
+    FieldElement(
+        18258000938655404241,
+    ),
+    FieldElement(
+        5748551999875476701,
+    ),
+    FieldElement(
+        1966967358738770300,
+    ),
+    FieldElement(
+        7218842656610042120,
+    ),
+    FieldElement(
+        15913696538195542664,
+    ),
+]

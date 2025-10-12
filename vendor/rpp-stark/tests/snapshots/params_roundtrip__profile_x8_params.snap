@@ -1,0 +1,80 @@
+---
+source: tests/params_roundtrip.rs
+expression: "&profile_x8"
+---
+{
+  "params_version": 1,
+  "field": "Goldilocks",
+  "hash": {
+    "Poseidon2": {
+      "parameter_set": 0
+    }
+  },
+  "lde": {
+    "blowup": 8,
+    "order": "RowMajor",
+    "coset_tag": 5782993836944076849
+  },
+  "fri": {
+    "r": 4,
+    "queries": 30,
+    "domain_log2": 22,
+    "folding": "Natural",
+    "num_layers": 5
+  },
+  "merkle": {
+    "leaf_encoding": "Little",
+    "leaf_width": 4,
+    "arity": "Binary",
+    "domain_sep": 5569629336425812529
+  },
+  "transcript": {
+    "protocol_tag": 6004514686866838095,
+    "seed": [
+      82,
+      80,
+      80,
+      45,
+      83,
+      84,
+      65,
+      82,
+      75,
+      45,
+      80,
+      82,
+      79,
+      70,
+      73,
+      76,
+      69,
+      45,
+      88,
+      56,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      48
+    ],
+    "challenge_bounds": {
+      "minimum": 16,
+      "maximum": 64
+    }
+  },
+  "proof": {
+    "version": 1,
+    "max_size_kb": 512
+  },
+  "security": {
+    "target_bits": 96,
+    "soundness_slack_bits": 16
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "params_ok": true,
+  "public_ok": true,
+  "merkle_ok": true,
+  "fri_ok": true,
+  "composition_ok": true,
+  "total_bytes": 134326,
+  "proof_version": 1,
+  "params_hash": "e5e4106dff8decc6ef79242c7835af59318d902f198a287e74af2125f85fca06",
+  "public_digest": "33a35b7496af36230dc5cb12c09a7161ab456d09f12c968402cb6fc56769bacf"
+}
