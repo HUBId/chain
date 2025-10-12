@@ -286,14 +286,14 @@ struct LocalFinalizationContext {
 }
 
 #[allow(dead_code)]
-struct ExternalFinalizationContext {
+pub struct ExternalFinalizationContext {
     round: ConsensusRound,
     block: Block,
     previous_block: Option<Block>,
     archived_votes: Vec<SignedBftVote>,
 }
 
-enum FinalizationOutcome {
+pub enum FinalizationOutcome {
     Sealed { block: Block, tip_height: u64 },
     AwaitingQuorum,
 }
@@ -1155,6 +1155,14 @@ mod tests {
 impl NodeHandle {
     pub async fn stop(&self) -> ChainResult<()> {
         self.inner.stop().await
+    }
+
+    pub fn finalize_block(
+        &self,
+        ctx: ExternalFinalizationContext,
+    ) -> ChainResult<FinalizationOutcome> {
+        self.inner
+            .finalize_block(FinalizationContext::External(ctx))
     }
 
     pub fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
