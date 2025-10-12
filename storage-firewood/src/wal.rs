@@ -240,3 +240,66 @@ impl FileWal {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error;
+    use std::fs::{self, OpenOptions};
+    use tempfile::tempdir;
+
+    #[test]
+    fn append_and_replay_after_restart() -> Result<(), Box<dyn Error>> {
+        let dir = tempdir()?;
+
+        // Initial append to the log followed by a simulated process restart.
+        {
+            let wal = FileWal::open(dir.path())?;
+            assert_eq!(0, wal.append(b"first entry")?);
+            assert_eq!(1, wal.append(b"second entry")?);
+            wal.sync()?;
+        }
+
+        // Reopen the log and ensure replay surfaces the full history.
+        let wal = FileWal::open(dir.path())?;
+        let records = wal.replay_from(0)?;
+        assert_eq!(
+            records,
+            vec![
+                (0, b"first entry".to_vec()),
+                (1, b"second entry".to_vec()),
+            ]
+        );
+
+        // Check partial replay to ensure the index survived the restart intact.
+        let records = wal.replay_from(1)?;
+        assert_eq!(records, vec![(1, b"second entry".to_vec())]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_payload_triggers_recovery_error() -> Result<(), Box<dyn Error>> {
+        let dir = tempdir()?;
+
+        {
+            let wal = FileWal::open(dir.path())?;
+            wal.append(b"healthy entry")?;
+            wal.sync()?;
+        }
+
+        // Deliberately truncate the WAL so the length prefix no longer matches
+        // the payload. Operators are expected to discard the WAL and rebuild
+        // from a consistent snapshot when this path is triggered.
+        let wal_path = dir.path().join("firewood.wal");
+        let metadata = fs::metadata(&wal_path)?;
+        let truncated_len = metadata.len().saturating_sub(1);
+        let file = OpenOptions::new().write(true).open(&wal_path)?;
+        file.set_len(truncated_len)?;
+
+        match FileWal::open(dir.path()) {
+            Err(WalError::Corrupt) => Ok(()),
+            other => panic!("expected WalError::Corrupt, got {other:?}"),
+        }
+    }
+}
