@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 use libp2p::PeerId;
 use thiserror::Error;
 
+use crate::identity::IdentityMetadata;
 use crate::peerstore::{Peerstore, PeerstoreError, ReputationSnapshot};
 use crate::tier::TierLevel;
 use crate::topics::GossipTopic;
@@ -57,6 +58,7 @@ pub struct ReputationOutcome {
 #[derive(Debug)]
 pub struct AdmissionControl {
     peerstore: Arc<Peerstore>,
+    metadata: IdentityMetadata,
     gossip_reward: f64,
     uptime_reward: f64,
     vote_reward: f64,
@@ -65,9 +67,10 @@ pub struct AdmissionControl {
 }
 
 impl AdmissionControl {
-    pub fn new(peerstore: Arc<Peerstore>) -> Self {
+    pub fn new(peerstore: Arc<Peerstore>, metadata: IdentityMetadata) -> Self {
         Self {
             peerstore,
+            metadata,
             gossip_reward: DEFAULT_GOSSIP_REWARD,
             uptime_reward: DEFAULT_UPTIME_REWARD,
             vote_reward: DEFAULT_VOTE_REWARD,
@@ -76,13 +79,9 @@ impl AdmissionControl {
         }
     }
 
-    fn topic_policy(topic: GossipTopic) -> (TierLevel, TierLevel) {
-        match topic {
-            GossipTopic::Blocks | GossipTopic::Votes => (TierLevel::Tl0, TierLevel::Tl3),
-            GossipTopic::Proofs => (TierLevel::Tl0, TierLevel::Tl1),
-            GossipTopic::Snapshots => (TierLevel::Tl0, TierLevel::Tl1),
-            GossipTopic::Meta => (TierLevel::Tl0, TierLevel::Tl0),
-        }
+    fn topic_policy(&self, topic: GossipTopic) -> (TierLevel, TierLevel) {
+        let policy = self.metadata.policy_for(topic);
+        (policy.subscribe, policy.publish)
     }
 
     fn ensure_tier(required: TierLevel, actual: TierLevel) -> Result<(), AdmissionError> {
@@ -98,7 +97,7 @@ impl AdmissionControl {
         tier: TierLevel,
         topic: GossipTopic,
     ) -> Result<(), AdmissionError> {
-        let (required, _) = Self::topic_policy(topic);
+        let (required, _) = self.topic_policy(topic);
         Self::ensure_tier(required, tier)
     }
 
@@ -107,7 +106,7 @@ impl AdmissionControl {
         tier: TierLevel,
         topic: GossipTopic,
     ) -> Result<(), AdmissionError> {
-        let (_, required) = Self::topic_policy(topic);
+        let (_, required) = self.topic_policy(topic);
         Self::ensure_tier(required, tier)
     }
 
@@ -123,7 +122,7 @@ impl AdmissionControl {
         if let Some(until) = snapshot.banned_until {
             return Err(AdmissionError::Banned { until });
         }
-        let (required, _) = Self::topic_policy(topic);
+        let (required, _) = self.topic_policy(topic);
         Self::ensure_tier(required, snapshot.tier)?;
         Ok(snapshot)
     }
@@ -140,7 +139,7 @@ impl AdmissionControl {
         if let Some(until) = snapshot.banned_until {
             return Err(AdmissionError::Banned { until });
         }
-        let (_, required) = Self::topic_policy(topic);
+        let (_, required) = self.topic_policy(topic);
         Self::ensure_tier(required, snapshot.tier)?;
         Ok(snapshot)
     }
@@ -277,7 +276,7 @@ mod tests {
             Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
                 .expect("open"),
         );
-        let control = AdmissionControl::new(store.clone());
+        let control = AdmissionControl::new(store.clone(), IdentityMetadata::default());
         let keypair = identity::Keypair::generate_ed25519();
         let peer = PeerId::from(keypair.public());
 
@@ -288,11 +287,9 @@ mod tests {
             )
             .expect("handshake");
 
-        assert!(
-            control
-                .can_remote_publish(&peer, GossipTopic::Proofs)
-                .is_ok()
-        );
+        assert!(control
+            .can_remote_publish(&peer, GossipTopic::Proofs)
+            .is_ok());
         assert!(matches!(
             control.can_remote_publish(&peer, GossipTopic::Votes),
             Err(AdmissionError::TierInsufficient { .. })
@@ -314,7 +311,7 @@ mod tests {
                 Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
                     .expect("open"),
             );
-            let control = AdmissionControl::new(store.clone());
+            let control = AdmissionControl::new(store.clone(), IdentityMetadata::default());
             let keypair = identity::Keypair::generate_ed25519();
             let peer = PeerId::from(keypair.public());
             let tier = TierLevel::from_reputation(score);

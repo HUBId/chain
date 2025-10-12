@@ -9,11 +9,11 @@ use libp2p::noise;
 use libp2p::request_response::{self, ProtocolSupport};
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::yamux;
-use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, identify, ping};
+use libp2p::{identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder};
 use thiserror::Error;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
-use crate::handshake::{HANDSHAKE_PROTOCOL, HandshakeCodec, HandshakePayload};
+use crate::handshake::{HandshakeCodec, HandshakePayload, HANDSHAKE_PROTOCOL};
 use crate::identity::NodeIdentity;
 use crate::peerstore::{Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
@@ -212,7 +212,7 @@ impl Network {
             })
             .map_err(|err| NetworkError::Gossipsub(err.to_string()))?;
         let swarm = builder.build();
-        let admission = AdmissionControl::new(peerstore.clone());
+        let admission = AdmissionControl::new(peerstore.clone(), identity.metadata().clone());
         let mut network = Self {
             swarm,
             peerstore,
