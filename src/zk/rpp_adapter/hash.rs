@@ -1,18 +1,19 @@
 #![cfg(feature = "backend-rpp-stark")]
 
-use blake3::Hasher;
+use blake2::digest::{Digest, FixedOutput, Update};
+use blake2::Blake2s256;
 
 use super::digest::Digest32;
 
 /// Wrapper exposing the 32-byte hash function used by the `rpp-stark` backend.
 #[derive(Clone, Default)]
-pub struct RppStarkHasher(Hasher);
+pub struct RppStarkHasher(Blake2s256);
 
 impl RppStarkHasher {
     /// Creates a new hasher instance.
     #[inline]
     pub fn new() -> Self {
-        Self(Hasher::new())
+        Self(Blake2s256::new())
     }
 
     /// Feeds additional bytes into the hasher state.
@@ -24,7 +25,8 @@ impl RppStarkHasher {
     /// Finalises the hasher and returns a [`Digest32`].
     #[inline]
     pub fn finalize(self) -> Digest32 {
-        Digest32(self.0.finalize().into())
+        let output = self.0.finalize_fixed();
+        Digest32::from(output.into())
     }
 }
 

@@ -1,51 +1,69 @@
 #![cfg(feature = "backend-rpp-stark")]
 
-use hex_literal::hex;
+use hex::FromHex;
 use std::convert::TryFrom;
-use prover_backend_interface::TxPublicInputs;
-use rpp_chain::zk::rpp_adapter::{
-    compute_public_digest, encode_public_inputs, Digest32, Felt,
-};
+use std::fs;
+use std::path::{Path, PathBuf};
 
-const UTXO_ROOT: [u8; 32] = hex!(
-    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-);
-const TRANSACTION_COMMITMENT: [u8; 32] = hex!(
-    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
-);
-const PUBLIC_INPUTS_BIN: [u8; 64] = hex!(
-    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
-    "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f"
-);
-const PUBLIC_DIGEST_HEX: &str = "4eed7141ea4a5cd4b788606bd23f46e212af9cacebacdc7d1f4c6dc7f2511b98";
+use prover_backend_interface::TxPublicInputs;
+use rpp_chain::zk::rpp_adapter::{compute_public_digest, encode_public_inputs, Digest32, Felt};
+
+const VECTORS_DIR: &str = "vendor/rpp-stark/vectors/stwo/mini";
+
+fn vector_path(name: &str) -> PathBuf {
+    Path::new(VECTORS_DIR).join(name)
+}
+
+fn load_hex_bytes(name: &str) -> Vec<u8> {
+    let contents = fs::read_to_string(vector_path(name)).expect("read hex vector");
+    Vec::from_hex(contents.trim()).expect("valid hex payload")
+}
+
+fn load_hex_string(name: &str) -> String {
+    fs::read_to_string(vector_path(name))
+        .expect("read digest vector")
+        .trim()
+        .to_lowercase()
+}
 
 fn sample_public_inputs() -> TxPublicInputs {
     TxPublicInputs {
-        utxo_root: UTXO_ROOT,
-        transaction_commitment: TRANSACTION_COMMITMENT,
+        utxo_root: [0u8; 32],
+        transaction_commitment: {
+            let mut commitment = [0u8; 32];
+            commitment[0] = 0x03;
+            commitment
+        },
     }
 }
 
 #[test]
 fn public_inputs_bytes_match_golden_vector() {
+    let expected = load_hex_bytes("public_inputs.bin");
     let encoded = encode_public_inputs(&sample_public_inputs());
-    assert_eq!(encoded.as_slice(), &PUBLIC_INPUTS_BIN);
+    assert_eq!(
+        encoded, expected,
+        "encoded public inputs mismatch golden vector"
+    );
 }
 
 #[test]
 fn public_digest_matches_header_hex() {
-    let digest = compute_public_digest(&PUBLIC_INPUTS_BIN);
-    assert_eq!(digest.to_string(), PUBLIC_DIGEST_HEX);
+    let bytes = load_hex_bytes("public_inputs.bin");
+    let expected_digest = load_hex_string("public_digest.hex");
+    let digest = compute_public_digest(&bytes);
+    assert_eq!(digest.to_hex(), expected_digest, "public digest mismatch");
 }
 
 #[test]
 fn digest_roundtrip_hex_bytes_ok() {
-    let digest = Digest32::from_hex(PUBLIC_DIGEST_HEX).expect("valid digest hex");
-    assert_eq!(digest.to_string(), PUBLIC_DIGEST_HEX);
+    let expected_digest = load_hex_string("public_digest.hex");
+    let digest = Digest32::from_hex(&expected_digest).expect("valid digest hex");
+    assert_eq!(digest.to_hex(), expected_digest);
 
     let bytes: [u8; 32] = digest.into();
     let recovered = Digest32::try_from(bytes.as_slice()).expect("32-byte digest");
-    assert_eq!(recovered.to_string(), PUBLIC_DIGEST_HEX);
+    assert_eq!(recovered.to_hex(), expected_digest);
 }
 
 #[test]
