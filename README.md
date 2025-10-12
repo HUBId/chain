@@ -25,6 +25,8 @@ The workspace is pinned to the stable `1.79.0` toolchain via `rust-toolchain.tom
 CI enforces `cargo clippy --all-features -D warnings` on this toolchain, so local development should use the same components (`rustfmt`, `clippy`) installed for 1.79.0.
 Nightly builds are no longer required for day-to-day work; the stable scan workflow should remain clean now that all `edition2024` blockers have been removed.
 
+Storage-specific MSRV tracking lives in [docs/STORAGE_STABLE_REPORT.md](docs/STORAGE_STABLE_REPORT.md) so operators can confirm Firewood compatibility on stable Rust.
+
 ## Build Requirements
 
 This workspace is pinned to `1.79.0` (stable) via `rust-toolchain.toml`. Install the matching toolchain along with the bundled `rustfmt` and `clippy` components before building locally to ensure consistent formatting and lint coverage.

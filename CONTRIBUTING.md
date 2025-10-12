@@ -10,6 +10,10 @@
   - Run `scripts/ci/stable_scan` to generate `docs/STABLE_MIGRATION_REPORT.md` when auditing for regressions.
   - The GitHub Actions workflow publishes the same report in warn mode; once it stays empty we will flip it to blocking.
 
+- **Storage stability snapshot**
+  - Review [docs/STORAGE_STABLE_REPORT.md](docs/STORAGE_STABLE_REPORT.md) for the latest Firewood MSRV audit and CI notes.
+  - Update the report whenever storage crates gain new features or dependencies so operators can track stable readiness.
+
 ## Lokale Entwicklung
 
 Use the stable toolchain commands directly when iterating:
