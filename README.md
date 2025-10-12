@@ -156,6 +156,8 @@ cargo run --no-default-features --features backend-plonky3 -- start --mode node 
 
 Aktiviert man das Feature, steht die `RppStarkVerifier`-Fassade zur Verfügung, die Proofs prüft und einen strukturierten `RppStarkVerificationReport` mit Stage-Flags (`params`, `public`, `merkle`, `fri`, `composition`) zurückliefert. Details zum Reporting und den abgebildeten Prüfschritten finden sich in `docs/blueprints/rpp_stark_integration.md`.
 
+Als Referenz für Golden-Vectors dient der Interop-Test `tests/interop_rpp_stark.rs`. Er lässt sich mit aktiviertem Feature über `cargo test --features backend-rpp-stark --test interop_rpp_stark` ausführen und prüft Digest, Flags, Byte-Längen und FRI-Indizes gegen die mitgelieferten Vektoren.
+
 **Toggle rollout feature gates**
 
 ```toml

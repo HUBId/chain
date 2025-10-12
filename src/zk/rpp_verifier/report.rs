@@ -1,8 +1,51 @@
 #![cfg(feature = "backend-rpp-stark")]
 
 use core::fmt;
+use std::vec::Vec;
 
 use rpp_stark::proof::types::VerifyReport;
+
+/// Boolean verification stages bundled for convenient assertions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RppStarkVerificationFlags {
+    params: bool,
+    public: bool,
+    merkle: bool,
+    fri: bool,
+    composition: bool,
+}
+
+impl RppStarkVerificationFlags {
+    /// Returns whether parameter hashing checks succeeded.
+    pub const fn params(self) -> bool {
+        self.params
+    }
+
+    /// Returns whether public input binding checks succeeded.
+    pub const fn public(self) -> bool {
+        self.public
+    }
+
+    /// Returns whether Merkle commitment checks succeeded.
+    pub const fn merkle(self) -> bool {
+        self.merkle
+    }
+
+    /// Returns whether the FRI verifier accepted the proof.
+    pub const fn fri(self) -> bool {
+        self.fri
+    }
+
+    /// Returns whether composition openings matched expectations.
+    pub const fn composition(self) -> bool {
+        self.composition
+    }
+
+    /// Indicates whether all stages reported success.
+    pub const fn all_passed(self) -> bool {
+        self.params && self.public && self.merkle && self.fri && self.composition
+    }
+}
 
 /// Structured verification report exposed by the chain facade.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +59,7 @@ pub struct RppStarkVerificationReport {
     total_bytes: u64,
     verified: bool,
     notes: Option<&'static str>,
+    trace_query_indices: Option<Vec<u32>>,
 }
 
 impl RppStarkVerificationReport {
@@ -31,11 +75,16 @@ impl RppStarkVerificationReport {
             total_bytes: 0,
             verified: false,
             notes: Some(notes),
+            trace_query_indices: None,
         }
     }
 
     /// Creates a report from the backend verification summary.
     pub(crate) fn from_backend(report: &VerifyReport) -> Self {
+        let trace_query_indices = report
+            .proof
+            .as_ref()
+            .map(|handles| handles.openings().trace().indices().to_vec());
         Self {
             backend: "rpp-stark",
             params_ok: report.params_ok,
@@ -46,12 +95,24 @@ impl RppStarkVerificationReport {
             total_bytes: report.total_bytes,
             verified: report.error.is_none(),
             notes: None,
+            trace_query_indices,
         }
     }
 
     /// Returns the backend identifier attached to the report.
     pub const fn backend(&self) -> &'static str {
         self.backend
+    }
+
+    /// Returns the stage flags emitted by the backend.
+    pub const fn flags(&self) -> RppStarkVerificationFlags {
+        RppStarkVerificationFlags {
+            params: self.params_ok,
+            public: self.public_ok,
+            merkle: self.merkle_ok,
+            fri: self.fri_ok,
+            composition: self.composition_ok,
+        }
     }
 
     /// Indicates whether the proof was fully verified.
@@ -92,6 +153,11 @@ impl RppStarkVerificationReport {
     /// Provides additional context on the verification outcome, when present.
     pub const fn notes(&self) -> Option<&'static str> {
         self.notes
+    }
+
+    /// Returns the optional trace query indices surfaced by the backend report.
+    pub fn trace_query_indices(&self) -> Option<&[u32]> {
+        self.trace_query_indices.as_deref()
     }
 }
 
