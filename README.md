@@ -148,6 +148,10 @@ cargo run -- start --mode node --node-config config/node.toml
 cargo run --no-default-features --features backend-plonky3 -- start --mode node --node-config config/node.toml
 ```
 
+### ZK-Backend Features
+
+- `backend-rpp-stark` — optional, stable-only backend gated for Rust 1.79. The feature wires in the `rpp-stark` verifier stack; follow-up PRs will land the adapter layer, verifier integration, and interop coverage before enabling it in production paths.
+
 **Toggle rollout feature gates**
 
 ```toml
