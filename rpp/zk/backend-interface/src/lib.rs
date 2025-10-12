@@ -276,6 +276,7 @@ pub enum ProofSystemKind {
     Plonky3,
     Plonky2,
     Halo2,
+    RppStark,
 }
 
 pub trait ProofBackend: Send + Sync + 'static {

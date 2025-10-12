@@ -14,14 +14,15 @@
 //! Public status/reporting structs are defined alongside the runtime to expose
 //! snapshot views without leaking internal locks.
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::convert::TryFrom;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
-use tokio::sync::{Mutex, Notify, broadcast};
+use tokio::sync::{broadcast, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -32,13 +33,13 @@ use serde_json;
 
 use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
-    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
-    classify_participants, evaluate_vrf,
+    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
+    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
+    SignedBftVote, ValidatorCandidate,
 };
 use crate::crypto::{
-    VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
-    sign_message, signature_to_hex, vrf_public_key_to_hex,
+    address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair, sign_message,
+    signature_to_hex, vrf_public_key_to_hex, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -46,6 +47,7 @@ use crate::ledger::{
 };
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
+use crate::proof_backend::Blake2sHasher;
 use crate::proof_system::{ProofProver, ProofVerifierRegistry};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
@@ -59,15 +61,16 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
-    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
-    TransactionProofBundle, UptimeProof,
+    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
+#[cfg(feature = "backend-rpp-stark")]
+use crate::zk::rpp_verifier::RppStarkVerificationReport;
 use rpp_p2p::{HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
-use crate::proof_backend::Blake2sHasher;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
@@ -472,6 +475,8 @@ impl Node {
         let epoch_manager = VrfEpochManager::new(config.epoch_length, ledger.current_epoch());
 
         let (shutdown, _shutdown_rx) = broadcast::channel(1);
+        let verifier_registry =
+            ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -496,7 +501,7 @@ impl Node {
             evidence_pool: RwLock::new(EvidencePool::default()),
             telemetry_last_height: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
-            verifiers: ProofVerifierRegistry::default(),
+            verifiers: verifier_registry,
             shutdown,
             worker_tasks: Mutex::new(Vec::new()),
             completion: Notify::new(),
@@ -528,7 +533,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
+        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -536,11 +541,11 @@ mod tests {
     };
     use crate::errors::ChainError;
     use crate::ledger::Ledger;
+    use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
-        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field,
+        string_to_field, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -551,7 +556,6 @@ mod tests {
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
-    use crate::proof_backend::Blake2sHasher;
     use tempfile::tempdir;
     use tracing_test::traced_test;
 
@@ -1289,6 +1293,108 @@ impl NodeHandle {
 }
 
 impl NodeInner {
+    #[cfg(feature = "backend-rpp-stark")]
+    fn verify_rpp_stark_with_metrics(
+        &self,
+        proof_kind: &'static str,
+        proof: &ChainProof,
+    ) -> ChainResult<RppStarkVerificationReport> {
+        let started = Instant::now();
+        match self
+            .verifiers
+            .verify_rpp_stark_with_report(proof, proof_kind)
+        {
+            Ok(report) => {
+                self.emit_rpp_stark_metrics(proof_kind, proof, &report, started.elapsed());
+                Ok(report)
+            }
+            Err(err) => {
+                self.emit_rpp_stark_failure_metrics(proof_kind, proof, started.elapsed(), &err);
+                Err(err)
+            }
+        }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn emit_rpp_stark_metrics(
+        &self,
+        proof_kind: &'static str,
+        proof: &ChainProof,
+        report: &RppStarkVerificationReport,
+        duration: Duration,
+    ) {
+        if let Ok(artifact) = proof.expect_rpp_stark() {
+            let flags = report.flags();
+            let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
+            let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
+            let public_inputs_bytes =
+                u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
+            let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
+
+            info!(
+                target = "proofs",
+                proof_backend = "rpp-stark",
+                proof_kind,
+                valid = report.is_verified(),
+                params_ok = flags.params(),
+                public_ok = flags.public(),
+                merkle_ok = flags.merkle(),
+                fri_ok = flags.fri(),
+                composition_ok = flags.composition(),
+                proof_bytes = report.total_bytes(),
+                params_bytes,
+                public_inputs_bytes,
+                payload_bytes,
+                verify_duration_ms,
+                trace_queries = ?report.trace_query_indices(),
+                report = %report,
+                "rpp-stark proof verification"
+            );
+        }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn emit_rpp_stark_failure_metrics(
+        &self,
+        proof_kind: &'static str,
+        proof: &ChainProof,
+        duration: Duration,
+        error: &ChainError,
+    ) {
+        let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
+        if let Ok(artifact) = proof.expect_rpp_stark() {
+            let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
+            let public_inputs_bytes =
+                u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
+            let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
+            let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
+
+            warn!(
+                target = "proofs",
+                proof_backend = "rpp-stark",
+                proof_kind,
+                valid = false,
+                proof_bytes,
+                params_bytes,
+                public_inputs_bytes,
+                payload_bytes,
+                verify_duration_ms,
+                error = %error,
+                "rpp-stark proof verification failed"
+            );
+        } else {
+            warn!(
+                target = "proofs",
+                proof_backend = "rpp-stark",
+                proof_kind,
+                valid = false,
+                verify_duration_ms,
+                error = %error,
+                "rpp-stark proof verification failed"
+            );
+        }
+    }
+
     fn spawn_runtime(self: &Arc<Self>) -> JoinHandle<()> {
         let runner = Arc::clone(self);
         let shutdown = runner.subscribe_shutdown();
@@ -1571,11 +1677,30 @@ impl NodeInner {
     fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
         bundle.transaction.verify()?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            if let Err(err) = self.verifiers.verify_transaction(&bundle.proof) {
-                warn!(?err, "transaction proof rejected by verifier");
-                return Err(err);
+            #[cfg(feature = "backend-rpp-stark")]
+            {
+                let verification = match &bundle.proof {
+                    ChainProof::RppStark(_) => self
+                        .verify_rpp_stark_with_metrics("transaction", &bundle.proof)
+                        .map(|_| ()),
+                    _ => self.verifiers.verify_transaction(&bundle.proof),
+                };
+                if let Err(err) = verification {
+                    warn!(?err, "transaction proof rejected by verifier");
+                    return Err(err);
+                }
+                if !matches!(bundle.proof, ChainProof::RppStark(_)) {
+                    Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
+                }
             }
-            Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            {
+                if let Err(err) = self.verifiers.verify_transaction(&bundle.proof) {
+                    warn!(?err, "transaction proof rejected by verifier");
+                    return Err(err);
+                }
+                Self::ensure_transaction_payload(&bundle.proof, &bundle.transaction)?;
+            }
         }
         let mut mempool = self.mempool.write();
         if mempool.len() >= self.config.mempool_limit {
@@ -2760,7 +2885,16 @@ impl NodeInner {
         )?;
         let state_proof = prover.prove_state_transition(state_witness)?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            if let Err(err) = self.verifiers.verify_state(&state_proof) {
+            #[cfg(feature = "backend-rpp-stark")]
+            let state_result = match &state_proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("state", &state_proof)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_state(&state_proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let state_result = self.verifiers.verify_state(&state_proof);
+            if let Err(err) = state_result {
                 error!(
                     height,
                     block_hash = %block_hash,
@@ -2787,7 +2921,16 @@ impl NodeInner {
         )?;
         let pruning_stark = prover.prove_pruning(pruning_witness)?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            if let Err(err) = self.verifiers.verify_pruning(&pruning_stark) {
+            #[cfg(feature = "backend-rpp-stark")]
+            let pruning_result = match &pruning_stark {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("pruning", &pruning_stark)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_pruning(&pruning_stark),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let pruning_result = self.verifiers.verify_pruning(&pruning_stark);
+            if let Err(err) = pruning_result {
                 error!(
                     height,
                     block_hash = %block_hash,
@@ -2812,7 +2955,16 @@ impl NodeInner {
             prover.build_consensus_witness(&block_hash, &consensus_certificate)?;
         let consensus_proof = prover.prove_consensus(consensus_witness)?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            if let Err(err) = self.verifiers.verify_consensus(&consensus_proof) {
+            #[cfg(feature = "backend-rpp-stark")]
+            let consensus_result = match &consensus_proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("consensus", &consensus_proof)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_consensus(&consensus_proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let consensus_result = self.verifiers.verify_consensus(&consensus_proof);
+            if let Err(err) = consensus_result {
                 error!(
                     height,
                     block_hash = %block_hash,
@@ -2844,7 +2996,16 @@ impl NodeInner {
         )?;
         let recursive_stark = prover.prove_recursive(recursive_witness)?;
         if self.config.rollout.feature_gates.recursive_proofs {
-            if let Err(err) = self.verifiers.verify_recursive(&recursive_stark) {
+            #[cfg(feature = "backend-rpp-stark")]
+            let recursive_result = match &recursive_stark {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("recursive", &recursive_stark)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_recursive(&recursive_stark),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let recursive_result = self.verifiers.verify_recursive(&recursive_stark);
+            if let Err(err) = recursive_result {
                 error!(
                     height,
                     block_hash = %block_hash,
@@ -2987,7 +3148,16 @@ impl NodeInner {
 
         if self.config.rollout.feature_gates.recursive_proofs {
             let round_number = round.round();
-            if let Err(err) = self.verifiers.verify_state(&block.stark.state_proof) {
+            #[cfg(feature = "backend-rpp-stark")]
+            let state_result = match &block.stark.state_proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("state", &block.stark.state_proof)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_state(&block.stark.state_proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let state_result = self.verifiers.verify_state(&block.stark.state_proof);
+            if let Err(err) = state_result {
                 warn!(
                     height,
                     round = round_number,
@@ -2999,7 +3169,16 @@ impl NodeInner {
                 self.punish_invalid_proof(&block.header.proposer, height, round_number);
                 return Err(err);
             }
-            if let Err(err) = self.verifiers.verify_pruning(&block.stark.pruning_proof) {
+            #[cfg(feature = "backend-rpp-stark")]
+            let pruning_result = match &block.stark.pruning_proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("pruning", &block.stark.pruning_proof)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_pruning(&block.stark.pruning_proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let pruning_result = self.verifiers.verify_pruning(&block.stark.pruning_proof);
+            if let Err(err) = pruning_result {
                 warn!(
                     height,
                     round = round_number,
@@ -3011,10 +3190,20 @@ impl NodeInner {
                 self.punish_invalid_proof(&block.header.proposer, height, round_number);
                 return Err(err);
             }
-            if let Err(err) = self
+            #[cfg(feature = "backend-rpp-stark")]
+            let recursive_result = match &block.stark.recursive_proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics("recursive", &block.stark.recursive_proof)
+                    .map(|_| ()),
+                _ => self
+                    .verifiers
+                    .verify_recursive(&block.stark.recursive_proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let recursive_result = self
                 .verifiers
-                .verify_recursive(&block.stark.recursive_proof)
-            {
+                .verify_recursive(&block.stark.recursive_proof);
+            if let Err(err) = recursive_result {
                 warn!(
                     height,
                     round = round_number,
@@ -3027,7 +3216,16 @@ impl NodeInner {
                 return Err(err);
             }
             if let Some(proof) = &block.consensus_proof {
-                if let Err(err) = self.verifiers.verify_consensus(proof) {
+                #[cfg(feature = "backend-rpp-stark")]
+                let consensus_result = match proof {
+                    ChainProof::RppStark(_) => self
+                        .verify_rpp_stark_with_metrics("consensus", proof)
+                        .map(|_| ()),
+                    _ => self.verifiers.verify_consensus(proof),
+                };
+                #[cfg(not(feature = "backend-rpp-stark"))]
+                let consensus_result = self.verifiers.verify_consensus(proof);
+                if let Err(err) = consensus_result {
                     warn!(
                         height,
                         round = round_number,
@@ -3340,18 +3538,18 @@ pub(super) async fn dispatch_telemetry_snapshot(
 #[cfg(test)]
 mod telemetry_tests {
     use super::{
-        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
-        ReleaseChannel, TelemetryConfig, TimetokeParams, dispatch_telemetry_snapshot,
-        send_telemetry_with_tracking,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
+        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
+        TimetokeParams,
     };
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{Router, routing::post};
+    use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tokio::sync::oneshot;
     use tracing_test::traced_test;
 

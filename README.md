@@ -158,6 +158,8 @@ Aktiviert man das Feature, steht die `RppStarkVerifier`-Fassade zur Verfügung, 
 
 Als Referenz für Golden-Vectors dient der Interop-Test `tests/interop_rpp_stark.rs`. Er lässt sich mit aktiviertem Feature über `cargo test --features backend-rpp-stark --test interop_rpp_stark` ausführen und prüft Digest, Flags, Byte-Längen und FRI-Indizes gegen die mitgelieferten Vektoren.
 
+Weitere Hinweise zu Aktivierung, Telemetrie und Fehlersuche finden sich in [docs/zk_backends.md](docs/zk_backends.md).
+
 **Toggle rollout feature gates**
 
 ```toml
