@@ -14,10 +14,10 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 * **Rust-Schnittstellen**: Traits/Module für Konsens, Wirtschaftlichkeit, Netzwerk, Clients.
 
 ## Ist-Zustand der Codebasis (Kurzfassung)
-* **Reputation & Stake**: Reputation wird nur als Score für Stake-Gewichtung verwendet; Timetoke fehlt vollständig.
-* **Validator-/Proposer-Selektion**: Stake-gewichtete Lotterie auf Basis von VRF(seed, round, addr); Tier- und Timetoke-Tiebreaker fehlen.
-* **Rewards**: Proposer erhält 100 % des Blockrewards; kein Validator-Split, kein Leader-Bonus.
-* **Proofs**: STWO-Workflow prüft Signaturen und Quorum, aber keine VRF-/Leader-Verifikation.
+* **Reputation & Stake**: Reputation verwaltet Score **und** Tier-Level; Timetoke-Balances werden im Ledger gepflegt und bei Reputation-Audits berücksichtigt.
+* **Validator-/Proposer-Selektion**: VRF-Auswertung nutzt Timetoke-Daten (`derive_tier_seed`) und filtert Kandidaten mit Tier < 3 aus; Leader-Selektion priorisiert Tier → Timetoke → VRF.
+* **Rewards**: `Ledger::distribute_consensus_rewards` verteilt Basis-Rewards gleichmäßig, addiert Gebühren und vergibt einen Leader-Bonus von 20 %.
+* **Proofs**: STWO-Workflow prüft Konsens-, Uptime- und Modul-Witnesses; VRF- und Leader-Daten werden im Blockheader persistiert und während der Finalisierung validiert.
 * **Anti-Abuse**: Allgemeines Slashing vorhanden, jedoch ohne blueprint-spezifische Checks.
 * **Netzwerk**: BFT-Nachrichten sind nicht entlang der geforderten Kanalstruktur organisiert.
 * **Rust-Interfaces**: Traits fokussieren auf Stake-BFT, ohne Reputation-/Timetoke-Einbindung.
@@ -25,16 +25,21 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 ## Gap-Analyse nach Funktionsbereichen
 | Bereich | Blueprint-Soll | Ist | Lücke |
 | --- | --- | --- | --- |
-| Reputation/Tiers | Tier ≥ 3 als Mindestanforderung; Reputation beeinflusst Eintritt | Reputation nur Score, keine Tier-Filter | Tier- und Reputation-Gate implementieren |
-| Timetoke | Gewichtung/Thresholds, Decay, Synchronisation | Nicht vorhanden | Timetoke-Datenmodell + Runtime/Storage + Sync |
-| VRF & Validator-Set | VRF Input = (sk, epoch_nonce, timetoke) + Threshold aus Timetoke | Input ohne Timetoke, Threshold aus Stake | VRF-Modul erweitern, Threshold-Formel anpassen |
-| Leader-Selektion | Priorität: Tier → Timetoke → VRF | Stake-Lotterie | Neue Leader-Selektion auf Basis Validator-Set |
-| Witness-Rolle | Externe Verifikation | Nicht differenziert | Witness-Protokoll und Interfaces |
-| Rewards | Gleichmäßig + Leader-Bonus | Nur Proposer | Reward-Engine erweitern |
+| Reputation/Tiers | Tier ≥ 3 als Mindestanforderung; Reputation beeinflusst Eintritt | `select_validators` filtert Tier < 3 und aktualisiert Gewichte über Reputation/Stake; Ledger-Audits liefern Tierdaten | **TODO**: Tier-Gates auf P2P-Handshakes & Gossip Admission ausweiten |
+| Timetoke | Gewichtung/Thresholds, Decay, Synchronisation | Ledger pflegt Timetoke-State (`timetoke_snapshot`/`sync_timetoke_records`), Node kreditiert Uptime-Proofs und VRF-Seed nutzt Timetoke | **TODO**: Netzwerkweiter Sync-Plan (Snapshots, Replay-Schutz) finalisieren |
+| VRF & Validator-Set | VRF Input = (sk, epoch_nonce, timetoke) + Threshold aus Timetoke | VRF-Seed kombiniert Adresse & Timetoke; Validator-Gewichte berücksichtigen Reputation + Timetoke | **TODO**: Threshold-Parametrisierung & Monitoring der Erfolgsquoten dokumentieren |
+| Leader-Selektion | Priorität: Tier → Timetoke → VRF | `select_leader` sortiert nach Tier, Timetoke, VRF-Ausgabe | ✅ |
+| Witness-Rolle | Externe Verifikation | Tier 1–2 werden als Observer/Witness geführt, Konsens-Witnesses werden erstellt und verprooft | **TODO**: Dedizierte Witness-Kanäle & Incentives (Rewards/Slashing) definieren |
+| Rewards | Gleichmäßig + Leader-Bonus | Konsens-Rewards teilen Basis-Reward + Gebühren auf Validatoren mit 20 % Leader-Bonus | **TODO**: Konfigurierbare Pools & Witness-Beteiligung einführen |
 | Proofs | Nachweis VRF/Leader/Quorum in Block-Proof | Nur Signatur-Check | Proof-Komponenten erweitern |
 | Anti-Abuse | Double-Sign, Fake-Proof, Zensur, Inaktivität | Teilweise generisch | Spezifische Erkennungslogik |
 | Netzwerk | Dedizierte Kanäle | Mischverkehr | Messaging-Layer modularisieren |
 | Schnittstellen | Konsens-/Ökonomie-/Netzwerk-Traits | Stake-zentriert | Neue Traits/Adapter |
+
+### Referenztests & Historien
+* **VRF-Integrität**: `select_validators_rejects_manipulated_proof` sichert die Tier-Gates & Proof-Verifikation ab (`rpp/consensus/src/tests.rs`).
+* **Konsens-Proof-Härtung**: `rejects_external_block_with_tampered_state_fri_proof` prüft die Ablehnung manipulierter Blöcke inkl. Consensus/Witness-Bundles (`rpp/runtime/node.rs`).
+* **VRF-Historie**: Ledger-Tests (`record_vrf_history_tracks_entries`) stellen sicher, dass VRF-Submissions epochweise archiviert werden (`rpp/storage/ledger.rs`).
 
 ## Architekturentscheidungen & Komponenten
 ### Domänenmodelle

@@ -63,6 +63,9 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 3. **Monitoring & Replay-Schutz**
    - Deliverable: Anti-Replay-Mechanismen, Telemetrie-Dashboards.
    - Tests: Integration mit meta-Kanal, Replay-Testfälle.
+4. **Timetoke-Synchronisation härten** *(neu)*
+   - Deliverable: Netzwerkweiter Sync-Plan für `timetoke_snapshot`/`sync_timetoke_records` inkl. Replay-Schutz und Delta-Gossip.
+   - Tests: Snapshot-Replay gegen manipulierte/alte Timetoke-Daten, Roundtrip über mehrere Nodes.
 
 ## 6. Malachite BFT & Slashing (Blueprint 2.5)
 1. **Mehrknoten-BFT**
@@ -74,6 +77,12 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 3. **Reward-Distribution**
    - Deliverable: Leader-/Validator-Belohnungen, Uptime-Rewards.
    - Tests: Auszahlungskonsistenz pro Block.
+4. **Witness-Gossip & Admission-Control** *(neu)*
+   - Deliverable: Dedizierte Witness-Kanäle (`proofs`, `meta`) mit Tier-Gating und Observer-Handshakes.
+   - Tests: Zugriffskontrollen für Tier 1–2, Witness-Abstimmungen gegen byzantinische Leader.
+5. **Reward-Parametrisierung für Witnesses** *(neu)*
+   - Deliverable: Konfigurierbare Pools für Validator-, Leader- und Witness-Rewards (z. B. Anteil Leader-Bonus, Witness-Quoten).
+   - Tests: Auszahlungssimulation mit variierenden Pools, ökonomische Regressionstests.
 
 ## 7. Electrs Binary & UI (Blueprint 2.6)
 1. **Modus-Trennung**
