@@ -33,6 +33,46 @@ production.
    against production data before switching binaries to guarantee the RocksDB
    schema matches the proof bundle format.【F:README.md†L96-L107】
 
+## Mempool Retention & Operations
+
+1. **Understand queue boundaries.** Transaction, identity, and consensus vote
+   submissions are buffered in per-type `VecDeque`s that are re-created empty on
+   every node startup, so no pending items survive a restart.【F:rpp/runtime/node.rs†L489-L506】
+   Each queue enforces `mempool_limit`; once the limit is reached new entries
+   are rejected rather than evicting older ones, and duplicate submissions are
+   ignored.【F:rpp/runtime/node.rs†L1743-L1755】【F:rpp/runtime/node.rs†L1839-L1858】【F:rpp/runtime/node.rs†L1879-L1888】
+   Configuration validation also prevents operators from setting this limit to
+   zero.【F:rpp/runtime/config.rs†L170-L181】
+2. **FIFO draining during block production.** When a validator assembles a
+   block, the runtime pulls transactions and identities from the front of their
+   queues up to the configured per-block caps, guaranteeing oldest-first
+   inclusion and leaving any overflow for future blocks.【F:rpp/runtime/node.rs†L2533-L2556】
+   Votes are drained for the targeted height/hash whenever a round is finalised,
+   ensuring only matching votes are removed and later rounds retain their queued
+   messages.【F:rpp/runtime/node.rs†L2418-L2431】【F:rpp/runtime/node.rs†L2639-L2670】【F:rpp/runtime/node.rs†L2855-L2879】
+3. **Tune queue depth deliberately.** Size `mempool_limit` relative to
+   `max_block_transactions` and `max_block_identity_registrations` so that the
+   node can absorb expected bursts without hitting the hard rejection path. The
+   default limit of 8,192 works well for moderate throughput but validators can
+   scale it up (at the cost of more RAM) or down (for constrained hardware) via
+   `node.toml`; the loader validates and persists the change automatically.【F:config/node.toml†L3-L14】【F:rpp/runtime/config.rs†L40-L130】
+   Because vote queues share the same limit, environments with large validator
+   sets should reserve headroom for vote storms triggered by round restarts.
+4. **Gate features to match readiness.** Recursive-proof verification for
+   transactions and identities, and consensus enforcement for votes, are guarded
+   by rollout feature flags. Disable them in lower environments when proofs are
+   not yet available to avoid systematic rejections; re-enable as soon as the
+   production circuits are validated.【F:config/node.toml†L29-L33】【F:rpp/runtime/node.rs†L1718-L1761】【F:rpp/runtime/node.rs†L1862-L1888】
+5. **Monitor `/status/mempool`.** The RPC surface exposes a structured view of
+   queued entries—including hashes, senders, and queue sizes—via the
+   `/status/mempool` endpoint. Use it for dashboards and alerts that detect when
+   queues approach the configured limit, or when identities and votes stop being
+   drained.【F:rpp/rpc/api.rs†L510-L536】【F:rpp/runtime/node.rs†L2160-L2230】
+
+Operators should combine these controls with routine snapshots of queue depth so
+they can resize the mempool proactively and diagnose stuck items before they
+threaten block production.
+
 ## Telemetry & Metrics
 
 1. **Enable telemetry sampling.** Flip `rollout.telemetry.enabled` and tune the
