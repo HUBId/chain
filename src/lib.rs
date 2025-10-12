@@ -57,6 +57,8 @@ pub mod state;
 pub mod storage;
 #[path = "../rpp/proofs/stwo/mod.rs"]
 pub mod stwo;
+#[cfg(feature = "backend-rpp-stark")]
+pub mod zk;
 #[path = "../rpp/runtime/sync.rs"]
 pub mod sync;
 #[path = "../rpp/runtime/types/mod.rs"]
