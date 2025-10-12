@@ -21,7 +21,7 @@ It integrates:
 
 The workspace is pinned to the stable `1.79.0` toolchain via `rust-toolchain.toml`, establishing `1.79` as the minimum supported Rust version (MSRV).
 CI enforces `cargo clippy --all-features -D warnings` on this toolchain, so local development should use the same components (`rustfmt`, `clippy`) installed for 1.79.0.
-Nightly builds are no longer required for day-to-day work; use the stable scan workflow to monitor any regressions before we make the warning gate blocking.
+Nightly builds are no longer required for day-to-day work; use the stable scan workflow to monitor regressions and track the remaining `edition2024` blockers (workspace manifests plus the `malachite` dependency) in `docs/STABLE_MIGRATION_REPORT.md` until the warn-mode gate becomes blocking.
 
 ## Build Requirements
 

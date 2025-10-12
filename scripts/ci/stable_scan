@@ -23,8 +23,11 @@ RG_COMMON_ARGS=(
 mapfile -t feature_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob '*.rs' '#!\[feature' || true)
 mapfile -t zflag_hits < <(rg "${RG_COMMON_ARGS[@]}" '(^|\s)-Z[[:alnum:]_-]+' || true)
 mapfile -t unstable_feature_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob 'Cargo.toml' 'feature\s*=\s*"unstable"' || true)
+mapfile -t cargo_edition_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob 'Cargo.toml' 'cargo-features\s*=\s*\["edition2024"\]' || true)
+mapfile -t edition_field_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob 'Cargo.toml' 'edition\s*=\s*"2024"' || true)
+mapfile -t lock_edition_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob 'Cargo.lock' 'edition2024' || true)
 
-all_hits=("${feature_hits[@]}" "${zflag_hits[@]}" "${unstable_feature_hits[@]}")
+all_hits=("${feature_hits[@]}" "${zflag_hits[@]}" "${unstable_feature_hits[@]}" "${cargo_edition_hits[@]}" "${edition_field_hits[@]}" "${lock_edition_hits[@]}")
 total_findings=${#all_hits[@]}
 
 # Collect impacted top-level paths for the summary.
@@ -89,6 +92,33 @@ mkdir -p "$(dirname "$REPORT_PATH")"
     echo "- Keine Funde."
   else
     for hit in "${unstable_feature_hits[@]}"; do
+      echo "- ${hit}"
+    done
+  fi
+  echo
+  echo "### Cargo manifests using \"edition2024\" (cargo-features)"
+  if ((${#cargo_edition_hits[@]} == 0)); then
+    echo "- Keine Funde."
+  else
+    for hit in "${cargo_edition_hits[@]}"; do
+      echo "- ${hit}"
+    done
+  fi
+  echo
+  echo "### Crates targeting edition = \"2024\""
+  if ((${#edition_field_hits[@]} == 0)); then
+    echo "- Keine Funde."
+  else
+    for hit in "${edition_field_hits[@]}"; do
+      echo "- ${hit}"
+    done
+  fi
+  echo
+  echo "### Cargo.lock entries requiring edition2024"
+  if ((${#lock_edition_hits[@]} == 0)); then
+    echo "- Keine Funde."
+  else
+    for hit in "${lock_edition_hits[@]}"; do
       echo "- ${hit}"
     done
   fi
