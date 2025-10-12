@@ -7,6 +7,7 @@ vrf_key_path = "./keys/vrf.toml"
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"
 rpc_listen = "127.0.0.1:7070"
+rpc_requests_per_minute = 600
 block_time_ms = 5000
 max_block_transactions = 512
 max_block_identity_registrations = 32

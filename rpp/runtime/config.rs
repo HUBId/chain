@@ -51,6 +51,8 @@ pub struct NodeConfig {
     pub rpc_auth_token: Option<String>,
     #[serde(default)]
     pub rpc_allowed_origin: Option<String>,
+    #[serde(default)]
+    pub rpc_requests_per_minute: Option<u64>,
     pub block_time_ms: u64,
     pub max_block_transactions: usize,
     #[serde(default = "default_max_block_identity_registrations")]
@@ -209,6 +211,13 @@ impl NodeConfig {
                 ));
             }
         }
+        if let Some(limit) = self.rpc_requests_per_minute {
+            if limit == 0 {
+                return Err(ChainError::Config(
+                    "node configuration rpc_requests_per_minute must be greater than 0".into(),
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -228,6 +237,7 @@ impl Default for NodeConfig {
             rpc_listen: "127.0.0.1:7070".parse().expect("valid socket addr"),
             rpc_auth_token: None,
             rpc_allowed_origin: None,
+            rpc_requests_per_minute: None,
             block_time_ms: 5_000,
             max_block_transactions: 512,
             max_block_identity_registrations: default_max_block_identity_registrations(),

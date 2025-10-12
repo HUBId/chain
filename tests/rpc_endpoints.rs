@@ -1,20 +1,23 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
-    Json, Router,
     body::Body,
+    error_handling::HandleErrorLayer,
     extract::{Path, Request as AxumRequest, State},
     http::{
-        Method, Request as HttpRequest, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
+        Method, Request as HttpRequest, StatusCode,
     },
     middleware::{self, Next},
     response::Response,
     routing::{get, post},
+    BoxError, Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tower::ServiceExt;
+use serde_json::{json, Value};
+use tower::limit::RateLimitLayer;
+use tower::{ServiceBuilder, ServiceExt};
 
 #[tokio::test]
 async fn status_returns_node_status() {
@@ -96,6 +99,36 @@ async fn status_rejects_invalid_auth_token_when_required() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn rate_limit_exceeded_returns_429() {
+    let app = build_rate_limited_app(Mode::Node, 1);
+
+    let first = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 #[tokio::test]
@@ -267,6 +300,19 @@ fn build_app_with_auth(mode: Mode, auth_token: Option<String>) -> Router {
     }
 
     router.with_state(RpcState::new(mode))
+}
+
+fn build_rate_limited_app(mode: Mode, requests_per_minute: u64) -> Router {
+    build_app(mode).layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_: BoxError| async move {
+                StatusCode::TOO_MANY_REQUESTS
+            }))
+            .layer(RateLimitLayer::new(
+                requests_per_minute,
+                Duration::from_secs(60),
+            )),
+    )
 }
 
 #[derive(Clone)]
