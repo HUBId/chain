@@ -20,7 +20,7 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Build workspace (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+      - name: Build workspace (stable${{ matrix.features != '' && ' + ' || '' }}${{ matrix.features }})
         env:
           FEATURES: ${{ matrix.features }}
         run: |
@@ -43,7 +43,7 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Test workspace (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+      - name: Test workspace (stable${{ matrix.features != '' && ' + ' || '' }}${{ matrix.features }})
         env:
           FEATURES: ${{ matrix.features }}
         run: |
@@ -66,7 +66,7 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Clippy (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+      - name: Clippy (stable${{ matrix.features != '' && ' + ' || '' }}${{ matrix.features }})
         env:
           FEATURES: ${{ matrix.features }}
         run: |
@@ -89,5 +89,5 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Format check (stable${{ matrix.features != '' && format(' + {0}', matrix.features) || '' }})
+      - name: Format check (stable${{ matrix.features != '' && ' + ' || '' }}${{ matrix.features }})
         run: cargo +1.79.0 fmt --all -- --check

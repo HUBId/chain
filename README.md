@@ -22,7 +22,7 @@ It integrates:
 ## Toolchain & MSRV
 
 The workspace is pinned to the stable `1.79.0` toolchain via `rust-toolchain.toml`, establishing `1.79` as the minimum supported Rust version (MSRV).
-CI enforces `cargo clippy --all-features -D warnings` on this toolchain, so local development should use the same components (`rustfmt`, `clippy`) installed for 1.79.0.
+CI enforces `cargo clippy -D warnings` twice on this toolchain—once for the default feature set and once with `--features backend-rpp-stark`—so local development should use the same components (`rustfmt`, `clippy`) installed for 1.79.0.
 Nightly builds are no longer required for day-to-day work; the stable scan workflow should remain clean now that all `edition2024` blockers have been removed.
 
 ## Build Requirements

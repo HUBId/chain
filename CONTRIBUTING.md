@@ -5,7 +5,7 @@
 - **Stable default (required)**
   - Install the pinned stable toolchain with `rustup toolchain install 1.79.0`.
   - `rustup` will auto-select it through `rust-toolchain.toml`; ensure the `rustfmt` and `clippy` components are added (`rustup component add --toolchain 1.79.0 rustfmt clippy`).
-  - CI runs `cargo +1.79.0 clippy --workspace -D warnings` for the default feature set **and** with `--features backend-rpp-stark`; mirror both invocations locally before submitting a PR.
+  - CI runs the full matrix (`build`, `test`, `clippy -D warnings`, `fmt --check`) for the default feature set **and** with `--features backend-rpp-stark`; mirror both combinations locally before submitting a PR.
 - **Nightly scan (optional checks)**
   - Run `scripts/ci/stable_scan` to generate `docs/STABLE_MIGRATION_REPORT.md` when auditing for regressions.
   - The GitHub Actions workflow publishes the same report in warn mode; once it stays empty we will flip it to blocking.
