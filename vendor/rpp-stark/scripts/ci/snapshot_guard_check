@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+range=""
+base_commit=""
+if [[ -n "${GITHUB_BASE_REF:-}" ]]; then
+  base_ref="origin/${GITHUB_BASE_REF}"
+  if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+    if git rev-parse --verify "${GITHUB_BASE_REF}" >/dev/null 2>&1; then
+      base_ref="${GITHUB_BASE_REF}"
+    else
+      git fetch origin "${GITHUB_BASE_REF}:${GITHUB_BASE_REF}" >/dev/null 2>&1 || true
+    fi
+  fi
+  if ! git rev-parse --verify "$base_ref" >/dev/null 2>&1 && git rev-parse --verify "${GITHUB_BASE_REF}" >/dev/null 2>&1; then
+    base_ref="${GITHUB_BASE_REF}"
+  fi
+  if git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+    base_commit=$(git rev-parse "$base_ref")
+    range="${base_commit}...HEAD"
+  else
+    echo "::error::Snapshot guard konnte den Basis-Branch '${GITHUB_BASE_REF}' nicht auflösen." >&2
+    exit 1
+  fi
+else
+  if git rev-parse HEAD^ >/dev/null 2>&1; then
+    base_commit=$(git rev-parse HEAD^)
+    range="${base_commit}..HEAD"
+  else
+    echo "::error::Snapshot guard benötigt mindestens einen Vorgänger-Commit zum Vergleich." >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "$range" ]]; then
+  echo "::error::Snapshot guard konnte den Vergleichsbereich nicht bestimmen." >&2
+  exit 1
+fi
+
+name_only=$(git diff --name-only --diff-filter=ACDMRTUXB $range)
+name_status=$(git diff --name-status --diff-filter=ACDMRTUXB $range)
+
+snapshot_targets=(
+  "vectors/stwo/mini/params.bin"
+  "vectors/stwo/mini/public_inputs.bin"
+  "vectors/stwo/mini/public_digest.hex"
+  "vectors/stwo/mini/proof.bin"
+  "vectors/stwo/mini/proof_report.json"
+  "vectors/stwo/mini/roots.json"
+  "vectors/stwo/mini/challenges.json"
+  "vectors/stwo/mini/indices.json"
+)
+
+mapfile -t diff_paths <<<"$name_only"
+
+declare -a snapshot_files=()
+params_changed=false
+
+declare -A status_cache=()
+while IFS=$'\t' read -r status path extra; do
+  [[ -z "$status" ]] && continue
+  case "$status" in
+    R*)
+      [[ -n "$extra" ]] && status_cache["$extra"]="${status} (from ${path})"
+      status_cache["$path"]="${status}"
+      ;;
+    C*)
+      [[ -n "$extra" ]] && status_cache["$extra"]="${status} (from ${path})"
+      status_cache["$path"]="${status}"
+      ;;
+    *)
+      status_cache["$path"]="$status"
+      ;;
+  esac
+  if [[ "$status" == '??' ]]; then
+    status_cache["$path"]="untracked"
+  fi
+done <<<"$name_status"
+
+for path in "${diff_paths[@]}"; do
+  [[ -z "$path" ]] && continue
+  for target in "${snapshot_targets[@]}"; do
+    if [[ "$path" == "$target" ]]; then
+      snapshot_files+=("$path")
+      [[ "$path" == "vectors/stwo/mini/params.bin" ]] && params_changed=true
+      continue 2
+    fi
+  done
+  if [[ "$path" == tests/snapshots* || "$path" =~ ^tests/snapshots/ ]]; then
+    snapshot_files+=("$path")
+    continue
+  fi
+done
+
+if (( ${#snapshot_files[@]} > 0 )); then
+  mapfile -t snapshot_files < <(printf '%s\n' "${snapshot_files[@]}" | awk '!seen[$0]++')
+fi
+
+if (( ${#snapshot_files[@]} == 0 )); then
+  echo "Keine Snapshot-Änderungen gefunden – Guard PASS."
+  exit 0
+fi
+
+proof_version_file="src/proof/types.rs"
+
+if ! git ls-tree -r HEAD -- "$proof_version_file" >/dev/null 2>&1; then
+  echo "::error::PROOF_VERSION-Quelle '$proof_version_file' nicht gefunden. Bitte definieren und Guard aktualisieren." >&2
+  exit 1
+fi
+
+if ! git ls-tree -r "$base_commit" -- "$proof_version_file" >/dev/null 2>&1; then
+  echo "::error::PROOF_VERSION-Quelle '$proof_version_file' existiert nicht im Basis-Commit. Bitte Definition hinzufügen und Guard anpassen." >&2
+  exit 1
+fi
+
+extract_version() {
+  local commit=$1
+  git show "${commit}:${proof_version_file}" 2>/dev/null | \
+    sed -n 's/^[[:space:]]*pub[[:space:]]\+const[[:space:]]\+PROOF_VERSION[^=]*=[[:space:]]*\([0-9]\+\)[[:space:]]*;.*/\1/p' | head -n1
+}
+
+old_version=$(extract_version "$base_commit")
+new_version=$(extract_version HEAD)
+
+if [[ -z "$old_version" || -z "$new_version" ]]; then
+  echo "::error::Konnte PROOF_VERSION nicht aus '${proof_version_file}' extrahieren. Bitte sicherstellen, dass dort 'pub const PROOF_VERSION: u16 = <N>;' definiert ist." >&2
+  exit 1
+fi
+
+if [[ "$old_version" == "$new_version" ]]; then
+  echo "Snapshot-Guard FAIL: Snapshots geändert, aber PROOF_VERSION unverändert (${new_version})." >&2
+  echo "Betroffene Dateien:" >&2
+  for path in "${snapshot_files[@]}"; do
+    status="${status_cache[$path]:-unbekannt}"
+    echo " - ${path} (${status})" >&2
+  done
+  echo >&2
+  echo "To-Dos:" >&2
+  echo "  • Erhöhe PROOF_VERSION in ${proof_version_file} (aktuell ${new_version}, erwarteter neuer Wert: $((new_version + 1)) oder passend zur Änderung)." >&2
+  echo "  • Ergänze CHANGELOG.md um einen Eintrag mit Datum und kurzem Hinweis auf die PROOF-ABI-/Snapshot-Änderung." >&2
+  echo "  • Committe Snapshot-Update, PROOF_VERSION-Bump und CHANGELOG-Eintrag gemeinsam." >&2
+  exit 2
+fi
+
+changelog_touched=false
+docs_touched=false
+for path in "${diff_paths[@]}"; do
+  [[ -z "$path" ]] && continue
+  [[ "$path" == "CHANGELOG.md" ]] && changelog_touched=true
+  [[ "$path" == docs/* ]] && docs_touched=true
+done
+
+if [[ "$changelog_touched" != true ]]; then
+  echo "Snapshot-Guard FAIL: Snapshots & PROOF_VERSION geändert, aber CHANGELOG.md nicht aktualisiert." >&2
+  echo "Betroffene Dateien:" >&2
+  for path in "${snapshot_files[@]}"; do
+    status="${status_cache[$path]:-unbekannt}"
+    echo " - ${path} (${status})" >&2
+  done
+  echo >&2
+  echo "To-Dos:" >&2
+  echo "  • Füge in CHANGELOG.md einen Eintrag hinzu: Datum, neue PROOF_VERSION (${old_version} → ${new_version}), kurzer ABI-Hinweis." >&2
+  echo "  • Committe Snapshot-Update, PROOF_VERSION-Bump und CHANGELOG-Eintrag gemeinsam." >&2
+  exit 3
+fi
+
+if ! git diff $range -- CHANGELOG.md | grep -E '^\+.*PROOF_VERSION' >/dev/null 2>&1; then
+  echo "Snapshot-Guard FAIL: CHANGELOG.md enthält keinen neuen Hinweis auf die PROOF_VERSION-Erhöhung." >&2
+  echo "Betroffene Dateien:" >&2
+  for path in "${snapshot_files[@]}"; do
+    status="${status_cache[$path]:-unbekannt}"
+    echo " - ${path} (${status})" >&2
+  done
+  echo >&2
+  echo "To-Dos:" >&2
+  echo "  • Ergänze CHANGELOG.md um einen Eintrag mit explizitem PROOF_VERSION-Hinweis (z. B. 'PROOF_VERSION++', 'Proof-ABI geändert')." >&2
+  echo "  • Committe Snapshot-Update, PROOF_VERSION-Bump und CHANGELOG-Eintrag gemeinsam." >&2
+  exit 4
+fi
+
+if [[ "$params_changed" == true && "$docs_touched" != true ]]; then
+  echo "::warning::vectors/stwo/mini/params.bin geändert, aber keine Aktualisierung in docs/ gefunden. Bitte prüfe, ob eine Notiz notwendig ist."
+fi
+
+echo "Snapshots geändert, PROOF_VERSION ${old_version} → ${new_version} erkannt und CHANGELOG aktualisiert – Guard PASS."
+exit 0

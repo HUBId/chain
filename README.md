@@ -152,6 +152,7 @@ cargo run --no-default-features --features backend-plonky3 -- start --mode node 
 ### ZK-Backend Features
 
 - `backend-rpp-stark` — optional, stable-only backend gated for Rust 1.79. The feature wires in the `rpp-stark` verifier stack; follow-up PRs will land the adapter layer, verifier integration, and interop coverage before enabling it in production paths.
+- Optionales Backend `backend-rpp-stark` (vendored in `vendor/rpp-stark/`).
 
 **Toggle rollout feature gates**
 

@@ -1,0 +1,5 @@
+---
+source: tests/fail_matrix/fri.rs
+expression: issue
+---
+None

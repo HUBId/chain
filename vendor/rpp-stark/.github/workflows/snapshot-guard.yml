@@ -1,0 +1,21 @@
+name: Snapshot Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  snapshot-guard:
+    name: snapshot-guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Snapshot guard check
+        run: scripts/ci/snapshot_guard_check

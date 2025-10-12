@@ -1,0 +1,32 @@
+name: release-on-tag
+
+on:
+  push:
+    tags:
+      - rpp-stark-v*
+
+jobs:
+  release:
+    name: Build & Draft Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --locked
+
+      - name: Dry-run publish
+        run: cargo publish --locked --dry-run
+
+      - name: Create GitHub release draft
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          body_path: docs/RELEASE_NOTES.md
+          tag_name: ${{ github.ref_name }}

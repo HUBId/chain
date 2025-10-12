@@ -1,0 +1,6 @@
+---
+source: tests/ser_primitives.rs
+assertion_line: 71
+expression: hex
+---
+ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab 07

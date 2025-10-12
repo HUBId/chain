@@ -1,0 +1,80 @@
+---
+source: tests/params_roundtrip.rs
+expression: "&hisec"
+---
+{
+  "params_version": 2,
+  "field": "Bn254",
+  "hash": {
+    "Rescue": {
+      "parameter_set": 1
+    }
+  },
+  "lde": {
+    "blowup": 16,
+    "order": "ColMajor",
+    "coset_tag": 5782993836944082993
+  },
+  "fri": {
+    "r": 5,
+    "queries": 48,
+    "domain_log2": 26,
+    "folding": "Coset",
+    "num_layers": 6
+  },
+  "merkle": {
+    "leaf_encoding": "Big",
+    "leaf_width": 8,
+    "arity": "Quaternary",
+    "domain_sep": 5209910827612129619
+  },
+  "transcript": {
+    "protocol_tag": 6004514686866311507,
+    "seed": [
+      82,
+      80,
+      80,
+      45,
+      83,
+      84,
+      65,
+      82,
+      75,
+      45,
+      72,
+      73,
+      83,
+      69,
+      67,
+      45,
+      88,
+      49,
+      54,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      95,
+      48,
+      48
+    ],
+    "challenge_bounds": {
+      "minimum": 24,
+      "maximum": 96
+    }
+  },
+  "proof": {
+    "version": 2,
+    "max_size_kb": 768
+  },
+  "security": {
+    "target_bits": 128,
+    "soundness_slack_bits": 32
+  }
+}

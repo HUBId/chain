@@ -1,0 +1,40 @@
+---
+source: src/air/example/lfsr.rs
+assertion_line: 502
+expression: inputs.digest()
+---
+[
+  3,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  8,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+]
+
