@@ -21,7 +21,7 @@ Test selection:
   --integration             Run integration tests (`cargo test --tests`)
   --doc                     Run documentation tests
   --all                     Run all test suites (default if none selected)
-  --backend <name>          Run the suites for a specific backend (default|stwo|plonky3)
+  --backend <name>          Run the suites for a specific backend (default|stwo|plonky3|rpp-stark)
 
 Build options:
   --release                 Test using the release profile
@@ -36,9 +36,10 @@ Build options:
   --                        Pass the remaining arguments directly to cargo
 
 Backends:
-  default   Use the workspace default backend configuration
-  stwo      Force the `prover-stwo` feature only
-  plonky3   Force the `backend-plonky3` feature only
+  default    Use the workspace default backend configuration
+  stwo       Force the `prover-stwo` feature only
+  plonky3    Force the `backend-plonky3` feature only
+  rpp-stark  Force the `backend-rpp-stark` feature
 USAGE
 }
 
@@ -81,7 +82,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       case "$2" in
-        default|stwo|plonky3)
+        default|stwo|plonky3|rpp-stark)
           BACKENDS+=("$2")
           ;;
         *)
@@ -181,7 +182,7 @@ if [[ ${#SUITES_SELECTED[@]} -eq 0 ]]; then
 fi
 
 if [[ ${#BACKENDS[@]} -eq 0 ]]; then
-  BACKENDS=(default)
+  BACKENDS=(default rpp-stark)
 fi
 
 run_suite() {
@@ -198,6 +199,9 @@ run_suite() {
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")
+      ;;
+    rpp-stark)
+      backend_args=("--features" "backend-rpp-stark")
       ;;
     *)
       echo "error: unsupported backend '$backend'" >&2

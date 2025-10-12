@@ -12,7 +12,7 @@ The project currently depends on the `nightly-2024-06-20` Rust toolchain. Releas
 
 ### Update Process
 
-1. Run the full validation suite (`scripts/build.sh`, `scripts/test.sh`, `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`).
+1. Run the full validation suite (`scripts/build.sh`, `scripts/test.sh --all --integration`, `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`).
 2. Execute the stable validation path with `RUSTUP_TOOLCHAIN=1.79.0` to compare results.
 3. Update documentation (README, CONTRIBUTING, MIGRATION) if toolchain requirements change.
 4. Announce the outcome in the release communication channel and update the tracking issues.
