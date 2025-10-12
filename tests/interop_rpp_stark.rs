@@ -42,19 +42,21 @@ fn interop_verify_golden_vector_ok() -> anyhow::Result<()> {
     assert_eq!(digest.to_hex(), expected_digest, "public digest mismatch");
 
     let verifier = RppStarkVerifier::new();
-    if verifier.is_ready() {
-        let report = verifier.verify_golden_vector(&params, &public_inputs, &proof)?;
-        assert_eq!(report.backend(), verifier.backend_name());
-        assert!(report.is_verified(), "golden proof should verify");
-    } else {
-        let error = verifier
-            .verify_golden_vector(&params, &public_inputs, &proof)
-            .expect_err("stub verifier should report backend availability");
-        assert!(matches!(
-            error,
-            rpp_verifier::RppStarkVerifierError::BackendUnavailable(_)
-        ));
-    }
+    assert!(verifier.is_ready(), "backend wiring should be complete");
+
+    let report = verifier.verify_golden_vector(&params, &public_inputs, &proof)?;
+    assert_eq!(report.backend(), verifier.backend_name());
+    assert!(report.is_verified(), "golden proof should verify");
+    assert!(report.params_ok(), "params stage should succeed");
+    assert!(report.public_ok(), "public-input stage should succeed");
+    assert!(report.merkle_ok(), "merkle stage should succeed");
+    assert!(report.fri_ok(), "fri stage should succeed");
+    assert!(report.composition_ok(), "composition stage should succeed");
+    assert_eq!(
+        report.total_bytes() as usize,
+        proof.len(),
+        "reported proof length must match provided bytes"
+    );
 
     Ok(())
 }

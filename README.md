@@ -154,6 +154,8 @@ cargo run --no-default-features --features backend-plonky3 -- start --mode node 
 
 - `backend-rpp-stark` — optional Rust 1.79-gated verifier stack, activate via `cargo build --features backend-rpp-stark` (vendored in `vendor/rpp-stark/`).
 
+Aktiviert man das Feature, steht die `RppStarkVerifier`-Fassade zur Verfügung, die Proofs prüft und einen strukturierten `RppStarkVerificationReport` mit Stage-Flags (`params`, `public`, `merkle`, `fri`, `composition`) zurückliefert. Details zum Reporting und den abgebildeten Prüfschritten finden sich in `docs/blueprints/rpp_stark_integration.md`.
+
 **Toggle rollout feature gates**
 
 ```toml
