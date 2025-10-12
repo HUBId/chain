@@ -68,6 +68,9 @@ are ready for staging.
 4. **Data retention & backups.** Take coordinated backups of ledger state,
    timetoke snapshots, and proof caches prior to each promotion. Confirm restore
    procedures against staging nodes.
+5. **Publish the storage recovery runbook.** Link operators to the Firewood
+   recovery steps for WAL replay, snapshot restoration, and pruning proof
+   validation so maintenance windows have a vetted rollback plan.【F:docs/storage_recovery.md†L1-L53】
 
 ## 5. Communication Plan
 
