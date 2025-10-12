@@ -32,6 +32,7 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 
 ## 4. CI/CD-Integration
 - **GitHub Actions Pipeline**:
+  - `scripts/test.sh --all --integration` (runs unit/integration/doc suites across default + RPP-STARK backends)
   - `cargo fmt --all -- --check`
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test --all-targets`

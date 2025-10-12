@@ -66,11 +66,14 @@ Run targeted test suites via `scripts/test.sh` – it enforces `-D warnings` and
 supports backend-specific feature matrices.
 
 ```bash
-# Run unit and integration tests (default behaviour)
-scripts/test.sh
+# Run unit, integration, and doc tests across the default + RPP-STARK backends
+scripts/test.sh --all --integration
 
 # Run only the integration tests using the Plonky3 backend
 scripts/test.sh --integration --backend plonky3
+
+# Force the RPP-STARK backend explicitly (unit tests only in this example)
+scripts/test.sh --unit --backend rpp-stark
 
 # Execute documentation tests with the release profile
 scripts/test.sh --doc --release
