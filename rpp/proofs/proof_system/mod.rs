@@ -1,3 +1,5 @@
+use std::convert::TryFrom;
+
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
@@ -10,6 +12,11 @@ use crate::types::{
 use crate::plonky3::verifier::Plonky3Verifier;
 use crate::stwo::aggregation::StateCommitmentSnapshot;
 use crate::stwo::verifier::NodeVerifier;
+
+#[cfg(feature = "backend-rpp-stark")]
+use crate::zk::rpp_verifier::{
+    RppStarkVerificationReport, RppStarkVerifier, RppStarkVerifierError,
+};
 
 /// High-level abstraction for wallet-side proof generation that any backend must satisfy.
 pub trait ProofProver {
@@ -122,7 +129,12 @@ pub struct ProofVerifierRegistry {
     stwo: NodeVerifier,
     #[cfg(feature = "backend-plonky3")]
     plonky3: Plonky3Verifier,
+    #[cfg(feature = "backend-rpp-stark")]
+    rpp_stark: RppStarkProofVerifier,
 }
+
+#[cfg(feature = "backend-rpp-stark")]
+const DEFAULT_RPP_STARK_PROOF_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
 impl Default for ProofVerifierRegistry {
     fn default() -> Self {
@@ -130,11 +142,124 @@ impl Default for ProofVerifierRegistry {
             stwo: NodeVerifier::new(),
             #[cfg(feature = "backend-plonky3")]
             plonky3: Plonky3Verifier::default(),
+            #[cfg(feature = "backend-rpp-stark")]
+            rpp_stark: RppStarkProofVerifier::new(
+                u32::try_from(DEFAULT_RPP_STARK_PROOF_LIMIT_BYTES)
+                    .expect("default proof limit fits in u32"),
+            ),
         }
     }
 }
 
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone)]
+struct RppStarkProofVerifier {
+    inner: RppStarkVerifier,
+    max_proof_size_bytes: u32,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl RppStarkProofVerifier {
+    fn new(max_proof_size_bytes: u32) -> Self {
+        Self {
+            inner: RppStarkVerifier::new(),
+            max_proof_size_bytes,
+        }
+    }
+
+    fn verify_with_report(
+        &self,
+        proof: &ChainProof,
+        kind: &'static str,
+    ) -> ChainResult<RppStarkVerificationReport> {
+        let artifact = proof.expect_rpp_stark()?;
+        self.inner
+            .verify(
+                artifact.params(),
+                artifact.public_inputs(),
+                artifact.proof(),
+                self.max_proof_size_bytes,
+            )
+            .map_err(|err| self.map_error(kind, err))
+    }
+
+    fn verify_block_bundle(&self, bundle: &BlockProofBundle) -> ChainResult<()> {
+        for proof in &bundle.transaction_proofs {
+            self.verify_with_report(proof, "transaction")?;
+        }
+        self.verify_with_report(&bundle.state_proof, "state")?;
+        self.verify_with_report(&bundle.pruning_proof, "pruning")?;
+        self.verify_with_report(&bundle.recursive_proof, "recursive")?;
+        Ok(())
+    }
+
+    fn map_error(&self, kind: &'static str, error: RppStarkVerifierError) -> ChainError {
+        match error {
+            RppStarkVerifierError::VerificationFailed { failure, report } => ChainError::Crypto(
+                format!("rpp-stark {kind} verification failed: {failure}; report={report}"),
+            ),
+            other => ChainError::Crypto(format!("rpp-stark {kind} verification error: {other}")),
+        }
+    }
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl ProofVerifier for RppStarkProofVerifier {
+    fn system(&self) -> ProofSystemKind {
+        ProofSystemKind::RppStark
+    }
+
+    fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "transaction").map(|_| ())
+    }
+
+    fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "identity").map(|_| ())
+    }
+
+    fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "state").map(|_| ())
+    }
+
+    fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "pruning").map(|_| ())
+    }
+
+    fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "recursive").map(|_| ())
+    }
+
+    fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "uptime").map(|_| ())
+    }
+
+    fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.verify_with_report(proof, "consensus").map(|_| ())
+    }
+}
+
 impl ProofVerifierRegistry {
+    /// Construct a registry with a custom proof-size limit for RPP-STARK verification.
+    pub fn with_max_proof_size_bytes(max_bytes: usize) -> ChainResult<Self> {
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let _ = max_bytes;
+
+        #[cfg(feature = "backend-rpp-stark")]
+        let limit = u32::try_from(max_bytes).map_err(|_| {
+            ChainError::Config(
+                "max_proof_size_bytes exceeds u32::MAX and cannot be forwarded to rpp-stark".into(),
+            )
+        })?;
+
+        Ok(Self {
+            stwo: NodeVerifier::new(),
+            #[cfg(feature = "backend-plonky3")]
+            plonky3: Plonky3Verifier::default(),
+            #[cfg(feature = "backend-rpp-stark")]
+            rpp_stark: RppStarkProofVerifier::new(limit),
+        })
+    }
+
     /// Construct a new registry with default verifier instances for each
     /// backend.
     pub fn new() -> Self {
@@ -146,6 +271,8 @@ impl ProofVerifierRegistry {
             ProofSystemKind::Stwo => Ok(&self.stwo),
             #[cfg(feature = "backend-plonky3")]
             ProofSystemKind::Plonky3 => Ok(&self.plonky3),
+            #[cfg(feature = "backend-rpp-stark")]
+            ProofSystemKind::RppStark => Ok(&self.rpp_stark),
             other => Err(ChainError::Crypto(format!(
                 "unsupported proof system {:?} in verifier registry",
                 other
@@ -155,6 +282,21 @@ impl ProofVerifierRegistry {
 
     fn proof_verifier(&self, proof: &ChainProof) -> ChainResult<&dyn ProofVerifier> {
         self.system_verifier(proof.system())
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn verify_rpp_stark_with_report(
+        &self,
+        proof: &ChainProof,
+        proof_kind: &'static str,
+    ) -> ChainResult<RppStarkVerificationReport> {
+        if proof.system() != ProofSystemKind::RppStark {
+            return Err(ChainError::Crypto(format!(
+                "expected RPP-STARK proof, received {:?}",
+                proof.system()
+            )));
+        }
+        self.rpp_stark.verify_with_report(proof, proof_kind)
     }
 
     fn ensure_bundle_system(
@@ -254,6 +396,23 @@ impl ProofVerifierRegistry {
                 self.ensure_bundle_system(bundle, ProofSystemKind::Plonky3)?;
                 self.plonky3
                     .verify_bundle(bundle, expected_previous_commitment)?;
+                Ok(())
+            }
+            #[cfg(feature = "backend-rpp-stark")]
+            ProofSystemKind::RppStark => {
+                self.ensure_bundle_system(bundle, ProofSystemKind::RppStark)?;
+                let _ = state_commitments;
+                let _ = expected_previous_commitment;
+                for proof in identity_proofs {
+                    self.proof_verifier(proof)?.verify_identity(proof)?;
+                }
+                for proof in uptime_proofs {
+                    self.proof_verifier(proof)?.verify_uptime(proof)?;
+                }
+                for proof in consensus_proofs {
+                    self.proof_verifier(proof)?.verify_consensus(proof)?;
+                }
+                self.rpp_stark.verify_block_bundle(bundle)?;
                 Ok(())
             }
             other => Err(ChainError::Crypto(format!(

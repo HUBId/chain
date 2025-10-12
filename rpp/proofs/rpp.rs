@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 
+use crate::proof_backend::Blake2sHasher;
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::proof_backend::{
     ProofSystemKind as BackendProofSystemKind, WitnessBytes, WitnessHeader,
 };
-use crate::state::{StoredUtxo, merkle::compute_merkle_root};
+use crate::state::{merkle::compute_merkle_root, StoredUtxo};
 use crate::types::Address;
 
 /// 32-byte digest representing a commitment root.
@@ -63,6 +63,7 @@ pub enum ProofSystemKind {
     Plonky3,
     Plonky2,
     Halo2,
+    RppStark,
 }
 
 impl From<ProofSystemKind> for BackendProofSystemKind {
@@ -72,6 +73,7 @@ impl From<ProofSystemKind> for BackendProofSystemKind {
             ProofSystemKind::Plonky3 => BackendProofSystemKind::Plonky3,
             ProofSystemKind::Plonky2 => BackendProofSystemKind::Plonky2,
             ProofSystemKind::Halo2 => BackendProofSystemKind::Halo2,
+            ProofSystemKind::RppStark => BackendProofSystemKind::RppStark,
         }
     }
 }

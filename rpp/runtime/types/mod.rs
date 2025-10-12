@@ -17,7 +17,12 @@ pub use identity::{
     AttestedIdentityRequest, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
     IdentityDeclaration, IdentityGenesis, IdentityProof,
 };
-pub use proofs::{BlockProofBundle, ChainProof, TransactionProofBundle};
+pub use proofs::{
+    BlockProofBundle, ChainProof,
+    #[cfg(feature = "backend-rpp-stark")]
+    RppStarkProof,
+    TransactionProofBundle,
+};
 pub use transaction::{SignedTransaction, Transaction, TransactionEnvelope};
 pub use uptime::{UptimeClaim, UptimeProof};
 

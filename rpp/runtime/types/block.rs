@@ -5,12 +5,12 @@ use std::str::FromStr;
 
 use hex;
 
+use crate::proof_backend::Blake2sHasher;
 use ed25519_dalek::{PublicKey, Signature};
 use malachite::Natural;
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 
-use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, verify_vrf};
+use crate::consensus::{verify_vrf, BftVoteKind, ConsensusCertificate, SignedBftVote};
 use crate::crypto::{
     signature_from_hex, signature_to_hex, verify_signature, vrf_public_key_from_hex,
 };
@@ -28,8 +28,8 @@ use crate::vrf::VrfProof;
 use serde_json;
 
 use super::{
-    Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
     identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
+    Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
 };
 
 const PRUNING_WITNESS_DOMAIN: &[u8] = b"rpp-pruning-proof";
@@ -149,6 +149,7 @@ impl From<ReputationAudit> for ReputationUpdate {
 pub enum ProofSystem {
     Stwo,
     Plonky3,
+    RppStark,
 }
 
 impl Default for ProofSystem {
@@ -330,10 +331,19 @@ impl RecursiveProof {
             ));
         }
 
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        if matches!(system, ProofSystem::RppStark) {
+            return Err(ChainError::Crypto(
+                "RPP-STARK backend not enabled for recursive proof verification".into(),
+            ));
+        }
+
         let derived = match &proof {
             ChainProof::Stwo(_) => ProofSystem::Stwo,
             #[cfg(feature = "backend-plonky3")]
             ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => ProofSystem::RppStark,
         };
 
         if derived != system {
@@ -383,6 +393,8 @@ impl RecursiveProof {
             ChainProof::Stwo(_) => ProofSystem::Stwo,
             #[cfg(feature = "backend-plonky3")]
             ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => ProofSystem::RppStark,
         };
         let instance = Self {
             system,
@@ -406,6 +418,10 @@ impl RecursiveProof {
                 .ok_or_else(|| {
                     ChainError::Crypto("plonky3 recursive proof payload missing commitment".into())
                 }),
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => Err(ChainError::Crypto(
+                "rpp-stark recursive proofs do not encode commitments".into(),
+            )),
         }
     }
 
@@ -421,6 +437,9 @@ impl RecursiveProof {
         match self.system {
             ProofSystem::Stwo => self.verify_stwo(header, pruning, previous),
             ProofSystem::Plonky3 => self.verify_plonky3(previous),
+            ProofSystem::RppStark => Err(ChainError::Crypto(
+                "rpp-stark recursive proof verification is not supported".into(),
+            )),
         }?;
         Ok(())
     }
@@ -430,6 +449,8 @@ impl RecursiveProof {
             ChainProof::Stwo(_) => ProofSystem::Stwo,
             #[cfg(feature = "backend-plonky3")]
             ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => ProofSystem::RppStark,
         };
         if derived != self.system {
             return Err(ChainError::Crypto(
@@ -738,6 +759,8 @@ impl Block {
                     ChainProof::Stwo(stark) => Some(stark.commitment.as_str()),
                     #[cfg(feature = "backend-plonky3")]
                     ChainProof::Plonky3(_) => None,
+                    #[cfg(feature = "backend-rpp-stark")]
+                    ChainProof::RppStark(_) => None,
                 });
             let identity_proofs: Vec<ChainProof> = self
                 .identities
@@ -906,6 +929,8 @@ impl Block {
                         let witness = Self::decode_plonky3_transaction_witness(value)?;
                         witness.transaction.verify()?;
                     }
+                    #[cfg(feature = "backend-rpp-stark")]
+                    ChainProof::RppStark(_) => {}
                 }
             }
         } else {
@@ -932,6 +957,8 @@ impl Block {
                             ));
                         }
                     }
+                    #[cfg(feature = "backend-rpp-stark")]
+                    ChainProof::RppStark(_) => {}
                 }
             }
         }
@@ -1311,16 +1338,16 @@ impl StoredBlock {
 mod tests {
     use super::*;
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
+        evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::errors::ChainError;
-    use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
+    use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
+    use crate::proof_backend::Blake2sHasher;
     use crate::reputation::{ReputationWeights, Tier};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
-        ExecutionTrace, StarkCircuit,
         consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower},
         identity::{IdentityCircuit, IdentityWitness},
         pruning::PruningWitness,
@@ -1328,6 +1355,7 @@ mod tests {
         state::StateWitness,
         string_to_field,
         uptime::UptimeWitness,
+        ExecutionTrace, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1335,12 +1363,11 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::{
-        AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
-        IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
     use rand::rngs::OsRng;
-    use crate::proof_backend::Blake2sHasher;
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
@@ -1876,21 +1903,17 @@ mod tests {
 
         let mut missing_witness_block = block.clone();
         missing_witness_block.module_witnesses = ModuleWitnessBundle::default();
-        assert!(
-            missing_witness_block
-                .verify_consensus(Some(&prev_block), &registry)
-                .is_err()
-        );
+        assert!(missing_witness_block
+            .verify_consensus(Some(&prev_block), &registry)
+            .is_err());
 
         let mut mismatched_witness_block = block.clone();
         let mut mismatched_bundle = ModuleWitnessBundle::default();
         mismatched_bundle.record_consensus(ConsensusWitness::new(1, 1, vec!["cafebabe".repeat(4)]));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
-        assert!(
-            mismatched_witness_block
-                .verify_consensus(Some(&prev_block), &registry)
-                .is_err()
-        );
+        assert!(mismatched_witness_block
+            .verify_consensus(Some(&prev_block), &registry)
+            .is_err());
     }
 
     #[test]
