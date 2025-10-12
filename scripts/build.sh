@@ -21,7 +21,7 @@ Options:
   --release                 Build artifacts in release mode (alias for --profile release)
   --profile <name>          Build with the named cargo profile
   --feature-set <name>      Use a predefined feature matrix (default|minimal|full)
-  --backend <name>          Build for a specific backend (default|stwo|plonky3)
+  --backend <name>          Build for a specific backend (default|stwo|plonky3|rpp-stark)
   --features <features>     Pass a custom feature list to cargo
   --no-default-features     Disable default features
   --all-features            Enable all features
@@ -114,7 +114,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       case "$2" in
-        default|stwo|plonky3)
+        default|stwo|plonky3|rpp-stark)
           BACKEND="$2"
           ;;
         *)
@@ -157,6 +157,9 @@ case "$BACKEND" in
     ;;
   plonky3)
     BACKEND_ARGS=("--features" "backend-plonky3")
+    ;;
+  rpp-stark)
+    BACKEND_ARGS=("--features" "backend-rpp-stark")
     ;;
   *)
     echo "error: unsupported backend '$BACKEND'" >&2
