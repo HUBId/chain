@@ -114,6 +114,9 @@ threaten block production.
 3. **Telemetry regression alerts.** Fail the deployment if telemetry snapshots
    stop at the prior height or if encoded payloads cannot be emitted; both
    symptoms surface via the telemetry loop warnings.【F:src/node.rs†L478-L517】
+4. **Stage the storage recovery plan.** Keep the Firewood recovery runbook
+   handy so operators can replay WALs, restore snapshots, and verify pruning
+   checkpoints when a node requires manual repair.【F:docs/storage_recovery.md†L1-L53】
 
 With these guardrails, operators can ship the blueprint implementation safely
 and maintain real-time visibility into proof generation, verification, and
