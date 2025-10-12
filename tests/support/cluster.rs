@@ -3,19 +3,19 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use libp2p::PeerId;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{broadcast, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep};
+use tokio::time::{sleep, Instant};
 
 use rpp_chain::config::{GenesisAccount, NodeConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
-use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
+use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
@@ -97,6 +97,13 @@ pub struct TestCluster {
 impl TestCluster {
     /// Boot a new cluster containing `count` validators.
     pub async fn start(count: usize) -> Result<Self> {
+        Self::start_with(count, |_, _| Ok(())).await
+    }
+
+    pub async fn start_with<F>(count: usize, mut configure: F) -> Result<Self>
+    where
+        F: FnMut(&mut NodeConfig, usize) -> Result<()>,
+    {
         if count < 3 {
             return Err(anyhow!("test cluster requires at least three nodes"));
         }
@@ -137,6 +144,8 @@ impl TestCluster {
             load_or_generate_vrf_keypair(&config.vrf_key_path)
                 .with_context(|| format!("failed to initialise VRF key for node {index}"))?;
             let address = address_from_public_key(&keypair.public);
+
+            configure(&mut config, index)?;
 
             prepared.push((index, temp_dir, config, address, listen_addr));
         }
