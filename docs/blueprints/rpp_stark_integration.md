@@ -59,6 +59,7 @@ Ein einheitlicher Einstieg im `chain`-Verifier, der `rpp_stark::verify()` kapsel
   - Aufruf `rpp_stark::verify(...)`.
   - Fehler-Mapping: präzise Übersetzung auf Node-Error.
   - Report: Flags (`params_ok`, `public_ok`, `merkle_ok`, `fri_ok`, ggf. `composition_ok`), `total_bytes`.
+  - Ergebnis-Struct `RppStarkVerificationReport` mit Stage-Flags + Byte-Länge exponieren und für Operator/Telemetry dokumentieren.
 
 **DoD**: Smoke-Test ruft `verify()` durch, liefert Report; keine Änderung am Default-Backend.
 
