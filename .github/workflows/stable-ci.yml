@@ -18,16 +18,19 @@ jobs:
           toolchain: 1.79.0
           components: clippy, rustfmt
       - name: Build workspace (stable)
+        id: stable_build
         run: |
-          set +e
-          cargo +1.79.0 build --workspace --all-features
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable build failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
-          else
-            echo "Stable build succeeded on Rust 1.79.0."
-          fi
-          exit 0
+          cargo +1.79.0 build --workspace --all-features |& tee stable-build.log
+      - name: Warn on stable build failure
+        if: failure() && steps.stable_build.outcome == 'failure'
+        run: echo "::warning::Stable build failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+      - name: Upload stable build log
+        if: failure() && steps.stable_build.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-build-log
+          path: stable-build.log
+          if-no-files-found: ignore
 
   test:
     runs-on: ubuntu-latest
@@ -40,16 +43,19 @@ jobs:
           toolchain: 1.79.0
           components: clippy, rustfmt
       - name: Test workspace (stable)
+        id: stable_test
         run: |
-          set +e
-          cargo +1.79.0 test --workspace --all-features
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable test suite failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
-          else
-            echo "Stable test suite succeeded on Rust 1.79.0."
-          fi
-          exit 0
+          cargo +1.79.0 test --workspace --all-features |& tee stable-test.log
+      - name: Warn on stable test failure
+        if: failure() && steps.stable_test.outcome == 'failure'
+        run: echo "::warning::Stable test suite failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+      - name: Upload stable test log
+        if: failure() && steps.stable_test.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-test-log
+          path: stable-test.log
+          if-no-files-found: ignore
 
   clippy:
     runs-on: ubuntu-latest
@@ -62,16 +68,19 @@ jobs:
           toolchain: 1.79.0
           components: clippy, rustfmt
       - name: Clippy (stable, warnings as errors)
+        id: stable_clippy
         run: |
-          set +e
-          cargo +1.79.0 clippy --workspace --all-features -D warnings
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable clippy failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
-          else
-            echo "Stable clippy passed on Rust 1.79.0."
-          fi
-          exit 0
+          cargo +1.79.0 clippy --workspace --all-features -D warnings |& tee stable-clippy.log
+      - name: Warn on stable clippy failure
+        if: failure() && steps.stable_clippy.outcome == 'failure'
+        run: echo "::warning::Stable clippy failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+      - name: Upload stable clippy log
+        if: failure() && steps.stable_clippy.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-clippy-log
+          path: stable-clippy.log
+          if-no-files-found: ignore
 
   fmt:
     runs-on: ubuntu-latest
@@ -84,13 +93,16 @@ jobs:
           toolchain: 1.79.0
           components: clippy, rustfmt
       - name: Format check (stable)
+        id: stable_fmt
         run: |
-          set +e
-          cargo +1.79.0 fmt --all -- --check
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::warning::Stable fmt check failed on Rust 1.79.0 (exit code $status). Track blockers in docs/STABLE_MIGRATION_REPORT.md."
-          else
-            echo "Stable fmt check passed on Rust 1.79.0."
-          fi
-          exit 0
+          cargo +1.79.0 fmt --all -- --check |& tee stable-fmt.log
+      - name: Warn on stable fmt failure
+        if: failure() && steps.stable_fmt.outcome == 'failure'
+        run: echo "::warning::Stable fmt check failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."
+      - name: Upload stable fmt log
+        if: failure() && steps.stable_fmt.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stable-fmt-log
+          path: stable-fmt.log
+          if-no-files-found: ignore
