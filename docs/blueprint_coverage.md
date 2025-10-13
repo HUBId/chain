@@ -53,7 +53,9 @@ dispatches verification through the shared traits used by wallets and nodes, so
   be inspected alongside consensus data.【F:src/vrf/mod.rs†L360-L494】【F:src/ledger.rs†L100-L214】【F:src/node.rs†L1140-L1214】
 * Node status and telemetry snapshots include VRF selection metrics covering the
   submission pool size, accepted validator count, rejections, and fallback
-  usage so operators can monitor participation over time.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】【F:src/node.rs†L489-L548】
+  usage so operators can monitor participation over time, alongside
+  `verifier_metrics.per_backend` counters and cumulative durations so backend
+  regressions surface immediately in exported snapshots.【F:src/node.rs†L57-L125】【F:rpp/runtime/node.rs†L220-L238】【F:rpp/runtime/node.rs†L1615-L1626】
 
 ## Circuit Palette
 

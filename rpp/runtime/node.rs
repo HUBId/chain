@@ -48,7 +48,7 @@ use crate::ledger::{
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_backend::Blake2sHasher;
-use crate::proof_system::{ProofProver, ProofVerifierRegistry};
+use crate::proof_system::{ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
@@ -230,6 +230,7 @@ pub struct NodeTelemetrySnapshot {
     pub consensus: ConsensusStatus,
     pub mempool: MempoolStatus,
     pub timetoke_params: TimetokeParams,
+    pub verifier_metrics: VerifierMetricsSnapshot,
 }
 
 pub struct Node {
@@ -552,9 +553,9 @@ mod tests {
     use crate::stwo::proof::{
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
-    use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
     #[cfg(feature = "backend-rpp-stark")]
     use crate::types::RppStarkProof;
+    use crate::types::{ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof};
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
@@ -1616,6 +1617,7 @@ impl NodeInner {
         let node = self.node_status()?;
         let consensus = self.consensus_status()?;
         let mempool = self.mempool_status()?;
+        let verifier_metrics = self.verifiers.metrics_snapshot();
         Ok(NodeTelemetrySnapshot {
             release_channel: self.config.rollout.release_channel,
             feature_gates: self.config.rollout.feature_gates.clone(),
@@ -1623,6 +1625,7 @@ impl NodeInner {
             consensus,
             mempool,
             timetoke_params: self.ledger.timetoke_params(),
+            verifier_metrics,
         })
     }
 
@@ -3659,13 +3662,13 @@ pub(super) async fn dispatch_telemetry_snapshot(
 
 #[cfg(test)]
 mod telemetry_tests {
+    #[cfg(feature = "backend-rpp-stark")]
+    use super::NodeInner;
     use super::{
         dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
         MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
-        TimetokeParams,
+        TimetokeParams, VerifierMetricsSnapshot,
     };
-    #[cfg(feature = "backend-rpp-stark")]
-    use super::NodeInner;
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
     #[cfg(feature = "backend-rpp-stark")]
@@ -3675,11 +3678,11 @@ mod telemetry_tests {
     use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
-    #[cfg(feature = "backend-rpp-stark")]
-    use std::time::Duration;
     use std::net::SocketAddr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    #[cfg(feature = "backend-rpp-stark")]
+    use std::time::Duration;
     use tokio::sync::oneshot;
     use tracing_test::traced_test;
 
@@ -3698,6 +3701,7 @@ mod telemetry_tests {
         };
         let client = Client::new();
         let snapshot = sample_snapshot(42);
+        assert!(snapshot.verifier_metrics.per_backend.contains_key("stwo"));
         let last_height = RwLock::new(None);
 
         send_telemetry_with_tracking(&client, &config, &snapshot, &last_height)
@@ -3750,6 +3754,7 @@ mod telemetry_tests {
         };
         let client = Client::new();
         let snapshot = sample_snapshot(7);
+        assert!(snapshot.verifier_metrics.per_backend.contains_key("stwo"));
         let last_height = RwLock::new(None);
 
         send_telemetry_with_tracking(&client, &config, &snapshot, &last_height)
@@ -3786,7 +3791,9 @@ mod telemetry_tests {
         assert!(logs_contain("public_inputs_bytes=3"));
         assert!(logs_contain("payload_bytes=4"));
         assert!(logs_contain("verify_duration_ms=37"));
-        assert!(logs_contain("error=\"cryptography error: verification failed\""));
+        assert!(logs_contain(
+            "error=\"cryptography error: verification failed\""
+        ));
     }
 
     #[tokio::test]
@@ -3795,6 +3802,7 @@ mod telemetry_tests {
         let endpoint = format!("http://{addr}/");
         let client = Client::new();
         let snapshot = sample_snapshot(99);
+        assert!(snapshot.verifier_metrics.per_backend.contains_key("stwo"));
 
         dispatch_telemetry_snapshot(&client, Some(&endpoint), &snapshot)
             .await
@@ -3844,6 +3852,7 @@ mod telemetry_tests {
                 uptime_proofs: Vec::new(),
             },
             timetoke_params: TimetokeParams::default(),
+            verifier_metrics: VerifierMetricsSnapshot::default(),
         }
     }
 
