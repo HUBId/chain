@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: ["", "backend-rpp-stark"]
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -17,10 +20,14 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Build workspace (stable)
+      - name: "Build workspace (stable, features='${{ matrix.feature || 'default' }}')"
         id: stable_build
         run: |
-          cargo +1.79.0 build --workspace --all-features |& tee stable-build.log
+          if [ -n "${{ matrix.feature }}" ]; then
+            cargo +1.79.0 build --workspace --features "${{ matrix.feature }}" |& tee stable-build.log
+          else
+            cargo +1.79.0 build --workspace |& tee stable-build.log
+          fi
       - name: Warn on stable build failure
         if: failure() && steps.stable_build.outcome == 'failure'
         run: echo "::warning::Stable build failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."
@@ -34,6 +41,9 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: ["", "backend-rpp-stark"]
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -42,10 +52,14 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Test workspace (stable)
+      - name: "Test workspace (stable, features='${{ matrix.feature || 'default' }}')"
         id: stable_test
         run: |
-          cargo +1.79.0 test --workspace --all-features |& tee stable-test.log
+          if [ -n "${{ matrix.feature }}" ]; then
+            cargo +1.79.0 test --workspace --features "${{ matrix.feature }}" |& tee stable-test.log
+          else
+            cargo +1.79.0 test --workspace |& tee stable-test.log
+          fi
       - name: Warn on stable test failure
         if: failure() && steps.stable_test.outcome == 'failure'
         run: echo "::warning::Stable test suite failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."
@@ -59,6 +73,9 @@ jobs:
 
   clippy:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        feature: ["", "backend-rpp-stark"]
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -67,10 +84,14 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
-      - name: Clippy (stable, warnings as errors)
+      - name: "Clippy (stable, features='${{ matrix.feature || 'default' }}')"
         id: stable_clippy
         run: |
-          cargo +1.79.0 clippy --workspace --all-features -D warnings |& tee stable-clippy.log
+          if [ -n "${{ matrix.feature }}" ]; then
+            cargo +1.79.0 clippy --workspace --features "${{ matrix.feature }}" -D warnings |& tee stable-clippy.log
+          else
+            cargo +1.79.0 clippy --workspace -D warnings |& tee stable-clippy.log
+          fi
       - name: Warn on stable clippy failure
         if: failure() && steps.stable_clippy.outcome == 'failure'
         run: echo "::warning::Stable clippy failed on Rust 1.79.0. Track blockers in docs/STABLE_MIGRATION_REPORT.md."

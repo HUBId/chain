@@ -11,6 +11,13 @@
 //! [`node::Node`] and [`node::NodeHandle`] to operate it, and the supporting modules for consensus,
 //! networking, proofs, and state synchronization.
 
+rustversion::not_nightly! {
+    #[cfg(feature = "prover-stwo")]
+    compile_error!(
+        "STWO Prover requires Rust nightly (portable_simd / array_chunks etc.). Build without these features or use Nightly."
+    );
+}
+
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 #[path = "../rpp/rpc/api.rs"]

@@ -1,0 +1,40 @@
+name: Nightly Prover
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  prover:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: clippy, rustfmt
+      - name: Build workspace (nightly, prover-stwo)
+        run: cargo +nightly build --workspace --features prover-stwo
+      - name: Build workspace (nightly, prover-stwo + SIMD)
+        run: cargo +nightly build --workspace --features "prover-stwo,prover-stwo-simd"
+      - name: Test workspace (nightly, prover-stwo)
+        run: cargo +nightly test --workspace --features prover-stwo
+      - name: Clippy (nightly, prover-stwo)
+        run: cargo +nightly clippy --workspace --features prover-stwo -D warnings
+      - name: Fmt check (nightly, prover-stwo)
+        run: cargo +nightly fmt --all -- --check
+      - name: Package nightly prover binary
+        run: |
+          mkdir -p artifacts
+          cp target/debug/rpp-chain artifacts/chain-nightly-prover
+          (cd artifacts && sha256sum chain-nightly-prover > chain-nightly-prover.sha256)
+      - name: Upload nightly prover artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-nightly-prover
+          path: artifacts
+          if-no-files-found: error

@@ -1,7 +1,7 @@
 //! Consensus engine coordinating the validator set and proof backends.
 //!
 //! # STWO feature toggles
-//! * `prover-stwo` enables the STWO backend for real proof verification.
+//! * `prover-stwo` enables the STWO backend for real proof verification (requires Rust nightly).
 //! * `prover-stwo-simd` layers on `prover-stwo` and allows the STWO fork to use
 //!   its SIMD optimisations. Enable it when the runtime environment guarantees
 //!   the necessary vector extensions; omit it to rely on the portable scalar
@@ -12,6 +12,13 @@
 //! Toggling these options only requires adjusting Cargo feature flags; no code
 //! snippets or manual wiring is needed.
 use std::fmt;
+
+rustversion::not_nightly! {
+    #[cfg(feature = "prover-stwo")]
+    compile_error!(
+        "STWO Prover requires Rust nightly (portable_simd / array_chunks etc.). Build without these features or use Nightly."
+    );
+}
 
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
