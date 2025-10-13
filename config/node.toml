@@ -1,5 +1,7 @@
 # Default RPP Chain configuration
 
+config_version = "1.0"
+
 data_dir = "./data"
 key_path = "./keys/node.toml"
 p2p_key_path = "./keys/p2p.toml"

@@ -35,8 +35,16 @@ impl Default for P2pConfig {
     }
 }
 
+pub const NODE_CONFIG_VERSION: &str = "1.0";
+
+fn default_node_config_version() -> String {
+    NODE_CONFIG_VERSION.to_string()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
+    #[serde(default = "default_node_config_version")]
+    pub config_version: String,
     pub data_dir: PathBuf,
     pub key_path: PathBuf,
     #[serde(default = "default_p2p_key_path")]
@@ -161,6 +169,17 @@ impl NodeConfig {
     }
 
     pub fn validate(&self) -> ChainResult<()> {
+        let version = self.config_version.trim();
+        if version.is_empty() {
+            return Err(ChainError::Config(
+                "node configuration requires config_version to be set".into(),
+            ));
+        }
+        if version != NODE_CONFIG_VERSION {
+            return Err(ChainError::Config(format!(
+                "node configuration config_version {version} is not supported; expected {NODE_CONFIG_VERSION}"
+            )));
+        }
         if self.block_time_ms == 0 {
             return Err(ChainError::Config(
                 "node configuration requires block_time_ms to be greater than 0".into(),
@@ -228,6 +247,7 @@ impl Default for NodeConfig {
         p2p.peerstore_path = default_peerstore_path();
         p2p.gossip_path = default_gossip_state_path();
         Self {
+            config_version: default_node_config_version(),
             data_dir: PathBuf::from("./data"),
             key_path: PathBuf::from("./keys/node.toml"),
             p2p_key_path: default_p2p_key_path(),
@@ -310,6 +330,40 @@ mod tests {
     fn node_config_validation_accepts_defaults() {
         let config = NodeConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn node_config_validation_rejects_mismatched_config_version() {
+        let mut config = NodeConfig::default();
+        config.config_version = "2.0".to_string();
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("config_version"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_missing_config_version() {
+        let mut config = NodeConfig::default();
+        config.config_version.clear();
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("config_version"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 
     #[test]
