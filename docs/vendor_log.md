@@ -23,3 +23,9 @@ Weitere Schritte:
 | Crate | Version(en) | Zielverzeichnis | Notizen |
 |-------|-------------|-----------------|---------|
 | axum | 0.8.4 | `vendor/axum/0.8.4/` | Archiv `axum-main-1.zip` entpackt; Workspace umfasst `axum-core` und `axum-macros` für Pfadabhängigkeiten. |
+
+## Batch 3 – Numerische Utilities (2025-09-25)
+
+| Crate | Version(en) | Zielverzeichnis | Notizen |
+|-------|-------------|-----------------|---------|
+| malachite | 0.4.18 | `vendor/malachite/0.4.18/src/` | Komplettes Git-Checkout als Quelle genutzt; Workspace benötigt Pfad auf das `src`-Unterverzeichnis. |
