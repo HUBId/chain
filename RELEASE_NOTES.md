@@ -2,7 +2,7 @@
 
 ## Nightly Dependency & Update Process
 
-The project currently depends on the `nightly-2024-06-20` Rust toolchain. Releases must confirm that this nightly pin still compiles, formats, and lints cleanly before the artefact is tagged. The migration plan targets Rust `1.79` as the next stable baseline; consult `MIGRATION.md` for the readiness checklist.
+The project currently depends on the `1.79.0` Rust toolchain. Releases must confirm that this stable pin still compiles, formats, and lints cleanly before the artefact is tagged. The migration plan continues to track the `1.79.0` baseline; consult `MIGRATION.md` for the readiness checklist.
 
 ### Risks
 
