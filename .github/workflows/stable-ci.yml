@@ -92,6 +92,8 @@ jobs:
         with:
           toolchain: 1.79.0
           components: clippy, rustfmt
+      - name: Check documentation toolchain references
+        run: scripts/ci/check_docs.sh
       - name: Format check (stable)
         id: stable_fmt
         run: |

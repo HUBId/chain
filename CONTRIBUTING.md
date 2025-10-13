@@ -6,6 +6,9 @@
   - Install the pinned stable toolchain with `rustup toolchain install 1.79.0`.
   - `rustup` will auto-select it through `rust-toolchain.toml`; ensure the `rustfmt` and `clippy` components are added (`rustup component add --toolchain 1.79.0 rustfmt clippy`).
   - CI runs `cargo +1.79.0 clippy --workspace --all-features -D warnings`; mirror this locally before submitting a PR.
+- **Documentation sync**
+  - Run `scripts/ci/check_docs.sh` before pushing to confirm `RELEASE_NOTES.md` mentions the pinned toolchain.
+  - The stable fmt job executes the same check and will fail if the docs drift from `rust-toolchain.toml`.
 - **Nightly scan (optional checks)**
   - Run `scripts/ci/stable_scan` to generate `docs/STABLE_MIGRATION_REPORT.md` when auditing for regressions.
   - The GitHub Actions workflow publishes the same report in warn mode; once it stays empty we will flip it to blocking.
