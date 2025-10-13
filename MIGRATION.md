@@ -1,5 +1,28 @@
 # Migration Guide
 
+## Node Configuration Schema Versioning
+
+Use the following checklist when the `NodeConfig` schema changes:
+
+- [ ] Bump `NODE_CONFIG_VERSION` in `rpp/runtime/config.rs` and update the
+      `config_version` field in sample configs (e.g. `config/node.toml`).
+- [ ] Document operator-facing changes and migration steps in `docs/` and the
+      release notes.
+- [ ] Provide an upgrade procedure that includes backing up the previous
+      configuration and running validation via `rpp-chain config validate` (or
+      the equivalent CLI entry point).
+- [ ] Communicate the new version to validators and ensure automation or
+      orchestration scripts fail-fast on mismatches.
+
+### Hot-reload evaluation
+
+`NodeConfig` is loaded during start-up and its values are wired into subsystems
+such as networking, storage, and consensus before the main runtime begins. The
+current runtime does not support re-initialising those components on the fly,
+so hot-reloading configuration files would not apply the updated values safely
+and could leave the process in an inconsistent state. Operators should restart
+the node after editing configuration files to pick up changes.
+
 ## Switching from Nightly to Stable
 
 Use the following checklist to track the stable readiness work:
