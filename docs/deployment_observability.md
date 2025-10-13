@@ -91,6 +91,18 @@ threaten block production.
    usage so dashboards can alert on declining VRF participation or repeated
    fallback elections.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】
 
+## Health Probes
+
+1. **Expose HTTP probes to your orchestrator.** Route Kubernetes or Nomad
+   liveness checks to `/health/live` and readiness checks to `/health/ready`;
+   liveness calls hit `NodeHandle::node_status` so they fail once the runtime
+   stops, while readiness reflects the active runtime mode (node, wallet,
+   orchestrator).【F:rpp/rpc/api.rs†L512-L558】
+2. **Retain `/health` for legacy smoke tests.** The existing endpoint still
+   returns the runtime role and address but does not surface failure states, so
+   migrate automation to the explicit probe paths to catch startup and shutdown
+   transitions.【F:rpp/rpc/api.rs†L559-L583】
+
 ## Observability Dashboards
 
 1. **Rollout status.** Dashboards should surface `release_channel`, feature

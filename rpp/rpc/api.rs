@@ -506,6 +506,8 @@ pub async fn serve(
 
     let mut router = Router::new()
         .route("/health", get(health))
+        .route("/health/live", get(health_live))
+        .route("/health/ready", get(health_ready))
         .route("/runtime/mode", get(runtime_mode).post(update_runtime_mode))
         .route("/ui/history", get(ui_history))
         .route("/ui/send/preview", post(ui_send_preview))
@@ -602,6 +604,31 @@ async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
         address,
         role: mode.as_str(),
     })
+}
+
+async fn health_live(State(state): State<ApiContext>) -> StatusCode {
+    match state.node_for_mode() {
+        Some(node) => match node.node_status() {
+            Ok(_) => StatusCode::OK,
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        },
+        None => StatusCode::OK,
+    }
+}
+
+async fn health_ready(State(state): State<ApiContext>) -> StatusCode {
+    let mode = state.current_mode();
+
+    let node_ready = !mode.includes_node() || state.node_enabled();
+    let wallet_ready = !mode.includes_wallet() || state.wallet_enabled();
+    let orchestrator_ready =
+        !matches!(mode, RuntimeMode::Validator) || state.orchestrator_enabled();
+
+    if node_ready && wallet_ready && orchestrator_ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    }
 }
 
 async fn runtime_mode(State(state): State<ApiContext>) -> Json<RuntimeModeResponse> {

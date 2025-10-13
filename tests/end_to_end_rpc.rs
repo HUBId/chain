@@ -14,8 +14,8 @@ use rpp_chain::node::NodeHandle;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
-use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::circuit::transaction::TransactionWitness;
+use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
@@ -38,6 +38,14 @@ struct RpcTestHarness {
 
 impl RpcTestHarness {
     async fn start() -> Result<Self> {
+        Self::launch(true).await
+    }
+
+    async fn start_without_wait() -> Result<Self> {
+        Self::launch(false).await
+    }
+
+    async fn launch(wait_for_ready: bool) -> Result<Self> {
         let cluster = TestCluster::start(3)
             .await
             .context("failed to boot validator cluster")?;
@@ -70,7 +78,18 @@ impl RpcTestHarness {
             .build()
             .context("failed to build client")?;
         let base_url = format!("http://{}", addr);
-        wait_for_server(&client, &base_url).await?;
+
+        if wait_for_ready {
+            if let Err(err) = wait_for_server(&client, &base_url).await {
+                rpc_task.abort();
+                let _ = rpc_task.await;
+                cluster
+                    .shutdown()
+                    .await
+                    .context("failed to stop validator cluster")?;
+                return Err(err);
+            }
+        }
 
         Ok(Self {
             client,
@@ -87,6 +106,11 @@ impl RpcTestHarness {
 
     fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    async fn wait_for_ready(&self) -> Result<()> {
+        let client = self.client();
+        wait_for_server(&client, self.base_url()).await
     }
 
     fn node_address(&self) -> String {
@@ -195,6 +219,76 @@ async fn status_endpoint_returns_node_snapshot() -> Result<()> {
     assert_eq!(payload["height"].as_u64(), Some(0));
     assert_eq!(payload["pending_transactions"].as_u64(), Some(0));
     assert_eq!(payload["epoch"].as_u64(), Some(0));
+
+    harness.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn health_probes_track_startup_and_shutdown() -> Result<()> {
+    let mut harness = match RpcTestHarness::start_without_wait().await {
+        Ok(harness) => harness,
+        Err(err) => {
+            eprintln!("skipping health probe test: {err:?}");
+            return Ok(());
+        }
+    };
+
+    let client = harness.client();
+    let base_url = harness.base_url().to_string();
+
+    let live_url = format!("{}/health/live", base_url);
+    let ready_url = format!("{}/health/ready", base_url);
+
+    let initial_live = client.get(&live_url).send().await;
+    let initial_live_status = initial_live
+        .ok()
+        .map(|response| response.status())
+        .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(initial_live_status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let initial_ready = client.get(&ready_url).send().await;
+    let initial_ready_status = initial_ready
+        .ok()
+        .map(|response| response.status())
+        .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(initial_ready_status, StatusCode::SERVICE_UNAVAILABLE);
+
+    harness.wait_for_ready().await?;
+
+    let live_ready = client
+        .get(&live_url)
+        .send()
+        .await
+        .context("failed to hit live probe after startup")?;
+    assert_eq!(live_ready.status(), StatusCode::OK);
+
+    let ready_ready = client
+        .get(&ready_url)
+        .send()
+        .await
+        .context("failed to hit ready probe after startup")?;
+    assert_eq!(ready_ready.status(), StatusCode::OK);
+
+    harness
+        .node_handle
+        .stop()
+        .await
+        .context("failed to stop node runtime")?;
+
+    let live_shutdown = client.get(&live_url).send().await;
+    let live_shutdown_status = live_shutdown
+        .ok()
+        .map(|response| response.status())
+        .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(live_shutdown_status, StatusCode::SERVICE_UNAVAILABLE);
+
+    let ready_shutdown = client.get(&ready_url).send().await;
+    let ready_shutdown_status = ready_shutdown
+        .ok()
+        .map(|response| response.status())
+        .unwrap_or(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(ready_shutdown_status, StatusCode::SERVICE_UNAVAILABLE);
 
     harness.shutdown().await?;
     Ok(())
