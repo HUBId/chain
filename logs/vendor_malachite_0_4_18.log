@@ -1,0 +1,23 @@
+[2025-10-13T19:12:11Z] [INFO] Archive /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate not found, downloading from https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-13T19:12:12Z] [INFO] Downloaded archive to /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-13T19:12:12Z] [INFO] Extracting /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-13T19:12:12Z] [INFO] Copied sources into /workspace/chain/vendor/malachite/0.4.18/src
+[2025-10-13T19:12:12Z] [WARN] Missing expected license file (LICENSE*)
+[2025-10-13T19:12:12Z] [INFO] No non-build paths needed removal
+[2025-10-13T19:12:12Z] [INFO] Generating file manifest at /workspace/chain/vendor/malachite/0.4.18/manifest/final_file_list.txt
+[2025-10-13T19:12:12Z] [INFO] Wrote 7 entries to manifest
+[2025-10-13T19:12:12Z] [INFO] Unpack and clean completed successfully
+[2025-10-13T19:12:36Z] [INFO] Extracting /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-13T19:12:36Z] [INFO] Copied sources into /workspace/chain/vendor/malachite/0.4.18/src
+[2025-10-13T19:12:36Z] [WARN] Missing expected license file (LICENSE*)
+[2025-10-13T19:12:36Z] [INFO] No non-build paths needed removal
+[2025-10-13T19:12:36Z] [INFO] Generating file manifest at /workspace/chain/vendor/malachite/0.4.18/manifest/final_file_list.txt
+[2025-10-13T19:12:36Z] [INFO] Wrote 7 entries to manifest
+[2025-10-13T19:12:36Z] [INFO] Unpack and clean completed successfully
+[2025-10-13T19:13:08Z] [INFO] Extracting /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-13T19:13:08Z] [INFO] Copied sources into /workspace/chain/vendor/malachite/0.4.18/src
+[2025-10-13T19:13:08Z] [WARN] Missing expected license file (LICENSE*)
+[2025-10-13T19:13:08Z] [INFO] No non-build paths needed removal
+[2025-10-13T19:13:08Z] [INFO] Generating file manifest at /workspace/chain/vendor/malachite/0.4.18/manifest/final_file_list.txt
+[2025-10-13T19:13:08Z] [INFO] Wrote 7 entries to manifest
+[2025-10-13T19:13:08Z] [INFO] Unpack and clean completed successfully

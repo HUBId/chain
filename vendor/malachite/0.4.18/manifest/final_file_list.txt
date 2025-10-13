@@ -1,0 +1,7 @@
+./.cargo_vcs_info.json
+./Cargo.lock
+./Cargo.toml
+./Cargo.toml.orig
+./README.md
+./katex-header.html
+./src/lib.rs

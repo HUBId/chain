@@ -1,0 +1,38 @@
+[package]
+name = "malachite"
+version = "0.4.18"
+authors = ["Mikhail Hogrefe <mikhailhogrefe@gmail.com>"]
+rust-version.workspace = true
+edition.workspace = true
+description = "Arbitrary-precision arithmetic, with efficient algorithms partially derived from GMP, FLINT, and MPFR."
+readme = "../README.md"
+homepage = "https://malachite.rs/"
+repository = "https://github.com/mhogrefe/malachite"
+license = "LGPL-3.0-only"
+keywords = ["mathematics", "math", "numerics", "bignum"]
+categories = ["mathematics"]
+
+[dependencies]
+malachite-base = { version = "0.4.18", default-features = false }
+malachite-nz = { version = "0.4.18", default-features = false, optional = true }
+malachite-q = { version = "0.4.18", default-features = false, optional = true }
+malachite-float = { version = "0.4.18", default-features = false, optional = true }
+serde = { version = "1.0.188", optional = true, features = ["derive"] }
+embed-doc-image = { version = "0.1.4", optional = true }
+
+[features]
+default = [ "naturals_and_integers", "rationals" ]
+enable_pyo3 = [ "malachite-nz/enable_pyo3" ]
+enable_serde = [ "malachite-nz/enable_serde", "malachite-q/enable_serde", "malachite-float/enable_serde" ]
+random = ["malachite-base/random", "malachite-nz/random", "malachite-q/random", "malachite-float/random"]
+32_bit_limbs = ["malachite-nz/32_bit_limbs", "malachite-q/32_bit_limbs", "malachite-float/32_bit_limbs"]
+
+naturals_and_integers = [ "malachite-nz" ]
+rationals = [ "malachite-q" ]
+floats = [ "malachite-float" ]
+
+[package.metadata.docs.rs]
+# docs.rs uses a nightly compiler, so by instructing it to use our `doc-images` feature we
+# ensure that it will render any images that we may have in inner attribute documentation.
+features = ["embed-doc-image", "random"]
+rustdoc-args = [ "--html-in-header", "katex-header.html" ]
