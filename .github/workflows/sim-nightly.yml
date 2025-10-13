@@ -14,6 +14,7 @@ jobs:
       CARGO_TERM_COLOR: always
       RUSTFLAGS: -D warnings
       CARGO_HOME: ${{ github.workspace }}/.cargo
+      CARGO_NET_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,6 +43,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+      # Offline nightly runs depend on the cache hit path to provide registry/git data locally.
       - name: Run ignored rpp-sim smoke tests
         run: |
           cargo test -p rpp-sim -- --ignored

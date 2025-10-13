@@ -4,6 +4,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   CARGO_HOME: ${{ github.workspace }}/.cargo
+  CARGO_NET_OFFLINE: "true"
 
 on:
   push:
@@ -13,6 +14,8 @@ on:
 jobs:
   chain-backends:
     runs-on: ubuntu-latest
+    env:
+      CARGO_NET_OFFLINE: "true"
     strategy:
       matrix:
         backend: [stwo, plonky3, rpp-stark]
@@ -36,6 +39,7 @@ jobs:
           mkdir -p "$CARGO_HOME"
       # Cache Cargo registry and build artifacts; updating Cargo.lock will bust the key.
       # Keep an eye on runtime after enabling the cache and tighten the path list if size grows.
+      # Offline cargo builds rely on these caches to avoid fetching over the network.
       - name: Cache cargo directories
         uses: actions/cache@v4
         with:
@@ -56,6 +60,7 @@ jobs:
     env:
       RPP_SIM_STATIC_KEY_SEED: ci-smoke
       RPP_SIM_REQUIRE_DETERMINISTIC: "0"
+      CARGO_NET_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,6 +81,7 @@ jobs:
           mkdir -p "$CARGO_HOME"
       # Share the same cache key so registry downloads and build output can be reused across jobs.
       # If cache misses start to dominate runtime, consider separating cargo registry vs target caches.
+      # Offline cargo doc/test invocations depend on the caches populated by previous steps.
       - name: Cache cargo directories
         uses: actions/cache@v4
         with:
