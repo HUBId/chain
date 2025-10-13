@@ -132,6 +132,49 @@ async fn rate_limit_exceeded_returns_429() {
 }
 
 #[tokio::test]
+async fn rate_limit_applies_to_mixed_routes() {
+    let app = build_rate_limited_app(Mode::Node, 2);
+
+    let status_ok = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_ok.status(), StatusCode::OK);
+
+    let validators_ok = app
+        .clone()
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/consensus/validators")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(validators_ok.status(), StatusCode::OK);
+
+    let third = app
+        .oneshot(
+            HttpRequest::builder()
+                .method(Method::GET)
+                .uri("/ledger/1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn ledger_returns_snapshot_for_height() {
     let app = build_app(Mode::Node);
 

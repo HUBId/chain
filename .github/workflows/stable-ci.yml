@@ -108,3 +108,17 @@ jobs:
           name: stable-fmt-log
           path: stable-fmt.log
           if-no-files-found: ignore
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.79.0
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit dependencies for advisories
+        run: cargo audit --deny warnings
