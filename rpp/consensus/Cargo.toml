@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.79"
 
 [features]
-default = ["prover-stwo"]
+default = []
 prover-stwo = ["prover-backend-interface/prover-stwo"]
 prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
 prover-mock = ["prover-backend-interface/prover-mock"]
@@ -17,3 +17,4 @@ tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 blake3 = "=1.8.2"
 libp2p = { version = "=0.54.1", default-features = false }
 prover-backend-interface = { path = "../zk/backend-interface" }
+rustversion = "1.0"

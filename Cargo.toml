@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.79"
 
 [features]
-default = ["prover-stwo"]
+default = []
 prover-stwo = [
     "dep:stwo",
     "prover-backend-interface/prover-stwo",
@@ -70,6 +70,7 @@ libp2p = { version = "=0.54.1", default-features = false, features = [
     "tokio",
     "yamux",
 ] }
+rustversion = "1.0"
 
 [workspace]
 members = [

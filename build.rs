@@ -11,11 +11,9 @@ fn main() {
         return;
     }
 
-    panic!(concat!(
-        "The `prover-stwo` feature requires the Rust nightly toolchain.\n",
-        "Please switch to a nightly toolchain (e.g. `rustup override set nightly`) ",
-        "or set `RUSTC_BOOTSTRAP=1` before building."
-    ));
+    panic!(
+        "STWO Prover requires Rust nightly (portable_simd / array_chunks etc.). Build without these features or use Nightly."
+    );
 }
 
 fn is_nightly_toolchain() -> bool {

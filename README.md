@@ -40,6 +40,17 @@ This workspace is pinned to `1.79.0` (stable) via `rust-toolchain.toml`. Install
 
 > ℹ️ Keep running validation passes against both channels so that the nightly dependency can be safely removed when the stable target is promoted.
 
+### Build Profiles
+
+| Profile | Toolchain | Features | Description |
+| --- | --- | --- | --- |
+| Stable Verify (default) | Rust 1.79 | `default`, `backend-rpp-stark` (optional) | Ships verifier-only binaries and keeps the entire workspace on the MSRV. The STWO prover features are disabled by default, so `cargo build` and `cargo test` work out of the box on stable. |
+| Nightly Prover | Rust nightly | `prover-stwo`, `prover-stwo-simd` (optional) | Re-enables the vendored STWO prover. Guard rails emit a compile error on stable when these features are toggled, so opt into them only with `cargo +nightly build --features prover-stwo`. |
+
+The guard rail message reads: “STWO Prover requires Rust nightly (portable_simd / array_chunks etc.). Build without these features or use Nightly.” It is emitted from the root crate, the STWO backend crate, and all consumers that forward the `prover-stwo` feature.
+
+CI mirrors this split via two blocking workflows: `stable-ci.yml` exercises the default and `backend-rpp-stark` verifier paths on Rust 1.79, while `nightly-prover.yml` builds, tests, lints, and formats the workspace on nightly with `prover-stwo` (and the optional SIMD toggle).
+
 ## Getting Started
 
 ### Prerequisites

@@ -1,5 +1,16 @@
 # ZK-Backends
 
+## Feature-Matrix
+
+| Feature flag | Toolchain | Default? | Beschreibung |
+| --- | --- | --- | --- |
+| *(none)* | Rust 1.79 | ✅ | Verifier-only Build. `cargo build` und `cargo test` laufen ohne zusätzliche Flags und ohne STWO-Prover. |
+| `backend-rpp-stark` | Rust 1.79 | ⏹️ (opt-in) | Aktiviert den RPP-STARK-Verifier. Wird im Stable-CI-Job als eigener Matrix-Eintrag getestet. |
+| `prover-stwo` | Rust nightly | ⏹️ (opt-in) | Reintegriert den STWO-Prover. Guardrails (`compile_error!`) verhindern Builds auf Stable und verweisen auf den Nightly-Pfad. |
+| `prover-stwo,prover-stwo-simd` | Rust nightly | ⏹️ (opt-in) | Ergänzt den STWO-Prover um das optionale SIMD-Profil. Wird im Nightly-Prover-Workflow zusätzlich gebaut. |
+
+Der Guardrail-Text lautet: “STWO Prover requires Rust nightly (portable_simd / array_chunks etc.). Build without these features or use Nightly.”
+
 ## rpp-stark (stable)
 
 ### Aktivierung
