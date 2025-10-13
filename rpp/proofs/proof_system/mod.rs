@@ -1,4 +1,7 @@
-use std::convert::TryFrom;
+use std::collections::BTreeMap;
+use std::convert::{TryFrom, TryInto};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
@@ -17,6 +20,8 @@ use crate::stwo::verifier::NodeVerifier;
 use crate::zk::rpp_verifier::{
     RppStarkVerificationReport, RppStarkVerifier, RppStarkVerifierError,
 };
+use parking_lot::Mutex;
+use serde::Serialize;
 
 /// High-level abstraction for wallet-side proof generation that any backend must satisfy.
 pub trait ProofProver {
@@ -121,11 +126,122 @@ pub trait ProofVerifier {
     fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()>;
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct BackendVerificationMetrics {
+    pub accepted: u64,
+    pub rejected: u64,
+    pub total_duration_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct VerifierMetricsSnapshot {
+    pub per_backend: BTreeMap<String, BackendVerificationMetrics>,
+}
+
+impl Default for VerifierMetricsSnapshot {
+    fn default() -> Self {
+        let mut per_backend = BTreeMap::new();
+        for system in registry_backends() {
+            per_backend.insert(
+                proof_system_label(system).to_string(),
+                BackendVerificationMetrics::default(),
+            );
+        }
+        Self { per_backend }
+    }
+}
+
+#[derive(Clone)]
+struct VerifierMetrics {
+    inner: Arc<Mutex<BTreeMap<String, BackendVerificationMetrics>>>,
+}
+
+impl VerifierMetrics {
+    fn new() -> Self {
+        let mut per_backend = BTreeMap::new();
+        for system in registry_backends() {
+            per_backend.insert(
+                proof_system_label(system).to_string(),
+                BackendVerificationMetrics::default(),
+            );
+        }
+        Self {
+            inner: Arc::new(Mutex::new(per_backend)),
+        }
+    }
+
+    fn record(&self, system: ProofSystemKind, duration: Duration, succeeded: bool) {
+        let label = proof_system_label(system).to_string();
+        let mut guard = self.inner.lock();
+        let entry = guard
+            .entry(label)
+            .or_insert_with(BackendVerificationMetrics::default);
+        if succeeded {
+            entry.accepted = entry.accepted.saturating_add(1);
+        } else {
+            entry.rejected = entry.rejected.saturating_add(1);
+        }
+        entry.total_duration_ms = entry
+            .total_duration_ms
+            .saturating_add(duration_to_millis(duration));
+    }
+
+    fn snapshot(&self) -> VerifierMetricsSnapshot {
+        let guard = self.inner.lock();
+        let mut per_backend = VerifierMetricsSnapshot::default().per_backend;
+        for (label, metrics) in guard.iter() {
+            per_backend
+                .entry(label.clone())
+                .or_insert_with(BackendVerificationMetrics::default)
+                .clone_from(metrics);
+        }
+        VerifierMetricsSnapshot { per_backend }
+    }
+}
+
+impl Default for VerifierMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn duration_to_millis(duration: Duration) -> u64 {
+    duration
+        .as_millis()
+        .min(u128::from(u64::MAX))
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn registry_backends() -> Vec<ProofSystemKind> {
+    let mut systems = vec![ProofSystemKind::Stwo];
+    #[cfg(feature = "backend-plonky3")]
+    {
+        systems.push(ProofSystemKind::Plonky3);
+    }
+    #[cfg(feature = "backend-rpp-stark")]
+    {
+        systems.push(ProofSystemKind::RppStark);
+    }
+    systems
+}
+
+fn proof_system_label(system: ProofSystemKind) -> &'static str {
+    match system {
+        ProofSystemKind::Stwo => "stwo",
+        ProofSystemKind::Plonky3 => "plonky3",
+        ProofSystemKind::Plonky2 => "plonky2",
+        ProofSystemKind::Halo2 => "halo2",
+        ProofSystemKind::RppStark => "rpp-stark",
+    }
+}
+
 /// Maintains verifier instances for all supported proof backends and provides
 /// ergonomic dispatch helpers for consumers that only work with the unified
 /// [`ChainProof`] abstraction.
 #[derive(Clone)]
 pub struct ProofVerifierRegistry {
+    metrics: VerifierMetrics,
     stwo: NodeVerifier,
     #[cfg(feature = "backend-plonky3")]
     plonky3: Plonky3Verifier,
@@ -139,6 +255,7 @@ const DEFAULT_RPP_STARK_PROOF_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 impl Default for ProofVerifierRegistry {
     fn default() -> Self {
         Self {
+            metrics: VerifierMetrics::default(),
             stwo: NodeVerifier::new(),
             #[cfg(feature = "backend-plonky3")]
             plonky3: Plonky3Verifier::default(),
@@ -252,6 +369,7 @@ impl ProofVerifierRegistry {
         })?;
 
         Ok(Self {
+            metrics: VerifierMetrics::default(),
             stwo: NodeVerifier::new(),
             #[cfg(feature = "backend-plonky3")]
             plonky3: Plonky3Verifier::default(),
@@ -296,7 +414,9 @@ impl ProofVerifierRegistry {
                 proof.system()
             )));
         }
-        self.rpp_stark.verify_with_report(proof, proof_kind)
+        self.record_backend(ProofSystemKind::RppStark, || {
+            self.rpp_stark.verify_with_report(proof, proof_kind)
+        })
     }
 
     fn ensure_bundle_system(
@@ -331,37 +451,37 @@ impl ProofVerifierRegistry {
 
     /// Verify a transaction proof using the appropriate backend.
     pub fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_transaction(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_transaction(proof))
     }
 
     /// Verify an identity proof using the appropriate backend.
     pub fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_identity(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_identity(proof))
     }
 
     /// Verify a state transition proof using the appropriate backend.
     pub fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_state(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_state(proof))
     }
 
     /// Verify a pruning proof using the appropriate backend.
     pub fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_pruning(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_pruning(proof))
     }
 
     /// Verify a recursive aggregation proof using the appropriate backend.
     pub fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_recursive(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_recursive(proof))
     }
 
     /// Verify an uptime proof using the appropriate backend.
     pub fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_uptime(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_uptime(proof))
     }
 
     /// Verify a consensus proof using the appropriate backend.
     pub fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.proof_verifier(proof)?.verify_consensus(proof)
+        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_consensus(proof))
     }
 
     /// Verify the collection of proofs tied to a block and ensure they all use
@@ -378,25 +498,27 @@ impl ProofVerifierRegistry {
         match bundle.state_proof.system() {
             ProofSystemKind::Stwo => {
                 self.ensure_bundle_system(bundle, ProofSystemKind::Stwo)?;
-                self.stwo.verify_bundle(
-                    identity_proofs,
-                    &bundle.transaction_proofs,
-                    uptime_proofs,
-                    consensus_proofs,
-                    &bundle.state_proof,
-                    &bundle.pruning_proof,
-                    &bundle.recursive_proof,
-                    state_commitments,
-                    expected_previous_commitment,
-                )?;
-                Ok(())
+                self.record_backend(ProofSystemKind::Stwo, || {
+                    self.stwo.verify_bundle(
+                        identity_proofs,
+                        &bundle.transaction_proofs,
+                        uptime_proofs,
+                        consensus_proofs,
+                        &bundle.state_proof,
+                        &bundle.pruning_proof,
+                        &bundle.recursive_proof,
+                        state_commitments,
+                        expected_previous_commitment,
+                    )
+                })
             }
             #[cfg(feature = "backend-plonky3")]
             ProofSystemKind::Plonky3 => {
                 self.ensure_bundle_system(bundle, ProofSystemKind::Plonky3)?;
-                self.plonky3
-                    .verify_bundle(bundle, expected_previous_commitment)?;
-                Ok(())
+                self.record_backend(ProofSystemKind::Plonky3, || {
+                    self.plonky3
+                        .verify_bundle(bundle, expected_previous_commitment)
+                })
             }
             #[cfg(feature = "backend-rpp-stark")]
             ProofSystemKind::RppStark => {
@@ -404,21 +526,50 @@ impl ProofVerifierRegistry {
                 let _ = state_commitments;
                 let _ = expected_previous_commitment;
                 for proof in identity_proofs {
-                    self.proof_verifier(proof)?.verify_identity(proof)?;
+                    self.verify_identity(proof)?;
                 }
                 for proof in uptime_proofs {
-                    self.proof_verifier(proof)?.verify_uptime(proof)?;
+                    self.verify_uptime(proof)?;
                 }
                 for proof in consensus_proofs {
-                    self.proof_verifier(proof)?.verify_consensus(proof)?;
+                    self.verify_consensus(proof)?;
                 }
-                self.rpp_stark.verify_block_bundle(bundle)?;
-                Ok(())
+                self.record_backend(ProofSystemKind::RppStark, || {
+                    self.rpp_stark.verify_block_bundle(bundle)
+                })
             }
             other => Err(ChainError::Crypto(format!(
                 "unsupported proof system {:?} for block bundle",
                 other
             ))),
         }
+    }
+
+    pub fn metrics_snapshot(&self) -> VerifierMetricsSnapshot {
+        self.metrics.snapshot()
+    }
+
+    fn verify_with_metrics<F, T>(&self, proof: &ChainProof, verify_fn: F) -> ChainResult<T>
+    where
+        F: FnOnce(&dyn ProofVerifier, &ChainProof) -> ChainResult<T>,
+    {
+        let verifier = self.proof_verifier(proof)?;
+        let system = verifier.system();
+        let started = Instant::now();
+        let result = verify_fn(verifier, proof);
+        let success = result.is_ok();
+        self.metrics.record(system, started.elapsed(), success);
+        result
+    }
+
+    fn record_backend<F, T>(&self, system: ProofSystemKind, action: F) -> ChainResult<T>
+    where
+        F: FnOnce() -> ChainResult<T>,
+    {
+        let started = Instant::now();
+        let result = action();
+        let success = result.is_ok();
+        self.metrics.record(system, started.elapsed(), success);
+        result
     }
 }

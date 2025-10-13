@@ -111,6 +111,10 @@ threaten block production.
 2. **Proof pipeline health.** Alert when telemetry snapshots stall (no new
    height) or when proof cache utilization exceeds capacity, since recursive
    proofs are required for block production.【F:src/node.rs†L489-L517】【F:src/node.rs†L823-L827】
+3. **Verifier health.** Track `verifier_metrics.per_backend` counts and
+   cumulative durations to catch spikes in rejection rates or verification
+   latency regressions; notify operators when any backend reports sustained
+   failures or multi-second runtimes.【F:rpp/runtime/node.rs†L220-L238】【F:rpp/proofs/proof_system/mod.rs†L150-L260】
 3. **Consensus availability.** Track uptime/consensus proof counts per block in
    telemetry to ensure validators continue submitting the expected auxiliary
    proofs; deviations indicate failing wallets or byzantine participants.【F:src/node.rs†L489-L517】
