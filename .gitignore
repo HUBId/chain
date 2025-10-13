@@ -4,3 +4,4 @@ data/
 keys/
 rpp/*/Cargo.lock
 storage-firewood/Cargo.lock
+vendor/**/*.crate
