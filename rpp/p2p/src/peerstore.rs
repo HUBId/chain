@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use libp2p::Multiaddr;
 use libp2p::PeerId;
 use libp2p::{identity, multihash::Multihash};
@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 use crate::tier::TierLevel;
-use schnorrkel::{Signature, keys::PublicKey as Sr25519PublicKey};
+use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
 
 #[derive(Debug, Error)]
 pub enum PeerstoreError {
@@ -366,6 +366,17 @@ impl Peerstore {
             record.clear_ban_if_elapsed();
             record.clone()
         })
+    }
+
+    pub fn known_peers(&self) -> Vec<PeerRecord> {
+        let mut guard = self.peers.write();
+        guard
+            .values_mut()
+            .map(|record| {
+                record.clear_ban_if_elapsed();
+                record.clone()
+            })
+            .collect()
     }
 
     pub fn reputation_snapshot(&self, peer_id: &PeerId) -> Option<ReputationSnapshot> {
@@ -898,5 +909,21 @@ mod tests {
         store
             .record_handshake(peer_id, &payload)
             .expect("handshake should be accepted");
+    }
+
+    #[test]
+    fn known_peers_exposes_records() {
+        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let peer = PeerId::random();
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/12345".parse().expect("addr");
+        store.record_address(peer, addr.clone()).expect("address");
+
+        let known = store.known_peers();
+        assert!(known.iter().any(|record| record.peer_id == peer));
+        let entry = known
+            .into_iter()
+            .find(|record| record.peer_id == peer)
+            .expect("record");
+        assert!(entry.addresses.contains(&addr));
     }
 }

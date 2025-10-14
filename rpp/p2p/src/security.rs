@@ -97,6 +97,7 @@ impl RateLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::thread;
 
     #[test]
@@ -116,5 +117,34 @@ mod tests {
         assert!(!limiter.allow(peer));
         thread::sleep(Duration::from_millis(60));
         assert!(limiter.allow(peer));
+    }
+
+    proptest! {
+        #[test]
+        fn replay_window_evicts_old_entries(window in 1usize..64, overflow in 1usize..16) {
+            let mut protector = ReplayProtector::with_capacity(window);
+            let effective = protector.capacity;
+            let total = effective + overflow;
+            for index in 0..total {
+                let digest = blake3::hash(&index.to_le_bytes());
+                prop_assert!(protector.observe(digest));
+            }
+            for index in 0..overflow {
+                let digest = blake3::hash(&index.to_le_bytes());
+                prop_assert!(protector.observe(digest));
+            }
+        }
+
+        #[test]
+        fn rate_limiter_bounds_messages(limit in 1u64..8) {
+            let mut limiter = RateLimiter::new(Duration::from_millis(20), limit);
+            let peer = PeerId::random();
+            for _ in 0..limit {
+                prop_assert!(limiter.allow(peer));
+            }
+            prop_assert!(!limiter.allow(peer));
+            thread::sleep(Duration::from_millis(25));
+            prop_assert!(limiter.allow(peer));
+        }
     }
 }
