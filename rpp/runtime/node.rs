@@ -70,7 +70,7 @@ use crate::vrf::{
 };
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
-use rpp_p2p::{HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
+use rpp_p2p::{GossipTopic, HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
@@ -233,6 +233,52 @@ pub struct NodeTelemetrySnapshot {
     pub verifier_metrics: VerifierMetricsSnapshot,
 }
 
+struct WitnessChannels {
+    blocks: broadcast::Sender<Vec<u8>>,
+    votes: broadcast::Sender<Vec<u8>>,
+    proofs: broadcast::Sender<Vec<u8>>,
+    snapshots: broadcast::Sender<Vec<u8>>,
+    meta: broadcast::Sender<Vec<u8>>,
+}
+
+impl WitnessChannels {
+    fn new(capacity: usize) -> Self {
+        let (blocks, _) = broadcast::channel(capacity);
+        let (votes, _) = broadcast::channel(capacity);
+        let (proofs, _) = broadcast::channel(capacity);
+        let (snapshots, _) = broadcast::channel(capacity);
+        let (meta, _) = broadcast::channel(capacity);
+        Self {
+            blocks,
+            votes,
+            proofs,
+            snapshots,
+            meta,
+        }
+    }
+
+    fn publish(&self, topic: GossipTopic, payload: Vec<u8>) {
+        let sender = match topic {
+            GossipTopic::Blocks => &self.blocks,
+            GossipTopic::Votes => &self.votes,
+            GossipTopic::Proofs => &self.proofs,
+            GossipTopic::Snapshots => &self.snapshots,
+            GossipTopic::Meta => &self.meta,
+        };
+        let _ = sender.send(payload);
+    }
+
+    fn subscribe(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
+        match topic {
+            GossipTopic::Blocks => self.blocks.subscribe(),
+            GossipTopic::Votes => self.votes.subscribe(),
+            GossipTopic::Proofs => self.proofs.subscribe(),
+            GossipTopic::Snapshots => self.snapshots.subscribe(),
+            GossipTopic::Meta => self.meta.subscribe(),
+        }
+    }
+}
+
 pub struct Node {
     inner: Arc<NodeInner>,
 }
@@ -262,6 +308,7 @@ pub(crate) struct NodeInner {
     shutdown: broadcast::Sender<()>,
     worker_tasks: Mutex<Vec<JoinHandle<()>>>,
     completion: Notify,
+    witness_channels: WitnessChannels,
 }
 
 enum FinalizationContext {
@@ -506,6 +553,7 @@ impl Node {
             shutdown,
             worker_tasks: Mutex::new(Vec::new()),
             completion: Notify::new(),
+            witness_channels: WitnessChannels::new(128),
         });
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
@@ -516,6 +564,13 @@ impl Node {
         NodeHandle {
             inner: self.inner.clone(),
         }
+    }
+
+    pub fn subscribe_witness_gossip(
+        &self,
+        topic: GossipTopic,
+    ) -> broadcast::Receiver<Vec<u8>> {
+        self.inner.subscribe_witness_gossip(topic)
     }
 
     pub async fn start(self) -> ChainResult<()> {
@@ -1202,6 +1257,17 @@ impl NodeHandle {
         self.inner.submit_transaction(bundle)
     }
 
+    pub fn subscribe_witness_gossip(
+        &self,
+        topic: GossipTopic,
+    ) -> broadcast::Receiver<Vec<u8>> {
+        self.inner.subscribe_witness_gossip(topic)
+    }
+
+    pub fn fanout_witness_gossip(&self, topic: GossipTopic, payload: &[u8]) {
+        self.inner.emit_witness_bytes(topic, payload.to_vec());
+    }
+
     pub fn submit_identity(&self, request: AttestedIdentityRequest) -> ChainResult<String> {
         self.inner.submit_identity(request)
     }
@@ -1334,6 +1400,21 @@ impl NodeHandle {
 }
 
 impl NodeInner {
+    fn subscribe_witness_gossip(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
+        self.witness_channels.subscribe(topic)
+    }
+
+    fn emit_witness_bytes(&self, topic: GossipTopic, payload: Vec<u8>) {
+        self.witness_channels.publish(topic, payload);
+    }
+
+    fn emit_witness_json<T: Serialize>(&self, topic: GossipTopic, payload: &T) {
+        match serde_json::to_vec(payload) {
+            Ok(bytes) => self.emit_witness_bytes(topic, bytes),
+            Err(err) => debug!(?err, ?topic, "failed to encode witness gossip payload"),
+        }
+    }
+
     #[cfg(feature = "backend-rpp-stark")]
     fn verify_rpp_stark_with_metrics(
         &self,
@@ -1787,6 +1868,7 @@ impl NodeInner {
             return Err(ChainError::Transaction("mempool full".into()));
         }
         let tx_hash = bundle.hash();
+        let tx_payload = bundle.transaction.payload.clone();
         if mempool
             .iter()
             .any(|existing| existing.transaction.id == bundle.transaction.id)
@@ -1794,6 +1876,15 @@ impl NodeInner {
             return Err(ChainError::Transaction("transaction already queued".into()));
         }
         mempool.push_back(bundle);
+        let tx_hash_clone = tx_hash.clone();
+        let summary = serde_json::json!({
+            "hash": tx_hash_clone,
+            "from": tx_payload.from,
+            "to": tx_payload.to,
+            "fee": tx_payload.fee,
+            "nonce": tx_payload.nonce,
+        });
+        self.emit_witness_json(GossipTopic::Proofs, &summary);
         Ok(tx_hash)
     }
 
@@ -1923,10 +2014,18 @@ impl NodeInner {
             return Err(ChainError::Transaction("vote mempool full".into()));
         }
         let vote_hash = vote.hash();
+        let vote_summary = serde_json::json!({
+            "hash": vote_hash.clone(),
+            "voter": vote.vote.voter.clone(),
+            "height": vote.vote.height,
+            "round": vote.vote.round,
+            "kind": vote.vote.kind,
+        });
         if mempool.iter().any(|existing| existing.hash() == vote_hash) {
             return Err(ChainError::Transaction("vote already queued".into()));
         }
         mempool.push_back(vote);
+        self.emit_witness_json(GossipTopic::Votes, &vote_summary);
         Ok(vote_hash)
     }
 
@@ -2063,7 +2162,14 @@ impl NodeInner {
                 let hash = block.hash.clone();
                 self.observe_consensus_round(height, round);
                 let mut inbox = self.proposal_inbox.write();
+                let block_summary = serde_json::json!({
+                    "hash": hash.clone(),
+                    "height": block.header.height,
+                    "round": block.consensus.round,
+                    "proposer": block.header.proposer.clone(),
+                });
                 inbox.insert((height, proposer), VerifiedProposal { block });
+                self.emit_witness_json(GossipTopic::Blocks, &block_summary);
                 Ok(hash)
             }
             Err(err) => {
@@ -2103,6 +2209,7 @@ impl NodeInner {
             reason = reason_label,
             "recorded consensus evidence"
         );
+        self.emit_witness_json(GossipTopic::Meta, &evidence);
         if let Some(vote_kind) = evidence.vote_kind {
             let mut mempool = self.vote_mempool.write();
             mempool.retain(|vote| {
@@ -2163,6 +2270,7 @@ impl NodeInner {
                 self.storage.persist_account(&account)?;
             }
         }
+        self.emit_witness_json(GossipTopic::Snapshots, &records);
         Ok(records)
     }
 
@@ -2172,6 +2280,9 @@ impl NodeInner {
             if let Some(account) = self.ledger.get_account(address) {
                 self.storage.persist_account(&account)?;
             }
+        }
+        if !updated.is_empty() {
+            self.emit_witness_json(GossipTopic::Snapshots, &updated);
         }
         Ok(updated)
     }

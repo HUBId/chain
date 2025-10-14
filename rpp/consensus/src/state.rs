@@ -6,7 +6,7 @@ use libp2p::PeerId;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::bft_loop::ConsensusMessage;
-use crate::evidence::{EvidenceRecord, EvidenceType};
+use crate::evidence::{slash, EvidenceRecord, EvidenceType};
 use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal, Signature};
 use crate::rewards::{distribute_rewards, RewardDistribution};
@@ -34,6 +34,9 @@ pub struct ConsensusConfig {
     pub precommit_timeout: Duration,
     pub base_reward: u64,
     pub leader_bonus: f64,
+    pub witness_reward: u64,
+    pub false_proof_penalty: u64,
+    pub censorship_penalty: u64,
 }
 
 impl ConsensusConfig {
@@ -48,7 +51,22 @@ impl ConsensusConfig {
             precommit_timeout: Duration::from_millis(precommit_timeout_ms),
             base_reward,
             leader_bonus,
+            witness_reward: base_reward.saturating_div(2),
+            false_proof_penalty: base_reward,
+            censorship_penalty: base_reward.saturating_div(2).max(1),
         }
+    }
+
+    pub fn with_witness_params(
+        mut self,
+        witness_reward: u64,
+        false_proof_penalty: u64,
+        censorship_penalty: u64,
+    ) -> Self {
+        self.witness_reward = witness_reward;
+        self.false_proof_penalty = false_proof_penalty;
+        self.censorship_penalty = censorship_penalty;
+        self
     }
 }
 
@@ -178,6 +196,7 @@ pub struct ConsensusState {
     pub last_activity: Instant,
     pub halted: bool,
     recorded_votes: HashMap<VoteKey, VoteFingerprint>,
+    witness_rewards: BTreeMap<ValidatorId, u64>,
 }
 
 impl ConsensusState {
@@ -212,6 +231,7 @@ impl ConsensusState {
             last_activity: Instant::now(),
             halted: false,
             recorded_votes: HashMap::new(),
+            witness_rewards: BTreeMap::new(),
         };
 
         state.update_leader();
@@ -419,7 +439,15 @@ impl ConsensusState {
     }
 
     pub fn record_evidence(&mut self, evidence: EvidenceRecord) {
+        self.apply_witness_evidence(&evidence);
         self.pending_evidence.push(evidence);
+    }
+
+    pub fn witness_reward_balance(&self, witness: &ValidatorId) -> u64 {
+        self.witness_rewards
+            .get(witness)
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn find_proposal(&self, block_hash: &str) -> Option<&Proposal> {
@@ -434,14 +462,17 @@ impl ConsensusState {
         self.block_height = commit.block.height;
         self.record_proof(commit.proof.clone());
         if let Some(leader) = self.current_leader.clone() {
-            let rewards = distribute_rewards(
+            let mut rewards = distribute_rewards(
                 &self.validator_set,
                 &leader,
                 self.block_height,
                 self.config.base_reward,
                 self.config.leader_bonus,
             );
+            rewards.witness_rewards = self.drain_witness_rewards();
             self.record_reward(rewards);
+        } else {
+            self.drain_witness_rewards();
         }
         self.pending_prevotes.clear();
         self.pending_precommits.clear();
@@ -526,4 +557,42 @@ pub fn initialize_state(
         config,
     );
     ConsensusState::new(genesis)
+}
+
+impl ConsensusState {
+    fn drain_witness_rewards(&mut self) -> BTreeMap<ValidatorId, u64> {
+        if self.witness_rewards.is_empty() {
+            return BTreeMap::new();
+        }
+        std::mem::take(&mut self.witness_rewards)
+    }
+
+    fn apply_witness_evidence(&mut self, record: &EvidenceRecord) {
+        if self.config.witness_reward > 0 {
+            let entry = self
+                .witness_rewards
+                .entry(record.reporter.clone())
+                .or_insert(0);
+            *entry = entry.saturating_add(self.config.witness_reward);
+        }
+
+        match record.evidence {
+            EvidenceType::DoubleSign { .. } => {
+                let penalty = self.config.false_proof_penalty.saturating_mul(2);
+                if penalty > 0 {
+                    slash(&record.accused, penalty, self);
+                }
+            }
+            EvidenceType::FalseProof { .. } => {
+                if self.config.false_proof_penalty > 0 {
+                    slash(&record.accused, self.config.false_proof_penalty, self);
+                }
+            }
+            EvidenceType::VoteWithholding { .. } => {
+                if self.config.censorship_penalty > 0 {
+                    slash(&record.accused, self.config.censorship_penalty, self);
+                }
+            }
+        }
+    }
 }

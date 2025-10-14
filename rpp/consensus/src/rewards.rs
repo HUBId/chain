@@ -9,11 +9,19 @@ pub struct RewardDistribution {
     pub total_reward: u64,
     pub leader_bonus: u64,
     pub rewards: BTreeMap<ValidatorId, u64>,
+    pub witness_rewards: BTreeMap<ValidatorId, u64>,
 }
 
 impl RewardDistribution {
     pub fn reward_for(&self, validator: &ValidatorId) -> u64 {
         self.rewards.get(validator).copied().unwrap_or_default()
+    }
+
+    pub fn witness_reward_for(&self, witness: &ValidatorId) -> u64 {
+        self.witness_rewards
+            .get(witness)
+            .copied()
+            .unwrap_or_default()
     }
 }
 
@@ -29,6 +37,7 @@ pub fn distribute_rewards(
         total_reward: 0,
         leader_bonus: 0,
         rewards: BTreeMap::new(),
+        witness_rewards: BTreeMap::new(),
     };
 
     if validators.validators.is_empty() {
