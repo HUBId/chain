@@ -27,6 +27,8 @@ Nightly builds are no longer required for day-to-day work; the stable scan workf
 
 Storage-specific MSRV tracking lives in [docs/STORAGE_STABLE_REPORT.md](docs/STORAGE_STABLE_REPORT.md) so operators can confirm Firewood compatibility on stable Rust.
 
+Operational runbooks, including authentication, rate limits, and recovery steps for the RPC CLI, are documented in the [RPC CLI Operator Guide](docs/rpc_cli_operator_guide.md).
+
 ## Build Requirements
 
 This workspace is pinned to `1.79.0` (stable) via `rust-toolchain.toml`. Install the matching toolchain along with the bundled `rustfmt` and `clippy` components before building locally to ensure consistent formatting and lint coverage.

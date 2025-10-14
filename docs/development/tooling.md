@@ -5,6 +5,9 @@ The pinned Rust toolchain requires the following components to be installed:
 - rustfmt
 - clippy
 
+For operational guidance on the RPC CLI—including authentication, rate limits, and
+recovery procedures—consult the [RPC CLI Operator Guide](../rpc_cli_operator_guide.md).
+
 ## Fehlersuche
 
 | Fehlermeldung | Ursache | Lösung |
