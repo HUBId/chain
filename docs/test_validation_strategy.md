@@ -37,6 +37,7 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
   - `cargo clippy --all-targets --all-features -- -D warnings`
   - `cargo test --all-targets`
   - `cargo test --no-default-features --features backend-plonky3`
+  - Workflow `sim-smoke`, Job `interop-rpp-stark`: `cargo test --features backend-rpp-stark --test interop_rpp_stark`
   - optionale Stufen: Benchmarks (nightly), Fuzzing (cron), Integrationstests (nightly).
 - **Artefaktverwaltung**: Speicherung generierter Beispiel-Proofs und Logs zur Reproduktion fehlschlagender Runs.
 

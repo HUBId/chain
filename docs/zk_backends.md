@@ -12,6 +12,7 @@
 
 - Golden Vectors liegen unter `vendor/rpp-stark/vectors/stwo/mini/`.
 - Testaufruf: `cargo test --features backend-rpp-stark --test interop_rpp_stark`.
+- CI-Absicherung: Die GitHub-Actions-Job `interop-rpp-stark` im Workflow `sim-smoke` führt den Test bei jedem Push/PR aus.
 - Prüft Digest, Stage-Flags (`params`, `public`, `merkle`, `fri`, `composition`), Proof-Länge und Trace-Indizes.
 
 ### Public-Inputs-Encoding
