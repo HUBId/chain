@@ -29,10 +29,10 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 | Timetoke | Gewichtung/Thresholds, Decay, Synchronisation | Ledger pflegt Timetoke-State (`timetoke_snapshot`/`sync_timetoke_records`), Node kreditiert Uptime-Proofs und VRF-Seed nutzt Timetoke | **TODO**: Netzwerkweiter Sync-Plan (Snapshots, Replay-Schutz) finalisieren |
 | VRF & Validator-Set | VRF Input = (sk, epoch_nonce, timetoke) + Threshold aus Timetoke | VRF-Seed kombiniert Adresse & Timetoke; Validator-Gewichte berücksichtigen Reputation + Timetoke | **TODO**: Threshold-Parametrisierung & Monitoring der Erfolgsquoten dokumentieren |
 | Leader-Selektion | Priorität: Tier → Timetoke → VRF | `select_leader` sortiert nach Tier, Timetoke, VRF-Ausgabe | ✅ |
-| Witness-Rolle | Externe Verifikation | Tier 1–2 werden als Observer/Witness geführt, Konsens-Witnesses werden erstellt und verprooft | **TODO**: Dedizierte Witness-Kanäle & Incentives (Rewards/Slashing) definieren |
+| Witness-Rolle | Externe Verifikation | Tier 1–2 werden als Observer/Witness geführt, Konsens-Witnesses werden erstellt, bepreist und über die Incentive-Pipeline geprüft ([tests/witness_incentives.rs](../tests/witness_incentives.rs)) | **TODO**: Dedizierte Witness-Kanäle (QoS/Topic-Isolation) und Treasury-Anbindung der Witness-Rewards finalisieren |
 | Rewards | Gleichmäßig + Leader-Bonus | Konsens-Rewards teilen Basis-Reward + Gebühren auf Validatoren mit 20 % Leader-Bonus | **TODO**: Konfigurierbare Pools & Witness-Beteiligung einführen |
 | Proofs | Nachweis VRF/Leader/Quorum in Block-Proof | Nur Signatur-Check | Proof-Komponenten erweitern |
-| Anti-Abuse | Double-Sign, Fake-Proof, Zensur, Inaktivität | Teilweise generisch | Spezifische Erkennungslogik |
+| Anti-Abuse | Double-Sign, Fake-Proof, Zensur, Inaktivität | Evidence-Pool erzwingt sofortiges Slashing bei Double-Signs und blockiert Reorgs ([tests/reorg_regressions.rs](../tests/reorg_regressions.rs)) | **TODO**: Censorship-/Inaktivitäts-Heuristiken & P2P Admission-Kontrollen ausrollen |
 | Netzwerk | Dedizierte Kanäle | Mischverkehr | Messaging-Layer modularisieren |
 | Schnittstellen | Konsens-/Ökonomie-/Netzwerk-Traits | Stake-zentriert | Neue Traits/Adapter |
 
@@ -40,6 +40,12 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 * **VRF-Integrität**: `select_validators_rejects_manipulated_proof` sichert die Tier-Gates & Proof-Verifikation ab (`rpp/consensus/src/tests.rs`).
 * **Konsens-Proof-Härtung**: `rejects_external_block_with_tampered_state_fri_proof` prüft die Ablehnung manipulierter Blöcke inkl. Consensus/Witness-Bundles (`rpp/runtime/node.rs`).
 * **VRF-Historie**: Ledger-Tests (`record_vrf_history_tracks_entries`) stellen sicher, dass VRF-Submissions epochweise archiviert werden (`rpp/storage/ledger.rs`).
+* **Reorg-Schutz & Anti-Abuse**: `tests/reorg_regressions.rs` erzwingt, dass der Evidence-Pool konkurrierende Forks unterbindet und den Tip stabil hält.
+
+### Offene Konsens-TODOs
+* P2P-Handshakes & Gossip Admission konsequent über Tier-Gates absichern, um Sybil-Einschleusung zu verhindern.
+* Netzwerkweite Timetoke-Snapshot-/Replay-Strategie fertigstellen (inkl. Witness-Distribution).
+* Monitoring & Parametrisierung der VRF-Thresholds dokumentieren und in Telemetrie einspeisen.
 
 ## Architekturentscheidungen & Komponenten
 ### Domänenmodelle
