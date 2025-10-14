@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,7 +32,9 @@ use hex;
 use serde::Serialize;
 use serde_json;
 
-use crate::config::{FeatureGates, GenesisAccount, NodeConfig, ReleaseChannel, TelemetryConfig};
+use crate::config::{
+    FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
+};
 use crate::consensus::{
     aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
     ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
@@ -133,6 +136,7 @@ pub struct MempoolStatus {
     pub identities: Vec<PendingIdentitySummary>,
     pub votes: Vec<PendingVoteSummary>,
     pub uptime_proofs: Vec<PendingUptimeSummary>,
+    pub queue_weights: QueueWeightsConfig,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -285,6 +289,8 @@ pub struct Node {
 
 pub(crate) struct NodeInner {
     config: NodeConfig,
+    mempool_limit: AtomicUsize,
+    queue_weights: RwLock<QueueWeightsConfig>,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
     p2p_identity: Arc<NodeIdentity>,
@@ -525,9 +531,13 @@ impl Node {
         let (shutdown, _shutdown_rx) = broadcast::channel(1);
         let verifier_registry =
             ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
+        let mempool_limit = config.mempool_limit;
+        let queue_weights = config.queue_weights.clone();
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
+            mempool_limit: AtomicUsize::new(mempool_limit),
+            queue_weights: RwLock::new(queue_weights),
             keypair,
             vrf_keypair,
             p2p_identity,
@@ -1308,6 +1318,22 @@ impl NodeHandle {
         self.inner.mempool_status()
     }
 
+    pub fn update_mempool_limit(&self, limit: usize) -> ChainResult<()> {
+        self.inner.update_mempool_limit(limit)
+    }
+
+    pub fn mempool_limit(&self) -> usize {
+        self.inner.mempool_limit()
+    }
+
+    pub fn queue_weights(&self) -> QueueWeightsConfig {
+        self.inner.queue_weights()
+    }
+
+    pub fn update_queue_weights(&self, weights: QueueWeightsConfig) -> ChainResult<()> {
+        self.inner.update_queue_weights(weights)
+    }
+
     pub fn rollout_status(&self) -> RolloutStatus {
         self.inner.rollout_status()
     }
@@ -1413,6 +1439,30 @@ impl NodeInner {
             Ok(bytes) => self.emit_witness_bytes(topic, bytes),
             Err(err) => debug!(?err, ?topic, "failed to encode witness gossip payload"),
         }
+    }
+
+    fn mempool_limit(&self) -> usize {
+        self.mempool_limit.load(Ordering::Relaxed)
+    }
+
+    fn update_mempool_limit(&self, limit: usize) -> ChainResult<()> {
+        if limit == 0 {
+            return Err(ChainError::Config(
+                "node configuration requires mempool_limit to be greater than 0".into(),
+            ));
+        }
+        self.mempool_limit.store(limit, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn queue_weights(&self) -> QueueWeightsConfig {
+        self.queue_weights.read().clone()
+    }
+
+    fn update_queue_weights(&self, weights: QueueWeightsConfig) -> ChainResult<()> {
+        weights.validate()?;
+        *self.queue_weights.write() = weights;
+        Ok(())
     }
 
     #[cfg(feature = "backend-rpp-stark")]
@@ -1864,7 +1914,7 @@ impl NodeInner {
             }
         }
         let mut mempool = self.mempool.write();
-        if mempool.len() >= self.config.mempool_limit {
+        if mempool.len() >= self.mempool_limit() {
             return Err(ChainError::Transaction("mempool full".into()));
         }
         let tx_hash = bundle.hash();
@@ -1970,7 +2020,7 @@ impl NodeInner {
 
         let hash = request.identity_hash()?;
         let mut mempool = self.identity_mempool.write();
-        if mempool.len() >= self.config.mempool_limit {
+        if mempool.len() >= self.mempool_limit() {
             return Err(ChainError::Transaction("identity mempool full".into()));
         }
         if mempool.iter().any(|existing| {
@@ -2010,7 +2060,7 @@ impl NodeInner {
         }
         self.observe_consensus_round(vote.vote.height, vote.vote.round);
         let mut mempool = self.vote_mempool.write();
-        if mempool.len() >= self.config.mempool_limit {
+        if mempool.len() >= self.mempool_limit() {
             return Err(ChainError::Transaction("vote mempool full".into()));
         }
         let vote_hash = vote.hash();
@@ -2377,6 +2427,7 @@ impl NodeInner {
             identities,
             votes,
             uptime_proofs,
+            queue_weights: self.queue_weights(),
         })
     }
 
@@ -3961,6 +4012,7 @@ mod telemetry_tests {
                 identities: Vec::new(),
                 votes: Vec::new(),
                 uptime_proofs: Vec::new(),
+                queue_weights: QueueWeightsConfig::default(),
             },
             timetoke_params: TimetokeParams::default(),
             verifier_metrics: VerifierMetricsSnapshot::default(),

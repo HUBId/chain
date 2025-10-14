@@ -55,9 +55,14 @@ production.
    node can absorb expected bursts without hitting the hard rejection path. The
    default limit of 8,192 works well for moderate throughput but validators can
    scale it up (at the cost of more RAM) or down (for constrained hardware) via
-   `node.toml`; the loader validates and persists the change automatically.【F:config/node.toml†L3-L14】【F:rpp/runtime/config.rs†L40-L130】
+   `node.toml`; the loader validates and persists the change automatically.【F:config/node.toml†L3-L23】【F:rpp/runtime/config.rs†L40-L228】
    Because vote queues share the same limit, environments with large validator
    sets should reserve headroom for vote storms triggered by round restarts.
+   Operators can also rebalance inclusion pressure between backlog age and fee
+   contribution by adjusting the `queue_weights.priority`/`queue_weights.fee`
+   sliders (which must sum to 1.0) and monitoring the exposed weights via the
+   mempool status RPC; in bursty workloads a 60/40 split keeps latency in check
+   while still rewarding high-fee submissions.【F:config/node.toml†L17-L23】【F:rpp/runtime/config.rs†L207-L256】【F:rpp/runtime/node.rs†L124-L140】【F:rpp/rpc/api.rs†L515-L563】【F:rpp/rpc/api.rs†L840-L880】
 4. **Gate features to match readiness.** Recursive-proof verification for
    transactions and identities, and consensus enforcement for votes, are guarded
    by rollout feature flags. Disable them in lower environments when proofs are

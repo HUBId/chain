@@ -18,6 +18,10 @@ epoch_length = 1440
 target_validator_count = 100
 max_proof_size_bytes = 4194304
 
+[queue_weights]
+priority = 0.7
+fee = 0.3
+
 [p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/7600"
 bootstrap_peers = []
