@@ -12,7 +12,7 @@ Das Skript [`scripts/vendor_malachite/chunk_plan.sh`](../../../scripts/vendor_ma
 ./scripts/vendor_malachite/chunk_plan.sh /pfad/zum/malachite-0.4.18.crate
 ```
 
-Standardmäßig wird der Plan als JSON unter `vendor/malachite/0.4.18/manifest/chunk_plan.json` geschrieben. Die Segmentgröße lässt sich über die Umgebungsvariable `CHUNK_SEGMENT_SIZE_BYTES` anpassen.
+Standardmäßig wird der Plan als JSON unter `vendor/malachite/0.4.18/manifest/chunk_plan.json` geschrieben. Die Segmentgröße lässt sich über die Umgebungsvariable `CHUNK_SEGMENT_SIZE_BYTES` anpassen. Der aktuell gültige Plan liegt unter [`manifest/chunk_plan.json`](manifest/chunk_plan.json).
 
 ## Manifest-Update und Verifizierung
 
