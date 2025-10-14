@@ -1,7 +1,7 @@
-./.cargo_vcs_info.json
-./Cargo.lock
-./Cargo.toml
-./Cargo.toml.orig
-./README.md
-./katex-header.html
-./src/lib.rs
+09216fa39c1e9a3ee86e6223ca19ce70ceaffe6c44df2710ceeb1f67b8f6317a 103 ./.cargo_vcs_info.json
+5b3e756bf66940e5f4698d4f76c7215bbc0aa9ca754cc9cf443f52cbba3c5f38 17987 ./Cargo.lock
+aed703d1c014b5c1a875ee752ff73f7d3826e0548de166df5e3ba37112134a6f 2340 ./Cargo.toml
+41bf34e0818a1255696f69e588396ebe4357531b55dc0a782836cd55dc5afb74 1800 ./Cargo.toml.orig
+fa35276d6ae01159cc10755727142e20ae7a579becfa6a911deb22e1876c4c04 1121 ./README.md
+6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b 1040 ./katex-header.html
+46f287ad69f2b2bbf72d710a2c8a890224e871c67382e5644674879b79f182ee 915 ./src/lib.rs

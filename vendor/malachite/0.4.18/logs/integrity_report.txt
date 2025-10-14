@@ -1,6 +1,6 @@
 Integrity Report for malachite 0.4.18
-Generated at: 2025-10-13T19:22:18Z
-Reference source: downloaded crate archive /tmp/malachite-0.4.18-jizajlj0.crate
+Generated at: 2025-10-14T19:35:13Z
+Reference source: downloaded crate archive /tmp/malachite-0.4.18-4duixmf4.crate
 Overall result: PASS
 
 Checksum summary:
