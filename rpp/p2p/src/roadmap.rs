@@ -192,6 +192,7 @@ const MILESTONES: &[Milestone] = &[
             "Admission control enforces TL0/TL1/TL3+ permissions per channel.",
             "Reputation updates propagate between peers via the meta channel.",
             "Blocklisted peers are prevented from joining the gossip mesh.",
+            "Multi-node ingestion tests (rpp/p2p/tests/gossip_ingestion.rs) cover block, vote and proof pipelines end-to-end.",
         ],
     },
     Milestone {
@@ -225,16 +226,14 @@ mod tests {
         let plan = libp2p_backbone_plan();
         assert_eq!(plan.phases().len(), 3);
         assert_eq!(plan.milestones().len(), 3);
-        assert!(
-            plan.phases()
-                .iter()
-                .any(|phase| phase.name.contains("Transport foundations"))
-        );
-        assert!(
-            plan.phases()
-                .iter()
-                .any(|phase| phase.name.contains("Data paths"))
-        );
+        assert!(plan
+            .phases()
+            .iter()
+            .any(|phase| phase.name.contains("Transport foundations")));
+        assert!(plan
+            .phases()
+            .iter()
+            .any(|phase| phase.name.contains("Data paths")));
     }
 
     #[test]

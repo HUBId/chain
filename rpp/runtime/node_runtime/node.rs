@@ -7,9 +7,9 @@ use libp2p::PeerId;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rpp_p2p::{
-    BasicRecursiveProofVerifier, GossipTopic, HandshakePayload, JsonProofValidator,
-    LightClientSync, MetaTelemetry, NetworkError, NetworkEvent, NodeIdentity,
-    PersistentProofStorage, PipelineError, ProofMempool, TierLevel,
+    GossipTopic, HandshakePayload, JsonProofValidator, LightClientSync, MetaTelemetry,
+    NetworkError, NetworkEvent, NodeIdentity, PersistentProofStorage, PipelineError, ProofMempool,
+    TierLevel,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -17,6 +17,7 @@ use tokio::time;
 use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
 use crate::node::NetworkIdentityProfile;
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
+use crate::sync::RuntimeRecursiveProofVerifier;
 
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
 
@@ -159,7 +160,7 @@ impl GossipPipelines {
         let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
         let validator = Arc::new(JsonProofValidator::default());
         let proofs = ProofMempool::new(validator, storage)?;
-        let verifier = Arc::new(BasicRecursiveProofVerifier::default());
+        let verifier = Arc::new(RuntimeRecursiveProofVerifier::default());
         let light_client = LightClientSync::new(verifier);
         Ok(Self {
             proofs,
