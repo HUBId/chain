@@ -70,6 +70,7 @@ libp2p = { version = "=0.54.1", default-features = false, features = [
     "tokio",
     "yamux",
 ] }
+metrics = "0.21"
 
 [workspace]
 members = [

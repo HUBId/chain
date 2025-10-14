@@ -126,14 +126,14 @@ pub trait ProofVerifier {
     fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()>;
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, Serialize, PartialEq)]
 pub struct BackendVerificationMetrics {
     pub accepted: u64,
     pub rejected: u64,
     pub total_duration_ms: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct VerifierMetricsSnapshot {
     pub per_backend: BTreeMap<String, BackendVerificationMetrics>,
 }
