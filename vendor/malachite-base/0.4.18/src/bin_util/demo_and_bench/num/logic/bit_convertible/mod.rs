@@ -9,17 +9,9 @@
 use malachite_base::test_util::runner::Runner;
 
 pub(crate) fn register(runner: &mut Runner) {
-    arithmetic::register(runner);
-    comparison::register(runner);
-    conversion::register(runner);
-    factorization::register(runner);
-    float::register(runner);
-    logic::register(runner);
+    from_bits::register(runner);
+    to_bits::register(runner);
 }
 
-mod arithmetic;
-mod comparison;
-mod conversion;
-mod factorization;
-mod float;
-mod logic;
+mod from_bits;
+mod to_bits;

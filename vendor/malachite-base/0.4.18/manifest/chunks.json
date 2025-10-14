@@ -1,6 +1,6 @@
 {
   "version": "0.4.18",
-  "generated_at": "2025-10-14T20:42:17Z",
+  "generated_at": "2025-10-14T21:49:07Z",
   "segments": [
     {
       "segment_name": "malachite-0.4.18.part000",
@@ -8,8 +8,8 @@
       "chunk_name": "chunk_000",
       "offset": 0,
       "length": 822554,
-      "status": "manually_imported",
-      "timestamp": "2025-10-14T21:20:52Z"
+      "status": "missing",
+      "timestamp": "2025-10-14T21:49:07Z"
     }
   ]
 }
