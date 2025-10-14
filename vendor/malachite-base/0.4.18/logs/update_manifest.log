@@ -3,3 +3,5 @@
 [2025-10-14T20:42:17Z] [WARN] One or more segments are missing or invalid. Trigger a re-download to restore them.
 [2025-10-14T21:20:52Z] [INFO] Manually imported src/bin_util/generate and selected demo_and_bench modules (bools, chars, comparison, rounding_modes, slices, strings).
 [2025-10-14T21:20:52Z] [INFO] Updated manifest and documentation; remaining numeric demos tracked in docs/demo_and_bench_status.md.
+[2025-11-05T00:00:00Z] [INFO] Added demo_and_bench/num/conversion along with module registration updates.
+[2025-11-05T00:00:00Z] [INFO] Regenerated manifest file list to include new numeric demos.
