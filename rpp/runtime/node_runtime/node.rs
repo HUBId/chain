@@ -149,6 +149,9 @@ pub enum NodeError {
 struct GossipPipelines {
     proofs: ProofMempool,
     light_client: LightClientSync,
+    block_cache: HashSet<Hash>,
+    vote_cache: HashSet<Hash>,
+    meta_cache: HashSet<Hash>,
 }
 
 impl GossipPipelines {
@@ -161,15 +164,38 @@ impl GossipPipelines {
         Ok(Self {
             proofs,
             light_client,
+            block_cache: HashSet::new(),
+            vote_cache: HashSet::new(),
+            meta_cache: HashSet::new(),
         })
     }
 
     fn handle_gossip(&mut self, peer: PeerId, topic: GossipTopic, data: Vec<u8>) {
         match topic {
+            GossipTopic::Blocks => self.handle_blocks(peer, data),
+            GossipTopic::Votes => self.handle_votes(peer, data),
             GossipTopic::Proofs => self.handle_proofs(peer, data),
             GossipTopic::Snapshots => self.handle_snapshots(&data),
-            _ => {}
+            GossipTopic::Meta => self.handle_meta(peer, data),
         }
+    }
+
+    fn handle_blocks(&mut self, peer: PeerId, data: Vec<u8>) {
+        let digest = blake3::hash(&data);
+        if !self.block_cache.insert(digest) {
+            debug!(target: "node", ?peer, "duplicate block gossip ignored");
+            return;
+        }
+        debug!(target: "node", ?peer, "block gossip ingested");
+    }
+
+    fn handle_votes(&mut self, peer: PeerId, data: Vec<u8>) {
+        let digest = blake3::hash(&data);
+        if !self.vote_cache.insert(digest) {
+            debug!(target: "node", ?peer, "duplicate vote gossip ignored");
+            return;
+        }
+        debug!(target: "node", ?peer, "vote gossip ingested");
     }
 
     fn handle_proofs(&mut self, peer: PeerId, data: Vec<u8>) {
@@ -221,6 +247,15 @@ impl GossipPipelines {
                 );
             }
         }
+    }
+
+    fn handle_meta(&mut self, peer: PeerId, data: Vec<u8>) {
+        let digest = blake3::hash(&data);
+        if !self.meta_cache.insert(digest) {
+            debug!(target: "node", ?peer, "duplicate meta gossip ignored");
+            return;
+        }
+        debug!(target: "node", ?peer, "meta gossip ingested");
     }
 }
 
