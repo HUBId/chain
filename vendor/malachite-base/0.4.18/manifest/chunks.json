@@ -8,8 +8,8 @@
       "chunk_name": "chunk_000",
       "offset": 0,
       "length": 822554,
-      "status": "missing",
-      "timestamp": "2025-10-14T20:42:17Z"
+      "status": "manually_imported",
+      "timestamp": "2025-10-14T21:20:52Z"
     }
   ]
 }
