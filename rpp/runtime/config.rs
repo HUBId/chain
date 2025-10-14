@@ -9,6 +9,8 @@ use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds};
 use crate::types::Stake;
 
+const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct P2pConfig {
@@ -79,6 +81,8 @@ pub struct NodeConfig {
     pub genesis: GenesisConfig,
     #[serde(default)]
     pub reputation: ReputationConfig,
+    #[serde(default)]
+    pub queue_weights: QueueWeightsConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -237,6 +241,7 @@ impl NodeConfig {
                 ));
             }
         }
+        self.queue_weights.validate()?;
         Ok(())
     }
 }
@@ -269,6 +274,50 @@ impl Default for NodeConfig {
             p2p,
             genesis: GenesisConfig::default(),
             reputation: ReputationConfig::default(),
+            queue_weights: QueueWeightsConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct QueueWeightsConfig {
+    pub priority: f64,
+    pub fee: f64,
+}
+
+impl QueueWeightsConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.priority.is_nan() || self.fee.is_nan() {
+            return Err(ChainError::Config(
+                "queue_weights priority and fee must be finite numbers".into(),
+            ));
+        }
+        if self.priority < 0.0 {
+            return Err(ChainError::Config(
+                "queue_weights.priority must be greater than or equal to 0.0".into(),
+            ));
+        }
+        if self.fee < 0.0 {
+            return Err(ChainError::Config(
+                "queue_weights.fee must be greater than or equal to 0.0".into(),
+            ));
+        }
+        let sum = self.priority + self.fee;
+        if (sum - 1.0).abs() > QUEUE_WEIGHT_SUM_TOLERANCE {
+            return Err(ChainError::Config(
+                "queue_weights priority and fee must sum to 1.0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for QueueWeightsConfig {
+    fn default() -> Self {
+        Self {
+            priority: 0.7,
+            fee: 0.3,
         }
     }
 }
@@ -392,6 +441,24 @@ mod tests {
             ChainError::Config(message) => {
                 assert!(
                     message.contains("mempool_limit"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_invalid_queue_weights() {
+        let mut config = NodeConfig::default();
+        config.queue_weights.priority = 0.8;
+        config.queue_weights.fee = 0.3;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("queue_weights"),
                     "unexpected message: {}",
                     message
                 );

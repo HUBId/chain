@@ -27,6 +27,7 @@ use crate::node::{
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
+use crate::runtime::config::QueueWeightsConfig;
 use crate::runtime::RuntimeMode;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
@@ -436,6 +437,13 @@ struct PipelineShutdownResponse {
     status: &'static str,
 }
 
+#[derive(Deserialize)]
+struct UpdateMempoolRequest {
+    limit: Option<usize>,
+    priority_weight: Option<f64>,
+    fee_weight: Option<f64>,
+}
+
 fn apply_cors_headers(headers: &mut HeaderMap, origin: &HeaderValue) {
     headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
     headers.insert(
@@ -522,6 +530,7 @@ pub async fn serve(
         .route("/validator/uptime", post(validator_submit_uptime))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
+        .route("/control/mempool", post(update_mempool_limits))
         .route("/status/consensus", get(consensus_status))
         .route("/status/rollout", get(rollout_status))
         .route("/consensus/vrf/:address", get(vrf_status))
@@ -876,6 +885,38 @@ async fn mempool_status(
         .mempool_status()
         .map(Json)
         .map_err(to_http_error)
+}
+
+async fn update_mempool_limits(
+    State(state): State<ApiContext>,
+    Json(request): Json<UpdateMempoolRequest>,
+) -> Result<Json<MempoolStatus>, (StatusCode, Json<ErrorResponse>)> {
+    if request.limit.is_none()
+        && request.priority_weight.is_none()
+        && request.fee_weight.is_none()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "no mempool updates provided".into(),
+            }),
+        ));
+    }
+    let node = state.require_node()?;
+    if let Some(limit) = request.limit {
+        node.update_mempool_limit(limit).map_err(to_http_error)?;
+    }
+    if request.priority_weight.is_some() || request.fee_weight.is_some() {
+        let mut weights = node.queue_weights();
+        if let Some(priority) = request.priority_weight {
+            weights.priority = priority;
+        }
+        if let Some(fee) = request.fee_weight {
+            weights.fee = fee;
+        }
+        node.update_queue_weights(weights).map_err(to_http_error)?;
+    }
+    node.mempool_status().map(Json).map_err(to_http_error)
 }
 
 async fn consensus_status(

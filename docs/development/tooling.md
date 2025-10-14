@@ -32,3 +32,11 @@ Die folgenden Hinweise helfen bei typischen Fehlern rund um `cargo run -- genera
 3. **Schlüssel neu erzeugen.** Sollten Schlüsseldateien beschädigt oder inkonsistent sein (z. B. VRF-Mismatch), lösche die betroffenen Dateien und führe `cargo run -- keygen --path keys/node.toml --vrf-path keys/vrf.toml` erneut aus. Die Helfer sorgen für das richtige TOML-Format und erzeugen konsistente Schlüsselpaare.【F:src/main.rs†L280-L287】【F:rpp/crypto/mod.rs†L180-L241】
 
 > 💡 Tipp: Nach manuellen Änderungen kannst du die Validierung ohne Start des Nodes testen, indem du `cargo run -- generate-config --path <bestehende-datei>` ausführst – der Befehl schreibt zwar neu, aber schlägt mit einer aussagekräftigen Fehlermeldung fehl, falls die Werte ungültig sind.
+
+### Mempool-Tuning und Live-Anpassungen
+
+- **Queue-Gewichte inspizieren.** Die RPC-Antwort von `/status/mempool` enthält jetzt das Feld `queue_weights`, sodass du mit
+  `curl http://127.0.0.1:7070/status/mempool | jq '.queue_weights'` sofort siehst, wie stark Priorität vs. Gebühren gewichtet
+  werden.【F:rpp/runtime/node.rs†L120-L141】【F:rpp/rpc/api.rs†L515-L563】【F:rpp/rpc/api.rs†L840-L880】
+- **Limits und Gewichtung live anpassen.** Über `POST /control/mempool` kannst du den Hard-Limit-Schwellwert und die beiden
+  Gewichte ohne Neustart umschalten, z. B. `curl -X POST http://127.0.0.1:7070/control/mempool -H 'Content-Type: application/json' -d '{"limit":16384,"priority_weight":0.6,"fee_weight":0.4}'`. Die Server-Seite erzwingt dabei, dass die Gewichte ≥ 0 sind und zusammen exakt 1 ergeben, sodass Konfigurationen aus `config/node.toml` konsistent bleiben.【F:config/node.toml†L3-L23】【F:rpp/runtime/config.rs†L207-L256】【F:rpp/runtime/node.rs†L120-L141】【F:rpp/rpc/api.rs†L515-L575】【F:rpp/rpc/api.rs†L840-L880】
