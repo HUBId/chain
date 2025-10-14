@@ -225,6 +225,7 @@ impl Network {
             rate_limiter: RateLimiter::new(Duration::from_secs(1), 128),
         };
         network.bootstrap_subscriptions()?;
+        network.bootstrap_known_peers();
         Ok(network)
     }
 
@@ -559,6 +560,24 @@ impl Network {
         Ok(())
     }
 
+    fn bootstrap_known_peers(&mut self) {
+        let local = self.local_peer_id();
+        for record in self.peerstore.known_peers() {
+            if record.peer_id == local {
+                continue;
+            }
+            self.swarm
+                .behaviour_mut()
+                .gossipsub
+                .add_explicit_peer(&record.peer_id);
+            for addr in record.addresses {
+                if let Err(err) = self.swarm.dial(addr.clone()) {
+                    tracing::debug!(?record.peer_id, ?addr, ?err, "failed to dial stored peer");
+                }
+            }
+        }
+    }
+
     fn try_subscribe(&mut self, topic: GossipTopic) -> Result<(), NetworkError> {
         if self
             .admission
@@ -681,18 +700,15 @@ mod tests {
         store
             .record_subscription(GossipTopic::Blocks)
             .expect("subscription");
+        let mesh_peer = PeerId::random();
         store
-            .record_message(
-                GossipTopic::Blocks,
-                PeerId::random(),
-                blake3::hash(b"payload"),
-            )
+            .record_message(GossipTopic::Blocks, mesh_peer, blake3::hash(b"payload"))
             .expect("message");
 
         let key_path = dir.path().join("node.key");
         let identity = temp_identity(&key_path);
         let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
-        let network = Network::new(
+        let mut network = Network::new(
             identity,
             peerstore,
             template_handshake("node", TierLevel::Tl3),
@@ -710,6 +726,10 @@ mod tests {
             .collect();
         assert!(subscribed.contains(&GossipTopic::Blocks));
         assert!(!store.recent_digests().is_empty());
+        assert!(
+            !network.replay.observe(blake3::hash(b"payload")),
+            "preloaded digests should be recognised"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

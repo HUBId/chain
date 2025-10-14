@@ -49,6 +49,7 @@ jobs:
         run: |
           cargo run -p rpp-sim -- --scenario scenarios/small_world_smoke.toml --output target/sim-smoke/nightly-summary.json
           cargo run -p rpp-sim -- --scenario scenarios/partition_restart_plan.toml --output target/sim-smoke/nightly-partition-summary.json
+          cargo run -p rpp-sim -- --scenario scenarios/high_density_mesh.toml --output target/sim-smoke/nightly-high-density-summary.json
       - name: Enforce partition restart plan thresholds
         run: |
           python - <<'PY'
