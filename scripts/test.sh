@@ -49,6 +49,7 @@ PASSTHROUGH_ARGS=()
 FEATURE_SET_SELECTED=""
 SUITES_SELECTED=()
 BACKENDS=()
+INTEGRATION_FOCUSED_TESTS=(reorg_regressions)
 
 add_suite() {
   local suite="$1"
@@ -233,8 +234,53 @@ run_suite() {
   "${command[@]}"
 }
 
+run_integration_focus_tests() {
+  local backend="$1"
+  if [[ ${#INTEGRATION_FOCUSED_TESTS[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  local -a backend_args=()
+  case "$backend" in
+    default)
+      backend_args=()
+      ;;
+    stwo)
+      backend_args=("--no-default-features" "--features" "prover-stwo")
+      ;;
+    plonky3)
+      backend_args=("--features" "backend-plonky3")
+      ;;
+    rpp-stark)
+      backend_args=("--features" "backend-rpp-stark")
+      ;;
+    *)
+      echo "error: unsupported backend '$backend'" >&2
+      exit 1
+      ;;
+  esac
+
+  backend_args+=("${FEATURE_ARGS[@]}")
+
+  for test_name in "${INTEGRATION_FOCUSED_TESTS[@]}"; do
+    local -a command=(
+      cargo test
+      "${PROFILE_ARGS[@]}"
+      "${backend_args[@]}"
+      "${PASSTHROUGH_ARGS[@]}"
+      --test
+      "$test_name"
+    )
+    echo "==> Running integration test $test_name (${backend})"
+    "${command[@]}"
+  done
+}
+
 for backend in "${BACKENDS[@]}"; do
   for suite in "${SUITES_SELECTED[@]}"; do
     run_suite "$suite" "$backend"
+    if [[ "$suite" == "integration" ]]; then
+      run_integration_focus_tests "$backend"
+    fi
   done
 done
