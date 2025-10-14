@@ -3,3 +3,6 @@
 [2025-10-14T20:45:00Z] [INFO] Generated chunk plan and refreshed manifest/chunks.json (1 segment, status=missing) for malachite-base 0.4.18.
 [2025-10-14T20:45:00Z] [INFO] Diffstat checkpoint after staging: ~463 added lines across six files, well below the 10k review budget.
 [2025-10-14T20:45:00Z] [INFO] B5b follow-up: migrate remaining tests/vecs subdirectories (exhaustive/, random/) including fixtures and utilities.
+[2025-10-14T21:05:00Z] [INFO] Copied tests/vecs/random/ modules into vendor/malachite-base/0.4.18/tests/vecs/random/.
+[2025-10-14T21:05:00Z] [INFO] Added 19 entries to manifest/final_file_list.txt for the random vecs test vectors.
+[2025-10-14T21:05:00Z] [INFO] With random coverage landed, the vendor tree now contains the complete vecs test suite from malachite-base 0.4.18.
