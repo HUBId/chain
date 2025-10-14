@@ -2,6 +2,7 @@ target/
 **/*.rs.bk
 data/
 keys/
+logs/
 rpp/*/Cargo.lock
 storage-firewood/Cargo.lock
 vendor/**/*.crate
