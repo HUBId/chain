@@ -9,6 +9,7 @@
   - `rounding_modes`
   - `slices`
   - `strings`
+  - `num/conversion`
 
 ## Outstanding numeric demo modules
 The remaining `num` demo modules are still pending import. The upstream crate exposes the
@@ -16,7 +17,6 @@ following numeric categories that must be integrated before the CLI reaches feat
 
 - `num/arithmetic` (comprehensive arithmetic demos & benches)
 - `num/comparison`
-- `num/conversion`
 - `num/factorization`
 - `num/float`
 - `num/logic`
