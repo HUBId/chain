@@ -1494,13 +1494,33 @@ impl NodeInner {
         report: &RppStarkVerificationReport,
         duration: Duration,
     ) {
+        let flags = report.flags();
+        Self::record_rpp_stark_duration_metric(duration, proof_kind);
+        Self::record_rpp_stark_bytes_metric(
+            "rpp_stark_proof_total_bytes",
+            report.total_bytes(),
+            proof_kind,
+        );
+        Self::record_rpp_stark_stage_metric("params", flags.params(), proof_kind);
+        Self::record_rpp_stark_stage_metric("public", flags.public(), proof_kind);
+        Self::record_rpp_stark_stage_metric("merkle", flags.merkle(), proof_kind);
+        Self::record_rpp_stark_stage_metric("fri", flags.fri(), proof_kind);
+        Self::record_rpp_stark_stage_metric("composition", flags.composition(), proof_kind);
+
         if let Ok(artifact) = proof.expect_rpp_stark() {
-            let flags = report.flags();
             let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
             let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
             let public_inputs_bytes =
                 u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
             let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
+
+            Self::record_rpp_stark_bytes_metric("rpp_stark_params_bytes", params_bytes, proof_kind);
+            Self::record_rpp_stark_bytes_metric(
+                "rpp_stark_public_inputs_bytes",
+                public_inputs_bytes,
+                proof_kind,
+            );
+            Self::record_rpp_stark_bytes_metric("rpp_stark_payload_bytes", payload_bytes, proof_kind);
 
             info!(
                 target = "proofs",
@@ -1549,12 +1569,22 @@ impl NodeInner {
         error: &ChainError,
     ) {
         let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
+        Self::record_rpp_stark_duration_metric(duration, proof_kind);
         if let Ok(artifact) = proof.expect_rpp_stark() {
             let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
             let public_inputs_bytes =
                 u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
             let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
             let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
+
+            Self::record_rpp_stark_bytes_metric("rpp_stark_proof_total_bytes", proof_bytes, proof_kind);
+            Self::record_rpp_stark_bytes_metric("rpp_stark_params_bytes", params_bytes, proof_kind);
+            Self::record_rpp_stark_bytes_metric(
+                "rpp_stark_public_inputs_bytes",
+                public_inputs_bytes,
+                proof_kind,
+            );
+            Self::record_rpp_stark_bytes_metric("rpp_stark_payload_bytes", payload_bytes, proof_kind);
 
             warn!(
                 target = "proofs",
@@ -1602,6 +1632,42 @@ impl NodeInner {
                 "rpp-stark proof verification failed"
             );
         }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    const RPP_STARK_METRIC_BACKEND: &'static str = "rpp-stark";
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn record_rpp_stark_duration_metric(duration: Duration, proof_kind: &'static str) {
+        metrics::histogram!(
+            "rpp_stark_verify_duration_seconds",
+            duration.as_secs_f64(),
+            "proof_backend" => Self::RPP_STARK_METRIC_BACKEND,
+            "proof_kind" => proof_kind,
+        );
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn record_rpp_stark_bytes_metric(metric: &'static str, bytes: u64, proof_kind: &'static str) {
+        metrics::histogram!(
+            metric,
+            bytes as f64,
+            "proof_backend" => Self::RPP_STARK_METRIC_BACKEND,
+            "proof_kind" => proof_kind,
+        );
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn record_rpp_stark_stage_metric(stage: &'static str, ok: bool, proof_kind: &'static str) {
+        let result = if ok { "ok" } else { "fail" };
+        metrics::counter!(
+            "rpp_stark_stage_checks_total",
+            1,
+            "proof_backend" => Self::RPP_STARK_METRIC_BACKEND,
+            "proof_kind" => proof_kind,
+            "stage" => stage,
+            "result" => result,
+        );
     }
 
     fn spawn_runtime(self: &Arc<Self>) -> JoinHandle<()> {

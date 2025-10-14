@@ -7,6 +7,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use crate::config::TelemetryConfig;
+use crate::proof_system::VerifierMetricsSnapshot;
 
 const TELEMETRY_CHANNEL_CAPACITY: usize = 128;
 
@@ -27,6 +28,8 @@ pub struct TelemetrySnapshot {
     pub reputation_score: f64,
     /// Timestamp of the snapshot on the local node.
     pub timestamp: SystemTime,
+    /// Aggregated verifier statistics grouped by backend.
+    pub verifier_metrics: VerifierMetricsSnapshot,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -294,6 +297,10 @@ mod tests {
         let json: Value = serde_json::from_str(&payloads[0]).expect("json payload");
         assert_eq!(json["block_height"], 42);
         assert_eq!(json["node_id"], "node-1");
+        assert!(
+            json["verifier_metrics"]["per_backend"].is_object(),
+            "per-backend verifier metrics missing"
+        );
         handle.shutdown().await.expect("shutdown");
         let _ = shutdown.send(());
     }
@@ -335,6 +342,7 @@ mod tests {
             node_id: "node-1".into(),
             reputation_score: 0.75,
             timestamp: SystemTime::now(),
+            verifier_metrics: VerifierMetricsSnapshot::default(),
         }
     }
 

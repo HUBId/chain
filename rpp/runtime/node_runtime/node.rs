@@ -16,6 +16,7 @@ use tokio::time;
 
 use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
 use crate::node::NetworkIdentityProfile;
+use crate::proof_system::VerifierMetricsSnapshot;
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
 use crate::sync::RuntimeRecursiveProofVerifier;
 
@@ -43,6 +44,7 @@ pub struct NodeMetrics {
     pub block_hash: String,
     pub transaction_count: usize,
     pub reputation_score: f64,
+    pub verifier_metrics: VerifierMetricsSnapshot,
 }
 
 /// Summary of peer activity that is emitted via heartbeat and meta telemetry events.
@@ -435,6 +437,7 @@ impl NodeInner {
     async fn emit_heartbeat(&self) {
         let metrics = self.metrics.read().clone();
         let peer_count = self.connected_peers.len();
+        let verifier_metrics = metrics.verifier_metrics.clone();
         let heartbeat = Heartbeat {
             peer_count,
             block_height: metrics.block_height,
@@ -455,6 +458,7 @@ impl NodeInner {
             node_id: self.identity.peer_id().to_base58(),
             reputation_score: metrics.reputation_score,
             timestamp: SystemTime::now(),
+            verifier_metrics,
         };
         if let Err(err) = self.telemetry.send(snapshot).await {
             warn!(target: "telemetry", "failed to enqueue telemetry snapshot: {err}");
@@ -785,6 +789,7 @@ mod tests {
                     block_hash: "0xabc".into(),
                     transaction_count: 4,
                     reputation_score: 0.9,
+                    verifier_metrics: VerifierMetricsSnapshot::default(),
                 });
 
                 let task = task::spawn_local(async move {
