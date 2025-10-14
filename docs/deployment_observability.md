@@ -2,7 +2,9 @@
 
 This playbook translates the blueprint's phase 8 requirements into actionable
 runbooks for bringing the STWO/Plonky3 chain online and keeping it observable in
-production.
+production. Pair it with the [RPC CLI Operator Guide](./rpc_cli_operator_guide.md)
+for authentication, throttling, and recovery procedures that apply to
+operator-driven RPC workflows.
 
 ## Release Channels & Feature Gating
 
