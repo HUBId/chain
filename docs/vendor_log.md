@@ -29,3 +29,9 @@ Weitere Schritte:
 | Crate | Version(en) | Zielverzeichnis | Notizen |
 |-------|-------------|-----------------|---------|
 | malachite | 0.4.18 | `vendor/malachite/0.4.18/src/` | Komplettes Git-Checkout als Quelle genutzt; Workspace benötigt Pfad auf das `src`-Unterverzeichnis. |
+
+## Strategie-Update – Mehrstufige Vendor-Planung (2025-10-14)
+
+* Diff-Limit pro PR: ca. 2 000 geänderte Zeilen, damit Code-Reviews handhabbar bleiben.
+* Segmentgröße: höchstens drei Crates pro Batch, um innerhalb des Diff-Limits zu bleiben.
+* Folgeaufgaben: Umsetzung der noch offenen Vendor-Schritte gemäß Abschnitt „Folgeaktionen“ im Abhängigkeits-Kompatibilitätsbericht.
