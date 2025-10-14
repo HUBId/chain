@@ -1,51 +1,59 @@
 {
   "package": "malachite",
   "version": "0.4.18",
-  "generated_at": "2025-10-13T19:22:18Z",
-  "reference_source": "downloaded crate archive /tmp/malachite-0.4.18-jizajlj0.crate",
+  "generated_at": "2025-10-14T19:35:13Z",
+  "reference_source": "downloaded crate archive /tmp/malachite-0.4.18-4duixmf4.crate",
   "status": "pass",
   "summary": {
     "total": 7,
     "match": 7,
     "mismatch": 0,
     "missing_in_vendor": 0,
-    "missing_in_reference": 0
+    "missing_in_reference": 0,
+    "total_bytes": 25306
   },
   "results": {
     ".cargo_vcs_info.json": {
       "status": "match",
       "actual": "09216fa39c1e9a3ee86e6223ca19ce70ceaffe6c44df2710ceeb1f67b8f6317a",
-      "expected": "09216fa39c1e9a3ee86e6223ca19ce70ceaffe6c44df2710ceeb1f67b8f6317a"
+      "expected": "09216fa39c1e9a3ee86e6223ca19ce70ceaffe6c44df2710ceeb1f67b8f6317a",
+      "size_bytes": 103
     },
     "Cargo.lock": {
       "status": "match",
       "actual": "5b3e756bf66940e5f4698d4f76c7215bbc0aa9ca754cc9cf443f52cbba3c5f38",
-      "expected": "5b3e756bf66940e5f4698d4f76c7215bbc0aa9ca754cc9cf443f52cbba3c5f38"
+      "expected": "5b3e756bf66940e5f4698d4f76c7215bbc0aa9ca754cc9cf443f52cbba3c5f38",
+      "size_bytes": 17987
     },
     "Cargo.toml": {
       "status": "match",
       "actual": "aed703d1c014b5c1a875ee752ff73f7d3826e0548de166df5e3ba37112134a6f",
-      "expected": "aed703d1c014b5c1a875ee752ff73f7d3826e0548de166df5e3ba37112134a6f"
+      "expected": "aed703d1c014b5c1a875ee752ff73f7d3826e0548de166df5e3ba37112134a6f",
+      "size_bytes": 2340
     },
     "Cargo.toml.orig": {
       "status": "match",
       "actual": "41bf34e0818a1255696f69e588396ebe4357531b55dc0a782836cd55dc5afb74",
-      "expected": "41bf34e0818a1255696f69e588396ebe4357531b55dc0a782836cd55dc5afb74"
+      "expected": "41bf34e0818a1255696f69e588396ebe4357531b55dc0a782836cd55dc5afb74",
+      "size_bytes": 1800
     },
     "README.md": {
       "status": "match",
       "actual": "fa35276d6ae01159cc10755727142e20ae7a579becfa6a911deb22e1876c4c04",
-      "expected": "fa35276d6ae01159cc10755727142e20ae7a579becfa6a911deb22e1876c4c04"
+      "expected": "fa35276d6ae01159cc10755727142e20ae7a579becfa6a911deb22e1876c4c04",
+      "size_bytes": 1121
     },
     "katex-header.html": {
       "status": "match",
       "actual": "6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b",
-      "expected": "6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b"
+      "expected": "6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b",
+      "size_bytes": 1040
     },
     "src/lib.rs": {
       "status": "match",
       "actual": "46f287ad69f2b2bbf72d710a2c8a890224e871c67382e5644674879b79f182ee",
-      "expected": "46f287ad69f2b2bbf72d710a2c8a890224e871c67382e5644674879b79f182ee"
+      "expected": "46f287ad69f2b2bbf72d710a2c8a890224e871c67382e5644674879b79f182ee",
+      "size_bytes": 915
     }
   },
   "actual_hashes": {
@@ -65,5 +73,14 @@
     "README.md": "fa35276d6ae01159cc10755727142e20ae7a579becfa6a911deb22e1876c4c04",
     "katex-header.html": "6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b",
     "src/lib.rs": "46f287ad69f2b2bbf72d710a2c8a890224e871c67382e5644674879b79f182ee"
+  },
+  "actual_sizes": {
+    ".cargo_vcs_info.json": 103,
+    "Cargo.lock": 17987,
+    "Cargo.toml": 2340,
+    "Cargo.toml.orig": 1800,
+    "README.md": 1121,
+    "katex-header.html": 1040,
+    "src/lib.rs": 915
   }
 }
