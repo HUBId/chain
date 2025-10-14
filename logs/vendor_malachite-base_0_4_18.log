@@ -6,3 +6,5 @@
 [2025-10-14T21:05:00Z] [INFO] Copied tests/vecs/random/ modules into vendor/malachite-base/0.4.18/tests/vecs/random/.
 [2025-10-14T21:05:00Z] [INFO] Added 19 entries to manifest/final_file_list.txt for the random vecs test vectors.
 [2025-10-14T21:05:00Z] [INFO] With random coverage landed, the vendor tree now contains the complete vecs test suite from malachite-base 0.4.18.
+[2025-10-14T22:08:52Z] [INFO] Imported upstream malachite-base/src/num arithmetic, basic, logic, iterators into vendor tree.
+[2025-10-14T22:08:52Z] [INFO] Regenerated manifest/final_file_list.txt for new numeric modules and refreshed manifest/chunks.json.
