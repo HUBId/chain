@@ -54,3 +54,12 @@ network with verified state commitments.
 
 Following these steps guarantees storage repairs reconstitute the Merkle state
 and pruning frontier expected by downstream proofs.
+
+## 5. Automated Recovery Drill
+
+To keep these procedures fresh, CI runs `scripts/ci/firewood_recovery.sh` every
+night at 05:00 UTC. The drill corrupts a WAL, restores a snapshot, and
+validates the resulting state root with `FirewoodPruner::verify_pruned_state`.
+GitHub Actions uploads the generated JSON summary and console log as the
+`firewood-recovery-artifacts` bundle so operators can review the latest dry
+run results.
