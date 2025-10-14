@@ -36,3 +36,23 @@ Die Manifest-Datei enthält allgemeine Metadaten sowie ein Feld `segments`, das 
 - `timestamp`: Zeitpunkt der letzten erfolgreichen Verifikation im UTC-Format (`YYYY-MM-DDTHH:MM:SSZ`).
 
 Ergänzend werden `chunk_name`, `offset`, `length`, `downloaded_at` und `status` gepflegt, damit die Segmentinformationen mit dem Chunk-Plan sowie dem Download-Prozess abgeglichen werden können.
+
+## PR-Abfolge
+
+Um die Review-Last überschaubar zu halten, sollte jeder Pull Request für diese Vendor-Aktualisierung maximal rund 10 000 Diff-Zeilen umfassen. Der Gesamtimport wird dazu in fünf aufeinanderfolgende Teil-PRs zerlegt, die den Malachite-Workspace von außen nach innen aufbauen:
+
+1. **metakrate** – Workspace-Manifeste, gemeinsame Lizenzdateien und Hilfsskripte.
+2. **malachite-base** – Kern-Bibliothek mit booleschen Utilities und allgemeinen Zahlentypen.
+3. **malachite-nz** – Nicht-negative Ganzzahlen inkl. Tests und Beispielprogramme.
+4. **malachite-q** – Rationale Zahlen und zugehörige Tests.
+5. **malachite-float** – Fließkommazahlen, Benchmarks und Integration in das Workspace-Manifest.
+
+Vor dem ersten Teil-PR wird das Chunk-Plan-Skript [`chunk_plan.sh`](../../../scripts/vendor_malachite/chunk_plan.sh) einmalig gegen das frisch heruntergeladene Crate-Archiv ausgeführt. Dadurch steht ein stabiler Zuschnitt der Binärsegmente für alle nachfolgenden PRs fest. Nach jedem Teil-PR, der neue Dateien unter `chunks/` oder `manifest/` anlegt oder verändert, ist anschließend das Manifest über [`update_manifest.py`](../../../scripts/vendor_malachite/update_manifest.py) zu aktualisieren. Bei reinem Code-Import ohne neue Segmente genügt ein Lauf unmittelbar vor dem finalen PR, um sämtliche Hashes zu verifizieren.
+
+| Teil-PR              | Zielverzeichnis (relativ zu `vendor/malachite/0.4.18/src/`) | Inhaltlicher Block |
+|----------------------|------------------------------------------------------------|--------------------|
+| 1 – metakrate        | `.` (Workspace-Wurzel, `Cargo.toml`, `README.md`, `katex-header.html`) | Grundlegende Workspace-Metadaten und Hilfsassets |
+| 2 – malachite-base   | `src/malachite-base/src/booleans`, `src/malachite-base/src/integer`    | Basisfunktionen, boolesche Utilities und ganzzahlige Typen |
+| 3 – malachite-nz     | `src/malachite-nz/src`                                        | Nicht-negative Ganzzahlen inkl. Tests `tests/natural/arithmetic A–C` |
+| 4 – malachite-q      | `src/malachite-q/src`                                         | Rationale Zahlen, Parser sowie `tests/rational` |
+| 5 – malachite-float  | `src/malachite-float/src`, `tests/float`                      | Fließkommazahlen, Benchmarks und Integrationstests |
