@@ -9,17 +9,11 @@
 use malachite_base::test_util::runner::Runner;
 
 pub(crate) fn register(runner: &mut Runner) {
-    arithmetic::register(runner);
-    comparison::register(runner);
-    conversion::register(runner);
-    factorization::register(runner);
-    float::register(runner);
-    logic::register(runner);
+    is_prime::register(runner);
+    primes::register(runner);
+    prime_sieve::register(runner);
 }
 
-mod arithmetic;
-mod comparison;
-mod conversion;
-mod factorization;
-mod float;
-mod logic;
+mod is_prime;
+mod prime_sieve;
+mod primes;
