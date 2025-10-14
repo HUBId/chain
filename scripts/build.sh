@@ -10,6 +10,8 @@ fi
 : "${CARGO_TERM_COLOR:=always}"
 export CARGO_TERM_COLOR
 
+export CARGO_NET_OFFLINE=true
+
 usage() {
   cat <<'USAGE'
 Usage: scripts/build.sh [options] [-- <cargo build args>]
@@ -167,4 +169,4 @@ case "$BACKEND" in
     ;;
 esac
 
-cargo build "${PROFILE_ARGS[@]}" "${BACKEND_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
+cargo build --offline "${PROFILE_ARGS[@]}" "${BACKEND_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
