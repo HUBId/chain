@@ -9,10 +9,86 @@ use crate::reputation::Tier;
 
 use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
+use crate::proof_system::ProofVerifierRegistry;
 use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
 use crate::types::StoredBlock;
-use crate::types::{Block, BlockMetadata, BlockPayload, ChainProof};
+use crate::types::{Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem, RecursiveProof};
+use rpp_p2p::{PipelineError, RecursiveProofVerifier};
+
+#[derive(Clone, Debug)]
+pub struct RuntimeRecursiveProofVerifier {
+    registry: ProofVerifierRegistry,
+}
+
+impl Default for RuntimeRecursiveProofVerifier {
+    fn default() -> Self {
+        Self {
+            registry: ProofVerifierRegistry::default(),
+        }
+    }
+}
+
+impl RuntimeRecursiveProofVerifier {
+    pub fn new(registry: ProofVerifierRegistry) -> Self {
+        Self { registry }
+    }
+}
+
+impl RecursiveProofVerifier for RuntimeRecursiveProofVerifier {
+    fn verify_recursive(
+        &self,
+        proof: &[u8],
+        expected_commitment: &str,
+        previous_commitment: Option<&str>,
+    ) -> Result<(), PipelineError> {
+        let artifact: ChainProof = serde_json::from_slice(proof).map_err(|err| {
+            PipelineError::SnapshotVerification(format!("invalid recursive proof payload: {err}"))
+        })?;
+        let system = match &artifact {
+            ChainProof::Stwo(_) => ProofSystem::Stwo,
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => ProofSystem::Plonky3,
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => ProofSystem::RppStark,
+        };
+        let recursive = RecursiveProof::from_parts(
+            system,
+            expected_commitment.to_string(),
+            previous_commitment.map(|value| value.to_string()),
+            artifact.clone(),
+        )
+        .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
+        if let Some(expected) = previous_commitment {
+            match recursive.previous_commitment.as_deref() {
+                Some(actual) if actual == expected => {}
+                Some(actual) => {
+                    return Err(PipelineError::SnapshotVerification(format!(
+                        "previous commitment mismatch (expected {expected}, got {actual})"
+                    )))
+                }
+                None => {
+                    return Err(PipelineError::SnapshotVerification(
+                        "recursive proof missing previous commitment".into(),
+                    ))
+                }
+            }
+        }
+        if previous_commitment.is_none() {
+            if let Some(actual) = recursive.previous_commitment.as_deref() {
+                if actual != RecursiveProof::anchor() {
+                    return Err(PipelineError::SnapshotVerification(
+                        "unexpected previous commitment for genesis proof".into(),
+                    ));
+                }
+            }
+        }
+        self.registry
+            .verify_recursive(&artifact)
+            .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
+        Ok(())
+    }
+}
 use ed25519_dalek::PublicKey;
 
 /// Interface that provides raw block payloads required for reconstruction.
@@ -469,7 +545,7 @@ fn decode_digest(value: &str) -> ChainResult<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
+        evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact};
@@ -828,10 +904,8 @@ mod tests {
 
         let light_client_feed = engine.light_client_feed(1).expect("feed from height 1");
         assert_eq!(light_client_feed.len(), 2);
-        assert!(
-            light_client_feed
-                .iter()
-                .all(|update| !update.state_root.is_empty())
-        );
+        assert!(light_client_feed
+            .iter()
+            .all(|update| !update.state_root.is_empty()));
     }
 }

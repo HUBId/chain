@@ -1,6 +1,7 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use libp2p::PeerId;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
@@ -10,6 +11,10 @@ use crate::consensus::SignedBftVote;
 use crate::node::NodeHandle;
 use crate::runtime::node_runtime::node::NodeEvent;
 use crate::types::{Block, TransactionProofBundle};
+use parking_lot::Mutex;
+use rpp_p2p::{
+    GossipTopic, JsonProofValidator, PipelineError, ProofMempool, ProofRecord, ProofStorage,
+};
 
 /// Processes decoded gossip payloads for downstream pipelines.
 pub trait GossipProcessor: Send + Sync + 'static {
@@ -27,11 +32,23 @@ pub trait GossipProcessor: Send + Sync + 'static {
 #[derive(Clone)]
 pub struct NodeGossipProcessor {
     node: NodeHandle,
+    proofs: Arc<Mutex<ProofMempool>>,
+    seen_blocks: Arc<Mutex<HashSet<String>>>,
+    seen_votes: Arc<Mutex<HashSet<String>>>,
 }
 
 impl NodeGossipProcessor {
     pub fn new(node: NodeHandle) -> Self {
-        Self { node }
+        let validator = Arc::new(JsonProofValidator::default());
+        let storage = Arc::new(NullProofStorage::default());
+        let proofs = ProofMempool::new(validator, storage)
+            .expect("in-memory proof pipeline must initialise");
+        Self {
+            node,
+            proofs: Arc::new(Mutex::new(proofs)),
+            seen_blocks: Arc::new(Mutex::new(HashSet::new())),
+            seen_votes: Arc::new(Mutex::new(HashSet::new())),
+        }
     }
 }
 
@@ -39,6 +56,12 @@ impl GossipProcessor for NodeGossipProcessor {
     fn handle_block(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
         let block: Block = serde_json::from_slice(payload)
             .map_err(|err| anyhow!("invalid block gossip payload: {err}"))?;
+        {
+            let mut guard = self.seen_blocks.lock();
+            if !guard.insert(block.hash.clone()) {
+                return Ok(());
+            }
+        }
         self.node
             .submit_block_proposal(block)
             .map(|_| ())
@@ -48,19 +71,49 @@ impl GossipProcessor for NodeGossipProcessor {
     fn handle_vote(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
         let vote: SignedBftVote = serde_json::from_slice(payload)
             .map_err(|err| anyhow!("invalid vote gossip payload: {err}"))?;
+        {
+            let mut guard = self.seen_votes.lock();
+            if !guard.insert(vote.hash()) {
+                return Ok(());
+            }
+        }
         self.node
             .submit_vote(vote)
             .map(|_| ())
             .map_err(|err| anyhow!("failed to submit vote: {err}"))
     }
 
-    fn handle_proof(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
+    fn handle_proof(&self, peer: &PeerId, payload: &[u8]) -> Result<()> {
+        let mut proofs = self.proofs.lock();
+        match proofs.ingest(*peer, GossipTopic::Proofs, payload.to_vec()) {
+            Ok(_) => {}
+            Err(PipelineError::Duplicate) => {
+                return Ok(());
+            }
+            Err(err) => {
+                return Err(anyhow!("failed to ingest proof gossip: {err}"));
+            }
+        }
+        drop(proofs);
         let bundle: TransactionProofBundle = serde_json::from_slice(payload)
             .map_err(|err| anyhow!("invalid proof gossip payload: {err}"))?;
-        self.node
+        let outcome = self
+            .node
             .submit_transaction(bundle)
             .map(|_| ())
-            .map_err(|err| anyhow!("failed to submit proof bundle: {err}"))
+            .map_err(|err| anyhow!("failed to submit proof bundle: {err}"));
+        let mut proofs = self.proofs.lock();
+        while proofs.pop().is_some() {}
+        outcome
+    }
+}
+
+#[derive(Debug, Default)]
+struct NullProofStorage;
+
+impl ProofStorage for NullProofStorage {
+    fn persist(&self, _record: &ProofRecord) -> Result<(), PipelineError> {
+        Ok(())
     }
 }
 
