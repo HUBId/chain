@@ -1,0 +1,50 @@
+[package]
+name = "malachite-base"
+version = "0.4.18"
+authors = ["Mikhail Hogrefe <mikhailhogrefe@gmail.com>"]
+rust-version.workspace = true
+edition.workspace = true
+description = "A collection of utilities, including new arithmetic traits and iterators that generate all values of a type."
+readme = "README.md"
+homepage = "https://malachite.rs/"
+repository = "https://github.com/mhogrefe/malachite"
+license = "LGPL-3.0-only"
+keywords = ["mathematics", "math", "numerics", "testing"]
+categories = ["mathematics", "development-tools::testing"]
+
+[lib]
+name = "malachite_base"
+path = "src/lib.rs"
+
+[[bin]]
+name = "malachite_base_main"
+path = "src/bin.rs"
+test = false
+
+[dependencies]
+itertools = { version = "0.11.0", default-features = false, features = ["use_alloc"] }
+ryu = { version = "1.0.15", default-features = false }
+hashbrown = { version = "0.14", default-features = false, features = ["ahash", "inline-more"] }
+libm = { version = "0.2.8", default-features = false }
+
+sha3 = { version = "0.10.8", optional = true, default-features = false }
+rand = { version = "0.8.5", optional = true, default-features = false }
+rand_chacha = { version = "0.3.1", optional = true, default-features = false }
+getrandom = { version = "0.2", default-features = false, features = ["js"], optional = true }
+
+clap = { version = "2.33.1", optional = true }
+gnuplot = { version = "0.0.39", optional = true }
+time = { version = "0.3.28", optional = true }
+walkdir = { version = "2.3.3", optional = true }
+
+[features]
+random = ["sha3", "rand", "rand_chacha", "getrandom"]
+test_build = ["gnuplot", "time", "clap", "random", "itertools/use_std"]
+bin_build = ["walkdir", "test_build"]
+
+[dev-dependencies]
+malachite-base = { workspace = true, features = ["test_build"] }
+maplit = "1.0.2"
+
+[package.metadata.docs.rs]
+rustdoc-args = [ "--html-in-header", "katex-header.html" ]
