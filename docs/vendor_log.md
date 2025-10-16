@@ -30,6 +30,12 @@ Weitere Schritte:
 |-------|-------------|-----------------|---------|
 | malachite | 0.4.18 | `vendor/malachite/0.4.18/src/` | Komplettes Git-Checkout als Quelle genutzt; Workspace benötigt Pfad auf das `src`-Unterverzeichnis. |
 
+### Offline-Validierung (2025-10-14)
+
+* Temporäre Auskommentierungen in `cargo/config.toml` entfernt; sämtliche `malachite*`-Pfade sind nun aktiv eingebunden.
+* Abschluss-Checks (`cargo metadata --offline`, `cargo check --offline -p rpp-chain -p rpp-node -p rpp-sim`) durchgeführt und unter `logs/vendor_cargo_metadata_20250214.log` bzw. `logs/vendor_cargo_check_20250214.log` abgelegt (50 k Upload-Limit weiterhin beachten – Logs bei Bedarf lokal inspizieren).
+* `cargo check` bricht aktuell in `malachite-base` wegen des stabil noch nicht verfügbaren `char::MIN`-APIs ab; Fehlerdetails sind im Log dokumentiert und dienen als Ausgangspunkt für den nächsten Fix.
+
 ## Strategie-Update – Mehrstufige Vendor-Planung (2025-10-14)
 
 * Diff-Limit pro PR: ca. 2 000 geänderte Zeilen, damit Code-Reviews handhabbar bleiben.

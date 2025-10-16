@@ -71,25 +71,21 @@ name = "malachite"
 version = "0.4.18"
 path = "../vendor/malachite/0.4.18/src"
 
-# Aktiv, sobald Segment PR B1–B12 gemergt sind.
 [[patch.crates-io]]
 name = "malachite-base"
 version = "0.4.18"
 path = "../vendor/malachite-base/0.4.18"
 
-# Aktiv, sobald Segment PR B1–B12 gemergt sind.
 [[patch.crates-io]]
 name = "malachite-nz"
 version = "0.4.18"
 path = "../vendor/malachite-nz/0.4.18"
 
-# Aktiv, sobald Segment PR B1–B12 gemergt sind.
 [[patch.crates-io]]
 name = "malachite-q"
 version = "0.4.18"
 path = "../vendor/malachite-q/0.4.18"
 
-# Aktiv, sobald Segment PR B1–B12 gemergt sind.
 [[patch.crates-io]]
 name = "malachite-float"
 version = "0.4.18"
