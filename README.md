@@ -137,6 +137,47 @@ cargo run -- start --mode node --node-config config/node.toml
 The node opens a Firewood store under the configured `data_dir` (creating `db`, `wal`, and pruning checkpoints), starts block production, and exposes an HTTP API (default `127.0.0.1:7070`).
 Firewood automatically prunes historical state once checkpoints are verified, keeping the working set lean while preserving proofs.
 
+## Vendored Malachite maintenance
+
+Malachite's rational arithmetic helpers ship with extensive CLI demos and benchmarks under `src/bin_util`. These utilities are vendored into `vendor/malachite-q/0.4.18/src/bin_util/` so that the workspace keeps a self-contained toolchain for regression testing and documentation snippets.
+
+When updating this vendor drop:
+
+1. Refresh the segmented download manifest so that the audit trail captures the new timestamps and on-disk status. The helper script accepts explicit paths for the `malachite-q` layout:
+
+   ```bash
+   python3 scripts/vendor_malachite/update_manifest.py \
+     --plan vendor/malachite-q/0.4.18/manifest/chunk_plan.json \
+     --manifest vendor/malachite-q/0.4.18/manifest/chunks.json \
+     --chunks-dir vendor/malachite-q/0.4.18/chunks \
+     --log-file vendor/malachite-q/0.4.18/logs/update_manifest.log \
+     --segment-template 'malachite-q-0.4.18.part{index:03d}'
+   ```
+
+   The script logs straight into `vendor/malachite-q/0.4.18/logs/update_manifest.log`, preserving the gap left by the intentionally omitted binary chunks.
+
+2. Rebuild `manifest/final_file_list.txt` so that the SHA-256 and byte counts stay aligned with the mirrored sources:
+
+   ```bash
+   python - <<'PY'
+   import hashlib
+   from pathlib import Path
+
+   root = Path('vendor/malachite-q/0.4.18')
+   entries = []
+   for path in sorted(root.rglob('*')):
+       if path.is_file():
+           data = path.read_bytes()
+           entries.append((path.relative_to(root), hashlib.sha256(data).hexdigest(), len(data)))
+
+   with (root / 'manifest' / 'final_file_list.txt').open('w', encoding='utf-8') as handle:
+       for rel_path, digest, size in entries:
+           handle.write(f"{digest} {size} {rel_path.as_posix()}\n")
+   PY
+   ```
+
+   Commit the regenerated manifest alongside any source updates so downstream consumers can verify integrity locally.
+
 ### Modern quickstart workflows
 
 **Use curated runtime profiles**
