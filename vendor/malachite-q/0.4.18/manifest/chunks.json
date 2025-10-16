@@ -1,6 +1,6 @@
 {
   "version": "0.4.18",
-  "generated_at": "2025-10-16T09:42:08Z",
+  "generated_at": "2025-10-16T10:29:05Z",
   "segments": [
     {
       "segment_name": "malachite-q-0.4.18.part000",
@@ -8,8 +8,8 @@
       "chunk_name": "chunk_000",
       "offset": 0,
       "length": 220393,
-      "status": "omitted",
-      "notes": "Binary crate archive omitted from repository; fetch from crates.io if needed."
+      "status": "missing",
+      "timestamp": "2025-10-16T10:29:05Z"
     }
   ]
 }
