@@ -1,0 +1,185 @@
+{
+  "generated_at": "2025-10-16T14:34:18Z",
+  "subcrates": [
+    {
+      "chunks": {
+        "segment_count": 1,
+        "segments": [
+          {
+            "chunk_name": "chunk_000",
+            "length": 277,
+            "offset": 0,
+            "segment_name": "malachite-0.4.18.part000",
+            "status": "missing"
+          }
+        ]
+      },
+      "crate": "malachite",
+      "final_file_list": {
+        "key_files": {
+          "./Cargo.lock": {
+            "sha256": "5b3e756bf66940e5f4698d4f76c7215bbc0aa9ca754cc9cf443f52cbba3c5f38",
+            "size_bytes": 17987
+          },
+          "./Cargo.toml": {
+            "sha256": "aed703d1c014b5c1a875ee752ff73f7d3826e0548de166df5e3ba37112134a6f",
+            "size_bytes": 2340
+          },
+          "./README.md": {
+            "sha256": "fa35276d6ae01159cc10755727142e20ae7a579becfa6a911deb22e1876c4c04",
+            "size_bytes": 1121
+          }
+        },
+        "total_entries": 7
+      },
+      "integrity_report": {
+        "match": 7,
+        "mismatch": 0,
+        "status": "pass",
+        "total": 7
+      },
+      "paths": "vendor/malachite/0.4.18",
+      "version": "0.4.18"
+    },
+    {
+      "chunks": {
+        "segment_count": 1,
+        "segments": [
+          {
+            "chunk_name": "chunk_000",
+            "length": 822554,
+            "offset": 0,
+            "segment_name": "malachite-0.4.18.part000",
+            "status": "missing"
+          }
+        ]
+      },
+      "crate": "malachite-base",
+      "final_file_list": {
+        "key_files": {
+          "Cargo.lock": {
+            "sha256": "56d4d259863b458fe47744689b94bf8cd9d9b47dd3e2de4dcf41d4972207ae10",
+            "size_bytes": 16824
+          },
+          "Cargo.toml": {
+            "sha256": "89aee99ac533938b750a2025ee52db8cf3f20271757e701e84c4ae7dbff0c6c5",
+            "size_bytes": 2584
+          },
+          "README.md": {
+            "sha256": "af56e042c132ef12b7e01fd3c97ada4322ea10cef9911cd694cb51653f3b45c6",
+            "size_bytes": 5521
+          }
+        },
+        "total_entries": 1149
+      },
+      "integrity_report": {
+        "status": "not_available"
+      },
+      "paths": "vendor/malachite-base/0.4.18",
+      "version": "0.4.18"
+    },
+    {
+      "chunks": {
+        "segment_count": 1,
+        "segments": [
+          {
+            "chunk_name": "chunk_000",
+            "length": 623265,
+            "offset": 0,
+            "segment_name": "malachite-float-0.4.18.part000",
+            "status": "missing"
+          }
+        ]
+      },
+      "crate": "malachite-float",
+      "final_file_list": {
+        "key_files": {
+          "Cargo.toml": {
+            "sha256": "ccf39327b791d02bbea3ef355d09cf49861c4ede9eed11d17371da72b6186c7d",
+            "size_bytes": 2602
+          },
+          "README.md": {
+            "sha256": "53721cb69b540dd4f1921b6cba693f36dc5da27cc019b8bb9c69fdca8249adf1",
+            "size_bytes": 920
+          }
+        },
+        "total_entries": 156
+      },
+      "integrity_report": {
+        "status": "not_available"
+      },
+      "paths": "vendor/malachite-float/0.4.18",
+      "version": "0.4.18"
+    },
+    {
+      "chunks": {
+        "segment_count": 1,
+        "segments": [
+          {
+            "chunk_name": "chunk_000",
+            "length": 2426976,
+            "offset": 0,
+            "segment_name": "malachite-nz-0.4.18.part000",
+            "status": "missing"
+          }
+        ]
+      },
+      "crate": "malachite-nz",
+      "final_file_list": {
+        "key_files": {
+          "./Cargo.lock": {
+            "sha256": null,
+            "size_bytes": null
+          },
+          "./Cargo.toml": {
+            "sha256": null,
+            "size_bytes": null
+          },
+          "./README.md": {
+            "sha256": null,
+            "size_bytes": null
+          }
+        },
+        "total_entries": 779
+      },
+      "integrity_report": {
+        "status": "not_available"
+      },
+      "paths": "vendor/malachite-nz/0.4.18",
+      "version": "0.4.18"
+    },
+    {
+      "chunks": {
+        "segment_count": 1,
+        "segments": [
+          {
+            "chunk_name": "chunk_000",
+            "length": 220393,
+            "offset": 0,
+            "segment_name": "malachite-q-0.4.18.part000",
+            "status": "missing"
+          }
+        ]
+      },
+      "crate": "malachite-q",
+      "final_file_list": {
+        "key_files": {
+          "Cargo.toml": {
+            "sha256": "a3497fb9ee7c08ed4b9800fa362fc2e5a4fadc1cd17a3be5fbdddb7ee2dea202",
+            "size_bytes": 2362
+          },
+          "README.md": {
+            "sha256": "b8d38436a87bdb01269d49317794d46fb50618e1458cdd22dbc4a58077668d52",
+            "size_bytes": 5162
+          }
+        },
+        "total_entries": 209
+      },
+      "integrity_report": {
+        "status": "not_available"
+      },
+      "paths": "vendor/malachite-q/0.4.18",
+      "version": "0.4.18"
+    }
+  ]
+}

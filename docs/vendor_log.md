@@ -41,3 +41,18 @@ Weitere Schritte:
 * Diff-Limit pro PR: ca. 2 000 geänderte Zeilen, damit Code-Reviews handhabbar bleiben.
 * Segmentgröße: höchstens drei Crates pro Batch, um innerhalb des Diff-Limits zu bleiben.
 * Folgeaufgaben: Umsetzung der noch offenen Vendor-Schritte gemäß Abschnitt „Folgeaktionen“ im Abhängigkeits-Kompatibilitätsbericht.
+
+## Integritätsüberblick – Malachite-Workspace (2025-10-16)
+
+* Konsolidierter Sammelbericht: `vendor/malachite/0.4.18/manifest/integrity_summary.json` fasst Kern-Prüfsummen (u. a. `Cargo.toml`, `Cargo.lock`, `README.md`) sowie den Status aller Segmentdateien der Subkrates zusammen.
+* Die Übersicht deckt `malachite`, `malachite-base`, `malachite-float`, `malachite-nz` und `malachite-q` ab und ergänzt fehlende Integritätsberichte mit Platzhaltern zur schnellen Nachverfolgung.
+
+### Archivierte Logauszüge (Update-Manifest)
+
+```text
+[malachite]      [2025-10-14T20:09:17Z] Segment malachite-0.4.18.part000 verified (sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[malachite-base] [2025-10-15T10:31:10Z] Segment malachite-0.4.18.part000 is missing on disk (length=822554)
+[malachite-float][2025-10-16T13:55:22Z] Segment malachite-float-0.4.18.part000 is missing on disk (length=623265)
+[malachite-nz]   [2025-10-16T09:27:03Z] Segment malachite-nz-0.4.18.part000 is missing on disk (length=2426976)
+[malachite-q]    [2025-10-16T09:42:08Z] Segment malachite-q-0.4.18.part000 omitted; binary chunks stored externally
+```
