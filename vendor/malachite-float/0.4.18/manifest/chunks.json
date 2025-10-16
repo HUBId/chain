@@ -1,6 +1,6 @@
 {
   "version": "0.4.18",
-  "generated_at": "2025-10-16T12:17:06Z",
+  "generated_at": "2025-10-16T13:26:09Z",
   "segments": [
     {
       "segment_name": "malachite-float-0.4.18.part000",
@@ -9,7 +9,7 @@
       "offset": 0,
       "length": 623265,
       "status": "missing",
-      "timestamp": "2025-10-16T12:17:06Z"
+      "timestamp": "2025-10-16T13:26:09Z"
     }
   ]
 }
