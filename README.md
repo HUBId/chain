@@ -178,6 +178,37 @@ When updating this vendor drop:
 
    Commit the regenerated manifest alongside any source updates so downstream consumers can verify integrity locally.
 
+   The same segmented workflow now applies to the float helpers under `vendor/malachite-float/0.4.18/`. Update their manifest with matching arguments so that new `src/test_util` imports stay covered by the integrity logs:
+
+   ```bash
+   python3 scripts/vendor_malachite/update_manifest.py \
+     --plan vendor/malachite-float/0.4.18/manifest/chunk_plan.json \
+     --manifest vendor/malachite-float/0.4.18/manifest/chunks.json \
+     --chunks-dir vendor/malachite-float/0.4.18/chunks \
+     --log-file vendor/malachite-float/0.4.18/logs/update_manifest.log \
+     --segment-template 'malachite-float-0.4.18.part{index:03d}'
+   ```
+
+   Regenerate the float manifest’s file list as part of the same workflow so the expanded test utilities remain checksummed:
+
+   ```bash
+   python - <<'PY'
+   import hashlib
+   from pathlib import Path
+
+   root = Path('vendor/malachite-float/0.4.18')
+   entries = []
+   for path in sorted(root.rglob('*')):
+       if path.is_file():
+           data = path.read_bytes()
+           entries.append((path.relative_to(root), hashlib.sha256(data).hexdigest(), len(data)))
+
+   with (root / 'manifest' / 'final_file_list.txt').open('w', encoding='utf-8') as handle:
+       for rel_path, digest, size in entries:
+           handle.write(f"{digest} {size} {rel_path.as_posix()}\n")
+   PY
+   ```
+
 ### Modern quickstart workflows
 
 **Use curated runtime profiles**
