@@ -32,7 +32,7 @@ DEFAULT_VENDOR_ROOT = REPO_ROOT / "vendor" / "malachite" / DEFAULT_VERSION
 DEFAULT_PLAN_FILE = DEFAULT_VENDOR_ROOT / "manifest" / "chunk_plan.json"
 DEFAULT_MANIFEST_FILE = DEFAULT_VENDOR_ROOT / "manifest" / "chunks.json"
 DEFAULT_LOG_FILE = DEFAULT_VENDOR_ROOT / "logs" / "update_manifest.log"
-SEGMENT_TEMPLATE = f"malachite-{DEFAULT_VERSION}.part{{index:03d}}"
+DEFAULT_SEGMENT_TEMPLATE = f"malachite-{DEFAULT_VERSION}.part{{index:03d}}"
 
 # Non-zero exit code that signals that at least one segment must be re-downloaded
 EXIT_MISMATCH = 3
@@ -104,8 +104,8 @@ def load_plan(path: Path) -> Dict:
     return plan
 
 
-def resolve_segment_name(index: int) -> str:
-    return SEGMENT_TEMPLATE.format(index=index)
+def resolve_segment_name(index: int, template: str) -> str:
+    return template.format(index=index)
 
 
 def update_manifest(
@@ -114,6 +114,7 @@ def update_manifest(
     manifest_path: Path,
     chunk_dir: Path,
     logger: Logger,
+    segment_template: str,
 ) -> int:
     manifest = load_json(manifest_path)
     existing_segments: Dict[str, Dict] = {
@@ -134,7 +135,7 @@ def update_manifest(
         offset = int(chunk.get("offset"))
         length = int(chunk.get("length"))
         chunk_name = chunk.get("chunk_name") or f"chunk_{index:03d}"
-        segment_name = resolve_segment_name(index)
+        segment_name = resolve_segment_name(index, segment_template)
         segment_path = chunk_dir / segment_name
 
         logger.info(
@@ -271,6 +272,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Log file to write diagnostic output (default: %(default)s)",
     )
+    parser.add_argument(
+        "--segment-template",
+        dest="segment_template",
+        default=DEFAULT_SEGMENT_TEMPLATE,
+        help=(
+            "Filename template for chunk segments. "
+            "Must contain '{index:03d}' (default: %(default)s)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -299,6 +309,7 @@ def main() -> int:
         manifest_path=args.manifest_file,
         chunk_dir=args.chunks_dir,
         logger=logger,
+        segment_template=args.segment_template,
     )
 
 
