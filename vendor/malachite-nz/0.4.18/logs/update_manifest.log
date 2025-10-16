@@ -8,3 +8,6 @@
 [2025-10-16T08:49:10Z] [INFO] Processing segment malachite-nz-0.4.18.part000 (index=0, offset=0, length=2426976)
 [2025-10-16T08:49:10Z] [WARN] Segment malachite-nz-0.4.18.part000 is missing on disk
 [2025-10-16T08:49:10Z] [WARN] One or more segments are missing or invalid. Trigger a re-download to restore them.
+[2025-10-16T08:57:05Z] [INFO] Processing segment malachite-nz-0.4.18.part000 (index=0, offset=0, length=2426976)
+[2025-10-16T08:57:05Z] [WARN] Segment malachite-nz-0.4.18.part000 is missing on disk
+[2025-10-16T08:57:05Z] [WARN] One or more segments are missing or invalid. Trigger a re-download to restore them.
