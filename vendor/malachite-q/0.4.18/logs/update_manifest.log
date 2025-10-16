@@ -1,0 +1,3 @@
+[2025-10-16T09:42:08Z] [INFO] Processing segment malachite-q-0.4.18.part000 (index=0, offset=0, length=220393)
+[2025-10-16T09:42:08Z] [WARN] Segment malachite-q-0.4.18.part000 omitted from repository to avoid committing binary payloads
+[2025-10-16T09:42:08Z] [INFO] Manifest updated successfully (binary chunks stored externally)
