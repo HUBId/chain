@@ -1,0 +1,3 @@
+[2025-10-16T11:41:01Z] [INFO] Processing segment malachite-float-0.4.18.part000 (index=0, offset=0, length=623265)
+[2025-10-16T11:41:01Z] [WARN] Segment malachite-float-0.4.18.part000 is missing on disk
+[2025-10-16T11:41:01Z] [WARN] One or more segments are missing or invalid. Trigger a re-download to restore them.
