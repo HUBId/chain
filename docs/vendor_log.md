@@ -26,6 +26,13 @@
 * `scripts/vendor_stwo/update_manifest.py` wurde erneut ausgeführt; `manifest/chunks.json`, die Prüfsummenliste `manifest/final_file_list.txt` sowie das Log `logs/update_manifest.log` enthalten die neuen Stände und dokumentieren den Abschluss des `core`-Baums.【F:vendor/stwo-dev/0.1.1/manifest/chunks.json†L1-L6】【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L77】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L10-L18】
 * Damit ist der `core`-Teil des STWO-Workspaces vollständig vendort; Folgearbeiten können sich auf höhere Protokollschichten konzentrieren.
 
+#### Import – prover & tracing (2025-10-17)
+
+* Die STWO-Prover-Schichten (`prover/air/`, `channel/`, `lookups/`, `pcs/`, `poly/`, `vcs/` sowie `fri.rs`, `line.rs`, `secure_column.rs`) und das begleitende Tracing-Modul wurden aus dem Archiv in die Staging-Kopie übernommen; alle Referenzen aus `mod.rs` verweisen nun auf vorhandene Dateien.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/mod.rs†L1-L40】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/air/mod.rs†L1-L152】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/tracing/mod.rs†L1-L76】
+* Die vorhandenen Criterion-Benchmarks (`fri.rs`, `lookups.rs`, `pcs.rs`, `quotients.rs`) decken die neuen Module bereits ab und dienen weiterhin als Performance-Baseline für FRI-Faltung, Lookup-Argumente und Quotienten-Auswertung.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/benches/fri.rs†L1-L38】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/benches/lookups.rs†L1-L34】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/benches/pcs.rs†L1-L34】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/benches/quotients.rs†L1-L36】
+* Manifest und Log wurden erneut via `scripts/vendor_stwo/update_manifest.py` erzeugt; die aktualisierte Prüfliste enthält nun sämtliche `prover/`- und `tracing/`-Dateien, während das Log den Lauf dokumentiert.【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L120】【F:vendor/stwo-dev/0.1.1/manifest/chunks.json†L1-L6】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L1-L12】
+* Die Backend-Unterverzeichnisse `prover/backend/cpu/` und `prover/backend/simd/` fehlen weiterhin; `mod.rs` verweist noch auf diese Pfade, die in einem späteren Import nachgezogen werden müssen.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/mod.rs†L9-L24】
+
 ### Initiale Artefaktplanung (2025-10-17)
 
 * Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
