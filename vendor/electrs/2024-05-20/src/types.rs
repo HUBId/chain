@@ -1,5 +1,8 @@
+use sha2::{Digest, Sha256};
+
 use crate::vendor::electrs::rpp_ledger::bitcoin::{
     blockdata::block::Header as BlockHeader,
+    consensus::encode::{deserialize, serialize},
     hashes::sha256,
     OutPoint,
     Script,
@@ -16,7 +19,7 @@ type Height = u32;
 pub(crate) type SerBlock = Vec<u8>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HashPrefixRow {
+pub struct HashPrefixRow {
     prefix: HashPrefix,
     height: Height,
 }
@@ -24,16 +27,28 @@ pub(crate) struct HashPrefixRow {
 pub const HASH_PREFIX_ROW_SIZE: usize = HASH_PREFIX_LEN + HEIGHT_SIZE;
 
 impl HashPrefixRow {
-    pub(crate) fn to_db_row(&self) -> SerializedHashPrefixRow {
-        todo!("vendor_electrs: implement serialization via rpp-ledger consensus encode");
+    pub fn to_db_row(&self) -> SerializedHashPrefixRow {
+        let mut row = [0u8; HASH_PREFIX_ROW_SIZE];
+        row[..HASH_PREFIX_LEN].copy_from_slice(&self.prefix);
+        row[HASH_PREFIX_LEN..].copy_from_slice(&self.height.to_le_bytes());
+        row
     }
 
-    pub(crate) fn from_db_row(_row: SerializedHashPrefixRow) -> Self {
-        todo!("vendor_electrs: implement deserialization via rpp-ledger consensus encode");
+    pub fn from_db_row(row: SerializedHashPrefixRow) -> Self {
+        let mut prefix = [0u8; HASH_PREFIX_LEN];
+        prefix.copy_from_slice(&row[..HASH_PREFIX_LEN]);
+        let mut height_bytes = [0u8; HEIGHT_SIZE];
+        height_bytes.copy_from_slice(&row[HASH_PREFIX_LEN..]);
+        let height = Height::from_le_bytes(height_bytes);
+        Self { prefix, height }
     }
 
     pub fn height(&self) -> usize {
         self.height as usize
+    }
+
+    pub fn prefix(&self) -> HashPrefix {
+        self.prefix
     }
 }
 
@@ -41,66 +56,79 @@ impl HashPrefixRow {
 pub struct ScriptHash(pub sha256::Hash);
 
 impl ScriptHash {
-    pub fn new(_script: &Script) -> Self {
-        todo!("vendor_electrs: compute script hash via rpp-ledger");
+    pub fn new(script: &Script) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(&(script.as_bytes().len() as u32).to_le_bytes());
+        hasher.update(script.as_bytes());
+        Self(sha256::Hash(hasher.finalize().into()))
     }
 
     fn prefix(&self) -> HashPrefix {
-        todo!("vendor_electrs: derive script hash prefix via rpp-ledger");
+        let mut prefix = [0u8; HASH_PREFIX_LEN];
+        prefix.copy_from_slice(&self.0.as_bytes()[..HASH_PREFIX_LEN]);
+        prefix
     }
 }
 
 pub(crate) struct ScriptHashRow;
 
 impl ScriptHashRow {
-    pub(crate) fn scan_prefix(_scripthash: ScriptHash) -> HashPrefix {
-        todo!("vendor_electrs: scan script hash prefix via rpp-ledger");
+    pub(crate) fn scan_prefix(scripthash: ScriptHash) -> HashPrefix {
+        scripthash.prefix()
     }
 
-    pub(crate) fn row(_scripthash: ScriptHash, _height: usize) -> HashPrefixRow {
+    pub(crate) fn row(scripthash: ScriptHash, height: usize) -> HashPrefixRow {
         HashPrefixRow {
-            prefix: todo!("vendor_electrs: build script hash prefix row"),
-            height: todo!("vendor_electrs: convert height for script hash row"),
+            prefix: scripthash.prefix(),
+            height: height as Height,
         }
     }
 }
 
 pub struct StatusHash(pub sha256::Hash);
 
-fn spending_prefix(_prev: OutPoint) -> HashPrefix {
-    todo!("vendor_electrs: compute spending prefix via rpp-ledger");
+fn spending_prefix(prev: OutPoint) -> HashPrefix {
+    let mut hasher = Sha256::new();
+    hasher.update(prev.txid.as_bytes());
+    hasher.update(prev.vout.to_le_bytes());
+    let digest: [u8; 32] = hasher.finalize().into();
+    let mut prefix = [0u8; HASH_PREFIX_LEN];
+    prefix.copy_from_slice(&digest[..HASH_PREFIX_LEN]);
+    prefix
 }
 
 pub(crate) struct SpendingPrefixRow;
 
 impl SpendingPrefixRow {
-    pub(crate) fn scan_prefix(_outpoint: OutPoint) -> HashPrefix {
-        todo!("vendor_electrs: scan spending prefix via rpp-ledger");
+    pub(crate) fn scan_prefix(outpoint: OutPoint) -> HashPrefix {
+        spending_prefix(outpoint)
     }
 
-    pub(crate) fn row(_outpoint: OutPoint, _height: usize) -> HashPrefixRow {
+    pub(crate) fn row(outpoint: OutPoint, height: usize) -> HashPrefixRow {
         HashPrefixRow {
-            prefix: todo!("vendor_electrs: build spending prefix row"),
-            height: todo!("vendor_electrs: convert height for spending prefix row"),
+            prefix: spending_prefix(outpoint),
+            height: height as Height,
         }
     }
 }
 
-fn txid_prefix(_txid: &Txid) -> HashPrefix {
-    todo!("vendor_electrs: compute txid prefix via rpp-ledger");
+fn txid_prefix(txid: &Txid) -> HashPrefix {
+    let mut prefix = [0u8; HASH_PREFIX_LEN];
+    prefix.copy_from_slice(&txid.as_bytes()[..HASH_PREFIX_LEN]);
+    prefix
 }
 
 pub(crate) struct TxidRow;
 
 impl TxidRow {
-    pub(crate) fn scan_prefix(_txid: Txid) -> HashPrefix {
-        todo!("vendor_electrs: scan txid prefix via rpp-ledger");
+    pub(crate) fn scan_prefix(txid: Txid) -> HashPrefix {
+        txid_prefix(&txid)
     }
 
-    pub(crate) fn row(_txid: Txid, _height: usize) -> HashPrefixRow {
+    pub(crate) fn row(txid: Txid, height: usize) -> HashPrefixRow {
         HashPrefixRow {
-            prefix: todo!("vendor_electrs: build txid prefix row"),
-            height: todo!("vendor_electrs: convert height for txid prefix row"),
+            prefix: txid_prefix(&txid),
+            height: height as Height,
         }
     }
 }
@@ -108,31 +136,55 @@ impl TxidRow {
 pub(crate) type SerializedHeaderRow = [u8; HEADER_ROW_SIZE];
 
 #[derive(Debug, Clone)]
-pub(crate) struct HeaderRow {
+pub struct HeaderRow {
     pub(crate) header: BlockHeader,
 }
 
-pub const HEADER_ROW_SIZE: usize = 80;
+pub const HEADER_ROW_SIZE: usize = 232;
 
 impl HeaderRow {
-    pub(crate) fn new(header: BlockHeader) -> Self {
+    pub fn new(header: BlockHeader) -> Self {
         Self { header }
     }
 
-    pub(crate) fn to_db_row(&self) -> SerializedHeaderRow {
-        todo!("vendor_electrs: encode header row via rpp-ledger");
+    pub fn to_db_row(&self) -> SerializedHeaderRow {
+        let encoded = serialize(&self.header);
+        let mut row = [0u8; HEADER_ROW_SIZE];
+        row[..encoded.len()].copy_from_slice(&encoded);
+        row
     }
 
-    pub(crate) fn from_db_row(_row: SerializedHeaderRow) -> Self {
-        todo!("vendor_electrs: decode header row via rpp-ledger");
+    pub fn from_db_row(row: SerializedHeaderRow) -> Self {
+        let header = deserialize(&row).expect("valid header row");
+        Self { header }
     }
 }
 
-pub(crate) fn bsl_txid(_tx: &bsl::Transaction) -> Txid {
-    todo!("vendor_electrs: convert bsl transaction to txid via rpp-ledger");
+pub(crate) fn bsl_txid(tx: &bsl::Transaction) -> Txid {
+    Txid(tx.txid_sha2().0)
 }
 
 #[cfg(test)]
 mod tests {
-    // TODO: Re-aktivieren, sobald rpp-ledger-Typen verfügbar sind.
+    use super::*;
+    use crate::vendor::electrs::rpp_ledger::bitcoin::Script;
+
+    #[test]
+    fn hash_prefix_roundtrip() {
+        let row = HashPrefixRow {
+            prefix: [1, 2, 3, 4, 5, 6, 7, 8],
+            height: 42,
+        };
+        let encoded = row.to_db_row();
+        let decoded = HashPrefixRow::from_db_row(encoded);
+        assert_eq!(decoded.prefix(), row.prefix());
+        assert_eq!(decoded.height(), row.height());
+    }
+
+    #[test]
+    fn script_hash_prefix() {
+        let script = Script::new(vec![1, 2, 3]);
+        let hash = ScriptHash::new(&script);
+        assert_eq!(hash.prefix().len(), HASH_PREFIX_LEN);
+    }
 }
