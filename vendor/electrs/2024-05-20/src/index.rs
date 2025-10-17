@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 
 use crate::vendor::electrs::chain::{Chain, NewHeader};
 use crate::vendor::electrs::db::{Db, WriteBatch};
@@ -8,7 +8,7 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::blockdata::block::Header as Blo
 use crate::vendor::electrs::rpp_ledger::bitcoin::{Network, OutPoint, Script, Txid};
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
 use crate::vendor::electrs::types::{
-    bsl_txid, serialize_block, HeaderRow, ScriptHash, ScriptHashRow, SerBlock,
+    bsl_txid, deserialize_block, serialize_block, HeaderRow, ScriptHash, ScriptHashRow,
     SpendingPrefixRow, TxidRow,
 };
 
@@ -59,6 +59,29 @@ impl Index {
         let prefix = ScriptHashRow::scan_prefix(scripthash.clone());
         self.db
             .scan_scripthash(prefix)
+            .into_iter()
+            .map(|(row, txid)| (row.height(), txid))
+            .collect()
+    }
+
+    pub fn transaction_at(&self, height: usize, txid: Txid) -> Result<Option<Transaction>> {
+        let Some(bytes) = self.db.get_block(height) else {
+            return Ok(None);
+        };
+        let transactions = deserialize_block(&bytes)
+            .with_context(|| anyhow!("deserialize block at height {height}"))?;
+        for tx in transactions {
+            if bsl_txid(&tx) == txid {
+                return Ok(Some(tx));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn spends_for_outpoint(&self, outpoint: OutPoint) -> Vec<(usize, Txid)> {
+        let prefix = SpendingPrefixRow::scan_prefix(outpoint);
+        self.db
+            .scan_spending(prefix)
             .into_iter()
             .map(|(row, txid)| (row.height(), txid))
             .collect()
