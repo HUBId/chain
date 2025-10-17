@@ -1,0 +1,4 @@
+sha256: 3c286c40d801b3dfa1061c17a5b525c17458ac1c37bb46302529535a905af943
+size_bytes: 19360
+source: logo.png.b64 (decode with `python -m base64 -d`)
+notes: Binary assets cannot be committed; rebuild logo.png by decoding the Base64 helper and verify against this digest.
