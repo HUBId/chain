@@ -1,8 +1,6 @@
 # Lokal konfigurierte Crate-Pfade für den Offline-Betrieb.
 # Diese Einträge verweisen auf die bereits entpackten Archive unterhalb von `vendor/`.
 
-# Basis-Batch gemäß `docs/vendor_log.md`.
-
 [patch.crates-io]
 # Dummy-Tabelle, damit nachfolgende `[[patch.crates-io]]`-Einträge gültig sind.
 
@@ -90,3 +88,8 @@ path = "../vendor/malachite-q/0.4.18"
 name = "malachite-float"
 version = "0.4.18"
 path = "../vendor/malachite-float/0.4.18"
+
+[[patch.crates-io]]
+name = "stwo-official"
+version = "0.1.1"
+path = "../rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
