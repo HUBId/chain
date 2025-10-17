@@ -39,6 +39,68 @@ pub fn serialize_block(transactions: &[bsl::Transaction]) -> SerBlock {
     buf
 }
 
+fn read_u32(input: &[u8], cursor: &mut usize) -> Option<u32> {
+    if input.len().checked_sub(*cursor)? < 4 {
+        return None;
+    }
+    let mut buf = [0u8; 4];
+    buf.copy_from_slice(&input[*cursor..*cursor + 4]);
+    *cursor += 4;
+    Some(u32::from_le_bytes(buf))
+}
+
+fn read_bytes<'a>(input: &'a [u8], cursor: &mut usize, len: usize) -> Option<&'a [u8]> {
+    if input.len().checked_sub(*cursor)? < len {
+        return None;
+    }
+    let slice = &input[*cursor..*cursor + len];
+    *cursor += len;
+    Some(slice)
+}
+
+pub fn deserialize_transaction(bytes: &[u8]) -> Option<(bsl::Transaction, usize)> {
+    let mut cursor = 0usize;
+    let input_count = read_u32(bytes, &mut cursor)? as usize;
+    let mut inputs = Vec::with_capacity(input_count);
+    for _ in 0..input_count {
+        let txid_bytes = read_bytes(bytes, &mut cursor, 32)?;
+        let mut txid_array = [0u8; 32];
+        txid_array.copy_from_slice(txid_bytes);
+        let vout = read_u32(bytes, &mut cursor)?;
+        inputs.push(OutPoint::new(Txid::from_bytes(txid_array), vout));
+    }
+
+    let output_count = read_u32(bytes, &mut cursor)? as usize;
+    let mut outputs = Vec::with_capacity(output_count);
+    for _ in 0..output_count {
+        let len = read_u32(bytes, &mut cursor)? as usize;
+        let data = read_bytes(bytes, &mut cursor, len)?;
+        outputs.push(Script::new(data.to_vec()));
+    }
+
+    let memo_len = read_u32(bytes, &mut cursor)? as usize;
+    let memo_bytes = read_bytes(bytes, &mut cursor, memo_len)?.to_vec();
+
+    let tx = bsl::Transaction::new(inputs, outputs, memo_bytes);
+    Some((tx, cursor))
+}
+
+pub fn deserialize_block(bytes: &[u8]) -> Option<Vec<bsl::Transaction>> {
+    let mut cursor = 0usize;
+    let count = read_u32(bytes, &mut cursor)? as usize;
+    let mut transactions = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (tx, consumed) = deserialize_transaction(&bytes[cursor..])?;
+        cursor += consumed;
+        transactions.push(tx);
+    }
+    if cursor == bytes.len() {
+        Some(transactions)
+    } else {
+        None
+    }
+}
+
 pub const HASH_PREFIX_LEN: usize = 8;
 const HEIGHT_SIZE: usize = 4;
 

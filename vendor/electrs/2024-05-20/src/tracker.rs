@@ -93,7 +93,7 @@ impl Tracker {
         script: &Script,
     ) -> Result<bool> {
         let previous = status.statushash();
-        status.sync(script, self.index(), self.chain())?;
+        status.sync(script, self.index(), self.chain(), self.mempool.as_ref())?;
         Ok(previous != status.statushash())
     }
 
