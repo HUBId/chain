@@ -7,3 +7,6 @@
 [2025-10-17T11:45:12Z] [INFO] Starting manifest rebuild
 [2025-10-17T11:45:12Z] [INFO] Recorded SIMD backend sources (excluding fft/ and lookups/)
 [2025-10-17T11:45:12Z] [INFO] Manifest rebuild complete
+[2025-10-17T12:07:41Z] [INFO] Starting manifest rebuild
+[2025-10-17T12:07:41Z] [INFO] Recorded SIMD backend sources (fft/ and lookups/ complete)
+[2025-10-17T12:07:41Z] [INFO] Manifest rebuild complete
