@@ -130,6 +130,14 @@ impl Daemon {
         self.firewood.mempool_snapshot()
     }
 
+    pub(crate) fn runtime(&self) -> &RuntimeAdapters {
+        &self.runtime
+    }
+
+    pub(crate) fn firewood(&self) -> &FirewoodAdapter {
+        &self.firewood
+    }
+
     /// Iterate over blocks matching the supplied hashes and invoke `func` with
     /// their serialized representation.
     pub(crate) fn for_blocks<B, F>(&self, blockhashes: B, mut func: F) -> Result<()>
@@ -298,7 +306,9 @@ impl Daemon {
         Ok(block.map(|block| Self::convert_block(&block)))
     }
 
-    fn convert_block(block: &RuntimeBlock) -> (LedgerBlockHeader, Vec<LedgerTransaction>) {
+    pub(crate) fn convert_block(
+        block: &RuntimeBlock,
+    ) -> (LedgerBlockHeader, Vec<LedgerTransaction>) {
         let header = Self::convert_runtime_header(&block.header);
         let transactions = block
             .transactions
