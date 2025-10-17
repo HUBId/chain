@@ -10,3 +10,4 @@
 [2025-10-17T12:07:41Z] [INFO] Starting manifest rebuild
 [2025-10-17T12:07:41Z] [INFO] Recorded SIMD backend sources (fft/ and lookups/ complete)
 [2025-10-17T12:07:41Z] [INFO] Manifest rebuild complete
+[2025-10-17T12:15:32Z] [INFO] Recorded crates/stwo/README.md and refreshed bench documentation entries.
