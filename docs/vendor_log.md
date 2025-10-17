@@ -47,9 +47,9 @@
 
 #### Abschluss – Manifest & Integritätsberichte (2025-10-17)
 
-* Letzter Lauf von `scripts/vendor_stwo/update_manifest.py` bestätigt den finalen Staging-Bestand; `manifest/chunks.json` erhält einen aktualisierten Zeitstempel und verweist weiterhin auf einen leeren Chunk-Satz, während `manifest/final_file_list.txt` alle 171 Dateien des Workspaces erfasst.【F:vendor/stwo-dev/0.1.1/manifest/chunks.json†L1-L6】【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L171】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L13-L21】
-* `scripts/vendor_stwo/verify_extracted_files.py` bestätigt eine fehlerfreie Übereinstimmung; der konsolidierte Bericht `manifest/integrity_report.json` dokumentiert den `pass`-Status und enthält die Zählwerte für Matches/Mismatches.【F:vendor/stwo-dev/0.1.1/manifest/integrity_report.json†L1-L15】
-* Ergänzend fasst `manifest/integrity_summary.json` die Prüfsummen zentraler Dateien (u. a. `Cargo.toml`, `src/lib.rs`, Update-Log) zusammen und erleichtert spätere Spot-Checks.【F:vendor/stwo-dev/0.1.1/manifest/integrity_summary.json†L1-L35】
+* Der Abschlusslauf von `scripts/vendor_stwo/update_manifest.py` (2025-10-17T14:11Z) bestätigt den finalen Staging-Bestand; `manifest/chunks.json` bleibt leer, `manifest/final_file_list.txt` erfasst alle 212 Dateien, und das Update-Log dokumentiert die aktuellen Warn-/Info-Einträge.【F:vendor/stwo-dev/0.1.1/manifest/chunks.json†L1-L5】【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L212】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L34-L42】
+* `scripts/vendor_stwo/verify_extracted_files.py` bestätigt erneut eine fehlerfreie Übereinstimmung; der konsolidierte Bericht `manifest/integrity_report.json` hält den `pass`-Status sowie die aktualisierten Zählwerte fest.【F:vendor/stwo-dev/0.1.1/manifest/integrity_report.json†L1-L15】
+* Ergänzend fasst `manifest/integrity_summary.json` die aktualisierten Prüfsummen (u. a. `Cargo.toml`, `src/lib.rs`, Update-Log) zusammen und dokumentiert die vollständige Dateiabdeckung des Staging-Baums.【F:vendor/stwo-dev/0.1.1/manifest/integrity_summary.json†L1-L52】
 
 ### Initiale Artefaktplanung (2025-10-17)
 
