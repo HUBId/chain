@@ -2,12 +2,17 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use rpp::runtime::node::NodeHandle;
-use rpp::runtime::orchestration::PipelineOrchestrator;
-use rpp::runtime::sync::{PayloadProvider, RuntimeRecursiveProofVerifier};
+use anyhow::{anyhow, Context, Result};
+use rpp::runtime::node::{MempoolStatus, NodeHandle};
+use rpp::runtime::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator};
+use rpp::runtime::sync::{
+    PayloadProvider, ReconstructionPlan, RuntimeRecursiveProofVerifier,
+};
+use rpp::runtime::types::{Block, BlockHeader, BlockMetadata};
+use rpp_p2p::GossipTopic;
 use storage_firewood::kv::{FirewoodKv, Hash, KvError};
 use storage_firewood::Storage;
+use tokio::sync::{broadcast, watch};
 
 /// Thin wrapper around the Firewood key-value engine that exposes a simplified
 /// API tailored to the Electrs integration.
@@ -54,6 +59,132 @@ impl FirewoodAdapter {
     /// Expose the attached runtime adapters, if available.
     pub fn runtime(&self) -> Option<&RuntimeAdapters> {
         self.runtime.as_ref()
+    }
+
+    fn require_runtime(&self) -> Result<&RuntimeAdapters> {
+        self.runtime
+            .as_ref()
+            .ok_or_else(|| anyhow!("firewood runtime adapters not attached"))
+    }
+
+    fn collect_blocks_from(&self, start_height: u64) -> Result<Vec<Block>> {
+        let runtime = self.require_runtime()?;
+        let node = runtime.node();
+        let status = node
+            .node_status()
+            .map_err(|err| anyhow!("query node status: {err}"))?;
+        let tip_height = status
+            .tip
+            .as_ref()
+            .map(|metadata| metadata.height)
+            .unwrap_or(status.height);
+        if start_height > tip_height {
+            return Ok(Vec::new());
+        }
+        let mut blocks = Vec::new();
+        for height in start_height..=tip_height {
+            if let Some(block) = node
+                .get_block(height)
+                .map_err(|err| anyhow!("load block {height}: {err}"))?
+            {
+                blocks.push(block);
+            }
+        }
+        Ok(blocks)
+    }
+
+    /// Stream block headers from the runtime starting at the supplied height.
+    pub fn stream_headers_from(&self, start_height: u64) -> Result<Vec<BlockHeader>> {
+        let blocks = self.collect_blocks_from(start_height)?;
+        Ok(blocks.into_iter().map(|block| block.header).collect())
+    }
+
+    /// Stream block metadata from the runtime starting at the supplied height.
+    pub fn stream_metadata_from(&self, start_height: u64) -> Result<Vec<BlockMetadata>> {
+        let blocks = self.collect_blocks_from(start_height)?;
+        Ok(blocks.iter().map(BlockMetadata::from).collect())
+    }
+
+    /// Fetch a snapshot of the current mempool state from the runtime node.
+    pub fn mempool_snapshot(&self) -> Result<MempoolStatus> {
+        let runtime = self.require_runtime()?;
+        runtime
+            .node()
+            .mempool_status()
+            .map_err(|err| anyhow!("fetch mempool snapshot: {err}"))
+    }
+
+    /// Reconstruct a block payload at the requested height using the configured provider.
+    pub fn reconstruct_block(&self, height: u64) -> Result<Block> {
+        let runtime = self.require_runtime()?;
+        let provider = Arc::clone(runtime.payload_provider());
+        runtime
+            .node()
+            .reconstruct_block(height, provider.as_ref())
+            .map_err(|err| anyhow!("reconstruct block {height}: {err}"))
+    }
+
+    /// Reconstruct a range of blocks using the configured payload provider.
+    pub fn reconstruct_range(&self, start_height: u64, end_height: u64) -> Result<Vec<Block>> {
+        let runtime = self.require_runtime()?;
+        let provider = Arc::clone(runtime.payload_provider());
+        runtime
+            .node()
+            .reconstruct_range(start_height, end_height, provider.as_ref())
+            .map_err(|err| anyhow!(
+                "reconstruct blocks {start_height}..={end_height}: {err}"
+            ))
+    }
+
+    /// Execute a precomputed reconstruction plan using the configured payload provider.
+    pub fn execute_reconstruction_plan(
+        &self,
+        plan: &ReconstructionPlan,
+    ) -> Result<Vec<Block>> {
+        let runtime = self.require_runtime()?;
+        let provider = Arc::clone(runtime.payload_provider());
+        runtime
+            .node()
+            .execute_reconstruction_plan(plan, provider.as_ref())
+            .map_err(|err| anyhow!("execute reconstruction plan: {err}"))
+    }
+
+    /// Verify a recursive proof payload using the runtime verifier registry.
+    pub fn verify_recursive_proof(
+        &self,
+        proof: &[u8],
+        expected_commitment: &str,
+        previous_commitment: Option<&str>,
+    ) -> Result<()> {
+        let runtime = self.require_runtime()?;
+        runtime
+            .proof_verifier()
+            .verify_recursive(proof, expected_commitment, previous_commitment)
+            .map_err(|err| anyhow!("verify recursive proof: {err}"))
+    }
+
+    /// Subscribe to runtime gossip for the requested topic.
+    pub fn subscribe_gossip(
+        &self,
+        topic: GossipTopic,
+    ) -> Result<broadcast::Receiver<Vec<u8>>> {
+        let runtime = self.require_runtime()?;
+        Ok(runtime.node().subscribe_witness_gossip(topic))
+    }
+
+    /// Publish payloads onto the runtime gossip channels.
+    pub fn publish_gossip(&self, topic: GossipTopic, payload: &[u8]) -> Result<()> {
+        let runtime = self.require_runtime()?;
+        runtime.node().fanout_witness_gossip(topic, payload);
+        Ok(())
+    }
+
+    /// Subscribe to orchestrated pipeline dashboard snapshots.
+    pub fn subscribe_pipeline_dashboard(
+        &self,
+    ) -> Result<watch::Receiver<PipelineDashboardSnapshot>> {
+        let runtime = self.require_runtime()?;
+        Ok(runtime.orchestrator().subscribe_dashboard())
     }
 
     /// Stage a put mutation.
