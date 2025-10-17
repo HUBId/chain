@@ -1,7 +1,5 @@
 # Firewood: Compaction-Less Database Optimized for Efficiently Storing Recent Merkleized Blockchain State
 
-> **Import status:** This repository currently only contains the top-level workspace files from the Firewood archive. The crates themselves are represented by placeholder stubs until the full sources are migrated. GitHub workflow files have been removed for now while we focus on bootstrapping the workspace configuration.
-
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
 
@@ -86,30 +84,6 @@ In order to build firewood, the following dependencies must be installed:
 
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
-
-The STWO vendor staging area also contains helper shell scripts for running
-benchmarks and CI checks. They live under
-`vendor/stwo-dev/0.1.1/staging/scripts/`, with additional benchmarking entry
-points at the root of the same staging directory.
-
-## Assets
-
-The repository includes vendor-provided assets that are staged alongside the
-STWO tooling under `vendor/stwo-dev/0.1.1/staging/resources/`.
-
-- `img/logo.png.b64` – Base64-encoded STWO branding mark. Decode with
-  `python3 scripts/vendor_stwo/materialize_assets.py vendor/stwo-dev/0.1.1/staging`.
-  The helper rewrites the binary `img/logo.png` next to the encoded blob so
-  downstream packaging and documentation pipelines can consume the asset
-  without shipping binaries in this repository.
-
-All staged assets are tracked in `vendor/stwo-dev/0.1.1/manifest/final_file_list.txt`
-to ensure reproducible packaging. After materializing the assets, re-run the
-manifest update if you need to refresh the checksums:
-
-```sh
-python3 scripts/vendor_stwo/update_manifest.py vendor/stwo-dev/0.1.1
-```
 
 If you want to build and test the ffi layer for another platform,
 you can find those instructions in the [ffi README](ffi/README.md).
