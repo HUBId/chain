@@ -40,6 +40,11 @@
 * Hinweis (Update 2025-10-17T12:07Z): Der damals noch fehlende SIMD-Zweig wurde inzwischen vollständig vendort; siehe obenstehenden Eintrag zum SIMD-Backend für Details.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/backend/simd/fft/mod.rs†L1-L128】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/backend/simd/lookups/mod.rs†L1-L18】
 * `scripts/vendor_stwo/update_manifest.py` wurde erneut ausgeführt, wodurch `manifest/final_file_list.txt` um die neuen Backend-Dateien ergänzt und das Update-Log erweitert wurde.【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L120】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L1-L13】
 
+#### Offline-Build-Validierung – prover-stwo & prover-stwo-simd (2025-10-21)
+
+* Erfolgreiche Läufe von `cargo +nightly-2025-07-14 check --offline -p prover-stwo` und `cargo +nightly-2025-07-14 check --offline -p prover-stwo-simd` verifizieren die Integration auf der vendorten Toolchain.
+* Die Logausgaben sind unter `vendor/stwo-dev/0.1.1/logs/cargo_check_prover-stwo.log` bzw. `vendor/stwo-dev/0.1.1/logs/cargo_check_prover-stwo-simd.log` abgelegt und dokumentieren die Nightly-Toolchain `nightly-2025-07-14` entsprechend der bestehenden Toolchain-Vorgabe.
+
 ### Initiale Artefaktplanung (2025-10-17)
 
 * Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
