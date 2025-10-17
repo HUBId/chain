@@ -15,6 +15,15 @@ settings under [`staging/.cargo/config.toml`](0.1.1/staging/.cargo/config.toml).
   Criterion benches under `benches/`.
 - `0.1.1/staging/crates/constraint-framework`: Shared constraint utilities
   consumed by the prover.
+- `0.1.1/staging/crates/air-utils`: Lookup-table helpers and trace
+  abstractions that underpin upcoming backend work.
+- `0.1.1/staging/crates/air-utils-derive`: Derive macros that power the
+  iterator ergonomics used by `air-utils`.
+- `0.1.1/staging/crates/std-shims`: Minimal `std` adapters that unblock
+  cross-crate builds for follow-up backend PRs.
+
+With these additions the utility crates required for upcoming backend-focused
+pull requests are fully staged in the vendor snapshot.
 - `0.1.1/manifest`: Hash listings for every extracted file plus the chunk plan.
 - `0.1.1/logs`: Timestamped refresh logs for provenance tracking.
 
