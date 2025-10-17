@@ -8,7 +8,8 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::blockdata::block::Header as Blo
 use crate::vendor::electrs::rpp_ledger::bitcoin::{Network, OutPoint, Script, Txid};
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
 use crate::vendor::electrs::types::{
-    bsl_txid, HeaderRow, ScriptHash, ScriptHashRow, SerBlock, SpendingPrefixRow, TxidRow,
+    bsl_txid, serialize_block, HeaderRow, ScriptHash, ScriptHashRow, SerBlock,
+    SpendingPrefixRow, TxidRow,
 };
 
 pub struct Index {
@@ -84,29 +85,6 @@ impl Index {
             batch.put_spending(row, txid);
         }
     }
-}
-
-fn serialize_block(transactions: &[Transaction]) -> SerBlock {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(&(transactions.len() as u32).to_le_bytes());
-    for tx in transactions {
-        let inputs = tx.inputs();
-        buf.extend_from_slice(&(inputs.len() as u32).to_le_bytes());
-        for input in inputs {
-            buf.extend_from_slice(input.txid.as_bytes());
-            buf.extend_from_slice(&input.vout.to_le_bytes());
-        }
-        let outputs = tx.outputs();
-        buf.extend_from_slice(&(outputs.len() as u32).to_le_bytes());
-        for output in outputs {
-            buf.extend_from_slice(&(output.as_bytes().len() as u32).to_le_bytes());
-            buf.extend_from_slice(output.as_bytes());
-        }
-        let memo = tx.memo();
-        buf.extend_from_slice(&(memo.len() as u32).to_le_bytes());
-        buf.extend_from_slice(memo);
-    }
-    buf
 }
 
 #[cfg(test)]

@@ -452,9 +452,34 @@ pub mod index {
     ));
 }
 
+pub mod daemon {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/daemon.rs"
+    ));
+}
+
+pub mod status {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/status.rs"
+    ));
+}
+
+pub mod tracker {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/tracker.rs"
+    ));
+}
+
 pub mod types {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../vendor/electrs/2024-05-20/src/types.rs"
     ));
 }
+
+pub use self::daemon::Daemon;
+pub use self::status::{Balance, HistoryEntry, ScriptHashStatus, UnspentEntry};
+pub use self::tracker::Tracker;

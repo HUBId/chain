@@ -10,6 +10,35 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl;
 
+pub fn serialize_transaction(tx: &bsl::Transaction) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let inputs = tx.inputs();
+    buf.extend_from_slice(&(inputs.len() as u32).to_le_bytes());
+    for input in inputs {
+        buf.extend_from_slice(input.txid.as_bytes());
+        buf.extend_from_slice(&input.vout.to_le_bytes());
+    }
+    let outputs = tx.outputs();
+    buf.extend_from_slice(&(outputs.len() as u32).to_le_bytes());
+    for output in outputs {
+        buf.extend_from_slice(&(output.as_bytes().len() as u32).to_le_bytes());
+        buf.extend_from_slice(output.as_bytes());
+    }
+    let memo = tx.memo();
+    buf.extend_from_slice(&(memo.len() as u32).to_le_bytes());
+    buf.extend_from_slice(memo);
+    buf
+}
+
+pub fn serialize_block(transactions: &[bsl::Transaction]) -> SerBlock {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&(transactions.len() as u32).to_le_bytes());
+    for tx in transactions {
+        buf.extend_from_slice(&serialize_transaction(tx));
+    }
+    buf
+}
+
 pub const HASH_PREFIX_LEN: usize = 8;
 const HEIGHT_SIZE: usize = 4;
 
@@ -85,6 +114,7 @@ impl ScriptHashRow {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatusHash(pub sha256::Hash);
 
 fn spending_prefix(prev: OutPoint) -> HashPrefix {
