@@ -37,7 +37,7 @@ impl Tracker {
     pub fn sync(&mut self, daemon: &Daemon) -> Result<bool> {
         let current_height = self.index.chain().height();
         let mut updated = false;
-        for (header, transactions) in daemon.blocks_since(current_height) {
+        for (header, transactions) in daemon.blocks_since(current_height)? {
             self.index.index_block(header, &transactions)?;
             updated = true;
         }
