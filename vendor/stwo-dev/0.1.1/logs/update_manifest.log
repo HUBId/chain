@@ -19,3 +19,6 @@
 [2025-10-17T13:15:43Z] [INFO] Starting manifest rebuild
 [2025-10-17T13:15:43Z] [WARN] Chunk directory vendor/stwo-dev/0.1.1/chunks does not exist; manifest will be empty
 [2025-10-17T13:15:43Z] [INFO] Manifest rebuild complete
+[2025-10-17T13:26:51Z] [INFO] Starting manifest rebuild
+[2025-10-17T13:26:51Z] [WARN] Chunk directory vendor/stwo-dev/0.1.1/chunks does not exist; manifest will be empty
+[2025-10-17T13:26:51Z] [INFO] Manifest rebuild complete
