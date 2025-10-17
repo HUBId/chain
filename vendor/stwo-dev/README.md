@@ -15,8 +15,29 @@ settings under [`staging/.cargo/config.toml`](0.1.1/staging/.cargo/config.toml).
   Criterion benches under `benches/`.
 - `0.1.1/staging/crates/constraint-framework`: Shared constraint utilities
   consumed by the prover.
+- `0.1.1/staging/.github`: Upstream GitHub workflows, runner definitions, and
+  composite actions used to validate the workspace.
+- `0.1.1/staging/scripts`: Upstream maintenance helpers that drive CI and local
+  checks.
 - `0.1.1/manifest`: Hash listings for every extracted file plus the chunk plan.
 - `0.1.1/logs`: Timestamped refresh logs for provenance tracking.
+
+### Vendored automation assets
+
+We keep the upstream automation alongside the sources so the vendor snapshot can
+reproduce STWO's CI entry points. The contents of
+`0.1.1/staging/.github/workflows/` feed Firewood's internal mirroring jobs and
+document which scripts gate upstream merges. The paired `scripts/` directory is
+copied verbatim because the workflows invoke those helpers (for example
+`scripts/bench.sh` for benchmarking and `scripts/clippy.sh` for linting).
+
+Some releases bundle pre-generated data under `resources/`; if present, include
+that directory in `staging/` so workflow steps that depend on binary fixtures or
+documentation assets keep working.
+
+Root-level helpers such as `poseidon_benchmark.sh` and
+`trace_poseidon_benchmark.sh` are also staged to make it easy to run the same
+benchmarks outside of GitHub Actions while auditing the vendor drop.
 
 ## Running the vendored benches
 
