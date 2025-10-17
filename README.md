@@ -92,6 +92,25 @@ benchmarks and CI checks. They live under
 `vendor/stwo-dev/0.1.1/staging/scripts/`, with additional benchmarking entry
 points at the root of the same staging directory.
 
+## Assets
+
+The repository includes vendor-provided assets that are staged alongside the
+STWO tooling under `vendor/stwo-dev/0.1.1/staging/resources/`.
+
+- `img/logo.png.b64` – Base64-encoded STWO branding mark. Decode with
+  `python3 scripts/vendor_stwo/materialize_assets.py vendor/stwo-dev/0.1.1/staging`.
+  The helper rewrites the binary `img/logo.png` next to the encoded blob so
+  downstream packaging and documentation pipelines can consume the asset
+  without shipping binaries in this repository.
+
+All staged assets are tracked in `vendor/stwo-dev/0.1.1/manifest/final_file_list.txt`
+to ensure reproducible packaging. After materializing the assets, re-run the
+manifest update if you need to refresh the checksums:
+
+```sh
+python3 scripts/vendor_stwo/update_manifest.py vendor/stwo-dev/0.1.1
+```
+
 If you want to build and test the ffi layer for another platform,
 you can find those instructions in the [ffi README](ffi/README.md).
 
