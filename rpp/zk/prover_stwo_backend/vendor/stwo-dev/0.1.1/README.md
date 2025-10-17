@@ -26,3 +26,18 @@ Vendor-Struktur dokumentiert.
 
 Das vollständige Upstream-README befindet sich in
 [`README.upstream.md`](README.upstream.md).
+
+## Hilfsskripte
+
+Zur Pflege des Vendor-Drops stehen im Repository drei Helfer zur Verfügung:
+
+1. [`scripts/vendor_stwo/extract.sh`](../../../../../../scripts/vendor_stwo/extract.sh)
+   entpackt das Upstream-Archiv `vendor/stwo-dev/stwo-dev.zip` in ein Staging-Verzeichnis.
+2. Nach dem manuellen Kopieren der benötigten Teilmodule in die jeweiligen Segment-Commits
+   prüft [`scripts/vendor_stwo/verify_extracted_files.py`](../../../../../../scripts/vendor_stwo/verify_extracted_files.py)
+   optional, ob die abgelegten Dateien den Hashes im Staging-Bereich entsprechen.
+3. Abschließend erzeugt [`scripts/vendor_stwo/update_manifest.py`](../../../../../../scripts/vendor_stwo/update_manifest.py)
+   die Dateien `manifest/chunks.json` und `manifest/final_file_list.txt` mit frischen SHA-256-Hashes
+   der Segmentpakete bzw. der finalen Quellbäume.
+
+Der empfohlene Ablauf lautet somit: **Entpacken → Segmentweise ins Repository kopieren → Manifest aktualisieren**.
