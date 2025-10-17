@@ -1,6 +1,6 @@
 {
   "version": "0.4.18",
-  "generated_at": "2025-10-16T14:47:45Z",
+  "generated_at": "2025-10-17T06:43:55Z",
   "segments": [
     {
       "segment_name": "malachite-q-0.4.18.part000",
@@ -8,11 +8,8 @@
       "chunk_name": "chunk_000",
       "offset": 0,
       "length": 220393,
-      "status": "downloaded",
-      "timestamp": "2025-10-16T10:50:59Z",
-      "size_bytes": 220393,
-      "sha256": "be4a9dfffb87667ae94e8320213d3f5419e3e37311bc6bf8f4d2ab9b44f3a535",
-      "downloaded_at": "2025-10-16T14:47:45Z"
+      "status": "missing",
+      "timestamp": "2025-10-17T06:43:55Z"
     }
   ],
   "source_url": "https://crates.io/api/v1/crates/malachite-q/0.4.18/download"
