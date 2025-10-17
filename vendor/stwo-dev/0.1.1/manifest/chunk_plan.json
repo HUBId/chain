@@ -1,0 +1,63 @@
+{
+  "workspace": "stwo-dev",
+  "version": "0.1.1",
+  "source_archive": "rpp/zk/prover_stwo_backend/stwo-dev.zip",
+  "segment_size_limit_bytes": 52428800,
+  "generated_at": "2025-10-17T10:15:15Z",
+  "chunks": [
+    {
+      "name": "crates/air-utils",
+      "target": "staging/crates/air-utils",
+      "size_bytes": 17456,
+      "description": "Core AIR helper utilities."
+    },
+    {
+      "name": "crates/air-utils-derive",
+      "target": "staging/crates/air-utils-derive",
+      "size_bytes": 28225,
+      "description": "Procedural macros for AIR utilities."
+    },
+    {
+      "name": "crates/constraint-framework",
+      "target": "staging/crates/constraint-framework",
+      "size_bytes": 139294,
+      "description": "Shared constraint primitives for the workspace."
+    },
+    {
+      "name": "crates/examples",
+      "target": "staging/crates/examples",
+      "size_bytes": 207909,
+      "description": "Reference examples shipped with the workspace."
+    },
+    {
+      "name": "crates/std-shims",
+      "target": "staging/crates/std-shims",
+      "size_bytes": 575,
+      "description": "Minimal std wrappers used in no_std contexts."
+    },
+    {
+      "name": "crates/stwo",
+      "target": "staging/crates/stwo",
+      "size_bytes": 726302,
+      "description": "Primary STWO workspace crate."
+    },
+    {
+      "name": "ensure-verifier-no_std",
+      "target": "staging/ensure-verifier-no_std",
+      "size_bytes": 23180,
+      "description": "Verifier stubs for no_std builds."
+    },
+    {
+      "name": "resources",
+      "target": "staging/resources",
+      "size_bytes": 19360,
+      "description": "Fixed parameters and reference assets."
+    },
+    {
+      "name": "scripts",
+      "target": "staging/scripts",
+      "size_bytes": 877,
+      "description": "Utility scripts bundled with the workspace."
+    }
+  ]
+}
