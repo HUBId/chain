@@ -33,6 +33,12 @@
 * Manifest und Log wurden erneut via `scripts/vendor_stwo/update_manifest.py` erzeugt; die aktualisierte Prüfliste enthält nun sämtliche `prover/`- und `tracing/`-Dateien, während das Log den Lauf dokumentiert.【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L120】【F:vendor/stwo-dev/0.1.1/manifest/chunks.json†L1-L6】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L1-L12】
 * Die Backend-Unterverzeichnisse `prover/backend/cpu/` und `prover/backend/simd/` fehlen weiterhin; `mod.rs` verweist noch auf diese Pfade, die in einem späteren Import nachgezogen werden müssen.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/mod.rs†L9-L24】
 
+#### Import – prover backend (CPU) (2025-10-17)
+
+* Der Backend-Stamm wurde um das CPU-Backend ergänzt: `mod.rs`, `secure_column.rs` sowie `cpu/` (inkl. `accumulation.rs`, `blake2s.rs`, `circle.rs`, `fri.rs`, `grind.rs`, `lookups/`, `poseidon252.rs`, `quotients.rs`) sind nun in der Staging-Kopie vorhanden.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/backend/mod.rs†L1-L52】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/backend/secure_column.rs†L1-L120】【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/backend/cpu/mod.rs†L1-L79】
+* SIMD bleibt vorerst außen vor, `mod.rs` exportiert ausschließlich das CPU-Backend; der SIMD-Zweig wird in einem Folge-Import nachgezogen.【F:vendor/stwo-dev/0.1.1/staging/crates/stwo/src/prover/backend/mod.rs†L15-L20】
+* `scripts/vendor_stwo/update_manifest.py` wurde erneut ausgeführt, wodurch `manifest/final_file_list.txt` um die neuen Backend-Dateien ergänzt und das Update-Log erweitert wurde.【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L120】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L1-L13】
+
 ### Initiale Artefaktplanung (2025-10-17)
 
 * Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
