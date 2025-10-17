@@ -1,9 +1,9 @@
 {
   "workspace": "stwo-dev",
   "version": "0.1.1",
-  "generated_at": "2025-10-17T13:17:09Z",
+  "generated_at": "2025-10-17T14:12:13Z",
   "staging": {
-    "total_entries": 171,
+    "total_entries": 212,
     "key_files": {
       "crates/constraint-framework/Cargo.toml": {
         "sha256": "4f9599bcc88db44b46d8edb3376f6f497e8f404e2e38d6e5b763f1d990acda2b",
@@ -33,12 +33,12 @@
   },
   "manifests": {
     "manifest/chunks.json": {
-      "sha256": "c0665669d8c86e571a403dc86f8e734db52c3698e79be7bb5dc93e11b2ae5508",
+      "sha256": "da3d02437e6ee3ed1e42563b2c5d40520c99f8a039dc1bf36f46faeab7239001",
       "size_bytes": 85
     },
     "manifest/final_file_list.txt": {
-      "sha256": "f6f7a9358785c828893542fbe66ddd4712e3bf8692e12eab83e1938d6df32269",
-      "size_bytes": 18963
+      "sha256": "8e30fb0136e11fd9b9dd8a653274fc61fe0ef46afb3545483afa676b2379a866",
+      "size_bytes": 22917
     },
     "manifest/integrity_report.json": {
       "sha256": "dd7e3ebcf3bc0f77c9fc6a9f0752397f1f54e9c373c64acd33d0e7a17b938514",
@@ -47,8 +47,8 @@
   },
   "logs": {
     "logs/update_manifest.log": {
-      "sha256": "54615f599a9cb94d83372c59a020e531872406d9a7a74e2070609bbef0e440de",
-      "size_bytes": 1650
+      "sha256": "da7859bb484e50374da0991b937709bb1fdfa68051b5ce615a197213e973f22a",
+      "size_bytes": 3232
     }
   }
 }
