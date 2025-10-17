@@ -7,3 +7,6 @@
 [2025-10-16T13:55:22Z] [INFO] Processing segment malachite-float-0.4.18.part000 (index=0, offset=0, length=623265)
 [2025-10-16T13:55:22Z] [WARN] Segment malachite-float-0.4.18.part000 is missing on disk
 [2025-10-16T13:55:22Z] [WARN] One or more segments are missing or invalid. Trigger a re-download to restore them.
+[2025-10-17T07:04:45Z] [INFO] Processing segment malachite-float-0.4.18.part000 (index=0, offset=0, length=623265)
+[2025-10-17T07:04:45Z] [INFO] Segment malachite-float-0.4.18.part000 verified (size=623265, sha256=2204711bdc85cb6d01e0296f79a0811750eea7b98fc2fff941264b5744ee5601)
+[2025-10-17T07:04:45Z] [INFO] Manifest updated successfully
