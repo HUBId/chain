@@ -2,7 +2,12 @@
 
 This directory stores a curated snapshot of StarkWare's STWO prover workspace as
 used by Firewood. Sources are segmented under `0.1.1/staging/` so we can audit
-individual crates, regenerate manifests, and track large binary assets.
+individual crates, regenerate manifests, and track large binary assets. The
+workspace's top-level configuration now lives alongside the staged crates, so
+toolchain resolution follows the upstream setup via
+[`WORKSPACE`](0.1.1/staging/WORKSPACE),
+[`rust-toolchain.toml`](0.1.1/staging/rust-toolchain.toml), and the Cargo
+settings under [`staging/.cargo/config.toml`](0.1.1/staging/.cargo/config.toml).
 
 ## Layout
 
