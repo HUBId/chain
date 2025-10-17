@@ -10,6 +10,9 @@ members = [
 ]
 resolver = "2"
 
+[workspace.features]
+vendor_electrs = []
+
 [workspace.package]
 version = "0.0.12"
 edition = "2024"
