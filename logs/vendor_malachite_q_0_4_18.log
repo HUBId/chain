@@ -1,0 +1,2 @@
+[2025-10-17T06:51:40Z] [INFO] Added reference test suites (arithmetic, basic, conversion, random, exhaustive) and lib.rs from malachite-q 0.4.18 crate archive.
+[2025-10-17T06:51:40Z] [INFO] Verified chunk metadata via scripts/vendor_malachite/update_manifest.py (segment sha256=be4a9dfffb87667ae94e8320213d3f5419e3e37311bc6bf8f4d2ab9b44f3a535).
