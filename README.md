@@ -87,6 +87,11 @@ In order to build firewood, the following dependencies must be installed:
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
+The STWO vendor staging area also contains helper shell scripts for running
+benchmarks and CI checks. They live under
+`vendor/stwo-dev/0.1.1/staging/scripts/`, with additional benchmarking entry
+points at the root of the same staging directory.
+
 If you want to build and test the ffi layer for another platform,
 you can find those instructions in the [ffi README](ffi/README.md).
 
