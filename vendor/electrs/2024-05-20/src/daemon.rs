@@ -16,6 +16,7 @@ use crate::vendor::electrs::types::{
     HashPrefixRow, SerBlock, TxidRow, bsl_txid, serialize_block, serialize_transaction,
     HASH_PREFIX_ROW_SIZE,
 };
+use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
     Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, SignedTransaction,
 };
@@ -122,6 +123,11 @@ impl Daemon {
         }
 
         self.collect_blocks(start as u64, tip)
+    }
+
+    /// Fetch a snapshot of the runtime mempool state.
+    pub fn mempool_snapshot(&self) -> Result<MempoolStatus> {
+        self.firewood.mempool_snapshot()
     }
 
     /// Iterate over blocks matching the supplied hashes and invoke `func` with
@@ -407,7 +413,7 @@ impl Daemon {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_helpers {
     use super::*;
 
     use std::collections::HashMap;
@@ -420,6 +426,7 @@ mod tests {
 
     use rpp::crypto::{address_from_public_key, sign_message};
     use rpp::errors::{ChainError, ChainResult};
+    use rpp::proofs::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact, TransactionWitness};
     use rpp::reputation::{ReputationWeights, Tier};
     use rpp::runtime::config::NodeConfig;
     use rpp::runtime::node::Node;
@@ -433,63 +440,32 @@ mod tests {
     };
     use rpp::runtime::types::block::BlockProofBundle;
     use rpp::runtime::types::transaction::Signature as TxSignature;
-    use rpp::runtime::types::{BftVoteKind};
+    use rpp::runtime::types::BftVoteKind;
     use rpp::runtime::vrf::{evaluate_vrf, vrf_public_key_to_hex};
     use rpp::storage::Storage;
     use rpp::stwo::circuit::recursive::RecursiveWitness;
-    use rpp::stwo::proof::{CommitmentSchemeProofData, ExecutionTrace, FriProof, ProofKind, ProofPayload, StarkProof};
+    use rpp::stwo::proof::{
+        CommitmentSchemeProofData, ExecutionTrace, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
     use rpp::types::BftVote;
     use rpp::vrf::generate_vrf_keypair;
-    use rpp::proofs::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact, TransactionWitness};
-
     use sha2::{Digest, Sha256};
 
-    struct TestContext {
-        daemon: Daemon,
-        block_one_hash: BlockHash,
-        block_two_hash: BlockHash,
-        transaction_id: Txid,
-        expected_block_bytes: SerBlock,
-        expected_transaction_bytes: Box<[u8]>,
+    use crate::vendor::electrs::types::{
+        bsl_txid, serialize_block, serialize_transaction, SerBlock, HASH_PREFIX_ROW_SIZE,
+    };
+
+    #[derive(Debug)]
+    pub struct TestContext {
+        pub daemon: Daemon,
+        pub block_one_hash: BlockHash,
+        pub block_two_hash: BlockHash,
+        pub transaction_id: Txid,
+        pub expected_block_bytes: SerBlock,
+        pub expected_transaction_bytes: Box<[u8]>,
     }
 
-    #[test]
-    fn for_blocks_rejects_invalid_payload() {
-        let context = setup();
-        let err = context
-            .daemon
-            .for_blocks([context.block_two_hash], |_, _| {})
-            .expect_err("invalid block should be rejected");
-        assert!(err.to_string().contains("verify recursive proof"));
-    }
-
-    #[test]
-    fn for_blocks_surfaces_reconstructed_block() {
-        let context = setup();
-        let mut captured = Vec::new();
-        context
-            .daemon
-            .for_blocks([context.block_one_hash], |hash, block| {
-                captured.push((hash, block));
-            })
-            .expect("fetch block");
-        assert_eq!(captured.len(), 1);
-        assert_eq!(captured[0].0, context.block_one_hash);
-        assert_eq!(captured[0].1, context.expected_block_bytes);
-    }
-
-    #[test]
-    fn find_transaction_returns_serialized_payload() {
-        let context = setup();
-        let (block, bytes) = context
-            .daemon
-            .find_transaction(context.transaction_id)
-            .expect("transaction should be located");
-        assert_eq!(block, context.block_one_hash);
-        assert_eq!(bytes, context.expected_transaction_bytes);
-    }
-
-    fn setup() -> TestContext {
+    pub fn setup() -> TestContext {
         let temp_dir = TempDir::new().expect("tempdir");
         let firewood_dir = temp_dir.path().join("firewood");
         let mut config = node_config(temp_dir.path());
@@ -878,16 +854,28 @@ mod tests {
                 identity_commitments: Vec::new(),
                 tx_commitments: Vec::new(),
                 uptime_commitments: Vec::new(),
-                consensus_commitments: Vec::new(),
-                state_commitment: header.state_root.clone(),
-                global_state_root: header.state_root.clone(),
-                utxo_root: header.utxo_root.clone(),
-                reputation_root: header.reputation_root.clone(),
-                timetoke_root: header.timetoke_root.clone(),
-                zsi_root: header.zsi_root.clone(),
-                proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.witness_commitment.clone(),
+                attested_identities: Vec::new(),
+                reputation_updates: Vec::new(),
+                uptime_proofs: Vec::new(),
+                transactions: Vec::new(),
+                pruning_witnesses: Vec::new(),
+                parent_state_root: header.state_root.clone(),
+                new_state_root: header.state_root.clone(),
+                parent_utxo_root: header.utxo_root.clone(),
+                new_utxo_root: header.utxo_root.clone(),
+                parent_reputation_root: header.reputation_root.clone(),
+                new_reputation_root: header.reputation_root.clone(),
+                parent_timetoke_root: header.timetoke_root.clone(),
+                new_timetoke_root: header.timetoke_root.clone(),
+                parent_zsi_root: header.zsi_root.clone(),
+                new_zsi_root: header.zsi_root.clone(),
+                parent_proof_root: header.proof_root.clone(),
+                new_proof_root: header.proof_root.clone(),
+                attested_identity_requests: Vec::new(),
+                pruning_proof: pruning.clone(),
+                block_hash: header.hash(),
                 block_height: header.height,
+                block_timestamp: header.timestamp,
             }),
             trace: ExecutionTrace { segments: Vec::new() },
             commitment_proof: CommitmentSchemeProofData::default(),
@@ -914,5 +902,47 @@ mod tests {
             *leaves = next;
         }
         leaves[0]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::test_helpers::setup;
+
+    #[test]
+    fn for_blocks_rejects_invalid_payload() {
+        let context = setup();
+        let err = context
+            .daemon
+            .for_blocks([context.block_two_hash], |_, _| {})
+            .expect_err("invalid block should be rejected");
+        assert!(err.to_string().contains("verify recursive proof"));
+    }
+
+    #[test]
+    fn for_blocks_surfaces_reconstructed_block() {
+        let context = setup();
+        let mut captured = Vec::new();
+        context
+            .daemon
+            .for_blocks([context.block_one_hash], |hash, block| {
+                captured.push((hash, block));
+            })
+            .expect("fetch block");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].0, context.block_one_hash);
+        assert_eq!(captured[0].1, context.expected_block_bytes);
+    }
+
+    #[test]
+    fn find_transaction_returns_serialized_payload() {
+        let context = setup();
+        let (block, bytes) = context
+            .daemon
+            .find_transaction(context.transaction_id)
+            .expect("transaction should be located");
+        assert_eq!(block, context.block_one_hash);
+        assert_eq!(bytes, context.expected_transaction_bytes);
     }
 }
