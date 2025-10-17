@@ -1,0 +1,528 @@
+{
+  "package": "malachite-base",
+  "version": "0.4.18",
+  "generated_at": "2025-10-16T14:57:08Z",
+  "reference_source": "downloaded crate archive /tmp/malachite-base-0.4.18-pxw5wnj7.crate",
+  "status": "fail",
+  "summary": {
+    "total": 1613,
+    "match": 92,
+    "mismatch": 0,
+    "missing_in_vendor": 998,
+    "missing_in_reference": 523
+  },
+  "findings": {
+    "missing_in_vendor": {
+      "count": 998,
+      "samples": [
+        {
+          "path": ".cargo_vcs_info.json",
+          "actual": null,
+          "expected": "0b3c3d047626c76a870ac13808aa0f6837d7652a763a8a9b6901bd8ea5160073"
+        },
+        {
+          "path": ".gitignore",
+          "actual": null,
+          "expected": "bbf80a4b7de498fb4821e4d63c140f1561d208d2299ff1dc6b5386a853f48c36"
+        },
+        {
+          "path": "Cargo.lock",
+          "actual": null,
+          "expected": "56d4d259863b458fe47744689b94bf8cd9d9b47dd3e2de4dcf41d4972207ae10"
+        },
+        {
+          "path": "Cargo.toml",
+          "actual": null,
+          "expected": "89aee99ac533938b750a2025ee52db8cf3f20271757e701e84c4ae7dbff0c6c5"
+        },
+        {
+          "path": "Cargo.toml.orig",
+          "actual": null,
+          "expected": "64f928794510c6b02de0f27d0204af40075c4cce6cc97dbc5a4ca93426f84495"
+        },
+        {
+          "path": "README.md",
+          "actual": null,
+          "expected": "af56e042c132ef12b7e01fd3c97ada4322ea10cef9911cd694cb51653f3b45c6"
+        },
+        {
+          "path": "katex-header.html",
+          "actual": null,
+          "expected": "6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b"
+        },
+        {
+          "path": "rustfmt.toml",
+          "actual": null,
+          "expected": "274f8cb455fb72698a078faea0714f7d9270da9081ee2959b94f2e6877f36981"
+        },
+        {
+          "path": "src/bin.rs",
+          "actual": null,
+          "expected": "8b08a713b56767fee803cdcd95301d73a2de70017bbe57366579e7494f3728c3"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/bools/mod.rs",
+          "actual": null,
+          "expected": "4cabb8bac793cd050b755335c2877e0d00b7e6a98f83963e9288c74db638c29b"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/bools/not_assign.rs",
+          "actual": null,
+          "expected": "a27ca664dd6f7219f8c59e2dbec899ce6356246c5727468ac09c73e6089f931b"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/chars/crement/char_to_contiguous_range.rs",
+          "actual": null,
+          "expected": "92356a67e225e975862a9712f541e524909def064336108db18391249f617f1b"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/chars/crement/contiguous_range_to_char.rs",
+          "actual": null,
+          "expected": "48f1c00e8b538b746f6ba1b8ba5a627a3f8166b61611620c455ae5a343dc399c"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/chars/crement/crement.rs",
+          "actual": null,
+          "expected": "45ca8456f8031fde7e9cf24f2246a06bb64190a5d7e2828b3653303c2a1620f5"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/chars/crement/mod.rs",
+          "actual": null,
+          "expected": "ca12c9cbecd0e2bae6c494bbe0d8360973c15ae7d493220bc60cea0e5bf0547a"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/chars/mod.rs",
+          "actual": null,
+          "expected": "dab2c09a584d45a1891076f9f83bfd6370ec021c3c99d42e7a2d298129806f88"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/comparison/macros.rs",
+          "actual": null,
+          "expected": "ee6d97df010d02e6b3d180fbb154a89b406e48c881771e04a04d00461181b2fc"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/comparison/mod.rs",
+          "actual": null,
+          "expected": "9e64ae9938cf09ae1a36621a92003e45cd23a7534c2c675f7bba1108a1b37250"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/mod.rs",
+          "actual": null,
+          "expected": "f69040ec308230d6c155c7b0597c03c94689107db772dc486d0d57ffd764d567"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/abs.rs",
+          "actual": null,
+          "expected": "e68169906c5632ad4ddf1c0b1640f41b39cc16edfb3ff4e64a013352c5bd2a71"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/abs_diff.rs",
+          "actual": null,
+          "expected": "6bbdf8787f0953d4095d5c8ca548f9b42db6161c7708b0651d69e191783bb44d"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/add_mul.rs",
+          "actual": null,
+          "expected": "2ecdd9bf7feeaa99792289d6fd228578728ed9542a1ee0c3fd9b6f2f6e332c49"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/arithmetic_checked_shl.rs",
+          "actual": null,
+          "expected": "0a09309543298350cc832bb4cadf02d8e09fd12de4d5b4602babf4ef23283de0"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/arithmetic_checked_shr.rs",
+          "actual": null,
+          "expected": "bebd09f6459c22f3f4151124545fe834c6ae2edd8ab09fadc22334675a38d8fb"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/binomial_coefficient.rs",
+          "actual": null,
+          "expected": "7b8dceac2f166a1ebe9cdc02d18fedaf8ae2fa85f408249d9874487ae107498c"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/ceiling.rs",
+          "actual": null,
+          "expected": "8a3091cba4b5d4b0547a386c38e297876faaf4e3958ed8bd6359fed06f9bce72"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/checked_add_mul.rs",
+          "actual": null,
+          "expected": "57693170a8e0195426103a1b20d6cd8d023c9a0b08538fa911d0738c0fd2a018"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/checked_square.rs",
+          "actual": null,
+          "expected": "b932005b09ef2bd96cfe687d04f1d56a3d4719a43ca6c0e197fbcb03c8984483"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/checked_sub_mul.rs",
+          "actual": null,
+          "expected": "cf01b9c7bb6ce07de70ab86c2ac0d34e807814957777294acf77840f1637f37c"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/coprime_with.rs",
+          "actual": null,
+          "expected": "29800e8889a5f3199e17f535db9b15db9c9719b9024f43bc2e643a74c7a7ddee"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/div_exact.rs",
+          "actual": null,
+          "expected": "8290103683da34fd2fbd98834008e52c5eba81c5738ca672b4fa4da7ed764658"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/div_mod.rs",
+          "actual": null,
+          "expected": "ee41a772f6850f24fc7a677e75f0bad0a9238b366cbca83259a457eda4fb3d3e"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/div_round.rs",
+          "actual": null,
+          "expected": "0fc97ea3cbf21bf64692dd4f4aae7d9fefadb457db082d5d2af4df846228f08c"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/divisible_by.rs",
+          "actual": null,
+          "expected": "fa30bdf217ec06f1080ac63535644be7e15586055c9150da6bf049f9c084598e"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/divisible_by_power_of_2.rs",
+          "actual": null,
+          "expected": "5b073a235ca37afaa1a1eb9067d18f555cd2793d43d574e18a758a12180e3852"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/eq_mod.rs",
+          "actual": null,
+          "expected": "ed93f2a1486981c4fc51ccbe87532a4a02013a5c18aff52f57d74fe68347e9cd"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/eq_mod_power_of_2.rs",
+          "actual": null,
+          "expected": "e1d6b7198dee10aab9991c10a925ceda77f58ae37260cebd503dfbf28532fc8f"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/extended_gcd.rs",
+          "actual": null,
+          "expected": "f992436ea5cafdb3ceb027e9d10d8a2af309928a02eab99e938c8da0777d4b54"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/factorial.rs",
+          "actual": null,
+          "expected": "e0bb6bdb1f789975ddc9c445ce8e2dac6c83f328c3b42856ca13a07d077ee518"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/floor.rs",
+          "actual": null,
+          "expected": "103dbcf1bfb32b95bc880983be429742f3c1edb42ccb8189e3d0be95fbd3f79d"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/gcd.rs",
+          "actual": null,
+          "expected": "401583b464fd0f8624fc50023fc7aef2ce3f727f812d5b4b98dcd4f838f0fb5c"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/is_power_of_2.rs",
+          "actual": null,
+          "expected": "32f2f3cdbb446f46ede893b2e190f35ff3745a01eddc24f63be1701793b1863b"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/kronecker_symbol.rs",
+          "actual": null,
+          "expected": "7d7345534c5af8a5a62a01122ef8c8b7e8507cf6e58d2a303cf3fbebd7c84ff8"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/lcm.rs",
+          "actual": null,
+          "expected": "dc5065c10ec682f978b0f5c945cbca85f43f6c3fe59422103f63aef46e7c11a7"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/log_base.rs",
+          "actual": null,
+          "expected": "3b219e7319f5956cc9f169c477037500fe10f161e91cf413ca8933a69f349e94"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/log_base_2.rs",
+          "actual": null,
+          "expected": "7416768637bd9e2940b0fcfd611e22fa9b44fb77187439929732a592aa32b833"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/log_base_power_of_2.rs",
+          "actual": null,
+          "expected": "38a1ae25c48dce5e8e34ebba8ec0d0c566aa22706991c15d8b5fb58e92c0b967"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/mod.rs",
+          "actual": null,
+          "expected": "4a1e1d0758868019d5daae6e39165e76749ed052bc7645947da22070222de37e"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/mod_add.rs",
+          "actual": null,
+          "expected": "152405ddfdef6853d0a5e2fc9a845fbabb69f25584642cd1f2c0555f896ccd81"
+        },
+        {
+          "path": "src/bin_util/demo_and_bench/num/arithmetic/mod_inverse.rs",
+          "actual": null,
+          "expected": "9899b2828879cb6a31361ec55d82f24f4e75d2b393c096d8bb8b1cb60be253dd"
+        }
+      ],
+      "truncated": true
+    },
+    "missing_in_reference": {
+      "count": 523,
+      "samples": [
+        {
+          "path": "bin.rs",
+          "actual": "8b08a713b56767fee803cdcd95301d73a2de70017bbe57366579e7494f3728c3",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/bools/mod.rs",
+          "actual": "4cabb8bac793cd050b755335c2877e0d00b7e6a98f83963e9288c74db638c29b",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/bools/not_assign.rs",
+          "actual": "a27ca664dd6f7219f8c59e2dbec899ce6356246c5727468ac09c73e6089f931b",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/chars/crement/char_to_contiguous_range.rs",
+          "actual": "92356a67e225e975862a9712f541e524909def064336108db18391249f617f1b",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/chars/crement/contiguous_range_to_char.rs",
+          "actual": "48f1c00e8b538b746f6ba1b8ba5a627a3f8166b61611620c455ae5a343dc399c",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/chars/crement/crement.rs",
+          "actual": "45ca8456f8031fde7e9cf24f2246a06bb64190a5d7e2828b3653303c2a1620f5",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/chars/crement/mod.rs",
+          "actual": "ca12c9cbecd0e2bae6c494bbe0d8360973c15ae7d493220bc60cea0e5bf0547a",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/chars/mod.rs",
+          "actual": "dab2c09a584d45a1891076f9f83bfd6370ec021c3c99d42e7a2d298129806f88",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/comparison/macros.rs",
+          "actual": "ee6d97df010d02e6b3d180fbb154a89b406e48c881771e04a04d00461181b2fc",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/comparison/mod.rs",
+          "actual": "9e64ae9938cf09ae1a36621a92003e45cd23a7534c2c675f7bba1108a1b37250",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/mod.rs",
+          "actual": "bc3a2adc477d1155fdfcc0fb6d6a4653384b23062abb1a57ae1186760e558d55",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/abs.rs",
+          "actual": "e68169906c5632ad4ddf1c0b1640f41b39cc16edfb3ff4e64a013352c5bd2a71",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/abs_diff.rs",
+          "actual": "6bbdf8787f0953d4095d5c8ca548f9b42db6161c7708b0651d69e191783bb44d",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/add_mul.rs",
+          "actual": "2ecdd9bf7feeaa99792289d6fd228578728ed9542a1ee0c3fd9b6f2f6e332c49",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/arithmetic_checked_shl.rs",
+          "actual": "0a09309543298350cc832bb4cadf02d8e09fd12de4d5b4602babf4ef23283de0",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/arithmetic_checked_shr.rs",
+          "actual": "bebd09f6459c22f3f4151124545fe834c6ae2edd8ab09fadc22334675a38d8fb",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/binomial_coefficient.rs",
+          "actual": "7b8dceac2f166a1ebe9cdc02d18fedaf8ae2fa85f408249d9874487ae107498c",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/ceiling.rs",
+          "actual": "8a3091cba4b5d4b0547a386c38e297876faaf4e3958ed8bd6359fed06f9bce72",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/checked_add_mul.rs",
+          "actual": "57693170a8e0195426103a1b20d6cd8d023c9a0b08538fa911d0738c0fd2a018",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/checked_square.rs",
+          "actual": "b932005b09ef2bd96cfe687d04f1d56a3d4719a43ca6c0e197fbcb03c8984483",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/checked_sub_mul.rs",
+          "actual": "cf01b9c7bb6ce07de70ab86c2ac0d34e807814957777294acf77840f1637f37c",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/coprime_with.rs",
+          "actual": "29800e8889a5f3199e17f535db9b15db9c9719b9024f43bc2e643a74c7a7ddee",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/div_exact.rs",
+          "actual": "8290103683da34fd2fbd98834008e52c5eba81c5738ca672b4fa4da7ed764658",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/div_mod.rs",
+          "actual": "ee41a772f6850f24fc7a677e75f0bad0a9238b366cbca83259a457eda4fb3d3e",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/div_round.rs",
+          "actual": "0fc97ea3cbf21bf64692dd4f4aae7d9fefadb457db082d5d2af4df846228f08c",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/divisible_by.rs",
+          "actual": "fa30bdf217ec06f1080ac63535644be7e15586055c9150da6bf049f9c084598e",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/divisible_by_power_of_2.rs",
+          "actual": "5b073a235ca37afaa1a1eb9067d18f555cd2793d43d574e18a758a12180e3852",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/eq_mod.rs",
+          "actual": "ed93f2a1486981c4fc51ccbe87532a4a02013a5c18aff52f57d74fe68347e9cd",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/eq_mod_power_of_2.rs",
+          "actual": "e1d6b7198dee10aab9991c10a925ceda77f58ae37260cebd503dfbf28532fc8f",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/extended_gcd.rs",
+          "actual": "f992436ea5cafdb3ceb027e9d10d8a2af309928a02eab99e938c8da0777d4b54",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/factorial.rs",
+          "actual": "e0bb6bdb1f789975ddc9c445ce8e2dac6c83f328c3b42856ca13a07d077ee518",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/floor.rs",
+          "actual": "103dbcf1bfb32b95bc880983be429742f3c1edb42ccb8189e3d0be95fbd3f79d",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/gcd.rs",
+          "actual": "401583b464fd0f8624fc50023fc7aef2ce3f727f812d5b4b98dcd4f838f0fb5c",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/is_power_of_2.rs",
+          "actual": "32f2f3cdbb446f46ede893b2e190f35ff3745a01eddc24f63be1701793b1863b",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/kronecker_symbol.rs",
+          "actual": "7d7345534c5af8a5a62a01122ef8c8b7e8507cf6e58d2a303cf3fbebd7c84ff8",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/lcm.rs",
+          "actual": "dc5065c10ec682f978b0f5c945cbca85f43f6c3fe59422103f63aef46e7c11a7",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/log_base.rs",
+          "actual": "3b219e7319f5956cc9f169c477037500fe10f161e91cf413ca8933a69f349e94",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/log_base_2.rs",
+          "actual": "7416768637bd9e2940b0fcfd611e22fa9b44fb77187439929732a592aa32b833",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/log_base_power_of_2.rs",
+          "actual": "38a1ae25c48dce5e8e34ebba8ec0d0c566aa22706991c15d8b5fb58e92c0b967",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod.rs",
+          "actual": "4a1e1d0758868019d5daae6e39165e76749ed052bc7645947da22070222de37e",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_add.rs",
+          "actual": "152405ddfdef6853d0a5e2fc9a845fbabb69f25584642cd1f2c0555f896ccd81",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_inverse.rs",
+          "actual": "9899b2828879cb6a31361ec55d82f24f4e75d2b393c096d8bb8b1cb60be253dd",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_is_reduced.rs",
+          "actual": "e5c6ac79f59e5633e759e9b99524a6435c6b51d370d8140b44873d14ca3cc4ef",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_mul.rs",
+          "actual": "5e7746c6c5665d15a9be1073553790ff5e02bf6a3375ec6bbd542f0ccfb083aa",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_neg.rs",
+          "actual": "d2716f61c2142a802b722a84831e81dc4dae2883bc4324294f2c79b36ca03dde",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_op.rs",
+          "actual": "8b9110d30914d70db633bf72ab535b3652f609208a60e5f377d6b38a1a5e2eaf",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_pow.rs",
+          "actual": "d56b4108ab188bb93fdb10f3641bb211e8abe98644e2d0f6ad82e8b96dee01a5",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_power_of_2.rs",
+          "actual": "6eb085a7266c747767c0398bec1dcb2ec21388294f83dd110864964277077185",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_power_of_2_add.rs",
+          "actual": "aa03511e6902e2e211a3290369d1cbaf303af4d731525e1364acf8609d8eaa33",
+          "expected": null
+        },
+        {
+          "path": "bin_util/demo_and_bench/num/arithmetic/mod_power_of_2_inverse.rs",
+          "actual": "53e003897384ce934e7c899025289c770f74a377b4126c57a84f1367d1393192",
+          "expected": null
+        }
+      ],
+      "truncated": true
+    }
+  }
+}

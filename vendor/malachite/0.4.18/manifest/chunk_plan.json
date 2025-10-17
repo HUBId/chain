@@ -1,12 +1,12 @@
 {
   "source_archive": "/tmp/malachite/malachite-0.4.18.crate",
   "segment_size_bytes": 52428800,
-  "file_size": 277,
+  "file_size": 7712,
   "chunks": [
     {
       "chunk_name": "chunk_000",
       "offset": 0,
-      "length": 277,
+      "length": 7712,
       "source": "malachite-0.4.18.crate"
     }
   ]

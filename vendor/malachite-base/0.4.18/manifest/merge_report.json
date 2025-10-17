@@ -1,0 +1,8 @@
+{
+  "version": "0.4.18",
+  "timestamp": "2025-10-16T14:57:07Z",
+  "expected_sha256": "06f6d078bb4dad5b76f6a85737e6c9113667d199612a73eef375c56e75d5d4d5",
+  "actual_sha256": "06f6d078bb4dad5b76f6a85737e6c9113667d199612a73eef375c56e75d5d4d5",
+  "status": "success",
+  "output_file": "/workspace/chain/vendor/malachite-base/0.4.18/malachite-base-0.4.18.crate"
+}

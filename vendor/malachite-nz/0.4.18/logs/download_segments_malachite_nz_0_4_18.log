@@ -1,0 +1,18 @@
+[2025-10-16T14:47:40Z] [INFO] Starting segmented download for malachite-nz 0.4.18 using plan /workspace/chain/vendor/malachite-nz/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:47:40Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-nz/0.4.18/download
+[2025-10-16T14:47:40Z] [INFO] Processing malachite-nz-0.4.18.part000 (chunk_000) with range bytes=0-2426975
+[2025-10-16T14:47:40Z] [INFO] Downloading malachite-nz-0.4.18.part000 (attempt 1/5, range bytes=0-2426975)
+[2025-10-16T14:47:41Z] [INFO] Segment malachite-nz-0.4.18.part000 downloaded successfully (size=2426976, sha256=ad61a09cde72dcdb8b2baaf3e71430c5bd94fb6753da89f17301a459f3e466db)
+[2025-10-16T14:47:41Z] [INFO] All segments processed successfully
+[2025-10-16T14:56:28Z] [INFO] Starting segmented download for malachite-nz 0.4.18 using plan /workspace/chain/vendor/malachite-nz/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:56:28Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-nz/0.4.18/download
+[2025-10-16T14:56:28Z] [INFO] Processing malachite-nz-0.4.18.part000 (chunk_000) with range bytes=0-2426975
+[2025-10-16T14:56:28Z] [INFO] Verifying existing segment malachite-nz-0.4.18.part000
+[2025-10-16T14:56:29Z] [INFO] Segment malachite-nz-0.4.18.part000 already valid (sha256=ad61a09cde72dcdb8b2baaf3e71430c5bd94fb6753da89f17301a459f3e466db)
+[2025-10-16T14:56:29Z] [INFO] All segments processed successfully
+[2025-10-16T14:57:09Z] [INFO] Starting segmented download for malachite-nz 0.4.18 using plan /workspace/chain/vendor/malachite-nz/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:57:09Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-nz/0.4.18/download
+[2025-10-16T14:57:09Z] [INFO] Processing malachite-nz-0.4.18.part000 (chunk_000) with range bytes=0-2426975
+[2025-10-16T14:57:09Z] [INFO] Verifying existing segment malachite-nz-0.4.18.part000
+[2025-10-16T14:57:09Z] [INFO] Segment malachite-nz-0.4.18.part000 already valid (sha256=ad61a09cde72dcdb8b2baaf3e71430c5bd94fb6753da89f17301a459f3e466db)
+[2025-10-16T14:57:09Z] [INFO] All segments processed successfully

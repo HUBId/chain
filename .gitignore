@@ -6,3 +6,6 @@ logs/
 rpp/*/Cargo.lock
 storage-firewood/Cargo.lock
 vendor/**/*.crate
+
+vendor/**/chunks/*.part*
+vendor/**/chunks/*.tmp
