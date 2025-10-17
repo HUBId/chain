@@ -12,6 +12,9 @@ prover-mock = ["prover-backend-interface/prover-mock"]
 vendor_electrs = []
 
 [dependencies]
+anyhow = "1"
 prover-backend-interface = { path = "../zk/backend-interface" }
+sha2 = "0.10"
+storage-firewood = { path = "../../storage-firewood" }
 
 [workspace]
