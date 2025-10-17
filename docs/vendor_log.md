@@ -1,5 +1,11 @@
 # Vendor-Integrationsprotokoll
 
+## Geplanter Backend-Vendor – STWO (2025-10-21)
+
+* Mehr-PR-Prozess: STWO-Integration wird über mehrere PRs mit einem Diff-Limit von ca. 25 000 geänderten Zeilen gestaffelt.
+* Toolchain-Vorgabe: Das vendorte Backend benötigt die Nightly-Toolchain `nightly-2025-07-14` laut `vendor/stwo-dev/rust-toolchain.toml`.
+* Quellenreferenz: Ausgangspunkt ist das Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
+
 ## Batch 1 – Fundamentale Utility-Crates (2025-09-23)
 
 | Crate | Version(en) | Zielverzeichnis | Notizen |
