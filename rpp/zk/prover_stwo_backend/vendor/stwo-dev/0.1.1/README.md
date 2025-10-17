@@ -41,3 +41,22 @@ Zur Pflege des Vendor-Drops stehen im Repository drei Helfer zur Verfügung:
    der Segmentpakete bzw. der finalen Quellbäume.
 
 Der empfohlene Ablauf lautet somit: **Entpacken → Segmentweise ins Repository kopieren → Manifest aktualisieren**.
+
+## Beispiele (`crates/examples`)
+
+Dieses Segment bündelt Referenz-AIRs und Stark-Proofs für Poseidon, Blake2s,
+ein kleines State-Machine-Beispiel sowie GKR-/Lookup-Demonstrationen. Die Tests
+generieren alle benötigten Daten zur Laufzeit; es sind keine zusätzlichen
+Fixtures oder Ressourcen aus dem Upstream-Archiv nötig. Lediglich der
+Poseidon-Test `test_simd_poseidon_prove` liest optional die Umgebungsvariable
+`LOG_N_INSTANCES` (Standardwert `10`), um die Problemgröße anzupassen. Der
+Blake2s-Nachweis ist mit `#[cfg_attr(not(feature = "slow-tests"), ignore)]`
+markiert und muss explizit über `--features slow-tests` aktiviert werden.
+
+Die Criterion-Benchmark `benches/poseidon.rs` kann mit
+
+```bash
+cargo bench -p stwo-examples --bench poseidon
+```
+
+gestartet werden und benötigt ebenfalls keine externen Assets.

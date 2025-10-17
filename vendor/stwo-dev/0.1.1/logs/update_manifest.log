@@ -11,3 +11,7 @@
 [2025-10-17T12:07:41Z] [INFO] Recorded SIMD backend sources (fft/ and lookups/ complete)
 [2025-10-17T12:07:41Z] [INFO] Manifest rebuild complete
 [2025-10-17T12:15:32Z] [INFO] Recorded crates/stwo/README.md and refreshed bench documentation entries.
+[2025-10-17T12:26:31Z] [INFO] Starting manifest rebuild
+[2025-10-17T12:26:31Z] [WARN] Chunk directory vendor/stwo-dev/0.1.1/chunks does not exist; manifest will be empty
+[2025-10-17T12:26:31Z] [INFO] Manifest rebuild complete
+[2025-10-17T12:26:51Z] [INFO] Recorded crates/examples (no external fixtures; tests rely on generated data only).
