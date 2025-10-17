@@ -1,0 +1,12 @@
+info: syncing channel updates for 'nightly-2025-07-14-x86_64-unknown-linux-gnu'
+info: latest update on 2025-07-14, rust version 1.90.0-nightly (e9182f195 2025-07-13)
+info: downloading component 'cargo'
+info: downloading component 'rust-std'
+info: downloading component 'rustc'
+info: installing component 'cargo'
+info: installing component 'rust-std'
+info: installing component 'rustc'
+error: failed to parse manifest at `/workspace/chain/storage/Cargo.toml`
+
+Caused by:
+  can't find `serializer` bench at `benches/serializer.rs` or `benches/serializer/main.rs`. Please specify bench.path if you want to use a non-default path.
