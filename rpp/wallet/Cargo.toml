@@ -9,6 +9,9 @@ default = ["prover-stwo"]
 prover-stwo = ["prover-backend-interface/prover-stwo"]
 prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
 prover-mock = ["prover-backend-interface/prover-mock"]
+vendor_electrs = []
 
 [dependencies]
 prover-backend-interface = { path = "../zk/backend-interface" }
+
+[workspace]

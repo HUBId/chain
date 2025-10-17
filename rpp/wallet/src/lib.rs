@@ -14,3 +14,6 @@
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 
 pub use prover_backend_interface as proof_backend;
+
+/// Zugriff auf optionale Drittanbieter-Integrationen.
+pub mod vendor;
