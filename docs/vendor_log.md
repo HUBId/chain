@@ -6,6 +6,12 @@
 * Toolchain-Vorgabe: Das vendorte Backend benötigt die Nightly-Toolchain `nightly-2025-07-14` laut `vendor/stwo-dev/rust-toolchain.toml`.
 * Quellenreferenz: Ausgangspunkt ist das Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
 
+#### Import – constraint-framework-Staging (2025-10-17)
+
+* `vendor/stwo-dev/0.1.1/staging/crates/constraint-framework/` enthält nun die vollständigen Quellen (u. a. `expr/`, `prover/`, `info.rs`, `logup.rs`) aus dem Workspace-Archiv.
+* `scripts/vendor_stwo/update_manifest.py` aktualisiert `manifest/chunks.json`, die Prüfsummenliste `manifest/final_file_list.txt` sowie das Log `logs/update_manifest.log` für den neuen Staging-Bestand.
+* Prover-Module, die auf dem Framework aufsetzen: die Komponenten-Implementierungen in `crates/examples/src/blake/`, `crates/examples/src/poseidon/` und `crates/examples/src/wide_fibonacci/` nutzen `FrameworkComponent`, LogUp-Generatoren und Relation-Tracker aus dem Framework zur Zeugen-Erzeugung.【F:rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/blake/mod.rs†L14-L156】【F:rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/poseidon/mod.rs†L25-L351】【F:rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/wide_fibonacci/mod.rs†L11-L246】
+
 ### Initiale Artefaktplanung (2025-10-17)
 
 * Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
