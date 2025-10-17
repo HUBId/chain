@@ -1,46 +1,61 @@
-# Contributing
+# Welcome contributors
 
-## Toolchains & Local Workflows
+We are eager for contributions and happy you found yourself here.
+Please read through this document to familiarize yourself with our
+guidelines for contributing to firewood.
 
-- **Stable default (required)**
-  - Install the pinned stable toolchain with `rustup toolchain install 1.79.0`.
-  - `rustup` will auto-select it through `rust-toolchain.toml`; ensure the `rustfmt` and `clippy` components are added (`rustup component add --toolchain 1.79.0 rustfmt clippy`).
-  - CI runs `cargo +1.79.0 clippy --workspace --all-features -D warnings`; mirror this locally before submitting a PR.
-- **Documentation sync**
-  - Run `scripts/ci/check_docs.sh` before pushing to confirm `RELEASE_NOTES.md` mentions the pinned toolchain.
-  - The stable fmt job executes the same check and will fail if the docs drift from `rust-toolchain.toml`.
-- **Nightly scan (optional checks)**
-  - Run `scripts/ci/stable_scan` to generate `docs/STABLE_MIGRATION_REPORT.md` when auditing for regressions.
-  - The GitHub Actions workflow publishes the same report in warn mode; once it stays empty we will flip it to blocking.
+## Table of Contents
 
-- **Storage stability snapshot**
-  - Review [docs/STORAGE_STABLE_REPORT.md](docs/STORAGE_STABLE_REPORT.md) for the latest Firewood MSRV audit and CI notes.
-  - Update the report whenever storage crates gain new features or dependencies so operators can track stable readiness.
+* [Quick Links](#Quick Links)
+* [Testing](#testing)
+* [How to submit changes](#How to submit changes)
+* [Where can I ask for help?](#Where can I ask for help)
 
-## Lokale Entwicklung
+## [Quick Links]
 
-Use the stable toolchain commands directly when iterating:
+* [Setting up docker](README.docker.md)
+* [Auto-generated documentation](https://ava-labs.github.io/firewood/firewood/)
+* [Issue tracker](https://github.com/ava-labs/firewood/issues)
 
-```bash
-cargo +1.79.0 build --workspace --all-features
-cargo +1.79.0 test --workspace --all-features
-cargo +1.79.0 clippy --workspace --all-features -D warnings
-cargo +1.79.0 fmt --all -- --check
-```
+## [Testing]
 
-The helper scripts under `scripts/` remain available, but the explicit commands above match the new stable CI configuration.
-If these commands fail today, check `docs/STABLE_MIGRATION_REPORT.md`—the report should stay empty now that the workspace builds on stable 1.79 without `edition2024` opt-ins.
+After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
 
-## Backend Implementation Conventions
+    cargo fmt
+    cargo test
+    cargo clippy
+    cargo doc --no-deps
 
-- New proving/storage backends must live under dedicated feature flags (e.g. `backend-plonky3`) and default to disabled unless production-ready.
-- Implement backend-specific configuration in `config/` and document required keys in the README backend section.
-- Provide integration tests or simulations under `tests/` or `rpp/sim/` that exercise the backend in isolation.
-- Update CI matrices to include opt-in coverage for the new backend and describe the workflow in the PR summary.
+Resolve any warnings or errors before making your PR.
 
-## Troubleshooting
+## [How to submit changes]
 
-- **Toolchain mismatch errors**
-- `error: toolchain '1.79.0' is not installed`: run `rustup toolchain install 1.79.0`.
-- `error: component 'rustfmt' for target 'x86_64-unknown-linux-gnu' is unavailable`: run `rustup component add --toolchain 1.79.0 rustfmt clippy`.
-- If the stable scan reports new findings, investigate the referenced files and schedule a cleanup PR before promoting the warn gate to blocking.
+To create a PR, fork firewood, and use github to create the PR. We typically prioritize reviews in the middle of our the next work day,
+so you should expect a response during the week within 24 hours.
+
+## [How to report a bug]
+
+Please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for reporting issues.
+
+## [First time fixes for contributors]
+
+The [issue tracker](https://github.com/ava-labs/firewood/issues) typically has some issues tagged for first-time contributors. If not,
+please reach out. We hope you work on an easy task before tackling a harder one.
+
+## [How to request an enhancement]
+
+Just like bugs, please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for requesting enhancements. Please tag the issue with the "enhancement" tag.
+
+## [Style Guide / Coding Conventions]
+
+We generally follow the same rules that `cargo fmt` and `cargo clippy` will report as warnings, with a few notable exceptions as documented in the associated Cargo.toml file.
+
+By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
+
+## [Where can I ask for help]?
+
+Please reach out on X (formerly twitter) @rkuris for help or questions!
+
+## Thank you
+
+We'd like to extend a pre-emptive "thank you" for reading through this and submitting your first contribution!
