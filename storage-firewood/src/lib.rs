@@ -6,6 +6,8 @@ pub mod state;
 pub mod tree;
 pub mod wal;
 
+pub use crate::state::FirewoodState as Storage;
+
 #[cfg(test)]
 mod tests {
     use std::env;
