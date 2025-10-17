@@ -45,6 +45,12 @@
 * Erfolgreiche Läufe von `cargo +nightly-2025-07-14 check --offline -p prover-stwo` und `cargo +nightly-2025-07-14 check --offline -p prover-stwo-simd` verifizieren die Integration auf der vendorten Toolchain.
 * Die Logausgaben sind unter `vendor/stwo-dev/0.1.1/logs/cargo_check_prover-stwo.log` bzw. `vendor/stwo-dev/0.1.1/logs/cargo_check_prover-stwo-simd.log` abgelegt und dokumentieren die Nightly-Toolchain `nightly-2025-07-14` entsprechend der bestehenden Toolchain-Vorgabe.
 
+#### Abschluss – Manifest & Integritätsberichte (2025-10-17)
+
+* Letzter Lauf von `scripts/vendor_stwo/update_manifest.py` bestätigt den finalen Staging-Bestand; `manifest/chunks.json` erhält einen aktualisierten Zeitstempel und verweist weiterhin auf einen leeren Chunk-Satz, während `manifest/final_file_list.txt` alle 171 Dateien des Workspaces erfasst.【F:vendor/stwo-dev/0.1.1/manifest/chunks.json†L1-L6】【F:vendor/stwo-dev/0.1.1/manifest/final_file_list.txt†L1-L171】【F:vendor/stwo-dev/0.1.1/logs/update_manifest.log†L13-L21】
+* `scripts/vendor_stwo/verify_extracted_files.py` bestätigt eine fehlerfreie Übereinstimmung; der konsolidierte Bericht `manifest/integrity_report.json` dokumentiert den `pass`-Status und enthält die Zählwerte für Matches/Mismatches.【F:vendor/stwo-dev/0.1.1/manifest/integrity_report.json†L1-L15】
+* Ergänzend fasst `manifest/integrity_summary.json` die Prüfsummen zentraler Dateien (u. a. `Cargo.toml`, `src/lib.rs`, Update-Log) zusammen und erleichtert spätere Spot-Checks.【F:vendor/stwo-dev/0.1.1/manifest/integrity_summary.json†L1-L35】
+
 ### Initiale Artefaktplanung (2025-10-17)
 
 * Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.

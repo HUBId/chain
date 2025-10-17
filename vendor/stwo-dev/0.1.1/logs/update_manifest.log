@@ -16,3 +16,6 @@
 [2025-10-17T12:26:31Z] [INFO] Manifest rebuild complete
 [2025-10-17T12:26:51Z] [INFO] Recorded crates/examples (no external fixtures; tests rely on generated data only).
 [2025-10-17T12:45:03Z] [INFO] Added ensure-verifier-no_std manifest files to enforce the verifier's no_std build.
+[2025-10-17T13:15:43Z] [INFO] Starting manifest rebuild
+[2025-10-17T13:15:43Z] [WARN] Chunk directory vendor/stwo-dev/0.1.1/chunks does not exist; manifest will be empty
+[2025-10-17T13:15:43Z] [INFO] Manifest rebuild complete
