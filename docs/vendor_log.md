@@ -6,6 +6,12 @@
 * Toolchain-Vorgabe: Das vendorte Backend benötigt die Nightly-Toolchain `nightly-2025-07-14` laut `vendor/stwo-dev/rust-toolchain.toml`.
 * Quellenreferenz: Ausgangspunkt ist das Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
 
+### Initiale Artefaktplanung (2025-10-17)
+
+* Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
+* Manifest-Initialisierung: Ein Lauf von `scripts/vendor_stwo/update_manifest.py` gegen den leeren Zielbaum erzeugte ein leeres `manifest/chunks.json` sowie eine leere `manifest/final_file_list.txt` zur Vorbereitung der Folgeimporte.
+* Log-Ablage: Das Manifest-Log liegt unter `vendor/stwo-dev/0.1.1/logs/update_manifest.log` und dokumentiert den Initiallauf ohne erkannte Segmente.
+
 ## Batch 1 – Fundamentale Utility-Crates (2025-09-23)
 
 | Crate | Version(en) | Zielverzeichnis | Notizen |
