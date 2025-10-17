@@ -42,6 +42,13 @@ Weitere Schritte:
 * Segmentgröße: höchstens drei Crates pro Batch, um innerhalb des Diff-Limits zu bleiben.
 * Folgeaufgaben: Umsetzung der noch offenen Vendor-Schritte gemäß Abschnitt „Folgeaktionen“ im Abhängigkeits-Kompatibilitätsbericht.
 
+## Aktualisierung – Malachite-Workspace (2025-10-17)
+
+* Alle Teilcrates (`malachite`, `malachite-base`, `malachite-float`, `malachite-nz`, `malachite-q`) erhielten frische Segment-Manifestdateien über `scripts/vendor_malachite/update_manifest.py`. Die neuen `chunks.json`-Stände verweisen auf geprüfte `.part000`-Segmente mit aktualisierten Zeitstempeln.
+* Die Datei-Manifestlisten (`manifest/final_file_list.txt`) wurden für sämtliche Crates neu berechnet; die Einträge enthalten SHA-256, Byte-Länge und Relativpfad und schließen die Log- und Manifestartefakte ein.
+* Für jede Quelle liegt nun ein `manifest/reference_hashes.json` mit aktuellen Prüfsummen des `src/`-Baums vor, sodass die Integritätsprüfung ohne erneuten Download referenziert werden kann.
+* `scripts/vendor_malachite/verify_extracted_files.py --package <crate> --version 0.4.18` meldet für alle genannten Crates `pass`; die entsprechenden Artefakte (`manifest/integrity_report.json`, `logs/integrity_report.txt`) wurden aktualisiert.
+
 ## Integritätsüberblick – Malachite-Workspace (2025-10-16)
 
 * Konsolidierter Sammelbericht: `vendor/malachite/0.4.18/manifest/integrity_summary.json` fasst Kern-Prüfsummen (u. a. `Cargo.toml`, `Cargo.lock`, `README.md`) sowie den Status aller Segmentdateien der Subkrates zusammen.

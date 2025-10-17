@@ -1,119 +1,14 @@
 Integrity Report for malachite-nz 0.4.18
-Generated at: 2025-10-16T14:57:11Z
-Reference source: downloaded crate archive /tmp/malachite-nz-0.4.18-i00eztyu.crate
-Overall result: FAIL
+Generated at: 2025-10-17T07:59:22Z
+Reference source: hash manifest vendor/malachite-nz/0.4.18/manifest/reference_hashes.json
+Overall result: PASS
 
 Checksum summary:
-  Total files processed: 1317
-  Matching files: 0
+  Total files processed: 545
+  Matching files: 545
   Mismatched files: 0
-  Missing in vendor: 844
-  Missing in reference: 473
+  Missing in vendor: 0
+  Missing in reference: 0
 
 Details zu Abweichungen:
-
-  Missing In Reference: 473 Dateien
-    - bin_util/demo_and_bench/integer/arithmetic/abs.rs: actual=1c92bc9c159d574a000ee999107b066a05b9589c4d42d5cb37a7f2c99e74bb46 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/abs_diff.rs: actual=6e97430254259488ce1bcbaa377df80536478f371c422b6a82656fc4f6d374ef | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/add.rs: actual=03ab206ab835102313b3a81424d6483c182c66402f33aafd8beea58f1a93c7cf | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/add_mul.rs: actual=8d385401c0482e1791cfaedca479e7b7c0815c9df90f126c3a6b2f43e1676765 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/binomial_coefficient.rs: actual=69ea0fcf602edd59bd0f8779a4be599f4b5020fa648f7b0615cf5d2c28b3116b | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/div.rs: actual=07ec092c42aa1a4779b07a36f287c2833914c7a6a0c8ebde777fe440f4fe89f3 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/div_exact.rs: actual=44ef35d18e8a43dde9b99b8dd3001bcdca95a006d267bb112b3775c353873d2f | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/div_mod.rs: actual=686cf543d3beb5b529f160cfa655fb2c8adde246d37fed6d521ea075c9687b08 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/div_round.rs: actual=b39eefaf925e24774a4399de46ee6ab6da6b21f2b1f6744575d7b159237192d9 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/divisible_by.rs: actual=5a8e939fa605f2add48f87b286d2ec7e1fe007d03f43ddbcb4fe4e0c424d3acd | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/divisible_by_power_of_2.rs: actual=c3cc97ed5ade402d0e8101a6dd79d4cb09ca389d770e52b14d7638bb6e06d192 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/eq_mod.rs: actual=b4e937c921a62761bec83f2c87d66db5bbc47d9f8456247a00f3a11e171ef486 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/eq_mod_power_of_2.rs: actual=155f29203153e4c248df38f0eea8368878404bedbf9f27b4a12e19bb4a9a9145 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/extended_gcd.rs: actual=30d7e721614356580421029b3ab4b0fb5c3518f58318310ddc299589c62765c7 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/kronecker_symbol.rs: actual=c012d276911683b19f64782f197f046d9b5ff841de744cb408a4e1d1ee553d6f | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/mod.rs: actual=349397d6efd339d6a729030b4856713d7ef962d30f23954f57879298481589e7 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/mod_op.rs: actual=7ad86e002b5189d76923e4a0f7e6ba7ba764dcc4ce98389bc6953714b1022e9a | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/mod_power_of_2.rs: actual=a609593e3a993956fec87fc9221d42475bd00d33ab421583add79dfa1f216897 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/mul.rs: actual=282084bb7e9fce70cd7c6de262f48ff736eafa5e4627283706d6a9b39e14e69b | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/neg.rs: actual=475042b71ab79a1063dcf086c99caeef3b761d3fe2f67e118a7019a099b5a7d3 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/parity.rs: actual=d8713d3ac666e824e5096e7f5792790f326971a7dd775f54f62cae0c8d6170ef | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/pow.rs: actual=8708f52061f9e4c18226a49863b80ec24d643d5a8ef813a70f94e484320143a9 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/power_of_2.rs: actual=b129ac156c64e4e2aac72378c2a1d8ad145d93f2693fa0d6deaac9ed78650699 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/root.rs: actual=0127445d3c3fff053c1c204549481321f77f4e7a1dce5cb182b65baa5e37e9cc | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/round_to_multiple.rs: actual=c818fd308e9595ce6e904daca8b31a676b204737255aa4ee77047593e5a0e2de | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/round_to_multiple_of_power_of_2.rs: actual=dc80e96032a879dc803116a273423aaa804a6178fff0ffd19a11296b318b6efe | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/shl.rs: actual=96c3375ced367c3abda74e98db6a8a28645b045324a58ad82b745ae35ff04013 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/shl_round.rs: actual=99717c3241042118c370e2bd46af31ee052a3002f1f0bcaef898910423bcdd46 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/shr.rs: actual=972a8f336f45b07dc14ee55d1cb26a34301bf64ebdd021abcf68940b16b51fc0 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/shr_round.rs: actual=22fcb00cbfb3b4e1351a1c3ff30d71be68bfc4964b56da035abf13a0ed9f83fd | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/sign.rs: actual=3b74b9630a7300c290fd6e94717980490701e872a5c61aa8d1c12586a7a3c6d8 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/sqrt.rs: actual=e96c2b45e7512929b476e32a3fecb3be27b6589d4e14e7503935cbc4196dd6ff | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/square.rs: actual=e423097056b83c57124089248b813aa2653110182a1400aa80a72fe2ec61970c | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/sub.rs: actual=9fcb9329ddce4acc15eedbd6e9b00cc6bd2cca529f4b302058cab7ac00d6acc6 | expected=-
-    - bin_util/demo_and_bench/integer/arithmetic/sub_mul.rs: actual=99cbbbfbc9a73d0f29b4d2f3228a68917626e84976f577bafdffbebadf17524d | expected=-
-    - bin_util/demo_and_bench/integer/basic/from_sign_and_abs.rs: actual=cee4a67b87820c83a033690178b153ed98c2626ebbe421b85955a78b8b832f77 | expected=-
-    - bin_util/demo_and_bench/integer/basic/mod.rs: actual=9f2c3603c25eb8b72e1b1bb8435532c44df3ead00b9101f5c45d3affb0569373 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/cmp.rs: actual=ffa46c5745f959f1dafe15cbde5c8a769da51ad54605341ae7fd1eee98b00ea5 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/cmp_abs.rs: actual=4d4debc37c7eb6bfbc0e61b88be03d4e15bb5ce909c86caed1f081845113ff07 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/eq.rs: actual=54f4e419dc4c2648de6a7c2df596fdbeb125b888b78f4d99dc8ebfe3c592ff87 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/eq_abs.rs: actual=4f963d17da3bc35d2396c96c34edb8d9f170c7995e3c585fcda58cd75895a31f | expected=-
-    - bin_util/demo_and_bench/integer/comparison/eq_abs_natural.rs: actual=d3d1f55b6ac13948ffdd424d39f69d668fc3bc0fb7b84cd5d6c677f2c535eb86 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/eq_abs_primitive_float.rs: actual=e0dffa7cf26bb10b666f61686182d4e3b122fdd91708e0cf9c6448b5a446d8e0 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/eq_abs_primitive_int.rs: actual=6a3f8813833aa01f427618b2e8d88acff8c7a6acdea99a626a5a128987d304de | expected=-
-    - bin_util/demo_and_bench/integer/comparison/hash.rs: actual=25694c43d7265e2490aac3051a07f4e37a09b67f1832889144300ca173260ca0 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/mod.rs: actual=6ca3879e60db3d1fcd3e468d50c4f2862d420ff2d80c30e3211fe7cee827fa1b | expected=-
-    - bin_util/demo_and_bench/integer/comparison/partial_cmp_abs_natural.rs: actual=8bda399ae641fcc58fa3d4424b4d162ab7b01943005b5051f2ca2341f1edfb9c | expected=-
-    - bin_util/demo_and_bench/integer/comparison/partial_cmp_abs_primitive_float.rs: actual=18f5af19ec44524afa8a9f2319afb2ccdaa321900a957e76e7641af546a22684 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/partial_cmp_abs_primitive_int.rs: actual=1514558b624e9f0c4c23b30b553422c8d48816bc8fe15228646a05ee102b49c3 | expected=-
-    - bin_util/demo_and_bench/integer/comparison/partial_cmp_natural.rs: actual=446abe4895e334dbfd4b9eb461ba0fc7a10ff3d6a713305c3319c285f4977862 | expected=-
-    … weitere 423 Einträge unterdrückt (siehe JSON-Bericht).
-
-  Missing In Vendor: 844 Dateien
-    - .cargo_vcs_info.json: actual=- | expected=505fa4588e110c0a8c0eddaa20ded1f7cf30174eec22b160fdc208f85e367d0f
-    - .gitignore: actual=- | expected=bbf80a4b7de498fb4821e4d63c140f1561d208d2299ff1dc6b5386a853f48c36
-    - Cargo.lock: actual=- | expected=87dd9bf4d7eb49b34ad5e768370242e6c71689650e1530b5e1f9c5278162e74b
-    - Cargo.toml: actual=- | expected=c30cc0f4d5388af4242587c89e7a36700799333dccc3a02c1204c87d9b75a628
-    - Cargo.toml.orig: actual=- | expected=be769b40fa54043ee4564596cc1fb5f73140d6abd37f7153bf16263f8d186d74
-    - README.md: actual=- | expected=ec54d71ca5066d20ff02462f05b74be0bfe01fa4be90c4f563c446f23ba61566
-    - build.rs: actual=- | expected=66da1e719a98b8f7e957d741372d43cd6e0f770837450c8764d5d35138479fd3
-    - extra-tests.py: actual=- | expected=2a652a2b71e32ce12b277e28a7005be4cbce1f5e045cece63342e53e749942c2
-    - images/natural-mem-layout.asy: actual=- | expected=c6f256a4ca8272f564e1c2b6103ad7e10c7e38426b6366d78f81bd3418b91720
-    - images/natural-mem-layout.svg: actual=- | expected=b331bc1a11cf70b6fcd6cc51f02ddd09c3fc2478fa9bcc32abcbb3b116223ddc
-    - katex-header.html: actual=- | expected=6a55ee03555f9bd3ef5d6395815276476961ee7669ffbd42a381eedf7d1b027b
-    - rustfmt.toml: actual=- | expected=274f8cb455fb72698a078faea0714f7d9270da9081ee2959b94f2e6877f36981
-    - src/bin.rs: actual=- | expected=0cd15b57fdbeee9d1ac515938acb2996f44c2fcdfff08d28230b4eac845d95e3
-    - src/bin_util/demo_and_bench/integer/arithmetic/abs.rs: actual=- | expected=1c92bc9c159d574a000ee999107b066a05b9589c4d42d5cb37a7f2c99e74bb46
-    - src/bin_util/demo_and_bench/integer/arithmetic/abs_diff.rs: actual=- | expected=6e97430254259488ce1bcbaa377df80536478f371c422b6a82656fc4f6d374ef
-    - src/bin_util/demo_and_bench/integer/arithmetic/add.rs: actual=- | expected=03ab206ab835102313b3a81424d6483c182c66402f33aafd8beea58f1a93c7cf
-    - src/bin_util/demo_and_bench/integer/arithmetic/add_mul.rs: actual=- | expected=8d385401c0482e1791cfaedca479e7b7c0815c9df90f126c3a6b2f43e1676765
-    - src/bin_util/demo_and_bench/integer/arithmetic/binomial_coefficient.rs: actual=- | expected=69ea0fcf602edd59bd0f8779a4be599f4b5020fa648f7b0615cf5d2c28b3116b
-    - src/bin_util/demo_and_bench/integer/arithmetic/div.rs: actual=- | expected=07ec092c42aa1a4779b07a36f287c2833914c7a6a0c8ebde777fe440f4fe89f3
-    - src/bin_util/demo_and_bench/integer/arithmetic/div_exact.rs: actual=- | expected=44ef35d18e8a43dde9b99b8dd3001bcdca95a006d267bb112b3775c353873d2f
-    - src/bin_util/demo_and_bench/integer/arithmetic/div_mod.rs: actual=- | expected=686cf543d3beb5b529f160cfa655fb2c8adde246d37fed6d521ea075c9687b08
-    - src/bin_util/demo_and_bench/integer/arithmetic/div_round.rs: actual=- | expected=b39eefaf925e24774a4399de46ee6ab6da6b21f2b1f6744575d7b159237192d9
-    - src/bin_util/demo_and_bench/integer/arithmetic/divisible_by.rs: actual=- | expected=5a8e939fa605f2add48f87b286d2ec7e1fe007d03f43ddbcb4fe4e0c424d3acd
-    - src/bin_util/demo_and_bench/integer/arithmetic/divisible_by_power_of_2.rs: actual=- | expected=c3cc97ed5ade402d0e8101a6dd79d4cb09ca389d770e52b14d7638bb6e06d192
-    - src/bin_util/demo_and_bench/integer/arithmetic/eq_mod.rs: actual=- | expected=b4e937c921a62761bec83f2c87d66db5bbc47d9f8456247a00f3a11e171ef486
-    - src/bin_util/demo_and_bench/integer/arithmetic/eq_mod_power_of_2.rs: actual=- | expected=155f29203153e4c248df38f0eea8368878404bedbf9f27b4a12e19bb4a9a9145
-    - src/bin_util/demo_and_bench/integer/arithmetic/extended_gcd.rs: actual=- | expected=30d7e721614356580421029b3ab4b0fb5c3518f58318310ddc299589c62765c7
-    - src/bin_util/demo_and_bench/integer/arithmetic/kronecker_symbol.rs: actual=- | expected=c012d276911683b19f64782f197f046d9b5ff841de744cb408a4e1d1ee553d6f
-    - src/bin_util/demo_and_bench/integer/arithmetic/mod.rs: actual=- | expected=349397d6efd339d6a729030b4856713d7ef962d30f23954f57879298481589e7
-    - src/bin_util/demo_and_bench/integer/arithmetic/mod_op.rs: actual=- | expected=7ad86e002b5189d76923e4a0f7e6ba7ba764dcc4ce98389bc6953714b1022e9a
-    - src/bin_util/demo_and_bench/integer/arithmetic/mod_power_of_2.rs: actual=- | expected=a609593e3a993956fec87fc9221d42475bd00d33ab421583add79dfa1f216897
-    - src/bin_util/demo_and_bench/integer/arithmetic/mul.rs: actual=- | expected=282084bb7e9fce70cd7c6de262f48ff736eafa5e4627283706d6a9b39e14e69b
-    - src/bin_util/demo_and_bench/integer/arithmetic/neg.rs: actual=- | expected=475042b71ab79a1063dcf086c99caeef3b761d3fe2f67e118a7019a099b5a7d3
-    - src/bin_util/demo_and_bench/integer/arithmetic/parity.rs: actual=- | expected=d8713d3ac666e824e5096e7f5792790f326971a7dd775f54f62cae0c8d6170ef
-    - src/bin_util/demo_and_bench/integer/arithmetic/pow.rs: actual=- | expected=8708f52061f9e4c18226a49863b80ec24d643d5a8ef813a70f94e484320143a9
-    - src/bin_util/demo_and_bench/integer/arithmetic/power_of_2.rs: actual=- | expected=b129ac156c64e4e2aac72378c2a1d8ad145d93f2693fa0d6deaac9ed78650699
-    - src/bin_util/demo_and_bench/integer/arithmetic/root.rs: actual=- | expected=0127445d3c3fff053c1c204549481321f77f4e7a1dce5cb182b65baa5e37e9cc
-    - src/bin_util/demo_and_bench/integer/arithmetic/round_to_multiple.rs: actual=- | expected=c818fd308e9595ce6e904daca8b31a676b204737255aa4ee77047593e5a0e2de
-    - src/bin_util/demo_and_bench/integer/arithmetic/round_to_multiple_of_power_of_2.rs: actual=- | expected=dc80e96032a879dc803116a273423aaa804a6178fff0ffd19a11296b318b6efe
-    - src/bin_util/demo_and_bench/integer/arithmetic/shl.rs: actual=- | expected=96c3375ced367c3abda74e98db6a8a28645b045324a58ad82b745ae35ff04013
-    - src/bin_util/demo_and_bench/integer/arithmetic/shl_round.rs: actual=- | expected=99717c3241042118c370e2bd46af31ee052a3002f1f0bcaef898910423bcdd46
-    - src/bin_util/demo_and_bench/integer/arithmetic/shr.rs: actual=- | expected=972a8f336f45b07dc14ee55d1cb26a34301bf64ebdd021abcf68940b16b51fc0
-    - src/bin_util/demo_and_bench/integer/arithmetic/shr_round.rs: actual=- | expected=22fcb00cbfb3b4e1351a1c3ff30d71be68bfc4964b56da035abf13a0ed9f83fd
-    - src/bin_util/demo_and_bench/integer/arithmetic/sign.rs: actual=- | expected=3b74b9630a7300c290fd6e94717980490701e872a5c61aa8d1c12586a7a3c6d8
-    - src/bin_util/demo_and_bench/integer/arithmetic/sqrt.rs: actual=- | expected=e96c2b45e7512929b476e32a3fecb3be27b6589d4e14e7503935cbc4196dd6ff
-    - src/bin_util/demo_and_bench/integer/arithmetic/square.rs: actual=- | expected=e423097056b83c57124089248b813aa2653110182a1400aa80a72fe2ec61970c
-    - src/bin_util/demo_and_bench/integer/arithmetic/sub.rs: actual=- | expected=9fcb9329ddce4acc15eedbd6e9b00cc6bd2cca529f4b302058cab7ac00d6acc6
-    - src/bin_util/demo_and_bench/integer/arithmetic/sub_mul.rs: actual=- | expected=99cbbbfbc9a73d0f29b4d2f3228a68917626e84976f577bafdffbebadf17524d
-    - src/bin_util/demo_and_bench/integer/basic/from_sign_and_abs.rs: actual=- | expected=cee4a67b87820c83a033690178b153ed98c2626ebbe421b85955a78b8b832f77
-    - src/bin_util/demo_and_bench/integer/basic/mod.rs: actual=- | expected=9f2c3603c25eb8b72e1b1bb8435532c44df3ead00b9101f5c45d3affb0569373
-    … weitere 794 Einträge unterdrückt (siehe JSON-Bericht).
+  Keine Abweichungen registriert.

@@ -28,3 +28,9 @@
 [2025-10-16T14:57:06Z] [INFO] Verifying existing segment malachite-0.4.18.part000
 [2025-10-16T14:57:06Z] [INFO] Segment malachite-0.4.18.part000 already valid (sha256=06f6d078bb4dad5b76f6a85737e6c9113667d199612a73eef375c56e75d5d4d5)
 [2025-10-16T14:57:06Z] [INFO] All segments processed successfully
+[2025-10-17T07:57:10Z] [INFO] Starting segmented download for malachite-base 0.4.18 using plan vendor/malachite-base/0.4.18/manifest/chunk_plan.json
+[2025-10-17T07:57:10Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-base/0.4.18/download
+[2025-10-17T07:57:10Z] [INFO] Processing malachite-base-0.4.18.part000 (chunk_000) with range bytes=0-822553
+[2025-10-17T07:57:10Z] [INFO] Downloading malachite-base-0.4.18.part000 (attempt 1/5, range bytes=0-822553)
+[2025-10-17T07:57:12Z] [INFO] Segment malachite-base-0.4.18.part000 downloaded successfully (size=822554, sha256=06f6d078bb4dad5b76f6a85737e6c9113667d199612a73eef375c56e75d5d4d5)
+[2025-10-17T07:57:12Z] [INFO] All segments processed successfully
