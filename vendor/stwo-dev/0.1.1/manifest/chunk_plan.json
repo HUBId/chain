@@ -45,7 +45,7 @@
       "name": "ensure-verifier-no_std",
       "target": "staging/ensure-verifier-no_std",
       "size_bytes": 23180,
-      "description": "Verifier stubs for no_std builds."
+      "description": "Tiny binary used to assert the verifier compiles under no_std."
     },
     {
       "name": "resources",

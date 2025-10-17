@@ -40,3 +40,19 @@ bench targets and additional Criterion tips.
 
 All hashes in the manifest use SHA-256 and file sizes are recorded in bytes to
 make diffs easy to audit.
+
+## Optional no_std verifier check
+
+The upstream workspace also ships a tiny binary crate,
+`ensure-verifier-no_std`, whose only purpose is to prove that the STWO verifier
+continues to compile in `no_std` environments. We vendor its manifest files and
+`src/main.rs` under `0.1.1/staging/ensure-verifier-no_std/`. To re-run the check
+locally you can invoke Cargo directly against the vendored sources:
+
+```bash
+cargo +nightly -Z sparse-registry -Z avoid-dev-deps \
+    run --manifest-path vendor/stwo-dev/0.1.1/staging/ensure-verifier-no_std/Cargo.toml
+```
+
+The binary does not execute any logic at runtime; a successful build is enough
+to verify that the verifier crate remains `no_std` compatible.
