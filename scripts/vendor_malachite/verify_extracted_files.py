@@ -18,22 +18,16 @@ import tarfile
 import tempfile
 import urllib.request
 from pathlib import Path
-from typing import Dict, Mapping, Tuple
+from collections import defaultdict
+from typing import Dict, Iterable, Mapping, Tuple
 
 
 # --- Constants -----------------------------------------------------------------
 
-PACKAGE_NAME = "malachite"
+DEFAULT_PACKAGE = "malachite"
 DEFAULT_VERSION = "0.4.18"
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-DEFAULT_VENDOR_ROOT = REPO_ROOT / "vendor" / PACKAGE_NAME / DEFAULT_VERSION
-DEFAULT_SRC_DIR = DEFAULT_VENDOR_ROOT / "src"
-DEFAULT_MANIFEST_DIR = DEFAULT_VENDOR_ROOT / "manifest"
-DEFAULT_LOG_DIR = DEFAULT_VENDOR_ROOT / "logs"
-DEFAULT_REPORT_JSON = DEFAULT_MANIFEST_DIR / "integrity_report.json"
-DEFAULT_REPORT_TEXT = DEFAULT_LOG_DIR / "integrity_report.txt"
-DEFAULT_REFERENCE_MANIFEST = DEFAULT_MANIFEST_DIR / "reference_hashes.json"
 DEFAULT_CRATE_URL_TEMPLATE = (
     "https://static.crates.io/crates/{name}/{name}-{version}.crate"
 )
@@ -294,31 +288,71 @@ def summarise_results(results: Mapping[str, Mapping[str, str]]) -> Dict[str, int
     return summary
 
 
+def build_condensed_findings(
+    results: Mapping[str, Mapping[str, str]],
+    *,
+    max_entries_per_status: int = 50,
+) -> Dict[str, Dict[str, object]]:
+    """Summarise non-matching results with bounded detail output.
+
+    The JSON and text reports do not need to enumerate every matching file –
+    doing so bloats the artefacts and easily breaches hosting limits.  Instead
+    we collect at most ``max_entries_per_status`` sample entries for each
+    non-"match" status while keeping track of the total population size.
+    """
+
+    buckets: Dict[str, Dict[str, object]] = {}
+    sample_store: Dict[str, list] = defaultdict(list)
+
+    for path in sorted(results):
+        entry = results[path]
+        status = entry.get("status") or "unknown"
+        if status == "match":
+            continue
+
+        bucket = buckets.setdefault(status, {"count": 0, "samples": []})
+        bucket["count"] = int(bucket["count"]) + 1
+
+        bucket_samples = sample_store[status]
+        if len(bucket_samples) < max_entries_per_status:
+            bucket_samples.append(
+                {
+                    "path": path,
+                    "actual": entry.get("actual"),
+                    "expected": entry.get("expected"),
+                }
+            )
+
+    for status, bucket in buckets.items():
+        bucket_samples = sample_store[status]
+        bucket["samples"] = bucket_samples
+        bucket["truncated"] = bucket["count"] > len(bucket_samples)
+
+    return buckets
+
+
 def write_json_report(
     path: Path,
     *,
+    package: str,
     version: str,
     generated_at: str,
     source_description: str,
     overall_status: str,
     summary: Mapping[str, int],
-    results: Mapping[str, Mapping[str, str]],
-    actual_hashes: Mapping[str, str],
-    reference_hashes: Mapping[str, str],
+    findings: Mapping[str, Dict[str, object]],
 ) -> None:
     """Persist the structured integrity report as JSON."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "package": PACKAGE_NAME,
+        "package": package,
         "version": version,
         "generated_at": generated_at,
         "reference_source": source_description,
         "status": overall_status,
         "summary": dict(summary),
-        "results": results,
-        "actual_hashes": dict(actual_hashes),
-        "reference_hashes": dict(reference_hashes),
+        "findings": findings,
     }
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2)
@@ -328,18 +362,19 @@ def write_json_report(
 def write_text_summary(
     path: Path,
     *,
+    package: str,
     version: str,
     generated_at: str,
     source_description: str,
     overall_status: str,
     summary: Mapping[str, int],
-    results: Mapping[str, Mapping[str, str]],
+    findings: Mapping[str, Dict[str, object]],
 ) -> None:
     """Write a human-readable summary of the verification process."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        f"Integrity Report for {PACKAGE_NAME} {version}",
+        f"Integrity Report for {package} {version}",
         f"Generated at: {generated_at}",
         f"Reference source: {source_description}",
         f"Overall result: {overall_status.upper()}",
@@ -351,17 +386,35 @@ def write_text_summary(
         f"  Missing in vendor: {summary.get('missing_in_vendor', 0)}",
         f"  Missing in reference: {summary.get('missing_in_reference', 0)}",
         "",
-        "Per-file details:",
+        "Details zu Abweichungen:",
     ]
 
-    for rel_path in sorted(results):
-        entry = results[rel_path]
-        status = entry.get("status", "unknown").upper()
-        actual_hash = entry.get("actual") or "-"
-        expected_hash = entry.get("expected") or "-"
-        lines.append(
-            f"  {rel_path}: {status} (actual={actual_hash}, expected={expected_hash})"
-        )
+    if not findings:
+        lines.append("  Keine Abweichungen registriert.")
+    else:
+        for status in sorted(findings):
+            bucket = findings[status]
+            count = int(bucket.get("count", 0))
+            sample_entries: Iterable[Mapping[str, object]] = bucket.get("samples", [])
+            truncated = bool(bucket.get("truncated"))
+            lines.append("")
+            lines.append(f"  {status.replace('_', ' ').title()}: {count} Dateien")
+            sample_entries = list(sample_entries)
+            for sample in sample_entries:
+                sample_path = sample.get("path", "<unbekannt>")
+                actual_hash = sample.get("actual") or "-"
+                expected_hash = sample.get("expected") or "-"
+                lines.append(
+                    "    - {path}: actual={actual} | expected={expected}".format(
+                        path=sample_path, actual=actual_hash, expected=expected_hash
+                    )
+                )
+            if truncated:
+                remaining = count - len(sample_entries)
+                if remaining > 0:
+                    lines.append(
+                        f"    … weitere {remaining} Einträge unterdrückt (siehe JSON-Bericht)."
+                    )
 
     with path.open("w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
@@ -373,32 +426,48 @@ def write_text_summary(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--package",
+        default=DEFAULT_PACKAGE,
+        help="Crate name to verify (default: %(default)s)",
+    )
+    parser.add_argument(
         "--version",
         default=DEFAULT_VERSION,
         help="Malachite crate version to verify (default: %(default)s)",
     )
     parser.add_argument(
+        "--vendor-root",
+        type=Path,
+        help="Vendor directory for the crate (default: vendor/<package>/<version>)",
+    )
+    parser.add_argument(
+        "--manifest-dir",
+        type=Path,
+        help="Directory containing manifest artefacts (default: <vendor-root>/manifest)",
+    )
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        help="Directory to store log output (default: <vendor-root>/logs)",
+    )
+    parser.add_argument(
         "--src-dir",
         type=Path,
-        default=DEFAULT_SRC_DIR,
-        help="Directory containing the extracted crate files (default: %(default)s)",
+        help="Directory containing the extracted crate files (default: <vendor-root>/src)",
     )
     parser.add_argument(
         "--report-json",
         type=Path,
-        default=DEFAULT_REPORT_JSON,
-        help="Path to write the JSON integrity report (default: %(default)s)",
+        help="Path to write the JSON integrity report (default: <manifest-dir>/integrity_report.json)",
     )
     parser.add_argument(
         "--report-text",
         type=Path,
-        default=DEFAULT_REPORT_TEXT,
-        help="Path to write the human-readable summary (default: %(default)s)",
+        help="Path to write the human-readable summary (default: <log-dir>/integrity_report.txt)",
     )
     parser.add_argument(
         "--reference-manifest",
         type=Path,
-        default=DEFAULT_REFERENCE_MANIFEST,
         help="Optional JSON file containing reference hashes",
     )
     parser.add_argument(
@@ -421,6 +490,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable automatic crate downloads when no reference data is available",
     )
+    parser.add_argument(
+        "--max-report-entries",
+        type=int,
+        default=50,
+        help="Maximum number of sample entries to retain per status in the reports",
+    )
     return parser.parse_args()
 
 
@@ -431,7 +506,16 @@ def main() -> int:
     args = parse_args()
 
     version = args.version
-    package = PACKAGE_NAME
+    package = args.package
+    vendor_root = args.vendor_root or REPO_ROOT / "vendor" / package / version
+    manifest_dir = args.manifest_dir or vendor_root / "manifest"
+    log_dir = args.log_dir or vendor_root / "logs"
+    src_dir = args.src_dir or vendor_root / "src"
+    report_json = args.report_json or manifest_dir / "integrity_report.json"
+    report_text = args.report_text or log_dir / "integrity_report.txt"
+    reference_manifest = (
+        args.reference_manifest or manifest_dir / "reference_hashes.json"
+    )
 
     crate_url = args.crate_url or DEFAULT_CRATE_URL_TEMPLATE.format(
         name=package, version=version
@@ -440,7 +524,7 @@ def main() -> int:
     generated_at = utcnow()
 
     try:
-        actual_hashes = collect_hashes(args.src_dir)
+        actual_hashes = collect_hashes(src_dir)
     except (FileNotFoundError, NotADirectoryError) as exc:
         print(f"ERROR: {exc}")
         return 2
@@ -448,7 +532,7 @@ def main() -> int:
     tmp_handle = None
     try:
         reference_hashes, source_description, tmp_handle = determine_reference_hashes(
-            reference_manifest=args.reference_manifest,
+            reference_manifest=reference_manifest,
             reference_dir=args.reference_dir,
             crate_path=args.crate_path,
             crate_url=crate_url,
@@ -464,26 +548,29 @@ def main() -> int:
         actual=actual_hashes, reference=reference_hashes
     )
     summary = summarise_results(results)
+    findings = build_condensed_findings(
+        results, max_entries_per_status=max(1, args.max_report_entries)
+    )
 
     write_json_report(
-        args.report_json,
+        report_json,
+        package=package,
         version=version,
         generated_at=generated_at,
         source_description=source_description,
         overall_status=overall_status,
         summary=summary,
-        results=results,
-        actual_hashes=actual_hashes,
-        reference_hashes=reference_hashes,
+        findings=findings,
     )
     write_text_summary(
-        args.report_text,
+        report_text,
+        package=package,
         version=version,
         generated_at=generated_at,
         source_description=source_description,
         overall_status=overall_status,
         summary=summary,
-        results=results,
+        findings=findings,
     )
 
     if tmp_handle is not None:

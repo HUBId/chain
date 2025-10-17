@@ -1,0 +1,18 @@
+[2025-10-16T14:47:45Z] [INFO] Starting segmented download for malachite-q 0.4.18 using plan /workspace/chain/vendor/malachite-q/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:47:45Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-q/0.4.18/download
+[2025-10-16T14:47:45Z] [INFO] Processing malachite-q-0.4.18.part000 (chunk_000) with range bytes=0-220392
+[2025-10-16T14:47:45Z] [INFO] Downloading malachite-q-0.4.18.part000 (attempt 1/5, range bytes=0-220392)
+[2025-10-16T14:47:45Z] [INFO] Segment malachite-q-0.4.18.part000 downloaded successfully (size=220393, sha256=be4a9dfffb87667ae94e8320213d3f5419e3e37311bc6bf8f4d2ab9b44f3a535)
+[2025-10-16T14:47:45Z] [INFO] All segments processed successfully
+[2025-10-16T14:56:31Z] [INFO] Starting segmented download for malachite-q 0.4.18 using plan /workspace/chain/vendor/malachite-q/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:56:31Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-q/0.4.18/download
+[2025-10-16T14:56:31Z] [INFO] Processing malachite-q-0.4.18.part000 (chunk_000) with range bytes=0-220392
+[2025-10-16T14:56:31Z] [INFO] Verifying existing segment malachite-q-0.4.18.part000
+[2025-10-16T14:56:31Z] [INFO] Segment malachite-q-0.4.18.part000 already valid (sha256=be4a9dfffb87667ae94e8320213d3f5419e3e37311bc6bf8f4d2ab9b44f3a535)
+[2025-10-16T14:56:31Z] [INFO] All segments processed successfully
+[2025-10-16T14:57:12Z] [INFO] Starting segmented download for malachite-q 0.4.18 using plan /workspace/chain/vendor/malachite-q/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:57:12Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite-q/0.4.18/download
+[2025-10-16T14:57:12Z] [INFO] Processing malachite-q-0.4.18.part000 (chunk_000) with range bytes=0-220392
+[2025-10-16T14:57:12Z] [INFO] Verifying existing segment malachite-q-0.4.18.part000
+[2025-10-16T14:57:12Z] [INFO] Segment malachite-q-0.4.18.part000 already valid (sha256=be4a9dfffb87667ae94e8320213d3f5419e3e37311bc6bf8f4d2ab9b44f3a535)
+[2025-10-16T14:57:12Z] [INFO] All segments processed successfully

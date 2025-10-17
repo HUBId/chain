@@ -69,3 +69,24 @@ Der aktuelle Chunk-Plan besteht aus einem einzelnen Segment:
 | 000   | `malachite-nz-0.4.18.part000`     | 2 426 976    | `missing`            |
 
 Weitere Segmente werden bei Bedarf durch einen erneuten Lauf des Chunk-Plan-Skripts erzeugt und über das Manifest verwaltet.
+
+## Automatisierter Segment-Test
+
+Mit [`scripts/vendor_malachite/test_segments.sh`](../../../scripts/vendor_malachite/test_segments.sh) lassen sich Download (`download_segments.sh`), Merge (`merge_segments.sh`) und Verifikation (`verify_extracted_files.py`) für alle Subkrates in einem Durchlauf ausführen:
+
+```bash
+./scripts/vendor_malachite/test_segments.sh
+```
+
+Für `malachite-nz` entstehen dabei folgende Protokolle unter [`logs/`](logs/):
+
+- `download_segments_malachite_nz_0_4_18.log`
+- `merge_segments_malachite_nz_0_4_18.log`
+- `integrity_report.txt`
+
+Nach dem Lauf werden alle heruntergeladenen `.part*`-Segmente und das
+temporär erstellte `.crate` automatisch gelöscht, sodass keine Binärdateien
+im Repository landen. Wer die Dateien zu Analysezwecken behalten möchte,
+setzt `MALACHITE_KEEP_CHUNKS=1` vor dem Aufruf.
+
+Die Prüfberichte werden bewusst gekürzt, um Upload-Limits einzuhalten: pro Status (z. B. "missing in vendor") listet `integrity_report.txt` höchstens 50 Beispielpfade. Die vollständigen Zählwerte und Stichproben stehen im JSON-Gegenstück [`manifest/integrity_report.json`](manifest/integrity_report.json).

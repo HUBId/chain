@@ -88,3 +88,23 @@ browsing through
 Malachite is developed by Mikhail Hogrefe. Thanks to b4D8, florian1345, konstin, Rowan Hart, YunWon Jeong, Park Joon-Kyu, Antonio Mamić, OliverNChalk, shekohex, and skycloudd for additional contributions.
 
 Copyright © 2025 Mikhail Hogrefe
+
+## Vendor segment validation
+
+To verify the vendored sources end-to-end, run [`scripts/vendor_malachite/test_segments.sh`](../../../scripts/vendor_malachite/test_segments.sh). The helper sequentially executes `download_segments.sh`, `merge_segments.sh`, and `verify_extracted_files.py` for every workspace crate:
+
+```bash
+./scripts/vendor_malachite/test_segments.sh
+```
+
+`malachite-q` writes its logs to [`logs/`](logs/):
+
+- `download_segments_malachite_q_0_4_18.log`
+- `merge_segments_malachite_q_0_4_18.log`
+- `integrity_report.txt`
+
+Um Binary-Diffs zu vermeiden, entfernt das Skript nach Abschluss automatisch
+alle `.part*`-Segmente sowie das temporäre `.crate`. Falls du die Dateien
+lokal behalten möchtest, setze `MALACHITE_KEEP_CHUNKS=1` vor dem Start.
+
+Die Prüfberichte werden bewusst gekürzt, um Upload-Limits einzuhalten: pro Status (z. B. "missing in vendor") listet `integrity_report.txt` höchstens 50 Beispielpfade. Die vollständigen Zählwerte und Stichproben stehen im JSON-Gegenstück [`manifest/integrity_report.json`](manifest/integrity_report.json).

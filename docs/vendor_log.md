@@ -56,3 +56,24 @@ Weitere Schritte:
 [malachite-nz]   [2025-10-16T09:27:03Z] Segment malachite-nz-0.4.18.part000 is missing on disk (length=2426976)
 [malachite-q]    [2025-10-16T09:42:08Z] Segment malachite-q-0.4.18.part000 omitted; binary chunks stored externally
 ```
+
+## Segment-Testlauf – Malachite 0.4.18 (2025-10-16)
+
+Das neue Sammelskript [`scripts/vendor_malachite/test_segments.sh`](../scripts/vendor_malachite/test_segments.sh) lädt fehlende Segmente nach, fügt sie zu `.crate`-Archiven zusammen und verifiziert die entpackten Quellen. Ein kompletter Lauf ergab folgende Protokolle:
+
+| Crate | Download-Log | Merge-Log | Verifikation |
+|-------|--------------|-----------|--------------|
+| malachite | `vendor/malachite/0.4.18/logs/download_segments_malachite_0_4_18.log` | `vendor/malachite/0.4.18/logs/merge_segments_malachite_0_4_18.log` | ✅ (`integrity_report.txt`) |
+| malachite-base | `vendor/malachite-base/0.4.18/logs/download_segments_malachite_base_0_4_18.log` | `vendor/malachite-base/0.4.18/logs/merge_segments_malachite_base_0_4_18.log` | ❌ – fehlende Dateien im Workspace (`integrity_report.txt`) |
+| malachite-nz | `vendor/malachite-nz/0.4.18/logs/download_segments_malachite_nz_0_4_18.log` | `vendor/malachite-nz/0.4.18/logs/merge_segments_malachite_nz_0_4_18.log` | ❌ – fehlende Dateien im Workspace (`integrity_report.txt`) |
+| malachite-q | `vendor/malachite-q/0.4.18/logs/download_segments_malachite_q_0_4_18.log` | `vendor/malachite-q/0.4.18/logs/merge_segments_malachite_q_0_4_18.log` | ❌ – fehlende Dateien im Workspace (`integrity_report.txt`) |
+| malachite-float | `vendor/malachite-float/0.4.18/logs/download_segments_malachite_float_0_4_18.log` | `vendor/malachite-float/0.4.18/logs/merge_segments_malachite_float_0_4_18.log` | ❌ – fehlende Dateien im Workspace (`integrity_report.txt`) |
+
+Hinweis: Die negativen Verifikationsresultate spiegeln den aktuellen Importstand wider – große Teile der Subkrates fehlen im Vendor-Baum noch. Die Segmente und `.crate`-Archive wurden erfolgreich erstellt und können für weitere Diff-PRs wiederverwendet werden.
+
+Zur Vermeidung von Binärdateien im Repository entfernt das Sammelskript die
+heruntergeladenen `.part*`-Segmente sowie die rekonstruierten `.crate`-Archive
+nach jeder Ausführung automatisch. Wer die Artefakte lokal behalten möchte,
+setzt `MALACHITE_KEEP_CHUNKS=1` vor dem Start.
+
+Zur Einhaltung der Upload-Grenzen enthalten die neuen `integrity_report.txt`-Dateien je Status maximal 50 Beispielpfade; ausführliche Stichproben und Zählwerte können den kompakten JSON-Berichten unter `vendor/<crate>/0.4.18/manifest/integrity_report.json` entnommen werden.

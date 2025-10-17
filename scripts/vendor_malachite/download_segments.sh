@@ -3,15 +3,21 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
-VERSION="0.4.18"
-VENDOR_ROOT="${REPO_ROOT}/vendor/malachite/${VERSION}"
-CHUNKS_DIR="${VENDOR_ROOT}/chunks"
-MANIFEST_DIR="${VENDOR_ROOT}/manifest"
-LOG_DIR="${VENDOR_ROOT}/logs"
-LOG_FILE="${LOG_DIR}/vendor_malachite_0_4_18.log"
-MANIFEST_FILE="${MANIFEST_DIR}/chunks.json"
-PLAN_FILE="${1:-${MANIFEST_DIR}/chunk_plan.json}"
-SOURCE_URL="${2:-https://crates.io/api/v1/crates/malachite/0.4.18/download}"
+DEFAULT_VERSION="0.4.18"
+VERSION="${MALACHITE_VERSION:-$DEFAULT_VERSION}"
+CRATE_NAME="${MALACHITE_CRATE_NAME:-malachite}"
+VENDOR_ROOT="${MALACHITE_VENDOR_ROOT:-${REPO_ROOT}/vendor/${CRATE_NAME}/${VERSION}}"
+CHUNKS_DIR="${MALACHITE_CHUNKS_DIR:-${VENDOR_ROOT}/chunks}"
+MANIFEST_DIR="${MALACHITE_MANIFEST_DIR:-${VENDOR_ROOT}/manifest}"
+LOG_DIR="${MALACHITE_LOG_DIR:-${VENDOR_ROOT}/logs}"
+LOG_BASENAME="${CRATE_NAME//-/_}_${VERSION//./_}"
+LOG_FILE="${MALACHITE_LOG_FILE:-${LOG_DIR}/download_segments_${LOG_BASENAME}.log}"
+MANIFEST_FILE="${MALACHITE_MANIFEST_FILE:-${MANIFEST_DIR}/chunks.json}"
+PLAN_FILE="${1:-${MALACHITE_PLAN_FILE:-${MANIFEST_DIR}/chunk_plan.json}}"
+DEFAULT_SOURCE_URL="https://crates.io/api/v1/crates/${CRATE_NAME}/${VERSION}/download"
+SOURCE_URL="${2:-${MALACHITE_SOURCE_URL:-$DEFAULT_SOURCE_URL}}"
+USER_AGENT="${MALACHITE_USER_AGENT:-chain-segment-sync/0.1}"
+SEGMENT_PREFIX="${MALACHITE_SEGMENT_PREFIX:-${CRATE_NAME}}"
 MAX_RETRIES="${MAX_DOWNLOAD_RETRIES:-5}"
 RETRY_DELAY="${DOWNLOAD_RETRY_DELAY_SECONDS:-2}"
 
@@ -192,7 +198,7 @@ for index, chunk in enumerate(chunks):
 PY
 )
 
-log_event "INFO" "Starting segmented download using plan ${PLAN_FILE}"
+log_event "INFO" "Starting segmented download for ${CRATE_NAME} ${VERSION} using plan ${PLAN_FILE}"
 log_event "INFO" "Source URL: ${SOURCE_URL}"
 
 process_chunk() {
@@ -202,7 +208,7 @@ process_chunk() {
   local chunk_name="$4"
 
   local segment_name
-  segment_name=$(printf "malachite-0.4.18.part%03d" "${index}")
+  segment_name=$(printf "%s-%s.part%03d" "${SEGMENT_PREFIX}" "${VERSION}" "${index}")
   local segment_path="${CHUNKS_DIR}/${segment_name}"
   local range_end=$((offset + length - 1))
   local range_spec="bytes=${offset}-${range_end}"
@@ -272,7 +278,7 @@ process_chunk() {
     log_event "INFO" "Downloading ${segment_name} (attempt ${attempt}/${MAX_RETRIES}, range ${range_spec})"
     local tmp_file
     tmp_file=$(mktemp "${segment_path}.tmp.XXXXXX")
-    if curl --fail --location --silent --show-error --range "$range_spec" "$SOURCE_URL" --output "$tmp_file"; then
+    if curl --fail --location --silent --show-error --user-agent "$USER_AGENT" --range "$range_spec" "$SOURCE_URL" --output "$tmp_file"; then
       downloaded_size=$(stat -c%s "$tmp_file")
       if [[ "$downloaded_size" -ne "$length" ]]; then
         log_event "WARN" "Downloaded size for ${segment_name} was ${downloaded_size}, expected ${length}"

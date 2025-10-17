@@ -1,0 +1,67 @@
+[2025-10-16T14:43:10Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:43:10Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:43:10Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-276
+[2025-10-16T14:43:10Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 1/5, range bytes=0-276)
+[2025-10-16T14:43:10Z] [WARN] Attempt 1/5 for malachite-0.4.18.part000 failed (exit 22); retrying in 2s
+[2025-10-16T14:43:12Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 2/5, range bytes=0-276)
+[2025-10-16T14:43:13Z] [WARN] Attempt 2/5 for malachite-0.4.18.part000 failed (exit 22); retrying in 2s
+[2025-10-16T14:43:15Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 3/5, range bytes=0-276)
+[2025-10-16T14:43:15Z] [WARN] Attempt 3/5 for malachite-0.4.18.part000 failed (exit 22); retrying in 2s
+[2025-10-16T14:43:17Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 4/5, range bytes=0-276)
+[2025-10-16T14:43:17Z] [WARN] Attempt 4/5 for malachite-0.4.18.part000 failed (exit 22); retrying in 2s
+[2025-10-16T14:43:19Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 5/5, range bytes=0-276)
+[2025-10-16T14:43:19Z] [ERROR] Download failed for malachite-0.4.18.part000 after 5 attempts (last exit 22)
+[2025-10-16T14:43:26Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:43:26Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:43:26Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-276
+[2025-10-16T14:43:26Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 1/5, range bytes=0-276)
+[2025-10-16T14:43:26Z] [WARN] Downloaded size for malachite-0.4.18.part000 was 7712, expected 277
+[2025-10-16T14:43:26Z] [INFO] Retrying malachite-0.4.18.part000 after 2s
+[2025-10-16T14:43:28Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 2/5, range bytes=0-276)
+[2025-10-16T14:43:29Z] [WARN] Downloaded size for malachite-0.4.18.part000 was 7712, expected 277
+[2025-10-16T14:43:29Z] [INFO] Retrying malachite-0.4.18.part000 after 2s
+[2025-10-16T14:43:31Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 3/5, range bytes=0-276)
+[2025-10-16T14:43:31Z] [WARN] Downloaded size for malachite-0.4.18.part000 was 7712, expected 277
+[2025-10-16T14:43:31Z] [INFO] Retrying malachite-0.4.18.part000 after 2s
+[2025-10-16T14:43:33Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 4/5, range bytes=0-276)
+[2025-10-16T14:43:33Z] [WARN] Downloaded size for malachite-0.4.18.part000 was 7712, expected 277
+[2025-10-16T14:43:33Z] [INFO] Retrying malachite-0.4.18.part000 after 2s
+[2025-10-16T14:43:35Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 5/5, range bytes=0-276)
+[2025-10-16T14:43:36Z] [WARN] Downloaded size for malachite-0.4.18.part000 was 7712, expected 277
+[2025-10-16T14:43:36Z] [ERROR] Failed to download malachite-0.4.18.part000: size mismatch after 5 attempt(s)
+[2025-10-16T14:44:21Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:44:21Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:44:21Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-7711
+[2025-10-16T14:44:21Z] [INFO] Downloading malachite-0.4.18.part000 (attempt 1/5, range bytes=0-7711)
+[2025-10-16T14:44:22Z] [INFO] Segment malachite-0.4.18.part000 downloaded successfully (size=7712, sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[2025-10-16T14:44:22Z] [INFO] All segments processed successfully
+[2025-10-16T14:44:52Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:44:52Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:44:52Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-7711
+[2025-10-16T14:44:52Z] [INFO] Verifying existing segment malachite-0.4.18.part000
+[2025-10-16T14:44:52Z] [INFO] Segment malachite-0.4.18.part000 already valid (sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[2025-10-16T14:44:52Z] [INFO] All segments processed successfully
+[2025-10-16T14:45:57Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:45:57Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:45:57Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-7711
+[2025-10-16T14:45:57Z] [INFO] Verifying existing segment malachite-0.4.18.part000
+[2025-10-16T14:45:58Z] [INFO] Segment malachite-0.4.18.part000 already valid (sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[2025-10-16T14:45:58Z] [INFO] All segments processed successfully
+[2025-10-16T14:47:32Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:47:32Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:47:32Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-7711
+[2025-10-16T14:47:32Z] [INFO] Verifying existing segment malachite-0.4.18.part000
+[2025-10-16T14:47:33Z] [INFO] Segment malachite-0.4.18.part000 already valid (sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[2025-10-16T14:47:33Z] [INFO] All segments processed successfully
+[2025-10-16T14:56:22Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:56:22Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:56:22Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-7711
+[2025-10-16T14:56:22Z] [INFO] Verifying existing segment malachite-0.4.18.part000
+[2025-10-16T14:56:23Z] [INFO] Segment malachite-0.4.18.part000 already valid (sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[2025-10-16T14:56:23Z] [INFO] All segments processed successfully
+[2025-10-16T14:57:03Z] [INFO] Starting segmented download for malachite 0.4.18 using plan /workspace/chain/vendor/malachite/0.4.18/manifest/chunk_plan.json
+[2025-10-16T14:57:03Z] [INFO] Source URL: https://crates.io/api/v1/crates/malachite/0.4.18/download
+[2025-10-16T14:57:03Z] [INFO] Processing malachite-0.4.18.part000 (chunk_000) with range bytes=0-7711
+[2025-10-16T14:57:03Z] [INFO] Verifying existing segment malachite-0.4.18.part000
+[2025-10-16T14:57:04Z] [INFO] Segment malachite-0.4.18.part000 already valid (sha256=4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b)
+[2025-10-16T14:57:04Z] [INFO] All segments processed successfully

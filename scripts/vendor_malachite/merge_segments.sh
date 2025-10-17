@@ -3,18 +3,20 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
-VERSION="0.4.18"
-CRATE_NAME="malachite"
+DEFAULT_VERSION="0.4.18"
+VERSION="${MALACHITE_VERSION:-$DEFAULT_VERSION}"
+CRATE_NAME="${MALACHITE_CRATE_NAME:-malachite}"
 ARCHIVE_NAME="${CRATE_NAME}-${VERSION}.crate"
-VENDOR_ROOT="${REPO_ROOT}/vendor/${CRATE_NAME}/${VERSION}"
-CHUNKS_DIR="${VENDOR_ROOT}/chunks"
-MANIFEST_DIR="${VENDOR_ROOT}/manifest"
-LOG_DIR="${VENDOR_ROOT}/logs"
-OUTPUT_FILE="${VENDOR_ROOT}/${ARCHIVE_NAME}"
-LOG_FILE="${LOG_DIR}/merge_segments.log"
-MANIFEST_FILE="${MANIFEST_DIR}/chunks.json"
-REFERENCE_HASH_FILE="${MANIFEST_DIR}/reference_hash.txt"
-REPORT_FILE="${MANIFEST_DIR}/merge_report.json"
+VENDOR_ROOT="${MALACHITE_VENDOR_ROOT:-${REPO_ROOT}/vendor/${CRATE_NAME}/${VERSION}}"
+CHUNKS_DIR="${MALACHITE_CHUNKS_DIR:-${VENDOR_ROOT}/chunks}"
+MANIFEST_DIR="${MALACHITE_MANIFEST_DIR:-${VENDOR_ROOT}/manifest}"
+LOG_DIR="${MALACHITE_LOG_DIR:-${VENDOR_ROOT}/logs}"
+OUTPUT_FILE="${MALACHITE_OUTPUT_FILE:-${VENDOR_ROOT}/${ARCHIVE_NAME}}"
+LOG_BASENAME="${CRATE_NAME//-/_}_${VERSION//./_}"
+LOG_FILE="${MALACHITE_LOG_FILE:-${LOG_DIR}/merge_segments_${LOG_BASENAME}.log}"
+MANIFEST_FILE="${MALACHITE_MANIFEST_FILE:-${MANIFEST_DIR}/chunks.json}"
+REFERENCE_HASH_FILE="${MALACHITE_REFERENCE_HASH_FILE:-${MANIFEST_DIR}/reference_hash.txt}"
+REPORT_FILE="${MALACHITE_REPORT_FILE:-${MANIFEST_DIR}/merge_report.json}"
 CRATES_API_URL="https://crates.io/api/v1/crates/${CRATE_NAME}/${VERSION}"
 USER_AGENT="chain-merge-script/0.1 (https://github.com/chain)"
 
@@ -52,7 +54,7 @@ if [[ ! -f "$MANIFEST_FILE" ]]; then
   fatal "Manifest file not found: $MANIFEST_FILE"
 fi
 
-log_event "INFO" "Loading manifest from $MANIFEST_FILE"
+log_event "INFO" "Loading manifest for ${CRATE_NAME} ${VERSION} from $MANIFEST_FILE"
 
 mapfile -t SEGMENT_LINES < <(python3 - "$MANIFEST_FILE" <<'PY'
 import json
@@ -167,7 +169,7 @@ python3 - "$REPORT_FILE" "$timestamp" "$reference_hash" "$actual_hash" "$status"
 import json
 import sys
 
-report_path, timestamp, expected_hash, actual_hash, status, version, output_file = sys.argv[1:7]
+report_path, timestamp, expected_hash, actual_hash, status, version, output_file = sys.argv[1:8]
 report = {
     "version": version,
     "timestamp": timestamp,

@@ -25,6 +25,27 @@ Mit dem Skript [`scripts/vendor_malachite/update_manifest.py`](../../../scripts/
 
 Weichen gespeicherter Hash und Dateigröße von den Manifest-Werten ab, löscht das Skript die betroffene Segmentdatei und beendet sich mit Exit-Code `3`. Damit kann ein nachgelagerter Download-Prozess automatisch ausgelöst werden.
 
+## Segment-Testlauf & Logausgabe
+
+Für einen vollständigen Integritäts-Check über alle Subkrates steht das Sammelskript [`scripts/vendor_malachite/test_segments.sh`](../../../scripts/vendor_malachite/test_segments.sh) bereit. Es ruft nacheinander `download_segments.sh`, `merge_segments.sh` und `verify_extracted_files.py` für jede Teilcrate auf.
+
+```bash
+./scripts/vendor_malachite/test_segments.sh
+```
+
+Der Durchlauf erzeugt pro Crate dedizierte Logdateien. Für `malachite` befinden sie sich unter:
+
+- `logs/download_segments_malachite_0_4_18.log` – Segment-Download und Manifestabgleich.
+- `logs/merge_segments_malachite_0_4_18.log` – Zusammenführung zum `.crate`-Archiv.
+- `logs/integrity_report.txt` – Ergebnisbericht der Quelldatei-Verifikation.
+
+Nach Abschluss entfernt das Sammelskript automatisch die während des Laufs
+heruntergeladenen `.part*`-Segmente sowie das temporär erzeugte `.crate`,
+damit keine Binärdateien im Repository verbleiben. Wer die Artefakte lokal
+behalten möchte, kann den Lauf mit `MALACHITE_KEEP_CHUNKS=1` ausführen.
+
+Die Prüfberichte werden bewusst gekürzt, um Upload-Limits einzuhalten: pro Status (z. B. "missing in vendor") listet `integrity_report.txt` höchstens 50 Beispielpfade. Die vollständigen Zählwerte und Stichproben stehen im JSON-Gegenstück [`manifest/integrity_report.json`](manifest/integrity_report.json).
+
 ### Struktur von `chunks.json`
 
 Die Manifest-Datei enthält allgemeine Metadaten sowie ein Feld `segments`, das eine Liste aller Segmentobjekte umfasst. Jedes Segment besitzt mindestens die folgenden Informationen:
