@@ -1,8 +1,8 @@
 {
   "package": "malachite",
   "version": "0.4.18",
-  "generated_at": "2025-10-16T14:57:05Z",
-  "reference_source": "downloaded crate archive /tmp/malachite-0.4.18-q4pdqjss.crate",
+  "generated_at": "2025-10-17T07:59:20Z",
+  "reference_source": "hash manifest vendor/malachite/0.4.18/manifest/reference_hashes.json",
   "status": "pass",
   "summary": {
     "total": 7,

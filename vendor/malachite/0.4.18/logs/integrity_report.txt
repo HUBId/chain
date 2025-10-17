@@ -1,6 +1,6 @@
 Integrity Report for malachite 0.4.18
-Generated at: 2025-10-16T14:57:05Z
-Reference source: downloaded crate archive /tmp/malachite-0.4.18-q4pdqjss.crate
+Generated at: 2025-10-17T07:59:20Z
+Reference source: hash manifest vendor/malachite/0.4.18/manifest/reference_hashes.json
 Overall result: PASS
 
 Checksum summary:

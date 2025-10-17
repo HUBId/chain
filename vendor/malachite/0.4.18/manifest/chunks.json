@@ -6,14 +6,14 @@
       "chunk_name": "chunk_000",
       "offset": 0,
       "length": 7712,
-      "status": "downloaded",
-      "timestamp": "2025-10-15T12:09:19Z",
       "size_bytes": 7712,
       "sha256": "4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b",
-      "downloaded_at": "2025-10-16T14:44:22Z"
+      "downloaded_at": "2025-10-17T07:57:09Z",
+      "timestamp": "2025-10-17T07:57:25Z",
+      "status": "verified"
     }
   ],
   "version": "0.4.18",
-  "generated_at": "2025-10-16T14:44:22Z",
+  "generated_at": "2025-10-17T07:57:25Z",
   "source_url": "https://crates.io/api/v1/crates/malachite/0.4.18/download"
 }
