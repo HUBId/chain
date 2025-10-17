@@ -1,0 +1,54 @@
+{
+  "workspace": "stwo-dev",
+  "version": "0.1.1",
+  "generated_at": "2025-10-17T13:17:09Z",
+  "staging": {
+    "total_entries": 171,
+    "key_files": {
+      "crates/constraint-framework/Cargo.toml": {
+        "sha256": "4f9599bcc88db44b46d8edb3376f6f497e8f404e2e38d6e5b763f1d990acda2b",
+        "size_bytes": 588
+      },
+      "crates/examples/Cargo.toml": {
+        "sha256": "5818252d8556e34886e2571ec6f038fcd9304e7c7e3264e39f3eed533d929101",
+        "size_bytes": 858
+      },
+      "ensure-verifier-no_std/Cargo.toml": {
+        "sha256": "8f1d777c177c7af517644da71c083630a39317b6532c879dd0bf5fa4cc7bab00",
+        "size_bytes": 365
+      },
+      "crates/stwo/src/lib.rs": {
+        "sha256": "aaf23d5347139fb5c113be23136a3e47b39d352d8b120b3446a1cb8ec8d1ecb3",
+        "size_bytes": 401
+      },
+      "crates/stwo/benches/README.md": {
+        "sha256": "2685540c8d7ae9d425bc7d682747723d46fc468cee0d6a55be997c09e8d3777a",
+        "size_bytes": 96
+      },
+      "crates/stwo/src/prover/mod.rs": {
+        "sha256": "a66cc6a464f6b4846b28a2b9757a6c138fa8cef92def9b6a381fb31f9273a1e1",
+        "size_bytes": 3163
+      }
+    }
+  },
+  "manifests": {
+    "manifest/chunks.json": {
+      "sha256": "c0665669d8c86e571a403dc86f8e734db52c3698e79be7bb5dc93e11b2ae5508",
+      "size_bytes": 85
+    },
+    "manifest/final_file_list.txt": {
+      "sha256": "f6f7a9358785c828893542fbe66ddd4712e3bf8692e12eab83e1938d6df32269",
+      "size_bytes": 18963
+    },
+    "manifest/integrity_report.json": {
+      "sha256": "dd7e3ebcf3bc0f77c9fc6a9f0752397f1f54e9c373c64acd33d0e7a17b938514",
+      "size_bytes": 317
+    }
+  },
+  "logs": {
+    "logs/update_manifest.log": {
+      "sha256": "54615f599a9cb94d83372c59a020e531872406d9a7a74e2070609bbef0e440de",
+      "size_bytes": 1650
+    }
+  }
+}

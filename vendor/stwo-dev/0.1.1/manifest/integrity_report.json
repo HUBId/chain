@@ -1,0 +1,15 @@
+{
+  "package": "stwo-dev",
+  "version": "0.1.1",
+  "generated_at": "2025-10-17T13:17:00Z",
+  "reference_source": "manifest/final_file_list.txt",
+  "status": "pass",
+  "summary": {
+    "total": 171,
+    "match": 171,
+    "mismatch": 0,
+    "missing_in_vendor": 0,
+    "missing_in_reference": 0
+  },
+  "findings": {}
+}
