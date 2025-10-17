@@ -1,5 +1,22 @@
 # Vendor-Integrationsprotokoll
 
+## Abhängigkeitsüberblick – Builder-, Trie- und Telemetrie-Crates (2025-03-19)
+
+| Crate | Version | Firewood-Komponente(n) | Verwendung |
+|-------|---------|-------------------------|------------|
+| typed-builder | 0.22.0 | `firewood` (DB- und Revisionsmanager-Konfiguration) | Generiert Builder-APIs für `DbConfig`, `ConfigManager` und `RevisionManagerConfig`, die die Datenbank- und Revisionsverwaltung parametrisieren.【F:firewood/Cargo.toml†L36-L65】【F:firewood/src/db.rs†L20-L78】【F:firewood/src/manager.rs†L13-L118】
+| hash-db | 0.16.0 | `firewood` (Ethhash-Kompatibilitätstests), `firewood-triehash` (Trie-Berechnungen) | Stellt das `Hasher`-Trait für die Ethereum-kompatiblen Trie-Implementierungen bereit, die in den Merkle-Tests sowie beim Berechnen von Trie-Wurzeln genutzt werden.【F:firewood/Cargo.toml†L60-L65】【F:triehash/Cargo.toml†L11-L25】【F:firewood/src/merkle/tests/ethhash.rs†L4-L179】【F:triehash/src/lib.rs†L26-L117】
+| rlp | 0.6.1 (`firewood`, `firewood-storage`), 0.6 (`firewood-triehash`) | `firewood` (Tests), `firewood-storage` (Ethhash-Hasher), `firewood-triehash` (Trie-Serialisierung) | Serialisiert Trie-Knoten und Hash-Präbilder im Ethereum-Format; `firewood-storage` verwendet RLP beim Hashen von Trie-Knoten, während `firewood-triehash` RLP-Streams für die Wurzelberechnung aufbaut.【F:firewood/Cargo.toml†L60-L65】【F:storage/Cargo.toml†L34-L64】【F:triehash/Cargo.toml†L11-L25】【F:storage/src/hashers/ethhash.rs†L14-L120】【F:triehash/src/lib.rs†L26-L117】
+| opentelemetry | =0.30.0 | `firewood-benchmark` | Bindet Telemetrie-Scope und Spans in das Benchmark-Binärprogramm ein, um Laufzeitdaten an einen OTLP-Collector zu exportieren.【F:benchmark/Cargo.toml†L23-L63】【F:benchmark/src/main.rs†L15-L160】
+| opentelemetry-otlp | =0.30.0 | `firewood-benchmark` | Liefert den OTLP-Span-Exporter inklusive gRPC-/Timeout-Konfiguration für das Telemetrie-Reporting des Benchmarks.【F:benchmark/Cargo.toml†L23-L63】【F:benchmark/src/main.rs†L15-L160】
+| opentelemetry-proto | =0.30.0 | `firewood-benchmark` | Bringt die Protobuf-Typen für den OTLP-Exporter mit und wird gemeinsam mit `opentelemetry-otlp` geladen.【F:benchmark/Cargo.toml†L23-L63】
+| opentelemetry_sdk | =0.30.0 | `firewood-benchmark` | Konfiguriert den Telemetrie-Resource-Kontext, der mit den exportierten Spans verschickt wird.【F:benchmark/Cargo.toml†L23-L63】【F:benchmark/src/main.rs†L15-L160】
+| askama | 0.14.0 | `firewood-fwdctl` | Rendert den Textbericht `DBStatsReport`, der nach einem Konsistenz-Check ausgegeben wird.【F:fwdctl/Cargo.toml†L30-L52】【F:fwdctl/src/check.rs†L4-L160】
+
+Folgeschritte:
+
+* Nächste PRs sollen die oben genannten Crates in `vendor/` spiegeln und anschließend die `[patch]`-Einträge in `cargo/config.toml` ergänzen, damit Offline-Builds die lokalen Quellen referenzieren.
+
 ## Geplanter Backend-Vendor – STWO (2025-10-21)
 
 * Mehr-PR-Prozess: STWO-Integration wird über mehrere PRs mit einem Diff-Limit von ca. 25 000 geänderten Zeilen gestaffelt.
