@@ -73,9 +73,12 @@ impl Tracker {
         let current_height = self.index.chain().height();
         let new_headers = daemon.get_new_headers(self.chain())?;
         if !new_headers.is_empty() {
-            for (header, transactions) in daemon.blocks_since(current_height)? {
-                self.index
-                    .index_block(header, &transactions, None)?;
+            for block in daemon.blocks_since(current_height)? {
+                self.index.index_block(
+                    block.ledger_header.clone(),
+                    &block.ledger_transactions,
+                    Some(block.transaction_metadata.as_slice()),
+                )?;
             }
             updated = true;
         }
@@ -179,11 +182,12 @@ impl Tracker {
 
             let blocks = reconstruct_verified_range(daemon, start, end)?;
             for block in blocks {
-                let (header, transactions) = Daemon::convert_block(&block);
-                for tx in &transactions {
+                let converted = Daemon::convert_block(&block);
+                for tx in &converted.ledger_transactions {
                     if bsl_txid(tx) == txid {
-                        let block_hash = header.block_hash();
-                        let block_bytes = serialize_block(&transactions).into_boxed_slice();
+                        let block_hash = converted.ledger_header.block_hash();
+                        let block_bytes =
+                            serialize_block(&converted.ledger_transactions).into_boxed_slice();
                         let tx_bytes = serialize_transaction(tx).into_boxed_slice();
                         return Ok(Some(TransactionLookup::Block {
                             block_hash,

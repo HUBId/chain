@@ -1,5 +1,6 @@
 use core::fmt;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::vendor::electrs::rpp_ledger::bitcoin::{
@@ -11,6 +12,8 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{
     Txid,
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl;
+use rpp::proofs::rpp::TransactionWitness;
+use rpp::runtime::types::SignedTransaction;
 
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_adapter::{
@@ -20,6 +23,51 @@ use crate::zk::rpp_adapter::{
 };
 #[cfg(feature = "backend-rpp-stark")]
 use prover_backend_interface::TxPublicInputs;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LedgerScriptPayload {
+    Recipient { to: String, amount: u128 },
+    Sender { from: String, fee: u64 },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LedgerMemoPayload {
+    pub nonce: u64,
+    pub memo: Option<String>,
+    pub signature: String,
+    pub public_key: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredTransactionMetadata {
+    pub transaction: SignedTransaction,
+    pub witness: Option<TransactionWitness>,
+    pub rpp_stark_proof: Option<Vec<u8>>,
+}
+
+pub fn encode_ledger_script(payload: &LedgerScriptPayload) -> Vec<u8> {
+    serde_json::to_vec(payload).expect("serialize ledger script payload")
+}
+
+pub fn decode_ledger_script(bytes: &[u8]) -> Option<LedgerScriptPayload> {
+    serde_json::from_slice(bytes).ok()
+}
+
+pub fn encode_ledger_memo(payload: &LedgerMemoPayload) -> Vec<u8> {
+    serde_json::to_vec(payload).expect("serialize ledger memo payload")
+}
+
+pub fn decode_ledger_memo(bytes: &[u8]) -> Option<LedgerMemoPayload> {
+    serde_json::from_slice(bytes).ok()
+}
+
+pub fn encode_transaction_metadata(metadata: &StoredTransactionMetadata) -> Vec<u8> {
+    serde_json::to_vec(metadata).expect("serialize transaction metadata")
+}
+
+pub fn decode_transaction_metadata(bytes: &[u8]) -> Option<StoredTransactionMetadata> {
+    serde_json::from_slice(bytes).ok()
+}
 
 pub fn serialize_transaction(tx: &bsl::Transaction) -> Vec<u8> {
     let mut buf = Vec::new();

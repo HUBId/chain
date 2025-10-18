@@ -16,7 +16,10 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{
     Txid,
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
-use crate::vendor::electrs::types::{ScriptHash, StatusDigest};
+use crate::vendor::electrs::types::{
+    decode_ledger_script, decode_transaction_metadata, encode_ledger_script, LedgerScriptPayload,
+    ScriptHash, StatusDigest, StoredTransactionMetadata,
+};
 use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -208,8 +211,12 @@ impl ScriptHashStatus {
             let transaction = index
                 .transaction_at(height, txid)?
                 .with_context(|| anyhow!("transaction {txid:?} at height {height} missing"))?;
+            let metadata = index
+                .transaction_metadata_at(height, txid)
+                .and_then(|bytes| decode_transaction_metadata(&bytes));
             process_confirmed_transaction(
                 &transaction,
+                metadata.as_ref(),
                 height,
                 txid,
                 &self.scripthash,
@@ -287,6 +294,7 @@ impl ScriptHashStatus {
 
 fn process_confirmed_transaction(
     transaction: &Transaction,
+    metadata: Option<&StoredTransactionMetadata>,
     height: usize,
     txid: Txid,
     scripthash: &ScriptHash,
@@ -294,8 +302,7 @@ fn process_confirmed_transaction(
     balance: &mut u128,
     history: &mut Vec<HistoryEntry>,
 ) -> anyhow::Result<()> {
-    let memo = parse_memo(transaction.memo());
-    let fee = memo.as_ref().and_then(|memo| memo.fee);
+    let fee = metadata.map(|meta| meta.transaction.payload.fee);
     history.push(HistoryEntry::confirmed(txid, height, fee));
 
     for input in transaction.inputs() {
@@ -309,7 +316,7 @@ fn process_confirmed_transaction(
         if &output_hash != scripthash {
             continue;
         }
-        if let Some(amount) = extract_value(output, memo.as_ref())? {
+        if let Some(amount) = extract_amount(output)? {
             *balance = balance.saturating_add(u128::from(amount));
             let outpoint = OutPoint::new(txid, index_pos as u32);
             outputs.insert(outpoint, (height, amount));
@@ -339,7 +346,10 @@ fn mempool_entry(
     scripthash: &ScriptHash,
 ) -> anyhow::Result<Option<(HistoryEntry, u64)>> {
     let txid = decode_txid(&tx.hash);
-    let script = Script::new(format!("to:{}:{}", tx.to, tx.amount).into_bytes());
+    let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+        to: tx.to.clone(),
+        amount: tx.amount,
+    }));
     if ScriptHash::new(&script) != *scripthash {
         return Ok(None);
     }
@@ -361,110 +371,14 @@ fn decode_txid(hash: &str) -> Txid {
     Txid::from_bytes(digest)
 }
 
-fn extract_value(script: &Script, memo: Option<&Memo>) -> anyhow::Result<Option<u64>> {
-    let script_info = parse_script(script)?;
-    match script_info {
-        ScriptRole::To { amount, .. } => {
+fn extract_amount(script: &Script) -> anyhow::Result<Option<u64>> {
+    match decode_ledger_script(script.as_bytes()) {
+        Some(LedgerScriptPayload::Recipient { amount, .. }) => {
             let value = u64::try_from(amount).context("output amount exceeds u64")?;
             Ok(Some(value))
         }
-        ScriptRole::From { .. } => {
-            if let Some(memo) = memo {
-                if let Some(amount) = memo.amount {
-                    let total = amount
-                        .checked_add(u128::from(memo.fee.unwrap_or(0)))
-                        .ok_or_else(|| anyhow!("overflow computing memo total"))?;
-                    let value = u64::try_from(total).context("memo total exceeds u64")?;
-                    return Ok(Some(value));
-                }
-            }
-            Ok(None)
-        }
+        Some(LedgerScriptPayload::Sender { .. }) | None => Ok(None),
     }
-}
-
-fn parse_script(script: &Script) -> anyhow::Result<ScriptRole> {
-    let text = std::str::from_utf8(script.as_bytes())
-        .map_err(|err| anyhow!("invalid script encoding: {err}"))?;
-    let mut parts = text.split(':');
-    let kind = parts.next().unwrap_or_default();
-    let address = parts
-        .next()
-        .ok_or_else(|| anyhow!("script missing address component"))?;
-    let value = parts
-        .next()
-        .ok_or_else(|| anyhow!("script missing value component"))?;
-    match kind {
-        "to" => {
-            let amount: u128 = value
-                .parse()
-                .map_err(|err| anyhow!("invalid to-script amount: {err}"))?;
-            Ok(ScriptRole::To {
-                address: address.to_string(),
-                amount,
-            })
-        }
-        "from" => {
-            let fee: u64 = value
-                .parse()
-                .map_err(|err| anyhow!("invalid from-script fee: {err}"))?;
-            Ok(ScriptRole::From {
-                address: address.to_string(),
-                fee,
-            })
-        }
-        _ => Err(anyhow!("unsupported script kind")),
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Memo {
-    from: String,
-    to: String,
-    amount: Option<u128>,
-    fee: Option<u64>,
-}
-
-fn parse_memo(memo: &[u8]) -> Option<Memo> {
-    let text = std::str::from_utf8(memo).ok()?;
-    let mut from = None;
-    let mut to = None;
-    let mut amount = None;
-    let mut fee = None;
-
-    for entry in text.split(';') {
-        let mut parts = entry.splitn(2, '=');
-        let key = parts.next()?;
-        let value = parts.next().unwrap_or("");
-        match key {
-            "from" => from = Some(value.to_string()),
-            "to" => to = Some(value.to_string()),
-            "amount" => {
-                if let Ok(parsed) = value.parse() {
-                    amount = Some(parsed);
-                }
-            }
-            "fee" => {
-                if let Ok(parsed) = value.parse() {
-                    fee = Some(parsed);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    Some(Memo {
-        from: from?,
-        to: to?,
-        amount,
-        fee,
-    })
-}
-
-#[derive(Clone, Debug)]
-enum ScriptRole {
-    To { address: String, amount: u128 },
-    From { address: String, fee: u64 },
 }
 
 #[cfg(feature = "backend-rpp-stark")]
