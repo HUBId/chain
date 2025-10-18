@@ -7,6 +7,10 @@ use malachite::Natural;
 use parking_lot::RwLock;
 #[cfg(feature = "vendor_electrs")]
 use parking_lot::Mutex;
+#[cfg(feature = "vendor_electrs")]
+use tokio::sync::broadcast;
+#[cfg(feature = "vendor_electrs")]
+use tokio::sync::watch;
 use serde::{Serialize, de::DeserializeOwned};
 use crate::proof_backend::Blake2sHasher;
 use tokio::sync::Mutex as AsyncMutex;
@@ -14,6 +18,10 @@ use tokio::sync::Mutex as AsyncMutex;
 use serde_json;
 #[cfg(feature = "vendor_electrs")]
 use std::path::Path;
+#[cfg(feature = "vendor_electrs")]
+use tokio::task::JoinHandle;
+#[cfg(feature = "vendor_electrs")]
+use tokio::time;
 
 use crate::config::NodeConfig;
 use crate::consensus::evaluate_vrf;
@@ -36,11 +44,27 @@ use crate::types::{
     Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
 #[cfg(feature = "vendor_electrs")]
+use log::{debug, warn};
+#[cfg(feature = "vendor_electrs")]
+use rpp::runtime::node::MempoolStatus;
+#[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::ScriptHashStatus;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::Script;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::types::{
+    LedgerScriptPayload, ScriptHash, StatusDigest, encode_ledger_script,
+};
+#[cfg(feature = "vendor_electrs")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "vendor_electrs")]
+use rpp_p2p::GossipTopic;
 
 use super::workflows::synthetic_account_utxos;
 use super::{WalletNodeRuntime, start_node};
@@ -55,6 +79,138 @@ const ELECTRS_CONFIG_KEY: &[u8] = b"wallet_electrs_config";
 #[cfg(feature = "vendor_electrs")]
 type ElectrsHandlesGuard<'a> =
     parking_lot::lock_api::MutexGuard<'a, parking_lot::RawMutex, Option<ElectrsHandles>>;
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone)]
+struct WalletScriptStatus {
+    script: Script,
+    status: ScriptHashStatus,
+}
+
+#[cfg(feature = "vendor_electrs")]
+async fn tracker_sync_loop(
+    handles: Arc<Mutex<Option<ElectrsHandles>>>,
+    statuses: Arc<RwLock<Vec<WalletScriptStatus>>>,
+    snapshot: Arc<RwLock<Option<TrackerSnapshot>>>,
+    mut shutdown: watch::Receiver<bool>,
+    mut block_rx: Option<broadcast::Receiver<Vec<u8>>>,
+) {
+    let mut interval = time::interval(Duration::from_secs(5));
+    loop {
+        let should_sync = if let Some(receiver) = block_rx.as_mut() {
+            tokio::select! {
+                _ = interval.tick() => true,
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                    false
+                }
+                message = receiver.recv() => match message {
+                    Ok(_) => true,
+                    Err(broadcast::error::RecvError::Lagged(_)) => true,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        block_rx = None;
+                        true
+                    }
+                },
+            }
+        } else {
+            tokio::select! {
+                _ = interval.tick() => true,
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                    false
+                }
+            }
+        };
+
+        if !should_sync {
+            continue;
+        }
+
+        run_tracker_iteration(&handles, &statuses, &snapshot);
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn run_tracker_iteration(
+    handles: &Arc<Mutex<Option<ElectrsHandles>>>,
+    statuses: &Arc<RwLock<Vec<WalletScriptStatus>>>,
+    snapshot: &Arc<RwLock<Option<TrackerSnapshot>>>,
+) {
+    let mut guard = handles.lock();
+    let Some(inner) = guard.as_mut() else {
+        debug!(target: "wallet::tracker", "electrs handles unavailable");
+        return;
+    };
+    let (tracker, daemon) = match (inner.tracker.as_mut(), inner.daemon.as_ref()) {
+        (Some(tracker), Some(daemon)) => (tracker, daemon),
+        _ => {
+            debug!(target: "wallet::tracker", "tracker or daemon handle missing");
+            return;
+        }
+    };
+
+    if let Err(err) = tracker.sync(daemon) {
+        warn!(target: "wallet::tracker", "tracker sync failed: {err}");
+        return;
+    }
+
+    let mut script_snapshots = Vec::new();
+    {
+        let mut entries = statuses.write();
+        for entry in entries.iter_mut() {
+            if let Err(err) = tracker.update_scripthash_status(&mut entry.status, &entry.script) {
+                warn!(
+                    target: "wallet::tracker",
+                    "failed to update script hash status: {err}"
+                );
+                continue;
+            }
+            let digest = tracker.get_status_digest(&entry.status);
+            let hash_hex = hex::encode(entry.status.scripthash().0.as_ref());
+            script_snapshots.push(TrackedScriptSnapshot {
+                script_hash: hash_hex,
+                status_digest: digest,
+            });
+        }
+    }
+
+    let mempool_fingerprint = tracker.mempool_status().and_then(|status| {
+        compute_mempool_fingerprint(status).map_err(|err| {
+            warn!(target: "wallet::tracker", "mempool fingerprint error: {err}");
+            err
+        }).ok()
+    });
+
+    *snapshot.write() = Some(TrackerSnapshot {
+        scripts: script_snapshots,
+        mempool_fingerprint,
+    });
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn compute_mempool_fingerprint(status: &MempoolStatus) -> Result<[u8; 32], serde_json::Error> {
+    let encoded = serde_json::to_vec(status)?;
+    Ok(Sha256::digest(&encoded).into())
+}
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone, Debug)]
+pub struct TrackedScriptSnapshot {
+    pub script_hash: String,
+    pub status_digest: Option<StatusDigest>,
+}
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone, Debug)]
+pub struct TrackerSnapshot {
+    pub scripts: Vec<TrackedScriptSnapshot>,
+    pub mempool_fingerprint: Option<[u8; 32]>,
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletNodeRuntimeStatus {
@@ -74,6 +230,14 @@ pub struct Wallet {
     electrs_handles: Arc<Mutex<Option<ElectrsHandles>>>,
     #[cfg(feature = "vendor_electrs")]
     electrs_config: Arc<RwLock<Option<ElectrsConfig>>>,
+    #[cfg(feature = "vendor_electrs")]
+    tracker_tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    #[cfg(feature = "vendor_electrs")]
+    tracker_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
+    #[cfg(feature = "vendor_electrs")]
+    tracker_statuses: Arc<RwLock<Vec<WalletScriptStatus>>>,
+    #[cfg(feature = "vendor_electrs")]
+    tracker_snapshot: Arc<RwLock<Option<TrackerSnapshot>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -102,17 +266,8 @@ pub struct ConsensusReceipt {
 }
 
 impl Wallet {
-    pub fn new(
-        storage: Storage,
-        keypair: Keypair,
-        #[cfg(feature = "vendor_electrs")] electrs: Option<(ElectrsConfig, ElectrsHandles)>,
-    ) -> Self {
+    pub fn new(storage: Storage, keypair: Keypair) -> Self {
         let address = address_from_public_key(&keypair.public);
-        #[cfg(feature = "vendor_electrs")]
-        let (handles, config) = match electrs {
-            Some((config, handles)) => (Some(handles), Some(config)),
-            None => (None, None),
-        };
         Self {
             storage,
             keypair: Arc::new(keypair),
@@ -120,10 +275,31 @@ impl Wallet {
             node_runtime: Arc::new(AsyncMutex::new(None)),
             node_handle: Arc::new(RwLock::new(None)),
             #[cfg(feature = "vendor_electrs")]
-            electrs_handles: Arc::new(Mutex::new(handles)),
+            electrs_handles: Arc::new(Mutex::new(None)),
             #[cfg(feature = "vendor_electrs")]
-            electrs_config: Arc::new(RwLock::new(config)),
+            electrs_config: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "vendor_electrs")]
+            tracker_tasks: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "vendor_electrs")]
+            tracker_shutdown: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "vendor_electrs")]
+            tracker_statuses: Arc::new(RwLock::new(Vec::new())),
+            #[cfg(feature = "vendor_electrs")]
+            tracker_snapshot: Arc::new(RwLock::new(None)),
         }
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn with_electrs(
+        storage: Storage,
+        keypair: Keypair,
+        config: ElectrsConfig,
+        handles: ElectrsHandles,
+    ) -> ChainResult<Self> {
+        let wallet = Self::new(storage, keypair);
+        wallet.persist_electrs_config(&config)?;
+        wallet.attach_electrs_handles(handles)?;
+        Ok(wallet)
     }
 
     fn stark_prover(&self) -> WalletProver<'_> {
@@ -201,13 +377,101 @@ impl Wallet {
                     "failed to reinitialise wallet electrs handles: {err}"
                 ))
             })?;
-        *self.electrs_handles.lock() = Some(handles);
-        Ok(())
+        self.attach_electrs_handles(handles)
     }
 
     #[cfg(feature = "vendor_electrs")]
     pub fn electrs_handles(&self) -> ElectrsHandlesGuard<'_> {
         self.electrs_handles.lock()
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn attach_electrs_handles(&self, handles: ElectrsHandles) -> ChainResult<()> {
+        self.stop_tracker_tasks();
+        let statuses = self.build_wallet_script_statuses()?;
+        {
+            let mut guard = self.electrs_handles.lock();
+            *guard = Some(handles);
+        }
+        *self.tracker_statuses.write() = statuses;
+
+        let runtime_adapters = {
+            let guard = self.electrs_handles.lock();
+            guard
+                .as_ref()
+                .and_then(|handles| handles.firewood.runtime().cloned())
+        };
+
+        let block_notifications = match runtime_adapters {
+            Some(adapters) => match adapters.node().subscribe_witness_gossip(GossipTopic::Blocks) {
+                Ok(receiver) => Some(receiver),
+                Err(err) => {
+                    warn!(
+                        target: "wallet::tracker",
+                        "failed to subscribe to runtime gossip: {err}"
+                    );
+                    None
+                }
+            },
+            None => None,
+        };
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        *self.tracker_shutdown.lock() = Some(shutdown_tx);
+
+        let handles_arc = Arc::clone(&self.electrs_handles);
+        let statuses_arc = Arc::clone(&self.tracker_statuses);
+        let snapshot_arc = Arc::clone(&self.tracker_snapshot);
+        let block_rx = block_notifications;
+
+        let task = tokio::spawn(async move {
+            tracker_sync_loop(
+                handles_arc,
+                statuses_arc,
+                snapshot_arc,
+                shutdown_rx,
+                block_rx,
+            )
+            .await;
+        });
+        self.tracker_tasks.lock().push(task);
+
+        Ok(())
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn tracker_snapshot(&self) -> Option<TrackerSnapshot> {
+        self.tracker_snapshot.read().clone()
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn stop_tracker_tasks(&self) {
+        if let Some(sender) = self.tracker_shutdown.lock().take() {
+            let _ = sender.send(true);
+        }
+        let mut handles = self.tracker_tasks.lock();
+        while let Some(handle) = handles.pop() {
+            handle.abort();
+        }
+        self.tracker_statuses.write().clear();
+        *self.tracker_snapshot.write() = None;
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn build_wallet_script_statuses(&self) -> ChainResult<Vec<WalletScriptStatus>> {
+        let mut statuses = Vec::new();
+        for record in self.unspent_utxos(&self.address)? {
+            let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+                to: record.owner.clone(),
+                amount: record.value,
+            }));
+            let scripthash = ScriptHash::new(&script);
+            statuses.push(WalletScriptStatus {
+                script,
+                status: ScriptHashStatus::new(scripthash),
+            });
+        }
+        Ok(statuses)
     }
 
     pub fn persist_node_runtime_config(&self, config: &NodeConfig) -> ChainResult<()> {

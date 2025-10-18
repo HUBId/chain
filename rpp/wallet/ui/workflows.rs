@@ -553,12 +553,7 @@ mod tests {
         storage
             .persist_utxo_snapshot(&snapshot)
             .expect("persist utxo snapshot");
-        let wallet = Wallet::new(
-            storage.clone(),
-            keypair,
-            #[cfg(feature = "vendor_electrs")]
-            None,
-        );
+        let wallet = Wallet::new(storage.clone(), keypair);
         (wallet, address, storage, tempdir, snapshot)
     }
 
@@ -577,12 +572,7 @@ mod tests {
         };
         account.reputation.zsi.validate("proof");
         storage.persist_account(&account).expect("persist account");
-        let wallet = Wallet::new(
-            storage.clone(),
-            keypair,
-            #[cfg(feature = "vendor_electrs")]
-            None,
-        );
+        let wallet = Wallet::new(storage.clone(), keypair);
         (wallet, address, storage, tempdir)
     }
 

@@ -265,8 +265,6 @@ impl TestCluster {
             #[cfg(feature = "vendor_electrs")]
             let mut electrs_context: Option<(ElectrsConfig, ElectrsHandles)> = None;
             #[cfg(feature = "vendor_electrs")]
-            let mut electrs_config_for_persistence: Option<ElectrsConfig> = None;
-            #[cfg(feature = "vendor_electrs")]
             {
                 let mut wallet_config = WalletConfig::default();
                 wallet_config.data_dir = node_root.join("wallet");
@@ -290,25 +288,29 @@ impl TestCluster {
                         .with_context(|| {
                             format!("failed to initialise electrs for cluster node {index}")
                         })?;
-                    electrs_config_for_persistence = Some(cfg.clone());
                     electrs_context = Some((cfg, handles));
                 }
             }
 
             let wallet_key = load_or_generate_keypair(&config.key_path)
                 .with_context(|| format!("failed to load node key for wallet on node {index}"))?;
-            let wallet = Arc::new(Wallet::new(
-                storage.clone(),
-                wallet_key,
+            let wallet = {
                 #[cfg(feature = "vendor_electrs")]
-                electrs_context,
-            ));
-            #[cfg(feature = "vendor_electrs")]
-            if let Some(electrs_cfg) = electrs_config_for_persistence {
-                wallet
-                    .persist_electrs_config(&electrs_cfg)
-                    .map_err(|err| anyhow!(err))?;
-            }
+                {
+                    if let Some((cfg, handles)) = electrs_context {
+                        Arc::new(
+                            Wallet::with_electrs(storage.clone(), wallet_key, cfg, handles)
+                                .map_err(|err| anyhow!(err))?,
+                        )
+                    } else {
+                        Arc::new(Wallet::new(storage.clone(), wallet_key))
+                    }
+                }
+                #[cfg(not(feature = "vendor_electrs"))]
+                {
+                    Arc::new(Wallet::new(storage.clone(), wallet_key))
+                }
+            };
 
             let node_task = tokio::spawn(async move {
                 node.start()
