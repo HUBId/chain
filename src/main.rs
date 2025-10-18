@@ -235,8 +235,6 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         #[cfg(feature = "vendor_electrs")]
         let mut electrs_context: Option<(ElectrsConfig, ElectrsHandles)> = None;
         #[cfg(feature = "vendor_electrs")]
-        let mut electrs_persisted_config: Option<ElectrsConfig> = None;
-        #[cfg(feature = "vendor_electrs")]
         if let Some(cfg) = config.electrs.clone() {
             let firewood_dir = config.electrs_firewood_dir();
             let index_dir = config.electrs_index_dir();
@@ -257,21 +255,25 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
                 None
             };
             let handles = initialize(&cfg, &firewood_dir, &index_dir, runtime_adapters)?;
-            electrs_persisted_config = Some(cfg.clone());
             electrs_context = Some((cfg, handles));
         }
-        let wallet = Arc::new(Wallet::new(
-            storage,
-            keypair,
+        let wallet = {
             #[cfg(feature = "vendor_electrs")]
-            electrs_context,
-        ));
-        #[cfg(feature = "vendor_electrs")]
-        if let Some(cfg) = electrs_persisted_config {
-            wallet
-                .persist_electrs_config(&cfg)
-                .map_err(|err| anyhow!(err))?;
-        }
+            {
+                if let Some((cfg, handles)) = electrs_context {
+                    Arc::new(
+                        Wallet::with_electrs(storage, keypair, cfg, handles)
+                            .map_err(|err| anyhow!(err))?,
+                    )
+                } else {
+                    Arc::new(Wallet::new(storage, keypair))
+                }
+            }
+            #[cfg(not(feature = "vendor_electrs"))]
+            {
+                Arc::new(Wallet::new(storage, keypair))
+            }
+        };
         wallet_instance = Some(wallet);
         if rpc_addr.is_none() {
             rpc_addr = Some(config.rpc_listen);
