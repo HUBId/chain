@@ -12,9 +12,14 @@ use crate::vendor::electrs::daemon::Daemon;
 use crate::vendor::electrs::index::Index;
 use crate::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, Script, Txid};
 use crate::vendor::electrs::status::{Balance, ScriptHashStatus, UnspentEntry};
+#[cfg(feature = "backend-rpp-stark")]
+use crate::vendor::electrs::status::HistoryEntryWithMetadata;
 use crate::vendor::electrs::types::{
-    bsl_txid, serialize_block, serialize_transaction, HashPrefixRow, TxidRow, HASH_PREFIX_ROW_SIZE,
+    bsl_txid, serialize_block, serialize_transaction, HashPrefixRow, StatusDigest, TxidRow,
+    HASH_PREFIX_ROW_SIZE,
 };
+#[cfg(feature = "backend-rpp-stark")]
+use crate::vendor::electrs::types::StoredVrfAudit;
 
 #[derive(Clone, Debug)]
 pub enum TransactionLookup {
@@ -96,9 +101,9 @@ impl Tracker {
         status: &mut ScriptHashStatus,
         script: &Script,
     ) -> Result<bool> {
-        let previous = status.statushash();
+        let previous = status.status_digest();
         status.sync(script, self.index(), self.chain(), self.mempool.as_ref())?;
-        Ok(previous != status.statushash())
+        Ok(previous != status.status_digest())
     }
 
     /// Return the deterministic balance used by the placeholder backend.
@@ -109,6 +114,32 @@ impl Tracker {
     /// Return tracked unspent outputs for the script hash.
     pub fn get_unspent(&self, status: &ScriptHashStatus) -> Vec<UnspentEntry> {
         status.get_unspent(self.chain())
+    }
+
+    /// Return the enriched history entries that include digests, proofs and VRF data when available.
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn get_history_with_digests(
+        &self,
+        status: &ScriptHashStatus,
+    ) -> Vec<HistoryEntryWithMetadata> {
+        status.history_with_digests()
+    }
+
+    /// Digest summarising the script hash history.
+    pub fn get_status_digest(&self, status: &ScriptHashStatus) -> Option<StatusDigest> {
+        status.status_digest()
+    }
+
+    /// Collect proof envelopes for confirmed history entries.
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn get_proof_envelopes(&self, status: &ScriptHashStatus) -> Vec<Option<String>> {
+        status.proof_envelopes()
+    }
+
+    /// Collect VRF audit records for confirmed history entries.
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn get_vrf_audits(&self, status: &ScriptHashStatus) -> Vec<Option<StoredVrfAudit>> {
+        status.vrf_audits()
     }
 
     /// Snapshot of the latest runtime mempool state observed during sync.
