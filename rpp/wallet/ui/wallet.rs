@@ -1,3 +1,4 @@
+use std::collections::{btree_map::Entry as BTreeEntry, BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -44,6 +45,12 @@ use crate::types::{
     Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
 #[cfg(feature = "vendor_electrs")]
+use crate::{
+    runtime::node::PendingTransactionSummary,
+    runtime::types::ChainProof,
+    stwo::proof::ProofPayload,
+};
+#[cfg(feature = "vendor_electrs")]
 use log::{debug, warn};
 #[cfg(feature = "vendor_electrs")]
 use rpp::runtime::node::MempoolStatus;
@@ -54,13 +61,17 @@ use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::ScriptHashStatus;
+use rpp_wallet::vendor::electrs::{
+    HistoryEntry as ElectrsHistoryEntry, HistoryEntryWithMetadata, ScriptHashStatus,
+};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::Script;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::types::{
     LedgerScriptPayload, ScriptHash, StatusDigest, encode_ledger_script,
 };
+#[cfg(all(feature = "vendor_electrs", feature = "backend-rpp-stark"))]
+use rpp_wallet::vendor::electrs::StoredVrfAudit;
 #[cfg(feature = "vendor_electrs")]
 use sha2::{Digest, Sha256};
 #[cfg(feature = "vendor_electrs")]
@@ -212,6 +223,58 @@ pub struct TrackerSnapshot {
     pub mempool_fingerprint: Option<[u8; 32]>,
 }
 
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone, Debug, Serialize)]
+pub struct ScriptStatusMetadata {
+    pub script_hash: String,
+    pub confirmed_balance: u64,
+    pub mempool_delta: i64,
+    pub status_digest: Option<StatusDigest>,
+    pub proof_envelopes: Vec<Option<String>>,
+    #[cfg(feature = "backend-rpp-stark")]
+    pub vrf_audits: Vec<Option<StoredVrfAudit>>,
+}
+
+#[cfg(feature = "vendor_electrs")]
+struct TrackerHistoryView {
+    entry: ElectrsHistoryEntry,
+    status_digest: Option<StatusDigest>,
+    proof_envelope: Option<String>,
+    #[cfg(feature = "backend-rpp-stark")]
+    vrf_audit: Option<StoredVrfAudit>,
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn collect_tracker_history(status: &ScriptHashStatus) -> Vec<TrackerHistoryView> {
+    #[cfg(feature = "backend-rpp-stark")]
+    {
+        status
+            .history_with_digests()
+            .into_iter()
+            .map(|with_meta: HistoryEntryWithMetadata| TrackerHistoryView {
+                proof_envelope: with_meta.proof.map(|audit| audit.envelope),
+                vrf_audit: with_meta.vrf,
+                status_digest: with_meta.digest,
+                entry: with_meta.entry,
+            })
+            .collect()
+    }
+
+    #[cfg(not(feature = "backend-rpp-stark"))]
+    {
+        status
+            .get_history()
+            .iter()
+            .cloned()
+            .map(|entry| TrackerHistoryView {
+                entry,
+                status_digest: None,
+                proof_envelope: None,
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletNodeRuntimeStatus {
     pub running: bool,
@@ -248,6 +311,8 @@ pub struct WalletAccountSummary {
     pub reputation_score: f64,
     pub tier: Tier,
     pub uptime_hours: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mempool_delta: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -327,6 +392,267 @@ impl Wallet {
     pub fn firewood_state_root(&self) -> ChainResult<String> {
         Ok(hex::encode(self.storage.state_root()?))
     }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn tracker_block_timestamp(&self, height: usize) -> Option<u64> {
+        let guard = self.electrs_handles.lock();
+        let tracker = guard
+            .as_ref()
+            .and_then(|handles| handles.tracker.as_ref())?;
+        tracker
+            .chain()
+            .get_block_header(height)
+            .map(|header| header.timestamp)
+    }
+
+    fn legacy_history(&self) -> ChainResult<Vec<HistoryEntry>> {
+        let blocks = self.storage.load_blockchain()?;
+        let mut history = Vec::new();
+        for block in blocks {
+            for tx in block.transactions {
+                if tx.payload.from == self.address || tx.payload.to == self.address {
+                    let tx_hash = hex::encode(tx.hash());
+                    let entry = HistoryEntry::confirmed(
+                        tx_hash,
+                        Some(tx.clone()),
+                        block.header.height,
+                        block.header.timestamp,
+                        self.estimate_reputation_delta(&tx),
+                    );
+                    history.push(entry);
+                }
+            }
+        }
+        history.sort_by_key(|entry| entry.status.confirmation_height());
+        Ok(history)
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn history_from_tracker(&self) -> ChainResult<Option<Vec<HistoryEntry>>> {
+        let mut handles_guard = self.electrs_handles.lock();
+        let tracker = match handles_guard
+            .as_ref()
+            .and_then(|handles| handles.tracker.as_ref())
+        {
+            Some(tracker) => tracker,
+            None => return Ok(None),
+        };
+
+        let mempool_status = tracker.mempool_status().cloned();
+        drop(handles_guard);
+
+        let mut mempool: HashMap<String, PendingTransactionSummary> = mempool_status
+            .map(|status| {
+                status
+                    .transactions
+                    .into_iter()
+                    .map(|summary| (summary.hash.clone(), summary))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let statuses = self.tracker_statuses.read();
+        if statuses.is_empty() && mempool.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+
+        let mut aggregated: BTreeMap<String, (u8, HistoryEntry)> = BTreeMap::new();
+        for wallet_status in statuses.iter() {
+            for view in collect_tracker_history(&wallet_status.status) {
+                let tx_hash = view.entry.txid_hex();
+                let entry = self.history_entry_from_view(&tx_hash, &view, &mut mempool)?;
+                let priority = history_priority(&entry);
+                match aggregated.entry(tx_hash) {
+                    BTreeEntry::Vacant(slot) => {
+                        slot.insert((priority, entry));
+                    }
+                    BTreeEntry::Occupied(mut slot) => {
+                        let (existing_priority, existing_entry) = slot.get_mut();
+                        if priority > *existing_priority {
+                            let mut merged = entry;
+                            merge_history_metadata(&mut merged, existing_entry);
+                            *existing_priority = priority;
+                            *existing_entry = merged;
+                        } else {
+                            merge_history_metadata(existing_entry, &entry);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut history: Vec<HistoryEntry> = aggregated
+            .into_values()
+            .map(|(_, entry)| entry)
+            .collect();
+
+        if !mempool.is_empty() {
+            let submitted_at = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            for (tx_hash, summary) in mempool.into_iter() {
+                let signed_tx = Self::signed_transaction_from_summary(&summary);
+                let mut entry = HistoryEntry::pending(
+                    tx_hash,
+                    signed_tx.clone(),
+                    Some(summary),
+                    submitted_at,
+                );
+                if let Some(tx) = signed_tx {
+                    entry.reputation_delta = self.estimate_reputation_delta(&tx);
+                }
+                history.push(entry);
+            }
+        }
+        history.sort_by_key(|entry| entry.status.confirmation_height());
+        Ok(Some(history))
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn history_entry_from_view(
+        &self,
+        tx_hash: &str,
+        view: &TrackerHistoryView,
+        mempool: &mut HashMap<String, PendingTransactionSummary>,
+    ) -> ChainResult<HistoryEntry> {
+        if let Some(height) = view.entry.confirmed_height() {
+            let (transaction, timestamp, pruned) =
+                self.lookup_confirmed_transaction(height as u64, view.entry.txid().as_bytes())?;
+            let mut entry = match (pruned, transaction) {
+                (true, _) => HistoryEntry::pruned(tx_hash.to_string(), height as u64),
+                (false, Some(tx)) => {
+                    let reputation_delta = self.estimate_reputation_delta(&tx);
+                    HistoryEntry::confirmed(
+                        tx_hash.to_string(),
+                        Some(tx),
+                        height as u64,
+                        timestamp,
+                        reputation_delta,
+                    )
+                },
+                (false, None) => HistoryEntry::pruned(tx_hash.to_string(), height as u64),
+            };
+            entry = apply_tracker_metadata(entry, view);
+            return Ok(entry);
+        }
+
+        let summary = mempool.remove(tx_hash);
+        let signed_tx = summary
+            .as_ref()
+            .and_then(|pending| Self::signed_transaction_from_summary(pending));
+        let submitted_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut entry = HistoryEntry::pending(
+            tx_hash.to_string(),
+            signed_tx.clone(),
+            summary,
+            submitted_at,
+        );
+        if let Some(tx) = signed_tx {
+            entry.reputation_delta = self.estimate_reputation_delta(&tx);
+        }
+        entry = apply_tracker_metadata(entry, view);
+        Ok(entry)
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn lookup_confirmed_transaction(
+        &self,
+        height: u64,
+        txid: &[u8; 32],
+    ) -> ChainResult<(Option<SignedTransaction>, u64, bool)> {
+        if let Some(block) = self.storage.read_block(height)? {
+            let timestamp = block.header.timestamp;
+            if block.pruned {
+                return Ok((None, timestamp, true));
+            }
+            for tx in block.transactions {
+                if tx.hash() == *txid {
+                    return Ok((Some(tx), timestamp, false));
+                }
+            }
+            return Ok((None, timestamp, false));
+        }
+
+        let timestamp = self.tracker_block_timestamp(height as usize).unwrap_or(0);
+        Ok((None, timestamp, true))
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn signed_transaction_from_summary(
+        summary: &PendingTransactionSummary,
+    ) -> Option<SignedTransaction> {
+        if let Some(witness) = summary.witness.clone() {
+            return Some(witness.signed_tx);
+        }
+        if let Some(payload) = summary.proof_payload.clone() {
+            if let ProofPayload::Transaction(witness) = payload {
+                return Some(witness.signed_tx);
+            }
+        }
+        if let Some(proof) = summary.proof.clone() {
+            match proof {
+                ChainProof::Stwo(stwo) => {
+                    if let ProofPayload::Transaction(witness) = stwo.payload {
+                        return Some(witness.signed_tx);
+                    }
+                }
+                #[cfg(feature = "backend-plonky3")]
+                ChainProof::Plonky3(_) => {}
+                #[cfg(feature = "backend-rpp-stark")]
+                ChainProof::RppStark(_) => {}
+            }
+        }
+        None
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn script_status_metadata(&self) -> Option<Vec<ScriptStatusMetadata>> {
+        let guard = self.electrs_handles.lock();
+        if guard
+            .as_ref()
+            .and_then(|handles| handles.tracker.as_ref())
+            .is_none()
+        {
+            return None;
+        }
+        drop(guard);
+
+        let statuses = self.tracker_statuses.read();
+        let mut metadata = Vec::with_capacity(statuses.len());
+        for entry in statuses.iter() {
+            let script_hash = hex::encode(entry.status.scripthash().0.as_bytes());
+            let status_digest = entry.status.status_digest();
+            let confirmed_balance = entry.status.confirmed_balance();
+            let mempool_delta = entry.status.mempool_delta();
+            let proof_envelopes: Vec<Option<String>> = {
+                #[cfg(feature = "backend-rpp-stark")]
+                {
+                    entry.status.proof_envelopes()
+                }
+                #[cfg(not(feature = "backend-rpp-stark"))]
+                {
+                    Vec::new()
+                }
+            };
+            #[cfg(feature = "backend-rpp-stark")]
+            let vrf_audits = entry.status.vrf_audits();
+            metadata.push(ScriptStatusMetadata {
+                script_hash,
+                confirmed_balance,
+                mempool_delta,
+                status_digest,
+                proof_envelopes,
+                #[cfg(feature = "backend-rpp-stark")]
+                vrf_audits,
+            });
+        }
+        Some(metadata)
+    }
+
 
     #[cfg(feature = "vendor_electrs")]
     pub fn persist_electrs_config(&self, config: &ElectrsConfig) -> ChainResult<()> {
@@ -692,6 +1018,21 @@ impl Wallet {
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+        let mempool_delta = {
+            #[cfg(feature = "vendor_electrs")]
+            {
+                self.script_status_metadata().map(|entries| {
+                    entries
+                        .into_iter()
+                        .map(|meta| meta.mempool_delta)
+                        .sum::<i64>()
+                })
+            }
+            #[cfg(not(feature = "vendor_electrs"))]
+            {
+                None
+            }
+        };
         Ok(WalletAccountSummary {
             address: account.address.clone(),
             balance: account.balance,
@@ -699,6 +1040,7 @@ impl Wallet {
             reputation_score: account.reputation.score,
             tier: account.reputation.tier.clone(),
             uptime_hours: account.reputation.timetokes.hours_online,
+            mempool_delta,
         })
     }
 
@@ -843,25 +1185,12 @@ impl Wallet {
     }
 
     pub fn history(&self) -> ChainResult<Vec<HistoryEntry>> {
-        let blocks = self.storage.load_blockchain()?;
-        let mut history = Vec::new();
-        for block in blocks {
-            for tx in &block.transactions {
-                if tx.payload.from == self.address || tx.payload.to == self.address {
-                    let status = HistoryStatus::Confirmed {
-                        height: block.header.height,
-                        timestamp: block.header.timestamp,
-                    };
-                    history.push(HistoryEntry {
-                        transaction: tx.clone(),
-                        status,
-                        reputation_delta: self.estimate_reputation_delta(tx),
-                    });
-                }
-            }
+        #[cfg(feature = "vendor_electrs")]
+        if let Some(history) = self.history_from_tracker()? {
+            return Ok(history);
         }
-        history.sort_by_key(|entry| entry.status.confirmation_height());
-        Ok(history)
+
+        self.legacy_history()
     }
 
     fn estimate_reputation_delta(&self, tx: &SignedTransaction) -> i64 {
@@ -892,18 +1221,42 @@ impl Wallet {
     }
 
     pub fn node_metrics(&self) -> ChainResult<NodeTabMetrics> {
-        let tip = self.storage.tip()?;
         let account = self
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+        #[cfg(feature = "vendor_electrs")]
+        let tracker_metrics = {
+            let guard = self.electrs_handles.lock();
+            guard
+                .as_ref()
+                .and_then(|handles| handles.tracker.as_ref())
+                .map(|tracker| {
+                    let height = tracker.chain().height() as u64;
+                    let hash = hex::encode(tracker.chain().tip().as_bytes());
+                    (height, Some(hash), height.saturating_add(1))
+                })
+        };
+        #[cfg(not(feature = "vendor_electrs"))]
+        let tracker_metrics: Option<(u64, Option<String>, u64)> = None;
+
+        let (latest_block_height, latest_block_hash, total_blocks) = if let Some(metrics) = tracker_metrics
+        {
+            metrics
+        } else {
+            let tip = self.storage.tip()?;
+            let latest_height = tip.as_ref().map(|meta| meta.height).unwrap_or(0);
+            let latest_hash = tip.as_ref().map(|meta| meta.hash.clone());
+            let total = self.storage.load_blockchain()?.len() as u64;
+            (latest_height, latest_hash, total)
+        };
         Ok(NodeTabMetrics {
             reputation_score: account.reputation.score,
             tier: account.reputation.tier.clone(),
             uptime_hours: account.reputation.timetokes.hours_online,
-            latest_block_height: tip.as_ref().map(|meta| meta.height).unwrap_or(0),
-            latest_block_hash: tip.as_ref().map(|meta| meta.hash.clone()),
-            total_blocks: self.storage.load_blockchain()?.len() as u64,
+            latest_block_height,
+            latest_block_hash,
+            total_blocks,
         })
     }
 
@@ -978,4 +1331,69 @@ impl Wallet {
             zsi_reputation_proof: account.reputation.zsi.reputation_proof.clone(),
         })
     }
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn history_priority(entry: &HistoryEntry) -> u8 {
+    match entry.status {
+        HistoryStatus::Confirmed { .. } => 3,
+        HistoryStatus::Pruned { .. } => 2,
+        HistoryStatus::Pending { .. } => 1,
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn merge_history_metadata(existing: &mut HistoryEntry, other: &HistoryEntry) {
+    if existing.transaction.is_none() {
+        existing.transaction = other.transaction.clone();
+    }
+    if existing.pending_summary.is_none() {
+        existing.pending_summary = other.pending_summary.clone();
+    }
+    if existing.status_digest.is_none() {
+        existing.status_digest = other.status_digest.clone();
+    }
+    if existing.proof_envelope.is_none() {
+        existing.proof_envelope = other.proof_envelope.clone();
+    }
+    if existing.double_spend.is_none() {
+        existing.double_spend = other.double_spend;
+    }
+    if existing.reputation_delta == 0 {
+        existing.reputation_delta = other.reputation_delta;
+    }
+    if matches!(existing.status, HistoryStatus::Pending { .. })
+        && !matches!(other.status, HistoryStatus::Pending { .. })
+    {
+        existing.status = other.status.clone();
+    }
+    #[cfg(feature = "backend-rpp-stark")]
+    if existing.vrf_audit.is_none() {
+        existing.vrf_audit = other.vrf_audit.clone();
+    }
+    if existing.conflict.is_none() {
+        existing.conflict = other.conflict.clone();
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn apply_tracker_metadata(mut entry: HistoryEntry, view: &TrackerHistoryView) -> HistoryEntry {
+    if view.status_digest.is_some() {
+        entry.status_digest = view.status_digest;
+    }
+    if view.proof_envelope.is_some() {
+        entry.proof_envelope = view.proof_envelope.clone();
+    }
+    if let Some(double_spend) = view.entry.double_spend() {
+        entry.double_spend = Some(double_spend);
+    }
+    #[cfg(feature = "backend-rpp-stark")]
+    if let Some(audit) = view.vrf_audit.clone() {
+        entry.vrf_audit = Some(audit);
+    }
+    #[cfg(feature = "backend-rpp-stark")]
+    if let Some(conflict) = view.entry.conflict() {
+        entry.conflict = Some(conflict.to_string());
+    }
+    entry
 }
