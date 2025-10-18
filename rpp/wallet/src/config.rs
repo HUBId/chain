@@ -68,3 +68,34 @@ impl Default for FeatureGates {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_target_regtest_without_features() {
+        let config = ElectrsConfig::default();
+        assert_eq!(config.network, NetworkSelection::Regtest);
+        assert!(!config.features.runtime);
+        assert!(!config.features.tracker);
+    }
+
+    #[test]
+    fn serde_roundtrip_preserves_network_and_features() {
+        let config = ElectrsConfig {
+            network: NetworkSelection::Signet,
+            features: FeatureGates {
+                runtime: true,
+                tracker: false,
+            },
+        };
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let restored: ElectrsConfig = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(restored.network, NetworkSelection::Signet);
+        assert!(restored.features.runtime);
+        assert!(!restored.features.tracker);
+    }
+}

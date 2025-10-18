@@ -17,6 +17,7 @@ vendor_electrs = [
     "dep:storage-firewood",
     "dep:rpp",
     "dep:rpp_p2p",
+    "dep:hex",
 ]
 
 [dependencies]
@@ -29,5 +30,6 @@ serde_json = { version = "1.0", optional = true }
 tokio = { version = "1.37", features = ["sync"], optional = true }
 rpp = { package = "firewood", path = "../../firewood", optional = true }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
+hex = { version = "0.4", optional = true }
 
 [workspace]

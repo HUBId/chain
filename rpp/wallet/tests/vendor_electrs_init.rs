@@ -100,6 +100,37 @@ fn tracker_requires_runtime() {
     );
 }
 
+#[test]
+fn config_parses_from_json_and_drives_features() -> Result<()> {
+    let payload = r#"{
+        "network": "mainnet",
+        "features": {
+            "runtime": true,
+            "tracker": false
+        }
+    }"#;
+
+    let config: ElectrsConfig = serde_json::from_str(payload)?;
+    assert_eq!(config.network, NetworkSelection::Mainnet);
+    assert!(config.features.runtime);
+    assert!(!config.features.tracker);
+
+    let temp = TempDir::new()?;
+    let firewood_dir = temp.path().join("firewood");
+    let index_dir = temp.path().join("index");
+    fs::create_dir_all(&firewood_dir)?;
+    fs::create_dir_all(&index_dir)?;
+
+    let runtime = build_runtime_adapters(temp.path());
+    let handles = initialize(&config, &firewood_dir, &index_dir, Some(runtime))?;
+
+    assert!(handles.firewood.runtime().is_some(), "runtime enabled in config");
+    assert!(handles.daemon.is_some(), "daemon expected when runtime enabled");
+    assert!(handles.tracker.is_none(), "tracker disabled in config");
+
+    Ok(())
+}
+
 fn assert_network(tracker: &Tracker, network: NetworkSelection) {
     let expected = constants::genesis_block(network.into());
     assert_eq!(tracker.chain().height(), 0, "fresh index height");
