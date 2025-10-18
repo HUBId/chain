@@ -13,6 +13,8 @@ mod swarm;
 mod tier;
 mod topics;
 
+pub mod vendor;
+
 pub use admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
