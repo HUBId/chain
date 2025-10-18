@@ -1,3 +1,5 @@
+use core::fmt;
+
 use sha2::{Digest, Sha256};
 
 use crate::vendor::electrs::rpp_ledger::bitcoin::{
@@ -9,6 +11,15 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{
     Txid,
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl;
+
+#[cfg(feature = "backend-rpp-stark")]
+use crate::zk::rpp_adapter::{
+    compute_public_digest,
+    encode_public_inputs,
+    Digest32,
+};
+#[cfg(feature = "backend-rpp-stark")]
+use prover_backend_interface::TxPublicInputs;
 
 pub fn serialize_transaction(tx: &bsl::Transaction) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -176,8 +187,124 @@ impl ScriptHashRow {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StatusHash(pub sha256::Hash);
+#[cfg(feature = "backend-rpp-stark")]
+type StatusDigestInner = Digest32;
+#[cfg(not(feature = "backend-rpp-stark"))]
+type StatusDigestInner = [u8; 32];
+
+/// Wrapper around the status digest value exposed over the Electrum API.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct StatusDigest(StatusDigestInner);
+
+impl StatusDigest {
+    /// Creates a digest from its raw bytes.
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        #[cfg(feature = "backend-rpp-stark")]
+        {
+            Self(Digest32::from(bytes))
+        }
+
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        {
+            Self(bytes)
+        }
+    }
+
+    /// Returns the digest as a lowercase hexadecimal string.
+    pub fn to_hex(&self) -> String {
+        hex::encode(self.as_bytes())
+    }
+
+    /// Borrows the digest bytes.
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        #[cfg(feature = "backend-rpp-stark")]
+        {
+            self.0.as_bytes()
+        }
+
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        {
+            &self.0
+        }
+    }
+
+    /// Consumes the wrapper and returns the raw bytes.
+    pub fn into_bytes(self) -> [u8; 32] {
+        #[cfg(feature = "backend-rpp-stark")]
+        {
+            self.0.into_bytes()
+        }
+
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        {
+            self.0
+        }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn from_digest(digest: Digest32) -> Self {
+        Self(digest)
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn into_digest(self) -> Digest32 {
+        self.0
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn from_public_inputs(inputs: &TxPublicInputs) -> Self {
+        let encoded = encode_public_inputs(inputs);
+        let digest = compute_public_digest(&encoded);
+        Self(digest)
+    }
+}
+
+impl fmt::Debug for StatusDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "StatusDigest(0x{})", self.to_hex())
+    }
+}
+
+impl fmt::Display for StatusDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_hex())
+    }
+}
+
+impl From<[u8; 32]> for StatusDigest {
+    fn from(value: [u8; 32]) -> Self {
+        Self::from_bytes(value)
+    }
+}
+
+impl From<StatusDigest> for [u8; 32] {
+    fn from(value: StatusDigest) -> Self {
+        value.into_bytes()
+    }
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl From<Digest32> for StatusDigest {
+    fn from(value: Digest32) -> Self {
+        Self::from_digest(value)
+    }
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl From<StatusDigest> for Digest32 {
+    fn from(value: StatusDigest) -> Self {
+        value.into_digest()
+    }
+}
+
+impl serde::Serialize for StatusDigest {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
 
 fn spending_prefix(prev: OutPoint) -> HashPrefix {
     let mut hasher = Sha256::new();
