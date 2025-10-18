@@ -1,0 +1,15 @@
+[wallet]
+network = "regtest"
+runtime = true
+tracker = true
+
+[blocks]
+count = 1
+recipient = "wallet-recipient"
+amount = 321
+fee = 9
+memo = "wallet-demo"
+
+[proof]
+envelope = "wallet-feedface"
+report_notes = "wallet-verified"

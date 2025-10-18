@@ -16,6 +16,47 @@
 6. Vergleiche die modifizierten Dateien mit dem Upstreamstand, z. B. über `diff -u` oder `git difftool`,
    um Abweichungen nachvollziehen zu können.
 
+## Konfiguration & Feature-Gates
+
+Die Wallet-Bibliothek konfiguriert die Tracker-Integration über `ElectrsConfig`
+(`rpp/wallet/src/config.rs`). Wesentliche Schalter:
+
+| Schlüssel | Beschreibung |
+|-----------|--------------|
+| `network` | Wählt das Ledger-Netzwerk (`regtest`, `testnet`, `signet`, `mainnet`). Der Wert wird nach `rpp-ledger`-Netzwerken übersetzt und bestimmt den Genesis-Header des Index. |
+| `features.runtime` | Aktiviert die Runtime-Adapter (`FirewoodAdapter::open_with_runtime`) und startet den Daemon, sodass der Tracker gegen einen RPP-Laufzeitknoten spiegelt.【F:rpp/wallet/src/config.rs†L10-L55】【F:rpp/wallet/src/vendor/electrs/firewood_adapter.rs†L18-L118】|
+| `features.tracker` | Startet den High-Level-Tracker, der Index und Daemon verknüpft. Dieses Flag setzt `features.runtime` voraus.【F:rpp/wallet/src/config.rs†L57-L80】【F:rpp/wallet/src/vendor/electrs/init.rs†L34-L77】|
+
+Die Workspace-Feature-Flag `vendor_electrs` aktiviert sämtliche optionalen
+Abhängigkeiten (`serde`, `tokio`, `storage-firewood`, `rpp`-Runtime usw.) und
+bindet die vendorten Module in `rpp-wallet` ein.【F:rpp/wallet/Cargo.toml†L8-L27】【F:rpp/wallet/src/lib.rs†L13-L27】
+
+### Beispiel: Tracker initialisieren
+
+```rust
+use rpp_wallet::config::{ElectrsConfig, FeatureGates, NetworkSelection};
+use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
+use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+
+fn bootstrap(config: ElectrsConfig, runtime: RuntimeAdapters) -> anyhow::Result<ElectrsHandles> {
+    let firewood_dir = "/var/lib/rpp/wallet/firewood";
+    let index_dir = "/var/lib/rpp/wallet/index";
+    initialize(&config, firewood_dir, index_dir, Some(runtime))
+}
+
+let config = ElectrsConfig {
+    network: NetworkSelection::Regtest,
+    features: FeatureGates {
+        runtime: true,
+        tracker: true,
+    },
+};
+```
+
+Der zurückgelieferte `ElectrsHandles`-Container enthält den Firewood-Adapter,
+den Runtime-gestützten Daemon sowie den Tracker, der den Index aktualisiert und
+Skripthash-Statusabfragen bedient.【F:rpp/wallet/src/vendor/electrs/init.rs†L13-L82】
+
 ## Diff-Empfehlung
 
 Um lokale Anpassungen sichtbar zu machen, empfiehlt sich eine Referenzkopie der entpackten Dateien:
