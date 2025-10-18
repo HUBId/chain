@@ -120,6 +120,19 @@ For maximum runtime performance at the cost of compile time,
 use `cargo run --maxperf` instead,
 which enables maximum link time compiler optimizations.
 
+### Runtime signal handling
+
+The vendored Electrs harness uses an asynchronous supervisor that wires
+operating-system signals through [`tokio::signal`]. On Unix platforms the
+runtime reacts to `SIGINT` and `SIGTERM` by setting an internal exit flag while
+`SIGUSR1` merely triggers a reload notification. Windows environments rely on
+`Ctrl-C` (`SetConsoleCtrlHandler`) and therefore only expose the exit path
+without a dedicated reload hook. The [`ExitFlag`] is shared with the existing
+shutdown logic so long-running tasks can poll it and stop deterministically.
+
+[`tokio::signal`]: https://docs.rs/tokio/latest/tokio/signal/index.html
+[`ExitFlag`]: rpp/wallet/src/vendor/electrs/mod.rs
+
 ## Logging
 
 If you want logging, enable the `logging` feature flag, and then set RUST\_LOG accordingly.
