@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::errors::ChainError;
 use crate::errors::ChainResult;
 use crate::rpp::ProofSystemKind;
-use crate::stwo::proof::StarkProof;
+use crate::stwo::circuit::transaction::TransactionWitness;
+use crate::stwo::proof::{ProofPayload, StarkProof};
 
 use super::transaction::SignedTransaction;
 
@@ -154,11 +155,25 @@ impl ChainProof {
 pub struct TransactionProofBundle {
     pub transaction: SignedTransaction,
     pub proof: ChainProof,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub witness: Option<TransactionWitness>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_payload: Option<ProofPayload>,
 }
 
 impl TransactionProofBundle {
-    pub fn new(transaction: SignedTransaction, proof: ChainProof) -> Self {
-        Self { transaction, proof }
+    pub fn new(
+        transaction: SignedTransaction,
+        proof: ChainProof,
+        witness: Option<TransactionWitness>,
+        proof_payload: Option<ProofPayload>,
+    ) -> Self {
+        Self {
+            transaction,
+            proof,
+            witness,
+            proof_payload,
+        }
     }
 
     pub fn hash(&self) -> String {

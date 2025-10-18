@@ -745,6 +745,9 @@ mod tests {
             amount,
             fee: 7,
             nonce: 1,
+            proof: None,
+            witness: None,
+            proof_payload: None,
             #[cfg(feature = "backend-rpp-stark")]
             public_inputs_digest: None,
         };

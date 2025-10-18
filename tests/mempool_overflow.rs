@@ -58,11 +58,12 @@ fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
         reputation_weights: ReputationWeights::default(),
     };
 
+    let proof_payload = ProofPayload::Transaction(witness.clone());
     let proof = StarkProof {
         kind: ProofKind::Transaction,
         commitment: String::new(),
         public_inputs: Vec::new(),
-        payload: ProofPayload::Transaction(witness),
+        payload: proof_payload.clone(),
         trace: ExecutionTrace {
             segments: Vec::new(),
         },
@@ -70,7 +71,12 @@ fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
         fri_proof: Default::default(),
     };
 
-    TransactionProofBundle::new(signed_tx, ChainProof::Stwo(proof))
+    TransactionProofBundle::new(
+        signed_tx,
+        ChainProof::Stwo(proof),
+        Some(witness),
+        Some(proof_payload),
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

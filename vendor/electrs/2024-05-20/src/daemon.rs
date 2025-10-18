@@ -797,17 +797,23 @@ pub(crate) mod test_helpers {
             reputation_weights: ReputationWeights::default(),
         };
 
+        let proof_payload = ProofPayload::Transaction(witness.clone());
         let proof = StarkProof {
             kind: ProofKind::Transaction,
             commitment: String::new(),
             public_inputs: Vec::new(),
-            payload: ProofPayload::Transaction(witness),
+            payload: proof_payload.clone(),
             trace: ExecutionTrace { segments: Vec::new() },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         };
 
-        TransactionProofBundle::new(signed_tx, ChainProof::Stwo(proof))
+        TransactionProofBundle::new(
+            signed_tx,
+            ChainProof::Stwo(proof),
+            Some(witness),
+            Some(proof_payload),
+        )
     }
 
     fn generate_keypair() -> Keypair {
