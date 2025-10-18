@@ -74,7 +74,8 @@ impl Tracker {
         let new_headers = daemon.get_new_headers(self.chain())?;
         if !new_headers.is_empty() {
             for (header, transactions) in daemon.blocks_since(current_height)? {
-                self.index.index_block(header, &transactions)?;
+                self.index
+                    .index_block(header, &transactions, None)?;
             }
             updated = true;
         }

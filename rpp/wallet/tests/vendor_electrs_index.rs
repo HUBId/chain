@@ -64,13 +64,13 @@ fn index_sample_chain() {
     let header1 = sample_header(genesis, 1);
     let tx1 = sample_transaction(Script::new(vec![0xAA, 0xBB]), b"memo-1".to_vec());
     index
-        .index_block(header1.clone(), &[tx1.clone()])
+        .index_block(header1.clone(), &[tx1.clone()], None)
         .expect("index block");
 
     let header2 = sample_header(header1.block_hash(), 2);
     let tx2 = sample_transaction(Script::new(vec![0xAA, 0xBB]), b"memo-2".to_vec());
     index
-        .index_block(header2.clone(), &[tx2.clone()])
+        .index_block(header2.clone(), &[tx2.clone()], None)
         .expect("index block 2");
 
     assert_eq!(index.chain().height(), 2);

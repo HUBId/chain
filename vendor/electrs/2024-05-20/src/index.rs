@@ -31,7 +31,12 @@ impl Index {
         Ok(Self { db, chain })
     }
 
-    pub fn index_block(&mut self, header: BlockHeader, transactions: &[Transaction]) -> Result<()> {
+    pub fn index_block(
+        &mut self,
+        header: BlockHeader,
+        transactions: &[Transaction],
+        metadata: Option<&[Option<Vec<u8>>]>,
+    ) -> Result<()> {
         let height = self.chain.height() + 1;
         let mut batch = WriteBatch::default();
 
@@ -40,8 +45,12 @@ impl Index {
         let block_bytes = serialize_block(transactions);
         batch.put_block(height, &block_bytes);
 
-        for tx in transactions {
-            self.index_transaction(&mut batch, tx, height);
+        for (position, tx) in transactions.iter().enumerate() {
+            let rpp_metadata = metadata
+                .and_then(|entries| entries.get(position))
+                .and_then(|entry| entry.as_ref())
+                .map(|payload| payload.as_slice());
+            self.index_transaction(&mut batch, tx, height, rpp_metadata);
         }
 
         batch.set_tip(height, header.block_hash());
@@ -87,10 +96,20 @@ impl Index {
             .collect()
     }
 
-    fn index_transaction(&self, batch: &mut WriteBatch, tx: &Transaction, height: usize) {
+    fn index_transaction(
+        &self,
+        batch: &mut WriteBatch,
+        tx: &Transaction,
+        height: usize,
+        metadata: Option<&[u8]>,
+    ) {
         let txid = bsl_txid(tx);
         let tx_row = TxidRow::row(txid, height);
         batch.put_txid(tx_row, txid);
+
+        if let Some(payload) = metadata {
+            batch.put_rpp_metadata(height, txid, payload);
+        }
 
         for (output_index, script) in tx.outputs().iter().enumerate() {
             let scripthash = ScriptHash::new(script);
@@ -108,11 +127,29 @@ impl Index {
             batch.put_spending(row, txid);
         }
     }
+
+    pub fn transaction_metadata_at(&self, height: usize, txid: Txid) -> Option<Vec<u8>> {
+        self.db.get_transaction_metadata(height, txid)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vendor::electrs::rpp_ledger::bitcoin::BlockHash;
+    use tempfile::TempDir;
+
+    fn sample_header(parent: BlockHash, height: u8) -> BlockHeader {
+        BlockHeader::new(
+            parent,
+            [height; 32],
+            [height.wrapping_add(1); 32],
+            [height.wrapping_add(2); 32],
+            [height.wrapping_add(3); 64],
+            [height.wrapping_add(4); 32],
+            height as u64,
+        )
+    }
 
     #[test]
     fn serializes_block_layout() {
@@ -120,5 +157,26 @@ mod tests {
         let tx = Transaction::new(vec![], vec![script], vec![42]);
         let block = serialize_block(&[tx]);
         assert!(!block.is_empty());
+    }
+
+    #[test]
+    fn persists_transaction_metadata() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let mut index = Index::open(temp_dir.path(), Network::Regtest).expect("open index");
+        let genesis = index.chain().tip();
+
+        let header = sample_header(genesis, 1);
+        let script = Script::new(vec![0xAB]);
+        let tx = Transaction::new(vec![], vec![script], vec![7]);
+        let metadata = vec![Some(vec![0xCA, 0xFE])];
+
+        index
+            .index_block(header.clone(), &[tx.clone()], Some(&metadata))
+            .expect("index block with metadata");
+
+        let stored = index
+            .transaction_metadata_at(1, bsl_txid(&tx))
+            .expect("metadata stored");
+        assert_eq!(stored, vec![0xCA, 0xFE]);
     }
 }
