@@ -17,7 +17,8 @@ use crate::zk::rpp_verifier::{
 };
 #[cfg(feature = "backend-rpp-stark")]
 use crate::vendor::electrs::types::{
-    RppStarkProofAudit, RppStarkReportSummary, StoredVrfAudit,
+    RppStarkProofAudit, RppStarkReportSummary, StoredVrfAudit, VrfInputDescriptor,
+    VrfOutputDescriptor,
 };
 
 use crate::vendor::electrs::chain::Chain;
@@ -31,8 +32,9 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
 use crate::vendor::electrs::types::{
-    decode_ledger_script, decode_transaction_metadata, encode_ledger_script, LedgerScriptPayload,
-    ScriptHash, StatusDigest, StoredTransactionMetadata,
+    decode_ledger_script, decode_transaction_metadata, encode_ledger_script,
+    encode_transaction_metadata, LedgerScriptPayload, ScriptHash, StatusDigest,
+    StoredTransactionMetadata,
 };
 use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
 #[cfg(feature = "backend-rpp-stark")]
@@ -892,104 +894,155 @@ mod tests {
     use hex::encode;
     use tempfile::TempDir;
 
-    use crate::vendor::electrs::daemon::test_helpers::setup;
     use crate::vendor::electrs::index::Index;
     use crate::vendor::electrs::rpp_ledger::bitcoin::Network;
     use crate::vendor::electrs::tracker::Tracker;
     use rpp::runtime::config::QueueWeightsConfig;
     #[cfg(feature = "backend-rpp-stark")]
-    use crate::vendor::electrs::rpp_ledger::bitcoin::{OutPoint, Script, Txid};
+    use crate::vendor::electrs::rpp_ledger::bitcoin::{
+        blockdata::block::Header as BlockHeader, OutPoint, Script, Txid,
+    };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::vendor::electrs::types::LedgerScriptPayload;
     #[cfg(feature = "backend-rpp-stark")]
-    use crate::zk::rpp_adapter::Digest32;
+    use crate::zk::rpp_adapter::{compute_public_digest, Digest32};
     #[cfg(feature = "backend-rpp-stark")]
     use rpp::proofs::rpp::{
         AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint,
     };
     #[cfg(feature = "backend-rpp-stark")]
+    use rpp::runtime::types::proofs::{ChainProof, RppStarkProof};
+    #[cfg(feature = "backend-rpp-stark")]
+    use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
+    #[cfg(feature = "backend-rpp-stark")]
     use rpp::storage::state::utxo::StoredUtxo;
+    #[cfg(feature = "backend-rpp-stark")]
+    use uuid::Uuid;
 
+    #[cfg(feature = "backend-rpp-stark")]
+    fn sample_header(parent: BlockHash, height: u32) -> BlockHeader {
+        BlockHeader::new(
+            parent,
+            [height as u8; 32],
+            [height.wrapping_add(1) as u8; 32],
+            [height.wrapping_add(2) as u8; 32],
+            [height.wrapping_add(3) as u8; 64],
+            [height.wrapping_add(4) as u8; 32],
+            height as u64,
+        )
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
     #[test]
-    fn sync_derives_balance_and_unspent_outputs() {
+    fn sync_exports_rpp_stark_metadata() {
         let temp_dir = TempDir::new().expect("tempdir");
         let index_path = temp_dir.path().join("index");
         fs::create_dir_all(&index_path).expect("index dir");
 
-        let index = Index::open(&index_path, Network::Regtest).expect("open index");
-        let mut tracker = Tracker::new(index);
-        let context = setup();
+        let mut index = Index::open(&index_path, Network::Regtest).expect("open index");
+        let parent = index.chain().tip();
+        let header = sample_header(parent, 1);
 
-        tracker.sync(&context.daemon).expect("sync tracker");
+        let recipient = "rpp-recipient";
+        let amount = 123u128;
+        let fee = 7u64;
+        let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: recipient.to_string(),
+            amount,
+        }));
+        let tx_inputs = vec![OutPoint::new(Txid::from_bytes([0x10; 32]), 0)];
+        let tx = Transaction::new(tx_inputs, vec![script.clone()], Vec::new());
+        let txid = crate::vendor::electrs::types::bsl_txid(&tx);
+        let mut txid_bytes = [0u8; 32];
+        txid_bytes.copy_from_slice(txid.as_bytes());
+        let witness = sample_transaction_witness(txid_bytes, 0, recipient, amount, fee);
 
-        let transaction = tracker
-            .index()
-            .transaction_at(1, context.transaction_id)
-            .expect("transaction lookup")
-            .expect("transaction present");
-        let script = transaction.outputs().first().expect("output").clone();
+        let proof = RppStarkProof::new(vec![0xAA, 0xBB], vec![0xCC, 0xDD], vec![0xEE, 0xFF]);
+        let proof_bytes = serde_json::to_vec(&proof).expect("encode proof");
+        let witness_bytes = encode_transaction_witness(&witness).expect("witness bytes");
+        let public_digest = compute_public_digest(proof.public_inputs());
+        let expected_digest = hash_entry_components(Some(&witness_bytes), public_digest);
+
+        let proof_audit = RppStarkProofAudit {
+            envelope: "feedface".into(),
+            report: RppStarkReportSummary {
+                backend: "rpp-stark".into(),
+                verified: true,
+                params_ok: true,
+                public_ok: true,
+                merkle_ok: true,
+                fri_ok: true,
+                composition_ok: true,
+                total_bytes: proof_bytes.len() as u64,
+                notes: Some("verified".into()),
+                trace_query_indices: Some(vec![1, 2, 3]),
+            },
+        };
+        let vrf_audit = StoredVrfAudit {
+            input: VrfInputDescriptor {
+                last_block_header: "0xfeed".into(),
+                epoch: 42,
+                tier_seed: "0xdead".into(),
+            },
+            output: VrfOutputDescriptor {
+                randomness: "0xbeef".into(),
+                preoutput: "0xcafe".into(),
+                proof: "0xabba".into(),
+            },
+        };
+
+        let runtime_tx = RuntimeTransaction::new(
+            "sender".into(),
+            recipient.into(),
+            amount,
+            fee,
+            1,
+            None,
+        );
+        let signed = rpp::runtime::types::SignedTransaction {
+            id: Uuid::nil(),
+            payload: runtime_tx,
+            signature: "signature".into(),
+            public_key: "public-key".into(),
+        };
+        let metadata = StoredTransactionMetadata {
+            transaction: signed,
+            witness: Some(witness.clone()),
+            rpp_stark_proof: Some(proof_bytes.clone()),
+            proof_audit: Some(proof_audit.clone()),
+            vrf_audit: Some(vrf_audit.clone()),
+        };
+        let metadata_bytes = encode_transaction_metadata(&metadata);
+
+        index
+            .index_block(header, &[tx.clone()], Some(&vec![Some(metadata_bytes)]))
+            .expect("index block with metadata");
+
+        let tracker = Tracker::new(index);
         let scripthash = ScriptHash::new(&script);
-
         let mut status = ScriptHashStatus::new(scripthash);
         status
             .sync(&script, tracker.index(), tracker.chain(), None)
             .expect("sync status");
 
-        let balance = status.get_balance(tracker.chain());
-        assert!(balance.confirmed() > 0);
-        assert_eq!(balance.mempool_delta(), 0);
+        let digest = tracker
+            .get_status_digest(&status)
+            .expect("status digest computed");
+        assert_eq!(digest, expected_digest);
 
-        let unspent = status.get_unspent(tracker.chain());
-        assert!(!unspent.is_empty());
-        assert_eq!(unspent[0].value, balance.confirmed());
+        let history = tracker.get_history_with_digests(&status);
+        assert_eq!(history.len(), 1, "confirmed history entry expected");
+        let entry = &history[0];
+        assert_eq!(entry.entry.txid, txid);
+        assert_eq!(entry.digest, Some(expected_digest));
+        assert_eq!(entry.proof, Some(proof_audit.clone()));
+        assert_eq!(entry.vrf, Some(vrf_audit.clone()));
 
-        let baseline = status.status_digest();
+        let proof_envelopes = tracker.get_proof_envelopes(&status);
+        assert_eq!(proof_envelopes, vec![Some(proof_audit.envelope.clone())]);
 
-        let script_text = std::str::from_utf8(script.as_bytes()).expect("script text");
-        let mut parts = script_text.split(':');
-        let _ = parts.next();
-        let address = parts.next().expect("address");
-        let amount = parts
-            .next()
-            .expect("amount")
-            .parse::<u128>()
-            .expect("parse amount");
-
-        let pending = PendingTransactionSummary {
-            hash: encode([3u8; 32]),
-            from: "mempool-from".to_string(),
-            to: address.to_string(),
-            amount,
-            fee: 7,
-            nonce: 1,
-            proof: None,
-            witness: None,
-            proof_payload: None,
-            #[cfg(feature = "backend-rpp-stark")]
-            public_inputs_digest: None,
-        };
-        let mempool = MempoolStatus {
-            transactions: vec![pending],
-            identities: Vec::new(),
-            votes: Vec::new(),
-            uptime_proofs: Vec::new(),
-            queue_weights: QueueWeightsConfig::default(),
-        };
-
-        status
-            .sync(&script, tracker.index(), tracker.chain(), Some(&mempool))
-            .expect("sync with mempool");
-
-        let updated = status.get_balance(tracker.chain());
-        assert_eq!(updated.confirmed(), balance.confirmed());
-        let expected_delta = i64::try_from(amount).expect("delta fits in i64");
-        assert_eq!(updated.mempool_delta(), expected_delta);
-
-        assert_ne!(baseline, status.status_digest());
-        assert!(status
-            .get_history()
-            .iter()
-            .any(|entry| matches!(entry.height, Height::Unconfirmed { .. })));
+        let vrf_audits = tracker.get_vrf_audits(&status);
+        assert_eq!(vrf_audits, vec![Some(vrf_audit)]);
     }
 
     #[cfg(feature = "backend-rpp-stark")]
@@ -1035,6 +1088,7 @@ mod tests {
         witness: TransactionWitness,
         digest: Digest32,
         amount: u128,
+        proof: Option<ChainProof>,
     ) -> PendingTransactionSummary {
         let address = witness.recipient_after.address.clone();
         let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
@@ -1049,11 +1103,23 @@ mod tests {
             amount,
             fee: witness.fee,
             nonce: 1,
-            proof: None,
+            proof,
             witness: Some(witness),
             proof_payload: None,
             public_inputs_digest: Some(digest.to_hex()),
         }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn sample_rpp_chain_proof() -> (ChainProof, Digest32) {
+        let public_inputs = vec![0x21, 0x43, 0x65];
+        let digest = compute_public_digest(&public_inputs);
+        let proof = ChainProof::RppStark(RppStarkProof::new(
+            vec![0x10, 0x32],
+            public_inputs,
+            vec![0x54, 0x76, 0x98],
+        ));
+        (proof, digest)
     }
 
     #[cfg(feature = "backend-rpp-stark")]
@@ -1100,7 +1166,14 @@ mod tests {
         let tx_id = [0x11; 32];
         let digest = Digest32::from([0xAA; 32]);
         let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 7);
-        let pending = sample_pending_transaction(&scripthash, tx_id, witness.clone(), digest, amount);
+        let pending = sample_pending_transaction(
+            &scripthash,
+            tx_id,
+            witness.clone(),
+            digest,
+            amount,
+            None,
+        );
         let confirmed = confirmed_outpoints_map(tx_id, 0, amount as u64);
 
         let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
@@ -1125,7 +1198,14 @@ mod tests {
         let tx_id = [0x22; 32];
         let digest = Digest32::from([0xBB; 32]);
         let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 5);
-        let pending = sample_pending_transaction(&scripthash, tx_id, witness.clone(), digest, amount);
+        let pending = sample_pending_transaction(
+            &scripthash,
+            tx_id,
+            witness.clone(),
+            digest,
+            amount,
+            None,
+        );
         let confirmed = HashMap::new();
 
         let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
@@ -1136,6 +1216,77 @@ mod tests {
         assert_eq!(entry.double_spend, Some(true));
         assert!(entry.conflict().is_none(), "unexpected conflict: {:?}", entry.conflict());
         assert_eq!(entry.digest(), Some(&expected_digest));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn process_mempool_accepts_valid_double_spend_proof() {
+        let amount = 64u128;
+        let scripthash_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: "recipient".to_string(),
+            amount,
+        }));
+        let scripthash = ScriptHash::new(&scripthash_script);
+        let tx_id = [0x44; 32];
+        let (proof, digest) = sample_rpp_chain_proof();
+        let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 4);
+        let pending = sample_pending_transaction(
+            &scripthash,
+            tx_id,
+            witness.clone(),
+            digest,
+            amount,
+            Some(proof),
+        );
+        let confirmed = confirmed_outpoints_map(tx_id, 0, amount as u64);
+
+        let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
+        let witness_bytes = encode_transaction_witness(&witness).expect("encode witness");
+        let expected_digest = hash_entry_components(Some(&witness_bytes), digest);
+
+        assert_eq!(credit, Some(amount as u64));
+        assert_eq!(entry.double_spend, Some(false));
+        assert!(entry.conflict().is_none());
+        assert_eq!(entry.digest(), Some(&expected_digest));
+        assert!(entry.proof_audit().is_none());
+        assert!(entry.vrf_audit().is_none());
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn process_mempool_rejects_invalid_double_spend_proof() {
+        let amount = 91u128;
+        let scripthash_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: "recipient".to_string(),
+            amount,
+        }));
+        let scripthash = ScriptHash::new(&scripthash_script);
+        let tx_id = [0x55; 32];
+        let (proof, digest) = sample_rpp_chain_proof();
+        let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 5);
+        let mut pending = sample_pending_transaction(
+            &scripthash,
+            tx_id,
+            witness,
+            digest,
+            amount,
+            Some(proof),
+        );
+        pending.public_inputs_digest = Some("not-a-hex-digest".into());
+        let confirmed = confirmed_outpoints_map(tx_id, 0, amount as u64);
+
+        let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
+        assert!(credit.is_none());
+        assert_eq!(entry.double_spend, Some(true));
+        let conflict = entry.conflict().expect("conflict expected");
+        assert!(matches!(
+            conflict,
+            HistoryConflictReason::VerificationMismatch { .. }
+        ));
+        if let HistoryConflictReason::VerificationMismatch { detail } = conflict {
+            assert!(detail.contains("decode mempool public input digest"));
+        }
+        assert!(entry.digest().is_none());
     }
 
     #[cfg(feature = "backend-rpp-stark")]
@@ -1155,6 +1306,7 @@ mod tests {
             witness,
             Digest32::from([0u8; 32]),
             amount,
+            None,
         );
         pending.public_inputs_digest = None;
         let confirmed = HashMap::new();
