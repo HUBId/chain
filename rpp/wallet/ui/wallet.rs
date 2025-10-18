@@ -436,8 +436,20 @@ impl Wallet {
     pub fn prove_transaction(&self, tx: &SignedTransaction) -> ChainResult<TransactionProofBundle> {
         let prover = self.stark_prover();
         let witness = prover.build_transaction_witness(tx)?;
-        let proof = prover.prove_transaction(witness)?;
-        Ok(TransactionProofBundle::new(tx.clone(), proof))
+        let proof = prover.prove_transaction(witness.clone())?;
+        let proof_payload = match &proof {
+            ChainProof::Stwo(stark) => Some(stark.payload.clone()),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => None,
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => None,
+        };
+        Ok(TransactionProofBundle::new(
+            tx.clone(),
+            proof,
+            Some(witness),
+            proof_payload,
+        ))
     }
 
     pub fn generate_uptime_proof(&self) -> ChainResult<UptimeProof> {

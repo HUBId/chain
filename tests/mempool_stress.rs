@@ -82,11 +82,12 @@ fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
         reputation_weights: ReputationWeights::default(),
     };
 
+    let proof_payload = ProofPayload::Transaction(witness.clone());
     let proof = StarkProof {
         kind: ProofKind::Transaction,
         commitment: String::new(),
         public_inputs: Vec::new(),
-        payload: ProofPayload::Transaction(witness),
+        payload: proof_payload.clone(),
         trace: rpp_chain::types::ExecutionTrace {
             segments: Vec::new(),
         },
@@ -94,7 +95,12 @@ fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
         fri_proof: Default::default(),
     };
 
-    TransactionProofBundle::new(signed_tx, ChainProof::Stwo(proof))
+    TransactionProofBundle::new(
+        signed_tx,
+        ChainProof::Stwo(proof),
+        Some(witness),
+        Some(proof_payload),
+    )
 }
 
 fn seeded_keypair(seed: u8) -> ed25519_dalek::Keypair {

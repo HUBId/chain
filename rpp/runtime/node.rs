@@ -58,6 +58,7 @@ use crate::rpp::{
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
+use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::storage::{StateTransitionReceipt, Storage};
 use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
@@ -108,9 +109,66 @@ pub struct PendingTransactionSummary {
     pub amount: u128,
     pub fee: u64,
     pub nonce: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<ChainProof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub witness: Option<TransactionWitness>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_payload: Option<ProofPayload>,
     #[cfg(feature = "backend-rpp-stark")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_inputs_digest: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingTransactionMetadata {
+    proof: ChainProof,
+    witness: Option<TransactionWitness>,
+    proof_payload: Option<ProofPayload>,
+    #[cfg(feature = "backend-rpp-stark")]
+    public_inputs_digest: Option<String>,
+}
+
+impl PendingTransactionMetadata {
+    fn from_bundle(bundle: &TransactionProofBundle) -> Self {
+        let witness = bundle
+            .witness
+            .clone()
+            .or_else(|| bundle.proof_payload.as_ref().and_then(Self::transaction_witness));
+        let proof_payload = bundle
+            .proof_payload
+            .clone()
+            .or_else(|| Self::clone_payload(&bundle.proof));
+        #[cfg(feature = "backend-rpp-stark")]
+        let public_inputs_digest = match &bundle.proof {
+            ChainProof::RppStark(proof) => Some(compute_public_digest(proof.public_inputs()).to_hex()),
+            _ => None,
+        };
+        Self {
+            proof: bundle.proof.clone(),
+            witness,
+            proof_payload,
+            #[cfg(feature = "backend-rpp-stark")]
+            public_inputs_digest,
+        }
+    }
+
+    fn transaction_witness(payload: &ProofPayload) -> Option<TransactionWitness> {
+        match payload {
+            ProofPayload::Transaction(witness) => Some(witness.clone()),
+            _ => None,
+        }
+    }
+
+    fn clone_payload(proof: &ChainProof) -> Option<ProofPayload> {
+        match proof {
+            ChainProof::Stwo(stark) => Some(stark.payload.clone()),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => None,
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -303,6 +361,7 @@ pub(crate) struct NodeInner {
     storage: Storage,
     ledger: Ledger,
     mempool: RwLock<VecDeque<TransactionProofBundle>>,
+    pending_transaction_metadata: RwLock<HashMap<String, PendingTransactionMetadata>>,
     identity_mempool: RwLock<VecDeque<AttestedIdentityRequest>>,
     uptime_mempool: RwLock<VecDeque<RecordedUptimeProof>>,
     vrf_mempool: RwLock<VrfSubmissionPool>,
@@ -550,6 +609,7 @@ impl Node {
             storage,
             ledger,
             mempool: RwLock::new(VecDeque::new()),
+            pending_transaction_metadata: RwLock::new(HashMap::new()),
             identity_mempool: RwLock::new(VecDeque::new()),
             uptime_mempool: RwLock::new(VecDeque::new()),
             vrf_mempool: RwLock::new(VrfSubmissionPool::new()),
@@ -1996,15 +2056,26 @@ impl NodeInner {
         {
             return Err(ChainError::Transaction("transaction already queued".into()));
         }
+        let metadata = PendingTransactionMetadata::from_bundle(&bundle);
         mempool.push_back(bundle);
-        let tx_hash_clone = tx_hash.clone();
-        let summary = serde_json::json!({
-            "hash": tx_hash_clone,
-            "from": tx_payload.from,
-            "to": tx_payload.to,
-            "fee": tx_payload.fee,
-            "nonce": tx_payload.nonce,
-        });
+        drop(mempool);
+        {
+            let mut metadata_store = self.pending_transaction_metadata.write();
+            metadata_store.insert(tx_hash.clone(), metadata.clone());
+        }
+        let summary = PendingTransactionSummary {
+            hash: tx_hash.clone(),
+            from: tx_payload.from,
+            to: tx_payload.to,
+            amount: tx_payload.amount,
+            fee: tx_payload.fee,
+            nonce: tx_payload.nonce,
+            proof: Some(metadata.proof.clone()),
+            witness: metadata.witness.clone(),
+            proof_payload: metadata.proof_payload.clone(),
+            #[cfg(feature = "backend-rpp-stark")]
+            public_inputs_digest: metadata.public_inputs_digest.clone(),
+        };
         self.emit_witness_json(GossipTopic::Proofs, &summary);
         Ok(tx_hash)
     }
@@ -2048,6 +2119,16 @@ impl NodeInner {
                     ))
                 }
             }
+        }
+    }
+
+    fn purge_transaction_metadata(&self, bundles: &[TransactionProofBundle]) {
+        if bundles.is_empty() {
+            return;
+        }
+        let mut metadata = self.pending_transaction_metadata.write();
+        for bundle in bundles {
+            metadata.remove(&bundle.hash());
         }
     }
 
@@ -2441,26 +2522,29 @@ impl NodeInner {
     }
 
     fn mempool_status(&self) -> ChainResult<MempoolStatus> {
-        let transactions = self
-            .mempool
-            .read()
+        let mempool = self.mempool.read();
+        let metadata_store = self.pending_transaction_metadata.read();
+        let transactions = mempool
             .iter()
             .map(|bundle| {
-                #[cfg(feature = "backend-rpp-stark")]
-                let public_inputs_digest = bundle
-                    .proof
-                    .expect_rpp_stark()
-                    .ok()
-                    .map(|artifact| compute_public_digest(artifact.public_inputs()).to_hex());
+                let hash = bundle.hash();
+                let payload = bundle.transaction.payload.clone();
+                let metadata = metadata_store
+                    .get(&hash)
+                    .cloned()
+                    .unwrap_or_else(|| PendingTransactionMetadata::from_bundle(bundle));
                 PendingTransactionSummary {
-                    hash: bundle.hash(),
-                    from: bundle.transaction.payload.from.clone(),
-                    to: bundle.transaction.payload.to.clone(),
-                    amount: bundle.transaction.payload.amount,
-                    fee: bundle.transaction.payload.fee,
-                    nonce: bundle.transaction.payload.nonce,
+                    hash,
+                    from: payload.from,
+                    to: payload.to,
+                    amount: payload.amount,
+                    fee: payload.fee,
+                    nonce: payload.nonce,
+                    proof: Some(metadata.proof),
+                    witness: metadata.witness,
+                    proof_payload: metadata.proof_payload,
                     #[cfg(feature = "backend-rpp-stark")]
-                    public_inputs_digest,
+                    public_inputs_digest: metadata.public_inputs_digest,
                 }
             })
             .collect();
@@ -2839,6 +2923,7 @@ impl NodeInner {
                 }
             }
         }
+        self.purge_transaction_metadata(&pending);
         let has_uptime = !self.uptime_mempool.read().is_empty();
         if pending.is_empty() && identity_pending.is_empty() && !has_uptime {
             return Ok(());

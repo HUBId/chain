@@ -73,6 +73,7 @@ impl PipelineDashboardSnapshot {
 #[derive(Clone)]
 struct PipelineSubmission {
     workflow: TransactionWorkflow,
+    bundle: TransactionProofBundle,
     received_at: Instant,
 }
 
@@ -284,7 +285,8 @@ impl PipelineOrchestrator {
                 "account tier insufficient for orchestrated submission".into(),
             ));
         }
-        let hash = workflow.bundle.hash();
+        let bundle = workflow.bundle.clone();
+        let hash = bundle.hash();
         let expected_balance = workflow
             .sender_post_utxos
             .iter()
@@ -298,7 +300,7 @@ impl PipelineOrchestrator {
         );
         self.metrics.register(hash.clone(), metrics).await;
         if let Some(handle) = &self.p2p {
-            let payload = serde_json::to_vec(&workflow.bundle).map_err(|err| {
+            let payload = serde_json::to_vec(&bundle).map_err(|err| {
                 ChainError::Config(format!(
                     "failed to serialise proofs bundle for {hash}: {err}"
                 ))
@@ -312,6 +314,7 @@ impl PipelineOrchestrator {
         }
         let submission = PipelineSubmission {
             workflow,
+            bundle,
             received_at: Instant::now(),
         };
         self.submissions
@@ -389,11 +392,11 @@ impl PipelineOrchestrator {
                     let Some(submission) = maybe_submission else {
                         break;
                     };
-                    let hash = submission.workflow.bundle.hash();
+                    let hash = submission.bundle.hash();
                     metrics
                         .record_stage(&hash, PipelineStage::GossipReceived, submission.received_at)
                         .await;
-                    match node.submit_transaction(submission.workflow.bundle.clone()) {
+                    match node.submit_transaction(submission.bundle.clone()) {
                         Ok(_) => {
                             info!(?hash, "transaction enqueued into node mempool");
                         }
