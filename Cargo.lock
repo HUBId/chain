@@ -4441,3 +4441,7 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[patch.unused]]
+name = "libp2p-identity"
+version = "0.2.12"
