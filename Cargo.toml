@@ -6,6 +6,7 @@ members = [
   "firewood",
   "fwdctl",
   "storage",
+  "storage-firewood",
   "triehash",
 ]
 resolver = "2"
