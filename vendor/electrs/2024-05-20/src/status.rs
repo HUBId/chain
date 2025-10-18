@@ -33,7 +33,9 @@ use crate::vendor::electrs::types::{
 use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
 #[cfg(feature = "backend-rpp-stark")]
 use rpp::{
-    proofs::rpp::encode_transaction_witness,
+    proofs::rpp::{
+        encode_transaction_witness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint,
+    },
     runtime::types::proofs::RppStarkProof,
 };
 #[cfg(feature = "backend-rpp-stark")]
@@ -390,6 +392,17 @@ impl ScriptHashStatus {
             )?;
         }
 
+        let mut mempool_delta: i128 = 0;
+        if let Some(status) = mempool {
+            let mut mempool_history = process_mempool(
+                status,
+                &self.scripthash,
+                &outputs,
+                &mut mempool_delta,
+            )?;
+            history.append(&mut mempool_history);
+        }
+
         let mut unspent: Vec<UnspentEntry> = outputs
             .into_iter()
             .map(|(outpoint, (height, value))| UnspentEntry {
@@ -400,16 +413,6 @@ impl ScriptHashStatus {
             })
             .collect();
         unspent.sort_by_key(|entry| (entry.height, entry.tx_pos));
-
-        let mut mempool_delta: i128 = 0;
-        if let Some(status) = mempool {
-            let mut mempool_history = process_mempool(
-                status,
-                &self.scripthash,
-                &mut mempool_delta,
-            )?;
-            history.append(&mut mempool_history);
-        }
 
         self.confirmed_balance = balance.min(u128::from(u64::MAX)) as u64;
         self.mempool_delta = mempool_delta
@@ -540,12 +543,15 @@ fn process_confirmed_transaction(
 fn process_mempool(
     status: &MempoolStatus,
     scripthash: &ScriptHash,
+    confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
     delta: &mut i128,
 ) -> anyhow::Result<Vec<HistoryEntry>> {
     let mut history = Vec::new();
     for tx in &status.transactions {
-        if let Some((entry, amount)) = mempool_entry(tx, scripthash)? {
-            *delta += i128::from(amount);
+        if let Some((entry, credit)) = mempool_entry(tx, scripthash, confirmed_unspent)? {
+            if let Some(amount) = credit {
+                *delta += i128::from(amount);
+            }
             history.push(entry);
         }
     }
@@ -555,7 +561,10 @@ fn process_mempool(
 fn mempool_entry(
     tx: &PendingTransactionSummary,
     scripthash: &ScriptHash,
-) -> anyhow::Result<Option<(HistoryEntry, u64)>> {
+    confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
+) -> anyhow::Result<Option<(HistoryEntry, Option<u64>)>> {
+    #[cfg(not(feature = "backend-rpp-stark"))]
+    let _ = confirmed_unspent;
     let txid = decode_txid(&tx.hash);
     let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
         to: tx.to.clone(),
@@ -566,13 +575,108 @@ fn mempool_entry(
     }
     let amount = u64::try_from(tx.amount).context("mempool amount exceeds u64")?;
     #[cfg(feature = "backend-rpp-stark")]
-    let entry = {
-        let digest = mempool_entry_digest(tx)?;
-        HistoryEntry::unconfirmed(txid, false, tx.fee, digest, None, None, Some(false))
+    let (digest, double_spend, credit) = {
+        match verify_pending_transaction(tx, scripthash, confirmed_unspent)? {
+            Some(verification) => {
+                let credit = if verification.double_spend {
+                    None
+                } else {
+                    Some(amount)
+                };
+                (verification.digest, Some(verification.double_spend), credit)
+            }
+            None => (mempool_entry_digest(tx)?, Some(false), Some(amount)),
+        }
     };
     #[cfg(not(feature = "backend-rpp-stark"))]
+    let credit = Some(amount);
+    #[cfg(not(feature = "backend-rpp-stark"))]
     let entry = HistoryEntry::unconfirmed(txid, false, tx.fee, Some(false));
-    Ok(Some((entry, amount)))
+    #[cfg(feature = "backend-rpp-stark")]
+    let entry = HistoryEntry::unconfirmed(txid, false, tx.fee, digest, None, None, double_spend);
+    #[cfg(feature = "backend-rpp-stark")]
+    return Ok(Some((entry, credit)));
+    #[cfg(not(feature = "backend-rpp-stark"))]
+    Ok(Some((entry, credit)))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+struct PendingWitnessVerification {
+    digest: Option<StatusDigest>,
+    double_spend: bool,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn verify_pending_transaction(
+    tx: &PendingTransactionSummary,
+    scripthash: &ScriptHash,
+    confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
+) -> anyhow::Result<Option<PendingWitnessVerification>> {
+    let witness = match tx.witness.as_ref() {
+        Some(witness) => witness.clone(),
+        None => return Ok(None),
+    };
+
+    let tracked_outpoints = collect_tracked_outpoints(&witness, scripthash)?;
+    let double_spend = tracked_outpoints
+        .iter()
+        .any(|outpoint| !confirmed_unspent.contains_key(outpoint));
+
+    let digest = match tx.public_inputs_digest.as_deref() {
+        Some(hex_digest) => {
+            let public_digest = Digest32::from_hex(hex_digest)
+                .map_err(|err| anyhow!("decode mempool public input digest: {err}"))?;
+            let witness_bytes = encode_transaction_witness(&witness)
+                .map_err(|err| anyhow!("encode transaction witness payload: {err}"))?;
+            Some(hash_entry_components(Some(&witness_bytes), public_digest))
+        }
+        None => None,
+    };
+
+    Ok(Some(PendingWitnessVerification {
+        digest,
+        double_spend,
+    }))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn collect_tracked_outpoints(
+    witness: &TransactionWitness,
+    scripthash: &ScriptHash,
+) -> anyhow::Result<Vec<OutPoint>> {
+    let mut outpoints = Vec::new();
+    for snapshot in witness
+        .sender_utxos_before
+        .iter()
+        .chain(witness.recipient_utxos_before.iter())
+    {
+        if let Some(outpoint) = match_tracked_outpoint(snapshot, scripthash)? {
+            outpoints.push(outpoint);
+        }
+    }
+    Ok(outpoints)
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn match_tracked_outpoint(
+    snapshot: &TransactionUtxoSnapshot,
+    scripthash: &ScriptHash,
+) -> anyhow::Result<Option<OutPoint>> {
+    let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+        to: snapshot.utxo.owner.clone(),
+        amount: snapshot.utxo.amount,
+    }));
+    if ScriptHash::new(&script) != *scripthash {
+        return Ok(None);
+    }
+
+    let outpoint = convert_outpoint(&snapshot.outpoint);
+    Ok(Some(outpoint))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn convert_outpoint(outpoint: &UtxoOutpoint) -> OutPoint {
+    OutPoint::new(Txid::from_bytes(outpoint.tx_id), outpoint.index)
 }
 
 fn decode_txid(hash: &str) -> Txid {
