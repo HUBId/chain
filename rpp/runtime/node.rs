@@ -4185,7 +4185,7 @@ mod telemetry_tests {
         }
     }
 
-    async fn spawn_test_server(
+async fn spawn_test_server(
         status: StatusCode,
     ) -> (SocketAddr, Arc<AtomicUsize>, oneshot::Sender<()>) {
         let counter = Arc::new(AtomicUsize::new(0));
@@ -4218,6 +4218,134 @@ mod telemetry_tests {
         });
 
         (addr, counter, shutdown_tx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::fs;
+    use std::path::Path;
+
+    use tempfile::tempdir;
+
+    use crate::crypto::{address_from_public_key, generate_keypair, sign_message};
+    use crate::types::{
+        Account, ChainProof, ExecutionTrace, ProofKind, ProofPayload, ReputationWeights,
+        SignedTransaction, Stake, StarkProof, Tier, Transaction, TransactionProofBundle,
+        TransactionWitness,
+    };
+
+    fn sample_node_config(base: &Path) -> NodeConfig {
+        let data_dir = base.join("data");
+        let keys_dir = base.join("keys");
+        fs::create_dir_all(&data_dir).expect("node data dir");
+        fs::create_dir_all(&keys_dir).expect("node key dir");
+
+        let mut config = NodeConfig::default();
+        config.data_dir = data_dir.clone();
+        config.snapshot_dir = data_dir.join("snapshots");
+        config.proof_cache_dir = data_dir.join("proofs");
+        config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+        config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+        config.key_path = keys_dir.join("node.toml");
+        config.p2p_key_path = keys_dir.join("p2p.toml");
+        config.vrf_key_path = keys_dir.join("vrf.toml");
+        config.block_time_ms = 200;
+        config.mempool_limit = 8;
+        config.rollout.feature_gates.pruning = false;
+        config.rollout.feature_gates.recursive_proofs = false;
+        config.rollout.feature_gates.reconstruction = false;
+        config.rollout.feature_gates.consensus_enforcement = false;
+        config
+    }
+
+    fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
+        let keypair = generate_keypair();
+        let from = address_from_public_key(&keypair.public);
+        let tx = Transaction::new(from.clone(), to.to_string(), 42, nonce, 1, None);
+        let signature = sign_message(&keypair, &tx.canonical_bytes());
+        let signed_tx = SignedTransaction::new(tx, signature, &keypair.public);
+
+        let mut sender = Account::new(from.clone(), 1_000_000, Stake::from_u128(1_000));
+        sender.nonce = nonce;
+
+        let receiver = Account::new(to.to_string(), 0, Stake::default());
+
+        let witness = TransactionWitness {
+            signed_tx: signed_tx.clone(),
+            sender_account: sender,
+            receiver_account: Some(receiver),
+            required_tier: Tier::Tl0,
+            reputation_weights: ReputationWeights::default(),
+        };
+
+        let payload = ProofPayload::Transaction(witness.clone());
+        let proof = StarkProof {
+            kind: ProofKind::Transaction,
+            commitment: String::new(),
+            public_inputs: Vec::new(),
+            payload: payload.clone(),
+            trace: ExecutionTrace { segments: Vec::new() },
+            commitment_proof: Default::default(),
+            fri_proof: Default::default(),
+        };
+
+        TransactionProofBundle::new(
+            signed_tx,
+            ChainProof::Stwo(proof),
+            Some(witness),
+            Some(payload),
+        )
+    }
+
+    #[test]
+    fn mempool_status_exposes_witness_metadata_with_and_without_cache() {
+        let tempdir = tempdir().expect("tempdir");
+        let config = sample_node_config(tempdir.path());
+        let node = Node::new(config).expect("node init");
+        let handle = node.handle();
+        let recipient = handle.address().to_string();
+
+        let bundle = sample_transaction_bundle(&recipient, 0);
+        let hash = handle
+            .submit_transaction(bundle.clone())
+            .expect("transaction accepted");
+
+        let status = handle.mempool_status().expect("mempool status");
+        let summary = status
+            .transactions
+            .iter()
+            .find(|tx| tx.hash == hash)
+            .expect("summary present");
+        assert!(summary.witness.is_some(), "witness missing from snapshot");
+        assert!(summary.proof.is_some(), "proof missing from snapshot");
+        assert!(
+            summary.proof_payload.is_some(),
+            "proof payload missing from snapshot"
+        );
+
+        node.inner
+            .pending_transaction_metadata
+            .write()
+            .remove(&hash);
+
+        let status_after = handle.mempool_status().expect("mempool status fallback");
+        let summary_after = status_after
+            .transactions
+            .iter()
+            .find(|tx| tx.hash == hash)
+            .expect("summary present after purge");
+        assert!(summary_after.witness.is_some(), "fallback witness missing");
+        assert!(summary_after.proof.is_some(), "fallback proof missing");
+        assert!(
+            summary_after.proof_payload.is_some(),
+            "fallback proof payload missing"
+        );
+
+        drop(handle);
+        drop(node);
     }
 }
 

@@ -126,6 +126,14 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         queued_hashes, accepted_hashes,
         "mempool should retain initial submissions"
     );
+    for tx in &status.transactions {
+        assert!(tx.witness.is_some(), "pending transaction missing witness metadata");
+        assert!(tx.proof.is_some(), "pending transaction missing proof artifact");
+        assert!(
+            tx.proof_payload.is_some(),
+            "pending transaction missing proof payload metadata"
+        );
+    }
 
     drop(handle);
     drop(node);
