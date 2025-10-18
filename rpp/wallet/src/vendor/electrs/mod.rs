@@ -467,6 +467,13 @@ pub mod metrics {
     ));
 }
 
+pub mod mempool {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/mempool.rs"
+    ));
+}
+
 pub mod daemon {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
