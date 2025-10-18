@@ -467,6 +467,14 @@ pub mod metrics {
     ));
 }
 
+#[cfg(feature = "vendor_electrs")]
+pub mod p2p {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/p2p.rs"
+    ));
+}
+
 pub mod mempool {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),

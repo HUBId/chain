@@ -316,23 +316,20 @@ impl Daemon {
             return Ok(Vec::new());
         }
 
-        let mut blocks = Vec::new();
-        for height in start..=end {
-            if let Some(block) = self.fetch_block(height)? {
-                blocks.push(block);
-            }
-        }
-        Ok(blocks)
+        let runtime_blocks = self.reconstruct_verified_range(start, end)?;
+        Ok(runtime_blocks
+            .iter()
+            .map(Self::convert_block)
+            .collect())
     }
 
     fn fetch_block(&self, height: u64) -> Result<Option<ConvertedBlock>> {
         #[cfg(feature = "vendor_electrs_telemetry")]
         let start = Instant::now();
         let block = self
-            .runtime
-            .node()
-            .get_block(height)
-            .map_err(|err| anyhow!("load block {height}: {err}"))?;
+            .reconstruct_verified_range(height, height)?
+            .into_iter()
+            .next();
         #[cfg(feature = "vendor_electrs_telemetry")]
         self.telemetry.record_fetch_duration(start.elapsed());
         Ok(block.map(|block| Self::convert_block(&block)))
@@ -358,7 +355,7 @@ impl Daemon {
         }
     }
 
-    fn convert_runtime_header(header: &RuntimeBlockHeader) -> LedgerBlockHeader {
+    pub(crate) fn convert_runtime_header(header: &RuntimeBlockHeader) -> LedgerBlockHeader {
         LedgerBlockHeader {
             parent: BlockHash(Self::decode_field::<32>(&[header.previous_hash.as_str()])),
             state_root: Self::decode_field::<32>(&[
@@ -574,12 +571,10 @@ impl Daemon {
     }
 
     fn reconstruct_verified_range(&self, start: u64, end: u64) -> Result<Vec<RuntimeBlock>> {
-        let provider = Arc::clone(self.runtime.payload_provider());
         let blocks = self
-            .runtime
-            .node()
-            .reconstruct_range(start, end, provider.as_ref())
-            .map_err(|err| anyhow!("reconstruct blocks {start}..={end}: {err}"))?;
+            .firewood
+            .reconstruct_range(start, end)
+            .with_context(|| format!("reconstruct blocks {start}..={end}"))?;
         let verifier = Arc::clone(self.runtime.proof_verifier());
         for block in &blocks {
             let proof_bytes = serde_json::to_vec(&block.recursive_proof.proof)
@@ -644,8 +639,8 @@ impl DaemonTelemetry {
     }
 }
 
-#[cfg(test)]
-pub(crate) mod test_helpers {
+#[cfg(any(test, feature = "vendor_electrs_test_support"))]
+pub mod test_helpers {
     use super::*;
 
     use std::collections::HashMap;
@@ -687,8 +682,9 @@ pub(crate) mod test_helpers {
         bsl_txid, serialize_block, serialize_transaction, SerBlock, HASH_PREFIX_ROW_SIZE,
     };
 
-    #[derive(Debug)]
     pub struct TestContext {
+        _temp_dir: TempDir,
+        pub firewood: FirewoodAdapter,
         pub daemon: Daemon,
         pub block_one_hash: BlockHash,
         pub block_two_hash: BlockHash,
@@ -746,8 +742,9 @@ pub(crate) mod test_helpers {
         );
 
         std::fs::create_dir_all(&firewood_dir).expect("firewood dir");
-        let mut firewood =
-            FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters).expect("firewood");
+        let mut indexing_firewood =
+            FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters.clone())
+                .expect("firewood");
 
         let block_one_converted = Daemon::convert_block(&block_one);
         let block_one_hash = block_one_converted.ledger_header.block_hash();
@@ -759,14 +756,22 @@ pub(crate) mod test_helpers {
             .first()
             .expect("transaction");
         let txid = bsl_txid(transaction);
-        index_transaction(&mut firewood, txid, 1);
+        index_transaction(&mut indexing_firewood, txid, 1);
         let expected_block_bytes = serialize_block(&block_one_converted.ledger_transactions);
         let expected_transaction_bytes = serialize_transaction(transaction).into_boxed_slice();
-        firewood.commit().expect("commit index");
+        indexing_firewood.commit().expect("commit index");
 
-        let daemon = Daemon::new(firewood).expect("daemon");
+        let firewood =
+            FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters.clone())
+                .expect("connection firewood");
+        let daemon_firewood =
+            FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters)
+                .expect("daemon firewood");
+        let daemon = Daemon::new(daemon_firewood).expect("daemon");
 
         TestContext {
+            _temp_dir: temp_dir,
+            firewood,
             daemon,
             block_one_hash,
             block_two_hash,
