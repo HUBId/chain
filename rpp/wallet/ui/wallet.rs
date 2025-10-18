@@ -5,9 +5,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
+#[cfg(feature = "vendor_electrs")]
+use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use crate::proof_backend::Blake2sHasher;
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
+#[cfg(feature = "vendor_electrs")]
+use serde_json;
+#[cfg(feature = "vendor_electrs")]
+use std::path::Path;
 
 use crate::config::NodeConfig;
 use crate::consensus::evaluate_vrf;
@@ -29,6 +35,12 @@ use crate::types::{
     Account, Address, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction,
     Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::config::ElectrsConfig;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
 
 use super::workflows::synthetic_account_utxos;
 use super::{WalletNodeRuntime, start_node};
@@ -38,6 +50,11 @@ use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress
 const IDENTITY_WORKFLOW_KEY: &[u8] = b"wallet_identity_workflow";
 const IDENTITY_VRF_KEY: &[u8] = b"wallet_identity_vrf_keypair";
 const NODE_RUNTIME_CONFIG_KEY: &[u8] = b"wallet_node_runtime_config";
+#[cfg(feature = "vendor_electrs")]
+const ELECTRS_CONFIG_KEY: &[u8] = b"wallet_electrs_config";
+#[cfg(feature = "vendor_electrs")]
+type ElectrsHandlesGuard<'a> =
+    parking_lot::lock_api::MutexGuard<'a, parking_lot::RawMutex, Option<ElectrsHandles>>;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct WalletNodeRuntimeStatus {
@@ -51,8 +68,12 @@ pub struct Wallet {
     storage: Storage,
     keypair: Arc<Keypair>,
     address: Address,
-    node_runtime: Arc<Mutex<Option<WalletNodeRuntime>>>,
+    node_runtime: Arc<AsyncMutex<Option<WalletNodeRuntime>>>,
     node_handle: Arc<RwLock<Option<NodeHandle>>>,
+    #[cfg(feature = "vendor_electrs")]
+    electrs_handles: Arc<Mutex<Option<ElectrsHandles>>>,
+    #[cfg(feature = "vendor_electrs")]
+    electrs_config: Arc<RwLock<Option<ElectrsConfig>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -81,14 +102,27 @@ pub struct ConsensusReceipt {
 }
 
 impl Wallet {
-    pub fn new(storage: Storage, keypair: Keypair) -> Self {
+    pub fn new(
+        storage: Storage,
+        keypair: Keypair,
+        #[cfg(feature = "vendor_electrs")] electrs: Option<(ElectrsConfig, ElectrsHandles)>,
+    ) -> Self {
         let address = address_from_public_key(&keypair.public);
+        #[cfg(feature = "vendor_electrs")]
+        let (handles, config) = match electrs {
+            Some((config, handles)) => (Some(handles), Some(config)),
+            None => (None, None),
+        };
         Self {
             storage,
             keypair: Arc::new(keypair),
             address,
-            node_runtime: Arc::new(Mutex::new(None)),
+            node_runtime: Arc::new(AsyncMutex::new(None)),
             node_handle: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "vendor_electrs")]
+            electrs_handles: Arc::new(Mutex::new(handles)),
+            #[cfg(feature = "vendor_electrs")]
+            electrs_config: Arc::new(RwLock::new(config)),
         }
     }
 
@@ -116,6 +150,64 @@ impl Wallet {
 
     pub fn firewood_state_root(&self) -> ChainResult<String> {
         Ok(hex::encode(self.storage.state_root()?))
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn persist_electrs_config(&self, config: &ElectrsConfig) -> ChainResult<()> {
+        let mut encoded = serde_json::to_vec(config).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to encode wallet electrs config for persistence: {err}"
+            ))
+        })?;
+        if encoded.is_empty() {
+            encoded = b"{}".to_vec();
+        }
+        self.storage.write_metadata_blob(ELECTRS_CONFIG_KEY, encoded)?;
+        *self.electrs_config.write() = Some(config.clone());
+        Ok(())
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn load_electrs_config(&self) -> ChainResult<Option<ElectrsConfig>> {
+        if let Some(config) = self.electrs_config.read().clone() {
+            return Ok(Some(config));
+        }
+        let maybe_bytes = self.storage.read_metadata_blob(ELECTRS_CONFIG_KEY)?;
+        let Some(bytes) = maybe_bytes else {
+            return Ok(None);
+        };
+        let config: ElectrsConfig = serde_json::from_slice(&bytes).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to decode wallet electrs config from persistence: {err}"
+            ))
+        })?;
+        *self.electrs_config.write() = Some(config.clone());
+        Ok(Some(config))
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn reload_electrs_handles(
+        &self,
+        firewood_dir: impl AsRef<Path>,
+        index_dir: impl AsRef<Path>,
+        runtime_adapters: Option<RuntimeAdapters>,
+    ) -> ChainResult<()> {
+        let Some(config) = self.load_electrs_config()? else {
+            return Ok(());
+        };
+        let handles = initialize(&config, firewood_dir, index_dir, runtime_adapters)
+            .map_err(|err| {
+                ChainError::Config(format!(
+                    "failed to reinitialise wallet electrs handles: {err}"
+                ))
+            })?;
+        *self.electrs_handles.lock() = Some(handles);
+        Ok(())
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn electrs_handles(&self) -> ElectrsHandlesGuard<'_> {
+        self.electrs_handles.lock()
     }
 
     pub fn persist_node_runtime_config(&self, config: &NodeConfig) -> ChainResult<()> {

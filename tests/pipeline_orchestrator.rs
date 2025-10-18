@@ -77,7 +77,12 @@ impl OrchestratorFixture {
         };
         let handle = node.handle();
         let keypair = load_keypair(&node_config.key_path).expect("load node key");
-        let wallet = Arc::new(Wallet::new(handle.storage(), keypair));
+        let wallet = Arc::new(Wallet::new(
+            handle.storage(),
+            keypair,
+            #[cfg(feature = "vendor_electrs")]
+            None,
+        ));
 
         let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone(), None);
         let orchestrator = Arc::new(orchestrator);
@@ -184,7 +189,12 @@ async fn submit_transaction_returns_config_error_when_gossip_publish_fails() {
             .network_identity_profile()
             .map_err(|err| err.to_string())?;
         let keypair = load_keypair(&node_config.key_path).expect("load node key");
-        let wallet = Arc::new(Wallet::new(handle.storage(), keypair));
+        let wallet = Arc::new(Wallet::new(
+            handle.storage(),
+            keypair,
+            #[cfg(feature = "vendor_electrs")]
+            None,
+        ));
         Ok((base_dir, handle, wallet, identity, node_config))
     })
     .await
@@ -256,7 +266,12 @@ async fn gossip_loop_records_stage_for_matching_payload() {
             .network_identity_profile()
             .map_err(|err| err.to_string())?;
         let keypair = load_keypair(&node_config.key_path).expect("load node key");
-        let wallet = Arc::new(Wallet::new(handle.storage(), keypair));
+        let wallet = Arc::new(Wallet::new(
+            handle.storage(),
+            keypair,
+            #[cfg(feature = "vendor_electrs")]
+            None,
+        ));
         Ok((base_dir, handle, wallet, identity, node_config))
     })
     .await

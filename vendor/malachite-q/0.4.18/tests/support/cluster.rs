@@ -20,7 +20,61 @@ use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
+#[cfg(feature = "vendor_electrs")]
+use rpp_chain::runtime::sync::{
+    PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
+};
 use rpp_chain::wallet::Wallet;
+#[cfg(feature = "vendor_electrs")]
+use rpp_chain::{
+    config::WalletConfig,
+    errors::{ChainError, ChainResult},
+    storage::Storage,
+    types::BlockPayload,
+};
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::config::ElectrsConfig;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone)]
+struct ClusterPayloadProvider {
+    storage: Storage,
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl ClusterPayloadProvider {
+    fn new(storage: &Storage) -> Self {
+        Self {
+            storage: storage.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl PayloadProvider for ClusterPayloadProvider {
+    fn fetch_payload(&self, request: &ReconstructionRequest) -> ChainResult<BlockPayload> {
+        let record = self
+            .storage
+            .read_block_record(request.height)?
+            .ok_or_else(|| {
+                ChainError::Config(format!(
+                    "cluster block payload for height {} not found",
+                    request.height
+                ))
+            })?;
+        let payload = record.payload.ok_or_else(|| {
+            ChainError::Config(format!(
+                "cluster block payload for height {} is not available",
+                request.height
+            ))
+        })?;
+        Ok(payload)
+    }
+}
 
 /// Represents a running validator node inside the [`TestCluster`].
 pub struct TestClusterNode {
@@ -207,9 +261,54 @@ impl TestCluster {
             let processor = Arc::new(NodeGossipProcessor::new(node_handle.clone()));
             let gossip_task = spawn_node_event_worker(events, processor, Some(shutdown_rx.clone()));
 
+            let storage = node_handle.storage();
+            #[cfg(feature = "vendor_electrs")]
+            let mut electrs_context: Option<(ElectrsConfig, ElectrsHandles)> = None;
+            #[cfg(feature = "vendor_electrs")]
+            let mut electrs_config_for_persistence: Option<ElectrsConfig> = None;
+            #[cfg(feature = "vendor_electrs")]
+            {
+                let mut wallet_config = WalletConfig::default();
+                wallet_config.data_dir = node_root.join("wallet");
+                wallet_config.key_path = config.key_path.clone();
+                wallet_config
+                    .ensure_directories()
+                    .map_err(|err| anyhow!(err))?;
+                if let Some(cfg) = wallet_config.electrs.clone() {
+                    let firewood_dir = wallet_config.electrs_firewood_dir();
+                    let index_dir = wallet_config.electrs_index_dir();
+                    let provider = Arc::new(ClusterPayloadProvider::new(&storage));
+                    let verifier = Arc::new(RuntimeRecursiveProofVerifier::default());
+                    let runtime_adapters = RuntimeAdapters::new(
+                        Arc::new(storage.clone()),
+                        node_handle.clone(),
+                        orchestrator.as_ref().clone(),
+                        provider,
+                        verifier,
+                    );
+                    let handles = initialize(&cfg, firewood_dir, index_dir, Some(runtime_adapters))
+                        .with_context(|| {
+                            format!("failed to initialise electrs for cluster node {index}")
+                        })?;
+                    electrs_config_for_persistence = Some(cfg.clone());
+                    electrs_context = Some((cfg, handles));
+                }
+            }
+
             let wallet_key = load_or_generate_keypair(&config.key_path)
                 .with_context(|| format!("failed to load node key for wallet on node {index}"))?;
-            let wallet = Arc::new(Wallet::new(node_handle.storage(), wallet_key));
+            let wallet = Arc::new(Wallet::new(
+                storage.clone(),
+                wallet_key,
+                #[cfg(feature = "vendor_electrs")]
+                electrs_context,
+            ));
+            #[cfg(feature = "vendor_electrs")]
+            if let Some(electrs_cfg) = electrs_config_for_persistence {
+                wallet
+                    .persist_electrs_config(&electrs_cfg)
+                    .map_err(|err| anyhow!(err))?;
+            }
 
             let node_task = tokio::spawn(async move {
                 node.start()
