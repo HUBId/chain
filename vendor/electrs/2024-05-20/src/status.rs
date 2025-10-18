@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Context};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
-use sha2::{Digest, Sha256};
+
+#[cfg(feature = "backend-rpp-stark")]
+use crate::zk::rpp_adapter::{Digest32, RppStarkHasher};
 
 use crate::vendor::electrs::chain::Chain;
 use crate::vendor::electrs::index::Index;
@@ -14,7 +16,7 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{
     Txid,
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
-use crate::vendor::electrs::types::{ScriptHash, StatusHash};
+use crate::vendor::electrs::types::{ScriptHash, StatusDigest};
 use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -121,13 +123,16 @@ impl HistoryEntry {
         }
     }
 
-    fn hash(&self, hasher: &mut Sha256) {
-        let s = format!(
-            "{}:{}:",
-            hex_string(self.txid.as_bytes()),
-            self.height.as_i64()
-        );
-        hasher.update(s.as_bytes());
+    #[cfg(feature = "backend-rpp-stark")]
+    fn hash(&self, hasher: &mut RppStarkHasher) {
+        hasher.update(self.txid.as_bytes());
+        hasher.update(&self.height.as_i64().to_le_bytes());
+    }
+
+    #[cfg(not(feature = "backend-rpp-stark"))]
+    fn append_encoded(&self, output: &mut Vec<u8>) {
+        output.extend_from_slice(self.txid.as_bytes());
+        output.extend_from_slice(&self.height.as_i64().to_le_bytes());
     }
 }
 
@@ -151,7 +156,7 @@ pub struct ScriptHashStatus {
     scripthash: ScriptHash,
     tip: BlockHash,
     history: Vec<HistoryEntry>,
-    statushash: Option<StatusHash>,
+    statushash: Option<StatusDigest>,
     confirmed_balance: u64,
     mempool_delta: i64,
     unspent: Vec<UnspentEntry>,
@@ -275,7 +280,7 @@ impl ScriptHashStatus {
     }
 
     /// Hash of the status history as defined by the Electrum protocol.
-    pub fn statushash(&self) -> Option<StatusHash> {
+    pub fn statushash(&self) -> Option<StatusDigest> {
         self.statushash
     }
 }
@@ -352,7 +357,7 @@ fn decode_txid(hash: &str) -> Txid {
             return Txid::from_bytes(array);
         }
     }
-    let digest: [u8; 32] = Sha256::digest(hash.as_bytes()).into();
+    let digest = sha256::Hash::hash(hash.as_bytes()).into_inner();
     Txid::from_bytes(digest)
 }
 
@@ -462,17 +467,31 @@ enum ScriptRole {
     From { address: String, fee: u64 },
 }
 
-fn compute_statushash(history: &[HistoryEntry]) -> Option<StatusHash> {
+#[cfg(feature = "backend-rpp-stark")]
+fn compute_statushash(history: &[HistoryEntry]) -> Option<StatusDigest> {
     if history.is_empty() {
         return None;
     }
-    let mut hasher = Sha256::new();
+    let mut hasher = RppStarkHasher::new();
     for entry in history {
         entry.hash(&mut hasher);
     }
-    let digest: [u8; 32] = hasher.finalize().into();
-    let hash = sha256::Hash::from_slice(&digest).expect("valid sha256 length");
-    Some(StatusHash(hash))
+    let digest: Digest32 = hasher.finalize();
+    Some(StatusDigest::from_digest(digest))
+}
+
+#[cfg(not(feature = "backend-rpp-stark"))]
+fn compute_statushash(history: &[HistoryEntry]) -> Option<StatusDigest> {
+    if history.is_empty() {
+        return None;
+    }
+    const TXID_BYTES: usize = 32;
+    let mut encoded = Vec::with_capacity(history.len() * (TXID_BYTES + std::mem::size_of::<i64>()));
+    for entry in history {
+        entry.append_encoded(&mut encoded);
+    }
+    let digest = sha256::Hash::hash(&encoded).into_inner();
+    Some(StatusDigest::from_bytes(digest))
 }
 
 #[cfg(test)]
