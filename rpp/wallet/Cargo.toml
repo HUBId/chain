@@ -9,6 +9,7 @@ default = ["prover-stwo"]
 prover-stwo = ["prover-backend-interface/prover-stwo"]
 prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
 prover-mock = ["prover-backend-interface/prover-mock"]
+backend-rpp-stark = []
 vendor_electrs = [
     "dep:tokio",
     "dep:serde",
@@ -31,5 +32,10 @@ tokio = { version = "1.37", features = ["sync"], optional = true }
 rpp = { package = "firewood", path = "../../firewood", optional = true }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
 hex = { version = "0.4", optional = true }
+
+[dev-dependencies]
+tempfile = "3.10"
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
 
 [workspace]

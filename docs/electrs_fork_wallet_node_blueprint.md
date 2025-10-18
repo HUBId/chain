@@ -54,6 +54,64 @@ The `rppd` binary exposes subcommands for node lifecycle (start, keygen, migrate
 * **`rpc_listen`** – binds the unified Axum server for wallet and optional node control APIs.【F:rpp/runtime/config.rs†L242-L270】
 * **`[node] embedded`** – toggles an embedded node runtime when the wallet should shoulder consensus duties locally; disabled wallets must supply gossip peers instead.【F:rpp/runtime/config.rs†L231-L274】
 * **`[node] gossip_endpoints`** – enumerates gossip peers for client-mode wallets and is validated to be non-empty when the embedded node is off, ensuring the wallet can still sync blocks and proofs.【F:rpp/runtime/config.rs†L231-L274】【F:config/wallet.toml†L1-L6】
+* **`[electrs] network`** – maps auf `NetworkSelection` und bestimmt Genesis, Header-Hashes und ScriptHash-Prüfpfad des Trackers.【F:rpp/wallet/src/config.rs†L10-L44】【F:rpp/wallet/src/vendor/electrs/init.rs†L63-L82】
+* **`[electrs.features] runtime`** – aktiviert Runtime-Adapter, wodurch der Daemon Firewood und Pipeline-Orchestrator des Knotens verwendet.【F:rpp/wallet/src/config.rs†L46-L80】【F:rpp/wallet/src/vendor/electrs/firewood_adapter.rs†L18-L118】
+* **`[electrs.features] tracker`** – bringt den High-Level-Tracker hoch; er verlangt aktiviertes Runtime-Flag und stellt History-, Proof- und VRF-APIs bereit.【F:rpp/wallet/src/config.rs†L57-L80】【F:vendor/electrs/2024-05-20/src/tracker.rs†L39-L151】
+
+### Vendor-Feature-Flags
+
+`vendor_electrs` spannt die optionalen Abhängigkeiten für Tracker, Runtime-Adapters
+und Firewood über das gesamte Wallet-Crate auf. Ohne das Feature bleiben
+Konfiguration, `ElectrsConfig` und die Tracker-Implementierung außen vor; mit dem
+Flag landen alle Module unter `rpp_wallet::vendor::electrs::*` im Build.【F:rpp/wallet/Cargo.toml†L8-L27】【F:rpp/wallet/src/lib.rs†L13-L27】
+
+### Bootstrap des Trackers
+
+```rust
+use rpp_wallet::config::{ElectrsConfig, FeatureGates, NetworkSelection};
+use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
+use rpp_wallet::vendor::electrs::init::initialize;
+
+let runtime = RuntimeAdapters::new(storage, node_handle, orchestrator, payload_provider, proof_verifier);
+let config = ElectrsConfig {
+    network: NetworkSelection::Signet,
+    features: FeatureGates {
+        runtime: true,
+        tracker: true,
+    },
+};
+let handles = initialize(&config, "/var/lib/rpp/wallet/firewood", "/var/lib/rpp/wallet/index", Some(runtime))?;
+
+let tracker = handles.tracker.expect("tracker enabled in config");
+let daemon = handles.daemon.expect("runtime enabled in config");
+tracker.status()?; // Tracker meldet sich bereit
+```
+
+Der Tracker liefert anschließend API-Hilfsfunktionen für Skripthash-Status,
+Balance, History-Digests und VRF-Audits.【F:vendor/electrs/2024-05-20/src/tracker.rs†L39-L151】
+
+### Szenario „wallet_tracker_rpp“
+
+Unter `scenarios/wallet_tracker_rpp.toml` liegt ein CLI-Simulator, der Regtest,
+Runtime-Adapter und Tracker-Feature gemeinsam aktiviert. Die zugehörige
+Integration `vendor_electrs_tracker_scenario` erstellt Blöcke, synchronisiert den
+Index, fragt History- und Proof-Metadaten ab und prüft VRF-Audits.【F:scenarios/wallet_tracker_rpp.toml†L1-L20】【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L1-L239】
+
+**Lokale Validierung:**
+
+```bash
+cargo check --manifest-path rpp/wallet/Cargo.toml --features vendor_electrs
+cargo test  --manifest-path rpp/wallet/Cargo.toml \
+  --features "vendor_electrs backend-rpp-stark" \
+  --test vendor_electrs_tracker_scenario
+```
+
+Die Tests befüllen Firewood, erzeugen deterministische Witness-Digests und
+stellen sicher, dass Proof-Envelopes sowie VRF-Audits für Wallet-Clients
+verfügbar sind.【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L96-L206】
+> Hinweis: Beide Kommandos erwarten, dass die `rpp`-Runtime und das `rpp_stark`-
+> Backend im Workspace verfügbar sind. Im reinen Firewood-Checkout ohne diese
+> Crates schlägt der Build mit fehlenden Abhängigkeiten fehl.
 
 ## 6. ZSI-Genesis-Validierung
 
