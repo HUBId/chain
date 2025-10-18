@@ -73,7 +73,10 @@ pub fn initialize(
     let tracker = if config.features.tracker {
         let network: LedgerNetwork = config.network.into();
         let index = Index::open(index_path, network).context("open index")?;
-        Some(Tracker::new(index))
+        Some(Tracker::with_metrics(
+            index,
+            config.tracker.telemetry_endpoint,
+        ))
     } else {
         None
     };

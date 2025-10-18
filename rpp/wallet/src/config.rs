@@ -1,6 +1,7 @@
 #![cfg(feature = "vendor_electrs")]
 
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 use crate::vendor::electrs::rpp_ledger::bitcoin::Network as LedgerNetwork;
 
@@ -14,6 +15,8 @@ pub struct ElectrsConfig {
     pub features: FeatureGates,
     /// Cache configuration for vendor integrations.
     pub cache: CacheConfig,
+    /// Tracker-specific configuration options.
+    pub tracker: TrackerConfig,
 }
 
 impl Default for ElectrsConfig {
@@ -22,6 +25,7 @@ impl Default for ElectrsConfig {
             network: NetworkSelection::Regtest,
             features: FeatureGates::default(),
             cache: CacheConfig::default(),
+            tracker: TrackerConfig::default(),
         }
     }
 }
@@ -88,6 +92,22 @@ impl Default for CacheConfig {
     }
 }
 
+/// Controls tracker-specific behaviour, including telemetry endpoints.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackerConfig {
+    /// Socket address used when registering tracker telemetry metrics.
+    pub telemetry_endpoint: SocketAddr,
+}
+
+impl Default for TrackerConfig {
+    fn default() -> Self {
+        Self {
+            telemetry_endpoint: SocketAddr::from(([127, 0, 0, 1], 0)),
+        }
+    }
+}
+
 /// Controls how the cache reports telemetry and where it stores warmup data.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -119,6 +139,10 @@ mod tests {
         assert!(!config.features.tracker);
         assert!(!config.cache.telemetry.enabled);
         assert!(config.cache.telemetry.warmup_prefix.is_none());
+        assert_eq!(
+            config.tracker.telemetry_endpoint,
+            SocketAddr::from(([127, 0, 0, 1], 0))
+        );
     }
 
     #[test]
@@ -135,6 +159,9 @@ mod tests {
                     warmup_prefix: Some("cafebabe".into()),
                 },
             },
+            tracker: TrackerConfig {
+                telemetry_endpoint: SocketAddr::from(([10, 0, 0, 42], 9000)),
+            },
         };
 
         let json = serde_json::to_string(&config).expect("serialize");
@@ -147,6 +174,10 @@ mod tests {
         assert_eq!(
             restored.cache.telemetry.warmup_prefix,
             Some("cafebabe".into())
+        );
+        assert_eq!(
+            restored.tracker.telemetry_endpoint,
+            SocketAddr::from(([10, 0, 0, 42], 9000))
         );
     }
 }
