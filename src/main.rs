@@ -24,10 +24,61 @@ use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
 use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
+#[cfg(feature = "vendor_electrs")]
+use rpp_chain::runtime::sync::{
+    PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
+};
 use rpp_chain::storage::Storage;
+#[cfg(feature = "vendor_electrs")]
+use rpp_chain::types::BlockPayload;
 use rpp_chain::wallet::Wallet;
 
 use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
+#[cfg(feature = "vendor_electrs")]
+use rpp_chain::config::ElectrsConfig;
+#[cfg(feature = "vendor_electrs")]
+use rpp_chain::errors::{ChainError, ChainResult};
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone)]
+struct StoragePayloadProvider {
+    storage: Storage,
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl StoragePayloadProvider {
+    fn new(storage: &Storage) -> Self {
+        Self {
+            storage: storage.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl PayloadProvider for StoragePayloadProvider {
+    fn fetch_payload(&self, request: &ReconstructionRequest) -> ChainResult<BlockPayload> {
+        let record = self
+            .storage
+            .read_block_record(request.height)?
+            .ok_or_else(|| {
+                ChainError::Config(format!(
+                    "block payload for height {} not found",
+                    request.height
+                ))
+            })?;
+        let payload = record.payload.ok_or_else(|| {
+            ChainError::Config(format!(
+                "block payload for height {} is not available",
+                request.height
+            ))
+        })?;
+        Ok(payload)
+    }
+}
 
 #[derive(Parser)]
 #[command(author, version, about = "Production-ready RPP blockchain node")]
@@ -181,7 +232,46 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             Storage::open(&db_path)?
         };
         let keypair = load_or_generate_keypair(&config.key_path)?;
-        let wallet = Arc::new(Wallet::new(storage, keypair));
+        #[cfg(feature = "vendor_electrs")]
+        let mut electrs_context: Option<(ElectrsConfig, ElectrsHandles)> = None;
+        #[cfg(feature = "vendor_electrs")]
+        let mut electrs_persisted_config: Option<ElectrsConfig> = None;
+        #[cfg(feature = "vendor_electrs")]
+        if let Some(cfg) = config.electrs.clone() {
+            let firewood_dir = config.electrs_firewood_dir();
+            let index_dir = config.electrs_index_dir();
+            let runtime_adapters = if let (Some(handle), Some(orchestrator)) =
+                (&node_handle, orchestrator_instance.as_ref())
+            {
+                let storage_arc = Arc::new(storage.clone());
+                let provider = Arc::new(StoragePayloadProvider::new(&storage));
+                let verifier = Arc::new(RuntimeRecursiveProofVerifier::default());
+                Some(RuntimeAdapters::new(
+                    storage_arc,
+                    handle.clone(),
+                    orchestrator.as_ref().clone(),
+                    provider,
+                    verifier,
+                ))
+            } else {
+                None
+            };
+            let handles = initialize(&cfg, &firewood_dir, &index_dir, runtime_adapters)?;
+            electrs_persisted_config = Some(cfg.clone());
+            electrs_context = Some((cfg, handles));
+        }
+        let wallet = Arc::new(Wallet::new(
+            storage,
+            keypair,
+            #[cfg(feature = "vendor_electrs")]
+            electrs_context,
+        ));
+        #[cfg(feature = "vendor_electrs")]
+        if let Some(cfg) = electrs_persisted_config {
+            wallet
+                .persist_electrs_config(&cfg)
+                .map_err(|err| anyhow!(err))?;
+        }
         wallet_instance = Some(wallet);
         if rpc_addr.is_none() {
             rpc_addr = Some(config.rpc_listen);
