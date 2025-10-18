@@ -430,6 +430,7 @@ pub mod rpp_ledger {
 }
 
 pub mod firewood_adapter;
+pub mod init;
 
 pub mod chain {
     include!(concat!(
@@ -483,3 +484,4 @@ pub mod types {
 pub use self::daemon::Daemon;
 pub use self::status::{Balance, HistoryEntry, ScriptHashStatus, UnspentEntry};
 pub use self::tracker::Tracker;
+pub use init::{initialize, ElectrsHandles};
