@@ -21,6 +21,7 @@ vendor_electrs = [
     "dep:hex",
     "dep:parking_lot",
 ]
+vendor_electrs_telemetry = []
 
 [dependencies]
 anyhow = "1"
