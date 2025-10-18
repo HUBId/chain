@@ -31,6 +31,21 @@ Die Workspace-Feature-Flag `vendor_electrs` aktiviert sämtliche optionalen
 Abhängigkeiten (`serde`, `tokio`, `storage-firewood`, `rpp`-Runtime usw.) und
 bindet die vendorten Module in `rpp-wallet` ein.【F:rpp/wallet/Cargo.toml†L8-L27】【F:rpp/wallet/src/lib.rs†L13-L27】
 
+### Telemetrie-Integration
+
+* **Feature-Gate:** Die optionale Flag `vendor_electrs_telemetry` koppelt die vendorten Module an `malachite::telemetry` und
+  `rpp::telemetry`. Ohne diese Funktion bleiben die Wrapper aus `metrics.rs` No-Ops, sodass sich Builds auch ohne Telemetrie
+  erstellen lassen.【F:rpp/wallet/Cargo.toml†L8-L27】【F:vendor/electrs/2024-05-20/src/metrics.rs†L1-L352】
+* **Cache:** `CacheTelemetry` registriert Gauges für Treffer, Fehltreffer, Einträge, Bytes sowie Warmup-Kennzahlen und zeichnet
+  die Größe eingefügter Transaktionen über das Histogramm `electrs_cache_insert_size_bytes` auf.【F:vendor/electrs/2024-05-20/src/cache.rs†L1-L290】
+* **Mempool:** Der Tracker pflegt Gauges für anstehende Transaktionen, Identitäten, Votes und Uptime-Proofs jedes Runtime-
+  Snapshots.【F:vendor/electrs/2024-05-20/src/tracker.rs†L1-L420】
+* **P2P/Daemon:** Block-Gossip-Abonnements sowie die Latenz von `get_block`-Aufrufen fließen als `electrs_p2p_*`-Metriken in das
+  Telemetrie-Backend ein.【F:vendor/electrs/2024-05-20/src/daemon.rs†L1-L420】
+
+Ein begleitendes Beispiel zum Registrieren einer Gauge und zum Auslesen über `malachite::telemetry` befindet sich unter
+[`docs/vendor/electrs-metrics.md`](../../../docs/vendor/electrs-metrics.md).
+
 ### Beispiel: Tracker initialisieren
 
 ```rust

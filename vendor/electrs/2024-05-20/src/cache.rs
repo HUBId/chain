@@ -7,6 +7,10 @@ use anyhow::{anyhow, Result};
 use parking_lot::RwLock;
 
 use crate::vendor::electrs::firewood_adapter::FirewoodAdapter;
+#[cfg(feature = "vendor_electrs_telemetry")]
+use crate::vendor::electrs::metrics::malachite::telemetry::{self, GaugeHandle, HistogramHandle};
+#[cfg(feature = "vendor_electrs_telemetry")]
+use crate::vendor::electrs::metrics;
 use crate::vendor::electrs::rpp_ledger::bitcoin::Txid;
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
 use crate::vendor::electrs::types;
@@ -172,15 +176,132 @@ struct CacheTelemetryInner {
     warmup_loaded_bytes: AtomicU64,
     warmup_persisted: AtomicU64,
     warmup_persisted_bytes: AtomicU64,
+    #[cfg(feature = "vendor_electrs_telemetry")]
+    metrics: Option<CacheTelemetryMetrics>,
+}
+
+#[cfg(feature = "vendor_electrs_telemetry")]
+#[derive(Clone)]
+struct CacheTelemetryMetrics {
+    hits: GaugeHandle,
+    misses: GaugeHandle,
+    entries: GaugeHandle,
+    stored_bytes: GaugeHandle,
+    largest_entry: GaugeHandle,
+    warmup_loaded: GaugeHandle,
+    warmup_loaded_bytes: GaugeHandle,
+    warmup_persisted: GaugeHandle,
+    warmup_persisted_bytes: GaugeHandle,
+    insert_sizes: HistogramHandle,
+}
+
+#[cfg(feature = "vendor_electrs_telemetry")]
+impl CacheTelemetryMetrics {
+    fn register() -> Self {
+        let registry = telemetry::registry();
+        Self {
+            hits: registry.register_gauge(
+                "electrs_cache_hits_total",
+                "Total cache hits recorded by the electrs transaction cache",
+                "scope",
+            ),
+            misses: registry.register_gauge(
+                "electrs_cache_misses_total",
+                "Total cache misses observed by the electrs transaction cache",
+                "scope",
+            ),
+            entries: registry.register_gauge(
+                "electrs_cache_entries",
+                "Number of transactions currently resident in the electrs cache",
+                "scope",
+            ),
+            stored_bytes: registry.register_gauge(
+                "electrs_cache_stored_bytes",
+                "Total serialized bytes stored in the electrs cache",
+                "scope",
+            ),
+            largest_entry: registry.register_gauge(
+                "electrs_cache_largest_entry_bytes",
+                "Largest serialized transaction observed by the electrs cache",
+                "scope",
+            ),
+            warmup_loaded: registry.register_gauge(
+                "electrs_cache_warmup_loaded_total",
+                "Number of warmup entries loaded from Firewood",
+                "phase",
+            ),
+            warmup_loaded_bytes: registry.register_gauge(
+                "electrs_cache_warmup_loaded_bytes",
+                "Serialized bytes loaded during Firewood warmup",
+                "phase",
+            ),
+            warmup_persisted: registry.register_gauge(
+                "electrs_cache_warmup_persisted_total",
+                "Number of warmup entries persisted back to Firewood",
+                "phase",
+            ),
+            warmup_persisted_bytes: registry.register_gauge(
+                "electrs_cache_warmup_persisted_bytes",
+                "Serialized bytes persisted back to Firewood during warmup",
+                "phase",
+            ),
+            insert_sizes: registry.register_histogram(
+                "electrs_cache_insert_size_bytes",
+                "Distribution of serialized transaction sizes inserted into the cache",
+                "stage",
+                metrics::default_size_buckets(),
+            ),
+        }
+    }
+
+    fn record_hits(&self, value: u64) {
+        self.hits.set("total", value as f64);
+    }
+
+    fn record_misses(&self, value: u64) {
+        self.misses.set("total", value as f64);
+    }
+
+    fn record_entries(&self, value: u64) {
+        self.entries.set("total", value as f64);
+    }
+
+    fn record_stored_bytes(&self, value: u64) {
+        self.stored_bytes.set("total", value as f64);
+    }
+
+    fn record_largest_entry(&self, value: u64) {
+        self.largest_entry.set("bytes", value as f64);
+    }
+
+    fn record_warmup_loaded(&self, count: u64, bytes: u64) {
+        self.warmup_loaded.set("total", count as f64);
+        self.warmup_loaded_bytes.set("total", bytes as f64);
+    }
+
+    fn record_warmup_persisted(&self, count: u64, bytes: u64) {
+        self.warmup_persisted.set("total", count as f64);
+        self.warmup_persisted_bytes.set("total", bytes as f64);
+    }
+
+    fn observe_insert_size(&self, len: usize) {
+        self.insert_sizes.observe("insert", len as f64);
+    }
 }
 
 impl CacheTelemetry {
     /// Construct a telemetry handle that records metrics when `enabled` is true.
     pub fn new(enabled: bool) -> Self {
-        let telemetry = CacheTelemetryInner {
-            enabled: AtomicBool::new(enabled),
-            ..CacheTelemetryInner::default()
-        };
+        let mut telemetry = CacheTelemetryInner::default();
+        telemetry.enabled = AtomicBool::new(enabled);
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        {
+            telemetry.metrics = if enabled {
+                Some(CacheTelemetryMetrics::register())
+            } else {
+                None
+            };
+        }
         Self {
             inner: Arc::new(telemetry),
         }
@@ -198,13 +319,21 @@ impl CacheTelemetry {
 
     fn record_hit(&self) {
         if self.inner.enabled.load(Ordering::Relaxed) {
-            self.inner.hits.fetch_add(1, Ordering::Relaxed);
+            let hits = self.inner.hits.fetch_add(1, Ordering::Relaxed) + 1;
+            #[cfg(feature = "vendor_electrs_telemetry")]
+            if let Some(metrics) = &self.inner.metrics {
+                metrics.record_hits(hits);
+            }
         }
     }
 
     fn record_miss(&self) {
         if self.inner.enabled.load(Ordering::Relaxed) {
-            self.inner.misses.fetch_add(1, Ordering::Relaxed);
+            let misses = self.inner.misses.fetch_add(1, Ordering::Relaxed) + 1;
+            #[cfg(feature = "vendor_electrs_telemetry")]
+            if let Some(metrics) = &self.inner.metrics {
+                metrics.record_misses(misses);
+            }
         }
     }
 
@@ -212,10 +341,18 @@ impl CacheTelemetry {
         if !self.inner.enabled.load(Ordering::Relaxed) {
             return;
         }
-        self.inner.entries.fetch_add(1, Ordering::Relaxed);
-        self.inner
+        let entries = self.inner.entries.fetch_add(1, Ordering::Relaxed) + 1;
+        let stored = self
+            .inner
             .stored_bytes
-            .fetch_add(len as u64, Ordering::Relaxed);
+            .fetch_add(len as u64, Ordering::Relaxed)
+            + len as u64;
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        if let Some(metrics) = &self.inner.metrics {
+            metrics.record_entries(entries);
+            metrics.record_stored_bytes(stored);
+            metrics.observe_insert_size(len);
+        }
         self.update_largest(len as u64);
     }
 
@@ -223,28 +360,49 @@ impl CacheTelemetry {
         if !self.inner.enabled.load(Ordering::Relaxed) {
             return;
         }
-        self.inner
+        let count = count as u64;
+        let bytes = bytes as u64;
+        let loaded = self
+            .inner
             .warmup_loaded
-            .fetch_add(count as u64, Ordering::Relaxed);
-        self.inner
+            .fetch_add(count, Ordering::Relaxed)
+            + count;
+        let loaded_bytes = self
+            .inner
             .warmup_loaded_bytes
-            .fetch_add(bytes as u64, Ordering::Relaxed);
+            .fetch_add(bytes, Ordering::Relaxed)
+            + bytes;
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        if let Some(metrics) = &self.inner.metrics {
+            metrics.record_warmup_loaded(loaded, loaded_bytes);
+        }
     }
 
     fn record_warmup_persisted(&self, count: usize, bytes: usize) {
         if !self.inner.enabled.load(Ordering::Relaxed) {
             return;
         }
-        self.inner
+        let count = count as u64;
+        let bytes = bytes as u64;
+        let persisted = self
+            .inner
             .warmup_persisted
-            .fetch_add(count as u64, Ordering::Relaxed);
-        self.inner
+            .fetch_add(count, Ordering::Relaxed)
+            + count;
+        let persisted_bytes = self
+            .inner
             .warmup_persisted_bytes
-            .fetch_add(bytes as u64, Ordering::Relaxed);
+            .fetch_add(bytes, Ordering::Relaxed)
+            + bytes;
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        if let Some(metrics) = &self.inner.metrics {
+            metrics.record_warmup_persisted(persisted, persisted_bytes);
+        }
     }
 
     fn update_largest(&self, len: u64) {
         let mut current = self.inner.largest_entry.load(Ordering::Relaxed);
+        let mut updated = false;
         while len > current {
             match self.inner.largest_entry.compare_exchange(
                 current,
@@ -252,8 +410,18 @@ impl CacheTelemetry {
                 Ordering::Relaxed,
                 Ordering::Relaxed,
             ) {
-                Ok(_) => break,
+                Ok(_) => {
+                    updated = true;
+                    break;
+                }
                 Err(observed) => current = observed,
+            }
+        }
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        if updated {
+            if let Some(metrics) = &self.inner.metrics {
+                let latest = self.inner.largest_entry.load(Ordering::Relaxed);
+                metrics.record_largest_entry(latest);
             }
         }
     }

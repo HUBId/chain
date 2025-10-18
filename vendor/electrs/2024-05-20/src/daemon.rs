@@ -7,6 +7,10 @@ use serde_json;
 
 use crate::vendor::electrs::chain::{Chain, NewHeader};
 use crate::vendor::electrs::firewood_adapter::{FirewoodAdapter, RuntimeAdapters};
+#[cfg(feature = "vendor_electrs_telemetry")]
+use crate::vendor::electrs::metrics::malachite::telemetry::{self, GaugeHandle, HistogramHandle};
+#[cfg(feature = "vendor_electrs_telemetry")]
+use crate::vendor::electrs::metrics::default_duration_buckets;
 use crate::vendor::electrs::rpp_ledger::bitcoin::blockdata::{
     block::Header as LedgerBlockHeader, constants,
 };
@@ -30,6 +34,12 @@ use sha2::{Digest, Sha512};
 use tokio::sync::broadcast;
 #[cfg(feature = "backend-rpp-stark")]
 use std::str::FromStr;
+#[cfg(feature = "vendor_electrs_telemetry")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "vendor_electrs_telemetry")]
+use std::sync::OnceLock;
+#[cfg(feature = "vendor_electrs_telemetry")]
+use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub struct ConvertedBlock {
@@ -53,6 +63,8 @@ pub struct ConvertedBlock {
 pub struct Daemon {
     firewood: FirewoodAdapter,
     runtime: RuntimeAdapters,
+    #[cfg(feature = "vendor_electrs_telemetry")]
+    telemetry: &'static DaemonTelemetry,
 }
 
 impl Daemon {
@@ -63,7 +75,12 @@ impl Daemon {
             .cloned()
             .ok_or_else(|| anyhow!("firewood runtime adapters not attached"))?;
 
-        Ok(Self { firewood, runtime })
+        Ok(Self {
+            firewood,
+            runtime,
+            #[cfg(feature = "vendor_electrs_telemetry")]
+            telemetry: DaemonTelemetry::instance(),
+        })
     }
 
     /// Return the configured ledger network.
@@ -232,6 +249,8 @@ impl Daemon {
     /// Subscribe to new block notifications. Each call returns a dedicated
     /// receiver hooked into the runtime gossip pipeline.
     pub(crate) fn new_block_notification(&self) -> Result<broadcast::Receiver<Vec<u8>>> {
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        self.telemetry.record_subscription();
         self.firewood
             .subscribe_gossip(GossipTopic::Blocks)
             .context("subscribe to block gossip")
@@ -307,11 +326,15 @@ impl Daemon {
     }
 
     fn fetch_block(&self, height: u64) -> Result<Option<ConvertedBlock>> {
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        let start = Instant::now();
         let block = self
             .runtime
             .node()
             .get_block(height)
             .map_err(|err| anyhow!("load block {height}: {err}"))?;
+        #[cfg(feature = "vendor_electrs_telemetry")]
+        self.telemetry.record_fetch_duration(start.elapsed());
         Ok(block.map(|block| Self::convert_block(&block)))
     }
 
@@ -575,6 +598,49 @@ impl Daemon {
                 })?;
         }
         Ok(blocks)
+    }
+}
+
+#[cfg(feature = "vendor_electrs_telemetry")]
+struct DaemonTelemetry {
+    subscriptions: AtomicU64,
+    subscription_calls: GaugeHandle,
+    fetch_duration: HistogramHandle,
+}
+
+#[cfg(feature = "vendor_electrs_telemetry")]
+impl DaemonTelemetry {
+    fn instance() -> &'static Self {
+        static TELEMETRY: OnceLock<DaemonTelemetry> = OnceLock::new();
+        TELEMETRY.get_or_init(Self::new)
+    }
+
+    fn new() -> Self {
+        let registry = telemetry::registry();
+        Self {
+            subscriptions: AtomicU64::new(0),
+            subscription_calls: registry.register_gauge(
+                "electrs_p2p_block_subscriptions",
+                "Number of block gossip subscriptions opened by the electrs daemon",
+                "stage",
+            ),
+            fetch_duration: registry.register_histogram(
+                "electrs_p2p_fetch_block_seconds",
+                "Latency distribution for fetching blocks from the runtime adapters",
+                "operation",
+                default_duration_buckets(),
+            ),
+        }
+    }
+
+    fn record_subscription(&self) {
+        let total = self.subscriptions.fetch_add(1, Ordering::Relaxed) + 1;
+        self.subscription_calls.set("subscribe", total as f64);
+    }
+
+    fn record_fetch_duration(&self, duration: std::time::Duration) {
+        self.fetch_duration
+            .observe("get_block", duration.as_secs_f64());
     }
 }
 

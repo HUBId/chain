@@ -460,6 +460,13 @@ pub mod index {
     ));
 }
 
+pub mod metrics {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/metrics.rs"
+    ));
+}
+
 pub mod daemon {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
