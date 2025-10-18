@@ -22,7 +22,9 @@ use rpp::runtime::types::{BlockPayload, SignedTransaction};
 use rpp::storage::state::utxo::StoredUtxo;
 use rpp::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher};
 
-use rpp_wallet::config::{CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection, TrackerConfig};
+use rpp_wallet::config::{
+    CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection, P2pConfig, TrackerConfig,
+};
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 use rpp_wallet::vendor::electrs::init::initialize;
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::blockdata::block::Header;
@@ -98,6 +100,7 @@ fn vendor_electrs_tracker_end_to_end() -> Result<()> {
         },
         cache: CacheConfig::default(),
         tracker: TrackerConfig::default(),
+        p2p: P2pConfig::default(),
     };
 
     let mut handles = initialize(&config, &firewood_dir, &index_dir, Some(runtime))?;
