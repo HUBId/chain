@@ -897,6 +897,18 @@ mod tests {
     use crate::vendor::electrs::rpp_ledger::bitcoin::Network;
     use crate::vendor::electrs::tracker::Tracker;
     use rpp::runtime::config::QueueWeightsConfig;
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::vendor::electrs::rpp_ledger::bitcoin::{OutPoint, Script, Txid};
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::vendor::electrs::types::LedgerScriptPayload;
+    #[cfg(feature = "backend-rpp-stark")]
+    use crate::zk::rpp_adapter::Digest32;
+    #[cfg(feature = "backend-rpp-stark")]
+    use rpp::proofs::rpp::{
+        AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint,
+    };
+    #[cfg(feature = "backend-rpp-stark")]
+    use rpp::storage::state::utxo::StoredUtxo;
 
     #[test]
     fn sync_derives_balance_and_unspent_outputs() {
@@ -978,5 +990,183 @@ mod tests {
             .get_history()
             .iter()
             .any(|entry| matches!(entry.height, Height::Unconfirmed { .. })));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn sample_transaction_witness(
+        tx_id: [u8; 32],
+        utxo_index: u32,
+        recipient: &str,
+        amount: u128,
+        fee: u64,
+    ) -> TransactionWitness {
+        let recipient_snapshot = TransactionUtxoSnapshot::new(
+            UtxoOutpoint { tx_id, index: utxo_index },
+            StoredUtxo::new(recipient.to_string(), amount),
+        );
+        let sender_before = AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
+        let sender_after = AccountBalanceWitness::new("sender".to_string(), u128::from(fee), 2);
+        let recipient_before = Some(AccountBalanceWitness::new(recipient.to_string(), 0, 0));
+        let recipient_after = AccountBalanceWitness::new(recipient.to_string(), amount, 1);
+        TransactionWitness::new(
+            tx_id,
+            fee,
+            sender_before,
+            sender_after,
+            recipient_before,
+            recipient_after,
+            vec![recipient_snapshot.clone()],
+            Vec::new(),
+            vec![recipient_snapshot],
+            vec![TransactionUtxoSnapshot::new(
+                UtxoOutpoint {
+                    tx_id: [0x44; 32],
+                    index: 0,
+                },
+                StoredUtxo::new(recipient.to_string(), amount),
+            )],
+        )
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn sample_pending_transaction(
+        scripthash: &ScriptHash,
+        tx_hash: [u8; 32],
+        witness: TransactionWitness,
+        digest: Digest32,
+        amount: u128,
+    ) -> PendingTransactionSummary {
+        let address = witness.recipient_after.address.clone();
+        let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: address.clone(),
+            amount,
+        }));
+        assert_eq!(&ScriptHash::new(&script), scripthash, "script hash mismatch");
+        PendingTransactionSummary {
+            hash: encode(tx_hash),
+            from: "sender".to_string(),
+            to: address,
+            amount,
+            fee: witness.fee,
+            nonce: 1,
+            proof: None,
+            witness: Some(witness),
+            proof_payload: None,
+            public_inputs_digest: Some(digest.to_hex()),
+        }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn confirmed_outpoints_map(
+        tx_id: [u8; 32],
+        index: u32,
+        amount: u64,
+    ) -> HashMap<OutPoint, (usize, u64)> {
+        let mut confirmed = HashMap::new();
+        confirmed.insert(
+            OutPoint::new(Txid::from_bytes(tx_id), index),
+            (0usize, amount),
+        );
+        confirmed
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn process_single_transaction(
+        summary: PendingTransactionSummary,
+        scripthash: &ScriptHash,
+        confirmed: &HashMap<OutPoint, (usize, u64)>,
+    ) -> (HistoryEntry, Option<u64>) {
+        let mempool = MempoolStatus {
+            transactions: vec![summary],
+            identities: Vec::new(),
+            votes: Vec::new(),
+            uptime_proofs: Vec::new(),
+            queue_weights: QueueWeightsConfig::default(),
+        };
+        let entries = process_mempool(&mempool, scripthash, confirmed).expect("process mempool");
+        assert_eq!(entries.len(), 1, "unexpected entry count");
+        entries.into_iter().next().unwrap()
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn process_mempool_marks_verified_witness_as_safe() {
+        let amount = 42u128;
+        let scripthash_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: "recipient".to_string(),
+            amount,
+        }));
+        let scripthash = ScriptHash::new(&scripthash_script);
+        let tx_id = [0x11; 32];
+        let digest = Digest32::from([0xAA; 32]);
+        let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 7);
+        let pending = sample_pending_transaction(&scripthash, tx_id, witness.clone(), digest, amount);
+        let confirmed = confirmed_outpoints_map(tx_id, 0, amount as u64);
+
+        let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
+        let witness_bytes = encode_transaction_witness(&witness).expect("encode witness");
+        let expected_digest = hash_entry_components(Some(&witness_bytes), digest);
+
+        assert_eq!(credit, Some(amount as u64));
+        assert_eq!(entry.double_spend, Some(false));
+        assert!(entry.conflict().is_none(), "unexpected conflict: {:?}", entry.conflict());
+        assert_eq!(entry.digest(), Some(&expected_digest));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn process_mempool_flags_double_spend_on_missing_utxo() {
+        let amount = 75u128;
+        let scripthash_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: "recipient".to_string(),
+            amount,
+        }));
+        let scripthash = ScriptHash::new(&scripthash_script);
+        let tx_id = [0x22; 32];
+        let digest = Digest32::from([0xBB; 32]);
+        let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 5);
+        let pending = sample_pending_transaction(&scripthash, tx_id, witness.clone(), digest, amount);
+        let confirmed = HashMap::new();
+
+        let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
+        let witness_bytes = encode_transaction_witness(&witness).expect("encode witness");
+        let expected_digest = hash_entry_components(Some(&witness_bytes), digest);
+
+        assert!(credit.is_none(), "double-spend credit should be withheld");
+        assert_eq!(entry.double_spend, Some(true));
+        assert!(entry.conflict().is_none(), "unexpected conflict: {:?}", entry.conflict());
+        assert_eq!(entry.digest(), Some(&expected_digest));
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    #[test]
+    fn process_mempool_reports_conflict_when_digest_missing() {
+        let amount = 18u128;
+        let scripthash_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: "recipient".to_string(),
+            amount,
+        }));
+        let scripthash = ScriptHash::new(&scripthash_script);
+        let tx_id = [0x33; 32];
+        let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 3);
+        let mut pending = sample_pending_transaction(
+            &scripthash,
+            tx_id,
+            witness,
+            Digest32::from([0u8; 32]),
+            amount,
+        );
+        pending.public_inputs_digest = None;
+        let confirmed = HashMap::new();
+
+        let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);
+        assert!(credit.is_none());
+        assert_eq!(entry.double_spend, Some(true));
+        let conflict = entry.conflict().expect("conflict expected");
+        assert!(matches!(conflict, HistoryConflictReason::MissingData { .. }));
+        if let HistoryConflictReason::MissingData { detail } = conflict {
+            assert_eq!(detail, "public inputs digest missing");
+        }
+        assert!(entry.digest().is_none());
     }
 }
