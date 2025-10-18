@@ -43,6 +43,58 @@ pub struct StoredTransactionMetadata {
     pub transaction: SignedTransaction,
     pub witness: Option<TransactionWitness>,
     pub rpp_stark_proof: Option<Vec<u8>>,
+    #[cfg(feature = "backend-rpp-stark")]
+    #[serde(default)]
+    pub proof_audit: Option<RppStarkProofAudit>,
+    #[cfg(feature = "backend-rpp-stark")]
+    #[serde(default)]
+    pub vrf_audit: Option<StoredVrfAudit>,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RppStarkProofAudit {
+    pub envelope: String,
+    pub report: RppStarkReportSummary,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RppStarkReportSummary {
+    pub backend: String,
+    pub verified: bool,
+    pub params_ok: bool,
+    pub public_ok: bool,
+    pub merkle_ok: bool,
+    pub fri_ok: bool,
+    pub composition_ok: bool,
+    pub total_bytes: u64,
+    pub notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_query_indices: Option<Vec<u32>>,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct StoredVrfAudit {
+    pub input: VrfInputDescriptor,
+    pub output: VrfOutputDescriptor,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VrfInputDescriptor {
+    pub last_block_header: String,
+    pub epoch: u64,
+    pub tier_seed: String,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct VrfOutputDescriptor {
+    pub randomness: String,
+    pub preoutput: String,
+    pub proof: String,
 }
 
 pub fn encode_ledger_script(payload: &LedgerScriptPayload) -> Vec<u8> {

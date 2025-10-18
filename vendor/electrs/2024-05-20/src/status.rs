@@ -7,6 +7,14 @@ use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher};
+#[cfg(feature = "backend-rpp-stark")]
+use crate::zk::rpp_verifier::{
+    RppStarkVerificationReport, RppStarkVerifier, RppStarkVerifierError,
+};
+#[cfg(feature = "backend-rpp-stark")]
+use crate::vendor::electrs::types::{
+    RppStarkProofAudit, RppStarkReportSummary, StoredVrfAudit,
+};
 
 use crate::vendor::electrs::chain::Chain;
 use crate::vendor::electrs::index::Index;
@@ -28,6 +36,14 @@ use rpp::{
     proofs::rpp::encode_transaction_witness,
     runtime::types::proofs::RppStarkProof,
 };
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_stark::backend::params_limit_to_node_bytes;
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_stark::params::deserialize_params;
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_stark::proof::envelope::ProofBuilder;
+#[cfg(feature = "backend-rpp-stark")]
+use rpp_stark::proof::types::Proof;
 
 fn hex_string(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -36,6 +52,68 @@ fn hex_string(bytes: &[u8]) -> String {
         write!(&mut s, "{:02x}", byte).expect("write to string");
     }
     s
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+pub(crate) fn build_rpp_stark_audit(
+    proof: &RppStarkProof,
+) -> anyhow::Result<RppStarkProofAudit> {
+    let params = proof.params();
+    let public_inputs = proof.public_inputs();
+    let payload = proof.proof();
+
+    let stark_params = deserialize_params(params)
+        .context("decode rpp-stark proof parameters")?;
+    let node_limit = params_limit_to_node_bytes(&stark_params)
+        .map_err(|err| anyhow!("map proof size limit: {err}"))?;
+
+    let verifier = RppStarkVerifier::new();
+    let report = match verifier.verify(params, public_inputs, payload, node_limit) {
+        Ok(report) => report,
+        Err(RppStarkVerifierError::VerificationFailed { report, .. }) => report,
+        Err(err) => return Err(anyhow!("verify rpp-stark proof: {err}")),
+    };
+
+    let decoded = Proof::from_bytes(payload).context("decode rpp-stark proof envelope")?;
+    let rebuilt = ProofBuilder::new(*stark_params.proof())
+        .with_header(decoded.version(), decoded.params_hash().clone())
+        .with_binding(
+            *decoded.kind(),
+            decoded.air_spec_id().clone(),
+            decoded.public_inputs().to_vec(),
+        )
+        .with_openings_descriptor(decoded.openings().clone())
+        .with_fri_handle(decoded.fri().clone())
+        .with_telemetry_option(decoded.telemetry().clone())
+        .build()
+        .context("rebuild rpp-stark proof envelope")?
+        .proof
+        .to_bytes()
+        .context("serialize rpp-stark proof envelope")?;
+
+    Ok(RppStarkProofAudit {
+        envelope: hex::encode(rebuilt),
+        report: summarize_report(&report),
+    })
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn summarize_report(report: &RppStarkVerificationReport) -> RppStarkReportSummary {
+    let trace_indices = report
+        .trace_query_indices()
+        .map(|indices| indices.to_vec());
+    RppStarkReportSummary {
+        backend: report.backend().to_string(),
+        verified: report.is_verified(),
+        params_ok: report.params_ok(),
+        public_ok: report.public_ok(),
+        merkle_ok: report.merkle_ok(),
+        fri_ok: report.fri_ok(),
+        composition_ok: report.composition_ok(),
+        total_bytes: report.total_bytes(),
+        notes: report.notes().map(|note| note.to_string()),
+        trace_query_indices: trace_indices,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -114,6 +192,11 @@ pub struct HistoryEntry {
     fee: Option<u64>,
     #[cfg(feature = "backend-rpp-stark")]
     digest: Option<StatusDigest>,
+    #[cfg(feature = "backend-rpp-stark")]
+    proof_audit: Option<RppStarkProofAudit>,
+    #[cfg(feature = "backend-rpp-stark")]
+    vrf_audit: Option<StoredVrfAudit>,
+    double_spend: Option<bool>,
 }
 
 impl HistoryEntry {
@@ -122,6 +205,9 @@ impl HistoryEntry {
         height: usize,
         fee: Option<u64>,
         #[cfg(feature = "backend-rpp-stark")] digest: Option<StatusDigest>,
+        #[cfg(feature = "backend-rpp-stark")] proof_audit: Option<RppStarkProofAudit>,
+        #[cfg(feature = "backend-rpp-stark")] vrf_audit: Option<StoredVrfAudit>,
+        double_spend: Option<bool>,
     ) -> Self {
         Self {
             txid,
@@ -129,6 +215,11 @@ impl HistoryEntry {
             fee,
             #[cfg(feature = "backend-rpp-stark")]
             digest,
+            #[cfg(feature = "backend-rpp-stark")]
+            proof_audit,
+            #[cfg(feature = "backend-rpp-stark")]
+            vrf_audit,
+            double_spend,
         }
     }
 
@@ -137,6 +228,9 @@ impl HistoryEntry {
         has_unconfirmed_inputs: bool,
         fee: u64,
         #[cfg(feature = "backend-rpp-stark")] digest: Option<StatusDigest>,
+        #[cfg(feature = "backend-rpp-stark")] proof_audit: Option<RppStarkProofAudit>,
+        #[cfg(feature = "backend-rpp-stark")] vrf_audit: Option<StoredVrfAudit>,
+        double_spend: Option<bool>,
     ) -> Self {
         Self {
             txid,
@@ -146,6 +240,11 @@ impl HistoryEntry {
             fee: Some(fee),
             #[cfg(feature = "backend-rpp-stark")]
             digest,
+            #[cfg(feature = "backend-rpp-stark")]
+            proof_audit,
+            #[cfg(feature = "backend-rpp-stark")]
+            vrf_audit,
+            double_spend,
         }
     }
 
@@ -172,7 +271,7 @@ impl Serialize for HistoryEntry {
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("HistoryEntry", 3)?;
+        let mut state = serializer.serialize_struct("HistoryEntry", 5)?;
         state.serialize_field("tx_hash", &hex_string(self.txid.as_bytes()))?;
         state.serialize_field("height", &self.height)?;
         if let Some(fee) = self.fee {
@@ -181,6 +280,17 @@ impl Serialize for HistoryEntry {
         #[cfg(feature = "backend-rpp-stark")]
         if let Some(digest) = &self.digest {
             state.serialize_field("digest", digest)?;
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        if let Some(proof) = &self.proof_audit {
+            state.serialize_field("proof", proof)?;
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        if let Some(vrf) = &self.vrf_audit {
+            state.serialize_field("vrf", vrf)?;
+        }
+        if let Some(flag) = self.double_spend {
+            state.serialize_field("double_spend", &flag)?;
         }
         state.end()
     }
@@ -338,10 +448,12 @@ fn process_confirmed_transaction(
     #[cfg(feature = "backend-rpp-stark")]
     let history_entry = {
         let digest = confirmed_entry_digest(metadata)?;
-        HistoryEntry::confirmed(txid, height, fee, digest)
+        let proof_audit = metadata.and_then(|meta| meta.proof_audit.clone());
+        let vrf_audit = metadata.and_then(|meta| meta.vrf_audit.clone());
+        HistoryEntry::confirmed(txid, height, fee, digest, proof_audit, vrf_audit, Some(false))
     };
     #[cfg(not(feature = "backend-rpp-stark"))]
-    let history_entry = HistoryEntry::confirmed(txid, height, fee);
+    let history_entry = HistoryEntry::confirmed(txid, height, fee, Some(false));
     history.push(history_entry);
 
     for input in transaction.inputs() {
@@ -396,10 +508,10 @@ fn mempool_entry(
     #[cfg(feature = "backend-rpp-stark")]
     let entry = {
         let digest = mempool_entry_digest(tx)?;
-        HistoryEntry::unconfirmed(txid, false, tx.fee, digest)
+        HistoryEntry::unconfirmed(txid, false, tx.fee, digest, None, None, Some(false))
     };
     #[cfg(not(feature = "backend-rpp-stark"))]
-    let entry = HistoryEntry::unconfirmed(txid, false, tx.fee);
+    let entry = HistoryEntry::unconfirmed(txid, false, tx.fee, Some(false));
     Ok(Some((entry, amount)))
 }
 

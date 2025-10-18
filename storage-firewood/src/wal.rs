@@ -265,10 +265,7 @@ mod tests {
         let records = wal.replay_from(0)?;
         assert_eq!(
             records,
-            vec![
-                (0, b"first entry".to_vec()),
-                (1, b"second entry".to_vec()),
-            ]
+            vec![(0, b"first entry".to_vec()), (1, b"second entry".to_vec()),]
         );
 
         // Check partial replay to ensure the index survived the restart intact.
