@@ -57,6 +57,103 @@ und wählen darüber den gewünschten Gossip-Topic aus. Die Konfiguration stellt
 sicher, dass der gewählte Topic im Daemon freigeschaltet ist, bevor der
 Broadcast-Kanal geöffnet wird.【F:rpp/wallet/src/config.rs†L86-L137】【F:rpp/wallet/src/vendor/electrs/init.rs†L34-L135】【F:vendor/electrs/2024-05-20/src/tracker.rs†L40-L220】
 
+### Wallet-Initialisierung & Laufzeit-Erwartungen
+
+Wallet-Einbettungen speichern ihre Electrs-Konfiguration (`ElectrsConfig`) im
+Wallet-Storage und laden sie beim Start erneut. `Wallet::reload_electrs_handles`
+ruft `initialize` mit den aktuellen Pfaden und optionalen Runtime-Adaptern auf;
+das erzeugt fehlende Firewood- und Index-Verzeichnisse und verknüpft Runtime-
+abhängige Komponenten nur, wenn die Feature-Gates dies erlauben.【F:rpp/wallet/ui/wallet.rs†L788-L924】【F:rpp/wallet/src/vendor/electrs/init.rs†L28-L152】
+`WalletConfig::ensure_directories` legt `<data_dir>/electrs/firewood` sowie
+`<data_dir>/electrs/index` automatisch an, sobald Runtime- oder Tracker-Features
+gesetzt sind.【F:rpp/runtime/config.rs†L552-L578】
+
+Der Initialisierer validiert außerdem Gossip-Topics: Tracker- und Daemon-Topics
+werden dedupliziert, fehlende Topics werden ergänzt und ungültige Werte
+abgewiesen.【F:rpp/wallet/src/vendor/electrs/init.rs†L96-L152】 Für Runtime-
+betriebe sind Adapter (`RuntimeAdapters`) Pflicht; werden sie nicht übergeben,
+bricht `initialize` frühzeitig ab.【F:rpp/wallet/src/vendor/electrs/init.rs†L84-L112】
+
+### Konfigurationsbeispiele
+
+**Runtime + Tracker (Daemon aktiv, Gossip & Telemetrie eingeschaltet)**
+
+```toml
+data_dir = "./data"
+key_path = "./keys/wallet.toml"
+rpc_listen = "127.0.0.1:9090"
+
+[node]
+embedded = true
+gossip_endpoints = ["/ip4/127.0.0.1/tcp/7600"]
+
+[electrs]
+network = "signet"
+
+[electrs.features]
+runtime = true
+tracker = true
+
+[electrs.tracker]
+telemetry_endpoint = "127.0.0.1:9200"
+
+[electrs.tracker.notifications]
+p2p = true
+topic = "/rpp/gossip/blocks/1.0.0"
+
+[electrs.p2p]
+enabled = true
+metrics_endpoint = "127.0.0.1:9300"
+network_id = "rpp-signet"
+gossip_topics = ["/rpp/gossip/blocks/1.0.0", "/rpp/gossip/finality/1.0.0"]
+```
+
+**Offline Firewood (Daemon deaktiviert, Tracker aus)**
+
+```toml
+data_dir = "./data"
+key_path = "./keys/wallet.toml"
+rpc_listen = "127.0.0.1:9090"
+
+[node]
+embedded = false
+gossip_endpoints = ["/dns4/bootstrap.rpp.invalid/tcp/7600"]
+
+[electrs]
+network = "regtest"
+
+[electrs.features]
+runtime = false
+tracker = false
+```
+
+Beim Offline-Profil bleibt der Firewood-Adapter im reinen Dateimodus aktiv,
+damit lokale Indizes und Skriptmetadaten verfügbar bleiben, ohne dass Gossip-
+Kanäle benötigt werden.【F:rpp/wallet/src/vendor/electrs/init.rs†L84-L112】
+
+### Migration bestehender Wallets
+
+1. **Konfigurationsdatei aktualisieren:** Ergänzen Sie den `[electrs]`-Block im
+   bestehenden `wallet.toml` und wählen Sie die gewünschten Feature-Gates (siehe
+   Beispiele oben). Die Validierung stellt sicher, dass Tracker nur zusammen mit
+   Runtime aktiviert wird.【F:rpp/runtime/config.rs†L563-L568】
+2. **Verzeichnisse vorbereiten:** Führen Sie `WalletConfig::ensure_directories`
+   aus oder starten Sie das Wallet einmalig neu; dadurch werden die Electrs-
+   Unterordner im Datenverzeichnis angelegt.【F:rpp/runtime/config.rs†L552-L578】
+3. **Handles neu initialisieren:** Rufen Sie `Wallet::reload_electrs_handles`
+   nach der Konfigurationsänderung auf (z. B. beim Wallet-Start). Dadurch wird
+   der Daemon ggf. mit Runtime-Adaptern gebootet, der Tracker verbunden und der
+   Synchronisations-Task gestartet.【F:rpp/wallet/ui/wallet.rs†L821-L924】
+
+### RPC- & UI-Erweiterungen
+
+Der Electrs-Tracker erweitert Wallet-RPC-Antworten um `mempool_delta`,
+`script_metadata` und `tracker`. Downstream-Integrationen sollten die Felder
+optional behandeln und neue Skriptstatus-Hashes sowie Mempool-Fingerprints
+persistieren.【F:rpp/rpc/interfaces.rs†L268-L311】 Die Wallet-UI stellt über
+`WalletTrackerHandle` und `ScriptStatusMetadata` die gleichen Metadaten bereit,
+inklusive Status-Digests, Proof-Envelopes und optionaler VRF-Audits.【F:rpp/wallet/ui/wallet.rs†L320-L420】【F:rpp/wallet/ui/wallet.rs†L736-L776】
+
 ### Telemetrie-Integration
 
 * **Feature-Gate:** Die optionale Flag `vendor_electrs_telemetry` koppelt die vendorten Module an `malachite::telemetry` und
