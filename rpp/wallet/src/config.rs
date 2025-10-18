@@ -5,6 +5,8 @@ use std::net::SocketAddr;
 
 use crate::vendor::electrs::rpp_ledger::bitcoin::Network as LedgerNetwork;
 
+const DEFAULT_GOSSIP_TOPIC: &str = "/rpp/gossip/blocks/1.0.0";
+
 /// Configuration options for the Electrs vendor integration.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -17,6 +19,8 @@ pub struct ElectrsConfig {
     pub cache: CacheConfig,
     /// Tracker-specific configuration options.
     pub tracker: TrackerConfig,
+    /// Optional configuration for the P2P bridge used by the daemon.
+    pub p2p: P2pConfig,
 }
 
 impl Default for ElectrsConfig {
@@ -26,6 +30,7 @@ impl Default for ElectrsConfig {
             features: FeatureGates::default(),
             cache: CacheConfig::default(),
             tracker: TrackerConfig::default(),
+            p2p: P2pConfig::default(),
         }
     }
 }
@@ -92,18 +97,68 @@ impl Default for CacheConfig {
     }
 }
 
+/// Configure the optional daemon-level P2P connection used for fetching headers and blocks.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct P2pConfig {
+    /// Enable the P2P bridge and route daemon RPC calls through the network module.
+    pub enabled: bool,
+    /// Socket address used when registering daemon P2P metrics.
+    pub metrics_endpoint: SocketAddr,
+    /// Network identifier advertised when joining the swarm.
+    pub network_id: String,
+    /// Optional authentication token attached to subscription requests.
+    pub auth_token: Option<String>,
+    /// Gossip topics that the daemon exposes to downstream consumers.
+    pub gossip_topics: Vec<String>,
+}
+
+impl Default for P2pConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            metrics_endpoint: SocketAddr::from(([127, 0, 0, 1], 0)),
+            network_id: "rpp-local".into(),
+            auth_token: None,
+            gossip_topics: vec![DEFAULT_GOSSIP_TOPIC.into()],
+        }
+    }
+}
+
 /// Controls tracker-specific behaviour, including telemetry endpoints.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrackerConfig {
     /// Socket address used when registering tracker telemetry metrics.
     pub telemetry_endpoint: SocketAddr,
+    /// Configure optional notification subscriptions for the tracker.
+    pub notifications: TrackerNotificationConfig,
 }
 
 impl Default for TrackerConfig {
     fn default() -> Self {
         Self {
             telemetry_endpoint: SocketAddr::from(([127, 0, 0, 1], 0)),
+            notifications: TrackerNotificationConfig::default(),
+        }
+    }
+}
+
+/// Controls how the tracker interacts with the daemon's gossip channels.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TrackerNotificationConfig {
+    /// Enable the broadcast subscription for runtime P2P notifications.
+    pub p2p: bool,
+    /// Gossip topic used for the block notification subscription.
+    pub topic: String,
+}
+
+impl Default for TrackerNotificationConfig {
+    fn default() -> Self {
+        Self {
+            p2p: false,
+            topic: DEFAULT_GOSSIP_TOPIC.into(),
         }
     }
 }
@@ -143,6 +198,16 @@ mod tests {
             config.tracker.telemetry_endpoint,
             SocketAddr::from(([127, 0, 0, 1], 0))
         );
+        assert!(!config.tracker.notifications.p2p);
+        assert_eq!(config.tracker.notifications.topic, DEFAULT_GOSSIP_TOPIC);
+        assert!(!config.p2p.enabled);
+        assert_eq!(
+            config.p2p.metrics_endpoint,
+            SocketAddr::from(([127, 0, 0, 1], 0))
+        );
+        assert_eq!(config.p2p.network_id, "rpp-local");
+        assert!(config.p2p.auth_token.is_none());
+        assert_eq!(config.p2p.gossip_topics, vec![DEFAULT_GOSSIP_TOPIC.into()]);
     }
 
     #[test]
@@ -161,6 +226,20 @@ mod tests {
             },
             tracker: TrackerConfig {
                 telemetry_endpoint: SocketAddr::from(([10, 0, 0, 42], 9000)),
+                notifications: TrackerNotificationConfig {
+                    p2p: true,
+                    topic: "/rpp/gossip/snapshots/1.0.0".into(),
+                },
+            },
+            p2p: P2pConfig {
+                enabled: true,
+                metrics_endpoint: SocketAddr::from(([192, 168, 0, 55], 9100)),
+                network_id: "staging".into(),
+                auth_token: Some("bearer token".into()),
+                gossip_topics: vec![
+                    DEFAULT_GOSSIP_TOPIC.into(),
+                    "/rpp/gossip/snapshots/1.0.0".into(),
+                ],
             },
         };
 
@@ -178,6 +257,25 @@ mod tests {
         assert_eq!(
             restored.tracker.telemetry_endpoint,
             SocketAddr::from(([10, 0, 0, 42], 9000))
+        );
+        assert!(restored.tracker.notifications.p2p);
+        assert_eq!(
+            restored.tracker.notifications.topic,
+            "/rpp/gossip/snapshots/1.0.0"
+        );
+        assert!(restored.p2p.enabled);
+        assert_eq!(
+            restored.p2p.metrics_endpoint,
+            SocketAddr::from(([192, 168, 0, 55], 9100))
+        );
+        assert_eq!(restored.p2p.network_id, "staging");
+        assert_eq!(restored.p2p.auth_token, Some("bearer token".into()));
+        assert_eq!(
+            restored.p2p.gossip_topics,
+            vec![
+                DEFAULT_GOSSIP_TOPIC.into(),
+                "/rpp/gossip/snapshots/1.0.0".into()
+            ]
         );
     }
 }

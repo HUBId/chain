@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, ensure, Context, Result};
+use log::warn;
 use serde_json;
 
 use crate::vendor::electrs::chain::{Chain, NewHeader};
 use crate::vendor::electrs::firewood_adapter::{FirewoodAdapter, RuntimeAdapters};
+use crate::vendor::electrs::metrics::{default_duration_buckets, Metrics};
 #[cfg(feature = "vendor_electrs_telemetry")]
 use crate::vendor::electrs::metrics::malachite::telemetry::{self, GaugeHandle, HistogramHandle};
-#[cfg(feature = "vendor_electrs_telemetry")]
-use crate::vendor::electrs::metrics::default_duration_buckets;
 use crate::vendor::electrs::rpp_ledger::bitcoin::blockdata::{
     block::Header as LedgerBlockHeader, constants,
 };
@@ -30,6 +31,7 @@ use rpp::runtime::types::{
 };
 use rpp::proofs::rpp::TransactionWitness;
 use rpp_p2p::GossipTopic;
+use crate::vendor::electrs::p2p::Connection as P2pConnection;
 use sha2::{Digest, Sha512};
 use tokio::sync::broadcast;
 #[cfg(feature = "backend-rpp-stark")]
@@ -53,6 +55,68 @@ pub struct ConvertedBlock {
     pub rpp_stark_proofs: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct DaemonOptions {
+    pub p2p: Option<DaemonP2pOptions>,
+    pub gossip_topics: Vec<GossipTopic>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DaemonP2pOptions {
+    pub metrics_endpoint: SocketAddr,
+    pub network_id: String,
+    pub auth_token: Option<String>,
+}
+
+struct P2pClient {
+    metrics: Metrics,
+    #[allow(dead_code)]
+    network_id: String,
+    #[allow(dead_code)]
+    auth_token: Option<String>,
+}
+
+impl P2pClient {
+    fn new(options: DaemonP2pOptions) -> Result<Self> {
+        ensure!(
+            !options.network_id.trim().is_empty(),
+            "p2p network id must not be empty"
+        );
+        let metrics = Metrics::new(options.metrics_endpoint).context("initialise p2p metrics")?;
+        Ok(Self {
+            metrics,
+            network_id: options.network_id,
+            auth_token: options.auth_token,
+        })
+    }
+
+    fn connect<'a>(&'a self, firewood: &'a FirewoodAdapter) -> Result<P2pConnection<'a>> {
+        P2pConnection::connect(firewood, &self.metrics).context("attach p2p connection")
+    }
+
+    fn get_new_headers(&self, firewood: &FirewoodAdapter, chain: &Chain) -> Result<Vec<NewHeader>> {
+        let mut connection = self.connect(firewood)?;
+        connection
+            .get_new_headers(chain)
+            .context("fetch headers via p2p connection")
+    }
+
+    fn collect_blocks(
+        &self,
+        firewood: &FirewoodAdapter,
+        requested: &[BlockHash],
+    ) -> Result<Vec<(BlockHash, SerBlock)>> {
+        let mut connection = self.connect(firewood)?;
+        let mut collected = Vec::new();
+        connection
+            .for_blocks(requested.iter().copied(), |hash, block| {
+                collected.push((hash, block));
+            })
+            .context("fetch blocks via p2p connection")?;
+        Ok(collected)
+    }
+}
+
 /// Lightweight daemon harness that mimics a Bitcoin Core RPC backend.
 ///
 /// The real electrs daemon talks to bitcoind over RPC and P2P. Within the
@@ -63,6 +127,8 @@ pub struct ConvertedBlock {
 pub struct Daemon {
     firewood: FirewoodAdapter,
     runtime: RuntimeAdapters,
+    gossip_topics: Vec<GossipTopic>,
+    p2p: Option<P2pClient>,
     #[cfg(feature = "vendor_electrs_telemetry")]
     telemetry: &'static DaemonTelemetry,
 }
@@ -70,14 +136,36 @@ pub struct Daemon {
 impl Daemon {
     /// Create a new daemon backed by the Firewood runtime.
     pub fn new(firewood: FirewoodAdapter) -> Result<Self> {
+        Self::with_options(firewood, DaemonOptions::default())
+    }
+
+    /// Create a new daemon and apply the supplied runtime options.
+    pub fn with_options(firewood: FirewoodAdapter, options: DaemonOptions) -> Result<Self> {
         let runtime = firewood
             .runtime()
             .cloned()
             .ok_or_else(|| anyhow!("firewood runtime adapters not attached"))?;
 
+        let mut gossip_topics = Vec::new();
+        for topic in options.gossip_topics {
+            if !gossip_topics.contains(&topic) {
+                gossip_topics.push(topic);
+            }
+        }
+        if gossip_topics.is_empty() {
+            gossip_topics.push(GossipTopic::Blocks);
+        }
+
+        let p2p = match options.p2p {
+            Some(settings) => Some(P2pClient::new(settings)?),
+            None => None,
+        };
+
         Ok(Self {
             firewood,
             runtime,
+            gossip_topics,
+            p2p,
             #[cfg(feature = "vendor_electrs_telemetry")]
             telemetry: DaemonTelemetry::instance(),
         })
@@ -122,6 +210,30 @@ impl Daemon {
             .height()
             .checked_add(1)
             .ok_or_else(|| anyhow!("chain height overflow"))?;
+        if let Some(p2p) = &self.p2p {
+            match p2p.get_new_headers(&self.firewood, chain) {
+                Ok(headers) => return Ok(headers),
+                Err(err) => warn!("p2p get_new_headers failed, falling back to firewood: {err}"),
+            }
+        }
+
+        self.stream_headers_via_firewood(start_height)
+    }
+
+    /// Snapshot all blocks that appear above the provided height.
+    pub fn blocks_since(&self, height: usize) -> Result<Vec<ConvertedBlock>> {
+        let start = height
+            .checked_add(1)
+            .ok_or_else(|| anyhow!("height overflow"))?;
+        let tip = self.chain_tip_height()?;
+        if (start as u64) > tip {
+            return Ok(Vec::new());
+        }
+
+        self.collect_blocks(start as u64, tip)
+    }
+
+    fn stream_headers_via_firewood(&self, start_height: usize) -> Result<Vec<NewHeader>> {
         let runtime_headers = self
             .firewood
             .stream_headers_from(start_height as u64)
@@ -143,19 +255,6 @@ impl Daemon {
         }
 
         Ok(headers)
-    }
-
-    /// Snapshot all blocks that appear above the provided height.
-    pub fn blocks_since(&self, height: usize) -> Result<Vec<ConvertedBlock>> {
-        let start = height
-            .checked_add(1)
-            .ok_or_else(|| anyhow!("height overflow"))?;
-        let tip = self.chain_tip_height()?;
-        if (start as u64) > tip {
-            return Ok(Vec::new());
-        }
-
-        self.collect_blocks(start as u64, tip)
     }
 
     /// Fetch a snapshot of the runtime mempool state.
@@ -183,65 +282,21 @@ impl Daemon {
             return Ok(());
         }
 
-        let mut pending: HashSet<BlockHash> = requested.iter().copied().collect();
-        let runtime_blocks = self
-            .runtime
-            .storage()
-            .load_blockchain()
-            .map_err(|err| anyhow!("load runtime blockchain: {err}"))?;
-
-        let mut height_to_hash: HashMap<u64, BlockHash> = HashMap::new();
-        let mut heights: Vec<u64> = Vec::new();
-        for block in runtime_blocks {
-            if pending.is_empty() {
-                break;
-            }
-            let header = Self::convert_runtime_header(&block.header);
-            let hash = header.block_hash();
-            if pending.remove(&hash) {
-                let height = block.header.height;
-                height_to_hash.insert(height, hash);
-                heights.push(height);
-            }
-        }
-
-        if heights.is_empty() {
-            return Ok(());
-        }
-
-        heights.sort_unstable();
-        heights.dedup();
-
-        let mut serialized_blocks: HashMap<BlockHash, SerBlock> = HashMap::new();
-        let mut index = 0usize;
-        while index < heights.len() {
-            let mut start = heights[index];
-            let mut end = start;
-            while index + 1 < heights.len() && heights[index + 1] == end + 1 {
-                index += 1;
-                end = heights[index];
-            }
-
-            let blocks = self.reconstruct_verified_range(start, end)?;
-            for block in blocks {
-                let Some(expected_hash) = height_to_hash.get(&block.header.height) else {
-                    continue;
-                };
-                let converted = Self::convert_block(&block);
-                if converted.ledger_header.block_hash() != *expected_hash {
-                    continue;
+        if let Some(p2p) = &self.p2p {
+            match p2p.collect_blocks(&self.firewood, &requested) {
+                Ok(blocks) => {
+                    for (hash, bytes) in blocks {
+                        func(hash, bytes);
+                    }
+                    return Ok(());
                 }
-                let serialized = serialize_block(&converted.ledger_transactions);
-                serialized_blocks.entry(*expected_hash).or_insert(serialized);
+                Err(err) => warn!("p2p for_blocks failed, falling back to firewood: {err}"),
             }
-
-            index += 1;
         }
 
-        for blockhash in requested {
-            if let Some(serialized) = serialized_blocks.get(&blockhash) {
-                func(blockhash, serialized.clone());
-            }
+        let blocks = self.collect_serialized_blocks(&requested)?;
+        for (hash, bytes) in blocks {
+            func(hash, bytes);
         }
         Ok(())
     }
@@ -249,11 +304,22 @@ impl Daemon {
     /// Subscribe to new block notifications. Each call returns a dedicated
     /// receiver hooked into the runtime gossip pipeline.
     pub(crate) fn new_block_notification(&self) -> Result<broadcast::Receiver<Vec<u8>>> {
+        self.new_gossip_notification(GossipTopic::Blocks)
+    }
+
+    /// Subscribe to the configured gossip topic.
+    pub(crate) fn new_gossip_notification(
+        &self,
+        topic: GossipTopic,
+    ) -> Result<broadcast::Receiver<Vec<u8>>> {
+        if !self.gossip_topics.contains(&topic) {
+            return Err(anyhow!("gossip topic {topic} not enabled for daemon"));
+        }
         #[cfg(feature = "vendor_electrs_telemetry")]
         self.telemetry.record_subscription();
         self.firewood
-            .subscribe_gossip(GossipTopic::Blocks)
-            .context("subscribe to block gossip")
+            .subscribe_gossip(topic)
+            .with_context(|| format!("subscribe to {topic} gossip"))
     }
 
     /// Find the serialized representation of `txid`, if the daemon knows about it.
@@ -321,6 +387,75 @@ impl Daemon {
             .iter()
             .map(Self::convert_block)
             .collect())
+    }
+
+    fn collect_serialized_blocks(
+        &self,
+        requested: &[BlockHash],
+    ) -> Result<Vec<(BlockHash, SerBlock)>> {
+        let mut pending: HashSet<BlockHash> = requested.iter().copied().collect();
+        let runtime_blocks = self
+            .runtime
+            .storage()
+            .load_blockchain()
+            .map_err(|err| anyhow!("load runtime blockchain: {err}"))?;
+
+        let mut height_to_hash: HashMap<u64, BlockHash> = HashMap::new();
+        let mut heights: Vec<u64> = Vec::new();
+        for block in runtime_blocks {
+            if pending.is_empty() {
+                break;
+            }
+            let header = Self::convert_runtime_header(&block.header);
+            let hash = header.block_hash();
+            if pending.remove(&hash) {
+                let height = block.header.height;
+                height_to_hash.insert(height, hash);
+                heights.push(height);
+            }
+        }
+
+        if heights.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        heights.sort_unstable();
+        heights.dedup();
+
+        let mut serialized_blocks: HashMap<BlockHash, SerBlock> = HashMap::new();
+        let mut index = 0usize;
+        while index < heights.len() {
+            let mut start = heights[index];
+            let mut end = start;
+            while index + 1 < heights.len() && heights[index + 1] == end + 1 {
+                index += 1;
+                end = heights[index];
+            }
+
+            let blocks = self.reconstruct_verified_range(start, end)?;
+            for block in blocks {
+                let Some(expected_hash) = height_to_hash.get(&block.header.height) else {
+                    continue;
+                };
+                let converted = Self::convert_block(&block);
+                if converted.ledger_header.block_hash() != *expected_hash {
+                    continue;
+                }
+                let serialized = serialize_block(&converted.ledger_transactions);
+                serialized_blocks.entry(*expected_hash).or_insert(serialized);
+            }
+
+            index += 1;
+        }
+
+        let mut ordered = Vec::new();
+        for blockhash in requested {
+            if let Some(serialized) = serialized_blocks.get(blockhash) {
+                ordered.push((*blockhash, serialized.clone()));
+            }
+        }
+
+        Ok(ordered)
     }
 
     fn fetch_block(&self, height: u64) -> Result<Option<ConvertedBlock>> {

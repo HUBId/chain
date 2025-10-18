@@ -68,7 +68,9 @@ Flag landen alle Module unter `rpp_wallet::vendor::electrs::*` im Build.【F:rpp
 ### Bootstrap des Trackers
 
 ```rust
-use rpp_wallet::config::{CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection, TrackerConfig};
+use rpp_wallet::config::{
+    CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection, P2pConfig, TrackerConfig,
+};
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 use rpp_wallet::vendor::electrs::init::initialize;
 
@@ -82,7 +84,9 @@ let config = ElectrsConfig {
     cache: CacheConfig::default(),
     tracker: TrackerConfig {
         telemetry_endpoint: "127.0.0.1:0".parse().unwrap(),
+        ..TrackerConfig::default()
     },
+    p2p: P2pConfig::default(),
 };
 let handles = initialize(&config, "/var/lib/rpp/wallet/firewood", "/var/lib/rpp/wallet/index", Some(runtime))?;
 

@@ -1,0 +1,29 @@
+[wallet]
+network = "regtest"
+runtime = true
+tracker = true
+
+[wallet.p2p]
+enabled = true
+metrics_endpoint = "127.0.0.1:0"
+network_id = "wallet-gossip-demo"
+auth_token = "demo-token"
+gossip_topics = [
+  "/rpp/gossip/blocks/1.0.0",
+  "/rpp/gossip/snapshots/1.0.0",
+]
+
+[wallet.tracker.notifications]
+p2p = true
+topic = "/rpp/gossip/blocks/1.0.0"
+
+[blocks]
+count = 1
+recipient = "wallet-recipient"
+amount = 321
+fee = 9
+memo = "wallet-demo"
+
+[proof]
+envelope = "wallet-feedface"
+report_notes = "wallet-verified"

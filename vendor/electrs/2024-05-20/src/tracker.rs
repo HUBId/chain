@@ -23,6 +23,24 @@ use crate::vendor::electrs::types::{
 };
 #[cfg(feature = "backend-rpp-stark")]
 use crate::vendor::electrs::types::StoredVrfAudit;
+use rpp_p2p::GossipTopic;
+
+#[derive(Clone, Debug)]
+pub struct TrackerOptions {
+    pub telemetry_endpoint: SocketAddr,
+    pub subscribe_p2p_notifications: bool,
+    pub notification_topic: GossipTopic,
+}
+
+impl Default for TrackerOptions {
+    fn default() -> Self {
+        Self {
+            telemetry_endpoint: SocketAddr::from(([127, 0, 0, 1], 0)),
+            subscribe_p2p_notifications: false,
+            notification_topic: GossipTopic::Blocks,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub enum TransactionLookup {
@@ -44,23 +62,37 @@ pub struct Tracker {
     mempool: Mempool,
     mempool_fingerprint: Option<[u8; 32]>,
     block_notifications: Option<broadcast::Receiver<Vec<u8>>>,
+    subscribe_p2p_notifications: bool,
+    notification_topic: GossipTopic,
 }
 
 impl Tracker {
     /// Create a tracker around an already-initialised index.
     pub fn new(index: Index) -> Self {
-        let telemetry_endpoint = SocketAddr::from(([127, 0, 0, 1], 0));
-        Self::with_metrics(index, telemetry_endpoint)
+        Self::with_options(index, TrackerOptions::default())
     }
 
     /// Create a tracker with a custom telemetry endpoint for mempool metrics.
     pub fn with_metrics(index: Index, telemetry_endpoint: SocketAddr) -> Self {
-        let metrics = Metrics::new(telemetry_endpoint).expect("tracker metrics");
+        Self::with_options(
+            index,
+            TrackerOptions {
+                telemetry_endpoint,
+                ..TrackerOptions::default()
+            },
+        )
+    }
+
+    /// Create a tracker with custom options controlling telemetry and notifications.
+    pub fn with_options(index: Index, options: TrackerOptions) -> Self {
+        let metrics = Metrics::new(options.telemetry_endpoint).expect("tracker metrics");
         Self {
             index,
             mempool: Mempool::new(&metrics),
             mempool_fingerprint: None,
             block_notifications: None,
+            subscribe_p2p_notifications: options.subscribe_p2p_notifications,
+            notification_topic: options.notification_topic,
         }
     }
 
@@ -81,9 +113,11 @@ impl Tracker {
 
     /// Consume queued blocks from the daemon and extend the local index.
     pub fn sync(&mut self, daemon: &Daemon) -> Result<bool> {
-        self.ensure_block_subscription(daemon)?;
-
-        let mut updated = self.drain_block_notifications();
+        let mut updated = false;
+        if self.subscribe_p2p_notifications {
+            self.ensure_block_subscription(daemon)?;
+            updated = self.drain_block_notifications();
+        }
 
         let current_height = self.index.chain().height();
         let new_headers = daemon.get_new_headers(self.chain())?;
@@ -248,7 +282,7 @@ impl Tracker {
 
     fn ensure_block_subscription(&mut self, daemon: &Daemon) -> Result<()> {
         if self.block_notifications.is_none() {
-            self.block_notifications = Some(daemon.new_block_notification()?);
+            self.block_notifications = Some(daemon.new_gossip_notification(self.notification_topic)?);
         }
         Ok(())
     }
