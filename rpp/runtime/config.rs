@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::config::ElectrsConfig;
+
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds};
@@ -476,6 +479,9 @@ pub struct WalletConfig {
     pub rpc_listen: SocketAddr,
     #[serde(default)]
     pub node: WalletNodeRuntimeConfig,
+    #[cfg(feature = "vendor_electrs")]
+    #[serde(default = "default_wallet_electrs_config")]
+    pub electrs: Option<ElectrsConfig>,
 }
 
 fn default_wallet_rpc_listen() -> SocketAddr {
@@ -515,6 +521,8 @@ impl WalletConfig {
         if let Some(parent) = self.key_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        #[cfg(feature = "vendor_electrs")]
+        self.ensure_electrs_directories()?;
         Ok(())
     }
 
@@ -535,7 +543,43 @@ impl WalletConfig {
                 "wallet node runtime gossip endpoints must not be empty".into(),
             ));
         }
+        #[cfg(feature = "vendor_electrs")]
+        self.validate_electrs()?;
         Ok(())
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn ensure_electrs_directories(&self) -> ChainResult<()> {
+        if let Some(electrs) = self.electrs.as_ref() {
+            if electrs.features.runtime || electrs.features.tracker {
+                fs::create_dir_all(self.electrs_firewood_dir())?;
+                fs::create_dir_all(self.electrs_index_dir())?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn validate_electrs(&self) -> ChainResult<()> {
+        if let Some(electrs) = self.electrs.as_ref() {
+            if electrs.features.tracker && !electrs.features.runtime {
+                return Err(ChainError::Config(
+                    "wallet electrs tracker feature requires the runtime feature".into(),
+                ));
+            }
+            self.ensure_electrs_directories()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn electrs_firewood_dir(&self) -> PathBuf {
+        self.data_dir.join("electrs").join("firewood")
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    pub fn electrs_index_dir(&self) -> PathBuf {
+        self.data_dir.join("electrs").join("index")
     }
 }
 
@@ -549,8 +593,15 @@ impl Default for WalletConfig {
                 embedded: false,
                 gossip_endpoints: vec!["/ip4/127.0.0.1/tcp/7600".to_string()],
             },
+            #[cfg(feature = "vendor_electrs")]
+            electrs: default_wallet_electrs_config(),
         }
     }
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn default_wallet_electrs_config() -> Option<ElectrsConfig> {
+    Some(ElectrsConfig::default())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
