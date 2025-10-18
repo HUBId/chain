@@ -12,6 +12,8 @@ pub struct ElectrsConfig {
     pub network: NetworkSelection,
     /// Optional feature toggles that enable runtime-backed components.
     pub features: FeatureGates,
+    /// Cache configuration for vendor integrations.
+    pub cache: CacheConfig,
 }
 
 impl Default for ElectrsConfig {
@@ -19,6 +21,7 @@ impl Default for ElectrsConfig {
         Self {
             network: NetworkSelection::Regtest,
             features: FeatureGates::default(),
+            cache: CacheConfig::default(),
         }
     }
 }
@@ -69,6 +72,41 @@ impl Default for FeatureGates {
     }
 }
 
+/// Cache configuration influencing warmup and telemetry behaviour.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CacheConfig {
+    /// Telemetry settings for cache statistics.
+    pub telemetry: CacheTelemetryConfig,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            telemetry: CacheTelemetryConfig::default(),
+        }
+    }
+}
+
+/// Controls how the cache reports telemetry and where it stores warmup data.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CacheTelemetryConfig {
+    /// Enable or disable telemetry collection for cache interactions.
+    pub enabled: bool,
+    /// Optional hex-encoded prefix used when persisting warmup entries.
+    pub warmup_prefix: Option<String>,
+}
+
+impl Default for CacheTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            warmup_prefix: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +117,8 @@ mod tests {
         assert_eq!(config.network, NetworkSelection::Regtest);
         assert!(!config.features.runtime);
         assert!(!config.features.tracker);
+        assert!(!config.cache.telemetry.enabled);
+        assert!(config.cache.telemetry.warmup_prefix.is_none());
     }
 
     #[test]
@@ -89,6 +129,12 @@ mod tests {
                 runtime: true,
                 tracker: false,
             },
+            cache: CacheConfig {
+                telemetry: CacheTelemetryConfig {
+                    enabled: true,
+                    warmup_prefix: Some("cafebabe".into()),
+                },
+            },
         };
 
         let json = serde_json::to_string(&config).expect("serialize");
@@ -97,5 +143,10 @@ mod tests {
         assert_eq!(restored.network, NetworkSelection::Signet);
         assert!(restored.features.runtime);
         assert!(!restored.features.tracker);
+        assert!(restored.cache.telemetry.enabled);
+        assert_eq!(
+            restored.cache.telemetry.warmup_prefix,
+            Some("cafebabe".into())
+        );
     }
 }

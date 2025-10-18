@@ -19,6 +19,7 @@ vendor_electrs = [
     "dep:rpp",
     "dep:rpp_p2p",
     "dep:hex",
+    "dep:parking_lot",
 ]
 
 [dependencies]
@@ -32,6 +33,7 @@ tokio = { version = "1.37", features = ["sync"], optional = true }
 rpp = { package = "firewood", path = "../../firewood", optional = true }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
 hex = { version = "0.4", optional = true }
+parking_lot = { version = "0.12", optional = true }
 
 [dev-dependencies]
 tempfile = "3.10"

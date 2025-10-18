@@ -432,6 +432,13 @@ pub mod rpp_ledger {
 pub mod firewood_adapter;
 pub mod init;
 
+pub mod cache {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/cache.rs"
+    ));
+}
+
 pub mod chain {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
