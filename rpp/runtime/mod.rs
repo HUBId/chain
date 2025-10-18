@@ -119,6 +119,7 @@ impl RuntimeProfile {
 }
 
 pub mod node_runtime;
+pub mod supervisor;
 pub mod telemetry;
 
 #[cfg(test)]

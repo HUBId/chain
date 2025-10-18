@@ -2,7 +2,7 @@
 
 - **Upstream-Quelle:** `vendor/electrs-master.zip`
 - **Referenz-Commit:** `4a5af61668a1414f112fe8b07b23bff554779a4f`
-- **Importumfang:** `src/chain.rs`, `src/types.rs`
+- **Importumfang:** `src/chain.rs`, `src/types.rs`, `src/signals.rs`
 
 ## Aktualisierungsschritte
 

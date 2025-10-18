@@ -489,6 +489,14 @@ pub mod daemon {
     ));
 }
 
+#[cfg(feature = "vendor_electrs")]
+pub mod signals {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/electrs/2024-05-20/src/signals.rs"
+    ));
+}
+
 pub mod status {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -515,4 +523,8 @@ pub use self::status::{Balance, HistoryEntry, ScriptHashStatus, UnspentEntry};
 #[cfg(feature = "backend-rpp-stark")]
 pub use self::status::HistoryEntryWithMetadata;
 pub use self::tracker::Tracker;
+#[cfg(feature = "vendor_electrs")]
+pub use self::signals::{ExitFlag, Signal};
+#[cfg(all(feature = "vendor_electrs", feature = "vendor_electrs_test_support"))]
+pub use self::signals::TestSignal;
 pub use init::{initialize, ElectrsHandles};
