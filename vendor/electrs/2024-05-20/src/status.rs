@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "backend-rpp-stark")]
+use std::convert::TryFrom;
 
 use anyhow::{anyhow, Context};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
 
 #[cfg(feature = "backend-rpp-stark")]
-use crate::zk::rpp_adapter::{Digest32, RppStarkHasher};
+use crate::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher};
 
 use crate::vendor::electrs::chain::Chain;
 use crate::vendor::electrs::index::Index;
@@ -21,6 +23,11 @@ use crate::vendor::electrs::types::{
     ScriptHash, StatusDigest, StoredTransactionMetadata,
 };
 use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
+#[cfg(feature = "backend-rpp-stark")]
+use rpp::{
+    proofs::rpp::encode_transaction_witness,
+    runtime::types::proofs::RppStarkProof,
+};
 
 fn hex_string(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -105,24 +112,40 @@ pub struct HistoryEntry {
     txid: Txid,
     height: Height,
     fee: Option<u64>,
+    #[cfg(feature = "backend-rpp-stark")]
+    digest: Option<StatusDigest>,
 }
 
 impl HistoryEntry {
-    fn confirmed(txid: Txid, height: usize, fee: Option<u64>) -> Self {
+    fn confirmed(
+        txid: Txid,
+        height: usize,
+        fee: Option<u64>,
+        #[cfg(feature = "backend-rpp-stark")] digest: Option<StatusDigest>,
+    ) -> Self {
         Self {
             txid,
             height: Height::Confirmed { height },
             fee,
+            #[cfg(feature = "backend-rpp-stark")]
+            digest,
         }
     }
 
-    fn unconfirmed(txid: Txid, has_unconfirmed_inputs: bool, fee: u64) -> Self {
+    fn unconfirmed(
+        txid: Txid,
+        has_unconfirmed_inputs: bool,
+        fee: u64,
+        #[cfg(feature = "backend-rpp-stark")] digest: Option<StatusDigest>,
+    ) -> Self {
         Self {
             txid,
             height: Height::Unconfirmed {
                 has_unconfirmed_inputs,
             },
             fee: Some(fee),
+            #[cfg(feature = "backend-rpp-stark")]
+            digest,
         }
     }
 
@@ -130,6 +153,11 @@ impl HistoryEntry {
     fn hash(&self, hasher: &mut RppStarkHasher) {
         hasher.update(self.txid.as_bytes());
         hasher.update(&self.height.as_i64().to_le_bytes());
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn digest(&self) -> Option<&StatusDigest> {
+        self.digest.as_ref()
     }
 
     #[cfg(not(feature = "backend-rpp-stark"))]
@@ -149,6 +177,10 @@ impl Serialize for HistoryEntry {
         state.serialize_field("height", &self.height)?;
         if let Some(fee) = self.fee {
             state.serialize_field("fee", &fee)?;
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        if let Some(digest) = &self.digest {
+            state.serialize_field("digest", digest)?;
         }
         state.end()
     }
@@ -303,7 +335,14 @@ fn process_confirmed_transaction(
     history: &mut Vec<HistoryEntry>,
 ) -> anyhow::Result<()> {
     let fee = metadata.map(|meta| meta.transaction.payload.fee);
-    history.push(HistoryEntry::confirmed(txid, height, fee));
+    #[cfg(feature = "backend-rpp-stark")]
+    let history_entry = {
+        let digest = confirmed_entry_digest(metadata)?;
+        HistoryEntry::confirmed(txid, height, fee, digest)
+    };
+    #[cfg(not(feature = "backend-rpp-stark"))]
+    let history_entry = HistoryEntry::confirmed(txid, height, fee);
+    history.push(history_entry);
 
     for input in transaction.inputs() {
         if let Some((_, value)) = outputs.remove(input) {
@@ -354,6 +393,12 @@ fn mempool_entry(
         return Ok(None);
     }
     let amount = u64::try_from(tx.amount).context("mempool amount exceeds u64")?;
+    #[cfg(feature = "backend-rpp-stark")]
+    let entry = {
+        let digest = mempool_entry_digest(tx)?;
+        HistoryEntry::unconfirmed(txid, false, tx.fee, digest)
+    };
+    #[cfg(not(feature = "backend-rpp-stark"))]
     let entry = HistoryEntry::unconfirmed(txid, false, tx.fee);
     Ok(Some((entry, amount)))
 }
@@ -388,7 +433,10 @@ fn compute_statushash(history: &[HistoryEntry]) -> Option<StatusDigest> {
     }
     let mut hasher = RppStarkHasher::new();
     for entry in history {
-        entry.hash(&mut hasher);
+        match entry.digest() {
+            Some(digest) => hasher.update(digest.as_bytes()),
+            None => hasher.update(&[0u8; 32]),
+        }
     }
     let digest: Digest32 = hasher.finalize();
     Some(StatusDigest::from_digest(digest))
@@ -406,6 +454,56 @@ fn compute_statushash(history: &[HistoryEntry]) -> Option<StatusDigest> {
     }
     let digest = sha256::Hash::hash(&encoded).into_inner();
     Some(StatusDigest::from_bytes(digest))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn confirmed_entry_digest(
+    metadata: Option<&StoredTransactionMetadata>,
+) -> anyhow::Result<Option<StatusDigest>> {
+    let Some(metadata) = metadata else {
+        return Ok(None);
+    };
+    let Some(witness) = metadata.witness.as_ref() else {
+        return Ok(None);
+    };
+    let witness_bytes = encode_transaction_witness(witness)
+        .map_err(|err| anyhow!("encode transaction witness payload: {err}"))?;
+    let Some(proof_bytes) = metadata.rpp_stark_proof.as_deref() else {
+        return Ok(None);
+    };
+    let public_digest = parse_public_inputs_digest(proof_bytes)?;
+    Ok(Some(hash_entry_components(Some(&witness_bytes), public_digest)))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn mempool_entry_digest(tx: &PendingTransactionSummary) -> anyhow::Result<Option<StatusDigest>> {
+    let Some(hex_digest) = tx.public_inputs_digest.as_deref() else {
+        return Ok(None);
+    };
+    let public_digest = Digest32::from_hex(hex_digest)
+        .map_err(|err| anyhow!("decode mempool public input digest: {err}"))?;
+    Ok(Some(hash_entry_components(None, public_digest)))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn parse_public_inputs_digest(bytes: &[u8]) -> anyhow::Result<Digest32> {
+    let proof: RppStarkProof = serde_json::from_slice(bytes)
+        .context("decode stored rpp-stark proof payload")?;
+    Ok(compute_public_digest(proof.public_inputs()))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn hash_entry_components(
+    witness_bytes: Option<&[u8]>,
+    public_digest: Digest32,
+) -> StatusDigest {
+    let witness_bytes = witness_bytes.unwrap_or(&[]);
+    let witness_len = u32::try_from(witness_bytes.len()).unwrap_or(u32::MAX);
+    let mut hasher = RppStarkHasher::new();
+    hasher.update(&witness_len.to_le_bytes());
+    hasher.update(witness_bytes);
+    hasher.update(public_digest.as_bytes());
+    StatusDigest::from_digest(hasher.finalize())
 }
 
 #[cfg(test)]
@@ -475,6 +573,8 @@ mod tests {
             amount,
             fee: 7,
             nonce: 1,
+            #[cfg(feature = "backend-rpp-stark")]
+            public_inputs_digest: None,
         };
         let mempool = MempoolStatus {
             transactions: vec![pending],

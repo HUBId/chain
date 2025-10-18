@@ -28,6 +28,13 @@ fn encode_witness_payload<T: Serialize>(circuit: &str, payload: &T) -> ChainResu
         .map(WitnessBytes::into_inner)
 }
 
+/// Serialises a single transaction witness into the canonical encoding used by
+/// proof backends.
+#[cfg(feature = "backend-rpp-stark")]
+pub fn encode_transaction_witness(witness: &TransactionWitness) -> ChainResult<Vec<u8>> {
+    encode_witness_payload(CIRCUIT_TRANSACTIONS, witness)
+}
+
 /// Enumeration of all state modules that participate in the recursive pruning proof pipeline.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum StateModule {
