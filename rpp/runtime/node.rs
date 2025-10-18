@@ -72,6 +72,8 @@ use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
 #[cfg(feature = "backend-rpp-stark")]
+use crate::zk::rpp_adapter::compute_public_digest;
+#[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
 use rpp_p2p::{GossipTopic, HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
 
@@ -106,6 +108,9 @@ pub struct PendingTransactionSummary {
     pub amount: u128,
     pub fee: u64,
     pub nonce: u64,
+    #[cfg(feature = "backend-rpp-stark")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_inputs_digest: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2440,13 +2445,23 @@ impl NodeInner {
             .mempool
             .read()
             .iter()
-            .map(|bundle| PendingTransactionSummary {
-                hash: bundle.hash(),
-                from: bundle.transaction.payload.from.clone(),
-                to: bundle.transaction.payload.to.clone(),
-                amount: bundle.transaction.payload.amount,
-                fee: bundle.transaction.payload.fee,
-                nonce: bundle.transaction.payload.nonce,
+            .map(|bundle| {
+                #[cfg(feature = "backend-rpp-stark")]
+                let public_inputs_digest = bundle
+                    .proof
+                    .expect_rpp_stark()
+                    .ok()
+                    .map(|artifact| compute_public_digest(artifact.public_inputs()).to_hex());
+                PendingTransactionSummary {
+                    hash: bundle.hash(),
+                    from: bundle.transaction.payload.from.clone(),
+                    to: bundle.transaction.payload.to.clone(),
+                    amount: bundle.transaction.payload.amount,
+                    fee: bundle.transaction.payload.fee,
+                    nonce: bundle.transaction.payload.nonce,
+                    #[cfg(feature = "backend-rpp-stark")]
+                    public_inputs_digest,
+                }
             })
             .collect();
         let identities = self
