@@ -18,6 +18,10 @@ pub use crate::types::UptimeProof;
 pub use proofs::{ProofGenerator, TxProof};
 pub use tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 pub use wallet::{ConsensusReceipt, Wallet, WalletAccountSummary, WalletNodeRuntimeStatus};
+#[cfg(feature = "vendor_electrs")]
+pub use wallet::{
+    ScriptStatusMetadata, TrackerSnapshot, TrackedScriptSnapshot, TrackerState, WalletTrackerHandle,
+};
 pub use workflows::{
     IdentityFinalizationPhase, IdentityGenesisPhase, IdentityQuorumPhase, IdentityWorkflow,
     IdentityWorkflowState, ReputationStatus, TransactionPolicy, TransactionWorkflow,

@@ -19,6 +19,7 @@ use tracing::info;
 
 use crate::consensus::SignedBftVote;
 use crate::errors::{ChainError, ChainResult};
+use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
@@ -35,9 +36,12 @@ use crate::types::{
     TransactionProofBundle, UptimeProof,
 };
 use crate::wallet::{
-    ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet,
-    WalletAccountSummary,
+    ConsensusReceipt, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet, WalletAccountSummary,
 };
+#[cfg(feature = "vendor_electrs")]
+use crate::interfaces::WalletTrackerSnapshot;
+#[cfg(feature = "vendor_electrs")]
+use crate::wallet::{TrackerState, WalletTrackerHandle};
 use parking_lot::RwLock;
 
 #[derive(Clone)]
@@ -45,6 +49,8 @@ pub struct ApiContext {
     mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
     wallet: Option<Arc<Wallet>>,
+    #[cfg(feature = "vendor_electrs")]
+    tracker: Option<WalletTrackerHandle>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     request_limit_per_minute: Option<NonZeroU64>,
 }
@@ -57,10 +63,17 @@ impl ApiContext {
         orchestrator: Option<Arc<PipelineOrchestrator>>,
         request_limit_per_minute: Option<NonZeroU64>,
     ) -> Self {
+        #[cfg(feature = "vendor_electrs")]
+        let tracker = wallet
+            .as_ref()
+            .and_then(|wallet| wallet.tracker_handle());
+
         Self {
             mode,
             node,
             wallet,
+            #[cfg(feature = "vendor_electrs")]
+            tracker,
             orchestrator,
             request_limit_per_minute,
         }
@@ -117,6 +130,11 @@ impl ApiContext {
 
     fn wallet_handle(&self) -> Option<Arc<Wallet>> {
         self.wallet.as_ref().map(Arc::clone)
+    }
+
+    #[cfg(feature = "vendor_electrs")]
+    fn tracker_state(&self) -> Option<TrackerState> {
+        self.tracker.as_ref().map(|handle| handle.state())
     }
 
     fn require_node(&self) -> Result<NodeHandle, (StatusCode, Json<ErrorResponse>)> {
@@ -336,18 +354,6 @@ struct ProveTxResponse {
 #[derive(Deserialize)]
 struct SubmitTxRequest {
     bundle: TransactionProofBundle,
-}
-
-#[derive(Serialize)]
-struct BalanceResponse {
-    address: Address,
-    balance: u128,
-    nonce: u64,
-}
-
-#[derive(Serialize)]
-struct WalletHistoryResponse {
-    entries: Vec<HistoryEntry>,
 }
 
 #[derive(Deserialize)]
@@ -652,14 +658,44 @@ async fn update_runtime_mode(
     Ok(Json(state.runtime_state()))
 }
 
+fn wallet_history_payload(
+    state: &ApiContext,
+    wallet: &Wallet,
+) -> Result<WalletHistoryResponse, (StatusCode, Json<ErrorResponse>)> {
+    #[cfg(feature = "vendor_electrs")]
+    let tracker_state = state.tracker_state();
+
+    #[cfg(feature = "vendor_electrs")]
+    if matches!(tracker_state.as_ref(), Some(TrackerState::Pending)) {
+        return Err(tracker_sync_pending());
+    }
+
+    let entries = wallet.history().map_err(to_http_error)?;
+
+    #[cfg(feature = "vendor_electrs")]
+    let script_metadata = wallet.script_status_metadata();
+
+    #[cfg(feature = "vendor_electrs")]
+    let tracker = tracker_state
+        .and_then(|state| match state {
+            TrackerState::Ready(snapshot) => Some(WalletTrackerSnapshot::from(snapshot)),
+            TrackerState::Pending | TrackerState::Disabled => None,
+        });
+
+    Ok(WalletHistoryResponse {
+        entries,
+        #[cfg(feature = "vendor_electrs")]
+        script_metadata,
+        #[cfg(feature = "vendor_electrs")]
+        tracker,
+    })
+}
+
 async fn ui_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    wallet
-        .history()
-        .map(|entries| Json(WalletHistoryResponse { entries }))
-        .map_err(to_http_error)
+    wallet_history_payload(&state, wallet.as_ref()).map(Json)
 }
 
 async fn ui_send_preview(
@@ -1003,14 +1039,22 @@ async fn wallet_account(
 async fn wallet_balance(
     State(state): State<ApiContext>,
     Path(address): Path<String>,
-) -> Result<Json<BalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<WalletBalanceResponse>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    let account = wallet.account_by_address(&address).map_err(to_http_error)?;
-    match account {
-        Some(account) => Ok(Json(BalanceResponse {
-            address: account.address,
-            balance: account.balance,
-            nonce: account.nonce,
+    #[cfg(feature = "vendor_electrs")]
+    if matches!(state.tracker_state(), Some(TrackerState::Pending)) {
+        return Err(tracker_sync_pending());
+    }
+    match wallet
+        .account_summary_for(&address)
+        .map_err(to_http_error)?
+    {
+        Some(summary) => Ok(Json(WalletBalanceResponse {
+            address: summary.address,
+            balance: summary.balance,
+            nonce: summary.nonce,
+            #[cfg(feature = "vendor_electrs")]
+            mempool_delta: summary.mempool_delta,
         })),
         None => Err(not_found("account not found")),
     }
@@ -1021,8 +1065,14 @@ async fn wallet_reputation(
     Path(address): Path<String>,
 ) -> Result<Json<Option<WalletAccountSummary>>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    let account = wallet.account_by_address(&address).map_err(to_http_error)?;
-    Ok(Json(account.map(|account| summarize_account(&account))))
+    #[cfg(feature = "vendor_electrs")]
+    if matches!(state.tracker_state(), Some(TrackerState::Pending)) {
+        return Err(tracker_sync_pending());
+    }
+    wallet
+        .account_summary_for(&address)
+        .map(Json)
+        .map_err(to_http_error)
 }
 
 async fn wallet_tier(
@@ -1043,10 +1093,7 @@ async fn wallet_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    wallet
-        .history()
-        .map(|entries| Json(WalletHistoryResponse { entries }))
-        .map_err(to_http_error)
+    wallet_history_payload(&state, wallet.as_ref()).map(Json)
 }
 
 async fn wallet_send_preview(
@@ -1257,6 +1304,16 @@ fn not_started(component: &str) -> (StatusCode, Json<ErrorResponse>) {
     )
 }
 
+#[cfg(feature = "vendor_electrs")]
+fn tracker_sync_pending() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: "tracker synchronisation pending".to_string(),
+        }),
+    )
+}
+
 fn not_found(message: &str) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::NOT_FOUND,
@@ -1264,15 +1321,4 @@ fn not_found(message: &str) -> (StatusCode, Json<ErrorResponse>) {
             error: message.to_string(),
         }),
     )
-}
-
-fn summarize_account(account: &Account) -> WalletAccountSummary {
-    WalletAccountSummary {
-        address: account.address.clone(),
-        balance: account.balance,
-        nonce: account.nonce,
-        reputation_score: account.reputation.score,
-        tier: account.reputation.tier.clone(),
-        uptime_hours: account.reputation.timetokes.hours_online,
-    }
 }
