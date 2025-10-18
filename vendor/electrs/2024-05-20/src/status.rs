@@ -350,6 +350,49 @@ impl HistoryEntry {
     fn conflict(&self) -> Option<&HistoryConflictReason> {
         self.conflict.as_ref()
     }
+
+    /// Transaction identifier encoded in the status entry.
+    pub fn txid(&self) -> Txid {
+        self.txid
+    }
+
+    /// Transaction identifier encoded as a lowercase hexadecimal string.
+    pub fn txid_hex(&self) -> String {
+        hex_string(self.txid.as_bytes())
+    }
+
+    /// Height of the block confirming the transaction, when available.
+    pub fn confirmed_height(&self) -> Option<usize> {
+        match self.height {
+            Height::Confirmed { height } => Some(height),
+            Height::Unconfirmed { .. } => None,
+        }
+    }
+
+    /// Whether the entry represents an unconfirmed (mempool) transaction.
+    pub fn is_unconfirmed(&self) -> bool {
+        matches!(self.height, Height::Unconfirmed { .. })
+    }
+
+    /// Whether the unconfirmed transaction has unresolved input dependencies.
+    pub fn has_unconfirmed_inputs(&self) -> bool {
+        matches!(
+            self.height,
+            Height::Unconfirmed {
+                has_unconfirmed_inputs: true,
+            }
+        )
+    }
+
+    /// Reported fee for the transaction, when known.
+    pub fn fee(&self) -> Option<u64> {
+        self.fee
+    }
+
+    /// Flag signalling if the tracker detected a double-spend scenario.
+    pub fn double_spend(&self) -> Option<bool> {
+        self.double_spend
+    }
 }
 
 impl Serialize for HistoryEntry {
@@ -544,6 +587,16 @@ impl ScriptHashStatus {
     /// Digest of the status history including RPP metadata when enabled.
     pub fn status_digest(&self) -> Option<StatusDigest> {
         self.statushash
+    }
+
+    /// Confirmed balance associated with the script hash.
+    pub fn confirmed_balance(&self) -> u64 {
+        self.confirmed_balance
+    }
+
+    /// Net mempool delta affecting the tracked script hash.
+    pub fn mempool_delta(&self) -> i64 {
+        self.mempool_delta
     }
 
     #[cfg(feature = "backend-rpp-stark")]
