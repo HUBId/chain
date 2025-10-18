@@ -56,7 +56,8 @@ The `rppd` binary exposes subcommands for node lifecycle (start, keygen, migrate
 * **`[node] gossip_endpoints`** – enumerates gossip peers for client-mode wallets and is validated to be non-empty when the embedded node is off, ensuring the wallet can still sync blocks and proofs.【F:rpp/runtime/config.rs†L231-L274】【F:config/wallet.toml†L1-L6】
 * **`[electrs] network`** – maps auf `NetworkSelection` und bestimmt Genesis, Header-Hashes und ScriptHash-Prüfpfad des Trackers.【F:rpp/wallet/src/config.rs†L10-L44】【F:rpp/wallet/src/vendor/electrs/init.rs†L63-L82】
 * **`[electrs.features] runtime`** – aktiviert Runtime-Adapter, wodurch der Daemon Firewood und Pipeline-Orchestrator des Knotens verwendet.【F:rpp/wallet/src/config.rs†L46-L80】【F:rpp/wallet/src/vendor/electrs/firewood_adapter.rs†L18-L118】
-* **`[electrs.features] tracker`** – bringt den High-Level-Tracker hoch; er verlangt aktiviertes Runtime-Flag und stellt History-, Proof- und VRF-APIs bereit.【F:rpp/wallet/src/config.rs†L57-L80】【F:vendor/electrs/2024-05-20/src/tracker.rs†L39-L151】
+* **`[electrs.features] tracker`** – bringt den High-Level-Tracker hoch; er verlangt aktiviertes Runtime-Flag und stellt History-, Proof- und VRF-APIs bereit. Die Runtime-Konfiguration validiert diese Abhängigkeit bereits beim Laden.【F:rpp/wallet/src/config.rs†L57-L80】【F:vendor/electrs/2024-05-20/src/tracker.rs†L39-L151】【F:rpp/runtime/config.rs†L520-L548】
+* **`data/electrs/*`** – sobald Runtime- oder Tracker-Features aktiv sind, legt der Wallet-Loader die Firewood- und Index-Verzeichnisse unterhalb des Wallet-`data_dir` automatisch an (siehe Beispielkonfiguration).【F:rpp/runtime/config.rs†L532-L548】【F:config/wallet.toml†L9-L34】
 
 ### Vendor-Feature-Flags
 

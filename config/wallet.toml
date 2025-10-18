@@ -5,3 +5,29 @@ rpc_listen = "127.0.0.1:9090"
 [node]
 embedded = false
 gossip_endpoints = ["/ip4/127.0.0.1/tcp/7600"]
+
+# Electrs data is stored under "./data/electrs/firewood" and "./data/electrs/index" when enabled.
+[electrs]
+network = "regtest"
+
+[electrs.features]
+runtime = false
+tracker = false
+
+[electrs.cache.telemetry]
+enabled = false
+warmup_prefix = null
+
+[electrs.tracker]
+telemetry_endpoint = "127.0.0.1:0"
+
+[electrs.tracker.notifications]
+p2p = false
+topic = "/rpp/gossip/blocks/1.0.0"
+
+[electrs.p2p]
+enabled = false
+metrics_endpoint = "127.0.0.1:0"
+network_id = "rpp-local"
+auth_token = null
+gossip_topics = ["/rpp/gossip/blocks/1.0.0"]
