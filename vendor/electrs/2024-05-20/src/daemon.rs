@@ -13,16 +13,30 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::blockdata::{
 use crate::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, Network, OutPoint, Script, Txid};
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction as LedgerTransaction;
 use crate::vendor::electrs::types::{
-    HashPrefixRow, SerBlock, TxidRow, bsl_txid, serialize_block, serialize_transaction,
-    HASH_PREFIX_ROW_SIZE,
+    encode_ledger_memo, encode_ledger_script, encode_transaction_metadata, HashPrefixRow,
+    LedgerMemoPayload, LedgerScriptPayload, SerBlock, StoredTransactionMetadata, TxidRow,
+    bsl_txid, serialize_block, serialize_transaction, HASH_PREFIX_ROW_SIZE,
 };
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
-    Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, SignedTransaction,
+    Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, SignedTransaction,
 };
+use rpp::proofs::rpp::TransactionWitness;
 use rpp_p2p::GossipTopic;
 use sha2::{Digest, Sha512};
 use tokio::sync::broadcast;
+
+#[derive(Clone, Debug)]
+pub struct ConvertedBlock {
+    pub ledger_header: LedgerBlockHeader,
+    pub ledger_transactions: Vec<LedgerTransaction>,
+    pub runtime_header: RuntimeBlockHeader,
+    pub runtime_transactions: Vec<SignedTransaction>,
+    pub transaction_witnesses: Vec<TransactionWitness>,
+    pub transaction_metadata: Vec<Option<Vec<u8>>>,
+    #[cfg(feature = "backend-rpp-stark")]
+    pub rpp_stark_proofs: Vec<Vec<u8>>,
+}
 
 /// Lightweight daemon harness that mimics a Bitcoin Core RPC backend.
 ///
@@ -61,8 +75,8 @@ impl Daemon {
             .map_err(|err| anyhow!("query latest block: {err}"))?;
 
         if let Some(block) = latest {
-            let (header, _) = Self::convert_block(&block);
-            Ok(header.block_hash())
+            let converted = Self::convert_block(&block);
+            Ok(converted.ledger_header.block_hash())
         } else {
             let genesis = constants::genesis_block(self.network());
             Ok(genesis.header.block_hash())
@@ -110,10 +124,7 @@ impl Daemon {
     }
 
     /// Snapshot all blocks that appear above the provided height.
-    pub fn blocks_since(
-        &self,
-        height: usize,
-    ) -> Result<Vec<(LedgerBlockHeader, Vec<LedgerTransaction>)>> {
+    pub fn blocks_since(&self, height: usize) -> Result<Vec<ConvertedBlock>> {
         let start = height
             .checked_add(1)
             .ok_or_else(|| anyhow!("height overflow"))?;
@@ -194,11 +205,11 @@ impl Daemon {
                 let Some(expected_hash) = height_to_hash.get(&block.header.height) else {
                     continue;
                 };
-                let (header, transactions) = Self::convert_block(&block);
-                if header.block_hash() != *expected_hash {
+                let converted = Self::convert_block(&block);
+                if converted.ledger_header.block_hash() != *expected_hash {
                     continue;
                 }
-                let serialized = serialize_block(&transactions);
+                let serialized = serialize_block(&converted.ledger_transactions);
                 serialized_blocks.entry(*expected_hash).or_insert(serialized);
             }
 
@@ -251,11 +262,11 @@ impl Daemon {
                 Some(block) => block,
                 None => continue,
             };
-            let (header, transactions) = Self::convert_block(&block);
-            for tx in &transactions {
+            let converted = Self::convert_block(&block);
+            for tx in &converted.ledger_transactions {
                 if bsl_txid(tx) == txid {
                     let bytes = serialize_transaction(tx).into_boxed_slice();
-                    return Some((header.block_hash(), bytes));
+                    return Some((converted.ledger_header.block_hash(), bytes));
                 }
             }
         }
@@ -276,11 +287,7 @@ impl Daemon {
             .unwrap_or(status.height))
     }
 
-    fn collect_blocks(
-        &self,
-        start: u64,
-        end: u64,
-    ) -> Result<Vec<(LedgerBlockHeader, Vec<LedgerTransaction>)>> {
+    fn collect_blocks(&self, start: u64, end: u64) -> Result<Vec<ConvertedBlock>> {
         if start > end {
             return Ok(Vec::new());
         }
@@ -294,10 +301,7 @@ impl Daemon {
         Ok(blocks)
     }
 
-    fn fetch_block(
-        &self,
-        height: u64,
-    ) -> Result<Option<(LedgerBlockHeader, Vec<LedgerTransaction>)>> {
+    fn fetch_block(&self, height: u64) -> Result<Option<ConvertedBlock>> {
         let block = self
             .runtime
             .node()
@@ -306,16 +310,24 @@ impl Daemon {
         Ok(block.map(|block| Self::convert_block(&block)))
     }
 
-    pub(crate) fn convert_block(
-        block: &RuntimeBlock,
-    ) -> (LedgerBlockHeader, Vec<LedgerTransaction>) {
-        let header = Self::convert_runtime_header(&block.header);
-        let transactions = block
+    pub(crate) fn convert_block(block: &RuntimeBlock) -> ConvertedBlock {
+        let ledger_header = Self::convert_runtime_header(&block.header);
+        let ledger_transactions = block
             .transactions
             .iter()
             .map(Self::convert_transaction)
             .collect();
-        (header, transactions)
+        let transaction_metadata = Self::build_transaction_metadata(block);
+        ConvertedBlock {
+            ledger_header,
+            ledger_transactions,
+            runtime_header: block.header.clone(),
+            runtime_transactions: block.transactions.clone(),
+            transaction_witnesses: block.module_witnesses.transactions.clone(),
+            transaction_metadata,
+            #[cfg(feature = "backend-rpp-stark")]
+            rpp_stark_proofs: Self::collect_rpp_stark_payloads(block),
+        }
     }
 
     fn convert_runtime_header(header: &RuntimeBlockHeader) -> LedgerBlockHeader {
@@ -346,27 +358,108 @@ impl Daemon {
     }
 
     fn convert_transaction(tx: &SignedTransaction) -> LedgerTransaction {
-        let input_tag = format!("{}:{}", tx.id, tx.payload.nonce);
-        let outpoint = OutPoint::new(Txid(Self::hash_to_array::<32>(input_tag.as_bytes())), 0);
+        let tx_hash = tx.hash();
+        let txid = Txid::from_slice(&tx_hash)
+            .unwrap_or_else(|_| Txid(Self::hash_to_array::<32>(&tx_hash)));
+        let outpoint = OutPoint::new(txid, 0);
 
-        let to_script = format!("to:{}:{}", tx.payload.to, tx.payload.amount).into_bytes();
-        let from_script = format!("from:{}:{}", tx.payload.from, tx.payload.fee).into_bytes();
+        let to_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+            to: tx.payload.to.clone(),
+            amount: tx.payload.amount,
+        }));
+        let from_script = Script::new(encode_ledger_script(&LedgerScriptPayload::Sender {
+            from: tx.payload.from.clone(),
+            fee: tx.payload.fee,
+        }));
 
-        let mut memo = format!(
-            "from={};to={};amount={};fee={};nonce={}",
-            tx.payload.from, tx.payload.to, tx.payload.amount, tx.payload.fee, tx.payload.nonce
-        )
-        .into_bytes();
-        if let Some(extra) = &tx.payload.memo {
-            memo.extend_from_slice(b";memo=");
-            memo.extend_from_slice(extra.as_bytes());
+        let memo = encode_ledger_memo(&LedgerMemoPayload {
+            nonce: tx.payload.nonce,
+            memo: tx.payload.memo.clone(),
+            signature: tx.signature.clone(),
+            public_key: tx.public_key.clone(),
+        });
+
+        LedgerTransaction::new(vec![outpoint], vec![to_script, from_script], memo)
+    }
+
+    fn build_transaction_metadata(block: &RuntimeBlock) -> Vec<Option<Vec<u8>>> {
+        let mut witness_by_id: HashMap<[u8; 32], TransactionWitness> = HashMap::new();
+        for witness in &block.module_witnesses.transactions {
+            witness_by_id.insert(witness.tx_id, witness.clone());
         }
 
-        LedgerTransaction::new(
-            vec![outpoint],
-            vec![Script::new(to_script), Script::new(from_script)],
-            memo,
-        )
+        block
+            .transactions
+            .iter()
+            .enumerate()
+            .map(|(index, tx)| {
+                let witness = witness_by_id.remove(&tx.hash());
+                let metadata = StoredTransactionMetadata {
+                    transaction: tx.clone(),
+                    witness,
+                    rpp_stark_proof: Self::transaction_proof_bytes(block, index),
+                };
+                Some(encode_transaction_metadata(&metadata))
+            })
+            .collect()
+    }
+
+    fn transaction_proof_bytes(block: &RuntimeBlock, index: usize) -> Option<Vec<u8>> {
+        #[cfg(feature = "backend-rpp-stark")]
+        {
+            block
+                .stark
+                .transaction_proofs
+                .get(index)
+                .and_then(|proof| match proof {
+                    ChainProof::RppStark(inner) => serde_json::to_vec(inner).ok(),
+                    _ => None,
+                })
+        }
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        {
+            let _ = (block, index);
+            None
+        }
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn collect_rpp_stark_payloads(block: &RuntimeBlock) -> Vec<Vec<u8>> {
+        let mut proofs = Vec::new();
+        for proof in &block.stark.transaction_proofs {
+            if let ChainProof::RppStark(inner) = proof {
+                if let Ok(bytes) = serde_json::to_vec(inner) {
+                    proofs.push(bytes);
+                }
+            }
+        }
+
+        for proof in [
+            &block.stark.state_proof,
+            &block.stark.pruning_proof,
+            &block.stark.recursive_proof,
+        ] {
+            if let ChainProof::RppStark(inner) = proof {
+                if let Ok(bytes) = serde_json::to_vec(inner) {
+                    proofs.push(bytes);
+                }
+            }
+        }
+
+        if let Some(proof) = block.consensus_proof.as_ref() {
+            if let ChainProof::RppStark(inner) = proof {
+                if let Ok(bytes) = serde_json::to_vec(inner) {
+                    proofs.push(bytes);
+                }
+            }
+        }
+
+        proofs
+    }
+
+    #[cfg(not(feature = "backend-rpp-stark"))]
+    fn collect_rpp_stark_payloads(_block: &RuntimeBlock) -> Vec<Vec<u8>> {
+        Vec::new()
     }
 
     fn decode_field<const N: usize>(candidates: &[&str]) -> [u8; N] {
@@ -527,13 +620,18 @@ pub(crate) mod test_helpers {
         let mut firewood =
             FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters).expect("firewood");
 
-        let (block_one_header, block_one_transactions) = Daemon::convert_block(&block_one);
-        let block_one_hash = block_one_header.block_hash();
-        let block_two_hash = Daemon::convert_block(&block_two).0.block_hash();
-        let transaction = block_one_transactions.first().expect("transaction");
+        let block_one_converted = Daemon::convert_block(&block_one);
+        let block_one_hash = block_one_converted.ledger_header.block_hash();
+        let block_two_hash = Daemon::convert_block(&block_two)
+            .ledger_header
+            .block_hash();
+        let transaction = block_one_converted
+            .ledger_transactions
+            .first()
+            .expect("transaction");
         let txid = bsl_txid(transaction);
         index_transaction(&mut firewood, txid, 1);
-        let expected_block_bytes = serialize_block(&block_one_transactions);
+        let expected_block_bytes = serialize_block(&block_one_converted.ledger_transactions);
         let expected_transaction_bytes = serialize_transaction(transaction).into_boxed_slice();
         firewood.commit().expect("commit index");
 
