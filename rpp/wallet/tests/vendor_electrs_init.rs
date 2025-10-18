@@ -14,7 +14,7 @@ use rpp::runtime::orchestration::PipelineOrchestrator;
 use rpp::runtime::sync::{PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier};
 use rpp::runtime::types::BlockPayload;
 
-use rpp_wallet::config::{ElectrsConfig, FeatureGates, NetworkSelection};
+use rpp_wallet::config::{CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection, TrackerConfig};
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 use rpp_wallet::vendor::electrs::init::initialize;
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::blockdata::constants;
@@ -36,6 +36,8 @@ fn initialize_with_runtime_and_tracker() -> Result<()> {
             runtime: true,
             tracker: true,
         },
+        cache: CacheConfig::default(),
+        tracker: TrackerConfig::default(),
     };
 
     let handles = initialize(&config, &firewood_dir, &index_dir, Some(runtime.clone()))?;
@@ -64,6 +66,8 @@ fn initialize_without_runtime_skips_optional_handles() -> Result<()> {
             runtime: false,
             tracker: false,
         },
+        cache: CacheConfig::default(),
+        tracker: TrackerConfig::default(),
     };
 
     let handles = initialize(&config, &firewood_dir, &index_dir, None)?;
@@ -89,6 +93,8 @@ fn tracker_requires_runtime() {
             runtime: false,
             tracker: true,
         },
+        cache: CacheConfig::default(),
+        tracker: TrackerConfig::default(),
     };
 
     let error = initialize(&config, &firewood_dir, &index_dir, None).expect_err("tracker needs runtime");

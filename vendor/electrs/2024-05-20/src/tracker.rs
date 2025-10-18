@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
@@ -10,8 +11,8 @@ use tokio::sync::broadcast::{self, error::TryRecvError};
 use crate::vendor::electrs::chain::Chain;
 use crate::vendor::electrs::daemon::Daemon;
 use crate::vendor::electrs::index::Index;
-#[cfg(feature = "vendor_electrs_telemetry")]
-use crate::vendor::electrs::metrics::malachite::telemetry::{self, GaugeHandle};
+use crate::vendor::electrs::mempool::{Mempool, MempoolSyncUpdate};
+use crate::vendor::electrs::metrics::Metrics;
 use crate::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, Script, Txid};
 use crate::vendor::electrs::status::{Balance, ScriptHashStatus, UnspentEntry};
 #[cfg(feature = "backend-rpp-stark")]
@@ -40,89 +41,26 @@ pub enum TransactionLookup {
 /// exposes convenience helpers for status tracking.
 pub struct Tracker {
     index: Index,
-    mempool: Option<MempoolStatus>,
+    mempool: Mempool,
     mempool_fingerprint: Option<[u8; 32]>,
     block_notifications: Option<broadcast::Receiver<Vec<u8>>>,
-    #[cfg(feature = "vendor_electrs_telemetry")]
-    mempool_metrics: Option<MempoolTelemetry>,
-}
-
-#[cfg(feature = "vendor_electrs_telemetry")]
-#[derive(Clone)]
-struct MempoolTelemetry {
-    transactions: GaugeHandle,
-    identities: GaugeHandle,
-    votes: GaugeHandle,
-    uptime: GaugeHandle,
-}
-
-#[cfg(feature = "vendor_electrs_telemetry")]
-impl MempoolTelemetry {
-    fn new() -> Self {
-        let registry = telemetry::registry();
-        Self {
-            transactions: registry.register_gauge(
-                "electrs_mempool_transactions",
-                "Pending transactions tracked in the runtime mempool snapshot",
-                "category",
-            ),
-            identities: registry.register_gauge(
-                "electrs_mempool_identities",
-                "Pending identity updates advertised in the runtime mempool",
-                "category",
-            ),
-            votes: registry.register_gauge(
-                "electrs_mempool_votes",
-                "Pending consensus votes published via the runtime mempool",
-                "category",
-            ),
-            uptime: registry.register_gauge(
-                "electrs_mempool_uptime_proofs",
-                "Pending uptime proofs observed in the runtime mempool",
-                "category",
-            ),
-        }
-    }
-
-    fn record(&self, status: &MempoolStatus) {
-        self.transactions
-            .set("pending", status.transactions.len() as f64);
-        self.identities
-            .set("pending", status.identities.len() as f64);
-        self.votes.set("pending", status.votes.len() as f64);
-        self.uptime
-            .set("pending", status.uptime_proofs.len() as f64);
-    }
-
-    fn clear(&self) {
-        self.transactions.set("pending", 0.0);
-        self.identities.set("pending", 0.0);
-        self.votes.set("pending", 0.0);
-        self.uptime.set("pending", 0.0);
-    }
 }
 
 impl Tracker {
     /// Create a tracker around an already-initialised index.
     pub fn new(index: Index) -> Self {
-        Self {
-            index,
-            mempool: None,
-            mempool_fingerprint: None,
-            block_notifications: None,
-            #[cfg(feature = "vendor_electrs_telemetry")]
-            mempool_metrics: Some(MempoolTelemetry::new()),
-        }
+        let telemetry_endpoint = SocketAddr::from(([127, 0, 0, 1], 0));
+        Self::with_metrics(index, telemetry_endpoint)
     }
 
-    #[cfg(feature = "vendor_electrs_telemetry")]
-    fn update_mempool_metrics(&self) {
-        if let Some(metrics) = &self.mempool_metrics {
-            if let Some(status) = self.mempool.as_ref() {
-                metrics.record(status);
-            } else {
-                metrics.clear();
-            }
+    /// Create a tracker with a custom telemetry endpoint for mempool metrics.
+    pub fn with_metrics(index: Index, telemetry_endpoint: SocketAddr) -> Self {
+        let metrics = Metrics::new(telemetry_endpoint).expect("tracker metrics");
+        Self {
+            index,
+            mempool: Mempool::new(&metrics),
+            mempool_fingerprint: None,
+            block_notifications: None,
         }
     }
 
@@ -174,7 +112,7 @@ impl Tracker {
         script: &Script,
     ) -> Result<bool> {
         let previous = status.status_digest();
-        status.sync(script, self.index(), self.chain(), self.mempool.as_ref())?;
+        status.sync(script, self.index(), self.chain(), self.mempool.snapshot())?;
         Ok(previous != status.status_digest())
     }
 
@@ -216,7 +154,7 @@ impl Tracker {
 
     /// Snapshot of the latest runtime mempool state observed during sync.
     pub fn mempool_status(&self) -> Option<&MempoolStatus> {
-        self.mempool.as_ref()
+        self.mempool.snapshot()
     }
 
     /// Locate a transaction using the daemon's in-memory data set.
@@ -229,7 +167,7 @@ impl Tracker {
             return Ok(Some(result));
         }
 
-        if let Some(status) = self.mempool.as_ref() {
+        if let Some(status) = self.mempool.snapshot() {
             return Ok(Some(TransactionLookup::Mempool {
                 status: status.clone(),
             }));
@@ -347,13 +285,10 @@ impl Tracker {
         let fingerprint = mempool_fingerprint(&snapshot)?;
         if self.mempool_fingerprint != Some(fingerprint) {
             self.mempool_fingerprint = Some(fingerprint);
-            self.mempool = Some(snapshot);
-            #[cfg(feature = "vendor_electrs_telemetry")]
-            self.update_mempool_metrics();
+            let update = MempoolSyncUpdate::from_snapshot(snapshot);
+            self.mempool.apply_sync_update(update);
             Ok(true)
         } else {
-            #[cfg(feature = "vendor_electrs_telemetry")]
-            self.update_mempool_metrics();
             Ok(false)
         }
     }

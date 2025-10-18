@@ -42,7 +42,7 @@ use rpp::{
     proofs::rpp::{
         encode_transaction_witness, TransactionUtxoSnapshot, TransactionWitness, UtxoOutpoint,
     },
-    runtime::types::proofs::RppStarkProof,
+    runtime::types::proofs::{ChainProof, ProofPayload, RppStarkProof},
 };
 #[cfg(feature = "backend-rpp-stark")]
 use rpp_stark::backend::params_limit_to_node_bytes;
@@ -698,8 +698,8 @@ fn verify_pending_transaction(
     scripthash: &ScriptHash,
     confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
 ) -> anyhow::Result<PendingVerificationResult> {
-    let witness = match tx.witness.as_ref() {
-        Some(witness) => witness.clone(),
+    let witness = match extract_pending_witness(tx)? {
+        Some(witness) => witness,
         None => {
             return Ok(PendingVerificationResult::Conflict(
                 HistoryConflictReason::MissingData {
@@ -714,23 +714,9 @@ fn verify_pending_transaction(
         .iter()
         .any(|outpoint| !confirmed_unspent.contains_key(outpoint));
 
-    let Some(hex_digest) = tx.public_inputs_digest.as_deref() else {
-        return Ok(PendingVerificationResult::Conflict(
-            HistoryConflictReason::MissingData {
-                detail: "public inputs digest missing".to_string(),
-            },
-        ));
-    };
-
-    let public_digest = match Digest32::from_hex(hex_digest) {
+    let public_digest = match extract_public_inputs_digest(tx) {
         Ok(digest) => digest,
-        Err(err) => {
-            return Ok(PendingVerificationResult::Conflict(
-                HistoryConflictReason::VerificationMismatch {
-                    detail: format!("decode mempool public input digest: {err}"),
-                },
-            ));
-        }
+        Err(conflict) => return Ok(PendingVerificationResult::Conflict(conflict)),
     };
 
     let witness_bytes = match encode_transaction_witness(&witness) {
@@ -750,6 +736,50 @@ fn verify_pending_transaction(
         digest: Some(digest),
         double_spend,
     }))
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn extract_pending_witness(
+    tx: &PendingTransactionSummary,
+) -> anyhow::Result<Option<TransactionWitness>> {
+    if let Some(witness) = tx.witness.clone() {
+        return Ok(Some(witness));
+    }
+
+    if let Some(payload) = tx.proof_payload.as_ref() {
+        if let ProofPayload::Transaction(witness) = payload {
+            return Ok(Some(witness.clone()));
+        }
+    }
+
+    if let Some(ChainProof::Stwo(stwo)) = tx.proof.as_ref() {
+        if let ProofPayload::Transaction(witness) = &stwo.payload {
+            return Ok(Some(witness.clone()));
+        }
+    }
+
+    Ok(None)
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+fn extract_public_inputs_digest(
+    tx: &PendingTransactionSummary,
+) -> Result<Digest32, HistoryConflictReason> {
+    if let Some(hex_digest) = tx.public_inputs_digest.as_deref() {
+        return Digest32::from_hex(hex_digest).map_err(|err| {
+            HistoryConflictReason::VerificationMismatch {
+                detail: format!("decode mempool public input digest: {err}"),
+            }
+        });
+    }
+
+    if let Some(ChainProof::RppStark(proof)) = tx.proof.as_ref() {
+        return Ok(compute_public_digest(proof.public_inputs()));
+    }
+
+    Err(HistoryConflictReason::MissingData {
+        detail: "public inputs digest missing".to_string(),
+    })
 }
 
 #[cfg(feature = "backend-rpp-stark")]
@@ -1230,7 +1260,7 @@ mod tests {
         let tx_id = [0x44; 32];
         let (proof, digest) = sample_rpp_chain_proof();
         let witness = sample_transaction_witness(tx_id, 0, "recipient", amount, 4);
-        let pending = sample_pending_transaction(
+        let mut pending = sample_pending_transaction(
             &scripthash,
             tx_id,
             witness.clone(),
@@ -1238,6 +1268,7 @@ mod tests {
             amount,
             Some(proof),
         );
+        pending.public_inputs_digest = None;
         let confirmed = confirmed_outpoints_map(tx_id, 0, amount as u64);
 
         let (entry, credit) = process_single_transaction(pending, &scripthash, &confirmed);

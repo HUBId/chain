@@ -27,7 +27,13 @@ use rpp::proofs::rpp::{
     UtxoOutpoint,
 };
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp::runtime::config::QueueWeightsConfig;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::runtime::types::proofs::RppStarkProof;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp::runtime::types::proofs::ChainProof;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
@@ -267,4 +273,65 @@ fn tracker_exports_rpp_stark_metadata() {
 
     let vrf_records = tracker.get_vrf_audits(&status);
     assert_eq!(vrf_records, vec![Some(vrf_audit)]);
+}
+
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+#[test]
+fn tracker_applies_mempool_delta_with_digest_fallback() {
+    let dir = temp_path("mempool-delta");
+    let index = Index::open(&dir, Network::Regtest).expect("open index");
+    let tracker = Tracker::new(index);
+
+    let recipient = "delta-recipient";
+    let amount = 55u128;
+    let fee = 4u64;
+    let script = Script::new(encode_ledger_script(&LedgerScriptPayload::Recipient {
+        to: recipient.to_string(),
+        amount,
+    }));
+    let scripthash = ScriptHash::new(&script);
+
+    let txid = Txid([0x42; 32]);
+    let mut txid_bytes = [0u8; 32];
+    txid_bytes.copy_from_slice(txid.as_bytes());
+    let witness = wallet_sample_transaction_witness(txid_bytes, 0, recipient, amount, fee);
+
+    let proof = RppStarkProof::new(vec![0x11, 0x22], vec![0x33, 0x44], vec![0x55, 0x66]);
+    let digest = compute_public_digest(proof.public_inputs());
+    let witness_bytes = encode_transaction_witness(&witness).expect("encode witness");
+    let expected_digest = wallet_hash_entry_components(&witness_bytes, &digest);
+
+    let pending = PendingTransactionSummary {
+        hash: hex::encode(txid.as_bytes()),
+        from: "sender".into(),
+        to: recipient.into(),
+        amount,
+        fee,
+        nonce: 9,
+        proof: Some(ChainProof::RppStark(proof)),
+        witness: Some(witness),
+        proof_payload: None,
+        public_inputs_digest: None,
+    };
+
+    let mempool = MempoolStatus {
+        transactions: vec![pending],
+        identities: Vec::new(),
+        votes: Vec::new(),
+        uptime_proofs: Vec::new(),
+        queue_weights: QueueWeightsConfig::default(),
+    };
+
+    let mut status = ScriptHashStatus::new(scripthash);
+    status
+        .sync(&script, tracker.index(), tracker.chain(), Some(&mempool))
+        .expect("sync status with mempool");
+
+    assert_eq!(status.mempool_delta(), amount as i64);
+
+    let history = tracker.get_history_with_digests(&status);
+    assert_eq!(history.len(), 1, "one mempool entry expected");
+    let entry = &history[0];
+    assert_eq!(entry.entry.txid, txid);
+    assert_eq!(entry.digest, Some(expected_digest));
 }
