@@ -483,5 +483,7 @@ pub mod types {
 
 pub use self::daemon::Daemon;
 pub use self::status::{Balance, HistoryEntry, ScriptHashStatus, UnspentEntry};
+#[cfg(feature = "backend-rpp-stark")]
+pub use self::status::HistoryEntryWithMetadata;
 pub use self::tracker::Tracker;
 pub use init::{initialize, ElectrsHandles};

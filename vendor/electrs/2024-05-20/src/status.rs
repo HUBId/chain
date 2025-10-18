@@ -199,6 +199,18 @@ pub struct HistoryEntry {
     double_spend: Option<bool>,
 }
 
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+pub struct HistoryEntryWithMetadata {
+    pub entry: HistoryEntry,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digest: Option<StatusDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<RppStarkProofAudit>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vrf: Option<StoredVrfAudit>,
+}
+
 impl HistoryEntry {
     fn confirmed(
         txid: Txid,
@@ -263,6 +275,16 @@ impl HistoryEntry {
     fn append_encoded(&self, output: &mut Vec<u8>) {
         output.extend_from_slice(self.txid.as_bytes());
         output.extend_from_slice(&self.height.as_i64().to_le_bytes());
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn proof_audit(&self) -> Option<&RppStarkProofAudit> {
+        self.proof_audit.as_ref()
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn vrf_audit(&self) -> Option<&StoredVrfAudit> {
+        self.vrf_audit.as_ref()
     }
 }
 
@@ -414,6 +436,19 @@ impl ScriptHashStatus {
         &self.history
     }
 
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn history_with_digests(&self) -> Vec<HistoryEntryWithMetadata> {
+        self.history
+            .iter()
+            .map(|entry| HistoryEntryWithMetadata {
+                entry: entry.clone(),
+                digest: entry.digest.clone(),
+                proof: entry.proof_audit().cloned(),
+                vrf: entry.vrf_audit().cloned(),
+            })
+            .collect()
+    }
+
     /// Compute the balance of tracked entries derived from confirmed history and
     /// observed mempool deltas.
     pub fn get_balance(&self, _chain: &Chain) -> Balance {
@@ -430,7 +465,32 @@ impl ScriptHashStatus {
 
     /// Hash of the status history as defined by the Electrum protocol.
     pub fn statushash(&self) -> Option<StatusDigest> {
+        self.status_digest()
+    }
+
+    /// Digest of the status history including RPP metadata when enabled.
+    pub fn status_digest(&self) -> Option<StatusDigest> {
         self.statushash
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn proof_envelopes(&self) -> Vec<Option<String>> {
+        self.history
+            .iter()
+            .map(|entry| {
+                entry
+                    .proof_audit()
+                    .map(|audit| audit.envelope.clone())
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn vrf_audits(&self) -> Vec<Option<StoredVrfAudit>> {
+        self.history
+            .iter()
+            .map(|entry| entry.vrf_audit().cloned())
+            .collect()
     }
 }
 
@@ -666,7 +726,7 @@ mod tests {
         assert!(!unspent.is_empty());
         assert_eq!(unspent[0].value, balance.confirmed());
 
-        let baseline = status.statushash();
+        let baseline = status.status_digest();
 
         let script_text = std::str::from_utf8(script.as_bytes()).expect("script text");
         let mut parts = script_text.split(':');
@@ -705,7 +765,7 @@ mod tests {
         let expected_delta = i64::try_from(amount).expect("delta fits in i64");
         assert_eq!(updated.mempool_delta(), expected_delta);
 
-        assert_ne!(baseline, status.statushash());
+        assert_ne!(baseline, status.status_digest());
         assert!(status
             .get_history()
             .iter()
