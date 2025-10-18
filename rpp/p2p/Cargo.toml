@@ -2,14 +2,14 @@
 name = "rpp-p2p"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.79"
+rust-version = "1.83.0"
 
 [dependencies]
 base64 = "=0.21.7"
 async-trait = "0.1"
 futures = "0.3"
 hex = "=0.4.3"
-libp2p = { version = "=0.54.1", features = ["macros", "noise", "request-response", "identify", "ping", "gossipsub", "tcp", "tokio", "yamux"] }
+libp2p = { path = "../../vendor/libp2p/libp2p", features = ["macros", "noise", "request-response", "identify", "ping", "gossipsub", "tcp", "tokio", "yamux"] }
 parking_lot = "0.12"
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = "=1.0.145"
@@ -21,6 +21,9 @@ blake3 = "=1.8.2"
 blake2 = "=0.10.6"
 rand = { version = "=0.8.5", features = ["std"] }
 schnorrkel = "0.11"
+
+[patch.crates-io]
+libp2p-identity = { path = "../../vendor/libp2p/identity" }
 
 [dev-dependencies]
 tempfile = "3.10"

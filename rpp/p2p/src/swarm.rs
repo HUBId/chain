@@ -357,7 +357,7 @@ impl Network {
         event: request_response::Event<HandshakePayload, HandshakePayload>,
     ) -> Result<Option<NetworkEvent>, NetworkError> {
         match event {
-            request_response::Event::Message { peer, message } => match message {
+            request_response::Event::Message { peer, message, .. } => match message {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
@@ -528,6 +528,7 @@ impl Network {
                 Ok(None)
             }
             gossipsub::Event::GossipsubNotSupported { .. } => Ok(None),
+            gossipsub::Event::SlowPeer { .. } => Ok(None),
         }
     }
 
