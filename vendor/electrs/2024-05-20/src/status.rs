@@ -1,9 +1,13 @@
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "backend-rpp-stark")]
 use std::convert::TryFrom;
+#[cfg(feature = "backend-rpp-stark")]
+use std::fmt;
 
 use anyhow::{anyhow, Context};
 use serde::ser::{Serialize, SerializeStruct, Serializer};
+#[cfg(feature = "backend-rpp-stark")]
+use log::warn;
 
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher};
@@ -198,7 +202,52 @@ pub struct HistoryEntry {
     proof_audit: Option<RppStarkProofAudit>,
     #[cfg(feature = "backend-rpp-stark")]
     vrf_audit: Option<StoredVrfAudit>,
+    #[cfg(feature = "backend-rpp-stark")]
+    conflict: Option<HistoryConflictReason>,
     double_spend: Option<bool>,
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HistoryConflictReason {
+    MissingData { detail: String },
+    VerificationMismatch { detail: String },
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl HistoryConflictReason {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::MissingData { .. } => "missing_data",
+            Self::VerificationMismatch { .. } => "verification_mismatch",
+        }
+    }
+
+    fn detail(&self) -> &str {
+        match self {
+            Self::MissingData { detail } | Self::VerificationMismatch { detail } => detail,
+        }
+    }
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl fmt::Display for HistoryConflictReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.kind(), self.detail())
+    }
+}
+
+#[cfg(feature = "backend-rpp-stark")]
+impl Serialize for HistoryConflictReason {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("HistoryConflictReason", 2)?;
+        state.serialize_field("kind", self.kind())?;
+        state.serialize_field("detail", self.detail())?;
+        state.end()
+    }
 }
 
 #[cfg(feature = "backend-rpp-stark")]
@@ -221,6 +270,7 @@ impl HistoryEntry {
         #[cfg(feature = "backend-rpp-stark")] digest: Option<StatusDigest>,
         #[cfg(feature = "backend-rpp-stark")] proof_audit: Option<RppStarkProofAudit>,
         #[cfg(feature = "backend-rpp-stark")] vrf_audit: Option<StoredVrfAudit>,
+        #[cfg(feature = "backend-rpp-stark")] conflict: Option<HistoryConflictReason>,
         double_spend: Option<bool>,
     ) -> Self {
         Self {
@@ -233,6 +283,8 @@ impl HistoryEntry {
             proof_audit,
             #[cfg(feature = "backend-rpp-stark")]
             vrf_audit,
+            #[cfg(feature = "backend-rpp-stark")]
+            conflict,
             double_spend,
         }
     }
@@ -245,6 +297,7 @@ impl HistoryEntry {
         #[cfg(feature = "backend-rpp-stark")] proof_audit: Option<RppStarkProofAudit>,
         #[cfg(feature = "backend-rpp-stark")] vrf_audit: Option<StoredVrfAudit>,
         double_spend: Option<bool>,
+        #[cfg(feature = "backend-rpp-stark")] conflict: Option<HistoryConflictReason>,
     ) -> Self {
         Self {
             txid,
@@ -258,6 +311,8 @@ impl HistoryEntry {
             proof_audit,
             #[cfg(feature = "backend-rpp-stark")]
             vrf_audit,
+            #[cfg(feature = "backend-rpp-stark")]
+            conflict,
             double_spend,
         }
     }
@@ -288,6 +343,11 @@ impl HistoryEntry {
     fn vrf_audit(&self) -> Option<&StoredVrfAudit> {
         self.vrf_audit.as_ref()
     }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn conflict(&self) -> Option<&HistoryConflictReason> {
+        self.conflict.as_ref()
+    }
 }
 
 impl Serialize for HistoryEntry {
@@ -312,6 +372,10 @@ impl Serialize for HistoryEntry {
         #[cfg(feature = "backend-rpp-stark")]
         if let Some(vrf) = &self.vrf_audit {
             state.serialize_field("vrf", vrf)?;
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        if let Some(conflict) = &self.conflict {
+            state.serialize_field("conflict", conflict)?;
         }
         if let Some(flag) = self.double_spend {
             state.serialize_field("double_spend", &flag)?;
@@ -394,13 +458,17 @@ impl ScriptHashStatus {
 
         let mut mempool_delta: i128 = 0;
         if let Some(status) = mempool {
-            let mut mempool_history = process_mempool(
+            let processed_entries = process_mempool(
                 status,
                 &self.scripthash,
                 &outputs,
-                &mut mempool_delta,
             )?;
-            history.append(&mut mempool_history);
+            for (entry, credit) in processed_entries {
+                if let Some(amount) = credit {
+                    mempool_delta += i128::from(amount);
+                }
+                history.push(entry);
+            }
         }
 
         let mut unspent: Vec<UnspentEntry> = outputs
@@ -513,7 +581,7 @@ fn process_confirmed_transaction(
         let digest = confirmed_entry_digest(metadata)?;
         let proof_audit = metadata.and_then(|meta| meta.proof_audit.clone());
         let vrf_audit = metadata.and_then(|meta| meta.vrf_audit.clone());
-        HistoryEntry::confirmed(txid, height, fee, digest, proof_audit, vrf_audit, Some(false))
+        HistoryEntry::confirmed(txid, height, fee, digest, proof_audit, vrf_audit, None, Some(false))
     };
     #[cfg(not(feature = "backend-rpp-stark"))]
     let history_entry = HistoryEntry::confirmed(txid, height, fee, Some(false));
@@ -544,18 +612,14 @@ fn process_mempool(
     status: &MempoolStatus,
     scripthash: &ScriptHash,
     confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
-    delta: &mut i128,
-) -> anyhow::Result<Vec<HistoryEntry>> {
-    let mut history = Vec::new();
+) -> anyhow::Result<Vec<(HistoryEntry, Option<u64>)>> {
+    let mut entries = Vec::new();
     for tx in &status.transactions {
         if let Some((entry, credit)) = mempool_entry(tx, scripthash, confirmed_unspent)? {
-            if let Some(amount) = credit {
-                *delta += i128::from(amount);
-            }
-            history.push(entry);
+            entries.push((entry, credit));
         }
     }
-    Ok(history)
+    Ok(entries)
 }
 
 fn mempool_entry(
@@ -575,17 +639,31 @@ fn mempool_entry(
     }
     let amount = u64::try_from(tx.amount).context("mempool amount exceeds u64")?;
     #[cfg(feature = "backend-rpp-stark")]
-    let (digest, double_spend, credit) = {
-        match verify_pending_transaction(tx, scripthash, confirmed_unspent)? {
-            Some(verification) => {
-                let credit = if verification.double_spend {
-                    None
-                } else {
-                    Some(amount)
-                };
-                (verification.digest, Some(verification.double_spend), credit)
-            }
-            None => (mempool_entry_digest(tx)?, Some(false), Some(amount)),
+    let (digest, double_spend, credit, conflict) = match verify_pending_transaction(
+        tx,
+        scripthash,
+        confirmed_unspent,
+    )? {
+        PendingVerificationResult::Verified(verification) => {
+            let credit = if verification.double_spend {
+                None
+            } else {
+                Some(amount)
+            };
+            (
+                verification.digest,
+                Some(verification.double_spend),
+                credit,
+                None,
+            )
+        }
+        PendingVerificationResult::Conflict(conflict) => {
+            warn!(
+                "mempool transaction {} flagged during verification: {}",
+                tx.hash,
+                conflict
+            );
+            (None, Some(true), None, Some(conflict))
         }
     };
     #[cfg(not(feature = "backend-rpp-stark"))]
@@ -593,7 +671,7 @@ fn mempool_entry(
     #[cfg(not(feature = "backend-rpp-stark"))]
     let entry = HistoryEntry::unconfirmed(txid, false, tx.fee, Some(false));
     #[cfg(feature = "backend-rpp-stark")]
-    let entry = HistoryEntry::unconfirmed(txid, false, tx.fee, digest, None, None, double_spend);
+    let entry = HistoryEntry::unconfirmed(txid, false, tx.fee, digest, None, None, double_spend, conflict);
     #[cfg(feature = "backend-rpp-stark")]
     return Ok(Some((entry, credit)));
     #[cfg(not(feature = "backend-rpp-stark"))]
@@ -607,14 +685,26 @@ struct PendingWitnessVerification {
 }
 
 #[cfg(feature = "backend-rpp-stark")]
+enum PendingVerificationResult {
+    Verified(PendingWitnessVerification),
+    Conflict(HistoryConflictReason),
+}
+
+#[cfg(feature = "backend-rpp-stark")]
 fn verify_pending_transaction(
     tx: &PendingTransactionSummary,
     scripthash: &ScriptHash,
     confirmed_unspent: &HashMap<OutPoint, (usize, u64)>,
-) -> anyhow::Result<Option<PendingWitnessVerification>> {
+) -> anyhow::Result<PendingVerificationResult> {
     let witness = match tx.witness.as_ref() {
         Some(witness) => witness.clone(),
-        None => return Ok(None),
+        None => {
+            return Ok(PendingVerificationResult::Conflict(
+                HistoryConflictReason::MissingData {
+                    detail: "transaction witness missing".to_string(),
+                },
+            ));
+        }
     };
 
     let tracked_outpoints = collect_tracked_outpoints(&witness, scripthash)?;
@@ -622,19 +712,40 @@ fn verify_pending_transaction(
         .iter()
         .any(|outpoint| !confirmed_unspent.contains_key(outpoint));
 
-    let digest = match tx.public_inputs_digest.as_deref() {
-        Some(hex_digest) => {
-            let public_digest = Digest32::from_hex(hex_digest)
-                .map_err(|err| anyhow!("decode mempool public input digest: {err}"))?;
-            let witness_bytes = encode_transaction_witness(&witness)
-                .map_err(|err| anyhow!("encode transaction witness payload: {err}"))?;
-            Some(hash_entry_components(Some(&witness_bytes), public_digest))
-        }
-        None => None,
+    let Some(hex_digest) = tx.public_inputs_digest.as_deref() else {
+        return Ok(PendingVerificationResult::Conflict(
+            HistoryConflictReason::MissingData {
+                detail: "public inputs digest missing".to_string(),
+            },
+        ));
     };
 
-    Ok(Some(PendingWitnessVerification {
-        digest,
+    let public_digest = match Digest32::from_hex(hex_digest) {
+        Ok(digest) => digest,
+        Err(err) => {
+            return Ok(PendingVerificationResult::Conflict(
+                HistoryConflictReason::VerificationMismatch {
+                    detail: format!("decode mempool public input digest: {err}"),
+                },
+            ));
+        }
+    };
+
+    let witness_bytes = match encode_transaction_witness(&witness) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return Ok(PendingVerificationResult::Conflict(
+                HistoryConflictReason::VerificationMismatch {
+                    detail: format!("encode transaction witness payload: {err}"),
+                },
+            ));
+        }
+    };
+
+    let digest = hash_entry_components(Some(&witness_bytes), public_digest);
+
+    Ok(PendingVerificationResult::Verified(PendingWitnessVerification {
+        digest: Some(digest),
         double_spend,
     }))
 }
@@ -749,16 +860,6 @@ fn confirmed_entry_digest(
     };
     let public_digest = parse_public_inputs_digest(proof_bytes)?;
     Ok(Some(hash_entry_components(Some(&witness_bytes), public_digest)))
-}
-
-#[cfg(feature = "backend-rpp-stark")]
-fn mempool_entry_digest(tx: &PendingTransactionSummary) -> anyhow::Result<Option<StatusDigest>> {
-    let Some(hex_digest) = tx.public_inputs_digest.as_deref() else {
-        return Ok(None);
-    };
-    let public_digest = Digest32::from_hex(hex_digest)
-        .map_err(|err| anyhow!("decode mempool public input digest: {err}"))?;
-    Ok(Some(hash_entry_components(None, public_digest)))
 }
 
 #[cfg(feature = "backend-rpp-stark")]
