@@ -14,9 +14,12 @@ use crate::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, Network, OutPoint, 
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction as LedgerTransaction;
 use crate::vendor::electrs::types::{
     encode_ledger_memo, encode_ledger_script, encode_transaction_metadata, HashPrefixRow,
-    LedgerMemoPayload, LedgerScriptPayload, SerBlock, StoredTransactionMetadata, TxidRow,
+    LedgerMemoPayload, LedgerScriptPayload, RppStarkProofAudit, SerBlock, StoredTransactionMetadata,
+    StoredVrfAudit, TxidRow, VrfInputDescriptor, VrfOutputDescriptor,
     bsl_txid, serialize_block, serialize_transaction, HASH_PREFIX_ROW_SIZE,
 };
+#[cfg(feature = "backend-rpp-stark")]
+use malachite::Natural;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
     Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, SignedTransaction,
@@ -25,6 +28,8 @@ use rpp::proofs::rpp::TransactionWitness;
 use rpp_p2p::GossipTopic;
 use sha2::{Digest, Sha512};
 use tokio::sync::broadcast;
+#[cfg(feature = "backend-rpp-stark")]
+use std::str::FromStr;
 
 #[derive(Clone, Debug)]
 pub struct ConvertedBlock {
@@ -388,6 +393,11 @@ impl Daemon {
             witness_by_id.insert(witness.tx_id, witness.clone());
         }
 
+        #[cfg(feature = "backend-rpp-stark")]
+        let proof_audits = Self::collect_rpp_stark_audits(block);
+        #[cfg(feature = "backend-rpp-stark")]
+        let vrf_audit = Self::build_vrf_audit(&block.header);
+
         block
             .transactions
             .iter()
@@ -398,10 +408,63 @@ impl Daemon {
                     transaction: tx.clone(),
                     witness,
                     rpp_stark_proof: Self::transaction_proof_bytes(block, index),
+                    #[cfg(feature = "backend-rpp-stark")]
+                    proof_audit: proof_audits.get(index).cloned().flatten(),
+                    #[cfg(feature = "backend-rpp-stark")]
+                    vrf_audit: vrf_audit.clone(),
                 };
                 Some(encode_transaction_metadata(&metadata))
             })
             .collect()
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn collect_rpp_stark_audits(
+        block: &RuntimeBlock,
+    ) -> Vec<Option<RppStarkProofAudit>> {
+        block
+            .stark
+            .transaction_proofs
+            .iter()
+            .map(|proof| match proof {
+                ChainProof::RppStark(inner) => {
+                    crate::vendor::electrs::status::build_rpp_stark_audit(inner)
+                        .ok()
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "backend-rpp-stark")]
+    fn build_vrf_audit(header: &RuntimeBlockHeader) -> Option<StoredVrfAudit> {
+        use crate::crypto::vrf::{derive_tier_seed, VrfProof};
+        use crate::vrf::PoseidonVrfInput;
+
+        let seed_array = Self::decode_field::<32>(&[header.previous_hash.as_str()]);
+        let tier_seed = derive_tier_seed(&header.proposer, header.leader_timetoke);
+        let input = PoseidonVrfInput::new(seed_array, header.height, tier_seed);
+
+        let randomness = Natural::from_str(&header.randomness).ok()?;
+        let proof = VrfProof {
+            randomness,
+            preoutput: header.vrf_preoutput.clone(),
+            proof: header.vrf_proof.clone(),
+        };
+        let output = proof.to_vrf_output().ok()?;
+
+        Some(StoredVrfAudit {
+            input: VrfInputDescriptor {
+                last_block_header: hex::encode(input.last_block_header),
+                epoch: input.epoch,
+                tier_seed: hex::encode(input.tier_seed),
+            },
+            output: VrfOutputDescriptor {
+                randomness: hex::encode(output.randomness),
+                preoutput: hex::encode(output.preoutput),
+                proof: hex::encode(output.proof),
+            },
+        })
     }
 
     fn transaction_proof_bytes(block: &RuntimeBlock, index: usize) -> Option<Vec<u8>> {
