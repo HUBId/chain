@@ -15,6 +15,7 @@ const PREFIX_BLOCK: u8 = b'b';
 const PREFIX_SCRIPT: u8 = b's';
 const PREFIX_SPENDING: u8 = b'p';
 const PREFIX_TXID: u8 = b't';
+const PREFIX_RPP_META: u8 = b'r';
 const KEY_TIP: &[u8] = b"meta:tip";
 
 #[derive(Default)]
@@ -47,6 +48,11 @@ impl WriteBatch {
     pub fn put_txid(&mut self, row: HashPrefixRow, txid: Txid) {
         let key = hash_prefix_key(PREFIX_TXID, row);
         self.puts.push((key, txid.as_bytes().to_vec()));
+    }
+
+    pub fn put_rpp_metadata(&mut self, height: usize, txid: Txid, metadata: &[u8]) {
+        let key = transaction_metadata_key(height, txid);
+        self.puts.push((key, metadata.to_vec()));
     }
 
     pub fn set_tip(&mut self, height: usize, blockhash: BlockHash) {
@@ -182,6 +188,10 @@ impl Db {
     pub fn get_block(&self, height: usize) -> Option<SerBlock> {
         self.store.get(&block_key(height))
     }
+
+    pub fn get_transaction_metadata(&self, height: usize, txid: Txid) -> Option<Vec<u8>> {
+        self.store.get(&transaction_metadata_key(height, txid))
+    }
 }
 
 fn header_key(height: usize) -> Vec<u8> {
@@ -195,6 +205,14 @@ fn block_key(height: usize) -> Vec<u8> {
     let mut key = Vec::with_capacity(5);
     key.push(PREFIX_BLOCK);
     key.extend_from_slice(&(height as u32).to_le_bytes());
+    key
+}
+
+fn transaction_metadata_key(height: usize, txid: Txid) -> Vec<u8> {
+    let mut key = Vec::with_capacity(1 + std::mem::size_of::<u32>() + txid.as_bytes().len());
+    key.push(PREFIX_RPP_META);
+    key.extend_from_slice(&(height as u32).to_le_bytes());
+    key.extend_from_slice(txid.as_bytes());
     key
 }
 
