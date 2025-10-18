@@ -106,6 +106,16 @@ impl Tracker {
         &mut self.index
     }
 
+    /// Return whether P2P notifications should be consumed during sync.
+    pub fn p2p_notifications_enabled(&self) -> bool {
+        self.subscribe_p2p_notifications
+    }
+
+    /// Gossip topic that carries the block finality notifications for this tracker.
+    pub fn notification_topic(&self) -> GossipTopic {
+        self.notification_topic
+    }
+
     /// Access the tracked chain state.
     pub fn chain(&self) -> &Chain {
         self.index.chain()

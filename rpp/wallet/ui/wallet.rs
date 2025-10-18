@@ -105,44 +105,138 @@ async fn tracker_sync_loop(
     snapshot: Arc<RwLock<Option<TrackerSnapshot>>>,
     mut shutdown: watch::Receiver<bool>,
     mut block_rx: Option<broadcast::Receiver<Vec<u8>>>,
+    mut finality_rx: Option<watch::Receiver<PipelineDashboardSnapshot>>,
 ) {
     let mut interval = time::interval(Duration::from_secs(5));
+    let mut last_finality_height = finality_rx
+        .as_ref()
+        .and_then(|receiver| highest_commit_height(&receiver.borrow()));
     loop {
-        let should_sync = if let Some(receiver) = block_rx.as_mut() {
-            tokio::select! {
-                _ = interval.tick() => true,
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break;
+        let mut finality_closed = false;
+        let should_sync = match (block_rx.as_mut(), finality_rx.as_mut()) {
+            (Some(receiver), Some(finality)) => {
+                tokio::select! {
+                    _ = interval.tick() => true,
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            break;
+                        }
+                        false
                     }
-                    false
+                    message = receiver.recv() => match message {
+                        Ok(_) => true,
+                        Err(broadcast::error::RecvError::Lagged(_)) => true,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            block_rx = None;
+                            true
+                        }
+                    },
+                    res = finality.changed() => match res {
+                        Ok(_) => detect_finality_update(finality, &mut last_finality_height),
+                        Err(_) => {
+                            finality_closed = true;
+                            false
+                        }
+                    },
                 }
-                message = receiver.recv() => match message {
-                    Ok(_) => true,
-                    Err(broadcast::error::RecvError::Lagged(_)) => true,
-                    Err(broadcast::error::RecvError::Closed) => {
-                        block_rx = None;
-                        true
-                    }
-                },
             }
-        } else {
-            tokio::select! {
-                _ = interval.tick() => true,
-                changed = shutdown.changed() => {
-                    if changed.is_err() || *shutdown.borrow() {
-                        break;
+            (Some(receiver), None) => {
+                tokio::select! {
+                    _ = interval.tick() => true,
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            break;
+                        }
+                        false
                     }
-                    false
+                    message = receiver.recv() => match message {
+                        Ok(_) => true,
+                        Err(broadcast::error::RecvError::Lagged(_)) => true,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            block_rx = None;
+                            true
+                        }
+                    },
+                }
+            }
+            (None, Some(finality)) => {
+                tokio::select! {
+                    _ = interval.tick() => true,
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            break;
+                        }
+                        false
+                    }
+                    res = finality.changed() => match res {
+                        Ok(_) => detect_finality_update(finality, &mut last_finality_height),
+                        Err(_) => {
+                            finality_closed = true;
+                            false
+                        }
+                    },
+                }
+            }
+            (None, None) => {
+                tokio::select! {
+                    _ = interval.tick() => true,
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            break;
+                        }
+                        false
+                    }
                 }
             }
         };
+
+        if finality_closed {
+            finality_rx = None;
+            last_finality_height = None;
+        }
 
         if !should_sync {
             continue;
         }
 
         run_tracker_iteration(&handles, &statuses, &snapshot);
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn highest_commit_height(snapshot: &PipelineDashboardSnapshot) -> Option<u64> {
+    snapshot
+        .flows
+        .iter()
+        .filter_map(|flow| flow.commit_height)
+        .max()
+}
+
+#[cfg(feature = "vendor_electrs")]
+fn detect_finality_update(
+    receiver: &watch::Receiver<PipelineDashboardSnapshot>,
+    last_height: &mut Option<u64>,
+) -> bool {
+    let snapshot = receiver.borrow();
+    match (highest_commit_height(&snapshot), *last_height) {
+        (Some(current), Some(previous)) if current > previous => {
+            *last_height = Some(current);
+            true
+        }
+        (Some(current), None) => {
+            *last_height = Some(current);
+            true
+        }
+        (Some(current), Some(previous)) if current < previous => {
+            *last_height = Some(current);
+            true
+        }
+        (Some(_), Some(_)) => false,
+        (None, Some(_)) => {
+            *last_height = None;
+            false
+        }
+        (None, None) => false,
     }
 }
 
@@ -757,25 +851,43 @@ impl Wallet {
         }
         *self.tracker_statuses.write() = statuses;
 
-        let runtime_adapters = {
+        let (runtime_adapters, tracker_subscription) = {
             let guard = self.electrs_handles.lock();
-            guard
+            let runtime = guard
                 .as_ref()
-                .and_then(|handles| handles.firewood.runtime().cloned())
+                .and_then(|handles| handles.firewood.runtime().cloned());
+            let subscription = guard
+                .as_ref()
+                .and_then(|handles| handles.tracker.as_ref())
+                .map(|tracker| {
+                    (
+                        tracker.p2p_notifications_enabled(),
+                        tracker.notification_topic(),
+                    )
+                });
+            (runtime, subscription)
         };
 
-        let block_notifications = match runtime_adapters {
-            Some(adapters) => match adapters.node().subscribe_witness_gossip(GossipTopic::Blocks) {
-                Ok(receiver) => Some(receiver),
-                Err(err) => {
-                    warn!(
-                        target: "wallet::tracker",
-                        "failed to subscribe to runtime gossip: {err}"
-                    );
-                    None
-                }
-            },
-            None => None,
+        let block_notifications = match (runtime_adapters.as_ref(), tracker_subscription) {
+            (Some(adapters), Some((true, topic))) => {
+                Some(adapters.node().subscribe_witness_gossip(topic))
+            }
+            (None, Some((true, topic))) => {
+                warn!(
+                    target: "wallet::tracker",
+                    "tracker gossip topic {topic} requested but runtime adapters unavailable"
+                );
+                None
+            }
+            _ => None,
+        };
+
+        let finality_notifications = if tracker_subscription.is_some() {
+            runtime_adapters
+                .as_ref()
+                .map(|adapters| adapters.orchestrator().subscribe_dashboard())
+        } else {
+            None
         };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -785,6 +897,7 @@ impl Wallet {
         let statuses_arc = Arc::clone(&self.tracker_statuses);
         let snapshot_arc = Arc::clone(&self.tracker_snapshot);
         let block_rx = block_notifications;
+        let finality_rx = finality_notifications;
 
         let task = tokio::spawn(async move {
             tracker_sync_loop(
@@ -793,6 +906,7 @@ impl Wallet {
                 snapshot_arc,
                 shutdown_rx,
                 block_rx,
+                finality_rx,
             )
             .await;
         });

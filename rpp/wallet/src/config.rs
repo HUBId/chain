@@ -66,7 +66,10 @@ impl From<NetworkSelection> for LedgerNetwork {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct FeatureGates {
-    /// Attach runtime adapters to the Firewood integration.
+    /// Attach runtime adapters to the Firewood integration so the tracker can
+    /// subscribe to runtime gossip, stream Malachite finality receipts and
+    /// trigger Firewood snapshot/proof verification as soon as blocks
+    /// finalise.
     pub runtime: bool,
     /// Bring up the Electrs tracker backed by the runtime daemon.
     pub tracker: bool,
@@ -148,9 +151,14 @@ impl Default for TrackerConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TrackerNotificationConfig {
-    /// Enable the broadcast subscription for runtime P2P notifications.
+    /// Enable the broadcast subscription for runtime P2P notifications. When
+    /// paired with the runtime feature gate the wallet listens for Malachite
+    /// finality gossip on the configured topic and nudges the tracker to
+    /// mirror newly finalised blocks.
     pub p2p: bool,
-    /// Gossip topic used for the block notification subscription.
+    /// Gossip topic used for the block notification subscription. Operators can
+    /// retune this when their deployment forwards finality signals on a custom
+    /// channel.
     pub topic: String,
 }
 
