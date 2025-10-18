@@ -210,17 +210,53 @@ fn compute_mempool_fingerprint(status: &MempoolStatus) -> Result<[u8; 32], serde
 }
 
 #[cfg(feature = "vendor_electrs")]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TrackedScriptSnapshot {
     pub script_hash: String,
     pub status_digest: Option<StatusDigest>,
 }
 
 #[cfg(feature = "vendor_electrs")]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TrackerSnapshot {
     pub scripts: Vec<TrackedScriptSnapshot>,
     pub mempool_fingerprint: Option<[u8; 32]>,
+}
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone)]
+pub struct WalletTrackerHandle {
+    handles: Arc<Mutex<Option<ElectrsHandles>>>,
+    snapshot: Arc<RwLock<Option<TrackerSnapshot>>>,
+}
+
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone, Debug)]
+pub enum TrackerState {
+    Disabled,
+    Pending,
+    Ready(TrackerSnapshot),
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl WalletTrackerHandle {
+    pub fn state(&self) -> TrackerState {
+        let tracker_enabled = {
+            let guard = self.handles.lock();
+            guard
+                .as_ref()
+                .and_then(|handles| handles.tracker.as_ref())
+                .is_some()
+        };
+        if !tracker_enabled {
+            return TrackerState::Disabled;
+        }
+
+        match self.snapshot.read().clone() {
+            Some(snapshot) => TrackerState::Ready(snapshot),
+            None => TrackerState::Pending,
+        }
+    }
 }
 
 #[cfg(feature = "vendor_electrs")]
@@ -771,6 +807,25 @@ impl Wallet {
     }
 
     #[cfg(feature = "vendor_electrs")]
+    pub fn tracker_handle(&self) -> Option<WalletTrackerHandle> {
+        let tracker_available = {
+            let guard = self.electrs_handles.lock();
+            guard
+                .as_ref()
+                .and_then(|handles| handles.tracker.as_ref())
+                .is_some()
+        };
+        if !tracker_available {
+            return None;
+        }
+
+        Some(WalletTrackerHandle {
+            handles: Arc::clone(&self.electrs_handles),
+            snapshot: Arc::clone(&self.tracker_snapshot),
+        })
+    }
+
+    #[cfg(feature = "vendor_electrs")]
     fn stop_tracker_tasks(&self) {
         if let Some(sender) = self.tracker_shutdown.lock().take() {
             let _ = sender.send(true);
@@ -1018,34 +1073,22 @@ impl Wallet {
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
-        let mempool_delta = {
-            #[cfg(feature = "vendor_electrs")]
-            {
-                self.script_status_metadata().map(|entries| {
-                    entries
-                        .into_iter()
-                        .map(|meta| meta.mempool_delta)
-                        .sum::<i64>()
-                })
-            }
-            #[cfg(not(feature = "vendor_electrs"))]
-            {
-                None
-            }
-        };
-        Ok(WalletAccountSummary {
-            address: account.address.clone(),
-            balance: account.balance,
-            nonce: account.nonce,
-            reputation_score: account.reputation.score,
-            tier: account.reputation.tier.clone(),
-            uptime_hours: account.reputation.timetokes.hours_online,
-            mempool_delta,
-        })
+        Ok(self.summarize_account(&account))
     }
 
     pub fn account_by_address(&self, address: &Address) -> ChainResult<Option<Account>> {
         self.storage.read_account(address)
+    }
+
+    pub fn account_summary_for(
+        &self,
+        address: &Address,
+    ) -> ChainResult<Option<WalletAccountSummary>> {
+        let account = match self.account_by_address(address)? {
+            Some(account) => account,
+            None => return Ok(None),
+        };
+        Ok(Some(self.summarize_account(&account)))
     }
 
     pub fn accounts_snapshot(&self) -> ChainResult<Vec<Account>> {
@@ -1191,6 +1234,30 @@ impl Wallet {
         }
 
         self.legacy_history()
+    }
+
+    fn summarize_account(&self, account: &Account) -> WalletAccountSummary {
+        let mut summary = WalletAccountSummary {
+            address: account.address.clone(),
+            balance: account.balance,
+            nonce: account.nonce,
+            reputation_score: account.reputation.score,
+            tier: account.reputation.tier.clone(),
+            uptime_hours: account.reputation.timetokes.hours_online,
+            mempool_delta: None,
+        };
+
+        #[cfg(feature = "vendor_electrs")]
+        if account.address == self.address {
+            summary.mempool_delta = self.script_status_metadata().map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|meta| meta.mempool_delta)
+                    .sum::<i64>()
+            });
+        }
+
+        summary
     }
 
     fn estimate_reputation_delta(&self, tx: &SignedTransaction) -> i64 {

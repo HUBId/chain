@@ -11,7 +11,9 @@ use crate::types::{
     Address, Block, BlockProofBundle, SignedTransaction, TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{VrfProof, VrfSubmission};
-use crate::wallet::Wallet;
+use crate::wallet::{HistoryEntry, ScriptStatusMetadata, Wallet};
+#[cfg(feature = "vendor_electrs")]
+use crate::wallet::{TrackerSnapshot, TrackedScriptSnapshot};
 
 /// Identifier used for epoch-specific consensus state.
 pub type EpochId = u64;
@@ -244,4 +246,71 @@ pub trait ClientNode {
     fn submit_transaction(&self, tx: SignedTransaction) -> ChainResult<()>;
     fn submit_uptime_proof(&self, proof: UptimeProof) -> ChainResult<()>;
     fn status(&self) -> ChainResult<ClientStatus>;
+}
+
+/// Standard wallet balance response returned by RPC handlers.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WalletBalanceResponse {
+    pub address: Address,
+    pub balance: u128,
+    pub nonce: u64,
+    #[cfg(feature = "vendor_electrs")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mempool_delta: Option<i64>,
+}
+
+/// Script digest metadata captured by the Electrs tracker for tracked scripts.
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletTrackedScript {
+    pub script_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status_digest: Option<String>,
+}
+
+/// Snapshot of tracker state accompanying wallet history responses.
+#[cfg(feature = "vendor_electrs")]
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletTrackerSnapshot {
+    pub scripts: Vec<WalletTrackedScript>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mempool_fingerprint: Option<String>,
+}
+
+/// History payload returned by wallet RPC handlers including tracker metadata.
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletHistoryResponse {
+    pub entries: Vec<HistoryEntry>,
+    #[cfg(feature = "vendor_electrs")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_metadata: Option<Vec<ScriptStatusMetadata>>,
+    #[cfg(feature = "vendor_electrs")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracker: Option<WalletTrackerSnapshot>,
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl From<TrackedScriptSnapshot> for WalletTrackedScript {
+    fn from(snapshot: TrackedScriptSnapshot) -> Self {
+        Self {
+            script_hash: snapshot.script_hash,
+            status_digest: snapshot.status_digest.map(|digest| digest.to_string()),
+        }
+    }
+}
+
+#[cfg(feature = "vendor_electrs")]
+impl From<TrackerSnapshot> for WalletTrackerSnapshot {
+    fn from(snapshot: TrackerSnapshot) -> Self {
+        Self {
+            scripts: snapshot
+                .scripts
+                .into_iter()
+                .map(WalletTrackedScript::from)
+                .collect(),
+            mempool_fingerprint: snapshot
+                .mempool_fingerprint
+                .map(|fingerprint| hex::encode(fingerprint)),
+        }
+    }
 }
