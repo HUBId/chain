@@ -10,6 +10,13 @@
 //!
 //! Switching among these features happens via Cargo's feature flags; no code
 //! samples or configuration edits are necessary.
+//!
+//! # Runtime-backed tracker integration
+//! * `vendor_electrs` pulls in the vendored Electrs modules together with the
+//!   runtime adapters (`storage-firewood`, `rpp::runtime::node`,
+//!   `rpp::runtime::orchestration`) that the tracker uses to mirror the node
+//!   state. Enable this flag when testing the wallet against a live runtime or
+//!   the Firewood-backed daemon harness.
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 

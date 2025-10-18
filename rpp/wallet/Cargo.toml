@@ -9,16 +9,25 @@ default = ["prover-stwo"]
 prover-stwo = ["prover-backend-interface/prover-stwo"]
 prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
 prover-mock = ["prover-backend-interface/prover-mock"]
-vendor_electrs = ["tokio", "serde", "rpp", "rpp_p2p"]
+vendor_electrs = [
+    "dep:tokio",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:sha2",
+    "dep:storage-firewood",
+    "dep:rpp",
+    "dep:rpp_p2p",
+]
 
 [dependencies]
 anyhow = "1"
 prover-backend-interface = { path = "../zk/backend-interface" }
-sha2 = "0.10"
-storage-firewood = { path = "../../storage-firewood" }
+sha2 = { version = "0.10", optional = true }
+storage-firewood = { path = "../../storage-firewood", optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
 tokio = { version = "1.37", features = ["sync"], optional = true }
 rpp = { package = "firewood", path = "../../firewood", optional = true }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
 
 [workspace]
