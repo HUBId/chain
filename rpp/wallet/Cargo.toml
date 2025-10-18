@@ -22,6 +22,7 @@ vendor_electrs = [
     "dep:parking_lot",
 ]
 vendor_electrs_telemetry = []
+vendor_electrs_test_support = ["vendor_electrs"]
 
 [dependencies]
 anyhow = "1"
