@@ -18,18 +18,17 @@ use web_time::{Duration, Instant};
 use crate::connection::Action;
 use crate::frame::{header::Ping, Frame};
 
-const PING_INTERVAL: Duration = Duration::from_secs(10);
-
 #[derive(Clone, Debug)]
 pub(crate) struct Rtt(Arc<Mutex<RttInner>>);
 
 impl Rtt {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(ping_interval: Duration) -> Self {
         Self(Arc::new(Mutex::new(RttInner {
             rtt: None,
             state: RttState::Waiting {
                 next: Instant::now(),
             },
+            ping_interval,
         })))
     }
 
@@ -75,7 +74,7 @@ impl Rtt {
         log::debug!("received pong {received_nonce}, estimated round-trip-time {rtt:?}");
 
         inner.state = RttState::Waiting {
-            next: Instant::now() + PING_INTERVAL,
+            next: Instant::now() + inner.ping_interval,
         };
 
         Action::None
@@ -98,6 +97,7 @@ impl quickcheck::Arbitrary for Rtt {
 struct RttInner {
     state: RttState,
     rtt: Option<Duration>,
+    ping_interval: Duration,
 }
 
 #[cfg(test)]
@@ -110,6 +110,7 @@ impl quickcheck::Arbitrary for RttInner {
             } else {
                 None
             },
+            ping_interval: Duration::from_millis(g.gen_range(1..=60_000)),
         }
     }
 }
