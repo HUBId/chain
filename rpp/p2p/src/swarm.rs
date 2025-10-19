@@ -5,21 +5,54 @@ use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
-use crate::NetworkBehaviour;
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::gossipsub;
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::gossipsub::MessageId;
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::identity::Keypair;
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::request_response::{self, ProtocolSupport};
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::swarm::builder::SwarmBuilder;
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::swarm::{ExternalEventHandle, SwarmEvent};
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::{identify, ping, Swarm};
 #[cfg(all(
     feature = "gossipsub",
@@ -32,6 +65,13 @@ use crate::vendor::{identify, ping, Swarm};
 ))]
 use crate::vendor::{noise, tcp, yamux};
 use crate::vendor::{Multiaddr, PeerId};
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
+use crate::NetworkBehaviour;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
 use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
@@ -62,10 +102,20 @@ pub enum NetworkError {
     TransportDisabled,
 }
 
-#[cfg(not(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response")))]
+#[cfg(not(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+)))]
 pub type MessageId = ();
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "RppBehaviourEvent")]
 struct RppBehaviour {
@@ -75,7 +125,12 @@ struct RppBehaviour {
     gossipsub: gossipsub::Behaviour,
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 #[derive(Debug)]
 enum RppBehaviourEvent {
     RequestResponse(request_response::Event<HandshakePayload, HandshakePayload>),
@@ -85,35 +140,60 @@ enum RppBehaviourEvent {
     Network(NetworkEvent),
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 impl From<request_response::Event<HandshakePayload, HandshakePayload>> for RppBehaviourEvent {
     fn from(event: request_response::Event<HandshakePayload, HandshakePayload>) -> Self {
         RppBehaviourEvent::RequestResponse(event)
     }
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 impl From<identify::Event> for RppBehaviourEvent {
     fn from(event: identify::Event) -> Self {
         RppBehaviourEvent::Identify(event)
     }
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 impl From<ping::Event> for RppBehaviourEvent {
     fn from(event: ping::Event) -> Self {
         RppBehaviourEvent::Ping(event)
     }
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 impl From<gossipsub::Event> for RppBehaviourEvent {
     fn from(event: gossipsub::Event) -> Self {
         RppBehaviourEvent::Gossipsub(event)
     }
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 impl RppBehaviour {
     fn new(identity: &Keypair) -> Result<Self, NetworkError> {
         let protocols = std::iter::once((HANDSHAKE_PROTOCOL.to_string(), ProtocolSupport::Full));
@@ -174,7 +254,12 @@ impl RppBehaviour {
     }
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 fn build_peer_score_params() -> gossipsub::PeerScoreParams {
     let mut params = gossipsub::PeerScoreParams::default();
     params.topic_score_cap = 150.0;
@@ -204,7 +289,12 @@ fn build_peer_score_params() -> gossipsub::PeerScoreParams {
     params
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 fn build_peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
     gossipsub::PeerScoreThresholds {
         gossip_threshold: -5.0,
@@ -247,7 +337,12 @@ pub enum NetworkEvent {
     },
 }
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 pub struct Network {
     swarm: Swarm<RppBehaviour>,
     events_handle: Arc<ExternalEventHandle<RppBehaviourEvent>>,
@@ -257,14 +352,24 @@ pub struct Network {
     identity: Arc<NodeIdentity>,
     gossip_state: Option<Arc<GossipStateStore>>,
     replay: ReplayProtector,
-    rate_limiter: RateLimiter,
+    rate_limiter: Arc<Mutex<RateLimiter>>,
 }
 
-#[cfg(not(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response")))]
+#[cfg(not(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+)))]
 #[derive(Default)]
 pub struct Network;
 
-#[cfg(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response"))]
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 impl Network {
     fn default_handshake_metadata() -> TelemetryMetadata {
         TelemetryMetadata::with_agent(format!("rpp-p2p/{}", env!("CARGO_PKG_VERSION")))
@@ -288,6 +393,12 @@ impl Network {
         let local_key = identity.clone_keypair();
         let event_handle_slot: Arc<Mutex<Option<Arc<ExternalEventHandle<RppBehaviourEvent>>>>> =
             Arc::new(Mutex::new(None));
+
+        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(Duration::from_secs(1), 128)));
+        let inbound_permit = {
+            let limiter = rate_limiter.clone();
+            yamux::allow(move |peer: &PeerId| limiter.lock().allow(peer.clone()))
+        };
 
         let builder = SwarmBuilder::with_existing_identity(local_key.clone())
             .with_tokio()
@@ -333,8 +444,8 @@ impl Network {
                                         ))
                                     })?;
 
-                                if let Err(err) = peerstore
-                                    .record_public_key(peer_id, public_key.clone())
+                                if let Err(err) =
+                                    peerstore.record_public_key(peer_id, public_key.clone())
                                 {
                                     tracing::warn!(
                                         target: "telemetry.handshake",
@@ -394,7 +505,7 @@ impl Network {
                             })
                     }
                 },
-                yamux::Config::default,
+                yamux::Config::for_swarm(inbound_permit.clone()),
             )
             .map_err(|err| NetworkError::Noise(err.to_string()))?
             .with_behaviour(|keypair| {
@@ -416,7 +527,7 @@ impl Network {
             identity,
             gossip_state,
             replay: ReplayProtector::with_capacity(1024),
-            rate_limiter: RateLimiter::new(Duration::from_secs(1), 128),
+            rate_limiter,
         };
         network.bootstrap_subscriptions()?;
         network.bootstrap_known_peers();
@@ -631,7 +742,7 @@ impl Network {
                         )?;
                         return Ok(None);
                     }
-                    if !self.rate_limiter.allow(propagation_source) {
+                    if !self.rate_limiter.lock().allow(propagation_source) {
                         tracing::warn!(
                             ?propagation_source,
                             ?topic,
@@ -847,7 +958,12 @@ impl Network {
     }
 }
 
-#[cfg(not(all(feature = "gossipsub", feature = "identify", feature = "ping", feature = "request-response")))]
+#[cfg(not(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+)))]
 impl Network {
     pub fn new(
         _identity: Arc<NodeIdentity>,

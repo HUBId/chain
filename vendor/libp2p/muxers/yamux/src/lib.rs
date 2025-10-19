@@ -34,9 +34,10 @@ use std::{
 use either::Either;
 use futures::{prelude::*, ready};
 use libp2p_core::{
-    muxing::{StreamMuxer, StreamMuxerEvent},
+    muxing::{AssignPeerId, StreamMuxer, StreamMuxerEvent},
     upgrade::{InboundConnectionUpgrade, OutboundConnectionUpgrade, UpgradeInfo},
 };
+use libp2p_identity::PeerId;
 use thiserror::Error;
 
 /// A Yamux connection.
@@ -57,6 +58,10 @@ pub struct Muxer<C> {
     inbound_stream_buffer: VecDeque<Stream>,
     /// Waker to be called when new inbound streams are available.
     inbound_stream_waker: Option<Waker>,
+}
+
+impl<C> AssignPeerId for Muxer<C> {
+    fn assign_peer_id(&mut self, _: &PeerId) {}
 }
 
 /// How many streams to buffer before we start resetting them.
@@ -446,4 +451,3 @@ impl From<Error> for io::Error {
         }
     }
 }
-
