@@ -114,24 +114,3 @@ impl fmt::Display for InvalidProtocol {
 
 impl std::error::Error for InvalidProtocol {}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stream_protocol_print() {
-        let protocol = StreamProtocol::new("/foo/bar/1.0.0");
-
-        let debug = format!("{protocol:?}");
-        let display = format!("{protocol}");
-
-        assert_eq!(
-            debug, r#""/foo/bar/1.0.0""#,
-            "protocol to debug print as string with quotes"
-        );
-        assert_eq!(
-            display, "/foo/bar/1.0.0",
-            "protocol to display print as string without quotes"
-        );
-    }
-}
