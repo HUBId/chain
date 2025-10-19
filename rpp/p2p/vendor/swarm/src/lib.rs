@@ -59,6 +59,7 @@ mod stream;
 mod stream_protocol;
 mod upgrade;
 
+pub mod builder;
 pub mod behaviour;
 pub mod dial_opts;
 pub mod dummy;
@@ -105,6 +106,7 @@ pub use behaviour::{
     ListenerClosed, ListenerError, NetworkBehaviour, NewExternalAddrCandidate,
     NewExternalAddrOfPeer, NewListenAddr, NotifyHandler, PeerAddresses, ToSwarm,
 };
+pub use builder::SwarmBuilder;
 pub use connection::{pool::ConnectionCounters, ConnectionError, ConnectionId, SupportedProtocols};
 use connection::{
     pool::{EstablishedConnection, Pool, PoolConfig, PoolEvent},
