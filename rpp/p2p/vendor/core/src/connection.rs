@@ -18,6 +18,8 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+// Vendored from rust-libp2p v0.43.1 (https://github.com/libp2p/rust-libp2p).
+
 use crate::{
     multiaddr::{Multiaddr, Protocol},
     transport::PortUse,
