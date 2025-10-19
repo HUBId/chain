@@ -75,7 +75,7 @@ impl<T: AuthenticatedMultiplexedTransport>
     ) -> Result<
         SwarmBuilder<
             super::provider::Tokio,
-            WebsocketPhase<impl AuthenticatedMultiplexedTransport>,
+            RelayPhase<impl AuthenticatedMultiplexedTransport>,
         >,
         std::io::Error,
     > {
@@ -90,7 +90,7 @@ impl<T: AuthenticatedMultiplexedTransport>
         self,
         cfg: libp2p_dns::ResolverConfig,
         opts: libp2p_dns::ResolverOpts,
-    ) -> SwarmBuilder<super::provider::Tokio, WebsocketPhase<impl AuthenticatedMultiplexedTransport>>
+    ) -> SwarmBuilder<super::provider::Tokio, RelayPhase<impl AuthenticatedMultiplexedTransport>>
     {
         self.without_any_other_transports()
             .with_dns_config(cfg, opts)
@@ -135,7 +135,6 @@ impl<T: AuthenticatedMultiplexedTransport, Provider>
     {
         self.without_any_other_transports()
             .without_dns()
-            .without_websocket()
             .with_relay_client(security_upgrade, multiplexer_upgrade)
     }
 }
@@ -152,7 +151,6 @@ impl<Provider, T: AuthenticatedMultiplexedTransport>
     > {
         self.without_any_other_transports()
             .without_dns()
-            .without_websocket()
             .without_relay()
             .with_bandwidth_metrics(registry)
     }
@@ -166,7 +164,6 @@ impl<Provider, T: AuthenticatedMultiplexedTransport>
     ) -> Result<SwarmBuilder<Provider, SwarmPhase<T, B>>, R::Error> {
         self.without_any_other_transports()
             .without_dns()
-            .without_websocket()
             .without_relay()
             .with_behaviour(constructor)
     }

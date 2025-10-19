@@ -4,8 +4,6 @@ mod phase;
 mod select_muxer;
 mod select_security;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "websocket"))]
-pub use phase::WebsocketError;
 pub use phase::{BehaviourError, TransportError};
 
 /// Build a [`Swarm`](libp2p_swarm::Swarm) by combining an identity, a set of
@@ -28,9 +26,8 @@ pub use phase::{BehaviourError, TransportError};
 /// #     feature = "quic",
 /// #     feature = "dns",
 /// #     feature = "relay",
-/// #     feature = "websocket",
 /// # ))]
-/// # async fn build_swarm() -> Result<(), Box<dyn Error>> {
+/// # fn build_swarm() -> Result<(), Box<dyn Error>> {
 /// #     #[derive(NetworkBehaviour)]
 /// #     #[behaviour(prelude = "libp2p_swarm::derive_prelude")]
 /// #     struct MyBehaviour {
@@ -47,11 +44,6 @@ pub use phase::{BehaviourError, TransportError};
 ///     .with_quic()
 ///     .with_other_transport(|_key| DummyTransport::<(PeerId, StreamMuxerBox)>::new())?
 ///     .with_dns()?
-///     .with_websocket(
-///         (libp2p_tls::Config::new, libp2p_noise::Config::new),
-///         libp2p_yamux::Config::default,
-///     )
-///     .await?
 ///     .with_relay_client(
 ///         (libp2p_tls::Config::new, libp2p_noise::Config::new),
 ///         libp2p_yamux::Config::default,
@@ -339,7 +331,7 @@ mod tests {
             .build();
     }
 
-    /// Showcases how to provide custom transports unknown to the libp2p crate, e.g. WebRTC.
+    /// Showcases how to provide custom transports unknown to the libp2p crate.
     #[test]
     #[cfg(feature = "tokio")]
     fn other_transport() -> Result<(), Box<dyn std::error::Error>> {
@@ -360,78 +352,6 @@ mod tests {
             .build();
 
         Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg(all(
-        feature = "tokio",
-        feature = "tcp",
-        feature = "tls",
-        feature = "noise",
-        feature = "yamux",
-        feature = "dns",
-        feature = "websocket",
-    ))]
-    async fn tcp_websocket() {
-        let _ = SwarmBuilder::with_new_identity()
-            .with_tokio()
-            .with_tcp(
-                Default::default(),
-                (libp2p_tls::Config::new, libp2p_noise::Config::new),
-                libp2p_yamux::Config::default,
-            )
-            .unwrap()
-            .with_websocket(
-                (libp2p_tls::Config::new, libp2p_noise::Config::new),
-                libp2p_yamux::Config::default,
-            )
-            .await
-            .unwrap()
-            .with_behaviour(|_| libp2p_swarm::dummy::Behaviour)
-            .unwrap()
-            .build();
-    }
-
-    #[tokio::test]
-    #[cfg(all(
-        feature = "tokio",
-        feature = "tcp",
-        feature = "tls",
-        feature = "noise",
-        feature = "yamux",
-        feature = "quic",
-        feature = "dns",
-        feature = "relay",
-        feature = "websocket",
-        feature = "metrics",
-    ))]
-    async fn all() {
-        #[derive(NetworkBehaviour)]
-        #[behaviour(prelude = "libp2p_swarm::derive_prelude")]
-        struct MyBehaviour {
-            relay: libp2p_relay::client::Behaviour,
-        }
-
-        let _ = SwarmBuilder::with_new_identity()
-            .with_tokio()
-            .with_tcp(
-                Default::default(),
-                libp2p_tls::Config::new,
-                libp2p_yamux::Config::default,
-            )
-            .unwrap()
-            .with_quic()
-            .with_dns()
-            .unwrap()
-            .with_websocket(libp2p_tls::Config::new, libp2p_yamux::Config::default)
-            .await
-            .unwrap()
-            .with_relay_client(libp2p_tls::Config::new, libp2p_yamux::Config::default)
-            .unwrap()
-            .with_bandwidth_metrics(&mut libp2p_metrics::Registry::default())
-            .with_behaviour(|_key, relay| MyBehaviour { relay })
-            .unwrap()
-            .build();
     }
 
     #[test]

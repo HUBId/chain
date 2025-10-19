@@ -11,7 +11,6 @@ mod quic;
 mod relay;
 mod swarm;
 mod tcp;
-mod websocket;
 
 use bandwidth_metrics::*;
 pub use behaviour::BehaviourError;
@@ -27,9 +26,6 @@ use quic::*;
 use relay::*;
 use swarm::*;
 use tcp::*;
-#[cfg(all(not(target_arch = "wasm32"), feature = "websocket"))]
-pub use websocket::WebsocketError;
-use websocket::*;
 
 use super::{
     select_muxer::SelectMuxerUpgrade, select_security::SelectSecurityUpgrade, SwarmBuilder,
