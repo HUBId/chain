@@ -24,7 +24,7 @@ use std::{
 };
 
 use futures::prelude::*;
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 use super::ListenerId;
 use crate::{

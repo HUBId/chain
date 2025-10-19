@@ -17,7 +17,6 @@ futures = { workspace = true, features = ["executor", "thread-pool"] }
 futures-timer = "3"
 web-time = { workspace = true }
 libp2p-identity = { workspace = true, features = ["peerid", "ed25519"] }
-multiaddr = { workspace = true }
 multihash = { workspace = true }
 multistream-select = { workspace = true }
 parking_lot = "0.12.3"
@@ -28,6 +27,14 @@ rw-stream-sink = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 unsigned-varint = { workspace = true }
+arrayref = "0.3"
+byteorder = "1.3.1"
+data-encoding = "2.1"
+multibase = "0.9.1"
+percent-encoding = "2.1.0"
+serde = { version = "1", features = ["derive"] }
+static_assertions = "1.1"
+url = { version = "2.1.0", default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }

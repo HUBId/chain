@@ -23,7 +23,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 use crate::transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent};
 

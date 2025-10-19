@@ -20,10 +20,8 @@
 
 // Vendored from rust-libp2p v0.43.1 (https://github.com/libp2p/rust-libp2p).
 
-use crate::{
-    multiaddr::{Multiaddr, Protocol},
-    transport::PortUse,
-};
+use crate::multiaddr::{Multiaddr, Protocol};
+use crate::transport::PortUse;
 
 /// The endpoint roles associated with a peer-to-peer communication channel.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]

@@ -40,8 +40,8 @@ mod proto {
     };
 }
 
-/// Multi-address re-export.
-pub use multiaddr;
+/// Multi-address implementation vendored from the `multiaddr` crate.
+pub mod multiaddr;
 pub type Negotiated<T> = multistream_select::Negotiated<T>;
 
 pub mod connection;
@@ -54,7 +54,7 @@ pub mod upgrade;
 
 pub use connection::{ConnectedPoint, Endpoint};
 pub use libp2p_identity::PeerId;
-pub use multiaddr::Multiaddr;
+pub use self::multiaddr::Multiaddr;
 pub use multihash;
 pub use muxing::StreamMuxer;
 pub use peer_record::PeerRecord;
