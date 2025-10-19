@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io;
 
 use async_trait::async_trait;
@@ -24,6 +25,8 @@ pub struct HandshakePayload {
     pub tier: TierLevel,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub signature: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<TelemetryMetadata>,
 }
 
 impl HandshakePayload {
@@ -39,11 +42,17 @@ impl HandshakePayload {
             vrf_proof,
             tier,
             signature: Vec::new(),
+            telemetry: None,
         }
     }
 
     pub fn with_signature(mut self, signature: Vec<u8>) -> Self {
         self.signature = signature;
+        self
+    }
+
+    pub fn with_telemetry(mut self, telemetry: TelemetryMetadata) -> Self {
+        self.telemetry = Some(telemetry);
         self
     }
 
@@ -70,6 +79,7 @@ impl HandshakePayload {
             self.vrf_public_key.as_deref(),
             self.vrf_proof.as_deref(),
             self.tier,
+            self.telemetry.as_ref(),
         )
     }
 
@@ -79,6 +89,7 @@ impl HandshakePayload {
             self.vrf_public_key.as_deref(),
             None,
             self.tier,
+            self.telemetry.as_ref(),
         );
         digest.to_vec()
     }
@@ -95,6 +106,7 @@ impl HandshakePayload {
         vrf_public_key: Option<&[u8]>,
         vrf_proof: Option<&[u8]>,
         tier: TierLevel,
+        telemetry: Option<&TelemetryMetadata>,
     ) -> [u8; 32] {
         use blake2::digest::Digest;
 
@@ -119,10 +131,55 @@ impl HandshakePayload {
             None => hasher.update([0u8]),
         }
         hasher.update([tier as u8]);
+        match telemetry {
+            Some(meta) => {
+                hasher.update([1u8]);
+                meta.update_digest(&mut hasher);
+            }
+            None => hasher.update([0u8]),
+        }
         let digest = hasher.finalize();
         let mut buffer = [0u8; 32];
         buffer.copy_from_slice(&digest);
         buffer
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TelemetryMetadata {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<String, String>,
+}
+
+impl TelemetryMetadata {
+    pub fn new() -> Self {
+        Self {
+            tags: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_agent(agent: impl Into<String>) -> Self {
+        let mut meta = Self::new();
+        meta.tags.insert("agent".into(), agent.into());
+        meta
+    }
+
+    pub fn insert(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.tags.insert(key.into(), value.into());
+        self
+    }
+
+    fn update_digest(&self, hasher: &mut blake2::Blake2s256) {
+        hasher.update((self.tags.len() as u32).to_le_bytes());
+        for (key, value) in &self.tags {
+            let key_bytes = key.as_bytes();
+            hasher.update((key_bytes.len() as u32).to_le_bytes());
+            hasher.update(key_bytes);
+
+            let value_bytes = value.as_bytes();
+            hasher.update((value_bytes.len() as u32).to_le_bytes());
+            hasher.update(value_bytes);
+        }
     }
 }
 

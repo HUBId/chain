@@ -97,6 +97,11 @@ threaten block production.
    with submission counts, accepted validators, rejection totals, and fallback
    usage so dashboards can alert on declining VRF participation or repeated
    fallback elections.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】
+5. **Monitor handshake telemetry.** Each libp2p Noise handshake now emits
+   `telemetry.handshake` events with the remote agent string, tier, and ZSI. A
+   matching warning is logged on signature or VRF validation failures so that
+   operators can detect nodes announcing inconsistent VRF payloads or stale
+   metadata during admission.【F:rpp/p2p/src/swarm.rs†L248-L316】
 
 ## Health Probes
 

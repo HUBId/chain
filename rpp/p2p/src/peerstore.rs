@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
+use crate::handshake::{HandshakePayload, TelemetryMetadata, VRF_HANDSHAKE_CONTEXT};
 use crate::tier::TierLevel;
 use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
 
@@ -48,6 +48,7 @@ pub struct PeerRecord {
     pub last_seen: Option<SystemTime>,
     pub ban_until: Option<SystemTime>,
     pub public_key: Option<identity::PublicKey>,
+    pub telemetry: Option<TelemetryMetadata>,
 }
 
 impl PeerRecord {
@@ -63,6 +64,7 @@ impl PeerRecord {
             last_seen: None,
             ban_until: None,
             public_key: None,
+            telemetry: None,
         }
     }
 
@@ -72,6 +74,7 @@ impl PeerRecord {
         self.vrf_proof = payload.vrf_proof.clone();
         self.tier = payload.tier;
         self.last_seen = Some(SystemTime::now());
+        self.telemetry = payload.telemetry.clone();
     }
 
     fn set_public_key(&mut self, key: identity::PublicKey) {
@@ -139,6 +142,7 @@ struct StoredPeerRecord {
     last_seen: Option<u64>,
     ban_until: Option<u64>,
     public_key: Option<String>,
+    telemetry: Option<TelemetryMetadata>,
 }
 
 impl From<&PeerRecord> for StoredPeerRecord {
@@ -168,6 +172,7 @@ impl From<&PeerRecord> for StoredPeerRecord {
                 let encoded = key.encode_protobuf();
                 general_purpose::STANDARD.encode(encoded)
             }),
+            telemetry: record.telemetry.clone(),
         }
     }
 }
@@ -213,6 +218,7 @@ impl TryFrom<StoredPeerRecord> for PeerRecord {
                     .map_err(|err| PeerstoreError::Encoding(err.to_string()))
             })
             .transpose()?;
+        record.telemetry = value.telemetry;
         Ok(record)
     }
 }
