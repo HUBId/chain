@@ -18,6 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+// Vendored from rust-libp2p commit b187c14 (https://github.com/libp2p/rust-libp2p).
 //! Contains everything related to upgrading a connection or a substream to use a protocol.
 //!
 //! After a connection with a remote has been successfully established or a substream successfully
