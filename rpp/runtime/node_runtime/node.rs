@@ -400,6 +400,35 @@ impl NodeInner {
                 self.known_versions.remove(&peer);
                 let _ = self.events.send(NodeEvent::PeerDisconnected { peer });
             }
+            NetworkEvent::PingSuccess { peer, rtt } => {
+                let version = self
+                    .known_versions
+                    .get(&peer)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                self.meta_telemetry.record(peer, version, rtt);
+                debug!(
+                    target: "telemetry.ping",
+                    peer = %self.identity.peer_id(),
+                    remote = %peer,
+                    latency_ms = rtt.as_millis(),
+                    "ping_success"
+                );
+            }
+            NetworkEvent::PingFailure {
+                peer,
+                reason,
+                consecutive_failures,
+            } => {
+                warn!(
+                    target: "telemetry.ping",
+                    peer = %self.identity.peer_id(),
+                    remote = %peer,
+                    %reason,
+                    failures = consecutive_failures,
+                    "ping_failure"
+                );
+            }
             NetworkEvent::GossipMessage { peer, topic, data } => {
                 if self.gossip_enabled {
                     if let Some(version) = self.known_versions.get(&peer) {
@@ -715,12 +744,10 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(
-                    records
-                        .as_array()
-                        .map(|array| !array.is_empty())
-                        .unwrap_or(false)
-                );
+                assert!(records
+                    .as_array()
+                    .map(|array| !array.is_empty())
+                    .unwrap_or(false));
             })
             .await;
     }
