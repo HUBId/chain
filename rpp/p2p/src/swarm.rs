@@ -3,13 +3,14 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use futures::StreamExt;
-use libp2p::gossipsub::{self, MessageId};
-use libp2p::identity::Keypair;
-use libp2p::noise;
-use libp2p::request_response::{self, ProtocolSupport};
-use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
-use libp2p::yamux;
-use libp2p::{identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder};
+
+use crate::vendor::gossipsub::{self, MessageId};
+use crate::vendor::identity::Keypair;
+use crate::vendor::noise;
+use crate::vendor::request_response::{self, ProtocolSupport};
+use crate::vendor::swarm::{NetworkBehaviour, SwarmEvent};
+use crate::vendor::yamux;
+use crate::vendor::{identify, ping, tcp, Multiaddr, PeerId, Swarm, SwarmBuilder};
 use thiserror::Error;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
@@ -201,7 +202,7 @@ impl Network {
         let builder = SwarmBuilder::with_existing_identity(local_key.clone())
             .with_tokio()
             .with_tcp(
-                libp2p::tcp::Config::default().nodelay(true),
+                tcp::Config::default().nodelay(true),
                 noise::Config::new,
                 yamux::Config::default,
             )
@@ -644,7 +645,7 @@ mod tests {
     use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
     use crate::peerstore::PeerstoreConfig;
     use crate::persistence::GossipStateStore;
-    use libp2p::identity;
+    use crate::vendor::identity;
     use rand::rngs::OsRng;
     use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
     use std::time::Duration as StdDuration;

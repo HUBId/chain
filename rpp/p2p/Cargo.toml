@@ -4,12 +4,24 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.83.0"
 
+[features]
+default = ["identify", "ping", "gossipsub", "request-response"]
+
+identify = ["dep:libp2p-identify", "libp2p/identify"]
+ping = ["dep:libp2p-ping", "libp2p/ping"]
+gossipsub = ["dep:libp2p-gossipsub", "libp2p/gossipsub"]
+request-response = ["dep:libp2p-request-response", "libp2p/request-response"]
+
 [dependencies]
 base64 = "=0.21.7"
 async-trait = "0.1"
 futures = "0.3"
 hex = "=0.4.3"
-libp2p = { path = "../../vendor/libp2p/libp2p", features = ["macros", "noise", "request-response", "identify", "ping", "gossipsub", "tcp", "tokio", "yamux"] }
+libp2p = { path = "../../vendor/libp2p/libp2p", features = ["macros", "noise", "tcp", "tokio", "yamux"] }
+libp2p-identify = { path = "vendor/protocols/identify", optional = true }
+libp2p-ping = { path = "vendor/protocols/ping", optional = true }
+libp2p-gossipsub = { path = "vendor/protocols/gossipsub", optional = true }
+libp2p-request-response = { path = "vendor/protocols/request-response", optional = true }
 parking_lot = "0.12"
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = "=1.0.145"

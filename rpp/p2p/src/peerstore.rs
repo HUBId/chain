@@ -6,9 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose, Engine as _};
-use libp2p::Multiaddr;
-use libp2p::PeerId;
-use libp2p::{identity, multihash::Multihash};
+use crate::vendor::core::multihash::Multihash;
+use crate::vendor::{identity, Multiaddr, PeerId};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -630,7 +629,7 @@ fn derive_public_key(peer_id: &PeerId) -> Option<identity::PublicKey> {
 mod tests {
     use super::*;
     use crate::handshake::VRF_HANDSHAKE_CONTEXT;
-    use libp2p::identity;
+    use crate::vendor::identity;
     use rand::rngs::OsRng;
     use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
     use std::collections::HashMap;

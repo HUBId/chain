@@ -5,6 +5,9 @@ use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 
 use crate::tier::TierLevel;
+use crate::vendor::identity;
+#[cfg(feature = "request-response")]
+use crate::vendor::request_response;
 
 pub const HANDSHAKE_PROTOCOL: &str = "/rpp/handshake/1.0.0";
 pub const VRF_HANDSHAKE_CONTEXT: &[u8] = b"rpp.handshake.vrf";
@@ -45,8 +48,8 @@ impl HandshakePayload {
 
     pub fn signed(
         &self,
-        signer: &libp2p::identity::Keypair,
-    ) -> Result<Self, libp2p::identity::SigningError> {
+        signer: &identity::Keypair,
+    ) -> Result<Self, identity::SigningError> {
         let mut payload = self.clone();
         let digest = payload.digest();
         payload.signature = signer.sign(&digest)?;
@@ -72,7 +75,7 @@ impl HandshakePayload {
         digest.to_vec()
     }
 
-    pub fn verify_signature_with(&self, public_key: &libp2p::identity::PublicKey) -> bool {
+    pub fn verify_signature_with(&self, public_key: &identity::PublicKey) -> bool {
         if self.signature.is_empty() {
             return false;
         }
@@ -119,7 +122,8 @@ impl HandshakePayload {
 pub struct HandshakeCodec;
 
 #[async_trait]
-impl libp2p::request_response::Codec for HandshakeCodec {
+#[cfg(feature = "request-response")]
+impl request_response::Codec for HandshakeCodec {
     type Protocol = String;
     type Request = HandshakePayload;
     type Response = HandshakePayload;
@@ -205,12 +209,13 @@ impl libp2p::request_response::Codec for HandshakeCodec {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "request-response"))]
 mod tests {
     use super::*;
     use futures::executor::block_on;
     use futures::io::Cursor;
-    use libp2p::request_response::Codec;
+    use crate::vendor::identity;
+    use crate::vendor::request_response::Codec;
     use proptest::prelude::*;
 
     proptest! {
@@ -229,7 +234,7 @@ mod tests {
                 4 => TierLevel::Tl4,
                 _ => TierLevel::Tl5,
             };
-            let keypair = libp2p::identity::Keypair::generate_ed25519();
+            let keypair = identity::Keypair::generate_ed25519();
             let vrf_public_key = (!public.is_empty()).then(|| public.clone());
             let vrf_proof = (!proof.is_empty()).then(|| proof.clone());
             let template = HandshakePayload::new(zsi.clone(), vrf_public_key, vrf_proof, tier);

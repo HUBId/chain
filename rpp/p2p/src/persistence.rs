@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use blake3::Hash;
-use libp2p::PeerId;
+use crate::vendor::PeerId;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;

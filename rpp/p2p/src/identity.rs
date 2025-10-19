@@ -3,8 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use base64::{engine::general_purpose, Engine as _};
-use libp2p::identity::{self, Keypair};
-use libp2p::PeerId;
+use crate::vendor::identity::{self, Keypair};
+use crate::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
