@@ -20,13 +20,6 @@ use std::{
     task::{Context, Poll},
 };
 
-/// Maximum Yamux frame body length
-///
-/// Limits the amount of bytes a remote can cause the local node to allocate at once when reading.
-///
-/// Chosen based on intuition in past iterations.
-const MAX_FRAME_BODY_LEN: usize = crate::MIB;
-
 /// A [`Stream`] and writer of [`Frame`] values.
 #[derive(Debug)]
 pub(crate) struct Io<T> {
@@ -34,15 +27,17 @@ pub(crate) struct Io<T> {
     io: T,
     read_state: ReadState,
     write_state: WriteState,
+    max_frame_body_len: usize,
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> Io<T> {
-    pub(crate) fn new(id: Id, io: T) -> Self {
+    pub(crate) fn new(id: Id, io: T, max_frame_body_len: usize) -> Self {
         Io {
             id,
             io,
             read_state: ReadState::Init,
             write_state: WriteState::Init,
+            max_frame_body_len,
         }
     }
 }
@@ -221,7 +216,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Stream for Io<T> {
 
                         let body_len = header.len().val() as usize;
 
-                        if body_len > MAX_FRAME_BODY_LEN {
+                        if body_len > this.max_frame_body_len {
                             return Poll::Ready(Some(Err(FrameDecodeError::FrameTooLarge(
                                 body_len,
                             ))));

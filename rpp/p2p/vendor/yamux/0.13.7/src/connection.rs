@@ -353,11 +353,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Active<T> {
     fn new(socket: T, cfg: Config, mode: Mode) -> Self {
         let id = Id::random();
         log::debug!("new connection: {id} ({mode:?})");
-        let socket = frame::Io::new(id, socket).fuse();
+        let max_frame_body_len = cfg.max_frame_body_len;
+        let keepalive_interval = cfg.keepalive_interval;
+        let config = Arc::new(cfg);
+        let socket = frame::Io::new(id, socket, max_frame_body_len).fuse();
         Active {
             id,
             mode,
-            config: Arc::new(cfg),
+            config,
             socket,
             streams: IntMap::default(),
             stream_receivers: SelectAll::default(),
@@ -369,7 +372,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Active<T> {
             pending_read_frame: None,
             pending_write_frame: None,
             new_outbound_stream_waker: None,
-            rtt: rtt::Rtt::new(),
+            rtt: rtt::Rtt::new(keepalive_interval),
             accumulated_max_stream_windows: Default::default(),
         }
     }
@@ -615,7 +618,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Active<T> {
                 log::error!("{}: invalid stream id {}", self.id, stream_id);
                 return Action::Terminate(Frame::protocol_error());
             }
-            if frame.body().len() > DEFAULT_CREDIT as usize {
+            let frame_len = frame.body_len();
+            if frame_len > DEFAULT_CREDIT {
                 log::error!(
                     "{}/{}: 1st body of stream exceeds default credit",
                     self.id,
@@ -637,7 +641,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Active<T> {
                 if is_finish {
                     shared.update_state(self.id, stream_id, State::RecvClosed);
                 }
-                shared.consume_receive_window(frame.body_len());
+                if shared.buffer.len() + frame_len as usize > self.config.max_stream_buffer_size {
+                    log::error!(
+                        "{}/{}: stream buffer would exceed configured limit",
+                        self.id,
+                        stream_id
+                    );
+                    return Action::Terminate(Frame::protocol_error());
+                }
+                shared.consume_receive_window(frame_len);
                 shared.buffer.push(frame.into_body());
             }
             self.streams.insert(stream_id, stream.clone_shared());
@@ -646,9 +658,18 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Active<T> {
 
         if let Some(s) = self.streams.get_mut(&stream_id) {
             let mut shared = s.lock();
-            if frame.body_len() > shared.receive_window() {
+            let frame_len = frame.body_len();
+            if frame_len > shared.receive_window() {
                 log::error!(
                     "{}/{}: frame body larger than window of stream",
+                    self.id,
+                    stream_id
+                );
+                return Action::Terminate(Frame::protocol_error());
+            }
+            if shared.buffer.len() + frame_len as usize > self.config.max_stream_buffer_size {
+                log::error!(
+                    "{}/{}: stream buffer would exceed configured limit",
                     self.id,
                     stream_id
                 );
@@ -657,7 +678,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Active<T> {
             if is_finish {
                 shared.update_state(self.id, stream_id, State::RecvClosed);
             }
-            shared.consume_receive_window(frame.body_len());
+            shared.consume_receive_window(frame_len);
             shared.buffer.push(frame.into_body());
             if let Some(w) = shared.reader.take() {
                 w.wake()

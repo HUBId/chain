@@ -37,6 +37,7 @@ pub use crate::frame::{
     header::{HeaderDecodeError, StreamId},
     FrameDecodeError,
 };
+use web_time::Duration;
 
 const KIB: usize = 1024;
 const MIB: usize = KIB * 1024;
@@ -71,25 +72,39 @@ const DEFAULT_SPLIT_SEND_SIZE: usize = 16 * KIB;
 ///
 /// The default configuration values are as follows:
 ///
-/// - max. for the total receive window size across all streams of a connection = 1 GiB
+/// - max. for the total receive window size across all streams of a connection = 128 MiB
+///   (allows the 512 concurrent streams we exercise in RPP load tests to each exhaust their
+///   256 KiB default credit while bounding aggregate memory use)
 /// - max. number of streams = 512
-/// - read after close = true
+/// - read after close = false (matches the expectations of libp2p based transports)
 /// - split send size = 16 KiB
+/// - max. buffered bytes per stream = 4 MiB (caps the worst-case backlog that RPP nodes observed
+///   while still permitting a single stream to saturate multi-gigabit links)
+/// - max. frame payload accepted from the remote = 256 KiB (keeps per-frame allocations aligned
+///   with the receive window and avoids bursts of oversized frames)
+/// - keepalive interval = 5 seconds (refreshes NAT mappings under RPP deployments without wasting
+///   bandwidth on idle peers)
 #[derive(Debug, Clone)]
 pub struct Config {
     max_connection_receive_window: Option<usize>,
     max_num_streams: usize,
     read_after_close: bool,
     split_send_size: usize,
+    max_stream_buffer_size: usize,
+    max_frame_body_len: usize,
+    keepalive_interval: Duration,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
-            max_connection_receive_window: Some(GIB),
+            max_connection_receive_window: Some(128 * MIB),
             max_num_streams: 512,
-            read_after_close: true,
+            read_after_close: false,
             split_send_size: DEFAULT_SPLIT_SEND_SIZE,
+            max_stream_buffer_size: 4 * MIB,
+            max_frame_body_len: 256 * KIB,
+            keepalive_interval: Duration::from_secs(5),
         }
     }
 }
@@ -163,6 +178,71 @@ impl Config {
         self.split_send_size = n;
         self
     }
+
+    /// Set the max. number of bytes buffered per stream while waiting for the
+    /// application to read them.
+    pub fn set_max_stream_buffer_size(&mut self, n: usize) -> &mut Self {
+        assert!(
+            n >= DEFAULT_CREDIT as usize,
+            "the per-stream buffer must be able to hold at least the default credit"
+        );
+        assert!(
+            self.max_frame_body_len <= n,
+            "reducing the buffer below the frame limit would make the configuration inconsistent"
+        );
+        self.max_stream_buffer_size = n;
+        self
+    }
+
+    /// Set the maximum frame payload length accepted from the remote.
+    pub fn set_max_frame_body_len(&mut self, n: usize) -> &mut Self {
+        assert!(
+            n <= self.max_stream_buffer_size,
+            "a single frame must fit into the per-stream buffer"
+        );
+        self.max_frame_body_len = n;
+        self
+    }
+
+    /// Set the interval between keepalive pings on idle connections.
+    pub fn set_keepalive_interval(&mut self, interval: std::time::Duration) -> &mut Self {
+        assert!(
+            !interval.is_zero(),
+            "a zero keepalive interval would result in a busy loop"
+        );
+        self.keepalive_interval = interval.into();
+        self
+    }
+
+    /// The configured maximum receive window across all streams.
+    pub fn max_connection_receive_window(&self) -> Option<usize> {
+        self.max_connection_receive_window
+    }
+
+    /// The configured maximum number of concurrent streams.
+    pub fn max_num_streams(&self) -> usize {
+        self.max_num_streams
+    }
+
+    /// The configured per-stream buffer limit.
+    pub fn max_stream_buffer_size(&self) -> usize {
+        self.max_stream_buffer_size
+    }
+
+    /// The configured maximum frame payload length accepted from the remote.
+    pub fn max_frame_body_len(&self) -> usize {
+        self.max_frame_body_len
+    }
+
+    /// Whether buffered data can be read after the connection closes.
+    pub fn read_after_close(&self) -> bool {
+        self.read_after_close
+    }
+
+    /// The interval used for emitting keepalive pings on idle connections.
+    pub fn keepalive_interval(&self) -> std::time::Duration {
+        self.keepalive_interval.into()
+    }
 }
 
 // Check that we can safely cast a `usize` to a `u64`.
@@ -180,17 +260,24 @@ impl quickcheck::Arbitrary for Config {
     fn arbitrary(g: &mut quickcheck::Gen) -> Self {
         use quickcheck::GenRange;
 
-        let max_num_streams = g.gen_range(0..u16::MAX as usize);
+        let max_num_streams = g.gen_range(0..=1024);
+        let min_window = DEFAULT_CREDIT as usize * max_num_streams;
+        let extra_window = g.gen_range(0..=16 * MIB);
+        let max_stream_buffer_size = DEFAULT_CREDIT as usize + g.gen_range(0..=4 * MIB);
+        let max_frame_body_len = g.gen_range(DEFAULT_CREDIT as usize..=max_stream_buffer_size);
 
         Config {
             max_connection_receive_window: if bool::arbitrary(g) {
-                Some(g.gen_range((DEFAULT_CREDIT as usize * max_num_streams)..usize::MAX))
+                Some(min_window.saturating_add(extra_window))
             } else {
                 None
             },
             max_num_streams,
             read_after_close: bool::arbitrary(g),
-            split_send_size: g.gen_range(DEFAULT_SPLIT_SEND_SIZE..usize::MAX),
+            split_send_size: g.gen_range(DEFAULT_SPLIT_SEND_SIZE..=DEFAULT_SPLIT_SEND_SIZE * 64),
+            max_stream_buffer_size,
+            max_frame_body_len,
+            keepalive_interval: Duration::from_millis(g.gen_range(1..=60_000)),
         }
     }
 }
