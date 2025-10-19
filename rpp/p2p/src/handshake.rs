@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use serde::{Deserialize, Serialize};
 
+use crate::identity::{IdentityKeypairExt, IdentityPublicKeyExt};
 use crate::tier::TierLevel;
 use crate::vendor::identity;
 #[cfg(feature = "request-response")]
@@ -46,10 +47,7 @@ impl HandshakePayload {
         self
     }
 
-    pub fn signed(
-        &self,
-        signer: &identity::Keypair,
-    ) -> Result<Self, identity::SigningError> {
+    pub fn signed(&self, signer: &identity::Keypair) -> Result<Self, identity::SigningError> {
         let mut payload = self.clone();
         if payload.vrf_public_key.is_none() {
             if let Some(public) = signer.vrf_public_key() {
@@ -222,10 +220,10 @@ impl request_response::Codec for HandshakeCodec {
 #[cfg(all(test, feature = "request-response"))]
 mod tests {
     use super::*;
-    use futures::executor::block_on;
-    use futures::io::Cursor;
     use crate::vendor::identity;
     use crate::vendor::request_response::Codec;
+    use futures::executor::block_on;
+    use futures::io::Cursor;
     use proptest::prelude::*;
 
     proptest! {
