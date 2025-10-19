@@ -23,7 +23,7 @@ noise = ["dep:libp2p-noise", "libp2p/noise"]
 tcp = ["dep:libp2p-tcp", "libp2p/tcp"]
 yamux = ["dep:libp2p-yamux", "libp2p/yamux"]
 quic = ["dep:libp2p-quic", "libp2p/quic"]
-memory-transport = []
+memory-transport = ["libp2p/memory-transport"]
 
 [dependencies]
 base64 = "=0.21.7"

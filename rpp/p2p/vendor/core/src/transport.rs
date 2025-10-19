@@ -42,6 +42,8 @@ pub mod dummy;
 pub mod global_only;
 pub mod map;
 pub mod map_err;
+#[cfg(any(feature = "memory-transport", test))]
+#[cfg_attr(docsrs, doc(cfg(feature = "memory-transport")))]
 pub mod memory;
 pub mod timeout;
 pub mod upgrade;
@@ -49,10 +51,9 @@ pub mod upgrade;
 mod boxed;
 mod optional;
 
-pub use self::{
-    boxed::Boxed, choice::OrTransport, memory::MemoryTransport, optional::OptionalTransport,
-    upgrade::Upgrade,
-};
+pub use self::{boxed::Boxed, choice::OrTransport, optional::OptionalTransport, upgrade::Upgrade};
+#[cfg(any(feature = "memory-transport", test))]
+pub use self::memory::MemoryTransport;
 use crate::{ConnectedPoint, Endpoint};
 
 static NEXT_LISTENER_ID: AtomicUsize = AtomicUsize::new(1);
