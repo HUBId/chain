@@ -59,7 +59,7 @@ struct SimBehaviour {
 
 enum SimBehaviourEvent {
     Gossipsub(gossipsub::Event),
-    Ping,
+    Ping(ping::Event),
     Identify,
 }
 
@@ -70,8 +70,8 @@ impl From<gossipsub::Event> for SimBehaviourEvent {
 }
 
 impl From<ping::Event> for SimBehaviourEvent {
-    fn from(_: ping::Event) -> Self {
-        SimBehaviourEvent::Ping
+    fn from(event: ping::Event) -> Self {
+        SimBehaviourEvent::Ping(event)
     }
 }
 
@@ -248,7 +248,28 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
                                 local_peer,
                             );
                         }
-                        SwarmEvent::Behaviour(SimBehaviourEvent::Ping) => {}
+                        SwarmEvent::Behaviour(SimBehaviourEvent::Ping(event)) => {
+                            match event.result {
+                                Ok(rtt) => {
+                                    debug!(
+                                        target = "rpp::sim::node",
+                                        peer = %local_peer,
+                                        remote = %event.peer,
+                                        latency_ms = rtt.as_millis(),
+                                        "ping_success"
+                                    );
+                                }
+                                Err(ref failure) => {
+                                    warn!(
+                                        target = "rpp::sim::node",
+                                        peer = %local_peer,
+                                        remote = %event.peer,
+                                        failure = ?failure,
+                                        "ping_failure"
+                                    );
+                                }
+                            }
+                        }
                         SwarmEvent::Behaviour(SimBehaviourEvent::Identify) => {}
                         _ => {}
                     }

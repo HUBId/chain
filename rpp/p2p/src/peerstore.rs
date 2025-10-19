@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use base64::{engine::general_purpose, Engine as _};
 use crate::vendor::core::multihash::Multihash;
 use crate::vendor::{identity, Multiaddr, PeerId};
+use base64::{engine::general_purpose, Engine as _};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -49,6 +49,8 @@ pub struct PeerRecord {
     pub ban_until: Option<SystemTime>,
     pub public_key: Option<identity::PublicKey>,
     pub telemetry: Option<TelemetryMetadata>,
+    pub last_ping_rtt: Option<Duration>,
+    pub ping_failures: u32,
 }
 
 impl PeerRecord {
@@ -65,6 +67,8 @@ impl PeerRecord {
             ban_until: None,
             public_key: None,
             telemetry: None,
+            last_ping_rtt: None,
+            ping_failures: 0,
         }
     }
 
@@ -128,6 +132,17 @@ impl PeerRecord {
     fn remove_ban(&mut self) {
         self.ban_until = None;
     }
+
+    fn record_ping_success(&mut self, rtt: Duration) {
+        self.last_seen = Some(SystemTime::now());
+        self.last_ping_rtt = Some(rtt);
+        self.ping_failures = 0;
+    }
+
+    fn record_ping_failure(&mut self) -> u32 {
+        self.ping_failures = self.ping_failures.saturating_add(1);
+        self.ping_failures
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +158,10 @@ struct StoredPeerRecord {
     ban_until: Option<u64>,
     public_key: Option<String>,
     telemetry: Option<TelemetryMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_ping_rtt_ms: Option<u64>,
+    #[serde(default)]
+    ping_failures: u32,
 }
 
 impl From<&PeerRecord> for StoredPeerRecord {
@@ -173,6 +192,10 @@ impl From<&PeerRecord> for StoredPeerRecord {
                 general_purpose::STANDARD.encode(encoded)
             }),
             telemetry: record.telemetry.clone(),
+            last_ping_rtt_ms: record
+                .last_ping_rtt
+                .map(|rtt| (rtt.as_millis().min(u128::from(u64::MAX))) as u64),
+            ping_failures: record.ping_failures,
         }
     }
 }
@@ -219,6 +242,8 @@ impl TryFrom<StoredPeerRecord> for PeerRecord {
             })
             .transpose()?;
         record.telemetry = value.telemetry;
+        record.last_ping_rtt = value.last_ping_rtt_ms.map(Duration::from_millis);
+        record.ping_failures = value.ping_failures;
         Ok(record)
     }
 }
@@ -363,6 +388,33 @@ impl Peerstore {
             entry.record_address(addr);
         }
         self.persist()
+    }
+
+    pub fn record_ping_success(
+        &self,
+        peer_id: PeerId,
+        rtt: Duration,
+    ) -> Result<(), PeerstoreError> {
+        {
+            let mut guard = self.peers.write();
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
+            entry.record_ping_success(rtt);
+        }
+        self.persist()
+    }
+
+    pub fn record_ping_failure(&self, peer_id: PeerId) -> Result<u32, PeerstoreError> {
+        let failures = {
+            let mut guard = self.peers.write();
+            let entry = guard
+                .entry(peer_id)
+                .or_insert_with(|| PeerRecord::new(peer_id));
+            entry.record_ping_failure()
+        };
+        self.persist()?;
+        Ok(failures)
     }
 
     pub fn get(&self, peer_id: &PeerId) -> Option<PeerRecord> {
@@ -914,6 +966,45 @@ mod tests {
         store
             .record_handshake(peer_id, &payload)
             .expect("handshake should be accepted");
+    }
+
+    #[test]
+    fn ping_metrics_are_tracked_in_memory() {
+        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let peer = PeerId::random();
+
+        let first = store.record_ping_failure(peer).expect("failure count");
+        assert_eq!(first, 1);
+        let second = store.record_ping_failure(peer).expect("failure count");
+        assert_eq!(second, 2);
+
+        store
+            .record_ping_success(peer, Duration::from_millis(37))
+            .expect("success");
+
+        let record = store.get(&peer).expect("record");
+        assert_eq!(record.ping_failures, 0);
+        assert_eq!(record.last_ping_rtt, Some(Duration::from_millis(37)));
+        assert!(record.last_seen.is_some());
+    }
+
+    #[test]
+    fn ping_metrics_survive_persistence_roundtrip() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("peerstore.json");
+        let store = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("open");
+        let peer = PeerId::random();
+
+        store.record_ping_failure(peer).expect("failure recorded");
+        store
+            .record_ping_success(peer, Duration::from_millis(12))
+            .expect("success");
+        drop(store);
+
+        let reloaded = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("reload");
+        let record = reloaded.get(&peer).expect("record");
+        assert_eq!(record.ping_failures, 0);
+        assert_eq!(record.last_ping_rtt, Some(Duration::from_millis(12)));
     }
 
     #[test]

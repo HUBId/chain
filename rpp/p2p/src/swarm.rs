@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -32,6 +33,13 @@ use crate::vendor::identity::Keypair;
     feature = "ping",
     feature = "request-response"
 ))]
+use crate::vendor::ping::PingEventCallback;
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response"
+))]
 use crate::vendor::protocols::request_response::{self, ProtocolSupport};
 #[cfg(all(
     feature = "gossipsub",
@@ -47,12 +55,6 @@ use crate::vendor::swarm::builder::SwarmBuilder;
     feature = "request-response"
 ))]
 use crate::vendor::swarm::{ExternalEventHandle, SwarmEvent};
-#[cfg(all(
-    feature = "gossipsub",
-    feature = "identify",
-    feature = "ping",
-    feature = "request-response"
-))]
 use crate::vendor::{identify, ping, Swarm};
 #[cfg(all(
     feature = "gossipsub",
@@ -305,6 +307,35 @@ fn build_peer_score_thresholds() -> gossipsub::PeerScoreThresholds {
     }
 }
 
+const PING_FAILURE_REPUTATION_THRESHOLD: u32 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PingFailureReason {
+    Timeout,
+    Unsupported,
+    Other(String),
+}
+
+impl fmt::Display for PingFailureReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PingFailureReason::Timeout => f.write_str("timeout"),
+            PingFailureReason::Unsupported => f.write_str("unsupported"),
+            PingFailureReason::Other(reason) => f.write_str(reason),
+        }
+    }
+}
+
+impl From<&ping::Failure> for PingFailureReason {
+    fn from(value: &ping::Failure) -> Self {
+        match value {
+            ping::Failure::Timeout => PingFailureReason::Timeout,
+            ping::Failure::Unsupported => PingFailureReason::Unsupported,
+            ping::Failure::Other { error } => PingFailureReason::Other(error.to_string()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum NetworkEvent {
     NewListenAddr(Multiaddr),
@@ -319,6 +350,15 @@ pub enum NetworkEvent {
     },
     PeerDisconnected {
         peer: PeerId,
+    },
+    PingSuccess {
+        peer: PeerId,
+        rtt: Duration,
+    },
+    PingFailure {
+        peer: PeerId,
+        reason: PingFailureReason,
+        consecutive_failures: u32,
     },
     ReputationUpdated {
         peer: PeerId,
@@ -335,6 +375,65 @@ pub enum NetworkEvent {
         topic: GossipTopic,
         reason: AdmissionError,
     },
+}
+
+struct PingReporter {
+    peerstore: Arc<Peerstore>,
+    events: Arc<ExternalEventHandle<RppBehaviourEvent>>,
+}
+
+impl PingReporter {
+    fn new(peerstore: Arc<Peerstore>, events: Arc<ExternalEventHandle<RppBehaviourEvent>>) -> Self {
+        Self { peerstore, events }
+    }
+
+    fn dispatch(&self, event: NetworkEvent) {
+        if let Err(err) = self.events.push(RppBehaviourEvent::Network(event)) {
+            tracing::warn!(target: "telemetry.ping", error = %err, "ping_event_dispatch_failed");
+        }
+    }
+}
+
+impl PingEventCallback for PingReporter {
+    fn on_ping_event(
+        &self,
+        peer: &PeerId,
+        _connection: &ConnectionId,
+        result: &Result<Duration, ping::Failure>,
+    ) {
+        match result {
+            Ok(rtt) => {
+                if let Err(err) = self.peerstore.record_ping_success(peer.clone(), *rtt) {
+                    tracing::debug!(target: "telemetry.ping", %peer, error = %err, "record_ping_success_failed");
+                }
+                self.dispatch(NetworkEvent::PingSuccess {
+                    peer: peer.clone(),
+                    rtt: *rtt,
+                });
+            }
+            Err(failure) => {
+                let peer_id = peer.clone();
+                let failures = match self.peerstore.record_ping_failure(peer_id.clone()) {
+                    Ok(count) => count,
+                    Err(err) => {
+                        tracing::debug!(
+                            target: "telemetry.ping",
+                            %peer,
+                            error = %err,
+                            "record_ping_failure_failed"
+                        );
+                        0
+                    }
+                };
+                let reason = PingFailureReason::from(failure);
+                self.dispatch(NetworkEvent::PingFailure {
+                    peer: peer_id,
+                    reason,
+                    consecutive_failures: failures,
+                });
+            }
+        }
+    }
 }
 
 #[cfg(all(
@@ -529,6 +628,15 @@ impl Network {
             replay: ReplayProtector::with_capacity(1024),
             rate_limiter,
         };
+        let ping_callback: Arc<dyn PingEventCallback> = Arc::new(PingReporter::new(
+            network.peerstore.clone(),
+            network.events_handle.clone(),
+        ));
+        network
+            .swarm
+            .behaviour_mut()
+            .ping
+            .set_event_callback(Some(ping_callback));
         network.bootstrap_subscriptions()?;
         network.bootstrap_known_peers();
         Ok(network)
@@ -654,6 +762,48 @@ impl Network {
                 }
                 SwarmEvent::Behaviour(RppBehaviourEvent::Ping(_)) => {}
                 SwarmEvent::Behaviour(RppBehaviourEvent::Network(event)) => {
+                    match &event {
+                        NetworkEvent::PingSuccess { peer, rtt } => {
+                            tracing::debug!(
+                                target: "telemetry.ping",
+                                %peer,
+                                latency_ms = rtt.as_millis(),
+                                "ping_success_event"
+                            );
+                        }
+                        NetworkEvent::PingFailure {
+                            peer,
+                            reason,
+                            consecutive_failures,
+                        } => {
+                            tracing::debug!(
+                                target: "telemetry.ping",
+                                %peer,
+                                %reason,
+                                failures = *consecutive_failures,
+                                "ping_failure_event"
+                            );
+                            if *consecutive_failures == PING_FAILURE_REPUTATION_THRESHOLD
+                                && !matches!(reason, PingFailureReason::Unsupported)
+                            {
+                                if let Err(err) = self.penalise_peer(
+                                    peer.clone(),
+                                    ReputationEvent::ManualPenalty {
+                                        amount: 0.2,
+                                        reason: "ping_failure",
+                                    },
+                                ) {
+                                    tracing::warn!(
+                                        target: "telemetry.ping",
+                                        %peer,
+                                        error = %err,
+                                        "ping_penalty_failed"
+                                    );
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     return Ok(event);
                 }
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
