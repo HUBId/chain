@@ -52,9 +52,9 @@ pub use libp2p_plaintext as plaintext;
 #[cfg(feature = "tcp")]
 pub use libp2p_tcp as tcp;
 
-/// Yamux stream multiplexer implementation.
+/// Yamux stream multiplexer implementation with RPP defaults.
 #[cfg(feature = "yamux")]
-pub use libp2p_yamux as yamux;
+pub mod yamux;
 
 /// QUIC transport implementation.
 #[cfg(feature = "quic")]
