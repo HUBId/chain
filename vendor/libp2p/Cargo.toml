@@ -20,7 +20,10 @@ members = [
     "swarm",
     "swarm-derive",
     "transports/noise",
+    "transports/quic",
     "transports/tcp",
+    "transports/plaintext",
+    "transports/tls",
 ]
 resolver = "2"
 
@@ -38,12 +41,15 @@ libp2p-identify = { version = "0.47.0", path = "protocols/identify" }
 libp2p-identity = { version = "0.2.12", path = "identity" }
 libp2p-memory-connection-limits = { version = "0.5.0", path = "misc/memory-connection-limits" }
 libp2p-noise = { version = "0.46.1", path = "transports/noise" }
+libp2p-quic = { version = "0.13.0", path = "transports/quic" }
 libp2p-peer-store = { version = "0.1.0", path = "misc/peer-store" }
 libp2p-ping = { version = "0.47.0", path = "protocols/ping" }
+libp2p-plaintext = { version = "0.43.0", path = "transports/plaintext" }
 libp2p-request-response = { version = "0.29.0", path = "protocols/request-response" }
 libp2p-swarm = { version = "0.47.0", path = "swarm" }
 libp2p-swarm-derive = { version = "=0.35.1", path = "swarm-derive" } # `libp2p-swarm-derive` may not be compatible with different `libp2p-swarm` non-breaking releases.
 libp2p-tcp = { version = "0.44.0", path = "transports/tcp" }
+libp2p-tls = { version = "0.6.2", path = "transports/tls" }
 libp2p-webrtc-utils = { version = "0.4.0", path = "misc/webrtc-utils" }
 libp2p-yamux = { version = "0.47.0", path = "muxers/yamux" }
 multistream-select = { version = "0.13.0", path = "misc/multistream-select" }
