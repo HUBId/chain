@@ -12,7 +12,6 @@ categories = ["network-programming", "asynchronous"]
 
 [features]
 full = [
-    "autonat",
     "cbor",
     "dcutr",
     "dns",
@@ -44,15 +43,10 @@ full = [
     "tokio",
     "uds",
     "wasm-bindgen",
-    "webrtc-websys",
-    "websocket-websys",
-    "websocket",
-    "webtransport-websys",
     "yamux",
     "upnp",
 ]
 
-autonat = ["dep:libp2p-autonat"]
 cbor = ["libp2p-request-response?/cbor"]
 dcutr = ["dep:libp2p-dcutr", "libp2p-metrics?/dcutr"]
 dns = ["dep:libp2p-dns"]
@@ -84,10 +78,6 @@ tls = ["dep:libp2p-tls"]
 tokio = ["libp2p-swarm/tokio", "libp2p-mdns?/tokio", "libp2p-tcp?/tokio", "libp2p-dns?/tokio", "libp2p-quic?/tokio", "libp2p-upnp?/tokio"]
 uds = ["dep:libp2p-uds"]
 wasm-bindgen = ["futures-timer/wasm-bindgen", "getrandom/js", "libp2p-swarm/wasm-bindgen", "libp2p-gossipsub?/wasm-bindgen"]
-webrtc-websys = ['dep:libp2p-webrtc-websys']
-websocket-websys = ["dep:libp2p-websocket-websys"]
-websocket = ["dep:libp2p-websocket"]
-webtransport-websys = ["dep:libp2p-webtransport-websys"]
 yamux = ["dep:libp2p-yamux"]
 upnp = ["dep:libp2p-upnp"]
 
@@ -100,7 +90,6 @@ getrandom = { workspace = true } # Explicit dependency to be used in `wasm-bindg
 # TODO feature flag?
 rw-stream-sink = { workspace = true }
 libp2p-allow-block-list = { workspace = true }
-libp2p-autonat = { workspace = true, optional = true }
 libp2p-connection-limits = { workspace = true }
 libp2p-core = { workspace = true }
 libp2p-dcutr = { workspace = true, optional = true }
@@ -123,11 +112,6 @@ multiaddr = { workspace = true }
 pin-project = "1.0.0"
 thiserror = { workspace = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-libp2p-webrtc-websys = { workspace = true, optional = true }
-libp2p-websocket-websys = { workspace = true, optional = true }
-libp2p-webtransport-websys = { workspace = true, optional = true }
-
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 libp2p-dns = { workspace = true, optional = true }
 libp2p-mdns = { workspace = true, optional = true }
@@ -137,7 +121,6 @@ libp2p-tcp = { workspace = true, optional = true }
 libp2p-tls = { workspace = true, optional = true }
 libp2p-uds = { workspace = true, optional = true }
 libp2p-upnp = { workspace = true, optional = true }
-libp2p-websocket = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["io-util", "io-std", "macros", "rt", "rt-multi-thread"] }
