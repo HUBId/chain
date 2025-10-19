@@ -30,4 +30,18 @@ impl<Provider, T: AuthenticatedMultiplexedTransport, B: NetworkBehaviour>
             self.phase.swarm_config,
         )
     }
+
+    #[cfg(all(feature = "macros", feature = "tokio"))]
+    /// Builds a [`Swarm`] alongside an [`ExternalEventHandle`](crate::ExternalEventHandle) for
+    /// injecting external behaviour events.
+    pub fn build_with_external_event_handle(
+        self,
+    ) -> (Swarm<B>, crate::ExternalEventHandle<B::ToSwarm>) {
+        Swarm::new_with_external_event_channel(
+            TransportTimeout::new(self.phase.transport, self.phase.connection_timeout).boxed(),
+            self.phase.behaviour,
+            self.keypair.public().to_peer_id(),
+            self.phase.swarm_config,
+        )
+    }
 }

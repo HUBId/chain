@@ -115,6 +115,8 @@ use connection::{
 use dial_opts::{DialOpts, PeerCondition};
 pub use executor::Executor;
 use futures::{prelude::*, stream::FusedStream};
+#[cfg(all(feature = "macros", feature = "tokio"))]
+use futures::channel::mpsc;
 pub use handler::{
     ConnectionHandler, ConnectionHandlerEvent, ConnectionHandlerSelect, OneShotHandler,
     OneShotHandlerConfig, StreamUpgradeError, SubstreamProtocol,
@@ -290,6 +292,24 @@ pub enum SwarmEvent<TBehaviourOutEvent> {
     NewExternalAddrOfPeer { peer_id: PeerId, address: Multiaddr },
 }
 
+#[cfg(all(feature = "macros", feature = "tokio"))]
+/// Handle used to inject external events into a [`Swarm`].
+///
+/// Handles can be cloned and used from arbitrary tasks in order to enqueue events without
+/// holding a mutable reference to the [`Swarm`].
+#[derive(Clone)]
+pub struct ExternalEventHandle<TBehaviourOutEvent> {
+    sender: mpsc::UnboundedSender<TBehaviourOutEvent>,
+}
+
+#[cfg(all(feature = "macros", feature = "tokio"))]
+impl<TBehaviourOutEvent> ExternalEventHandle<TBehaviourOutEvent> {
+    /// Pushes a behaviour event into the [`Swarm`] from outside its poll loop.
+    pub fn push(&self, event: TBehaviourOutEvent) -> Result<(), mpsc::SendError<TBehaviourOutEvent>> {
+        self.sender.unbounded_send(event)
+    }
+}
+
 impl<TBehaviourOutEvent> SwarmEvent<TBehaviourOutEvent> {
     /// Extract the `TBehaviourOutEvent` from this [`SwarmEvent`] in case it is the `Behaviour`
     /// variant, otherwise fail.
@@ -337,6 +357,8 @@ where
     pending_handler_event: Option<(PeerId, PendingNotifyHandler, THandlerInEvent<TBehaviour>)>,
 
     pending_swarm_events: VecDeque<SwarmEvent<TBehaviour::ToSwarm>>,
+    #[cfg(all(feature = "macros", feature = "tokio"))]
+    external_event_receiver: Option<mpsc::UnboundedReceiver<TBehaviour::ToSwarm>>,
 }
 
 impl<TBehaviour> Unpin for Swarm<TBehaviour> where TBehaviour: NetworkBehaviour {}
@@ -365,7 +387,24 @@ where
             listened_addrs: HashMap::new(),
             pending_handler_event: None,
             pending_swarm_events: VecDeque::default(),
+            #[cfg(all(feature = "macros", feature = "tokio"))]
+            external_event_receiver: None,
         }
+    }
+
+    #[cfg(all(feature = "macros", feature = "tokio"))]
+    /// Creates a new [`Swarm`] and returns an [`ExternalEventHandle`] that can be used to
+    /// inject custom [`NetworkBehaviour::ToSwarm`] events from outside the [`Swarm`].
+    pub fn new_with_external_event_channel(
+        transport: transport::Boxed<(PeerId, StreamMuxerBox)>,
+        behaviour: TBehaviour,
+        local_peer_id: PeerId,
+        config: Config,
+    ) -> (Self, ExternalEventHandle<TBehaviour::ToSwarm>) {
+        let (sender, receiver) = mpsc::unbounded();
+        let mut swarm = Self::new(transport, behaviour, local_peer_id, config);
+        swarm.external_event_receiver = Some(receiver);
+        (swarm, ExternalEventHandle { sender })
     }
 
     /// Returns information about the connections underlying the [`Swarm`].
@@ -552,6 +591,17 @@ where
         );
 
         Ok(())
+    }
+
+    #[cfg(all(feature = "macros", feature = "tokio"))]
+    /// Pushes an event originating outside of the [`Swarm`] onto the internal queue of
+    /// pending swarm events.
+    ///
+    /// This is primarily useful together with [`ExternalEventHandle`] to inject events without
+    /// holding a mutable reference to the [`Swarm`].
+    pub fn push_external_event(&mut self, event: TBehaviour::ToSwarm) {
+        self.pending_swarm_events
+            .push_back(SwarmEvent::Behaviour(event));
     }
 
     /// Returns an iterator that produces the list of addresses we're listening on.
@@ -1199,6 +1249,22 @@ where
         // (2) is polled before (3) to prioritize existing connections
         // over upgrading new incoming connections.
         loop {
+            #[cfg(all(feature = "macros", feature = "tokio"))]
+            if let Some(receiver) = this.external_event_receiver.as_mut() {
+                while let Poll::Ready(item) = Pin::new(receiver).poll_next(cx) {
+                    match item {
+                        Some(event) => {
+                            this.pending_swarm_events
+                                .push_back(SwarmEvent::Behaviour(event));
+                        }
+                        None => {
+                            this.external_event_receiver = None;
+                            break;
+                        }
+                    }
+                }
+            }
+
             if let Some(swarm_event) = this.pending_swarm_events.pop_front() {
                 return Poll::Ready(swarm_event);
             }
