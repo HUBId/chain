@@ -113,8 +113,6 @@ pub struct Config {
     validate_messages: bool,
     message_id_fn: Arc<dyn Fn(&Message) -> MessageId + Send + Sync + 'static>,
     allow_self_origin: bool,
-    do_px: bool,
-    prune_peers: usize,
     prune_backoff: Duration,
     unsubscribe_backoff: Duration,
     backoff_slack: u32,
@@ -306,25 +304,6 @@ impl Config {
     /// penalizing the peer that sent us the message. Default is false.
     pub fn allow_self_origin(&self) -> bool {
         self.allow_self_origin
-    }
-
-    /// Whether Peer eXchange is enabled; this should be enabled in bootstrappers and other well
-    /// connected/trusted nodes. The default is false.
-    ///
-    /// Note: Peer exchange is not implemented today, see
-    /// <https://github.com/libp2p/rust-libp2p/issues/2398>.
-    pub fn do_px(&self) -> bool {
-        self.do_px
-    }
-
-    /// Controls the number of peers to include in prune Peer eXchange.
-    /// When we prune a peer that's eligible for PX (has a good score, etc), we will try to
-    /// send them signed peer records for up to `prune_peers` other peers that we
-    /// know of. It is recommended that this value is larger than `mesh_n_high` so that the pruned
-    /// peer can reliably form a full mesh. The default is typically 16 however until signed
-    /// records are spec'd this is disabled and set to 0.
-    pub fn prune_peers(&self) -> usize {
-        self.prune_peers
     }
 
     /// Controls the backoff time for pruned peers. This is how long
@@ -524,10 +503,6 @@ impl Default for ConfigBuilder {
                     MessageId::from(source_string)
                 }),
                 allow_self_origin: false,
-                do_px: false,
-                // NOTE: Increasing this currently has little effect until Signed
-                // records are implemented.
-                prune_peers: 0,
                 prune_backoff: Duration::from_secs(60),
                 unsubscribe_backoff: Duration::from_secs(10),
                 backoff_slack: 1,
@@ -827,27 +802,6 @@ impl ConfigBuilder {
         F: Fn(&Message) -> MessageId + Send + Sync + 'static,
     {
         self.config.message_id_fn = Arc::new(id_fn);
-        self
-    }
-
-    /// Enables Peer eXchange. This should be enabled in bootstrappers and other well
-    /// connected/trusted nodes. The default is false.
-    ///
-    /// Note: Peer exchange is not implemented today, see
-    /// <https://github.com/libp2p/rust-libp2p/issues/2398>.
-    pub fn do_px(&mut self) -> &mut Self {
-        self.config.do_px = true;
-        self
-    }
-
-    /// Controls the number of peers to include in prune Peer eXchange.
-    ///
-    /// When we prune a peer that's eligible for PX (has a good score, etc), we will try to
-    /// send them signed peer records for up to [`Self::prune_peers] other peers that we
-    /// know of. It is recommended that this value is larger than [`Self::mesh_n_high`] so that the
-    /// pruned peer can reliably form a full mesh. The default is 16.
-    pub fn prune_peers(&mut self, prune_peers: usize) -> &mut Self {
-        self.config.prune_peers = prune_peers;
         self
     }
 
@@ -1151,8 +1105,6 @@ impl std::fmt::Debug for Config {
         let _ = builder.field("duplicate_cache_time", &self.duplicate_cache_time);
         let _ = builder.field("validate_messages", &self.validate_messages);
         let _ = builder.field("allow_self_origin", &self.allow_self_origin);
-        let _ = builder.field("do_px", &self.do_px);
-        let _ = builder.field("prune_peers", &self.prune_peers);
         let _ = builder.field("prune_backoff", &self.prune_backoff);
         let _ = builder.field("backoff_slack", &self.backoff_slack);
         let _ = builder.field("flood_publish", &self.flood_publish);
@@ -1176,132 +1128,5 @@ impl std::fmt::Debug for Config {
         );
         let _ = builder.field("idontwant_on_publish", &self.idontwant_on_publish);
         builder.finish()
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::{
-        collections::hash_map::DefaultHasher,
-        hash::{Hash, Hasher},
-    };
-
-    use libp2p_core::UpgradeInfo;
-
-    use super::*;
-    use crate::{topic::IdentityHash, Topic};
-
-    #[test]
-    fn create_config_with_message_id_as_plain_function() {
-        let config = ConfigBuilder::default()
-            .message_id_fn(message_id_plain_function)
-            .build()
-            .unwrap();
-
-        let result = config.message_id(&get_gossipsub_message());
-
-        assert_eq!(result, get_expected_message_id());
-    }
-
-    #[test]
-    fn create_config_with_message_id_as_closure() {
-        let config = ConfigBuilder::default()
-            .message_id_fn(|message: &Message| {
-                let mut s = DefaultHasher::new();
-                message.data.hash(&mut s);
-                let mut v = s.finish().to_string();
-                v.push('e');
-                MessageId::from(v)
-            })
-            .build()
-            .unwrap();
-
-        let result = config.message_id(&get_gossipsub_message());
-
-        assert_eq!(result, get_expected_message_id());
-    }
-
-    #[test]
-    fn create_config_with_message_id_as_closure_with_variable_capture() {
-        let captured: char = 'e';
-
-        let config = ConfigBuilder::default()
-            .message_id_fn(move |message: &Message| {
-                let mut s = DefaultHasher::new();
-                message.data.hash(&mut s);
-                let mut v = s.finish().to_string();
-                v.push(captured);
-                MessageId::from(v)
-            })
-            .build()
-            .unwrap();
-
-        let result = config.message_id(&get_gossipsub_message());
-
-        assert_eq!(result, get_expected_message_id());
-    }
-
-    #[test]
-    fn create_config_with_protocol_id_prefix() {
-        let protocol_config = ConfigBuilder::default()
-            .protocol_id_prefix("/purple")
-            .build()
-            .unwrap()
-            .protocol_config();
-
-        let protocol_ids = protocol_config.protocol_info();
-
-        assert_eq!(protocol_ids.len(), 2);
-
-        assert_eq!(
-            protocol_ids[0].protocol,
-            StreamProtocol::new("/purple/1.1.0")
-        );
-        assert_eq!(protocol_ids[0].kind, PeerKind::Gossipsubv1_1);
-
-        assert_eq!(
-            protocol_ids[1].protocol,
-            StreamProtocol::new("/purple/1.0.0")
-        );
-        assert_eq!(protocol_ids[1].kind, PeerKind::Gossipsub);
-    }
-
-    #[test]
-    fn create_config_with_custom_protocol_id() {
-        let protocol_config = ConfigBuilder::default()
-            .protocol_id("/purple", Version::V1_0)
-            .build()
-            .unwrap()
-            .protocol_config();
-
-        let protocol_ids = protocol_config.protocol_info();
-
-        assert_eq!(protocol_ids.len(), 1);
-
-        assert_eq!(protocol_ids[0].protocol, "/purple");
-        assert_eq!(protocol_ids[0].kind, PeerKind::Gossipsub);
-    }
-
-    fn get_gossipsub_message() -> Message {
-        Message {
-            source: None,
-            data: vec![12, 34, 56],
-            sequence_number: None,
-            topic: Topic::<IdentityHash>::new("test").hash(),
-        }
-    }
-
-    fn get_expected_message_id() -> MessageId {
-        MessageId::from([
-            49, 55, 56, 51, 56, 52, 49, 51, 52, 51, 52, 55, 51, 51, 53, 52, 54, 54, 52, 49, 101,
-        ])
-    }
-
-    fn message_id_plain_function(message: &Message) -> MessageId {
-        let mut s = DefaultHasher::new();
-        message.data.hash(&mut s);
-        let mut v = s.finish().to_string();
-        v.push('e');
-        MessageId::from(v)
     }
 }

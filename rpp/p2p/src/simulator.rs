@@ -1,5 +1,8 @@
 use rand::prelude::*;
 
+use crate::topics::GossipTopic;
+use crate::vendor::gossipsub::TopicMeshConfig;
+
 #[derive(Debug, Clone)]
 pub struct SimulationReport {
     pub avg_latency_ms: f64,
@@ -7,17 +10,27 @@ pub struct SimulationReport {
     pub reputation_drift: f64,
     pub rounds: u32,
     pub peers: usize,
+    pub avg_score: f64,
+    pub mesh_health: Vec<(GossipTopic, f64)>,
 }
 
 impl SimulationReport {
     pub fn summary(&self) -> String {
+        let mesh_snapshot = self
+            .mesh_health
+            .iter()
+            .map(|(topic, health)| format!("{}:{:.2}", topic, health))
+            .collect::<Vec<_>>()
+            .join(",");
         format!(
-            "peers={} rounds={} avg_latency_ms={:.2} mesh_stability={:.3} reputation_drift={:.4}",
+            "peers={} rounds={} avg_latency_ms={:.2} mesh_stability={:.3} reputation_drift={:.4} avg_score={:.3} mesh_health=[{}]",
             self.peers,
             self.rounds,
             self.avg_latency_ms,
             self.mesh_stability,
-            self.reputation_drift
+            self.reputation_drift,
+            self.avg_score,
+            mesh_snapshot
         )
     }
 }
@@ -71,6 +84,42 @@ impl NetworkSimulation {
         let mesh_total = (self.rounds as f64 * self.peers as f64).max(1.0);
         let stability = (1.0 - (mesh_changes as f64 / mesh_total)).clamp(0.0, 1.0);
         let drift = reputation_delta / self.peers as f64;
+        let avg_score = if samples == 0 {
+            0.0
+        } else {
+            (reputation_delta / samples as f64).clamp(-5.0, 5.0)
+        };
+
+        let mesh_health = GossipTopic::all()
+            .into_iter()
+            .map(|topic| {
+                let config = match topic {
+                    GossipTopic::Blocks | GossipTopic::Votes => TopicMeshConfig {
+                        mesh_n: 10,
+                        mesh_n_low: 8,
+                        mesh_n_high: 16,
+                        mesh_outbound_min: 4,
+                    },
+                    GossipTopic::Proofs => TopicMeshConfig {
+                        mesh_n: 8,
+                        mesh_n_low: 6,
+                        mesh_n_high: 12,
+                        mesh_outbound_min: 3,
+                    },
+                    GossipTopic::Snapshots | GossipTopic::Meta => TopicMeshConfig {
+                        mesh_n: 6,
+                        mesh_n_low: 4,
+                        mesh_n_high: 10,
+                        mesh_outbound_min: 2,
+                    },
+                };
+                let balance =
+                    (config.mesh_n_low as f64 / config.mesh_n_high as f64).clamp(0.0, 1.0);
+                let jitter = rng.gen_range(0.0..0.1);
+                let health = ((stability * balance) + jitter).clamp(0.0, 1.0);
+                (topic, health)
+            })
+            .collect();
 
         SimulationReport {
             avg_latency_ms: avg_latency,
@@ -78,6 +127,8 @@ impl NetworkSimulation {
             reputation_drift: drift,
             rounds: self.rounds,
             peers: self.peers,
+            avg_score,
+            mesh_health,
         }
     }
 }
@@ -94,6 +145,7 @@ mod tests {
         assert_eq!(report.rounds, 20);
         assert!(report.avg_latency_ms > 0.0);
         assert!(report.mesh_stability <= 1.0);
-        assert!(report.summary().contains("peers=32"));
+        assert!(!report.mesh_health.is_empty());
+        assert!(report.summary().contains("avg_score"));
     }
 }
