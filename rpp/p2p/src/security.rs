@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use blake3::Hash;
-use libp2p::PeerId;
+use crate::vendor::PeerId;
 
 #[derive(Debug)]
 pub struct ReplayProtector {

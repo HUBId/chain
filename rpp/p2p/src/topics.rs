@@ -1,4 +1,4 @@
-use libp2p::gossipsub::{IdentTopic, TopicHash};
+use crate::vendor::gossipsub::{IdentTopic, TopicHash};
 
 /// Canonical GossipSub topics used by the RPP network backbone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

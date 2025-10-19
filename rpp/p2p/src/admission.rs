@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use libp2p::PeerId;
+use crate::vendor::PeerId;
 use thiserror::Error;
 
 use crate::identity::IdentityMetadata;
@@ -207,7 +207,7 @@ mod tests {
     use super::*;
     use crate::handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
     use crate::peerstore::{IdentityVerifier, PeerstoreConfig};
-    use libp2p::identity;
+    use crate::vendor::identity;
     use proptest::prelude::*;
     use rand::rngs::OsRng;
     use schnorrkel::keys::{ExpansionMode, MiniSecretKey};

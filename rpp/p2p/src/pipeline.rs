@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose};
 use blake3::Hash;
-use libp2p::PeerId;
+use crate::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

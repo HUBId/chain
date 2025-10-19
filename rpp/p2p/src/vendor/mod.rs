@@ -21,23 +21,27 @@ pub mod identity {
 }
 
 /// Gossipsub pubsub protocol implementation.
+#[cfg(feature = "gossipsub")]
 pub mod gossipsub {
-    pub use libp2p::gossipsub::*;
+    pub use libp2p_gossipsub::*;
 }
 
 /// Identify protocol implementation.
+#[cfg(feature = "identify")]
 pub mod identify {
-    pub use libp2p::identify::*;
+    pub use libp2p_identify::*;
 }
 
 /// Ping protocol implementation.
+#[cfg(feature = "ping")]
 pub mod ping {
-    pub use libp2p::ping::*;
+    pub use libp2p_ping::*;
 }
 
 /// Request-response protocol implementation.
+#[cfg(feature = "request-response")]
 pub mod request_response {
-    pub use libp2p::request_response::*;
+    pub use libp2p_request_response::*;
 }
 
 /// Noise security handshake primitives.
@@ -54,3 +58,5 @@ pub mod tcp {
 pub mod yamux {
     pub use libp2p::yamux::*;
 }
+
+pub use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder};
