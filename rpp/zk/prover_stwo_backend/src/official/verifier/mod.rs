@@ -79,6 +79,10 @@ impl NodeVerifier {
         }
     }
 
+    pub fn with_parameters(parameters: StarkParameters) -> Self {
+        Self { parameters }
+    }
+
     fn check_commitment(&self, proof: &StarkProof) -> ChainResult<Vec<FieldElement>> {
         let inputs = proof
             .public_inputs
@@ -353,6 +357,12 @@ impl NodeVerifier {
                 "consensus proof payload mismatch".into(),
             ))
         }
+    }
+}
+
+impl NodeVerifier {
+    pub fn verify_transaction_proof(&self, proof: &StarkProof) -> ChainResult<()> {
+        self.verify_transaction_stark(proof)
     }
 }
 
