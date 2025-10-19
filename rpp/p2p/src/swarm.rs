@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -7,10 +6,11 @@ use futures::StreamExt;
 use crate::vendor::gossipsub::{self, MessageId};
 use crate::vendor::identity::Keypair;
 use crate::vendor::request_response::{self, ProtocolSupport};
-use crate::vendor::swarm::{NetworkBehaviour, SwarmEvent};
+use crate::vendor::swarm::builder::SwarmBuilder;
+use crate::vendor::swarm::{ExternalEventHandle, NetworkBehaviour, SwarmEvent};
+use crate::vendor::{identify, ping, Multiaddr, PeerId, Swarm};
 #[cfg(all(feature = "tcp", feature = "noise", feature = "yamux"))]
 use crate::vendor::{noise, tcp, yamux};
-use crate::vendor::{identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder};
 use thiserror::Error;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
@@ -43,11 +43,45 @@ pub enum NetworkError {
 }
 
 #[derive(NetworkBehaviour)]
+#[behaviour(to_swarm = "RppBehaviourEvent")]
 struct RppBehaviour {
     request_response: request_response::Behaviour<HandshakeCodec>,
     identify: identify::Behaviour,
     ping: ping::Behaviour,
     gossipsub: gossipsub::Behaviour,
+}
+
+#[derive(Debug)]
+enum RppBehaviourEvent {
+    RequestResponse(request_response::Event<HandshakePayload, HandshakePayload>),
+    Identify(identify::Event),
+    Ping(ping::Event),
+    Gossipsub(gossipsub::Event),
+    Network(NetworkEvent),
+}
+
+impl From<request_response::Event<HandshakePayload, HandshakePayload>> for RppBehaviourEvent {
+    fn from(event: request_response::Event<HandshakePayload, HandshakePayload>) -> Self {
+        RppBehaviourEvent::RequestResponse(event)
+    }
+}
+
+impl From<identify::Event> for RppBehaviourEvent {
+    fn from(event: identify::Event) -> Self {
+        RppBehaviourEvent::Identify(event)
+    }
+}
+
+impl From<ping::Event> for RppBehaviourEvent {
+    fn from(event: ping::Event) -> Self {
+        RppBehaviourEvent::Ping(event)
+    }
+}
+
+impl From<gossipsub::Event> for RppBehaviourEvent {
+    fn from(event: gossipsub::Event) -> Self {
+        RppBehaviourEvent::Gossipsub(event)
+    }
 }
 
 impl RppBehaviour {
@@ -183,11 +217,11 @@ pub enum NetworkEvent {
 
 pub struct Network {
     swarm: Swarm<RppBehaviour>,
+    events_handle: ExternalEventHandle<RppBehaviourEvent>,
     peerstore: Arc<Peerstore>,
     admission: AdmissionControl,
     handshake: HandshakePayload,
     identity: Arc<NodeIdentity>,
-    pending: VecDeque<NetworkEvent>,
     gossip_state: Option<Arc<GossipStateStore>>,
     replay: ReplayProtector,
     rate_limiter: RateLimiter,
@@ -215,15 +249,15 @@ impl Network {
                     .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
             })
             .map_err(|err| NetworkError::Gossipsub(err.to_string()))?;
-        let swarm = builder.build();
+        let (swarm, events_handle) = builder.build_with_external_event_handle();
         let admission = AdmissionControl::new(peerstore.clone(), identity.metadata().clone());
         let mut network = Self {
             swarm,
+            events_handle,
             peerstore,
             admission,
             handshake,
             identity,
-            pending: VecDeque::new(),
             gossip_state,
             replay: ReplayProtector::with_capacity(1024),
             rate_limiter: RateLimiter::new(Duration::from_secs(1), 128),
@@ -304,8 +338,7 @@ impl Network {
         event: ReputationEvent,
     ) -> Result<(), NetworkError> {
         let outcome = self.admission.record_event(peer, event)?;
-        self.enqueue_outcome(outcome);
-        Ok(())
+        self.enqueue_outcome(outcome)
     }
 
     fn sign_handshake(&self) -> Result<HandshakePayload, NetworkError> {
@@ -316,10 +349,6 @@ impl Network {
     }
 
     pub async fn next_event(&mut self) -> Result<NetworkEvent, NetworkError> {
-        if let Some(event) = self.pending.pop_front() {
-            return Ok(event);
-        }
-
         loop {
             match self.swarm.select_next_some().await {
                 SwarmEvent::NewListenAddr { address, .. } => {
@@ -352,6 +381,9 @@ impl Network {
                     self.handle_identify_event(event);
                 }
                 SwarmEvent::Behaviour(RppBehaviourEvent::Ping(_)) => {}
+                SwarmEvent::Behaviour(RppBehaviourEvent::Network(event)) => {
+                    return Ok(event);
+                }
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
                     return Ok(NetworkEvent::PeerDisconnected { peer: peer_id });
                 }
@@ -359,10 +391,6 @@ impl Network {
                 other => {
                     tracing::trace!(?other, "swarm event ignored");
                 }
-            }
-
-            if let Some(event) = self.pending.pop_front() {
-                return Ok(event);
             }
         }
     }
@@ -472,7 +500,7 @@ impl Network {
                                 propagation_source,
                                 ReputationEvent::GossipSuccess { topic },
                             )?;
-                            self.enqueue_outcome(outcome);
+                            self.enqueue_outcome(outcome)?;
                             if let Some(state) = &self.gossip_state {
                                 if let Err(err) =
                                     state.record_message(topic, propagation_source, digest)
@@ -491,7 +519,7 @@ impl Network {
                             }));
                         }
                         Err(err) => {
-                            self.enqueue_rejection(propagation_source, topic, err.clone());
+                            self.enqueue_rejection(propagation_source, topic, err.clone())?;
                             self.penalise_peer(
                                 propagation_source,
                                 ReputationEvent::ManualPenalty {
@@ -516,7 +544,7 @@ impl Network {
                         }
                     }
                     if let Err(err) = self.admission.can_remote_subscribe(&peer_id, gossip_topic) {
-                        self.enqueue_rejection(peer_id, gossip_topic, err.clone());
+                        self.enqueue_rejection(peer_id, gossip_topic, err.clone())?;
                         self.penalise_peer(
                             peer_id,
                             ReputationEvent::ManualPenalty {
@@ -620,36 +648,47 @@ impl Network {
 
     fn penalise_peer(&mut self, peer: PeerId, event: ReputationEvent) -> Result<(), NetworkError> {
         let outcome = self.admission.record_event(peer, event)?;
-        self.enqueue_outcome(outcome);
-        Ok(())
+        self.enqueue_outcome(outcome)
     }
 
-    fn enqueue_outcome(&mut self, outcome: ReputationOutcome) {
+    fn enqueue_outcome(&mut self, outcome: ReputationOutcome) -> Result<(), NetworkError> {
         let snapshot = outcome.snapshot;
-        self.pending.push_back(NetworkEvent::ReputationUpdated {
+        self.push_network_event(NetworkEvent::ReputationUpdated {
             peer: snapshot.peer_id,
             tier: snapshot.tier,
             score: snapshot.reputation,
             label: outcome.label,
-        });
+        })?;
         if let Some(until) = snapshot.banned_until {
-            self.pending.push_back(NetworkEvent::PeerBanned {
+            self.push_network_event(NetworkEvent::PeerBanned {
                 peer: snapshot.peer_id,
                 until,
-            });
+            })?;
             self.swarm
                 .behaviour_mut()
                 .gossipsub
                 .blacklist_peer(&snapshot.peer_id);
         }
+        Ok(())
     }
 
-    fn enqueue_rejection(&mut self, peer: PeerId, topic: GossipTopic, reason: AdmissionError) {
-        self.pending.push_back(NetworkEvent::AdmissionRejected {
+    fn enqueue_rejection(
+        &mut self,
+        peer: PeerId,
+        topic: GossipTopic,
+        reason: AdmissionError,
+    ) -> Result<(), NetworkError> {
+        self.push_network_event(NetworkEvent::AdmissionRejected {
             peer,
             topic,
             reason,
-        });
+        })
+    }
+
+    fn push_network_event(&mut self, event: NetworkEvent) -> Result<(), NetworkError> {
+        self.events_handle
+            .push(RppBehaviourEvent::Network(event))
+            .map_err(|err| NetworkError::Swarm(err.to_string()))
     }
 }
 
