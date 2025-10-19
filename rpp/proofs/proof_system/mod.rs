@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
+use crate::proof_backend::{ProofBytes, TxPublicInputs};
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
     AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, PruningProof,
@@ -484,6 +485,65 @@ impl ProofVerifierRegistry {
         self.verify_with_metrics(proof, |verifier, proof| verifier.verify_consensus(proof))
     }
 
+    /// Verify a transaction proof provided as backend artifacts for the STWO system.
+    pub fn verify_stwo_proof_bytes(
+        &self,
+        proof_bytes: &ProofBytes,
+        public_inputs: &TxPublicInputs,
+    ) -> ChainResult<()> {
+        #[cfg(not(feature = "prover-stwo"))]
+        {
+            let _ = (proof_bytes, public_inputs);
+            Err(ChainError::Crypto(
+                "STWO backend not enabled for proof byte verification".into(),
+            ))
+        }
+
+        #[cfg(feature = "prover-stwo")]
+        {
+            self.verify_stwo_proof_bytes_impl(proof_bytes, public_inputs)
+        }
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    fn verify_stwo_proof_bytes_impl(
+        &self,
+        proof_bytes: &ProofBytes,
+        public_inputs: &TxPublicInputs,
+    ) -> ChainResult<()> {
+        use prover_stwo_backend::backend::decode_tx_proof;
+        use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
+
+        let decoded = decode_tx_proof(proof_bytes).map_err(map_stwo_backend_error)?;
+
+        let parameters = StarkParameters::blueprint_default();
+        let expected_fields = rebuild_tx_public_inputs(&parameters, public_inputs);
+        let expected_inputs: Vec<String> =
+            expected_fields.iter().map(FieldElement::to_hex).collect();
+
+        if decoded.public_inputs != expected_inputs {
+            return Err(ChainError::Crypto(
+                "transaction public inputs mismatch".into(),
+            ));
+        }
+
+        let hasher = parameters.poseidon_hasher();
+        let expected_commitment = hasher.hash(&expected_fields);
+        if decoded.commitment != expected_commitment.to_hex() {
+            return Err(ChainError::Crypto("transaction commitment mismatch".into()));
+        }
+
+        if field_to_padded_bytes(&expected_commitment) != public_inputs.transaction_commitment {
+            return Err(ChainError::Crypto(
+                "transaction commitment digest mismatch".into(),
+            ));
+        }
+
+        self.record_backend(ProofSystemKind::Stwo, || {
+            self.stwo.verify_transaction_proof(&decoded)
+        })
+    }
+
     /// Verify the collection of proofs tied to a block and ensure they all use
     /// the same backend implementation.
     pub fn verify_block_bundle(
@@ -572,4 +632,46 @@ impl ProofVerifierRegistry {
         self.metrics.record(system, started.elapsed(), success);
         result
     }
+}
+
+#[cfg(feature = "prover-stwo")]
+fn map_stwo_backend_error(err: crate::proof_backend::BackendError) -> ChainError {
+    match err {
+        crate::proof_backend::BackendError::Failure(message) => ChainError::Crypto(message),
+        crate::proof_backend::BackendError::Unsupported(context) => {
+            ChainError::Crypto(format!("STWO backend unsupported: {context}"))
+        }
+        crate::proof_backend::BackendError::Serialization(err) => {
+            ChainError::Crypto(format!("failed to decode STWO proof: {err}"))
+        }
+    }
+}
+
+#[cfg(feature = "prover-stwo")]
+fn rebuild_tx_public_inputs(
+    parameters: &prover_stwo_backend::official::params::StarkParameters,
+    inputs: &TxPublicInputs,
+) -> Vec<prover_stwo_backend::official::params::FieldElement> {
+    fn digest_chunks(
+        parameters: &prover_stwo_backend::official::params::StarkParameters,
+        digest: &[u8; 32],
+    ) -> Vec<prover_stwo_backend::official::params::FieldElement> {
+        digest
+            .chunks(8)
+            .map(|chunk| parameters.element_from_bytes(chunk))
+            .collect()
+    }
+
+    let mut fields = digest_chunks(parameters, &inputs.utxo_root);
+    fields.extend(digest_chunks(parameters, &inputs.transaction_commitment));
+    fields
+}
+
+#[cfg(feature = "prover-stwo")]
+fn field_to_padded_bytes(value: &prover_stwo_backend::official::params::FieldElement) -> [u8; 32] {
+    let repr = value.to_bytes();
+    let mut bytes = [0u8; 32];
+    let offset = bytes.len().saturating_sub(repr.len());
+    bytes[offset..offset + repr.len()].copy_from_slice(&repr);
+    bytes
 }

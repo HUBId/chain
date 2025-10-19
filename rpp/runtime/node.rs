@@ -16,14 +16,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::RwLock;
-use tokio::sync::{broadcast, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -36,13 +36,13 @@ use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
 };
 use crate::consensus::{
-    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
-    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
-    SignedBftVote, ValidatorCandidate,
+    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
+    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
+    classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
-    address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair, sign_message,
-    signature_to_hex, vrf_public_key_to_hex, VrfKeypair,
+    VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
+    sign_message, signature_to_hex, vrf_public_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -50,7 +50,7 @@ use crate::ledger::{
 };
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
-use crate::proof_backend::Blake2sHasher;
+use crate::proof_backend::{Blake2sHasher, ProofBytes};
 use crate::proof_system::{ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
@@ -58,16 +58,16 @@ use crate::rpp::{
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
-use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::storage::{StateTransitionReceipt, Storage};
+use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
-    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
+    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
+    TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -131,17 +131,21 @@ struct PendingTransactionMetadata {
 
 impl PendingTransactionMetadata {
     fn from_bundle(bundle: &TransactionProofBundle) -> Self {
-        let witness = bundle
-            .witness
-            .clone()
-            .or_else(|| bundle.proof_payload.as_ref().and_then(Self::transaction_witness));
+        let witness = bundle.witness.clone().or_else(|| {
+            bundle
+                .proof_payload
+                .as_ref()
+                .and_then(Self::transaction_witness)
+        });
         let proof_payload = bundle
             .proof_payload
             .clone()
             .or_else(|| Self::clone_payload(&bundle.proof));
         #[cfg(feature = "backend-rpp-stark")]
         let public_inputs_digest = match &bundle.proof {
-            ChainProof::RppStark(proof) => Some(compute_public_digest(proof.public_inputs()).to_hex()),
+            ChainProof::RppStark(proof) => {
+                Some(compute_public_digest(proof.public_inputs()).to_hex())
+            }
             _ => None,
         };
         Self {
@@ -641,10 +645,7 @@ impl Node {
         }
     }
 
-    pub fn subscribe_witness_gossip(
-        &self,
-        topic: GossipTopic,
-    ) -> broadcast::Receiver<Vec<u8>> {
+    pub fn subscribe_witness_gossip(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
         self.inner.subscribe_witness_gossip(topic)
     }
 
@@ -664,7 +665,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
+        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -675,8 +676,9 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
+        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field, StarkCircuit,
+        string_to_field,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1332,10 +1334,7 @@ impl NodeHandle {
         self.inner.submit_transaction(bundle)
     }
 
-    pub fn subscribe_witness_gossip(
-        &self,
-        topic: GossipTopic,
-    ) -> broadcast::Receiver<Vec<u8>> {
+    pub fn subscribe_witness_gossip(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
         self.inner.subscribe_witness_gossip(topic)
     }
 
@@ -1585,7 +1584,11 @@ impl NodeInner {
                 public_inputs_bytes,
                 proof_kind,
             );
-            Self::record_rpp_stark_bytes_metric("rpp_stark_payload_bytes", payload_bytes, proof_kind);
+            Self::record_rpp_stark_bytes_metric(
+                "rpp_stark_payload_bytes",
+                payload_bytes,
+                proof_kind,
+            );
 
             info!(
                 target = "proofs",
@@ -1642,14 +1645,22 @@ impl NodeInner {
             let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
             let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
 
-            Self::record_rpp_stark_bytes_metric("rpp_stark_proof_total_bytes", proof_bytes, proof_kind);
+            Self::record_rpp_stark_bytes_metric(
+                "rpp_stark_proof_total_bytes",
+                proof_bytes,
+                proof_kind,
+            );
             Self::record_rpp_stark_bytes_metric("rpp_stark_params_bytes", params_bytes, proof_kind);
             Self::record_rpp_stark_bytes_metric(
                 "rpp_stark_public_inputs_bytes",
                 public_inputs_bytes,
                 proof_kind,
             );
-            Self::record_rpp_stark_bytes_metric("rpp_stark_payload_bytes", payload_bytes, proof_kind);
+            Self::record_rpp_stark_bytes_metric(
+                "rpp_stark_payload_bytes",
+                payload_bytes,
+                proof_kind,
+            );
 
             warn!(
                 target = "proofs",
@@ -2021,11 +2032,19 @@ impl NodeInner {
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             {
-                let verification = match &bundle.proof {
-                    ChainProof::RppStark(_) => self
-                        .verify_rpp_stark_with_metrics("transaction", &bundle.proof)
-                        .map(|_| ()),
-                    _ => self.verifiers.verify_transaction(&bundle.proof),
+                let verification = if let (Some(bytes), Some(inputs)) = (
+                    bundle.stwo_proof_bytes.as_ref(),
+                    bundle.stwo_public_inputs.as_ref(),
+                ) {
+                    let proof_bytes = ProofBytes(bytes.clone());
+                    self.verifiers.verify_stwo_proof_bytes(&proof_bytes, inputs)
+                } else {
+                    match &bundle.proof {
+                        ChainProof::RppStark(_) => self
+                            .verify_rpp_stark_with_metrics("transaction", &bundle.proof)
+                            .map(|_| ()),
+                        _ => self.verifiers.verify_transaction(&bundle.proof),
+                    }
                 };
                 if let Err(err) = verification {
                     warn!(?err, "transaction proof rejected by verifier");
@@ -2037,7 +2056,16 @@ impl NodeInner {
             }
             #[cfg(not(feature = "backend-rpp-stark"))]
             {
-                if let Err(err) = self.verifiers.verify_transaction(&bundle.proof) {
+                let verification = if let (Some(bytes), Some(inputs)) = (
+                    bundle.stwo_proof_bytes.as_ref(),
+                    bundle.stwo_public_inputs.as_ref(),
+                ) {
+                    let proof_bytes = ProofBytes(bytes.clone());
+                    self.verifiers.verify_stwo_proof_bytes(&proof_bytes, inputs)
+                } else {
+                    self.verifiers.verify_transaction(&bundle.proof)
+                };
+                if let Err(err) = verification {
                     warn!(?err, "transaction proof rejected by verifier");
                     return Err(err);
                 }
@@ -2325,12 +2353,7 @@ impl NodeInner {
         self.apply_evidence(evidence);
     }
 
-    fn record_double_spend_if_applicable(
-        &self,
-        block: &Block,
-        round: u64,
-        err: &ChainError,
-    ) {
+    fn record_double_spend_if_applicable(&self, block: &Block, round: u64, err: &ChainError) {
         if !self.config.rollout.feature_gates.consensus_enforcement {
             return;
         }
@@ -3993,9 +4016,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
-        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
-        TimetokeParams, VerifierMetricsSnapshot,
+        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
+        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4003,12 +4026,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{routing::post, Router};
+    use axum::{Router, routing::post};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;
@@ -4185,7 +4208,7 @@ mod telemetry_tests {
         }
     }
 
-async fn spawn_test_server(
+    async fn spawn_test_server(
         status: StatusCode,
     ) -> (SocketAddr, Arc<AtomicUsize>, oneshot::Sender<()>) {
         let counter = Arc::new(AtomicUsize::new(0));
@@ -4287,7 +4310,9 @@ mod tests {
             commitment: String::new(),
             public_inputs: Vec::new(),
             payload: payload.clone(),
-            trace: ExecutionTrace { segments: Vec::new() },
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: Default::default(),
             fri_proof: Default::default(),
         };
