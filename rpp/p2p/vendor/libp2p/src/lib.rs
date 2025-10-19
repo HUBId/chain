@@ -36,9 +36,6 @@ pub use bytes;
 pub use futures;
 #[doc(inline)]
 pub use libp2p_allow_block_list as allow_block_list;
-#[cfg(feature = "autonat")]
-#[doc(inline)]
-pub use libp2p_autonat as autonat;
 #[doc(inline)]
 pub use libp2p_connection_limits as connection_limits;
 #[doc(inline)]
@@ -123,20 +120,6 @@ pub use libp2p_uds as uds;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(inline)]
 pub use libp2p_upnp as upnp;
-#[cfg(all(feature = "webrtc-websys", target_arch = "wasm32"))]
-#[doc(inline)]
-pub use libp2p_webrtc_websys as webrtc_websys;
-#[cfg(feature = "websocket")]
-#[cfg(not(target_arch = "wasm32"))]
-#[doc(inline)]
-pub use libp2p_websocket as websocket;
-#[cfg(all(feature = "websocket-websys", target_arch = "wasm32"))]
-#[doc(inline)]
-pub use libp2p_websocket_websys as websocket_websys;
-#[cfg(all(feature = "webtransport-websys", target_arch = "wasm32"))]
-#[cfg_attr(docsrs, doc(cfg(feature = "webtransport-websys")))]
-#[doc(inline)]
-pub use libp2p_webtransport_websys as webtransport_websys;
 #[cfg(feature = "yamux")]
 #[doc(inline)]
 pub use libp2p_yamux as yamux;
@@ -148,8 +131,6 @@ mod builder;
 #[cfg(doc)]
 pub mod tutorials;
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "websocket"))]
-pub use builder::WebsocketError as WebsocketBuilderError;
 pub use libp2p_identity as identity;
 pub use libp2p_identity::PeerId;
 pub use libp2p_swarm::{Stream, StreamProtocol};

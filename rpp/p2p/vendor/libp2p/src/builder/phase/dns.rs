@@ -14,14 +14,14 @@ impl<T: AuthenticatedMultiplexedTransport> SwarmBuilder<super::provider::Tokio, 
     ) -> Result<
         SwarmBuilder<
             super::provider::Tokio,
-            WebsocketPhase<impl AuthenticatedMultiplexedTransport>,
+            RelayPhase<impl AuthenticatedMultiplexedTransport>,
         >,
         std::io::Error,
     > {
         Ok(SwarmBuilder {
             keypair: self.keypair,
             phantom: PhantomData,
-            phase: WebsocketPhase {
+            phase: RelayPhase {
                 transport: libp2p_dns::tokio::Transport::system(self.phase.transport)?,
             },
         })
@@ -34,12 +34,12 @@ impl<T: AuthenticatedMultiplexedTransport> SwarmBuilder<super::provider::Tokio, 
         self,
         cfg: libp2p_dns::ResolverConfig,
         opts: libp2p_dns::ResolverOpts,
-    ) -> SwarmBuilder<super::provider::Tokio, WebsocketPhase<impl AuthenticatedMultiplexedTransport>>
+    ) -> SwarmBuilder<super::provider::Tokio, RelayPhase<impl AuthenticatedMultiplexedTransport>>
     {
         SwarmBuilder {
             keypair: self.keypair,
             phantom: PhantomData,
-            phase: WebsocketPhase {
+            phase: RelayPhase {
                 transport: libp2p_dns::tokio::Transport::custom(self.phase.transport, cfg, opts),
             },
         }
@@ -47,11 +47,11 @@ impl<T: AuthenticatedMultiplexedTransport> SwarmBuilder<super::provider::Tokio, 
 }
 
 impl<Provider, T> SwarmBuilder<Provider, DnsPhase<T>> {
-    pub(crate) fn without_dns(self) -> SwarmBuilder<Provider, WebsocketPhase<T>> {
+    pub(crate) fn without_dns(self) -> SwarmBuilder<Provider, RelayPhase<T>> {
         SwarmBuilder {
             keypair: self.keypair,
             phantom: PhantomData,
-            phase: WebsocketPhase {
+            phase: RelayPhase {
                 transport: self.phase.transport,
             },
         }
@@ -65,7 +65,6 @@ impl<Provider, T: AuthenticatedMultiplexedTransport> SwarmBuilder<Provider, DnsP
         constructor: impl FnOnce(&libp2p_identity::Keypair) -> R,
     ) -> Result<SwarmBuilder<Provider, SwarmPhase<T, B>>, R::Error> {
         self.without_dns()
-            .without_websocket()
             .without_relay()
             .with_behaviour(constructor)
     }

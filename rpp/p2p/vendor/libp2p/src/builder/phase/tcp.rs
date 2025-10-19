@@ -1,16 +1,9 @@
 use std::marker::PhantomData;
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "tcp", feature = "websocket")
-))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "tcp"))]
 use libp2p_core::muxing::{StreamMuxer, StreamMuxerBox};
-#[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
 use libp2p_core::Transport;
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "tcp", feature = "websocket")
-))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "tcp"))]
 use libp2p_core::{
     upgrade::InboundConnectionUpgrade, upgrade::OutboundConnectionUpgrade, Negotiated, UpgradeInfo,
 };
@@ -160,62 +153,3 @@ impl<Provider> SwarmBuilder<Provider, TcpPhase> {
             .with_other_transport(constructor)
     }
 }
-macro_rules! impl_tcp_phase_with_websocket {
-    ($providerKebabCase:literal, $providerPascalCase:ty, $websocketStream:ty) => {
-        #[cfg(all(feature = $providerKebabCase, not(target_arch = "wasm32"), feature = "websocket"))]
-        impl SwarmBuilder<$providerPascalCase, TcpPhase> {
-            /// See [`SwarmBuilder::with_websocket`].
-            pub async fn with_websocket <
-                SecUpgrade,
-                SecStream,
-                SecError,
-                MuxUpgrade,
-                MuxStream,
-                MuxError,
-            > (
-                self,
-                security_upgrade: SecUpgrade,
-                multiplexer_upgrade: MuxUpgrade,
-            ) -> Result<
-                    SwarmBuilder<
-                        $providerPascalCase,
-                        RelayPhase<impl AuthenticatedMultiplexedTransport>,
-                    >,
-                    WebsocketError<SecUpgrade::Error>,
-                >
-            where
-                SecStream: futures::AsyncRead + futures::AsyncWrite + Unpin + Send + 'static,
-                SecError: std::error::Error + Send + Sync + 'static,
-                SecUpgrade: IntoSecurityUpgrade<$websocketStream>,
-                SecUpgrade::Upgrade: InboundConnectionUpgrade<Negotiated<$websocketStream>, Output = (libp2p_identity::PeerId, SecStream), Error = SecError> + OutboundConnectionUpgrade<Negotiated<$websocketStream>, Output = (libp2p_identity::PeerId, SecStream), Error = SecError> + Clone + Send + 'static,
-            <SecUpgrade::Upgrade as InboundConnectionUpgrade<Negotiated<$websocketStream>>>::Future: Send,
-            <SecUpgrade::Upgrade as OutboundConnectionUpgrade<Negotiated<$websocketStream>>>::Future: Send,
-            <<<SecUpgrade as IntoSecurityUpgrade<$websocketStream>>::Upgrade as UpgradeInfo>::InfoIter as IntoIterator>::IntoIter: Send,
-            <<SecUpgrade as IntoSecurityUpgrade<$websocketStream>>::Upgrade as UpgradeInfo>::Info: Send,
-
-                MuxStream: StreamMuxer + Send + 'static,
-                MuxStream::Substream: Send + 'static,
-                MuxStream::Error: Send + Sync + 'static,
-                MuxUpgrade: IntoMultiplexerUpgrade<SecStream>,
-                MuxUpgrade::Upgrade: InboundConnectionUpgrade<Negotiated<SecStream>, Output = MuxStream, Error = MuxError> + OutboundConnectionUpgrade<Negotiated<SecStream>, Output = MuxStream, Error = MuxError> + Clone + Send + 'static,
-                <MuxUpgrade::Upgrade as InboundConnectionUpgrade<Negotiated<SecStream>>>::Future: Send,
-                <MuxUpgrade::Upgrade as OutboundConnectionUpgrade<Negotiated<SecStream>>>::Future: Send,
-                    MuxError: std::error::Error + Send + Sync + 'static,
-                <<<MuxUpgrade as IntoMultiplexerUpgrade<SecStream>>::Upgrade as UpgradeInfo>::InfoIter as IntoIterator>::IntoIter: Send,
-                <<MuxUpgrade as IntoMultiplexerUpgrade<SecStream>>::Upgrade as UpgradeInfo>::Info: Send,
-            {
-                self.without_tcp()
-                    .without_quic()
-                    .without_any_other_transports()
-                    .without_dns()
-                    .with_websocket(security_upgrade, multiplexer_upgrade)
-                    .await
-            }
-        }
-    }
-}
-impl_tcp_phase_with_websocket!(
-    "tokio",
-    super::provider::Tokio,
-    rw_stream_sink::RwStreamSink<libp2p_websocket::BytesConnection<libp2p_tcp::tokio::TcpStream>>
-);
