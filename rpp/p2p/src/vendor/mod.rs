@@ -44,6 +44,10 @@ pub use libp2p_request_response as request_response;
 #[cfg(feature = "noise")]
 pub use libp2p_noise as noise;
 
+/// Plaintext security handshake primitives.
+#[cfg(feature = "plaintext")]
+pub use libp2p_plaintext as plaintext;
+
 /// TCP transport implementation.
 #[cfg(feature = "tcp")]
 pub use libp2p_tcp as tcp;
