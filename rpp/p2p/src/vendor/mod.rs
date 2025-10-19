@@ -14,8 +14,6 @@
 //!   stream multiplexer.
 //! * `quic` – wires up the QUIC transport via the vendored
 //!   [`libp2p-quic`](https://github.com/libp2p/rust-libp2p) crate.
-//! * `memory-transport` – re-exports the in-memory transport utilities from
-//!   `libp2p-core` for testing and simulations.
 
 use libp2p as libp2p_main;
 
@@ -60,17 +58,14 @@ pub use libp2p_yamux as yamux;
 #[cfg(feature = "quic")]
 pub use libp2p_quic as quic;
 
-/// In-memory transport helpers useful for tests and simulations.
-#[cfg(feature = "memory-transport")]
-pub mod memory_transport {
-    pub use crate::vendor::core::transport::memory::*;
-}
-
 /// Multiaddr helper utilities vendored alongside `libp2p-core`.
 pub mod multiaddr {
     pub use crate::vendor::core::multiaddr::*;
 
-    use crate::vendor::core::multiaddr::{Error as MultiaddrError, Multiaddr, Protocol};
+    use crate::vendor::core::multiaddr::{
+        Error as MultiaddrError, Multiaddr as CoreMultiaddr, Protocol as CoreProtocol,
+    };
+    use std::result::Result as StdResult;
     use thiserror::Error;
 
     #[derive(Debug, Error)]
@@ -81,36 +76,36 @@ pub mod multiaddr {
         Unsupported(String),
     }
 
-    fn ensure_supported(addr: &Multiaddr) -> Result<(), StaticMultiaddrError> {
+    fn ensure_supported(addr: &CoreMultiaddr) -> StdResult<(), StaticMultiaddrError> {
         for protocol in addr.iter() {
             match protocol {
-                Protocol::Ip4(_)
-                | Protocol::Ip6(_)
-                | Protocol::Tcp(_)
-                | Protocol::Udp(_)
-                | Protocol::Quic
-                | Protocol::QuicV1
-                | Protocol::P2p(_) => {}
-                other => {
-                    return Err(StaticMultiaddrError::Unsupported(other.to_string()))
-                }
+                CoreProtocol::Ip4(_)
+                | CoreProtocol::Ip6(_)
+                | CoreProtocol::Tcp(_)
+                | CoreProtocol::Udp(_)
+                | CoreProtocol::Quic
+                | CoreProtocol::QuicV1
+                | CoreProtocol::P2p(_) => {}
+                other => return Err(StaticMultiaddrError::Unsupported(other.to_string())),
             }
         }
         Ok(())
     }
 
-    pub fn parse_static(value: &str) -> Result<Multiaddr, StaticMultiaddrError> {
-        let addr: Multiaddr = value.parse()?;
+    pub fn parse_static(value: &str) -> StdResult<CoreMultiaddr, StaticMultiaddrError> {
+        let addr: CoreMultiaddr = value.parse()?;
         ensure_supported(&addr)?;
         Ok(addr)
     }
 
-    pub fn format_static(addr: &Multiaddr) -> Result<String, StaticMultiaddrError> {
+    pub fn format_static(addr: &CoreMultiaddr) -> StdResult<String, StaticMultiaddrError> {
         ensure_supported(addr)?;
         Ok(addr.to_string())
     }
 
-    pub fn deserialize_static_addrs<I, S>(values: I) -> Result<Vec<Multiaddr>, StaticMultiaddrError>
+    pub fn deserialize_static_addrs<I, S>(
+        values: I,
+    ) -> StdResult<Vec<CoreMultiaddr>, StaticMultiaddrError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -121,7 +116,9 @@ pub mod multiaddr {
             .collect()
     }
 
-    pub fn serialize_static_addrs(addrs: &[Multiaddr]) -> Result<Vec<String>, StaticMultiaddrError> {
+    pub fn serialize_static_addrs(
+        addrs: &[CoreMultiaddr],
+    ) -> StdResult<Vec<String>, StaticMultiaddrError> {
         addrs.iter().map(format_static).collect()
     }
 
@@ -133,10 +130,8 @@ pub mod multiaddr {
 
         #[test]
         fn accepts_basic_ip_transport() {
-            let peer_id = PeerId::from_str(
-                "12D3KooWJqD9iXy2qxY8pYtBXf3y1Y9qsKf8GugHgdGXQTd7",
-            )
-            .expect("peer id");
+            let peer_id = PeerId::from_str("12D3KooWJqD9iXy2qxY8pYtBXf3y1Y9qsKf8GugHgdGXQTd7")
+                .expect("peer id");
             let input = format!("/ip4/127.0.0.1/tcp/30333/p2p/{}", peer_id);
             let addr = parse_static(&input).expect("parse");
             assert_eq!(format_static(&addr).expect("format"), input);
@@ -144,28 +139,26 @@ pub mod multiaddr {
 
         #[test]
         fn rejects_dns_protocols() {
-            let err = parse_static("/dns4/example.com/tcp/30333")
-                .expect_err("dns should be rejected");
+            let err =
+                parse_static("/dns4/example.com/tcp/30333").expect_err("dns should be rejected");
             assert!(matches!(err, StaticMultiaddrError::Unsupported(_)));
         }
 
         #[test]
         fn roundtrips_serialization() {
             let peers = [
-                PeerId::from_str("12D3KooWJqD9iXy2qxY8pYtBXf3y1Y9qsKf8GugHgdGXQTd7")
-                    .expect("peer"),
-                PeerId::from_str("12D3KooWQBo7c9Z2wrE5m7vt1W3avDy2tYx1s9pQnoC6R6kq")
-                    .expect("peer"),
+                PeerId::from_str("12D3KooWJqD9iXy2qxY8pYtBXf3y1Y9qsKf8GugHgdGXQTd7").expect("peer"),
+                PeerId::from_str("12D3KooWQBo7c9Z2wrE5m7vt1W3avDy2tYx1s9pQnoC6R6kq").expect("peer"),
             ];
             let addrs = vec![
                 Multiaddr::empty()
-                    .with(Protocol::Ip6("::1".parse().unwrap()))
-                    .with(Protocol::Tcp(1234))
-                    .with(Protocol::P2p(peers[0].clone())),
+                    .with(CoreProtocol::Ip6("::1".parse().unwrap()))
+                    .with(CoreProtocol::Tcp(1234))
+                    .with(CoreProtocol::P2p(peers[0].clone())),
                 Multiaddr::empty()
-                    .with(Protocol::Ip4("10.0.0.1".parse().unwrap()))
-                    .with(Protocol::QuicV1)
-                    .with(Protocol::P2p(peers[1].clone())),
+                    .with(CoreProtocol::Ip4("10.0.0.1".parse().unwrap()))
+                    .with(CoreProtocol::QuicV1)
+                    .with(CoreProtocol::P2p(peers[1].clone())),
             ];
             let serialized = serialize_static_addrs(&addrs).expect("serialize");
             let restored = deserialize_static_addrs(&serialized).expect("deserialize");

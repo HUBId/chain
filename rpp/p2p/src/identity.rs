@@ -2,13 +2,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose, Engine as _};
 use crate::vendor::identity::{self, Keypair};
 use crate::vendor::PeerId;
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use std::convert::TryInto;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
+use thiserror::Error;
 
 use crate::tier::TierLevel;
 use crate::topics::GossipTopic;
@@ -117,14 +117,21 @@ struct StoredIdentity {
     metadata: IdentityMetadata,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct IdentityHookState {
     inner: Arc<RwLock<IdentityHookData>>,
 }
 
+#[derive(Debug)]
 struct IdentityHookData {
     public_key: identity::PublicKey,
     vrf_secret: Option<Vec<u8>>,
+}
+
+static GLOBAL_HOOKS: OnceLock<RwLock<Option<IdentityHookState>>> = OnceLock::new();
+
+fn hooks_storage() -> &'static RwLock<Option<IdentityHookState>> {
+    GLOBAL_HOOKS.get_or_init(|| RwLock::new(None))
 }
 
 impl IdentityHookState {
@@ -138,20 +145,7 @@ impl IdentityHookState {
     }
 
     fn install(&self) {
-        let sign_state = self.clone();
-        let vrf_sign = Arc::new(move |keypair: &identity::Keypair, context: &[u8], message: &[u8]| {
-            sign_state.vrf_sign(keypair, context, message)
-        });
-        let public_state = self.clone();
-        let vrf_public = Arc::new(move |public: &identity::PublicKey| {
-            public_state.vrf_public_key(public)
-        });
-        identity::set_hooks(identity::IdentityHooks {
-            sign: None,
-            verify: None,
-            vrf_sign: Some(vrf_sign),
-            vrf_public_key: Some(vrf_public),
-        });
+        *hooks_storage().write().expect("identity hooks poisoned") = Some(self.clone());
     }
 
     fn set_vrf_secret(&self, secret: Option<Vec<u8>>) {
@@ -188,17 +182,47 @@ impl IdentityHookState {
 
         let mini = Self::decode_secret(&secret)?;
         let derived = mini.expand_to_keypair(ExpansionMode::Uniform);
-        Some(
-            derived
-                .sign_simple(context, message)
-                .to_bytes()
-                .to_vec(),
-        )
+        Some(derived.sign_simple(context, message).to_bytes().to_vec())
     }
 
     fn decode_secret(secret: &[u8]) -> Option<MiniSecretKey> {
         let bytes: [u8; 32] = secret.try_into().ok()?;
         MiniSecretKey::from_bytes(&bytes).ok()
+    }
+}
+
+fn with_hooks<R>(f: impl FnOnce(&IdentityHookState) -> Option<R>) -> Option<R> {
+    let guard = hooks_storage().read().expect("identity hooks poisoned");
+    guard.as_ref().and_then(f)
+}
+
+pub trait IdentityKeypairExt {
+    fn sign_with_extensions(&self, msg: &[u8]) -> Result<Vec<u8>, identity::SigningError>;
+    fn vrf_sign(&self, context: &[u8], message: &[u8]) -> Option<Vec<u8>>;
+    fn vrf_public_key(&self) -> Option<Vec<u8>>;
+}
+
+impl IdentityKeypairExt for identity::Keypair {
+    fn sign_with_extensions(&self, msg: &[u8]) -> Result<Vec<u8>, identity::SigningError> {
+        self.sign(msg)
+    }
+
+    fn vrf_sign(&self, context: &[u8], message: &[u8]) -> Option<Vec<u8>> {
+        with_hooks(|hooks| hooks.vrf_sign(self, context, message))
+    }
+
+    fn vrf_public_key(&self) -> Option<Vec<u8>> {
+        with_hooks(|hooks| hooks.vrf_public_key(&self.public()))
+    }
+}
+
+pub trait IdentityPublicKeyExt {
+    fn verify_with_extensions(&self, msg: &[u8], signature: &[u8]) -> bool;
+}
+
+impl IdentityPublicKeyExt for identity::PublicKey {
+    fn verify_with_extensions(&self, msg: &[u8], signature: &[u8]) -> bool {
+        self.verify(msg, signature)
     }
 }
 
@@ -270,8 +294,7 @@ impl NodeIdentity {
         self.vrf_secret = secret.map(|sk| sk.to_bytes().to_vec());
         self.metadata
             .set_vrf_secret_bytes(self.vrf_secret.as_deref());
-        self.hooks
-            .set_vrf_secret(self.vrf_secret.clone());
+        self.hooks.set_vrf_secret(self.vrf_secret.clone());
     }
 
     fn load(path: &Path) -> Result<Self, IdentityError> {
@@ -310,7 +333,7 @@ impl NodeIdentity {
     fn from_keypair(
         path: PathBuf,
         keypair: Keypair,
-        mut metadata: IdentityMetadata,
+        metadata: IdentityMetadata,
     ) -> Result<Self, IdentityError> {
         let public_key = keypair.public();
         let peer_id = PeerId::from(public_key.clone());
@@ -383,7 +406,10 @@ mod tests {
             .signed(identity.keypair())
             .expect("sign");
         assert_eq!(signed.vrf_public_key, Some(expected_public.clone()));
-        assert!(signed.vrf_proof.as_ref().map_or(false, |proof| !proof.is_empty()));
+        assert!(signed
+            .vrf_proof
+            .as_ref()
+            .map_or(false, |proof| !proof.is_empty()));
         let signed_reload = HandshakePayload::new("node", None, None, reloaded.tier())
             .signed(reloaded.keypair())
             .expect("sign reload");

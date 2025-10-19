@@ -8,8 +8,6 @@ members = [
   "storage",
   "storage-firewood",
   "triehash",
-]
-exclude = [
   "rpp/p2p",
 ]
 resolver = "2"
