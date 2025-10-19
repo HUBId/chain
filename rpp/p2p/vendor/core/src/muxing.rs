@@ -56,7 +56,7 @@ use futures::{
     task::{Context, Poll},
     AsyncRead, AsyncWrite,
 };
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 pub use self::boxed::{StreamMuxerBox, SubstreamBox};
 

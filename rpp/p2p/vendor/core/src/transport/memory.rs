@@ -33,7 +33,7 @@ use futures::{
     prelude::*,
     task::{Context, Poll},
 };
-use multiaddr::{Multiaddr, Protocol};
+use crate::multiaddr::{Multiaddr, Protocol};
 use parking_lot::Mutex;
 use rw_stream_sink::RwStreamSink;
 

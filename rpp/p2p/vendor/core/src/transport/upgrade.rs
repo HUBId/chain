@@ -30,7 +30,7 @@ use std::{
 
 use futures::{prelude::*, ready};
 use libp2p_identity::PeerId;
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 pub use crate::upgrade::Version;
 use crate::{

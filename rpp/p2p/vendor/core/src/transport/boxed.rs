@@ -26,7 +26,7 @@ use std::{
 };
 
 use futures::{prelude::*, stream::FusedStream};
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 use crate::transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent};
 

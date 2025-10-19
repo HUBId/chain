@@ -27,7 +27,7 @@ use std::{
 
 use either::Either;
 use futures::prelude::*;
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 use crate::{
     connection::ConnectedPoint,

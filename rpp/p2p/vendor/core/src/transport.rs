@@ -34,7 +34,7 @@ use std::{
 };
 
 use futures::prelude::*;
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 pub mod and_then;
 pub mod choice;

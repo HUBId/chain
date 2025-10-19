@@ -144,7 +144,7 @@ pub enum FromEnvelopeError {
     MismatchedSignature,
     /// Failed to decode a multi-address.
     #[error("Failed to decode bytes as MultiAddress")]
-    InvalidMultiaddr(#[from] multiaddr::Error),
+    InvalidMultiaddr(#[from] crate::multiaddr::Error),
 }
 
 #[cfg(test)]

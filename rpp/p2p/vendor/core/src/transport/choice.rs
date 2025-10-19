@@ -25,7 +25,7 @@ use std::{
 
 use either::Either;
 use futures::future;
-use multiaddr::Multiaddr;
+use crate::multiaddr::Multiaddr;
 
 use crate::{
     either::EitherFuture,
