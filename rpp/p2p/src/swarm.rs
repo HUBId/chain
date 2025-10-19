@@ -6,11 +6,11 @@ use futures::StreamExt;
 
 use crate::vendor::gossipsub::{self, MessageId};
 use crate::vendor::identity::Keypair;
-use crate::vendor::noise;
 use crate::vendor::request_response::{self, ProtocolSupport};
 use crate::vendor::swarm::{NetworkBehaviour, SwarmEvent};
-use crate::vendor::yamux;
-use crate::vendor::{identify, ping, tcp, Multiaddr, PeerId, Swarm, SwarmBuilder};
+#[cfg(all(feature = "tcp", feature = "noise", feature = "yamux"))]
+use crate::vendor::{noise, tcp, yamux};
+use crate::vendor::{identify, ping, Multiaddr, PeerId, Swarm, SwarmBuilder};
 use thiserror::Error;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
@@ -38,6 +38,8 @@ pub enum NetworkError {
     Persistence(String),
     #[error("handshake error: {0}")]
     Handshake(String),
+    #[error("transport support disabled (enable tcp + noise + yamux features)")]
+    TransportDisabled,
 }
 
 #[derive(NetworkBehaviour)]
@@ -192,6 +194,7 @@ pub struct Network {
 }
 
 impl Network {
+    #[cfg(all(feature = "tcp", feature = "noise", feature = "yamux"))]
     pub fn new(
         identity: Arc<NodeIdentity>,
         peerstore: Arc<Peerstore>,
@@ -228,6 +231,17 @@ impl Network {
         network.bootstrap_subscriptions()?;
         network.bootstrap_known_peers();
         Ok(network)
+    }
+
+    #[cfg(not(all(feature = "tcp", feature = "noise", feature = "yamux")))]
+    #[allow(unused_variables)]
+    pub fn new(
+        identity: Arc<NodeIdentity>,
+        peerstore: Arc<Peerstore>,
+        handshake: HandshakePayload,
+        gossip_state: Option<Arc<GossipStateStore>>,
+    ) -> Result<Self, NetworkError> {
+        Err(NetworkError::TransportDisabled)
     }
 
     pub fn listen_on(&mut self, addr: Multiaddr) -> Result<(), NetworkError> {
