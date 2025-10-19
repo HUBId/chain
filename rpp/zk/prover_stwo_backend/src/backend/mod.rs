@@ -1,3 +1,9 @@
+#[cfg(feature = "official")]
+mod io;
+
+#[cfg(feature = "official")]
+pub use io::{decode_tx_proof, decode_tx_witness, encode_tx_proof};
+
 use prover_backend_interface::{
     BackendError, BackendResult, ProofBackend, ProofBytes, ProvingKey, SecurityLevel, TxCircuitDef,
     TxPublicInputs, VerifyingKey, WitnessBytes,
