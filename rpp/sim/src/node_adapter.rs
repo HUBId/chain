@@ -5,22 +5,22 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use futures::StreamExt;
-use libp2p::core::transport::memory::MemoryTransport;
-use libp2p::core::upgrade::Version;
-use libp2p::gossipsub::{
+use rpp_p2p::vendor::core::transport::memory::MemoryTransport;
+use rpp_p2p::vendor::core::upgrade::Version;
+use rpp_p2p::vendor::core::Transport;
+use rpp_p2p::vendor::gossipsub::{
     self, Behaviour as GossipsubBehaviour, ConfigBuilder, IdentTopic, MessageAuthenticity,
 };
-use libp2p::identify;
-use libp2p::identity;
-use libp2p::identity::ed25519;
-use libp2p::multiaddr::Protocol;
-use libp2p::ping;
-use libp2p::plaintext;
-use libp2p::swarm::dial_opts::DialOpts;
-use libp2p::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
-use libp2p::Multiaddr;
-use libp2p::PeerId;
-use libp2p::Transport;
+use rpp_p2p::vendor::identify;
+use rpp_p2p::vendor::identity;
+use rpp_p2p::vendor::identity::ed25519;
+use rpp_p2p::vendor::multiaddr::Protocol;
+use rpp_p2p::vendor::ping;
+use rpp_p2p::vendor::plaintext;
+use rpp_p2p::vendor::swarm::dial_opts::DialOpts;
+use rpp_p2p::vendor::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
+use rpp_p2p::vendor::Multiaddr;
+use rpp_p2p::vendor::PeerId;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -141,7 +141,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
     let transport = MemoryTransport::new()
         .upgrade(Version::V1)
         .authenticate(plaintext::Config::new(&keypair))
-        .multiplex(libp2p::yamux::Config::default())
+        .multiplex(rpp_p2p::vendor::yamux::Config::default())
         .boxed();
 
     let gossipsub_config = ConfigBuilder::default()
@@ -172,7 +172,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
         transport,
         behaviour,
         peer_id,
-        libp2p::swarm::Config::with_tokio_executor(),
+        rpp_p2p::vendor::swarm::Config::with_tokio_executor(),
     );
     swarm
         .behaviour_mut()

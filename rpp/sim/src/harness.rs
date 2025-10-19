@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use libp2p::gossipsub::IdentTopic;
+use rpp_p2p::vendor::gossipsub::IdentTopic;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tokio::runtime::Builder;

@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use libp2p::PeerId;
+use rpp_p2p::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 
 use crate::metrics::reduce::{calculate_percentiles, SimulationSummary};
