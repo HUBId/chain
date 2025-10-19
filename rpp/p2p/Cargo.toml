@@ -15,15 +15,15 @@ default = [
     "yamux",
 ]
 
-identify = ["dep:libp2p-identify", "libp2p/identify"]
-ping = ["dep:libp2p-ping", "libp2p/ping"]
-gossipsub = ["dep:libp2p-gossipsub", "libp2p/gossipsub"]
-request-response = ["dep:libp2p-request-response", "libp2p/request-response"]
-noise = ["dep:libp2p-noise", "libp2p/noise"]
-tcp = ["dep:libp2p-tcp", "libp2p/tcp"]
-yamux = ["dep:libp2p-yamux", "libp2p/yamux"]
-quic = ["dep:libp2p-quic", "libp2p/quic"]
-memory-transport = []
+identify = ["dep:libp2p-identify"]
+ping = ["dep:libp2p-ping"]
+gossipsub = ["dep:libp2p-gossipsub"]
+request-response = ["dep:libp2p-request-response"]
+noise = ["dep:libp2p-noise"]
+tcp = ["dep:libp2p-tcp"]
+yamux = ["dep:libp2p-yamux"]
+quic = ["dep:libp2p-quic"]
+memory-transport = ["libp2p-core/memory-transport"]
 
 [dependencies]
 base64 = "=0.21.7"
@@ -31,7 +31,7 @@ async-trait = "0.1"
 futures = "0.3"
 hex = "=0.4.3"
 libp2p = { path = "../../vendor/libp2p/libp2p", features = ["macros", "tokio"] }
-libp2p_core = { package = "libp2p-core", path = "../../vendor/libp2p/core" }
+libp2p-core = { path = "../../vendor/libp2p/core" }
 libp2p-identify = { path = "../../vendor/libp2p/protocols/identify", optional = true }
 libp2p-ping = { path = "../../vendor/libp2p/protocols/ping", optional = true }
 libp2p-gossipsub = { path = "../../vendor/libp2p/protocols/gossipsub", optional = true }
