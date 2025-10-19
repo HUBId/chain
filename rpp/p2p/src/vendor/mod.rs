@@ -15,8 +15,6 @@
 //! * `quic` – wires up the QUIC transport via the vendored
 //!   [`libp2p-quic`](https://github.com/libp2p/rust-libp2p) crate.
 
-use libp2p as libp2p_main;
-
 /// Core libp2p primitives.
 pub use libp2p_core as core;
 
@@ -171,4 +169,4 @@ pub use crate::vendor::core::multihash;
 pub use crate::vendor::core::Multiaddr;
 pub use crate::vendor::identity::PeerId;
 pub use crate::vendor::swarm::Swarm;
-pub use libp2p_main::SwarmBuilder;
+pub use crate::vendor::swarm::builder::SwarmBuilder;
