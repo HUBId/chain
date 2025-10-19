@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use libp2p::identity;
-use libp2p::PeerId;
+// NOTE: Vendored libp2p types must be used to avoid pulling upstream crates
+// directly into the test harness.
+use rpp_p2p::vendor::{identity, PeerId};
 use rand::rngs::OsRng;
 use rpp_p2p::{
     AdmissionControl, AdmissionError, GossipTopic, HandshakePayload, IdentityMetadata,

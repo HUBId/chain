@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use libp2p::PeerId;
+// NOTE: Vendored libp2p types must be used to avoid pulling upstream crates
+// directly into the test harness.
+use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     ConsensusPipeline, GossipTopic, JsonProofValidator, PipelineError, ProofMempool, ProofRecord,
     ProofStorage, VoteOutcome,
