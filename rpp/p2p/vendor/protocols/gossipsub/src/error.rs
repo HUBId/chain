@@ -40,6 +40,8 @@ pub enum PublishError {
     /// Messages could not be sent because the queues for all peers were full. The usize represents
     /// the number of peers that were attempted.
     AllQueuesFull(usize),
+    /// Publishing was blocked by the configured admission hooks.
+    PermissionDenied,
 }
 
 impl std::fmt::Display for PublishError {
@@ -65,6 +67,8 @@ pub enum SubscriptionError {
     PublishError(PublishError),
     /// We are not allowed to subscribe to this topic by the subscription filter
     NotAllowed,
+    /// Subscription was blocked by the configured admission hooks.
+    PermissionDenied,
 }
 
 impl std::fmt::Display for SubscriptionError {

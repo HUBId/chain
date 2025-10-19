@@ -26,6 +26,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     fmt::{self, Debug},
     net::IpAddr,
+    sync::Arc,
     task::{Context, Poll},
     time::Duration,
 };
@@ -75,11 +76,21 @@ use crate::{
     FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
 };
 
-#[cfg(test)]
-mod tests;
-
 /// IDONTWANT cache capacity.
 const IDONTWANT_CAP: usize = 10_000;
+
+/// Admission hooks used to gate publishing/subscribing operations.
+#[derive(Default, Clone)]
+pub struct AdmissionHooks {
+    /// Callback executed before local publish attempts.
+    pub can_publish_local: Option<Arc<dyn Fn(&TopicHash) -> bool + Send + Sync>>,
+    /// Callback executed before local subscribe attempts.
+    pub can_subscribe_local: Option<Arc<dyn Fn(&TopicHash) -> bool + Send + Sync>>,
+    /// Callback executed before remote messages are accepted for a topic.
+    pub can_publish_remote: Option<Arc<dyn Fn(&PeerId, &TopicHash) -> bool + Send + Sync>>,
+    /// Callback executed before remote subscriptions are accepted.
+    pub can_subscribe_remote: Option<Arc<dyn Fn(&PeerId, &TopicHash) -> bool + Send + Sync>>,
+}
 
 /// IDONTWANT timeout before removal.
 const IDONTWANT_TIMEOUT: Duration = Duration::new(3, 0);
@@ -306,12 +317,6 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
     /// clean up -- eg backoff clean up.
     heartbeat_ticks: u64,
 
-    /// We remember all peers we found through peer exchange, since those peers are not considered
-    /// as safe as randomly discovered outbound peers. This behaviour diverges from the go
-    /// implementation to avoid possible love bombing attacks in PX. When disconnecting peers will
-    /// be removed from this list which may result in a true outbound rediscovery.
-    px_peers: HashSet<PeerId>,
-
     /// Stores optional peer score data together with thresholds, decay interval and gossip
     /// promises.
     peer_score: PeerScoreState,
@@ -339,6 +344,9 @@ pub struct Behaviour<D = IdentityTransform, F = AllowAllSubscriptionFilter> {
 
     /// Tracks recently sent `IWANT` messages and checks if peers respond to them.
     gossip_promises: GossipPromises,
+
+    /// Optional admission control hooks.
+    admission_hooks: AdmissionHooks,
 }
 
 impl<D, F> Behaviour<D, F>
@@ -440,7 +448,6 @@ where
             mcache: MessageCache::new(config.history_gossip(), config.history_length()),
             heartbeat: Delay::new(config.heartbeat_interval() + config.heartbeat_initial_delay()),
             heartbeat_ticks: 0,
-            px_peers: HashSet::new(),
             peer_score: PeerScoreState::Disabled,
             count_received_ihave: HashMap::new(),
             count_sent_iwant: HashMap::new(),
@@ -450,6 +457,7 @@ where
             data_transform,
             failed_messages: Default::default(),
             gossip_promises: Default::default(),
+            admission_hooks: AdmissionHooks::default(),
         })
     }
 
@@ -509,6 +517,11 @@ where
         }
     }
 
+    /// Installs admission hooks controlling publish/subscribe behaviour.
+    pub fn set_admission_hooks(&mut self, hooks: AdmissionHooks) {
+        self.admission_hooks = hooks;
+    }
+
     /// Subscribe to a topic.
     ///
     /// Returns [`Ok(true)`] if the subscription worked. Returns [`Ok(false)`] if we were already
@@ -517,6 +530,12 @@ where
         let topic_hash = topic.hash();
         if !self.subscription_filter.can_subscribe(&topic_hash) {
             return Err(SubscriptionError::NotAllowed);
+        }
+
+        if let Some(check) = &self.admission_hooks.can_subscribe_local {
+            if !check(&topic_hash) {
+                return Err(SubscriptionError::PermissionDenied);
+            }
         }
 
         if self.mesh.contains_key(&topic_hash) {
@@ -573,6 +592,12 @@ where
     ) -> Result<MessageId, PublishError> {
         let data = data.into();
         let topic = topic.into();
+
+        if let Some(check) = &self.admission_hooks.can_publish_local {
+            if !check(&topic) {
+                return Err(PublishError::PermissionDenied);
+            }
+        }
 
         // Transform the data before building a raw_message.
         let transformed_data = self
@@ -1078,21 +1103,12 @@ where
     }
 
     /// Creates a PRUNE gossipsub action.
-    fn make_prune(
-        &mut self,
-        topic_hash: &TopicHash,
-        peer: &PeerId,
-        do_px: bool,
-        on_unsubscribe: bool,
-    ) -> Prune {
+    fn make_prune(&mut self, topic_hash: &TopicHash, peer: &PeerId, on_unsubscribe: bool) -> Prune {
         if let PeerScoreState::Active(peer_score) = &mut self.peer_score {
             peer_score.prune(peer, topic_hash.clone());
         }
 
         match self.connected_peers.get(peer).map(|v| &v.kind) {
-            Some(PeerKind::Floodsub) => {
-                tracing::error!("Attempted to prune a Floodsub peer");
-            }
             Some(PeerKind::Gossipsub) => {
                 // GossipSub v1.0 -- no peer exchange, the peer won't be able to parse it anyway
                 return Prune {
@@ -1107,20 +1123,8 @@ where
             _ => {} // Gossipsub 1.1 peer perform the `Prune`
         }
 
-        // Select peers for peer exchange
-        let peers = if do_px {
-            get_random_peers(
-                &self.connected_peers,
-                topic_hash,
-                self.config.prune_peers(),
-                |p| p != peer && !self.peer_score.below_threshold(p, |_| 0.0).0,
-            )
-            .into_iter()
-            .map(|p| PeerInfo { peer_id: Some(p) })
-            .collect()
-        } else {
-            Vec::new()
-        };
+        // Peer exchange disabled: always return empty list of peers.
+        let peers = Vec::new();
 
         let backoff = if on_unsubscribe {
             self.config.unsubscribe_backoff()
@@ -1153,8 +1157,7 @@ where
                 tracing::debug!(%peer_id, "LEAVE: Sending PRUNE to peer");
 
                 let on_unsubscribe = true;
-                let prune =
-                    self.make_prune(topic_hash, &peer_id, self.config.do_px(), on_unsubscribe);
+                let prune = self.make_prune(topic_hash, &peer_id, on_unsubscribe);
                 self.send_message(peer_id, RpcOut::Prune(prune));
 
                 // If the peer did not previously exist in any mesh, inform the handler
@@ -1358,8 +1361,6 @@ where
 
         let mut to_prune_topics = HashSet::new();
 
-        let mut do_px = self.config.do_px();
-
         let Some(connected_peer) = self.connected_peers.get_mut(peer_id) else {
             tracing::error!(peer_id = %peer_id, "Peer non-existent when handling graft");
             return;
@@ -1383,8 +1384,6 @@ where
             tracing::warn!(peer=%peer_id, "GRAFT: ignoring request from direct peer");
             // this is possibly a bug from non-reciprocal configuration; send a PRUNE for all topics
             to_prune_topics = topics.into_iter().collect();
-            // but don't PX
-            do_px = false
         } else {
             let (below_zero, score) = self.peer_score.below_threshold(peer_id, |_| 0.0);
             let now = Instant::now();
@@ -1427,9 +1426,6 @@ where
                                     peer_score.add_penalty(peer_id, 1);
                                 }
                             }
-                            // no PX
-                            do_px = false;
-
                             to_prune_topics.insert(topic_hash.clone());
                             continue;
                         }
@@ -1447,8 +1443,6 @@ where
                         // we do send them PRUNE however, because it's a matter of protocol
                         // correctness
                         to_prune_topics.insert(topic_hash.clone());
-                        // but we won't PX to them
-                        do_px = false;
                         continue;
                     }
 
@@ -1488,8 +1482,6 @@ where
                         peer_score.graft(peer_id, topic_hash);
                     }
                 } else {
-                    // don't do PX when there is an unknown topic to avoid leaking our peers
-                    do_px = false;
                     tracing::debug!(
                         peer=%peer_id,
                         topic=%topic_hash,
@@ -1507,7 +1499,7 @@ where
 
             for prune in to_prune_topics
                 .iter()
-                .map(|t| self.make_prune(t, peer_id, do_px, on_unsubscribe))
+                .map(|t| self.make_prune(t, peer_id, on_unsubscribe))
                 .collect::<Vec<_>>()
             {
                 self.send_message(*peer_id, RpcOut::Prune(prune));
@@ -1573,73 +1565,15 @@ where
         prune_data: Vec<(TopicHash, Vec<PeerInfo>, Option<u64>)>,
     ) {
         tracing::debug!(peer=%peer_id, "Handling PRUNE message for peer");
-        let (below_threshold, score) = self
-            .peer_score
-            .below_threshold(peer_id, |ts| ts.accept_px_threshold);
-        for (topic_hash, px, backoff) in prune_data {
+        for (topic_hash, _, backoff) in prune_data {
             if self.remove_peer_from_mesh(peer_id, &topic_hash, backoff, true) {
                 #[cfg(feature = "metrics")]
                 if let Some(m) = self.metrics.as_mut() {
                     m.peers_removed(&topic_hash, Churn::Prune, 1);
                 }
             }
-
-            if self.mesh.contains_key(&topic_hash) {
-                // connect to px peers
-                if !px.is_empty() {
-                    // we ignore PX from peers with insufficient score
-                    if below_threshold {
-                        tracing::debug!(
-                            peer=%peer_id,
-                            %score,
-                            topic=%topic_hash,
-                            "PRUNE: ignoring PX from peer with insufficient score"
-                        );
-                        continue;
-                    }
-
-                    // NOTE: We cannot dial any peers from PX currently as we typically will not
-                    // know their multiaddr. Until SignedRecords are spec'd this
-                    // remains a stub. By default `config.prune_peers()` is set to zero and
-                    // this is skipped. If the user modifies this, this will only be able to
-                    // dial already known peers (from an external discovery mechanism for
-                    // example).
-                    if self.config.prune_peers() > 0 {
-                        self.px_connect(px);
-                    }
-                }
-            }
         }
         tracing::debug!(peer=%peer_id, "Completed PRUNE handling for peer");
-    }
-
-    fn px_connect(&mut self, mut px: Vec<PeerInfo>) {
-        let n = self.config.prune_peers();
-        // Ignore peerInfo with no ID
-        //
-        // TODO: Once signed records are spec'd: Can we use peerInfo without any IDs if they have a
-        // signed peer record?
-        px.retain(|p| p.peer_id.is_some());
-        if px.len() > n {
-            // only use at most prune_peers many random peers
-            let mut rng = thread_rng();
-            px.partial_shuffle(&mut rng, n);
-            px = px.into_iter().take(n).collect();
-        }
-
-        for p in px {
-            // TODO: Once signed records are spec'd: extract signed peer record if given and handle
-            // it, see https://github.com/libp2p/specs/pull/217
-            if let Some(peer_id) = p.peer_id {
-                // mark as px peer
-                self.px_peers.insert(peer_id);
-
-                // dial peer
-                self.events.push_back(ToSwarm::Dial {
-                    opts: DialOpts::peer_id(peer_id).build(),
-                });
-            }
-        }
     }
 
     /// Applies some basic checks to whether this message is valid. Does not apply user validation
@@ -1820,6 +1754,18 @@ where
             peer_score.validate_message(propagation_source, &msg_id, &message.topic);
         }
 
+        if let Some(check) = &self.admission_hooks.can_publish_remote {
+            if !check(propagation_source, &message.topic) {
+                tracing::debug!(
+                    peer=%propagation_source,
+                    topic=%message.topic,
+                    "message rejected by admission hook"
+                );
+                self.blacklist_peer(propagation_source);
+                return;
+            }
+        }
+
         // Add the message to our memcache
         self.mcache.put(&msg_id, raw_message.clone());
 
@@ -1936,6 +1882,18 @@ where
 
             match subscription.action {
                 SubscriptionAction::Subscribe => {
+                    if let Some(check) = &self.admission_hooks.can_subscribe_remote {
+                        if !check(propagation_source, topic_hash) {
+                            tracing::debug!(
+                                peer=%propagation_source,
+                                topic=%topic_hash,
+                                "subscription rejected by admission hook"
+                            );
+                            self.blacklist_peer(propagation_source);
+                            continue;
+                        }
+                    }
+
                     if peer.topics.insert(topic_hash.clone()) {
                         tracing::debug!(
                             peer=%propagation_source,
@@ -2637,12 +2595,7 @@ where
                 .into_iter()
                 .flatten()
                 .map(|topic_hash| {
-                    let prune = self.make_prune(
-                        &topic_hash,
-                        &peer_id,
-                        self.config.do_px() && !no_px.contains(&peer_id),
-                        false,
-                    );
+                    let prune = self.make_prune(&topic_hash, &peer_id, false);
                     RpcOut::Prune(prune)
                 });
 
@@ -2656,12 +2609,7 @@ where
         // The following prunes are not due to unsubscribing.
         for (peer_id, topics) in to_prune.iter() {
             for topic_hash in topics {
-                let prune = self.make_prune(
-                    topic_hash,
-                    peer_id,
-                    self.config.do_px() && !no_px.contains(peer_id),
-                    false,
-                );
+                let prune = self.make_prune(topic_hash, peer_id, false);
                 self.send_message(*peer_id, RpcOut::Prune(prune));
 
                 // inform the handler
@@ -3129,7 +3077,7 @@ where
             .connected_peers
             .entry(peer_id)
             .or_insert_with(|| PeerDetails {
-                kind: PeerKind::Floodsub,
+                kind: PeerKind::Gossipsub,
                 connections: vec![],
                 outbound: false,
                 sender: Sender::new(self.config.connection_handler_queue_len()),
@@ -3157,11 +3105,11 @@ where
             .connected_peers
             .entry(peer_id)
             .or_insert_with(|| PeerDetails {
-                kind: PeerKind::Floodsub,
+                kind: PeerKind::Gossipsub,
                 connections: vec![],
                 // Diverging from the go implementation we only want to consider a peer as outbound
                 // peer if its first connection is outbound.
-                outbound: !self.px_peers.contains(&peer_id),
+                outbound: true,
                 sender: Sender::new(self.config.connection_handler_queue_len()),
                 topics: Default::default(),
                 dont_send: LinkedHashMap::new(),

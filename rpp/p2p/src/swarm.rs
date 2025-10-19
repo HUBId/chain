@@ -12,14 +12,14 @@ use thiserror::Error;
     feature = "ping",
     feature = "request-response"
 ))]
-use crate::vendor::gossipsub;
+use crate::vendor::gossipsub::MessageId;
 #[cfg(all(
     feature = "gossipsub",
     feature = "identify",
     feature = "ping",
     feature = "request-response"
 ))]
-use crate::vendor::gossipsub::MessageId;
+use crate::vendor::gossipsub::{self, AdmissionHooks, TopicMeshConfig};
 #[cfg(all(
     feature = "gossipsub",
     feature = "identify",
@@ -236,6 +236,31 @@ impl RppBehaviour {
                 MessageId::from(digest.to_hex().to_string())
             });
 
+        for topic in GossipTopic::all() {
+            let ident = topic.ident();
+            let mesh_config = match topic {
+                GossipTopic::Blocks | GossipTopic::Votes => TopicMeshConfig {
+                    mesh_n: 10,
+                    mesh_n_low: 8,
+                    mesh_n_high: 16,
+                    mesh_outbound_min: 4,
+                },
+                GossipTopic::Proofs => TopicMeshConfig {
+                    mesh_n: 8,
+                    mesh_n_low: 6,
+                    mesh_n_high: 12,
+                    mesh_outbound_min: 3,
+                },
+                GossipTopic::Snapshots | GossipTopic::Meta => TopicMeshConfig {
+                    mesh_n: 6,
+                    mesh_n_low: 4,
+                    mesh_n_high: 10,
+                    mesh_outbound_min: 2,
+                },
+            };
+            config_builder.set_topic_config(ident.hash(), mesh_config);
+        }
+
         let config = config_builder
             .build()
             .map_err(|err| NetworkError::Gossipsub(format!("config error: {err:?}")))?;
@@ -446,7 +471,7 @@ pub struct Network {
     swarm: Swarm<RppBehaviour>,
     events_handle: Arc<ExternalEventHandle<RppBehaviourEvent>>,
     peerstore: Arc<Peerstore>,
-    admission: AdmissionControl,
+    admission: Arc<AdmissionControl>,
     handshake: Arc<RwLock<HandshakePayload>>,
     identity: Arc<NodeIdentity>,
     gossip_state: Option<Arc<GossipStateStore>>,
@@ -616,7 +641,10 @@ impl Network {
         let events_handle = Arc::new(raw_events_handle);
         *event_handle_slot.lock() = Some(events_handle.clone());
 
-        let admission = AdmissionControl::new(peerstore.clone(), identity.metadata().clone());
+        let admission = Arc::new(AdmissionControl::new(
+            peerstore.clone(),
+            identity.metadata().clone(),
+        ));
         let mut network = Self {
             swarm,
             events_handle,
@@ -628,6 +656,118 @@ impl Network {
             replay: ReplayProtector::with_capacity(1024),
             rate_limiter,
         };
+        let push_event: Arc<dyn Fn(NetworkEvent) + Send + Sync> = {
+            let handle = network.events_handle.clone();
+            Arc::new(move |event: NetworkEvent| {
+                if let Err(err) = handle.push(RppBehaviourEvent::Network(event)) {
+                    tracing::warn!(
+                        target: "telemetry.admission",
+                        error = %err,
+                        "admission_hook_event_push_failed"
+                    );
+                }
+            })
+        };
+        let emit_outcome: Arc<dyn Fn(ReputationOutcome) + Send + Sync> = {
+            let push_event = Arc::clone(&push_event);
+            Arc::new(move |outcome: ReputationOutcome| {
+                let snapshot = outcome.snapshot.clone();
+                (*push_event)(NetworkEvent::ReputationUpdated {
+                    peer: snapshot.peer_id,
+                    tier: snapshot.tier,
+                    score: snapshot.reputation,
+                    label: outcome.label,
+                });
+                if let Some(until) = snapshot.banned_until {
+                    (*push_event)(NetworkEvent::PeerBanned {
+                        peer: snapshot.peer_id,
+                        until,
+                    });
+                }
+            })
+        };
+        let remote_publish_hook: Arc<dyn Fn(&PeerId, &gossipsub::TopicHash) -> bool + Send + Sync> = {
+            let admission = Arc::clone(&network.admission);
+            let push_event = Arc::clone(&push_event);
+            let emit_outcome = Arc::clone(&emit_outcome);
+            Arc::new(move |peer, topic_hash| {
+                let Some(topic) = GossipTopic::from_hash(topic_hash) else {
+                    return true;
+                };
+                match admission.can_remote_publish(peer, topic) {
+                    Ok(_) => true,
+                    Err(reason) => {
+                        let peer_id = peer.clone();
+                        (*push_event)(NetworkEvent::AdmissionRejected {
+                            peer: peer_id.clone(),
+                            topic,
+                            reason: reason.clone(),
+                        });
+                        match admission.record_event(
+                            peer_id,
+                            ReputationEvent::ManualPenalty {
+                                amount: 0.8,
+                                reason: "unauthorised_publish",
+                            },
+                        ) {
+                            Ok(outcome) => (*emit_outcome)(outcome),
+                            Err(err) => tracing::warn!(
+                                target: "telemetry.admission",
+                                error = %err,
+                                "publish_penalty_failed"
+                            ),
+                        }
+                        false
+                    }
+                }
+            })
+        };
+        let remote_subscribe_hook: Arc<
+            dyn Fn(&PeerId, &gossipsub::TopicHash) -> bool + Send + Sync,
+        > = {
+            let admission = Arc::clone(&network.admission);
+            let push_event = Arc::clone(&push_event);
+            let emit_outcome = Arc::clone(&emit_outcome);
+            Arc::new(move |peer, topic_hash| {
+                let Some(topic) = GossipTopic::from_hash(topic_hash) else {
+                    return true;
+                };
+                match admission.can_remote_subscribe(peer, topic) {
+                    Ok(_) => true,
+                    Err(reason) => {
+                        let peer_id = peer.clone();
+                        (*push_event)(NetworkEvent::AdmissionRejected {
+                            peer: peer_id.clone(),
+                            topic,
+                            reason: reason.clone(),
+                        });
+                        match admission.record_event(
+                            peer_id,
+                            ReputationEvent::ManualPenalty {
+                                amount: 0.5,
+                                reason: "unauthorised_subscribe",
+                            },
+                        ) {
+                            Ok(outcome) => (*emit_outcome)(outcome),
+                            Err(err) => tracing::warn!(
+                                target: "telemetry.admission",
+                                error = %err,
+                                "subscribe_penalty_failed"
+                            ),
+                        }
+                        false
+                    }
+                }
+            })
+        };
+        let mut hooks = AdmissionHooks::default();
+        hooks.can_publish_remote = Some(remote_publish_hook);
+        hooks.can_subscribe_remote = Some(remote_subscribe_hook);
+        network
+            .swarm
+            .behaviour_mut()
+            .gossipsub
+            .set_admission_hooks(hooks);
         let ping_callback: Arc<dyn PingEventCallback> = Arc::new(PingReporter::new(
             network.peerstore.clone(),
             network.events_handle.clone(),
@@ -917,6 +1057,27 @@ impl Network {
                                 ReputationEvent::GossipSuccess { topic },
                             )?;
                             self.enqueue_outcome(outcome)?;
+                            if let Some(score) = self
+                                .swarm
+                                .behaviour()
+                                .gossipsub
+                                .peer_score(&propagation_source)
+                            {
+                                let mesh_peers = self
+                                    .swarm
+                                    .behaviour()
+                                    .gossipsub
+                                    .mesh_peers(&message.topic)
+                                    .count();
+                                tracing::debug!(
+                                    target: "telemetry.gossip",
+                                    peer = ?propagation_source,
+                                    topic = %topic,
+                                    score,
+                                    mesh_peers,
+                                    "gossip_message_accepted"
+                                );
+                            }
                             if let Some(state) = &self.gossip_state {
                                 if let Err(err) =
                                     state.record_message(topic, propagation_source, digest)
@@ -958,6 +1119,17 @@ impl Network {
                         if let Err(err) = state.record_subscription(gossip_topic) {
                             tracing::warn!(?gossip_topic, ?err, "failed to record subscription");
                         }
+                    }
+                    if let Some(score) = self.swarm.behaviour().gossipsub.peer_score(&peer_id) {
+                        let mesh_size = self.swarm.behaviour().gossipsub.mesh_peers(&topic).count();
+                        tracing::debug!(
+                            target: "telemetry.gossip",
+                            peer = ?peer_id,
+                            topic = %gossip_topic,
+                            score,
+                            mesh_size,
+                            "peer_subscribed"
+                        );
                     }
                     if let Err(err) = self.admission.can_remote_subscribe(&peer_id, gossip_topic) {
                         self.enqueue_rejection(peer_id, gossip_topic, err.clone())?;
