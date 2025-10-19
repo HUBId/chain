@@ -32,7 +32,7 @@ use crate::vendor::identity::Keypair;
     feature = "ping",
     feature = "request-response"
 ))]
-use crate::vendor::request_response::{self, ProtocolSupport};
+use crate::vendor::protocols::request_response::{self, ProtocolSupport};
 #[cfg(all(
     feature = "gossipsub",
     feature = "identify",

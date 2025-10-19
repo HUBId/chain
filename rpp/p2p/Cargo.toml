@@ -53,7 +53,7 @@ libp2p-core = { path = "../../vendor/libp2p/core" }
 libp2p-identify = { path = "../../vendor/libp2p/protocols/identify", optional = true }
 libp2p-ping = { path = "../../vendor/libp2p/protocols/ping", optional = true }
 libp2p-gossipsub = { path = "../../vendor/libp2p/protocols/gossipsub", optional = true }
-libp2p-request-response = { path = "../../vendor/libp2p/protocols/request-response", optional = true }
+libp2p-request-response = { path = "vendor/protocols/request_response", optional = true }
 libp2p-noise = { path = "vendor/security/noise", optional = true }
 libp2p-tcp = { path = "../../vendor/libp2p/transports/tcp", optional = true }
 libp2p-plaintext = { path = "../../vendor/libp2p/transports/plaintext", optional = true }

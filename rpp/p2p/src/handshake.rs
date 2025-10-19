@@ -2,19 +2,19 @@ use std::collections::BTreeMap;
 use std::io;
 
 use async_trait::async_trait;
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::io::{AsyncRead, AsyncWrite};
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{IdentityKeypairExt, IdentityPublicKeyExt};
 use crate::tier::TierLevel;
 use crate::vendor::identity;
 #[cfg(feature = "request-response")]
-use crate::vendor::request_response;
+pub use crate::vendor::protocols::request_response::MAX_HANDSHAKE_BYTES;
+#[cfg(feature = "request-response")]
+use crate::vendor::protocols::request_response::{self, read_handshake_payload, write_payload};
 
 pub const HANDSHAKE_PROTOCOL: &str = "/rpp/handshake/1.0.0";
 pub const VRF_HANDSHAKE_CONTEXT: &[u8] = b"rpp.handshake.vrf";
-pub const MAX_HANDSHAKE_BYTES: usize = 8 * 1024;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandshakePayload {
     pub zsi_id: String,
@@ -197,22 +197,7 @@ impl request_response::Codec for HandshakeCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut buf = Vec::new();
-        let mut limited = io.take(MAX_HANDSHAKE_BYTES as u64);
-        limited.read_to_end(&mut buf).await?;
-        let limit_reached = limited.limit() == 0;
-        drop(limited);
-
-        if limit_reached {
-            let mut extra = [0u8; 1];
-            if io.read(&mut extra).await? != 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "handshake message too large",
-                ));
-            }
-        }
-
+        let buf = read_handshake_payload(io).await?;
         serde_json::from_slice(&buf).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
@@ -224,22 +209,7 @@ impl request_response::Codec for HandshakeCodec {
     where
         T: AsyncRead + Unpin + Send,
     {
-        let mut buf = Vec::new();
-        let mut limited = io.take(MAX_HANDSHAKE_BYTES as u64);
-        limited.read_to_end(&mut buf).await?;
-        let limit_reached = limited.limit() == 0;
-        drop(limited);
-
-        if limit_reached {
-            let mut extra = [0u8; 1];
-            if io.read(&mut extra).await? != 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "handshake message too large",
-                ));
-            }
-        }
-
+        let buf = read_handshake_payload(io).await?;
         serde_json::from_slice(&buf).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
     }
 
@@ -254,8 +224,7 @@ impl request_response::Codec for HandshakeCodec {
     {
         let payload = serde_json::to_vec(&request)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        io.write_all(&payload).await?;
-        io.close().await
+        write_payload(io, &payload).await
     }
 
     async fn write_response<T>(
@@ -269,8 +238,7 @@ impl request_response::Codec for HandshakeCodec {
     {
         let payload = serde_json::to_vec(&response)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))?;
-        io.write_all(&payload).await?;
-        io.close().await
+        write_payload(io, &payload).await
     }
 }
 
@@ -278,10 +246,13 @@ impl request_response::Codec for HandshakeCodec {
 mod tests {
     use super::*;
     use crate::vendor::identity;
-    use crate::vendor::request_response::Codec;
+    use crate::vendor::protocols::request_response::Codec;
     use futures::executor::block_on;
     use futures::io::Cursor;
     use proptest::prelude::*;
+    use rand::rngs::OsRng;
+    use schnorrkel::{keys::ExpansionMode, signing_context, MiniSecretKey, Signature};
+    use tempfile::tempdir;
 
     proptest! {
         #[test]
@@ -363,5 +334,43 @@ mod tests {
             block_on(response_codec.read_response(&protocol, &mut response_reader))
                 .expect("normal response should succeed");
         assert_eq!(decoded_response, payload);
+    }
+
+    #[test]
+    fn vrf_handshakes_produce_verifiable_proofs() {
+        use crate::identity::NodeIdentity;
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("node.key");
+        let mut identity = NodeIdentity::load_or_generate(&path).expect("identity");
+        let mut rng = OsRng;
+        let vrf_secret = MiniSecretKey::generate_with(&mut rng);
+        let derived = vrf_secret.expand_to_keypair(ExpansionMode::Uniform);
+        let expected_public = derived.public.to_bytes().to_vec();
+
+        identity.set_vrf_secret(Some(&vrf_secret));
+        let keypair = identity.clone_keypair();
+
+        let handshake = HandshakePayload::new("node", None, None, TierLevel::Tl2)
+            .signed(&keypair)
+            .expect("signed payload");
+
+        assert_eq!(handshake.vrf_public_key, Some(expected_public));
+
+        let proof_bytes: [u8; 64] = handshake
+            .vrf_proof
+            .clone()
+            .expect("proof present")
+            .try_into()
+            .expect("signature length");
+        let proof = Signature::from_bytes(&proof_bytes).expect("signature bytes");
+
+        let context = signing_context(VRF_HANDSHAKE_CONTEXT);
+        derived
+            .public
+            .verify_simple(context, &handshake.vrf_message(), &proof)
+            .expect("valid VRF proof");
+
+        assert!(handshake.verify_signature_with(&keypair.public()));
     }
 }
