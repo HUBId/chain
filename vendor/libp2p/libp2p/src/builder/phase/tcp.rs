@@ -4,7 +4,7 @@ use std::marker::PhantomData;
     not(target_arch = "wasm32"),
     any(feature = "tcp", feature = "websocket")
 ))]
-use libp2p_core::muxing::{StreamMuxer, StreamMuxerBox};
+use libp2p_core::muxing::{AssignPeerId, StreamMuxer, StreamMuxerBox};
 #[cfg(all(feature = "websocket", not(target_arch = "wasm32")))]
 use libp2p_core::Transport;
 #[cfg(all(
@@ -68,7 +68,7 @@ macro_rules! impl_tcp_builder {
                 <<<SecUpgrade as IntoSecurityUpgrade<libp2p_tcp::$path::TcpStream>>::Upgrade as UpgradeInfo>::InfoIter as IntoIterator>::IntoIter: Send,
                 <<SecUpgrade as IntoSecurityUpgrade<libp2p_tcp::$path::TcpStream>>::Upgrade as UpgradeInfo>::Info: Send,
 
-                MuxStream: StreamMuxer + Send + 'static,
+                MuxStream: StreamMuxer + AssignPeerId + Send + 'static,
                 MuxStream::Substream: Send + 'static,
                 MuxStream::Error: Send + Sync + 'static,
                 MuxUpgrade: IntoMultiplexerUpgrade<SecStream>,
@@ -87,7 +87,10 @@ macro_rules! impl_tcp_builder {
                                 security_upgrade.into_security_upgrade(&self.keypair)?,
                             )
                             .multiplex(multiplexer_upgrade.into_multiplexer_upgrade())
-                            .map(|(p, c), _| (p, StreamMuxerBox::new(c))),
+                            .map(|(p, mut c), _| {
+                                c.assign_peer_id(&p);
+                                (p, StreamMuxerBox::new(c))
+                            }),
                     },
                     keypair: self.keypair,
                     phantom: PhantomData,

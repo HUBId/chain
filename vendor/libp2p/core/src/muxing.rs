@@ -56,6 +56,7 @@ use futures::{
     task::{Context, Poll},
     AsyncRead, AsyncWrite,
 };
+use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 
 pub use self::boxed::{StreamMuxerBox, SubstreamBox};
@@ -168,6 +169,15 @@ pub trait StreamMuxerExt: StreamMuxer + Sized {
     fn close(self) -> Close<Self> {
         Close(self)
     }
+}
+
+/// Allows assigning the remote [`PeerId`] associated with a [`StreamMuxer`].
+///
+/// Implementations that do not require knowledge of the remote peer may
+/// provide an empty implementation.
+pub trait AssignPeerId {
+    /// Record the remote peer identity for this muxer instance.
+    fn assign_peer_id(&mut self, peer: &PeerId);
 }
 
 impl<S> StreamMuxerExt for S where S: StreamMuxer {}

@@ -9,11 +9,13 @@ use futures::StreamExt;
 use rpp_p2p::handshake::{HandshakeCodec, HandshakePayload, HANDSHAKE_PROTOCOL};
 use rpp_p2p::tier::TierLevel;
 use rpp_p2p::vendor::identity::Keypair;
+use rpp_p2p::vendor::multiaddr::multiaddr;
 use rpp_p2p::vendor::request_response::{self, ProtocolSupport};
 use rpp_p2p::vendor::swarm::{NetworkBehaviour, SwarmEvent};
-use rpp_p2p::vendor::{noise, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};
 use rpp_p2p::vendor::PeerId;
-use rpp_p2p::vendor::multiaddr::multiaddr;
+use rpp_p2p::vendor::{noise, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 
 #[derive(NetworkBehaviour)]
@@ -38,6 +40,10 @@ struct TestSwarm {
 
 impl TestSwarm {
     fn new(name: &str) -> Self {
+        Self::with_throttle(name, yamux::allow_all())
+    }
+
+    fn with_throttle(name: &str, permit: yamux::InboundStreamPermit) -> Self {
         let keypair = Keypair::generate_ed25519();
         let handshake = HandshakePayload::new(name, None, None, TierLevel::Tl1)
             .signed(&keypair)
@@ -47,7 +53,7 @@ impl TestSwarm {
             .with_tcp(
                 tcp::Config::default().nodelay(true),
                 noise::Config::new,
-                yamux::Config::default,
+                yamux::Config::for_swarm(permit.clone()),
             )
             .expect("tcp transport")
             .with_behaviour(|_| Ok(HandshakeBehaviour::new()))
@@ -61,7 +67,7 @@ impl TestSwarm {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")] 
+#[tokio::test(flavor = "multi_thread")]
 async fn vendor_transport_handshake_completes() {
     let mut listener = TestSwarm::new("listener");
     let mut dialer = TestSwarm::new("dialer");
@@ -84,13 +90,21 @@ async fn vendor_transport_handshake_completes() {
                     if let SwarmEvent::NewListenAddr { address, .. } = &event {
                         dial_addr.get_or_insert_with(|| address.clone());
                     }
-                    if let Some(payload) = handle_event(&mut listener.swarm, event, &listener.handshake) {
-                        listener_handshake.get_or_insert(payload);
+                    match handle_event(&mut listener.swarm, event, &listener.handshake) {
+                        Ok(Some(payload)) => {
+                            listener_handshake.get_or_insert(payload);
+                        }
+                        Ok(None) => {}
+                        Err(err) => panic!("listener handshake failed: {err:?}"),
                     }
                 }
                 event = dialer.swarm.select_next_some() => {
-                    if let Some(payload) = handle_event(&mut dialer.swarm, event, &dialer.handshake) {
-                        dialer_handshake.get_or_insert(payload);
+                    match handle_event(&mut dialer.swarm, event, &dialer.handshake) {
+                        Ok(Some(payload)) => {
+                            dialer_handshake.get_or_insert(payload);
+                        }
+                        Ok(None) => {}
+                        Err(err) => panic!("dialer handshake failed: {err:?}"),
                     }
                 }
             }
@@ -122,39 +136,145 @@ async fn vendor_transport_handshake_completes() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn vendor_transport_throttles_inbound_streams() {
+    let permit_counter = Arc::new(AtomicUsize::new(0));
+    let listener_permit = {
+        let counter = permit_counter.clone();
+        yamux::allow(move |_peer: &PeerId| counter.fetch_add(1, Ordering::SeqCst) == 0)
+    };
+
+    let mut listener = TestSwarm::with_throttle("listener", listener_permit);
+    let mut dialer = TestSwarm::new("dialer");
+
+    let listen_addr: Multiaddr = multiaddr!("/ip4/127.0.0.1/tcp/0");
+    listener
+        .swarm
+        .listen_on(listen_addr)
+        .expect("listen address");
+
+    let mut dial_addr = None;
+    let mut dial_attempted = false;
+    let mut listener_handshake = None;
+    let mut dialer_handshake = None;
+    let mut extra_request_sent = false;
+    let mut throttle_failure = None;
+
+    timeout(Duration::from_secs(10), async {
+        loop {
+            tokio::select! {
+                event = listener.swarm.select_next_some() => {
+                    if let SwarmEvent::NewListenAddr { address, .. } = &event {
+                        dial_addr.get_or_insert_with(|| address.clone());
+                    }
+                    match handle_event(&mut listener.swarm, event, &listener.handshake) {
+                        Ok(Some(payload)) => {
+                            listener_handshake.get_or_insert(payload);
+                        }
+                        Ok(None) => {}
+                        Err(err) => panic!("listener handshake failed: {err:?}"),
+                    }
+                }
+                event = dialer.swarm.select_next_some() => {
+                    match handle_event(&mut dialer.swarm, event, &dialer.handshake) {
+                        Ok(Some(payload)) => {
+                            dialer_handshake.get_or_insert(payload);
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            throttle_failure.get_or_insert(err);
+                        }
+                    }
+                }
+            }
+
+            if let Some(addr) = dial_addr.as_ref() {
+                if !dial_attempted {
+                    dialer.swarm.dial(addr.clone()).expect("dial peer");
+                    dial_attempted = true;
+                }
+            }
+
+            if listener_handshake.is_some() && dialer_handshake.is_some() && !extra_request_sent {
+                dialer
+                    .swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_request(&listener.local_peer_id(), dialer.handshake.clone());
+                extra_request_sent = true;
+            }
+
+            if throttle_failure.is_some() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("throttle within timeout");
+
+    let failure = throttle_failure.expect("expected outbound failure after throttling");
+    match failure {
+        HandshakeFailure::Outbound { .. } => {}
+        other => panic!("unexpected failure variant: {other:?}"),
+    }
+
+    assert!(
+        extra_request_sent,
+        "dialer should attempt additional request"
+    );
+    assert!(
+        permit_counter.load(Ordering::SeqCst) >= 1,
+        "permit counter should increment"
+    );
+}
+
+#[derive(Debug)]
+enum HandshakeFailure {
+    Outbound {
+        peer: PeerId,
+        error: request_response::OutboundFailure,
+    },
+    Inbound {
+        peer: PeerId,
+        error: request_response::InboundFailure,
+    },
+}
+
 fn handle_event(
     swarm: &mut Swarm<HandshakeBehaviour>,
     event: SwarmEvent<HandshakeBehaviourEvent>,
     handshake: &HandshakePayload,
-) -> Option<HandshakePayload> {
+) -> Result<Option<HandshakePayload>, HandshakeFailure> {
     match event {
         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             swarm
                 .behaviour_mut()
                 .request_response
                 .send_request(&peer_id, handshake.clone());
-            None
+            Ok(None)
         }
-        SwarmEvent::Behaviour(HandshakeBehaviourEvent::RequestResponse(event)) => {
-            match event {
-                request_response::Event::Message { peer, message, .. } => match message {
-                    request_response::Message::Request { request, channel, .. } => {
-                        swarm
-                            .behaviour_mut()
-                            .request_response
-                            .send_response(channel, handshake.clone())
-                            .expect("send response");
-                        Some(request)
-                    }
-                    request_response::Message::Response { response, .. } => Some(response),
-                },
-                request_response::Event::ResponseSent { .. } => None,
-                request_response::Event::OutboundFailure { peer, error, .. }
-                | request_response::Event::InboundFailure { peer, error, .. } => {
-                    panic!("handshake with {peer:?} failed: {error:?}");
+        SwarmEvent::Behaviour(HandshakeBehaviourEvent::RequestResponse(event)) => match event {
+            request_response::Event::Message { peer, message, .. } => match message {
+                request_response::Message::Request {
+                    request, channel, ..
+                } => {
+                    swarm
+                        .behaviour_mut()
+                        .request_response
+                        .send_response(channel, handshake.clone())
+                        .expect("send response");
+                    Ok(Some(request))
                 }
+                request_response::Message::Response { response, .. } => Ok(Some(response)),
+            },
+            request_response::Event::ResponseSent { .. } => Ok(None),
+            request_response::Event::OutboundFailure { peer, error, .. } => {
+                Err(HandshakeFailure::Outbound { peer, error })
             }
-        }
+            request_response::Event::InboundFailure { peer, error, .. } => {
+                Err(HandshakeFailure::Inbound { peer, error })
+            }
+        },
         SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
             panic!("outgoing connection to {peer_id:?} failed: {error:?}");
         }
@@ -172,6 +292,6 @@ fn handle_event(
         | SwarmEvent::ExternalAddrExpired { .. }
         | SwarmEvent::NewExternalAddrCandidate { .. }
         | SwarmEvent::ConnectionAttemptCancelled { .. }
-        | SwarmEvent::NewListenAddrCandidate { .. } => None,
+        | SwarmEvent::NewListenAddrCandidate { .. } => Ok(None),
     }
 }

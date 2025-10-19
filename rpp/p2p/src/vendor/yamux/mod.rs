@@ -1,5 +1,14 @@
-use futures::prelude::*;
+use futures::{
+    future::BoxFuture,
+    prelude::*,
+    task::{Context, Poll},
+};
+use libp2p_core::muxing::{AssignPeerId, StreamMuxer, StreamMuxerEvent};
 use libp2p_core::upgrade::{InboundConnectionUpgrade, OutboundConnectionUpgrade, UpgradeInfo};
+use libp2p_identity::PeerId;
+use std::io;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 pub use libp2p_yamux::{Error, Muxer, Stream};
@@ -10,6 +19,19 @@ const MAX_STREAM_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 const MAX_FRAME_PAYLOAD: usize = 256 * 1024;
 const SPLIT_SEND_SIZE: usize = 16 * 1024;
 const KEEPALIVE_INTERVAL_SECS: u64 = 5;
+
+pub type InboundStreamPermit = Arc<dyn Fn(&PeerId) -> bool + Send + Sync>;
+
+pub fn allow<F>(hook: F) -> InboundStreamPermit
+where
+    F: Fn(&PeerId) -> bool + Send + Sync + 'static,
+{
+    Arc::new(hook)
+}
+
+pub fn allow_all() -> InboundStreamPermit {
+    allow(|_| true)
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -103,6 +125,17 @@ impl Config {
     pub fn keepalive_interval(&self) -> Duration {
         self.inner.keepalive_interval()
     }
+
+    pub fn for_swarm(permit: InboundStreamPermit) -> impl FnOnce() -> RateLimitedUpgrade {
+        move || Self::default().into_swarm(permit.clone())
+    }
+
+    pub fn into_swarm(self, permit: InboundStreamPermit) -> RateLimitedUpgrade {
+        RateLimitedUpgrade {
+            config: self,
+            permit,
+        }
+    }
 }
 
 impl Default for Config {
@@ -157,5 +190,135 @@ where
 
     fn upgrade_outbound(self, io: C, info: Self::Info) -> Self::Future {
         self.inner.upgrade_outbound(io, info)
+    }
+}
+
+#[derive(Clone)]
+pub struct RateLimitedUpgrade {
+    config: Config,
+    permit: InboundStreamPermit,
+}
+
+impl UpgradeInfo for RateLimitedUpgrade {
+    type Info = <Config as UpgradeInfo>::Info;
+    type InfoIter = <Config as UpgradeInfo>::InfoIter;
+
+    fn protocol_info(&self) -> Self::InfoIter {
+        self.config.protocol_info()
+    }
+}
+
+impl<C> InboundConnectionUpgrade<C> for RateLimitedUpgrade
+where
+    C: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    type Output = RateLimitedMuxer<<Config as InboundConnectionUpgrade<C>>::Output>;
+    type Error = <Config as InboundConnectionUpgrade<C>>::Error;
+    type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
+
+    fn upgrade_inbound(self, io: C, info: Self::Info) -> Self::Future {
+        let permit = self.permit.clone();
+        let config = self.config;
+        Box::pin(async move {
+            let muxer = config.into_inner().upgrade_inbound(io, info).await?;
+            Ok(RateLimitedMuxer::new(muxer, permit))
+        })
+    }
+}
+
+impl<C> OutboundConnectionUpgrade<C> for RateLimitedUpgrade
+where
+    C: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    type Output = RateLimitedMuxer<<Config as OutboundConnectionUpgrade<C>>::Output>;
+    type Error = <Config as OutboundConnectionUpgrade<C>>::Error;
+    type Future = BoxFuture<'static, Result<Self::Output, Self::Error>>;
+
+    fn upgrade_outbound(self, io: C, info: Self::Info) -> Self::Future {
+        let permit = self.permit.clone();
+        let config = self.config;
+        Box::pin(async move {
+            let muxer = config.into_inner().upgrade_outbound(io, info).await?;
+            Ok(RateLimitedMuxer::new(muxer, permit))
+        })
+    }
+}
+
+pub struct RateLimitedMuxer<M> {
+    inner: M,
+    permit: InboundStreamPermit,
+    peer_id: OnceLock<PeerId>,
+}
+
+impl<M> RateLimitedMuxer<M> {
+    fn new(inner: M, permit: InboundStreamPermit) -> Self {
+        Self {
+            inner,
+            permit,
+            peer_id: OnceLock::new(),
+        }
+    }
+
+    fn permit_allows(&self) -> bool {
+        match self.peer_id.get() {
+            Some(peer) => (self.permit)(peer),
+            None => true,
+        }
+    }
+}
+
+impl<M> AssignPeerId for RateLimitedMuxer<M> {
+    fn assign_peer_id(&mut self, peer: &PeerId) {
+        let _ = self.peer_id.set(peer.clone());
+    }
+}
+
+impl<M> StreamMuxer for RateLimitedMuxer<M>
+where
+    M: StreamMuxer,
+{
+    type Substream = M::Substream;
+    type Error = M::Error;
+
+    fn poll_inbound(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Self::Substream, Self::Error>> {
+        loop {
+            let poll =
+                unsafe { self.as_mut().map_unchecked_mut(|s| &mut s.inner) }.poll_inbound(cx);
+            match poll {
+                Poll::Ready(Ok(stream)) => {
+                    if self.as_ref().get_ref().permit_allows() {
+                        return Poll::Ready(Ok(stream));
+                    }
+                    if let Some(peer) = self.as_ref().get_ref().peer_id.get() {
+                        tracing::warn!(target = "transport.yamux", remote = %peer, "inbound stream throttled");
+                    }
+                    drop(stream);
+                    continue;
+                }
+                Poll::Ready(Err(err)) => return Poll::Ready(Err(err)),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+
+    fn poll_outbound(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<Self::Substream, Self::Error>> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.inner) }.poll_outbound(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.inner) }.poll_close(cx)
+    }
+
+    fn poll(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<StreamMuxerEvent, Self::Error>> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.inner) }.poll(cx)
     }
 }

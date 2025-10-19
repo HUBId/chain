@@ -19,9 +19,9 @@ use rpp_p2p::vendor::ping;
 use rpp_p2p::vendor::plaintext;
 use rpp_p2p::vendor::swarm::dial_opts::DialOpts;
 use rpp_p2p::vendor::swarm::{ExternalEventHandle, Swarm, SwarmEvent};
-use rpp_p2p::NetworkBehaviour;
 use rpp_p2p::vendor::Multiaddr;
 use rpp_p2p::vendor::PeerId;
+use rpp_p2p::NetworkBehaviour;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -143,7 +143,9 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
     let transport = MemoryTransport::new()
         .upgrade(Version::V1)
         .authenticate(plaintext::Config::new(&keypair))
-        .multiplex(rpp_p2p::vendor::yamux::Config::default())
+        .multiplex(rpp_p2p::vendor::yamux::Config::for_swarm(
+            rpp_p2p::vendor::yamux::allow_all(),
+        ))
         .boxed();
 
     let gossipsub_config = ConfigBuilder::default()
