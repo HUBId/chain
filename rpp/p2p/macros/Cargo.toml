@@ -1,0 +1,11 @@
+[package]
+name = "rpp-p2p-macros"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+rpp-libp2p-swarm-derive = { path = "../vendor/macros/swarm-derive" }

@@ -31,3 +31,4 @@ pub use simulator::{NetworkSimulation, SimulationReport};
 pub use swarm::{Network, NetworkError, NetworkEvent};
 pub use tier::TierLevel;
 pub use topics::GossipTopic;
+pub use rpp_p2p_macros::NetworkBehaviour;

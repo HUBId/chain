@@ -42,7 +42,9 @@ futures = { workspace = true }
 libp2p-identify = { path = "../protocols/identify" }                # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
 libp2p-identity = { workspace = true, features = ["ed25519"] }
 libp2p-ping = { path = "../protocols/ping" }                        # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
-libp2p-swarm-derive = { path = "../swarm-derive" }                  # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
+# Using the workspace definition avoids mismatched paths when compiling vendored crates
+# outside of the upstream release tooling.
+libp2p-swarm-derive = { workspace = true }
 libp2p-yamux = { path = "../muxers/yamux" }                         # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
 quickcheck = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }

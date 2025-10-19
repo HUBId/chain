@@ -7,7 +7,8 @@ use crate::vendor::gossipsub::{self, MessageId};
 use crate::vendor::identity::Keypair;
 use crate::vendor::request_response::{self, ProtocolSupport};
 use crate::vendor::swarm::builder::SwarmBuilder;
-use crate::vendor::swarm::{ExternalEventHandle, NetworkBehaviour, SwarmEvent};
+use crate::vendor::swarm::{ExternalEventHandle, SwarmEvent};
+use crate::NetworkBehaviour;
 use crate::vendor::{identify, ping, Multiaddr, PeerId, Swarm};
 #[cfg(all(feature = "tcp", feature = "noise", feature = "yamux"))]
 use crate::vendor::{noise, tcp, yamux};
