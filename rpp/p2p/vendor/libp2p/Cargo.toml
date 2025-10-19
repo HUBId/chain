@@ -26,6 +26,7 @@ full = [
     "macros",
     "mdns",
     "memory-connection-limits",
+    "memory-transport",
     "metrics",
     "noise",
     "ping",
@@ -65,6 +66,7 @@ kad = ["dep:libp2p-kad", "libp2p-metrics?/kad"]
 macros = ["libp2p-swarm/macros"]
 mdns = ["dep:libp2p-mdns"]
 memory-connection-limits = ["dep:libp2p-memory-connection-limits"]
+memory-transport = ["libp2p-core/memory-transport"]
 metrics = ["dep:libp2p-metrics"]
 noise = ["dep:libp2p-noise"]
 ping = ["dep:libp2p-ping", "libp2p-metrics?/ping"]

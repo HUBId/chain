@@ -38,6 +38,7 @@ libp2p-identity = { workspace = true, features = ["ed25519", "rand"] }
 
 [features]
 serde = ["multihash/serde-codec", "libp2p-identity/serde"]
+memory-transport = []
 
 # Passing arguments to the docsrs builder in order to properly document cfg's.
 # More information: https://docs.rs/about/builds#cross-compiling
