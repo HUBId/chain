@@ -15,8 +15,8 @@ either = "1"
 futures = { workspace = true }
 libp2p-core = { workspace = true }
 thiserror = { workspace = true }
-yamux012 = { version = "0.12.1", package = "yamux" }
-yamux013 = { version = "0.13.3", package = "yamux" }
+yamux012 = { version = "0.12.1", package = "yamux", path = "../../yamux/0.12.1" }
+yamux013 = { version = "0.13.7", package = "yamux", path = "../../yamux/0.13.7" }
 tracing = { workspace = true }
 
 [dev-dependencies]
