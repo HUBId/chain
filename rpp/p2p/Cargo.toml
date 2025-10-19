@@ -23,7 +23,7 @@ noise = ["dep:libp2p-noise", "libp2p/noise"]
 tcp = ["dep:libp2p-tcp", "libp2p/tcp"]
 yamux = ["dep:libp2p-yamux", "libp2p/yamux"]
 quic = ["dep:libp2p-quic", "libp2p/quic"]
-memory-transport = ["libp2p/memory-transport"]
+memory-transport = []
 
 [dependencies]
 base64 = "=0.21.7"
@@ -31,6 +31,7 @@ async-trait = "0.1"
 futures = "0.3"
 hex = "=0.4.3"
 libp2p = { path = "../../vendor/libp2p/libp2p", features = ["macros", "tokio"] }
+libp2p_core = { package = "libp2p-core", path = "../../vendor/libp2p/core" }
 libp2p-identify = { path = "../../vendor/libp2p/protocols/identify", optional = true }
 libp2p-ping = { path = "../../vendor/libp2p/protocols/ping", optional = true }
 libp2p-gossipsub = { path = "../../vendor/libp2p/protocols/gossipsub", optional = true }
@@ -39,6 +40,8 @@ libp2p-noise = { path = "../../vendor/libp2p/transports/noise", optional = true 
 libp2p-tcp = { path = "../../vendor/libp2p/transports/tcp", optional = true }
 libp2p-yamux = { path = "../../vendor/libp2p/muxers/yamux", optional = true }
 libp2p-quic = { path = "../../vendor/libp2p/transports/quic", optional = true }
+libp2p_swarm = { package = "libp2p-swarm", path = "../../vendor/libp2p/swarm" }
+libp2p_identity = { package = "libp2p-identity", path = "../../vendor/libp2p/identity" }
 parking_lot = "0.12"
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = "=1.0.145"

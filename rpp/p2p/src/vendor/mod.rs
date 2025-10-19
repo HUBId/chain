@@ -17,74 +17,62 @@
 //! * `memory-transport` – re-exports the in-memory transport utilities from
 //!   `libp2p-core` for testing and simulations.
 
+use libp2p as libp2p_main;
+
 /// Core libp2p primitives.
-pub mod core {
-    pub use libp2p::core::*;
-    pub use libp2p::multihash;
-}
+pub use libp2p_core as core;
 
 /// Swarm management and behaviour composition utilities.
-pub mod swarm {
-    pub use libp2p::swarm::*;
-}
+pub use libp2p_swarm as swarm;
 
 /// Identity handling helpers (PeerId, keys, etc.).
-pub mod identity {
-    pub use libp2p::identity::*;
-}
+pub use libp2p_identity as identity;
 
 /// Gossipsub pubsub protocol implementation.
 #[cfg(feature = "gossipsub")]
-pub mod gossipsub {
-    pub use libp2p_gossipsub::*;
-}
+pub use libp2p_gossipsub as gossipsub;
 
 /// Identify protocol implementation.
 #[cfg(feature = "identify")]
-pub mod identify {
-    pub use libp2p_identify::*;
-}
+pub use libp2p_identify as identify;
 
 /// Ping protocol implementation.
 #[cfg(feature = "ping")]
-pub mod ping {
-    pub use libp2p_ping::*;
-}
+pub use libp2p_ping as ping;
 
 /// Request-response protocol implementation.
 #[cfg(feature = "request-response")]
-pub mod request_response {
-    pub use libp2p_request_response::*;
-}
+pub use libp2p_request_response as request_response;
 
 /// Noise security handshake primitives.
 #[cfg(feature = "noise")]
-pub mod noise {
-    pub use libp2p::noise::*;
-}
+pub use libp2p_noise as noise;
 
 /// TCP transport implementation.
 #[cfg(feature = "tcp")]
-pub mod tcp {
-    pub use libp2p::tcp::*;
-}
+pub use libp2p_tcp as tcp;
 
 /// Yamux stream multiplexer implementation.
 #[cfg(feature = "yamux")]
-pub mod yamux {
-    pub use libp2p::yamux::*;
-}
+pub use libp2p_yamux as yamux;
 
 /// QUIC transport implementation.
 #[cfg(feature = "quic")]
-pub mod quic {
-    pub use libp2p::quic::*;
-}
+pub use libp2p_quic as quic;
 
 /// In-memory transport helpers useful for tests and simulations.
 #[cfg(feature = "memory-transport")]
 pub mod memory_transport {
-    pub use libp2p::core::transport::memory::*;
+    pub use crate::vendor::core::transport::memory::*;
 }
 
-pub use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder};
+/// Multiaddr helper utilities vendored alongside `libp2p-core`.
+pub mod multiaddr {
+    pub use crate::vendor::core::multiaddr::*;
+}
+
+pub use crate::vendor::core::multihash;
+pub use crate::vendor::core::Multiaddr;
+pub use crate::vendor::identity::PeerId;
+pub use crate::vendor::swarm::Swarm;
+pub use libp2p_main::SwarmBuilder;
