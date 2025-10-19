@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg(any(feature = "backend-plonky3", feature = "backend-rpp-stark"))]
-use crate::errors::ChainError;
-use crate::errors::ChainResult;
+use crate::errors::{ChainError, ChainResult};
+use crate::proof_backend::TxPublicInputs;
 use crate::rpp::ProofSystemKind;
 use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::{ProofPayload, StarkProof};
@@ -159,6 +158,10 @@ pub struct TransactionProofBundle {
     pub witness: Option<TransactionWitness>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proof_payload: Option<ProofPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stwo_proof_bytes: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stwo_public_inputs: Option<TxPublicInputs>,
 }
 
 impl TransactionProofBundle {
@@ -173,6 +176,8 @@ impl TransactionProofBundle {
             proof,
             witness,
             proof_payload,
+            stwo_proof_bytes: None,
+            stwo_public_inputs: None,
         }
     }
 
@@ -210,8 +215,8 @@ impl BlockProofBundle {
 mod tests {
     mod stwo {
         use super::super::ChainProof;
-        use crate::stwo::circuit::recursive::RecursiveWitness;
         use crate::stwo::circuit::ExecutionTrace;
+        use crate::stwo::circuit::recursive::RecursiveWitness;
         use crate::stwo::proof::{
             CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
         };
