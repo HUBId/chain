@@ -5,6 +5,24 @@ The pinned Rust toolchain requires the following components to be installed:
 - rustfmt
 - clippy
 
+## Vendored libp2p stack checks
+
+The integration tests rely on the vendored libp2p transport stack being
+buildable with the TCP + Noise + Yamux combination. Run
+
+```bash
+cargo check -p rpp-p2p --features "noise tcp yamux"
+```
+
+to validate the stack locally. When QUIC support is enabled, also verify the
+combined feature set with
+
+```bash
+cargo check -p rpp-p2p --features "noise tcp yamux quic"
+```
+
+to ensure the additional transport compiles alongside the default TCP stack.
+
 For operational guidance on the RPC CLI—including authentication, rate limits, and
 recovery procedures—consult the [RPC CLI Operator Guide](../rpc_cli_operator_guide.md).
 
