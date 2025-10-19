@@ -52,6 +52,8 @@ pub mod ecdsa;
 #[cfg(feature = "ed25519")]
 pub mod ed25519;
 
+pub mod hooks;
+
 #[cfg(all(feature = "rsa", not(target_arch = "wasm32")))]
 pub mod rsa;
 
@@ -112,6 +114,7 @@ pub use error::{DecodingError, OtherVariantError, SigningError};
 pub use keypair::{Keypair, PublicKey};
 #[cfg(feature = "peerid")]
 pub use peer_id::{ParseError, PeerId};
+pub use hooks::{clear_hooks, set_hooks, IdentityHooks, SignHook, VerifyHook, VrfPublicKeyHook, VrfSignHook};
 
 /// The type of key a `KeyPair` is holding.
 #[derive(Debug, PartialEq, Eq)]

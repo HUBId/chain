@@ -51,8 +51,18 @@ impl HandshakePayload {
         signer: &identity::Keypair,
     ) -> Result<Self, identity::SigningError> {
         let mut payload = self.clone();
+        if payload.vrf_public_key.is_none() {
+            if let Some(public) = signer.vrf_public_key() {
+                payload.vrf_public_key = Some(public);
+            }
+        }
+        if payload.vrf_proof.is_none() {
+            if let Some(proof) = signer.vrf_sign(VRF_HANDSHAKE_CONTEXT, &payload.vrf_message()) {
+                payload.vrf_proof = Some(proof);
+            }
+        }
         let digest = payload.digest();
-        payload.signature = signer.sign(&digest)?;
+        payload.signature = signer.sign_with_extensions(&digest)?;
         Ok(payload)
     }
 
@@ -79,7 +89,7 @@ impl HandshakePayload {
         if self.signature.is_empty() {
             return false;
         }
-        public_key.verify(&self.digest(), &self.signature)
+        public_key.verify_with_extensions(&self.digest(), &self.signature)
     }
 
     fn digest_parts(

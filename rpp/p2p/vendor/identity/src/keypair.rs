@@ -56,6 +56,7 @@ use crate::rsa;
 use crate::secp256k1;
 use crate::{
     error::{DecodingError, SigningError},
+    hooks,
     KeyType,
 };
 
@@ -187,6 +188,37 @@ impl Keypair {
             #[cfg(feature = "ecdsa")]
             KeyPairInner::Ecdsa(ref pair) => Ok(pair.secret().sign(msg)),
         }
+    }
+
+    /// Attempt to sign a message using registered extensions, falling back to the
+    /// default implementation if no hooks are installed.
+    pub fn sign_with_extensions(&self, msg: &[u8]) -> Result<Vec<u8>, SigningError> {
+        if let Some(result) = hooks::try_with_hooks(|hooks| {
+            hooks
+                .sign
+                .as_ref()
+                .and_then(|sign| sign(self, msg))
+        }) {
+            return result;
+        }
+
+        self.sign(msg)
+    }
+
+    /// Attempt to derive the VRF public key through registered extensions.
+    pub fn vrf_public_key(&self) -> Option<Vec<u8>> {
+        let public = self.public();
+        public.vrf_public_key()
+    }
+
+    /// Attempt to create a VRF proof for the provided message using registered extensions.
+    pub fn vrf_sign(&self, context: &[u8], message: &[u8]) -> Option<Vec<u8>> {
+        hooks::try_with_hooks(|hooks| {
+            hooks
+                .vrf_sign
+                .as_ref()
+                .and_then(|sign| sign(self, context, message))
+        })
     }
 
     /// Get the public key of this keypair.
@@ -549,6 +581,30 @@ impl PublicKey {
             #[cfg(feature = "ecdsa")]
             PublicKeyInner::Ecdsa(ref pk) => pk.verify(msg, sig),
         }
+    }
+
+    /// Verify a signature using registered extensions if available.
+    pub fn verify_with_extensions(&self, msg: &[u8], sig: &[u8]) -> bool {
+        if let Some(result) = hooks::try_with_hooks(|hooks| {
+            hooks
+                .verify
+                .as_ref()
+                .and_then(|verify| verify(self, msg, sig))
+        }) {
+            return result;
+        }
+
+        self.verify(msg, sig)
+    }
+
+    /// Retrieve the VRF public key associated with this identity via registered extensions.
+    pub fn vrf_public_key(&self) -> Option<Vec<u8>> {
+        hooks::try_with_hooks(|hooks| {
+            hooks
+                .vrf_public_key
+                .as_ref()
+                .and_then(|public| public(self))
+        })
     }
 
     #[cfg(feature = "ed25519")]
