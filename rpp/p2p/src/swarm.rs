@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use futures::StreamExt;
+use parking_lot::{Mutex, RwLock};
 
 use crate::vendor::gossipsub::{self, MessageId};
 use crate::vendor::identity::Keypair;
@@ -15,7 +16,7 @@ use crate::vendor::{noise, tcp, yamux};
 use thiserror::Error;
 
 use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
-use crate::handshake::{HandshakeCodec, HandshakePayload, HANDSHAKE_PROTOCOL};
+use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
 use crate::identity::NodeIdentity;
 use crate::peerstore::{Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
@@ -218,10 +219,10 @@ pub enum NetworkEvent {
 
 pub struct Network {
     swarm: Swarm<RppBehaviour>,
-    events_handle: ExternalEventHandle<RppBehaviourEvent>,
+    events_handle: Arc<ExternalEventHandle<RppBehaviourEvent>>,
     peerstore: Arc<Peerstore>,
     admission: AdmissionControl,
-    handshake: HandshakePayload,
+    handshake: Arc<RwLock<HandshakePayload>>,
     identity: Arc<NodeIdentity>,
     gossip_state: Option<Arc<GossipStateStore>>,
     replay: ReplayProtector,
@@ -229,6 +230,10 @@ pub struct Network {
 }
 
 impl Network {
+    fn default_handshake_metadata() -> TelemetryMetadata {
+        TelemetryMetadata::with_agent(format!("rpp-p2p/{}", env!("CARGO_PKG_VERSION")))
+    }
+
     #[cfg(all(feature = "tcp", feature = "noise", feature = "yamux"))]
     pub fn new(
         identity: Arc<NodeIdentity>,
@@ -236,12 +241,123 @@ impl Network {
         handshake: HandshakePayload,
         gossip_state: Option<Arc<GossipStateStore>>,
     ) -> Result<Self, NetworkError> {
+        let handshake = {
+            let mut payload = handshake;
+            if payload.telemetry.is_none() {
+                payload.telemetry = Some(Self::default_handshake_metadata());
+            }
+            payload
+        };
+        let handshake_state = Arc::new(RwLock::new(handshake));
         let local_key = identity.clone_keypair();
+        let event_handle_slot: Arc<Mutex<Option<Arc<ExternalEventHandle<RppBehaviourEvent>>>>> =
+            Arc::new(Mutex::new(None));
+
         let builder = SwarmBuilder::with_existing_identity(local_key.clone())
             .with_tokio()
             .with_tcp(
                 tcp::Config::default().nodelay(true),
-                noise::Config::new,
+                {
+                    let identity_for_payload = identity.clone();
+                    let handshake_for_payload = handshake_state.clone();
+                    let peerstore_for_payload = peerstore.clone();
+                    let event_slot = event_handle_slot.clone();
+                    move |keypair: &Keypair| -> Result<noise::NoiseAuthenticated, noise::Error> {
+                        let local_identity = identity_for_payload.clone();
+                        let handshake_state = handshake_for_payload.clone();
+                        let peerstore = peerstore_for_payload.clone();
+                        let event_slot = event_slot.clone();
+                        noise::NoiseAuthenticated::xx(keypair)?
+                            .with_handshake_payload(move || {
+                                let keypair = local_identity.clone_keypair();
+                                let payload = handshake_state.read().clone();
+                                let signed = payload.signed(&keypair).map_err(|err| {
+                                    noise::HandshakeHookError::new(format!(
+                                        "sign handshake payload: {err}"
+                                    ))
+                                })?;
+                                serde_json::to_vec(&signed).map_err(|err| {
+                                    noise::HandshakeHookError::new(format!(
+                                        "encode handshake payload: {err}"
+                                    ))
+                                })
+                            })
+                            .on_handshake_payload(move |public_key, bytes| {
+                                let peer_id = PeerId::from(public_key.clone());
+                                let handshake: HandshakePayload = serde_json::from_slice(bytes)
+                                    .map_err(|err| {
+                                        tracing::warn!(
+                                            target: "telemetry.handshake",
+                                            %peer_id,
+                                            error = %err,
+                                            "handshake_failure"
+                                        );
+                                        noise::HandshakeHookError::new(format!(
+                                            "decode handshake payload: {err}"
+                                        ))
+                                    })?;
+
+                                if let Err(err) = peerstore
+                                    .record_public_key(peer_id, public_key.clone())
+                                {
+                                    tracing::warn!(
+                                        target: "telemetry.handshake",
+                                        %peer_id,
+                                        error = %err,
+                                        "handshake_failure"
+                                    );
+                                    return Err(noise::HandshakeHookError::new(format!(
+                                        "record public key: {err}"
+                                    )));
+                                }
+                                if let Err(err) = peerstore.record_handshake(peer_id, &handshake) {
+                                    tracing::warn!(
+                                        target: "telemetry.handshake",
+                                        %peer_id,
+                                        error = %err,
+                                        "handshake_failure"
+                                    );
+                                    return Err(noise::HandshakeHookError::new(format!(
+                                        "record handshake: {err}"
+                                    )));
+                                }
+
+                                let agent = handshake
+                                    .telemetry
+                                    .as_ref()
+                                    .and_then(|meta| meta.tags.get("agent"))
+                                    .cloned()
+                                    .unwrap_or_else(|| "unknown".to_string());
+
+                                tracing::info!(
+                                    target: "telemetry.handshake",
+                                    %peer_id,
+                                    zsi = %handshake.zsi_id,
+                                    tier = ?handshake.tier,
+                                    agent = %agent,
+                                    "handshake_success"
+                                );
+
+                                if let Some(handle) = event_slot.lock().clone() {
+                                    if let Err(err) = handle.push(RppBehaviourEvent::Network(
+                                        NetworkEvent::HandshakeCompleted {
+                                            peer: peer_id,
+                                            payload: handshake.clone(),
+                                        },
+                                    )) {
+                                        tracing::warn!(
+                                            target: "telemetry.handshake",
+                                            %peer_id,
+                                            error = %err,
+                                            "handshake_dispatch_failed"
+                                        );
+                                    }
+                                }
+
+                                Ok(())
+                            })
+                    }
+                },
                 yamux::Config::default,
             )
             .map_err(|err| NetworkError::Noise(err.to_string()))?
@@ -250,14 +366,17 @@ impl Network {
                     .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
             })
             .map_err(|err| NetworkError::Gossipsub(err.to_string()))?;
-        let (swarm, events_handle) = builder.build_with_external_event_handle();
+        let (swarm, raw_events_handle) = builder.build_with_external_event_handle();
+        let events_handle = Arc::new(raw_events_handle);
+        *event_handle_slot.lock() = Some(events_handle.clone());
+
         let admission = AdmissionControl::new(peerstore.clone(), identity.metadata().clone());
         let mut network = Self {
             swarm,
             events_handle,
             peerstore,
             admission,
-            handshake,
+            handshake: handshake_state,
             identity,
             gossip_state,
             replay: ReplayProtector::with_capacity(1024),
@@ -300,7 +419,15 @@ impl Network {
         vrf_public_key: Vec<u8>,
         vrf_proof: Vec<u8>,
     ) -> Result<(), NetworkError> {
-        self.handshake = HandshakePayload::new(zsi_id, Some(vrf_public_key), Some(vrf_proof), tier);
+        {
+            let mut guard = self.handshake.write();
+            let telemetry = guard
+                .telemetry
+                .clone()
+                .or_else(|| Some(Self::default_handshake_metadata()));
+            *guard = HandshakePayload::new(zsi_id, Some(vrf_public_key), Some(vrf_proof), tier)
+                .with_telemetry(telemetry.unwrap());
+        }
         let signed = self.sign_handshake()?;
         let peer_id = self.local_peer_id();
         self.peerstore.record_handshake(peer_id, &signed)?;
@@ -345,6 +472,8 @@ impl Network {
     fn sign_handshake(&self) -> Result<HandshakePayload, NetworkError> {
         let keypair = self.identity.clone_keypair();
         self.handshake
+            .read()
+            .clone()
             .signed(&keypair)
             .map_err(|err| NetworkError::Handshake(format!("signing failed: {err}")))
     }
@@ -362,11 +491,6 @@ impl Network {
                     if let Err(err) = self.peerstore.record_address(peer_id, addr.clone()) {
                         tracing::warn!(?peer_id, ?addr, ?err, "failed to record peer address");
                     }
-                    let payload = self.sign_handshake()?;
-                    self.swarm
-                        .behaviour_mut()
-                        .request_response
-                        .send_request(&peer_id, payload);
                 }
                 SwarmEvent::Behaviour(RppBehaviourEvent::RequestResponse(event)) => {
                     if let Some(evt) = self.handle_request_response(event)? {
@@ -414,17 +538,11 @@ impl Network {
                         .map_err(|err| {
                             NetworkError::Swarm(format!("handshake response error: {err:?}"))
                         })?;
-                    Ok(Some(NetworkEvent::HandshakeCompleted {
-                        peer,
-                        payload: request,
-                    }))
+                    Ok(None)
                 }
                 request_response::Message::Response { response, .. } => {
                     self.peerstore.record_handshake(peer, &response)?;
-                    Ok(Some(NetworkEvent::HandshakeCompleted {
-                        peer,
-                        payload: response,
-                    }))
+                    Ok(None)
                 }
             },
             request_response::Event::ResponseSent { .. } => Ok(None),

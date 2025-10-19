@@ -383,9 +383,15 @@ impl NodeInner {
             NetworkEvent::HandshakeCompleted { peer, payload } => {
                 info!(target: "node", "peer connected: {peer}");
                 self.connected_peers.insert(peer);
-                self.known_versions.insert(peer, payload.zsi_id.clone());
+                let agent_version = payload
+                    .telemetry
+                    .as_ref()
+                    .and_then(|meta| meta.tags.get("agent"))
+                    .cloned()
+                    .unwrap_or_else(|| payload.zsi_id.clone());
+                self.known_versions.insert(peer, agent_version.clone());
                 self.meta_telemetry
-                    .record(peer, payload.zsi_id.clone(), Duration::from_millis(0));
+                    .record(peer, agent_version, Duration::from_millis(0));
                 let _ = self.events.send(NodeEvent::PeerConnected { peer, payload });
             }
             NetworkEvent::PeerDisconnected { peer } => {
