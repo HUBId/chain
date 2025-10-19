@@ -20,10 +20,28 @@ identify = ["dep:libp2p-identify"]
 ping = ["dep:libp2p-ping"]
 gossipsub = ["dep:libp2p-gossipsub"]
 request-response = ["dep:libp2p-request-response"]
-noise = ["dep:libp2p-noise"]
-tcp = ["dep:libp2p-tcp"]
+noise = [
+    "dep:libp2p-noise",
+    "gossipsub",
+    "identify",
+    "ping",
+    "request-response",
+]
+tcp = [
+    "dep:libp2p-tcp",
+    "gossipsub",
+    "identify",
+    "ping",
+    "request-response",
+]
 plaintext = ["dep:libp2p-plaintext"]
-yamux = ["dep:libp2p-yamux"]
+yamux = [
+    "dep:libp2p-yamux",
+    "gossipsub",
+    "identify",
+    "ping",
+    "request-response",
+]
 quic = ["dep:libp2p-quic"]
 
 [dependencies]

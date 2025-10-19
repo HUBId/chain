@@ -1,0 +1,8 @@
+[package]
+name = "libp2p-muxer-test-harness"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "libp2p_muxer_test_harness"
+path = "src/lib.rs"

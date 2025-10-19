@@ -1,3 +1,4 @@
+#[cfg(feature = "gossipsub")]
 use crate::vendor::gossipsub::{IdentTopic, TopicHash};
 
 /// Canonical GossipSub topics used by the RPP network backbone.
@@ -21,10 +22,12 @@ impl GossipTopic {
         }
     }
 
+    #[cfg(feature = "gossipsub")]
     pub fn ident(self) -> IdentTopic {
         IdentTopic::new(self.as_str())
     }
 
+    #[cfg(feature = "gossipsub")]
     pub fn from_hash(hash: &TopicHash) -> Option<Self> {
         match hash.as_str() {
             "/rpp/gossip/blocks/1.0.0" => Some(GossipTopic::Blocks),
