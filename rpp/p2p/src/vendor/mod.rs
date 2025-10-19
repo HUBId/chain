@@ -36,10 +36,6 @@ pub use libp2p_identify as identify;
 #[cfg(feature = "ping")]
 pub use libp2p_ping as ping;
 
-/// Request-response protocol implementation.
-#[cfg(feature = "request-response")]
-pub use libp2p_request_response as request_response;
-
 /// Noise security handshake primitives.
 #[cfg(feature = "noise")]
 pub use libp2p_noise as noise;
@@ -59,6 +55,12 @@ pub mod yamux;
 /// QUIC transport implementation.
 #[cfg(feature = "quic")]
 pub use libp2p_quic as quic;
+
+pub mod protocols {
+    /// Request-response protocol implementation tailored for RPP.
+    #[cfg(feature = "request-response")]
+    pub use libp2p_request_response as request_response;
+}
 
 /// Multiaddr helper utilities vendored alongside `libp2p-core`.
 pub mod multiaddr {
@@ -172,5 +174,5 @@ pub mod multiaddr {
 pub use crate::vendor::core::multihash;
 pub use crate::vendor::core::Multiaddr;
 pub use crate::vendor::identity::PeerId;
-pub use crate::vendor::swarm::Swarm;
 pub use crate::vendor::swarm::builder::SwarmBuilder;
+pub use crate::vendor::swarm::Swarm;

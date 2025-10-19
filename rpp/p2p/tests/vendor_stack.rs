@@ -10,7 +10,7 @@ use rpp_p2p::handshake::{HandshakeCodec, HandshakePayload, HANDSHAKE_PROTOCOL};
 use rpp_p2p::tier::TierLevel;
 use rpp_p2p::vendor::identity::Keypair;
 use rpp_p2p::vendor::multiaddr::multiaddr;
-use rpp_p2p::vendor::request_response::{self, ProtocolSupport};
+use rpp_p2p::vendor::protocols::request_response::{self, ProtocolSupport};
 use rpp_p2p::vendor::swarm::{NetworkBehaviour, SwarmEvent};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::vendor::{noise, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};

@@ -18,34 +18,18 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
-//! Generic request/response protocols.
+//! Request/response protocol primitives vendored from `rust-libp2p`.
 //!
-//! ## General Usage
+//! This crate exposes a synchronous request/response [`Behaviour`] tailored to
+//! the RPP handshake flow. It omits the generic codec helpers from upstream
+//! (e.g. JSON / CBOR conveniences) in favour of a minimal [`Codec`] trait and
+//! a handful of utilities for size-limited payload exchanges.
 //!
-//! The [`Behaviour`] struct is a [`NetworkBehaviour`] that implements a generic
-//! request/response protocol or protocol family, whereby each request is
-//! sent over a new substream on a connection. `Behaviour` is generic
-//! over the actual messages being sent, which are defined in terms of a
-//! [`Codec`]. Creating a request/response protocol thus amounts
-//! to providing an implementation of this trait which can then be
-//! given to [`Behaviour::with_codec`]. Further configuration options are
-//! available via the [`Config`].
+//! Requests are sent using [`Behaviour::send_request`] and the responses are
+//! emitted as [`Message::Response`] via [`Event::Message`].
 //!
-//! Requests are sent using [`Behaviour::send_request`] and the
-//! responses received as [`Message::Response`] via
-//! [`Event::Message`].
-//!
-//! Responses are sent using [`Behaviour::send_response`] upon
-//! receiving a [`Message::Request`] via
-//! [`Event::Message`].
-//!
-//! ## Predefined codecs
-//!
-//! In case your message types implement [`serde::Serialize`] and [`serde::Deserialize`],
-//! you can use two predefined behaviours:
-//!
-//! - [`cbor::Behaviour`] for CBOR-encoded messages
-//! - [`json::Behaviour`] for JSON-encoded messages
+//! Responses are sent using [`Behaviour::send_response`] upon receiving a
+//! [`Message::Request`] via [`Event::Message`].
 //!
 //! ## Protocol Families
 //!
@@ -66,12 +50,12 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg, doc_auto_cfg))]
 
-#[cfg(feature = "cbor")]
-pub mod cbor;
 mod codec;
 mod handler;
-#[cfg(feature = "json")]
-pub mod json;
+
+pub use codec::{
+    read_handshake_payload, read_limited, write_payload, Codec, Payload, MAX_HANDSHAKE_BYTES,
+};
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -81,7 +65,6 @@ use std::{
     time::Duration,
 };
 
-pub use codec::Codec;
 use futures::channel::oneshot;
 use handler::Handler;
 pub use handler::ProtocolSupport;
