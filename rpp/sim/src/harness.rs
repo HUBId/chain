@@ -77,7 +77,7 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     let harness_event_tx = event_tx.clone();
     let mut forwarders = Vec::new();
 
-    for Node { handle, mut events } in nodes.into_iter() {
+    for Node { handle, mut events, .. } in nodes.into_iter() {
         let tx_clone = event_tx.clone();
         forwarders.push(tokio::spawn(async move {
             while let Some(event) = events.recv().await {
