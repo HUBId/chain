@@ -18,7 +18,7 @@ use rpp_p2p::vendor::multiaddr::Protocol;
 use rpp_p2p::vendor::ping;
 use rpp_p2p::vendor::plaintext;
 use rpp_p2p::vendor::swarm::dial_opts::DialOpts;
-use rpp_p2p::vendor::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
+use rpp_p2p::vendor::swarm::{ExternalEventHandle, NetworkBehaviour, Swarm, SwarmEvent};
 use rpp_p2p::vendor::Multiaddr;
 use rpp_p2p::vendor::PeerId;
 use tokio::sync::mpsc;
@@ -132,6 +132,7 @@ impl NodeHandle {
 pub struct Node {
     pub handle: NodeHandle,
     pub events: mpsc::UnboundedReceiver<SimEvent>,
+    pub external_events: ExternalEventHandle<SimBehaviourEvent>,
 }
 
 pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
@@ -168,7 +169,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
         )),
     };
 
-    let mut swarm = Swarm::new(
+    let (mut swarm, external_events) = Swarm::new_with_external_event_channel(
         transport,
         behaviour,
         peer_id,
@@ -260,6 +261,7 @@ pub fn spawn_node(node_index: usize, topic: IdentTopic) -> Result<Node> {
             command_tx,
         },
         events: event_rx,
+        external_events,
     })
 }
 
