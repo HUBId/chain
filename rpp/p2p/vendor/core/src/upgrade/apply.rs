@@ -18,6 +18,7 @@
 // FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
 
+// Vendored from rust-libp2p commit b187c14 (https://github.com/libp2p/rust-libp2p).
 use std::{
     mem,
     pin::Pin,
