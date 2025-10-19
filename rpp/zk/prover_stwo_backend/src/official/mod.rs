@@ -5,4 +5,5 @@ pub mod fri;
 pub mod official_adapter;
 pub mod params;
 pub mod proof;
+pub mod prover;
 pub mod verifier;
