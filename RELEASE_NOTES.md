@@ -4,6 +4,10 @@
 
 The project is standardised on the Rust `1.79.0` toolchain. Each release must confirm that this stable pin continues to compile, format, and lint cleanly before the artefact is tagged. Toolchain health is summarised in [`docs/STABLE_MIGRATION_REPORT.md`](docs/STABLE_MIGRATION_REPORT.md), and migration criteria are tracked in `MIGRATION.md`.
 
+## Prover Backend Wiring
+
+- `rpp/node`, `rpp/wallet`, and `rpp/consensus` now enable the `rpp/zk/prover_stwo_backend` crate whenever the `prover-stwo` feature is active, replacing their previous interface-only relationship. The `prover-mock` feature continues to keep the backend disabled.
+
 ### Risks
 
 - Stable patch releases can change lint or formatting behaviour. Cache toolchains in CI to avoid mid-release drift and re-validate when a new 1.79.x patch lands.
