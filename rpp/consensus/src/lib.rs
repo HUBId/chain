@@ -18,6 +18,9 @@ compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive"
 
 pub use prover_backend_interface as proof_backend;
 
+#[cfg(feature = "prover-stwo")]
+pub use prover_stwo_backend;
+
 pub mod bft_loop;
 pub mod evidence;
 pub mod leader;

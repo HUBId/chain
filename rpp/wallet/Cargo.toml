@@ -6,8 +6,16 @@ rust-version = "1.79"
 
 [features]
 default = ["prover-stwo"]
-prover-stwo = ["prover-backend-interface/prover-stwo"]
-prover-stwo-simd = ["prover-stwo", "prover-backend-interface/prover-stwo-simd"]
+prover-stwo = [
+    "prover-backend-interface/prover-stwo",
+    "dep:prover_stwo_backend",
+    "prover_stwo_backend/prover-stwo",
+]
+prover-stwo-simd = [
+    "prover-stwo",
+    "prover-backend-interface/prover-stwo-simd",
+    "prover_stwo_backend/simd",
+]
 prover-mock = ["prover-backend-interface/prover-mock"]
 backend-rpp-stark = []
 vendor_electrs = [
@@ -27,6 +35,7 @@ vendor_electrs_test_support = ["vendor_electrs"]
 [dependencies]
 anyhow = "1"
 prover-backend-interface = { path = "../zk/backend-interface" }
+prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
 sha2 = { version = "0.10", optional = true }
 storage-firewood = { path = "../../storage-firewood", optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
