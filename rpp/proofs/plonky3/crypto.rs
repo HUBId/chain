@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use blake3::Hasher;
-use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
 use once_cell::sync::OnceCell;
 use serde::ser::{SerializeMap, SerializeSeq};
 use serde::{Deserialize, Serialize};
@@ -14,8 +15,10 @@ use crate::errors::{ChainError, ChainResult};
 
 #[derive(Clone)]
 struct CircuitArtifact {
-    verifying_key: [u8; 32],
-    proving_key: [u8; 32],
+    verifying_key: Vec<u8>,
+    proving_key: Vec<u8>,
+    verifying_key_hash: [u8; 32],
+    proving_key_hash: [u8; 32],
 }
 
 #[derive(Deserialize)]
@@ -29,21 +32,81 @@ struct CircuitArtifactConfig {
 
 static CIRCUIT_ARTIFACTS: OnceCell<HashMap<String, CircuitArtifact>> = OnceCell::new();
 
-fn decode_key(hex_value: &str, circuit: &str, kind: &str) -> ChainResult<[u8; 32]> {
-    let bytes = hex::decode(hex_value).map_err(|err| {
-        ChainError::Crypto(format!(
-            "{kind} for {circuit} circuit is not valid hex: {err}"
-        ))
-    })?;
-    if bytes.len() != 32 {
+fn candidate_paths(base: &Path, value: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let stripped = value.trim_start_matches('@');
+    if stripped.is_empty() {
+        return candidates;
+    }
+    let path = Path::new(stripped);
+    if path.is_absolute() {
+        candidates.push(path.to_path_buf());
+    } else {
+        candidates.push(base.join(path));
+    }
+    candidates
+}
+
+fn decode_artifact_bytes(
+    base: &Path,
+    value: &str,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<Vec<u8>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
         return Err(ChainError::Crypto(format!(
-            "{kind} for {circuit} circuit must be 32 bytes, found {}",
-            bytes.len()
+            "{kind} for {circuit} circuit is empty"
         )));
     }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&bytes);
-    Ok(key)
+
+    for path in candidate_paths(base, trimmed) {
+        if path.exists() {
+            let data = fs::read(&path).map_err(|err| {
+                ChainError::Crypto(format!(
+                    "unable to read {kind} for {circuit} circuit from {}: {err}",
+                    path.display()
+                ))
+            })?;
+            if data.is_empty() {
+                return Err(ChainError::Crypto(format!(
+                    "{kind} for {circuit} circuit at {} is empty",
+                    path.display()
+                )));
+            }
+            return Ok(data);
+        }
+    }
+
+    let hex_candidate = trimmed
+        .strip_prefix("hex:")
+        .or_else(|| trimmed.strip_prefix("0x"))
+        .unwrap_or(trimmed);
+    if hex_candidate
+        .chars()
+        .all(|char| char.is_ascii_hexdigit())
+        && hex_candidate.len() % 2 == 0
+    {
+        if let Ok(bytes) = hex::decode(hex_candidate) {
+            if !bytes.is_empty() {
+                return Ok(bytes);
+            }
+        }
+    }
+
+    let base64_candidate = trimmed
+        .strip_prefix("base64:")
+        .or_else(|| trimmed.strip_prefix("b64:"))
+        .unwrap_or(trimmed);
+    if let Ok(bytes) = BASE64_STANDARD.decode(base64_candidate.as_bytes()) {
+        if !bytes.is_empty() {
+            return Ok(bytes);
+        }
+    }
+
+    Err(ChainError::Crypto(format!(
+        "{kind} for {circuit} circuit must reference a file or contain hex/base64 data"
+    )))
 }
 
 fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
@@ -81,14 +144,28 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
                 file_path.display()
             )));
         }
-        let verifying_key = decode_key(&config.verifying_key, &config.circuit, "verifying key")?;
-        let proving_key = decode_key(&config.proving_key, &config.circuit, "proving key")?;
+        let verifying_key = decode_artifact_bytes(
+            &path,
+            &config.verifying_key,
+            &config.circuit,
+            "verifying key",
+        )?;
+        let proving_key = decode_artifact_bytes(
+            &path,
+            &config.proving_key,
+            &config.circuit,
+            "proving key",
+        )?;
+        let verifying_key_hash: [u8; 32] = *blake3::hash(&verifying_key).as_bytes();
+        let proving_key_hash: [u8; 32] = *blake3::hash(&proving_key).as_bytes();
         if artifacts
             .insert(
                 config.circuit.clone(),
                 CircuitArtifact {
                     verifying_key,
                     proving_key,
+                    verifying_key_hash,
+                    proving_key_hash,
                 },
             )
             .is_some()
@@ -126,8 +203,8 @@ fn circuit_artifact(circuit: &str) -> ChainResult<&'static CircuitArtifact> {
     })
 }
 
-pub fn verifying_key(circuit: &str) -> ChainResult<[u8; 32]> {
-    circuit_artifact(circuit).map(|artifact| artifact.verifying_key)
+pub fn verifying_key(circuit: &str) -> ChainResult<Vec<u8>> {
+    circuit_artifact(circuit).map(|artifact| artifact.verifying_key.clone())
 }
 
 pub fn compute_commitment(public_inputs: &Value) -> ChainResult<String> {
@@ -165,20 +242,12 @@ fn compute_proof(
     artifact: &CircuitArtifact,
 ) -> ChainResult<Vec<u8>> {
     let message = transcript_message(circuit, commitment, public_inputs)?;
-    let secret = SecretKey::from_bytes(&artifact.proving_key).map_err(|err| {
-        ChainError::Crypto(format!(
-            "invalid Plonky3 proving key for {circuit} circuit: {err}"
-        ))
-    })?;
-    let public = PublicKey::from(&secret);
-    if public.to_bytes() != artifact.verifying_key {
-        return Err(ChainError::Crypto(format!(
-            "Plonky3 proving key for {circuit} does not match verifying key"
-        )));
-    }
-    let keypair = Keypair { secret, public };
-    let signature = keypair.sign(&message);
-    Ok(signature.to_bytes().to_vec())
+    let mut proof = Vec::with_capacity(64);
+    proof.extend_from_slice(&artifact.verifying_key_hash);
+    let mut hasher = blake3::Hasher::new_keyed(&artifact.verifying_key_hash);
+    hasher.update(&message);
+    proof.extend_from_slice(hasher.finalize().as_bytes());
+    Ok(proof)
 }
 
 fn encode_canonical_json(value: &Value) -> serde_json::Result<Vec<u8>> {
@@ -232,7 +301,7 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
         commitment,
         public_inputs,
         proof,
-        verifying_key: artifact.verifying_key,
+        verifying_key: artifact.verifying_key.clone(),
     })
 }
 
@@ -241,8 +310,8 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
     if proof.verifying_key != artifact.verifying_key {
         return Err(ChainError::Crypto(format!(
             "plonky3 verifying key mismatch: expected {}, found {}",
-            hex::encode(artifact.verifying_key),
-            hex::encode(proof.verifying_key)
+            BASE64_STANDARD.encode(&artifact.verifying_key),
+            BASE64_STANDARD.encode(&proof.verifying_key)
         )));
     }
     let expected_commitment = compute_commitment(&proof.public_inputs)?;
@@ -253,32 +322,28 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         )));
     }
     let message = transcript_message(&proof.circuit, &expected_commitment, &proof.public_inputs)?;
-    let verifying_key = PublicKey::from_bytes(&artifact.verifying_key).map_err(|err| {
-        ChainError::Crypto(format!(
-            "invalid Plonky3 verifying key for {} circuit: {err}",
-            proof.circuit
-        ))
-    })?;
     if proof.proof.len() != 64 {
         return Err(ChainError::Crypto(format!(
-            "plonky3 proof signature must be 64 bytes, found {}",
+            "plonky3 proof blob must be 64 bytes, found {}",
             proof.proof.len()
         )));
     }
-    let mut signature_bytes = [0u8; 64];
-    signature_bytes.copy_from_slice(&proof.proof);
-    let signature = Signature::from_bytes(&signature_bytes).map_err(|err| {
-        ChainError::Crypto(format!(
-            "invalid Plonky3 proof signature encoding for {} circuit: {err}",
+    let (recorded_hash, recorded_proof) = proof.proof.split_at(32);
+    let verifying_hash = blake3::hash(&artifact.verifying_key);
+    if verifying_hash.as_bytes() != recorded_hash {
+        return Err(ChainError::Crypto(format!(
+            "plonky3 proof verifying key hash mismatch for {} circuit",
             proof.circuit
-        ))
-    })?;
-    verifying_key
-        .verify_strict(&message, &signature)
-        .map_err(|err| {
-            ChainError::Crypto(format!(
-                "plonky3 proof verification failed for {}: {err}",
-                proof.circuit
-            ))
-        })
+        )));
+    }
+    let mut hasher = blake3::Hasher::new_keyed(verifying_hash.as_bytes());
+    hasher.update(&message);
+    let expected = hasher.finalize();
+    if expected.as_bytes() != recorded_proof {
+        return Err(ChainError::Crypto(format!(
+            "plonky3 proof verification failed for {} circuit",
+            proof.circuit
+        )));
+    }
+    Ok(())
 }

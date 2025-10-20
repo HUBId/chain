@@ -170,7 +170,7 @@ fn recursive_bundle_verification_detects_tampering() {
     let mut bad_key_bundle = bundle.clone();
     if let ChainProof::Plonky3(value) = &mut bad_key_bundle.recursive_proof {
         if let Some(object) = value.as_object_mut() {
-            object.insert("verifying_key".into(), json!("00"));
+            object.insert("verifying_key".into(), json!("AA=="));
         }
     }
     assert!(verifier.verify_bundle(&bad_key_bundle, None).is_err());
