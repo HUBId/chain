@@ -11,9 +11,13 @@ selects the stable mock implementation.  Both use the shared
 `prover-backend-interface` dependency, and the STWO backend is wired in via the
 `stwo` alias so existing modules can keep their imports.【F:Cargo.toml†L6-L33】
 
-`rpp-chain` re-exports the backend interface under `proof_backend`, allowing
-consumer crates such as `rpp/node`, `rpp/wallet`, or `rpp/consensus` to depend
-on the trait instead of concrete prover implementations.【F:src/lib.rs†L1-L66】
+`rpp-chain` re-exports the backend interface under `proof_backend`, so external
+callers still program against the trait.  When the `prover-stwo` feature is
+active the workspace members `rpp/node`, `rpp/wallet`, and `rpp/consensus`
+enable a direct dependency on `rpp/zk/prover_stwo_backend`, ensuring the STWO
+implementation is compiled alongside their proof system plumbing.  The
+`prover-mock` flag keeps the backend dependency disabled, letting consumers stay
+on the interface-only mock path.【F:rpp/node/Cargo.toml†L1-L32】【F:rpp/wallet/Cargo.toml†L1-L40】【F:rpp/consensus/Cargo.toml†L1-L32】
 
 ## Shared backend interface
 
