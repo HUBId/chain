@@ -140,6 +140,17 @@ tracing-subscriber = "0.3.19"
 unsigned-varint = "0.8.0"
 web-time = "1.1.0"
 
+# plonky3 proof system dependencies
+p3-air = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-baby-bear = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-challenger = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-commit = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-field = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-mersenne-31 = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-matrix = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-poseidon = { version = "0.3.0", default-features = false, features = ["std"] }
+p3-util = { version = "0.3.0", default-features = false, features = ["std"] }
+
 
 [patch.crates-io]
 libp2p-identity = { path = "vendor/libp2p/identity" }

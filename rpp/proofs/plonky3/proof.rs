@@ -13,8 +13,8 @@ pub struct Plonky3Proof {
     pub public_inputs: Value,
     #[serde(with = "serde_base64_vec")]
     pub proof: Vec<u8>,
-    #[serde(with = "serde_hex_key")]
-    pub verifying_key: [u8; 32],
+    #[serde(with = "serde_base64_vec")]
+    pub verifying_key: Vec<u8>,
 }
 
 impl Plonky3Proof {
@@ -55,28 +55,3 @@ mod serde_base64_vec {
     }
 }
 
-mod serde_hex_key {
-    use super::*;
-    use serde::{Deserializer, Serializer};
-
-    pub fn serialize<S>(key: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&hex::encode(key))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let encoded = String::deserialize(deserializer)?;
-        let bytes = hex::decode(&encoded).map_err(serde::de::Error::custom)?;
-        if bytes.len() != 32 {
-            return Err(serde::de::Error::custom("verifying key must be 32 bytes"));
-        }
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&bytes);
-        Ok(key)
-    }
-}
