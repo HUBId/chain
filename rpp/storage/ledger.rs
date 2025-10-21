@@ -1,8 +1,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::mem;
 
-use parking_lot::RwLock;
 use crate::proof_backend::Blake2sHasher;
+use parking_lot::RwLock;
 
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
 use crate::crypto::public_key_from_hex;
@@ -562,15 +562,14 @@ impl Ledger {
                 "uptime proof commitment mismatch".into(),
             ));
         }
-        if let Some(zk_proof) = &proof.proof {
-            let registry = ProofVerifierRegistry::default();
-            registry.verify_uptime(zk_proof)?;
-            let claim = proof.claim()?;
-            if claim.wallet_address != proof.wallet_address {
-                return Err(ChainError::Transaction(
-                    "uptime proof wallet address mismatch".into(),
-                ));
-            }
+        let zk_proof = proof.proof()?;
+        let registry = ProofVerifierRegistry::default();
+        registry.verify_uptime(zk_proof)?;
+        let claim = proof.claim()?;
+        if claim.wallet_address != proof.wallet_address {
+            return Err(ChainError::Transaction(
+                "uptime proof wallet address mismatch".into(),
+            ));
         }
         let module_before = self.module_records(&proof.wallet_address);
         let (credited_hours, updated_account) = {
@@ -1180,26 +1179,29 @@ mod tests {
     use super::*;
     use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
+    use crate::proof_backend::Blake2sHasher;
     use crate::rpp::{
         AccountBalanceWitness, ConsensusWitness, ModuleWitnessBundle, ProofModule,
         ReputationEventKind, ReputationRecord, ReputationWitness, TierDescriptor, TimetokeRecord,
         TimetokeWitness, TransactionWitness, ZsiRecord, ZsiWitness,
     };
+    use crate::storage::Storage;
     use crate::stwo::circuit::StarkCircuit;
     use crate::stwo::circuit::identity::{IdentityCircuit, IdentityWitness};
     use crate::stwo::circuit::string_to_field;
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::prover::WalletProver;
     use crate::types::{
         AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
         IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
-        SignedTransaction, Transaction, UptimeProof,
+        SignedTransaction, Transaction, UptimeClaim, UptimeProof,
     };
     use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use std::collections::{BTreeMap, HashMap, HashSet};
-    use crate::proof_backend::Blake2sHasher;
+    use tempfile::tempdir;
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
@@ -1243,6 +1245,29 @@ mod tests {
             attested_votes,
             gossip_confirmations,
         }
+    }
+
+    fn build_uptime_proof(address: &str, window_start: u64, window_end: u64) -> UptimeProof {
+        let claim = UptimeClaim {
+            wallet_address: address.to_string(),
+            node_clock: window_end + 60,
+            epoch: 1,
+            head_hash: "00".repeat(32),
+            window_start,
+            window_end,
+        };
+        let temp_dir = tempdir().expect("temporary directory");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let prover = WalletProver::new(&storage);
+        let witness = prover
+            .derive_uptime_witness(&claim)
+            .expect("derive uptime witness");
+        let proof = ChainProof::Stwo(
+            prover
+                .prove_uptime_witness(witness)
+                .expect("prove uptime witness"),
+        );
+        UptimeProof::new(claim, proof)
     }
 
     fn sample_identity_declaration(ledger: &Ledger) -> IdentityDeclaration {
@@ -1999,7 +2024,7 @@ mod tests {
 
         let window_start = 3_600;
         let window_end = 10_800;
-        let proof = UptimeProof::legacy(address.clone(), window_start, window_end);
+        let proof = build_uptime_proof(&address, window_start, window_end);
 
         let credited_hours = ledger.apply_uptime_proof(&proof).unwrap();
         assert_eq!(credited_hours, 2);
@@ -2021,14 +2046,53 @@ mod tests {
 
         let first_start = 1_000;
         let first_end = first_start + 3_600;
-        let proof = UptimeProof::legacy(address.clone(), first_start, first_end);
+        let proof = build_uptime_proof(&address, first_start, first_end);
 
         ledger.apply_uptime_proof(&proof).unwrap();
 
-        let duplicate = UptimeProof::legacy(address.clone(), first_start, first_end);
+        let duplicate = proof.clone();
 
         let err = ledger.apply_uptime_proof(&duplicate).unwrap_err();
         assert!(matches!(err, ChainError::Transaction(_)));
+    }
+
+    #[test]
+    fn reject_uptime_proof_without_payload() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "payloadless".repeat(4);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("genesis-proof");
+        ledger.upsert_account(account).unwrap();
+
+        let proof = build_uptime_proof(&address, 3_600, 7_200);
+        let mut missing = proof.clone();
+        missing.proof = None;
+
+        let err = ledger.apply_uptime_proof(&missing).unwrap_err();
+        assert!(matches!(err, ChainError::Crypto(_)));
+    }
+
+    #[test]
+    fn reject_uptime_proof_with_invalid_payload() {
+        let ledger = Ledger::new(DEFAULT_EPOCH_LENGTH);
+        let address = "invalidpayload".repeat(3);
+        let mut account = Account::new(address.clone(), 0, Stake::default());
+        account.reputation.bind_genesis_identity("genesis-proof");
+        ledger.upsert_account(account).unwrap();
+
+        let mut proof = build_uptime_proof(&address, 3_600, 10_800);
+        if let Some(ChainProof::Stwo(stark)) = proof.proof.as_mut() {
+            if let ProofPayload::Uptime(witness) = &mut stark.payload {
+                witness.node_clock = witness.window_end.saturating_sub(1);
+            } else {
+                panic!("expected uptime witness");
+            }
+        } else {
+            panic!("expected embedded STWO proof");
+        }
+
+        let err = ledger.apply_uptime_proof(&proof).unwrap_err();
+        assert!(matches!(err, ChainError::Crypto(_)));
     }
 
     #[test]
@@ -2041,17 +2105,14 @@ mod tests {
 
         let first_start = 0;
         let first_end = 3_600;
-        let first_proof = UptimeProof::legacy(address.clone(), first_start, first_end);
+        let first_proof = build_uptime_proof(&address, first_start, first_end);
 
         ledger.apply_uptime_proof(&first_proof).unwrap();
 
         // Second proof overlaps the first hour but extends for two additional hours.
         let second_start = 1_800; // overlaps with the already credited hour
         let second_end = 10_800; // extends two new hours beyond the first proof
-        let mut second_proof = UptimeProof::legacy(address.clone(), second_start, second_end);
-        second_proof.node_clock = Some(second_end);
-        second_proof.epoch = Some(0);
-        second_proof.head_hash = Some(hex::encode([0u8; 32]));
+        let second_proof = build_uptime_proof(&address, second_start, second_end);
 
         let credited_hours = ledger.apply_uptime_proof(&second_proof).unwrap();
         assert_eq!(credited_hours, 2);

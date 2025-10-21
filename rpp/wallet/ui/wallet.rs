@@ -1325,7 +1325,7 @@ impl Wallet {
         let accounts = self.storage.load_accounts()?;
         let (ledger, _) = self.load_ledger_from_accounts(accounts)?;
         ledger.sync_epoch_for_height(tip_height);
-        let epoch = ledger.current_epoch();
+        let epoch = ledger.current_epoch().max(1);
 
         let claim = UptimeClaim {
             wallet_address: self.address.clone(),
