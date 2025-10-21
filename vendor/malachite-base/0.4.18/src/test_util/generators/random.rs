@@ -111,7 +111,7 @@ pub fn random_char_gen(_config: &GenConfig) -> It<char> {
 
 #[allow(unstable_name_collisions)]
 pub fn random_char_gen_var_1(_config: &GenConfig) -> It<char> {
-    Box::new(random_char_range(EXAMPLE_SEED, char::MIN, char::MAX))
+    Box::new(random_char_range(EXAMPLE_SEED, '\u{0}', char::MAX))
 }
 
 #[allow(unstable_name_collisions)]

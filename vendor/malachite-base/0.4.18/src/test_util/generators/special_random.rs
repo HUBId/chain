@@ -105,7 +105,7 @@ pub fn special_random_char_gen(config: &GenConfig) -> It<char> {
 pub fn special_random_char_gen_var_1(config: &GenConfig) -> It<char> {
     Box::new(graphic_weighted_random_char_range(
         EXAMPLE_SEED,
-        char::MIN,
+        '\u{0}',
         char::MAX,
         config.get_or("graphic_char_prob_n", 50),
         config.get_or("graphic_char_prob_d", 51),

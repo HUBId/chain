@@ -1,12 +1,12 @@
 {
   "package": "malachite-float",
   "version": "0.4.18",
-  "generated_at": "2025-10-17T07:59:21Z",
+  "generated_at": "2025-10-21T18:22:10Z",
   "reference_source": "hash manifest vendor/malachite-float/0.4.18/manifest/reference_hashes.json",
   "status": "pass",
   "summary": {
-    "total": 163,
-    "match": 163,
+    "total": 253,
+    "match": 253,
     "mismatch": 0,
     "missing_in_vendor": 0,
     "missing_in_reference": 0

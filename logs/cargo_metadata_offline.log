@@ -1,0 +1,3 @@
+error: two packages named `libp2p-ping` in this workspace:
+- /workspace/chain/vendor/libp2p/protocols/ping/Cargo.toml
+- /workspace/chain/rpp/p2p/vendor/protocols/ping/Cargo.toml

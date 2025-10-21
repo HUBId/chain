@@ -1,12 +1,12 @@
 {
   "package": "malachite-nz",
   "version": "0.4.18",
-  "generated_at": "2025-10-17T07:59:22Z",
+  "generated_at": "2025-10-21T18:22:09Z",
   "reference_source": "hash manifest vendor/malachite-nz/0.4.18/manifest/reference_hashes.json",
   "status": "pass",
   "summary": {
-    "total": 545,
-    "match": 545,
+    "total": 844,
+    "match": 844,
     "mismatch": 0,
     "missing_in_vendor": 0,
     "missing_in_reference": 0

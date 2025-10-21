@@ -28,3 +28,17 @@
 [2025-10-16T14:57:11Z] [INFO] Checksum verification succeeded
 [2025-10-16T14:57:11Z] [INFO] Merge report written to /workspace/chain/vendor/malachite-nz/0.4.18/manifest/merge_report.json
 [2025-10-16T14:57:11Z] [INFO] Merge completed successfully
+[2025-10-21T18:19:36Z] [INFO] Loading manifest for malachite-nz 0.4.18 from /workspace/chain/vendor/malachite-nz/0.4.18/manifest/chunks.json
+[2025-10-21T18:19:36Z] [INFO] Validating segment files
+[2025-10-21T18:19:36Z] [ERROR] Segment file missing: /workspace/chain/vendor/malachite-nz/0.4.18/chunks/0
+[2025-10-21T18:19:36Z] [ERROR] Merge aborted
+[2025-10-21T18:20:55Z] [INFO] Loading manifest for malachite-nz 0.4.18 from /workspace/chain/vendor/malachite-nz/0.4.18/manifest/chunks.json
+[2025-10-21T18:20:55Z] [INFO] Validating segment files
+[2025-10-21T18:20:55Z] [INFO] Queued segment malachite-nz-0.4.18.part000 (index=0 offset=0 length=2426976)
+[2025-10-21T18:20:55Z] [INFO] Fetching reference checksum from crates.io
+[2025-10-21T18:20:56Z] [INFO] Stored reference checksum at /workspace/chain/vendor/malachite-nz/0.4.18/manifest/reference_hash.txt
+[2025-10-21T18:20:56Z] [INFO] Merging 1 segments into /workspace/chain/vendor/malachite-nz/0.4.18/malachite-nz-0.4.18.crate
+[2025-10-21T18:20:56Z] [INFO] Computed archive checksum: ad61a09cde72dcdb8b2baaf3e71430c5bd94fb6753da89f17301a459f3e466db
+[2025-10-21T18:20:56Z] [INFO] Checksum verification succeeded
+[2025-10-21T18:20:56Z] [INFO] Merge report written to /workspace/chain/vendor/malachite-nz/0.4.18/manifest/merge_report.json
+[2025-10-21T18:20:56Z] [INFO] Merge completed successfully

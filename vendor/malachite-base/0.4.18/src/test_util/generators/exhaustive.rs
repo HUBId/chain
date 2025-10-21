@@ -114,7 +114,7 @@ pub fn exhaustive_char_gen() -> It<char> {
 
 #[allow(unstable_name_collisions)]
 pub fn exhaustive_char_gen_var_1() -> It<char> {
-    Box::new(char::MIN..char::MAX)
+    Box::new('\u{0}'..char::MAX)
 }
 
 #[allow(unstable_name_collisions)]
