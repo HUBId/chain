@@ -15,9 +15,9 @@ use rpp_chain::crypto::load_keypair;
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
 use rpp_chain::orchestration::{PipelineOrchestrator, PipelineStage};
-use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeEvent, NodeInner as P2pNode};
+use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::wallet::Wallet;
 use rpp_chain::wallet::WalletWorkflows;
 use rpp_p2p::GossipTopic;
@@ -215,6 +215,8 @@ async fn submit_transaction_returns_config_error_when_gossip_publish_fails() {
                 p2p_runtime.run().await.expect("run p2p runtime");
             });
 
+            handle_clone.attach_p2p(p2p_handle.clone()).await;
+
             let (orchestrator, shutdown_rx) =
                 PipelineOrchestrator::new(handle_clone.clone(), Some(p2p_handle.clone()));
             let orchestrator = Arc::new(orchestrator);
@@ -301,6 +303,8 @@ async fn gossip_loop_records_stage_for_matching_payload() {
             });
 
             wait_for_peer_connected(&mut receiver_events).await;
+
+            handle_clone.attach_p2p(receiver_handle.clone()).await;
 
             let (orchestrator, shutdown_rx) =
                 PipelineOrchestrator::new(handle_clone.clone(), Some(receiver_handle.clone()));

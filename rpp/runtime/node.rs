@@ -16,14 +16,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
-use parking_lot::RwLock;
-use tokio::sync::{Mutex, Notify, broadcast};
+use parking_lot::{Mutex as ParkingMutex, RwLock};
+use tokio::sync::{broadcast, mpsc, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -36,13 +36,13 @@ use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
 };
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
-    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
-    classify_participants, evaluate_vrf,
+    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
+    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
+    SignedBftVote, ValidatorCandidate,
 };
 use crate::crypto::{
-    VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
-    sign_message, signature_to_hex, vrf_public_key_to_hex,
+    address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair, sign_message,
+    signature_to_hex, vrf_public_key_to_hex, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -56,6 +56,13 @@ use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
+use crate::runtime::node_runtime::{
+    node::{
+        IdentityProfile as RuntimeIdentityProfile, NodeError as P2pError,
+        NodeRuntimeConfig as P2pRuntimeConfig,
+    },
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
+};
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -65,9 +72,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
-    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
-    TransactionProofBundle, UptimeProof,
+    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -310,6 +317,7 @@ struct WitnessChannels {
     proofs: broadcast::Sender<Vec<u8>>,
     snapshots: broadcast::Sender<Vec<u8>>,
     meta: broadcast::Sender<Vec<u8>>,
+    publisher: ParkingMutex<Option<mpsc::Sender<(GossipTopic, Vec<u8>)>>>,
 }
 
 impl WitnessChannels {
@@ -325,18 +333,21 @@ impl WitnessChannels {
             proofs,
             snapshots,
             meta,
+            publisher: ParkingMutex::new(None),
         }
     }
 
-    fn publish(&self, topic: GossipTopic, payload: Vec<u8>) {
-        let sender = match topic {
-            GossipTopic::Blocks => &self.blocks,
-            GossipTopic::Votes => &self.votes,
-            GossipTopic::Proofs => &self.proofs,
-            GossipTopic::Snapshots => &self.snapshots,
-            GossipTopic::Meta => &self.meta,
-        };
-        let _ = sender.send(payload);
+    fn attach_publisher(&self, publisher: mpsc::Sender<(GossipTopic, Vec<u8>)>) {
+        *self.publisher.lock() = Some(publisher);
+    }
+
+    fn publish_local(&self, topic: GossipTopic, payload: Vec<u8>) {
+        self.forward_to_network(topic.clone(), payload.clone());
+        self.fanout_local(topic, payload);
+    }
+
+    fn ingest_remote(&self, topic: GossipTopic, payload: Vec<u8>) {
+        self.fanout_local(topic, payload);
     }
 
     fn subscribe(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
@@ -347,6 +358,29 @@ impl WitnessChannels {
             GossipTopic::Snapshots => self.snapshots.subscribe(),
             GossipTopic::Meta => self.meta.subscribe(),
         }
+    }
+
+    fn forward_to_network(&self, topic: GossipTopic, payload: Vec<u8>) {
+        if let Some(sender) = self.publisher.lock().as_ref() {
+            if let Err(err) = sender.try_send((topic, payload)) {
+                warn!(
+                    ?err,
+                    ?topic,
+                    "failed to enqueue witness gossip for publishing"
+                );
+            }
+        }
+    }
+
+    fn fanout_local(&self, topic: GossipTopic, payload: Vec<u8>) {
+        let sender = match topic {
+            GossipTopic::Blocks => &self.blocks,
+            GossipTopic::Votes => &self.votes,
+            GossipTopic::Proofs => &self.proofs,
+            GossipTopic::Snapshots => &self.snapshots,
+            GossipTopic::Meta => &self.meta,
+        };
+        let _ = sender.send(payload);
     }
 }
 
@@ -383,6 +417,7 @@ pub(crate) struct NodeInner {
     worker_tasks: Mutex<Vec<JoinHandle<()>>>,
     completion: Notify,
     witness_channels: WitnessChannels,
+    p2p_runtime: ParkingMutex<Option<P2pHandle>>,
 }
 
 enum FinalizationContext {
@@ -633,6 +668,7 @@ impl Node {
             worker_tasks: Mutex::new(Vec::new()),
             completion: Notify::new(),
             witness_channels: WitnessChannels::new(128),
+            p2p_runtime: ParkingMutex::new(None),
         });
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
@@ -647,6 +683,10 @@ impl Node {
 
     pub fn subscribe_witness_gossip(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
         self.inner.subscribe_witness_gossip(topic)
+    }
+
+    pub fn p2p_handle(&self) -> Option<P2pHandle> {
+        self.inner.p2p_handle()
     }
 
     pub async fn start(self) -> ChainResult<()> {
@@ -665,7 +705,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
+        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -676,9 +716,8 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
-        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field,
+        string_to_field, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1338,8 +1377,16 @@ impl NodeHandle {
         self.inner.subscribe_witness_gossip(topic)
     }
 
+    pub fn p2p_handle(&self) -> Option<P2pHandle> {
+        self.inner.p2p_handle()
+    }
+
+    pub async fn attach_p2p(&self, handle: P2pHandle) {
+        self.inner.initialise_p2p_runtime(handle, None).await;
+    }
+
     pub fn fanout_witness_gossip(&self, topic: GossipTopic, payload: &[u8]) {
-        self.inner.emit_witness_bytes(topic, payload.to_vec());
+        self.inner.ingest_witness_bytes(topic, payload.to_vec());
     }
 
     pub fn submit_identity(&self, request: AttestedIdentityRequest) -> ChainResult<String> {
@@ -1495,13 +1542,126 @@ impl NodeInner {
     }
 
     fn emit_witness_bytes(&self, topic: GossipTopic, payload: Vec<u8>) {
-        self.witness_channels.publish(topic, payload);
+        self.witness_channels.publish_local(topic, payload);
     }
 
     fn emit_witness_json<T: Serialize>(&self, topic: GossipTopic, payload: &T) {
         match serde_json::to_vec(payload) {
             Ok(bytes) => self.emit_witness_bytes(topic, bytes),
             Err(err) => debug!(?err, ?topic, "failed to encode witness gossip payload"),
+        }
+    }
+
+    fn ingest_witness_bytes(&self, topic: GossipTopic, payload: Vec<u8>) {
+        self.witness_channels.ingest_remote(topic, payload);
+    }
+
+    fn attach_witness_publisher(&self, publisher: mpsc::Sender<(GossipTopic, Vec<u8>)>) {
+        self.witness_channels.attach_publisher(publisher);
+    }
+
+    fn runtime_config(&self) -> ChainResult<P2pRuntimeConfig> {
+        let mut config = P2pRuntimeConfig::from(&self.config);
+        let profile = self.network_identity_profile()?;
+        config.identity = Some(RuntimeIdentityProfile::from(profile));
+        Ok(config)
+    }
+
+    fn runtime_metrics(&self) -> ChainResult<P2pMetrics> {
+        let status = self.node_status()?;
+        let reputation_score = self
+            .ledger
+            .get_account(&self.address)
+            .map(|account| account.reputation.score)
+            .unwrap_or_default();
+        Ok(P2pMetrics {
+            block_height: status.height,
+            block_hash: status.last_hash,
+            transaction_count: status.pending_transactions,
+            reputation_score,
+            verifier_metrics: self.verifiers.metrics_snapshot(),
+        })
+    }
+
+    fn update_runtime_metrics(&self) {
+        if let Some(handle) = self.p2p_runtime.lock().clone() {
+            match self.runtime_metrics() {
+                Ok(metrics) => handle.update_metrics(metrics),
+                Err(err) => debug!(?err, "failed to collect runtime metrics"),
+            }
+        }
+    }
+
+    fn p2p_handle(&self) -> Option<P2pHandle> {
+        self.p2p_runtime.lock().clone()
+    }
+
+    async fn initialise_p2p_runtime(
+        self: &Arc<Self>,
+        handle: P2pHandle,
+        runtime_task: Option<JoinHandle<()>>,
+    ) {
+        {
+            let mut slot = self.p2p_runtime.lock();
+            *slot = Some(handle.clone());
+        }
+        let (publisher_tx, mut publisher_rx) = mpsc::channel::<(GossipTopic, Vec<u8>)>(128);
+        self.attach_witness_publisher(publisher_tx);
+        self.update_runtime_metrics();
+
+        let mut publish_shutdown = self.subscribe_shutdown();
+        let publisher_handle = handle.clone();
+        self.spawn_worker(tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = publish_shutdown.recv() => {
+                        match result {
+                            Ok(_) | Err(broadcast::error::RecvError::Closed) => break,
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                    maybe_message = publisher_rx.recv() => {
+                        let Some((topic, payload)) = maybe_message else {
+                            break;
+                        };
+                        if let Err(err) = publisher_handle.publish_gossip(topic, payload).await {
+                            warn!(?err, ?topic, "failed to publish witness gossip");
+                        }
+                    }
+                }
+            }
+        }))
+        .await;
+
+        let mut event_shutdown = self.subscribe_shutdown();
+        let mut events = handle.subscribe();
+        let ingest = Arc::clone(self);
+        self.spawn_worker(tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = event_shutdown.recv() => {
+                        match result {
+                            Ok(_) | Err(broadcast::error::RecvError::Closed) => break,
+                            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        }
+                    }
+                    event = events.recv() => match event {
+                        Ok(NodeEvent::Gossip { topic, data, .. }) => {
+                            ingest.ingest_witness_bytes(topic, data);
+                        }
+                        Ok(_) => {}
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(skipped, "lagged on gossip event stream");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    },
+                }
+            }
+        }))
+        .await;
+
+        if let Some(task) = runtime_task {
+            self.spawn_worker(task).await;
         }
     }
 
@@ -1770,12 +1930,29 @@ impl NodeInner {
     pub async fn start(config: NodeConfig) -> ChainResult<(NodeHandle, JoinHandle<()>)> {
         let node = Node::new(config)?;
         let handle = node.handle();
+        let runtime_config = handle.inner.runtime_config()?;
+        let (p2p_inner, p2p_handle) =
+            P2pRuntime::new(runtime_config).map_err(|err: P2pError| {
+                ChainError::Config(format!("failed to initialise p2p runtime: {err}"))
+            })?;
+        let p2p_task = tokio::spawn(async move {
+            if let Err(err) = p2p_inner.run().await {
+                warn!(?err, "p2p runtime exited with error");
+            }
+        });
+        handle
+            .inner
+            .initialise_p2p_runtime(p2p_handle, Some(p2p_task))
+            .await;
         let join = handle.inner.spawn_runtime();
         Ok((handle, join))
     }
 
     pub async fn stop(&self) -> ChainResult<()> {
         self.signal_shutdown();
+        if let Some(runtime) = self.inner.p2p_runtime.lock().clone() {
+            let _ = runtime.shutdown().await;
+        }
         self.completion.notified().await;
         self.drain_worker_tasks().await;
         Ok(())
@@ -3545,6 +3722,8 @@ impl NodeInner {
             .prune_below(block.header.height.saturating_add(1));
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
+        self.update_runtime_metrics();
+
         Ok(FinalizationOutcome::Sealed {
             tip_height: block.header.height,
             block,
@@ -3848,6 +4027,8 @@ impl NodeInner {
             .prune_below(block.header.height.saturating_add(1));
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
+        self.update_runtime_metrics();
+
         Ok(FinalizationOutcome::Sealed {
             tip_height: block.header.height,
             block,
@@ -4016,9 +4197,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
-        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
+        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
+        TimetokeParams, VerifierMetricsSnapshot,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4026,12 +4207,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{Router, routing::post};
+    use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;
