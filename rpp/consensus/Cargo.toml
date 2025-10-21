@@ -32,7 +32,3 @@ prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = f
 rpp-crypto-vrf = { path = "../crypto-vrf" }
 prover_mock_backend = { path = "../zk/prover_mock_backend", optional = true }
 
-[workspace]
-
-[patch.crates-io]
-libp2p-identity = { path = "../../vendor/libp2p/identity" }
