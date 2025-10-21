@@ -49,13 +49,8 @@ impl ProofGenerator {
         })
     }
 
-    pub fn generate_uptime_proof(&self) -> UptimeProof {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let window_start = now.saturating_sub(3600);
-        UptimeProof::legacy(self.wallet.address().clone(), window_start, now)
+    pub fn generate_uptime_proof(&self) -> ChainResult<UptimeProof> {
+        self.wallet.generate_uptime_proof()
     }
 }
 
@@ -109,5 +104,34 @@ mod tests {
         registry
             .verify_transaction(&proof.proof)
             .expect("proof should verify");
+    }
+
+    #[test]
+    fn generate_uptime_proof_surfaces_wallet_artifact() {
+        let temp_dir = tempdir().expect("temporary directory");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+
+        let mut rng = StdRng::from_seed([0x24; 32]);
+        let keypair = Keypair::generate(&mut rng);
+        let address = crate::crypto::address_from_public_key(&keypair.public);
+
+        let mut account =
+            crate::types::Account::new(address.clone(), 0, crate::types::Stake::default());
+        account.reputation.bind_genesis_identity("genesis-proof");
+        storage.persist_account(&account).expect("persist account");
+
+        let wallet = Arc::new(Wallet::new(storage, keypair));
+        let generator = ProofGenerator::new(wallet);
+
+        let proof = generator
+            .generate_uptime_proof()
+            .expect("generate uptime proof");
+
+        let registry = ProofVerifierRegistry::default();
+        let zk_proof = proof.proof().expect("embedded zk proof");
+        registry
+            .verify_uptime(zk_proof)
+            .expect("uptime proof should verify");
+        assert_eq!(proof.wallet_address, address);
     }
 }
