@@ -1,12 +1,12 @@
 {
   "package": "malachite-q",
   "version": "0.4.18",
-  "generated_at": "2025-10-17T07:59:23Z",
+  "generated_at": "2025-10-21T18:22:09Z",
   "reference_source": "hash manifest vendor/malachite-q/0.4.18/manifest/reference_hashes.json",
   "status": "pass",
   "summary": {
-    "total": 197,
-    "match": 197,
+    "total": 322,
+    "match": 322,
     "mismatch": 0,
     "missing_in_vendor": 0,
     "missing_in_reference": 0

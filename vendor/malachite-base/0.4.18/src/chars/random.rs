@@ -79,7 +79,7 @@ impl Iterator for WeightedGraphicRandomCharRange {
 /// ```
 #[inline]
 pub fn random_chars(seed: Seed) -> RandomCharRange {
-    random_char_inclusive_range(seed, char::MIN, char::MAX)
+    random_char_inclusive_range(seed, '\u{0}', char::MAX)
 }
 
 /// Uniformly generates random ASCII [`char`]s.
@@ -111,7 +111,7 @@ pub fn random_chars(seed: Seed) -> RandomCharRange {
 /// ```
 #[inline]
 pub fn random_ascii_chars(seed: Seed) -> RandomCharRange {
-    random_char_inclusive_range(seed, char::MIN, '\u{7f}')
+    random_char_inclusive_range(seed, '\u{0}', '\u{7f}')
 }
 
 /// Uniformly generates random [`char`]s in the half-open interval $[a, b)$.
@@ -251,7 +251,7 @@ pub fn graphic_weighted_random_chars(
 ) -> WeightedGraphicRandomCharRange {
     graphic_weighted_random_char_inclusive_range(
         seed,
-        char::MIN,
+        '\u{0}',
         char::MAX,
         p_numerator,
         p_denominator,
@@ -309,7 +309,7 @@ pub fn graphic_weighted_random_ascii_chars(
 ) -> WeightedGraphicRandomCharRange {
     graphic_weighted_random_char_inclusive_range(
         seed,
-        char::MIN,
+        '\u{0}',
         '\u{7f}',
         p_numerator,
         p_denominator,

@@ -1,11 +1,11 @@
 Integrity Report for malachite-float 0.4.18
-Generated at: 2025-10-17T07:59:21Z
+Generated at: 2025-10-21T18:22:10Z
 Reference source: hash manifest vendor/malachite-float/0.4.18/manifest/reference_hashes.json
 Overall result: PASS
 
 Checksum summary:
-  Total files processed: 163
-  Matching files: 163
+  Total files processed: 253
+  Matching files: 253
   Mismatched files: 0
   Missing in vendor: 0
   Missing in reference: 0

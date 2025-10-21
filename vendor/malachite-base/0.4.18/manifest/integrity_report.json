@@ -1,12 +1,12 @@
 {
   "package": "malachite-base",
   "version": "0.4.18",
-  "generated_at": "2025-10-17T07:59:21Z",
+  "generated_at": "2025-10-21T18:22:08Z",
   "reference_source": "hash manifest vendor/malachite-base/0.4.18/manifest/reference_hashes.json",
   "status": "pass",
   "summary": {
-    "total": 615,
-    "match": 615,
+    "total": 1090,
+    "match": 1090,
     "mismatch": 0,
     "missing_in_vendor": 0,
     "missing_in_reference": 0

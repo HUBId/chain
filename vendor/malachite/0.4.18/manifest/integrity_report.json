@@ -1,7 +1,7 @@
 {
   "package": "malachite",
   "version": "0.4.18",
-  "generated_at": "2025-10-17T07:59:20Z",
+  "generated_at": "2025-10-21T18:22:08Z",
   "reference_source": "hash manifest vendor/malachite/0.4.18/manifest/reference_hashes.json",
   "status": "pass",
   "summary": {

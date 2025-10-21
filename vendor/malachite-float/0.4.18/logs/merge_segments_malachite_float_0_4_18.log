@@ -28,3 +28,13 @@
 [2025-10-16T14:57:16Z] [INFO] Checksum verification succeeded
 [2025-10-16T14:57:16Z] [INFO] Merge report written to /workspace/chain/vendor/malachite-float/0.4.18/manifest/merge_report.json
 [2025-10-16T14:57:16Z] [INFO] Merge completed successfully
+[2025-10-21T18:20:57Z] [INFO] Loading manifest for malachite-float 0.4.18 from /workspace/chain/vendor/malachite-float/0.4.18/manifest/chunks.json
+[2025-10-21T18:20:58Z] [INFO] Validating segment files
+[2025-10-21T18:20:58Z] [INFO] Queued segment malachite-float-0.4.18.part000 (index=0 offset=0 length=623265)
+[2025-10-21T18:20:58Z] [INFO] Fetching reference checksum from crates.io
+[2025-10-21T18:20:58Z] [INFO] Stored reference checksum at /workspace/chain/vendor/malachite-float/0.4.18/manifest/reference_hash.txt
+[2025-10-21T18:20:58Z] [INFO] Merging 1 segments into /workspace/chain/vendor/malachite-float/0.4.18/malachite-float-0.4.18.crate
+[2025-10-21T18:20:58Z] [INFO] Computed archive checksum: 2204711bdc85cb6d01e0296f79a0811750eea7b98fc2fff941264b5744ee5601
+[2025-10-21T18:20:58Z] [INFO] Checksum verification succeeded
+[2025-10-21T18:20:59Z] [INFO] Merge report written to /workspace/chain/vendor/malachite-float/0.4.18/manifest/merge_report.json
+[2025-10-21T18:20:59Z] [INFO] Merge completed successfully

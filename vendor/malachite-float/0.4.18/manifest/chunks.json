@@ -1,6 +1,7 @@
 {
   "version": "0.4.18",
-  "generated_at": "2025-10-17T07:57:27Z",
+  "generated_at": "2025-10-21T18:20:47Z",
+  "source_url": "https://crates.io/api/v1/crates/malachite-float/0.4.18/download",
   "segments": [
     {
       "segment_name": "malachite-float-0.4.18.part000",
@@ -10,10 +11,8 @@
       "length": 623265,
       "size_bytes": 623265,
       "sha256": "2204711bdc85cb6d01e0296f79a0811750eea7b98fc2fff941264b5744ee5601",
-      "downloaded_at": "2025-10-17T07:57:13Z",
-      "timestamp": "2025-10-17T07:57:27Z",
-      "status": "verified"
+      "downloaded_at": "2025-10-21T18:20:47Z",
+      "status": "downloaded"
     }
-  ],
-  "source_url": "https://crates.io/api/v1/crates/malachite-float/0.4.18/download"
+  ]
 }

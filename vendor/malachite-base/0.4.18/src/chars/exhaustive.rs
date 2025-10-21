@@ -32,7 +32,7 @@ use core::ops::RangeInclusive;
 /// );
 /// ```
 pub const fn ascii_chars_increasing() -> RangeInclusive<char> {
-    char::MIN..='\u{7f}'
+    '\u{0}'..='\u{7f}'
 }
 
 /// Generates all [`char`]s, in ascending order.
@@ -59,7 +59,7 @@ pub const fn ascii_chars_increasing() -> RangeInclusive<char> {
 /// );
 /// ```
 pub const fn chars_increasing() -> RangeInclusive<char> {
-    char::MIN..=char::MAX
+    '\u{0}'..=char::MAX
 }
 
 /// Generates all [`char`]s, in a friendly order, so that more familiar [`char`] come first.

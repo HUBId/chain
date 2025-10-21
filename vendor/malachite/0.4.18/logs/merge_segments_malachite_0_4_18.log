@@ -56,3 +56,33 @@
 [2025-10-16T14:57:05Z] [INFO] Checksum verification succeeded
 [2025-10-16T14:57:05Z] [INFO] Merge report written to /workspace/chain/vendor/malachite/0.4.18/manifest/merge_report.json
 [2025-10-16T14:57:05Z] [INFO] Merge completed successfully
+[2025-10-21T18:11:17Z] [INFO] Loading manifest for malachite 0.4.18 from /workspace/chain/vendor/malachite/0.4.18/manifest/chunks.json
+[2025-10-21T18:11:17Z] [INFO] Validating segment files
+[2025-10-21T18:11:17Z] [INFO] Queued segment malachite-0.4.18.part000 (index=0 offset=0 length=7712)
+[2025-10-21T18:11:17Z] [INFO] Fetching reference checksum from crates.io
+[2025-10-21T18:11:18Z] [INFO] Stored reference checksum at /workspace/chain/vendor/malachite/0.4.18/manifest/reference_hash.txt
+[2025-10-21T18:11:18Z] [INFO] Merging 1 segments into /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-21T18:11:18Z] [INFO] Computed archive checksum: 4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b
+[2025-10-21T18:11:18Z] [INFO] Checksum verification succeeded
+[2025-10-21T18:11:18Z] [INFO] Merge report written to /workspace/chain/vendor/malachite/0.4.18/manifest/merge_report.json
+[2025-10-21T18:11:18Z] [INFO] Merge completed successfully
+[2025-10-21T18:12:12Z] [INFO] Loading manifest for malachite 0.4.18 from /workspace/chain/vendor/malachite/0.4.18/manifest/chunks.json
+[2025-10-21T18:12:12Z] [INFO] Validating segment files
+[2025-10-21T18:12:12Z] [INFO] Queued segment malachite-0.4.18.part000 (index=0 offset=0 length=7712)
+[2025-10-21T18:12:12Z] [INFO] Fetching reference checksum from crates.io
+[2025-10-21T18:12:13Z] [INFO] Stored reference checksum at /workspace/chain/vendor/malachite/0.4.18/manifest/reference_hash.txt
+[2025-10-21T18:12:13Z] [INFO] Merging 1 segments into /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-21T18:12:13Z] [INFO] Computed archive checksum: 4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b
+[2025-10-21T18:12:13Z] [INFO] Checksum verification succeeded
+[2025-10-21T18:12:13Z] [INFO] Merge report written to /workspace/chain/vendor/malachite/0.4.18/manifest/merge_report.json
+[2025-10-21T18:12:13Z] [INFO] Merge completed successfully
+[2025-10-21T18:18:00Z] [INFO] Loading manifest for malachite 0.4.18 from /workspace/chain/vendor/malachite/0.4.18/manifest/chunks.json
+[2025-10-21T18:18:00Z] [INFO] Validating segment files
+[2025-10-21T18:18:00Z] [INFO] Queued segment malachite-0.4.18.part000 (index=0 offset=0 length=7712)
+[2025-10-21T18:18:00Z] [INFO] Fetching reference checksum from crates.io
+[2025-10-21T18:18:01Z] [INFO] Stored reference checksum at /workspace/chain/vendor/malachite/0.4.18/manifest/reference_hash.txt
+[2025-10-21T18:18:01Z] [INFO] Merging 1 segments into /workspace/chain/vendor/malachite/0.4.18/malachite-0.4.18.crate
+[2025-10-21T18:18:01Z] [INFO] Computed archive checksum: 4a6ecab92657eb234bfe98abd0b17920772c6b14ce69256950142e2eb36d000b
+[2025-10-21T18:18:01Z] [INFO] Checksum verification succeeded
+[2025-10-21T18:18:01Z] [INFO] Merge report written to /workspace/chain/vendor/malachite/0.4.18/manifest/merge_report.json
+[2025-10-21T18:18:01Z] [INFO] Merge completed successfully

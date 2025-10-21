@@ -118,7 +118,7 @@ pub fn increment_char(c: &mut char) {
 /// ```
 #[inline]
 pub fn decrement_char(c: &mut char) {
-    if *c == char::MIN {
+    if *c == '\u{0}' {
         panic!("Cannot decrement char '{}'", *c);
     } else {
         *c = contiguous_range_to_char(char_to_contiguous_range(*c) - 1).unwrap();
