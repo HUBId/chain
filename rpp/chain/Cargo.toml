@@ -1,0 +1,26 @@
+[package]
+name = "rpp-chain"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["prover-stwo"]
+prover-stwo = ["prover-backend-interface/prover-stwo"]
+prover-stwo-simd = [
+    "prover-stwo",
+    "prover-backend-interface/prover-stwo-simd",
+]
+prover-mock = ["prover-backend-interface/prover-mock"]
+backend-plonky3 = []
+backend-rpp-stark = []
+
+[dependencies]
+prover-backend-interface = { path = "../zk/backend-interface" }
+
+[lints]
+workspace = true
