@@ -157,4 +157,13 @@ p3-util = { version = "0.3.0", default-features = false, features = ["std"] }
 
 [patch.crates-io]
 libp2p-identity = { path = "vendor/libp2p/identity" }
+p3-air = { path = "vendor/p3-air/0.3.0" }
+p3-baby-bear = { path = "vendor/p3-baby-bear/0.3.0" }
+p3-challenger = { path = "vendor/p3-challenger/0.3.0" }
+p3-commit = { path = "vendor/p3-commit/0.3.0" }
+p3-field = { path = "vendor/p3-field/0.3.0" }
+p3-matrix = { path = "vendor/p3-matrix/0.3.0" }
+p3-mersenne-31 = { path = "vendor/p3-mersenne-31/0.3.0" }
+p3-poseidon = { path = "vendor/p3-poseidon/0.3.0" }
+p3-util = { path = "vendor/p3-util/0.3.0" }
 
