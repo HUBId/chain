@@ -5,7 +5,10 @@ use serde_json::Value;
 use std::error::Error;
 use std::fmt;
 
-use crate::proof_backend::{ConsensusCircuitDef, ProofBackend, ProofBytes, VerifyingKey};
+use crate::proof_backend::{
+    BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofSystemKind, VerifyingKey,
+    WitnessBytes, WitnessHeader,
+};
 use crate::validator::ValidatorId;
 
 mod peer_id_serde {
@@ -122,6 +125,7 @@ impl ConsensusProof {
 pub struct Proposal {
     pub block: Block,
     pub proof: ConsensusProof,
+    pub certificate: ConsensusCertificate,
     pub leader_id: ValidatorId,
 }
 
@@ -166,5 +170,55 @@ pub struct Signature {
 pub struct Commit {
     pub block: Block,
     pub proof: ConsensusProof,
+    pub certificate: ConsensusCertificate,
     pub signatures: Vec<Signature>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TalliedVote {
+    pub validator_id: ValidatorId,
+    #[serde(with = "peer_id_serde")]
+    pub peer_id: PeerId,
+    pub signature: Vec<u8>,
+    pub voting_power: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConsensusCertificate {
+    pub block_hash: BlockId,
+    pub height: u64,
+    pub round: u64,
+    pub total_power: u64,
+    pub quorum_threshold: u64,
+    pub prevote_power: u64,
+    pub precommit_power: u64,
+    pub commit_power: u64,
+    pub prevotes: Vec<TalliedVote>,
+    pub precommits: Vec<TalliedVote>,
+}
+
+impl ConsensusCertificate {
+    pub fn genesis() -> Self {
+        Self {
+            block_hash: BlockId("genesis".into()),
+            height: 0,
+            round: 0,
+            total_power: 0,
+            quorum_threshold: 0,
+            prevote_power: 0,
+            precommit_power: 0,
+            commit_power: 0,
+            prevotes: Vec::new(),
+            precommits: Vec::new(),
+        }
+    }
+
+    pub fn circuit_identifier(&self) -> String {
+        format!("consensus-{}-{}", self.height, self.block_hash.0)
+    }
+
+    pub fn encode_witness(&self, backend: ProofSystemKind) -> BackendResult<WitnessBytes> {
+        let header = WitnessHeader::new(backend, self.circuit_identifier());
+        WitnessBytes::encode(&header, self)
+    }
 }

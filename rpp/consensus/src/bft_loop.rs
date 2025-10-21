@@ -120,11 +120,7 @@ async fn handle_message(state: &mut ConsensusState, message: ConsensusMessage) -
 }
 
 fn handle_proposal(state: &mut ConsensusState, proposal: Proposal) {
-    if proposal
-        .proof
-        .verify(&*state.proof_backend)
-        .is_err()
-    {
+    if proposal.proof.verify(&*state.proof_backend).is_err() {
         let evidence = EvidenceRecord {
             reporter: proposal.leader_id.clone(),
             accused: proposal.leader_id.clone(),
@@ -188,10 +184,17 @@ fn handle_precommit(state: &mut ConsensusState, vote: PreCommit) {
         VoteRecordOutcome::Counted { quorum_reached } => {
             if quorum_reached {
                 if let Some(proposal) = state.find_proposal(&vote.block_hash.0).cloned() {
+                    let new_certificate = state.build_certificate(
+                        &vote.block_hash.0,
+                        proposal.block.height,
+                        vote.round,
+                    );
+                    state.stage_certificate(new_certificate);
                     let signatures = state.precommit_signatures(&vote.block_hash.0);
                     let commit = Commit {
                         block: proposal.block,
                         proof: proposal.proof,
+                        certificate: proposal.certificate,
                         signatures,
                     };
                     let _ = finalize_block(commit);

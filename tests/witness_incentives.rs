@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rpp_chain::consensus::evidence::{EvidenceRecord, EvidenceType};
-use rpp_chain::consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
-use rpp_chain::consensus::validator::{VRFOutput, ValidatorLedgerEntry};
 use rpp_chain::consensus::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, VerifyingKey,
 };
+use rpp_chain::consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
+use rpp_chain::consensus::validator::{VRFOutput, ValidatorLedgerEntry};
 
 #[derive(Default)]
 struct FixtureBackend;
@@ -29,6 +29,22 @@ impl ProofBackend for FixtureBackend {
             return Err(BackendError::Failure("empty circuit identifier".into()));
         }
         Ok(())
+    }
+
+    fn prove_consensus(
+        &self,
+        witness: &prover_backend_interface::WitnessBytes,
+    ) -> BackendResult<(ProofBytes, VerifyingKey, ConsensusCircuitDef)> {
+        let digest = blake3::hash(witness.as_slice());
+        let identifier = format!("fixture.consensus.{}", digest.to_hex());
+        let circuit = ConsensusCircuitDef::new(identifier.clone());
+        let header = prover_backend_interface::ProofHeader::new(
+            prover_backend_interface::ProofSystemKind::Mock,
+            identifier.clone(),
+        );
+        let proof = ProofBytes::encode(&header, witness.as_slice())?;
+        let verifying_key = VerifyingKey(identifier.into_bytes());
+        Ok((proof, verifying_key, circuit))
     }
 }
 

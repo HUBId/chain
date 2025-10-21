@@ -35,7 +35,8 @@ pub use bft_loop::{
 pub use evidence::{submit_evidence, Evidence, EvidenceRecord, EvidenceType};
 pub use leader::{Leader, LeaderContext};
 pub use messages::{
-    Block, Commit, ConsensusProof, PreCommit, PreVote, ProofVerificationError, Proposal, Signature,
+    Block, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
+    ProofVerificationError, Proposal, Signature,
 };
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};

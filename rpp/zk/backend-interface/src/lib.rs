@@ -316,6 +316,13 @@ pub trait ProofBackend: Send + Sync + 'static {
         Err(BackendError::Unsupported("transaction verification"))
     }
 
+    fn prove_consensus(
+        &self,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<(ProofBytes, VerifyingKey, ConsensusCircuitDef)> {
+        Err(BackendError::Unsupported("consensus proving"))
+    }
+
     fn verify_consensus(
         &self,
         _vk: &VerifyingKey,
