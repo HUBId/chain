@@ -18,6 +18,13 @@ prover-stwo = [
     "rpp-consensus/prover-stwo",
     "rpp-wallet?/prover-stwo",
 ]
+prover-stwo-simd = [
+    "prover-stwo",
+    "prover-backend-interface/prover-stwo-simd",
+    "prover_stwo_backend/simd",
+    "rpp-consensus/prover-stwo-simd",
+    "rpp-wallet?/prover-stwo-simd",
+]
 prover-mock = [
     "prover-backend-interface/prover-mock",
     "rpp-consensus/prover-mock",
