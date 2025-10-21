@@ -8,7 +8,10 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use crate::bft_loop::ConsensusMessage;
 use crate::evidence::{slash, EvidenceRecord, EvidenceType};
 use crate::leader::{elect_leader, Leader, LeaderContext};
-use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal, Signature};
+use crate::messages::{
+    BlockId, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote, Proposal, Signature,
+    TalliedVote,
+};
 use crate::proof_backend::ProofBackend;
 use crate::rewards::{distribute_rewards, RewardDistribution};
 use crate::validator::{
@@ -143,6 +146,7 @@ struct VoteFingerprint {
 pub struct VoteReceipt {
     pub peer_id: PeerId,
     pub signature: Vec<u8>,
+    pub voting_power: u64,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -159,18 +163,24 @@ impl VoteTally {
         }
     }
 
-    fn insert(&mut self, validator: &Validator, receipt: VoteReceipt, threshold: u64) -> bool {
+    fn insert(&mut self, validator: &Validator, mut receipt: VoteReceipt, threshold: u64) -> bool {
+        receipt.voting_power = validator.voting_power();
         if !self.voters.contains_key(&validator.id) {
-            self.power = self.power.saturating_add(validator.voting_power());
+            self.power = self.power.saturating_add(receipt.voting_power);
             self.voters.insert(validator.id.clone(), receipt);
         }
         self.power >= threshold
     }
 
-    fn receipts(&self) -> Vec<(ValidatorId, VoteReceipt)> {
+    fn tallied_votes(&self) -> Vec<TalliedVote> {
         self.voters
             .iter()
-            .map(|(id, receipt)| (id.clone(), receipt.clone()))
+            .map(|(id, receipt)| TalliedVote {
+                validator_id: id.clone(),
+                peer_id: receipt.peer_id.clone(),
+                signature: receipt.signature.clone(),
+                voting_power: receipt.voting_power,
+            })
             .collect()
     }
 }
@@ -199,6 +209,8 @@ pub struct ConsensusState {
     recorded_votes: HashMap<VoteKey, VoteFingerprint>,
     witness_rewards: BTreeMap<ValidatorId, u64>,
     pub proof_backend: Arc<dyn ProofBackend>,
+    latest_certificate: ConsensusCertificate,
+    pending_certificate: Option<ConsensusCertificate>,
 }
 
 impl ConsensusState {
@@ -238,6 +250,8 @@ impl ConsensusState {
             recorded_votes: HashMap::new(),
             witness_rewards: BTreeMap::new(),
             proof_backend,
+            latest_certificate: ConsensusCertificate::genesis(),
+            pending_certificate: None,
         };
 
         state.update_leader();
@@ -289,6 +303,7 @@ impl ConsensusState {
                 let receipt = VoteReceipt {
                     peer_id: vote.peer_id.clone(),
                     signature: vote.signature.clone(),
+                    voting_power: validator.voting_power(),
                 };
                 let quorum = tally.insert(&validator, receipt, self.validator_set.quorum_threshold);
                 self.mark_activity();
@@ -335,6 +350,7 @@ impl ConsensusState {
                 let receipt = VoteReceipt {
                     peer_id: vote.peer_id.clone(),
                     signature: vote.signature.clone(),
+                    voting_power: validator.voting_power(),
                 };
                 let quorum = tally.insert(&validator, receipt, self.validator_set.quorum_threshold);
                 self.mark_activity();
@@ -388,16 +404,58 @@ impl ConsensusState {
             .get(block_hash)
             .map(|tally| {
                 tally
-                    .receipts()
+                    .tallied_votes()
                     .into_iter()
-                    .map(|(validator_id, receipt)| Signature {
-                        validator_id,
-                        peer_id: receipt.peer_id,
-                        signature: receipt.signature,
+                    .map(|vote| Signature {
+                        validator_id: vote.validator_id,
+                        peer_id: vote.peer_id,
+                        signature: vote.signature,
                     })
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub fn consensus_certificate(&self) -> &ConsensusCertificate {
+        &self.latest_certificate
+    }
+
+    pub fn build_certificate(
+        &self,
+        block_hash: &str,
+        height: u64,
+        round: u64,
+    ) -> ConsensusCertificate {
+        let prevote_tally = self
+            .pending_prevotes
+            .get(block_hash)
+            .map(|tally| (tally.power, tally.tallied_votes()))
+            .unwrap_or_default();
+        let precommit_tally = self
+            .pending_precommits
+            .get(block_hash)
+            .map(|tally| (tally.power, tally.tallied_votes()))
+            .unwrap_or_default();
+
+        let (prevote_power, prevotes) = prevote_tally;
+        let (precommit_power, precommits) = precommit_tally;
+
+        ConsensusCertificate {
+            block_hash: BlockId(block_hash.to_string()),
+            height,
+            round,
+            total_power: self.validator_set.total_voting_power,
+            quorum_threshold: self.validator_set.quorum_threshold,
+            prevote_power,
+            precommit_power,
+            commit_power: precommit_power,
+            prevotes,
+            precommits,
+        }
+    }
+
+    pub fn stage_certificate(&mut self, certificate: ConsensusCertificate) {
+        self.pending_certificate = Some(certificate);
     }
 
     pub fn queue_commit(&mut self, commit: Commit) {
@@ -466,6 +524,11 @@ impl ConsensusState {
     pub fn apply_commit(&mut self, commit: Commit) {
         let committed_hash = commit.block.hash();
         self.block_height = commit.block.height;
+        if let Some(certificate) = self.pending_certificate.take() {
+            self.latest_certificate = certificate;
+        } else {
+            self.latest_certificate = commit.certificate.clone();
+        }
         self.record_proof(commit.proof.clone());
         if let Some(leader) = self.current_leader.clone() {
             let mut rewards = distribute_rewards(
@@ -524,7 +587,7 @@ impl ConsensusState {
             epoch: self.epoch,
             round: self.round,
         };
-        Some(leader.build_proposal(self, context))
+        leader.build_proposal(self, context)
     }
 
     pub fn recompute_totals(&mut self) {

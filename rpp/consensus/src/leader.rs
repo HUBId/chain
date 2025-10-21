@@ -2,7 +2,7 @@ use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::messages::{Block, ConsensusProof, Proposal};
-use crate::proof_backend::{ConsensusCircuitDef, ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey};
+use crate::proof_backend::{ProofBackend, ProofSystemKind};
 use crate::state::ConsensusState;
 use crate::validator::{Validator, ValidatorSet};
 
@@ -22,7 +22,11 @@ impl Leader {
         Self { validator }
     }
 
-    pub fn build_proposal(&self, state: &ConsensusState, context: LeaderContext) -> Proposal {
+    pub fn build_proposal(
+        &self,
+        state: &ConsensusState,
+        context: LeaderContext,
+    ) -> Option<Proposal> {
         let block = Block {
             height: state.block_height + 1,
             epoch: context.epoch,
@@ -33,19 +37,31 @@ impl Leader {
             timestamp: current_timestamp(),
         };
 
-        let circuit = ConsensusCircuitDef::new(format!("consensus-{}", block.height));
-        let header = ProofHeader::new(ProofSystemKind::Mock, circuit.identifier.clone());
-        let payload = format!("consensus-proof-{}", block.height);
-        let proof_bytes = ProofBytes::encode(&header, &payload)
-            .expect("failed to encode consensus proof placeholder");
-        let verifying_key = VerifyingKey(payload.into_bytes());
+        let certificate = state.consensus_certificate().clone();
+        let system = proof_system_from_backend(state.proof_backend.as_ref());
+        let witness = certificate.encode_witness(system).ok()?;
+        let (proof_bytes, verifying_key, circuit) =
+            state.proof_backend.prove_consensus(&witness).ok()?;
         let proof = ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
 
-        Proposal {
+        Some(Proposal {
             block,
             proof,
+            certificate,
             leader_id: self.validator.id.clone(),
-        }
+        })
+    }
+}
+
+fn proof_system_from_backend(backend: &dyn ProofBackend) -> ProofSystemKind {
+    match backend.name() {
+        "mock" => ProofSystemKind::Mock,
+        "stwo" => ProofSystemKind::Stwo,
+        "plonky3" => ProofSystemKind::Plonky3,
+        "plonky2" => ProofSystemKind::Plonky2,
+        "halo2" => ProofSystemKind::Halo2,
+        "rpp-stark" => ProofSystemKind::RppStark,
+        _ => ProofSystemKind::Mock,
     }
 }
 

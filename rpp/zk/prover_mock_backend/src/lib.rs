@@ -37,7 +37,10 @@ impl ProofBackend for MockBackend {
 
     fn keygen_tx(&self, circuit: &TxCircuitDef) -> BackendResult<(ProvingKey, VerifyingKey)> {
         let tag = format!("mock-keygen::{}", circuit.identifier);
-        Ok((ProvingKey(tag.as_bytes().to_vec()), VerifyingKey(tag.into_bytes())))
+        Ok((
+            ProvingKey(tag.as_bytes().to_vec()),
+            VerifyingKey(tag.into_bytes()),
+        ))
     }
 
     fn prove_tx(&self, pk: &ProvingKey, witness: &WitnessBytes) -> BackendResult<ProofBytes> {
@@ -80,12 +83,29 @@ impl ProofBackend for MockBackend {
             ));
         }
         if proof.as_slice().is_empty() {
-            return Err(BackendError::Failure("consensus proof payload empty".into()));
+            return Err(BackendError::Failure(
+                "consensus proof payload empty".into(),
+            ));
         }
         if vk.as_slice().is_empty() {
-            return Err(BackendError::Failure("consensus verifying key empty".into()));
+            return Err(BackendError::Failure(
+                "consensus verifying key empty".into(),
+            ));
         }
         Ok(())
+    }
+
+    fn prove_consensus(
+        &self,
+        witness: &WitnessBytes,
+    ) -> BackendResult<(ProofBytes, VerifyingKey, ConsensusCircuitDef)> {
+        let digest = blake3::hash(witness.as_slice());
+        let identifier = format!("mock.consensus.{}", digest.to_hex());
+        let circuit = ConsensusCircuitDef::new(identifier.clone());
+        let header = ProofHeader::new(ProofSystemKind::Mock, identifier.clone());
+        let proof = ProofBytes::encode(&header, witness.as_slice())?;
+        let verifying_key = VerifyingKey(identifier.into_bytes());
+        Ok((proof, verifying_key, circuit))
     }
 }
 
@@ -103,9 +123,15 @@ mod tests {
         let witness_header = WitnessHeader::new(ProofSystemKind::Mock, "tx");
         let witness = WitnessBytes::encode(&witness_header, &42u64).unwrap();
         let proof = backend.prove_tx(&pk, &witness).unwrap();
-        assert!(backend.verify_tx(&vk, &proof, &TxPublicInputs {
-            utxo_root: [0u8; 32],
-            transaction_commitment: [0u8; 32],
-        }).unwrap());
+        assert!(backend
+            .verify_tx(
+                &vk,
+                &proof,
+                &TxPublicInputs {
+                    utxo_root: [0u8; 32],
+                    transaction_commitment: [0u8; 32],
+                }
+            )
+            .unwrap());
     }
 }
