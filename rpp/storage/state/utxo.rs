@@ -1,7 +1,8 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
 use crate::proof_backend::Blake2sHasher;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::RwLock;
 
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
@@ -34,9 +35,7 @@ impl StoredUtxo {
     }
 
     pub fn to_record(&self, outpoint: &UtxoOutpoint) -> UtxoRecord {
-        let mut script_seed = self.owner.as_bytes().to_vec();
-        script_seed.extend_from_slice(&outpoint.index.to_be_bytes());
-        let script_hash: [u8; 32] = Blake2sHasher::hash(&script_seed).into();
+        let script_hash = locking_script_hash(&self.owner, self.amount);
         UtxoRecord {
             outpoint: outpoint.clone(),
             owner: self.owner.clone(),
@@ -46,6 +45,24 @@ impl StoredUtxo {
             timelock: None,
         }
     }
+}
+
+#[derive(Serialize)]
+enum LedgerScriptPayload<'a> {
+    Recipient { to: &'a Address, amount: u128 },
+}
+
+fn encode_recipient_script(owner: &Address, amount: u128) -> Vec<u8> {
+    serde_json::to_vec(&LedgerScriptPayload::Recipient { to: owner, amount })
+        .expect("serialize ledger recipient script")
+}
+
+pub fn locking_script_hash(owner: &Address, amount: u128) -> [u8; 32] {
+    let script_bytes = encode_recipient_script(owner, amount);
+    let mut hasher = Sha256::new();
+    hasher.update(&(script_bytes.len() as u32).to_le_bytes());
+    hasher.update(&script_bytes);
+    hasher.finalize().into()
 }
 
 #[derive(Default)]
