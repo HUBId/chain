@@ -1,8 +1,40 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rpp_chain::consensus::evidence::{EvidenceRecord, EvidenceType};
 use rpp_chain::consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_chain::consensus::validator::{VRFOutput, ValidatorLedgerEntry};
+use rpp_chain::consensus::proof_backend::{
+    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, VerifyingKey,
+};
+
+#[derive(Default)]
+struct FixtureBackend;
+
+impl ProofBackend for FixtureBackend {
+    fn name(&self) -> &'static str {
+        "fixture-consensus"
+    }
+
+    fn verify_consensus(
+        &self,
+        vk: &VerifyingKey,
+        proof: &ProofBytes,
+        circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<()> {
+        if vk.as_slice().is_empty() || proof.as_slice().is_empty() {
+            return Err(BackendError::Failure("empty consensus artifacts".into()));
+        }
+        if circuit.identifier.trim().is_empty() {
+            return Err(BackendError::Failure("empty circuit identifier".into()));
+        }
+        Ok(())
+    }
+}
+
+fn consensus_backend() -> Arc<dyn ProofBackend> {
+    Arc::new(FixtureBackend::default())
+}
 
 fn sample_vrf_output(id: &str, output_byte: u8, tier: u8, score: f64, timetoken: u64) -> VRFOutput {
     VRFOutput {
@@ -42,7 +74,7 @@ fn witness_rewards_and_slashing_follow_blueprint() {
     let ledger = build_ledger(&[("validator-a", 10, 4, 1.2), ("validator-b", 8, 3, 1.1)]);
     let config = ConsensusConfig::new(50, 50, 10, 0.1).with_witness_params(4, 3, 2);
     let genesis = GenesisConfig::new(0, vrf_outputs, ledger, "root".into(), config.clone());
-    let mut state = ConsensusState::new(genesis).expect("state init");
+    let mut state = ConsensusState::new(genesis, consensus_backend()).expect("state init");
 
     let accused = "validator-a".to_string();
     let reporter = "witness-1".to_string();

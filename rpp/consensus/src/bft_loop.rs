@@ -120,7 +120,11 @@ async fn handle_message(state: &mut ConsensusState, message: ConsensusMessage) -
 }
 
 fn handle_proposal(state: &mut ConsensusState, proposal: Proposal) {
-    if proposal.proof.verify().is_err() {
+    if proposal
+        .proof
+        .verify(&*state.proof_backend)
+        .is_err()
+    {
         let evidence = EvidenceRecord {
             reporter: proposal.leader_id.clone(),
             accused: proposal.leader_id.clone(),
@@ -147,7 +151,7 @@ fn handle_proposal(state: &mut ConsensusState, proposal: Proposal) {
 fn handle_prevote(state: &mut ConsensusState, vote: PreVote) {
     let valid_proof = state
         .find_proposal(&vote.block_hash.0)
-        .map(|proposal| proposal.proof.verify().is_ok())
+        .map(|proposal| proposal.proof.verify(&*state.proof_backend).is_ok())
         .unwrap_or(false);
 
     if vote.proof_valid != valid_proof {

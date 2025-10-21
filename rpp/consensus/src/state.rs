@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use libp2p::PeerId;
@@ -9,6 +9,7 @@ use crate::bft_loop::ConsensusMessage;
 use crate::evidence::{slash, EvidenceRecord, EvidenceType};
 use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{Commit, ConsensusProof, PreCommit, PreVote, Proposal, Signature};
+use crate::proof_backend::ProofBackend;
 use crate::rewards::{distribute_rewards, RewardDistribution};
 use crate::validator::{
     select_validators, VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry, ValidatorSet,
@@ -197,10 +198,14 @@ pub struct ConsensusState {
     pub halted: bool,
     recorded_votes: HashMap<VoteKey, VoteFingerprint>,
     witness_rewards: BTreeMap<ValidatorId, u64>,
+    pub proof_backend: Arc<dyn ProofBackend>,
 }
 
 impl ConsensusState {
-    pub fn new(genesis: GenesisConfig) -> Result<Self, ConsensusError> {
+    pub fn new(
+        genesis: GenesisConfig,
+        proof_backend: Arc<dyn ProofBackend>,
+    ) -> Result<Self, ConsensusError> {
         let validator_set = select_validators(
             genesis.epoch,
             &genesis.validator_outputs,
@@ -232,6 +237,7 @@ impl ConsensusState {
             halted: false,
             recorded_votes: HashMap::new(),
             witness_rewards: BTreeMap::new(),
+            proof_backend,
         };
 
         state.update_leader();
@@ -542,6 +548,7 @@ pub fn initialize_state(
     precommit_timeout_ms: u64,
     base_reward: u64,
     leader_bonus: f64,
+    proof_backend: Arc<dyn ProofBackend>,
 ) -> Result<ConsensusState, ConsensusError> {
     let config = ConsensusConfig::new(
         view_timeout_ms,
@@ -556,7 +563,7 @@ pub fn initialize_state(
         reputation_root,
         config,
     );
-    ConsensusState::new(genesis)
+    ConsensusState::new(genesis, proof_backend)
 }
 
 impl ConsensusState {

@@ -1,6 +1,7 @@
 use prover_backend_interface::{
-    BackendResult, ProofBackend, ProofBytes, ProofHeader, ProofSystemKind, ProvingKey, SecurityLevel,
-    TxCircuitDef, TxPublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
+    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofHeader,
+    ProofSystemKind, ProvingKey, SecurityLevel, TxCircuitDef, TxPublicInputs, VerifyingKey,
+    WitnessBytes, WitnessHeader,
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +66,26 @@ impl ProofBackend for MockBackend {
         Ok(decoded.header == expected
             && decoded.witness_header.backend == ProofSystemKind::Mock
             && prefix_matches)
+    }
+
+    fn verify_consensus(
+        &self,
+        vk: &VerifyingKey,
+        proof: &ProofBytes,
+        circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<()> {
+        if circuit.identifier.trim().is_empty() {
+            return Err(BackendError::Failure(
+                "consensus circuit identifier cannot be empty".into(),
+            ));
+        }
+        if proof.as_slice().is_empty() {
+            return Err(BackendError::Failure("consensus proof payload empty".into()));
+        }
+        if vk.as_slice().is_empty() {
+            return Err(BackendError::Failure("consensus verifying key empty".into()));
+        }
+        Ok(())
     }
 }
 

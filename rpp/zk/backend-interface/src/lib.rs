@@ -234,6 +234,19 @@ impl TxCircuitDef {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusCircuitDef {
+    pub identifier: String,
+}
+
+impl ConsensusCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TxPublicInputs {
     pub utxo_root: [u8; 32],
     pub transaction_commitment: [u8; 32],
@@ -301,6 +314,15 @@ pub trait ProofBackend: Send + Sync + 'static {
         _public_inputs: &TxPublicInputs,
     ) -> BackendResult<bool> {
         Err(BackendError::Unsupported("transaction verification"))
+    }
+
+    fn verify_consensus(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<()> {
+        Err(BackendError::Unsupported("consensus verification"))
     }
 }
 
