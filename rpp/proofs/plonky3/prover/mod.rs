@@ -1,6 +1,7 @@
 //! Wallet integration for the Plonky3 backend.
 
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -28,28 +29,115 @@ use super::crypto;
 use super::params::Plonky3Parameters;
 use super::proof::Plonky3Proof;
 
+#[derive(Clone, Debug, Eq)]
+struct CircuitCacheKey {
+    circuit: String,
+    security_bits: u32,
+    use_gpu: bool,
+}
+
+impl PartialEq for CircuitCacheKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.circuit == other.circuit
+            && self.security_bits == other.security_bits
+            && self.use_gpu == other.use_gpu
+    }
+}
+
+impl Hash for CircuitCacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.circuit.hash(state);
+        self.security_bits.hash(state);
+        self.use_gpu.hash(state);
+    }
+}
+
 #[derive(Clone, Debug, Default)]
-struct Plonky3Backend {
-    compiled: Arc<Mutex<HashSet<String>>>,
+pub(super) struct Plonky3Backend {
+    compiled: Arc<Mutex<HashSet<CircuitCacheKey>>>,
+}
+
+trait Plonky3CircuitWitness: Serialize {
+    fn circuit(&self) -> &'static str;
+
+    fn block_height(&self) -> Option<u64> {
+        None
+    }
+}
+
+impl Plonky3CircuitWitness for IdentityWitness {
+    fn circuit(&self) -> &'static str {
+        "identity"
+    }
+}
+
+impl Plonky3CircuitWitness for TransactionWitness {
+    fn circuit(&self) -> &'static str {
+        "transaction"
+    }
+}
+
+impl Plonky3CircuitWitness for StateWitness {
+    fn circuit(&self) -> &'static str {
+        "state"
+    }
+}
+
+impl Plonky3CircuitWitness for PruningWitness {
+    fn circuit(&self) -> &'static str {
+        "pruning"
+    }
+}
+
+impl Plonky3CircuitWitness for RecursiveWitness {
+    fn circuit(&self) -> &'static str {
+        "recursive"
+    }
+
+    fn block_height(&self) -> Option<u64> {
+        Some(self.block_height)
+    }
+}
+
+impl Plonky3CircuitWitness for UptimeWitness {
+    fn circuit(&self) -> &'static str {
+        "uptime"
+    }
+}
+
+impl Plonky3CircuitWitness for ConsensusWitness {
+    fn circuit(&self) -> &'static str {
+        "consensus"
+    }
+
+    fn block_height(&self) -> Option<u64> {
+        Some(self.round)
+    }
 }
 
 impl Plonky3Backend {
-    fn ensure_compiled(&self, circuit: &str) -> ChainResult<()> {
-        let mut guard = self.compiled.lock();
-        if guard.insert(circuit.to_string()) {
-            crypto::verifying_key(circuit).map(|_| ())
-        } else {
-            Ok(())
+    fn ensure_compiled(&self, params: &Plonky3Parameters, circuit: &str) -> ChainResult<()> {
+        let key = CircuitCacheKey {
+            circuit: circuit.to_string(),
+            security_bits: params.security_bits,
+            use_gpu: params.use_gpu_acceleration,
+        };
+        {
+            let guard = self.compiled.lock();
+            if guard.contains(&key) {
+                return Ok(());
+            }
         }
+
+        crypto::verifying_key(circuit)?;
+
+        let mut guard = self.compiled.lock();
+        guard.insert(key);
+        Ok(())
     }
 
-    fn encode_public_inputs<T: Serialize>(
-        &self,
-        circuit: &str,
-        witness: &T,
-        block_height: Option<u64>,
-    ) -> ChainResult<Value> {
-        self.ensure_compiled(circuit)?;
+    fn encode_public_inputs<W: Plonky3CircuitWitness>(&self, witness: &W) -> ChainResult<Value> {
+        let circuit = witness.circuit();
         let witness_value = serde_json::to_value(witness).map_err(|err| {
             ChainError::Crypto(format!(
                 "failed to serialize {circuit} witness for Plonky3 proof generation: {err}"
@@ -57,22 +145,21 @@ impl Plonky3Backend {
         })?;
         let mut public_inputs = Map::new();
         public_inputs.insert("witness".into(), witness_value);
-        if let Some(height) = block_height {
+        if let Some(height) = witness.block_height() {
             public_inputs.insert("block_height".into(), Value::Number(Number::from(height)));
         }
         Ok(Value::Object(public_inputs))
     }
 
-    fn prove<T: Serialize>(
+    fn prove<W: Plonky3CircuitWitness>(
         &self,
-        circuit: &str,
-        witness: &T,
-        block_height: Option<u64>,
+        params: &Plonky3Parameters,
+        witness: &W,
     ) -> ChainResult<Plonky3Proof> {
-        let public_inputs = self.encode_public_inputs(circuit, witness, block_height)?;
-        let proof = Plonky3Proof::new(circuit, public_inputs)?;
-        crypto::verify_proof(&proof)?;
-        Ok(proof)
+        let circuit = witness.circuit();
+        self.ensure_compiled(params, circuit)?;
+        let public_inputs = self.encode_public_inputs(witness)?;
+        Plonky3Proof::new(circuit, public_inputs)
     }
 }
 
@@ -92,13 +179,11 @@ impl Plonky3Prover {
         }
     }
 
-    fn prove_with_backend<T: Serialize>(
-        &self,
-        circuit: &str,
-        witness: &T,
-        block_height: Option<u64>,
-    ) -> ChainResult<ChainProof> {
-        let proof = self.backend.prove(circuit, witness, block_height)?;
+    fn prove_with_backend<W>(&self, witness: &W) -> ChainResult<ChainProof>
+    where
+        W: Plonky3CircuitWitness,
+    {
+        let proof = self.backend.prove(&self.params, witness)?;
         proof.into_value().map(ChainProof::Plonky3)
     }
 }
@@ -233,42 +318,32 @@ impl ProofProver for Plonky3Prover {
     }
 
     fn prove_transaction(&self, witness: Self::TransactionWitness) -> ChainResult<ChainProof> {
-        self.prove_with_backend("transaction", &witness, None)
+        self.prove_with_backend(&witness)
     }
 
     fn prove_identity(&self, witness: Self::IdentityWitness) -> ChainResult<ChainProof> {
-        self.prove_with_backend("identity", &witness, None)
+        self.prove_with_backend(&witness)
     }
 
     fn prove_state_transition(&self, witness: Self::StateWitness) -> ChainResult<ChainProof> {
-        self.prove_with_backend("state", &witness, None)
+        self.prove_with_backend(&witness)
     }
 
     fn prove_pruning(&self, witness: Self::PruningWitness) -> ChainResult<ChainProof> {
-        self.prove_with_backend("pruning", &witness, None)
+        self.prove_with_backend(&witness)
     }
 
     fn prove_recursive(&self, witness: Self::RecursiveWitness) -> ChainResult<ChainProof> {
-        let mut commitments = Vec::new();
-        if let Some(previous) = witness.previous_recursive.clone() {
-            commitments.push(previous);
-        }
-        commitments.extend(witness.identity_proofs.clone());
-        commitments.extend(witness.transaction_proofs.clone());
-        commitments.extend(witness.uptime_proofs.clone());
-        commitments.extend(witness.consensus_proofs.clone());
-        commitments.push(witness.state_proof.clone());
-        commitments.push(witness.pruning_proof.clone());
-        let aggregator = RecursiveAggregator::new(witness.block_height, commitments);
-        let proof = aggregator.finalize()?;
+        let aggregator = RecursiveAggregator::new(self.params.clone(), self.backend.clone());
+        let proof = aggregator.finalize(&witness)?;
         proof.into_value().map(ChainProof::Plonky3)
     }
 
     fn prove_uptime(&self, witness: Self::UptimeWitness) -> ChainResult<ChainProof> {
-        self.prove_with_backend("uptime", &witness, None)
+        self.prove_with_backend(&witness)
     }
 
     fn prove_consensus(&self, witness: Self::ConsensusWitness) -> ChainResult<ChainProof> {
-        self.prove_with_backend("consensus", &witness, Some(witness.round))
+        self.prove_with_backend(&witness)
     }
 }

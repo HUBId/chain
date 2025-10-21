@@ -1,8 +1,9 @@
 #![cfg(feature = "backend-plonky3")]
 
 use ed25519_dalek::{Keypair, Signer};
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::SeedableRng;
+use serde_json::Value;
 
 use rpp_chain::crypto::address_from_public_key;
 use rpp_chain::plonky3::crypto;
@@ -73,7 +74,7 @@ fn plonky3_recursive_flow_roundtrip() {
     );
     verifier.verify_bundle(&bundle, None).unwrap();
 
-    // Recursive proof must reference all commitments from the bundle.
+    // Recursive proof must embed the same sub-proofs inside its witness payload.
     if let ChainProof::Plonky3(value) = &bundle.recursive_proof {
         let parsed = Plonky3Proof::from_value(value).unwrap();
         assert_eq!(parsed.proof.len(), 64);
@@ -81,22 +82,27 @@ fn plonky3_recursive_flow_roundtrip() {
             parsed.verifying_key,
             crypto::verifying_key("recursive").unwrap()
         );
-        let commitments = value
+        let public_inputs = value
             .get("public_inputs")
-            .and_then(|inputs| inputs.get("commitments"))
-            .and_then(|commitments| commitments.as_array())
             .cloned()
-            .unwrap();
-        let state_commitment = match &bundle.state_proof {
-            ChainProof::Plonky3(state_value) => {
-                Plonky3Proof::from_value(state_value).unwrap().commitment
-            }
-            ChainProof::Stwo(_) => panic!("expected Plonky3 state proof"),
-        };
-        assert!(
-            commitments
-                .iter()
-                .any(|entry| entry.as_str() == Some(&state_commitment))
-        );
+            .expect("recursive public inputs");
+        let block_height = public_inputs
+            .get("block_height")
+            .and_then(Value::as_u64)
+            .expect("recursive block height");
+        assert_eq!(block_height, 9);
+        let witness_value = public_inputs
+            .get("witness")
+            .cloned()
+            .expect("recursive witness payload");
+        let recorded: crate::plonky3::circuit::recursive::RecursiveWitness =
+            serde_json::from_value(witness_value).unwrap();
+        assert_eq!(recorded.block_height, 9);
+        assert!(recorded
+            .transaction_proofs
+            .iter()
+            .any(|proof| proof == &tx_proof));
+        assert_eq!(recorded.state_proof, bundle.state_proof);
+        assert_eq!(recorded.pruning_proof, bundle.pruning_proof);
     }
 }
