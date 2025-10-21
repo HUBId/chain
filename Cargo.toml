@@ -9,6 +9,7 @@ members = [
   "storage-firewood",
   "triehash",
   "rpp/p2p",
+  "rpp/chain",
 ]
 resolver = "2"
 
