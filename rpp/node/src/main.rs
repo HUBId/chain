@@ -29,13 +29,21 @@ struct Cli {
     #[arg(long)]
     rpc_listen: Option<std::net::SocketAddr>,
 
+    /// Override the RPC authentication token defined in the configuration
+    #[arg(long)]
+    rpc_auth_token: Option<String>,
+
     /// Override the telemetry endpoint defined in the configuration
     #[arg(long)]
     telemetry_endpoint: Option<String>,
 
     /// Override the telemetry authentication token defined in the configuration
     #[arg(long)]
-    telemetry_auth: Option<String>,
+    telemetry_auth_token: Option<String>,
+
+    /// Override the telemetry sample interval (seconds) defined in the configuration
+    #[arg(long)]
+    telemetry_sample_interval: Option<u64>,
 
     /// Override the log level (also respects RUST_LOG)
     #[arg(long)]
@@ -86,23 +94,30 @@ async fn main() -> Result<()> {
         .context("failed to start node runtime")?;
 
     info!(address = %handle.address(), "node runtime started");
-    info!(rpc_listen = %config.rpc_listen, "rpc endpoint configured");
+    info!(target = "rpc", listen = %config.rpc_listen, "rpc endpoint configured");
     if config.rollout.telemetry.enabled {
         if let Some(endpoint) = &config.rollout.telemetry.endpoint {
             info!(
                 target = "telemetry",
                 endpoint = %endpoint,
+                sample_interval_secs = config.rollout.telemetry.sample_interval_secs,
                 "telemetry endpoint configured"
             );
         } else {
             info!(
                 target = "telemetry",
+                sample_interval_secs = config.rollout.telemetry.sample_interval_secs,
                 "telemetry enabled without explicit endpoint"
             );
         }
     } else {
         info!(target = "telemetry", "telemetry disabled");
     }
+    info!(
+        target = "p2p",
+        listen_addr = %config.p2p.listen_addr,
+        "p2p endpoint configured"
+    );
 
     let runtime_mode = Arc::new(RwLock::new(RuntimeMode::Node));
     let rpc_context = ApiContext::new(
@@ -235,6 +250,14 @@ fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
     if let Some(addr) = cli.rpc_listen {
         config.rpc_listen = addr;
     }
+    if let Some(token) = cli.rpc_auth_token.as_ref() {
+        let token = token.trim();
+        if token.is_empty() {
+            config.rpc_auth_token = None;
+        } else {
+            config.rpc_auth_token = Some(token.to_string());
+        }
+    }
     if let Some(endpoint) = cli.telemetry_endpoint.as_ref() {
         let endpoint = endpoint.trim();
         if endpoint.is_empty() {
@@ -245,12 +268,18 @@ fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
             config.rollout.telemetry.enabled = true;
         }
     }
-    if let Some(auth) = cli.telemetry_auth.as_ref() {
+    if let Some(auth) = cli.telemetry_auth_token.as_ref() {
         let token = auth.trim();
         if token.is_empty() {
             config.rollout.telemetry.auth_token = None;
         } else {
             config.rollout.telemetry.auth_token = Some(token.to_string());
+        }
+    }
+    if let Some(interval) = cli.telemetry_sample_interval {
+        config.rollout.telemetry.sample_interval_secs = interval;
+        if config.rollout.telemetry.endpoint.is_some() {
+            config.rollout.telemetry.enabled = true;
         }
     }
 }
