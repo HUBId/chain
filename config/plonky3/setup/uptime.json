@@ -1,6 +1,11 @@
 {
   "circuit": "uptime",
-  "constraints": "ed25519-signature",
-  "proving_key": "416f7974e162793b6ddc3eb1cccc7e9382be6d5bfb24b1b4cf5d12088e2a93ab",
-  "verifying_key": "0180ca01a5a1c1cd1e44e25fffaf3a78888041c0d8ec2635e36d677720e606a5"
+  "verifying_key": {
+    "encoding": "base64",
+    "value": "GtKVeDhcAOVbEE5Myf4Zr/gEAa8xNWB1dsDN0K0+7S6K1MIDcGBjfi4DrDzUo3oNflgEZBhu+Dp2ZoTbqzTJtMpbVpHRu/RaCCYwRiwhe2iAt30TH2EABWK631A4lqzz"
+  },
+  "proving_key": {
+    "encoding": "base64",
+    "value": "l7a2lNdSPFslfj7WApRR9w3dvp5H4gRN8KeHdq1lyeZN69UpLYhq+8ROp+C/DbGmvNKI1gi/UqA8N9/yc+N0RAhxC3nXW3Bra/pRkyFRERicCWaHnjHHgHUuJ7MHWKjNqWXmsHP6U1qcGWVMtEQG38BaB7xRu9iJXKaPRp+OR0Q="
+  }
 }

@@ -1,6 +1,11 @@
 {
   "circuit": "state",
-  "constraints": "ed25519-signature",
-  "proving_key": "25c7ef1a18012a03a134f7ccf900d732cd4ff4b823eba9bb9baf5e13c3d6a9b6",
-  "verifying_key": "0d09e64bd65a128a8a3b76e073ecd820b9060df44094a9edf76143c8763b0584"
+  "verifying_key": {
+    "encoding": "base64",
+    "value": "oUcHZ7S7Yl/g5lU4OnZhevYAOXjgckxCGfsik5CMGiZXEMfs/jLzl7Oi6DJJAwSBs/dWH4rkiajWcJferoz9b+M+7I40sSaUD+e9UfwtrAu+HBV5h8dqAyVzwDO7JYEY"
+  },
+  "proving_key": {
+    "encoding": "base64",
+    "value": "WxhCqDQ/c306t582bIS4TYv9j56xWY/urO06Ca2OOfElailvNSZKKGySZoD5Ddlu5P6HhWX5+U6NL0m9tSSGpKtSWWhYp5NBXuQwtYI0lLtpDxTwe8qTsCMw1XbkpBfEpdlZeM/RRNdnZUu6zlLNYPulVCCcNTFWZIkzbQK4deOvm2sxfSoHAXo39YOhaDbyYgYcgrEgrlkGmuC/IyN+FEvJ8KGpz7xiD0Zg52CbAG40TzvmFFYwof2xKO9ik1CjAy5vfjXaTzbmTmyOZCNxxZ4Xi+yKagERdXeHTt2G2Lc="
+  }
 }
