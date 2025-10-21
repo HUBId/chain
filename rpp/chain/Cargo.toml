@@ -1,26 +1,94 @@
 [package]
 name = "rpp-chain"
 version.workspace = true
-edition.workspace = true
+edition = "2024"
+rust-version = "1.89.0"
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
-rust-version.workspace = true
 
 [features]
 default = ["prover-stwo"]
-prover-stwo = ["prover-backend-interface/prover-stwo"]
-prover-stwo-simd = [
-    "prover-stwo",
-    "prover-backend-interface/prover-stwo-simd",
+prover-stwo = [
+    "prover-backend-interface/prover-stwo",
+    "dep:prover_stwo_backend",
+    "prover_stwo_backend/prover-stwo",
+    "dep:stwo",
+    "rpp-consensus/prover-stwo",
+    "rpp-wallet?/prover-stwo",
 ]
-prover-mock = ["prover-backend-interface/prover-mock"]
-backend-plonky3 = []
-backend-rpp-stark = []
+prover-mock = [
+    "prover-backend-interface/prover-mock",
+    "rpp-consensus/prover-mock",
+    "rpp-wallet?/prover-mock",
+]
+backend-plonky3 = [
+    "dep:p3-air",
+    "dep:p3-baby-bear",
+    "dep:p3-challenger",
+    "dep:p3-commit",
+    "dep:p3-field",
+    "dep:p3-matrix",
+    "dep:p3-mersenne-31",
+    "dep:p3-poseidon",
+    "dep:p3-util",
+]
+backend-rpp-stark = ["dep:rpp-stark", "rpp-wallet?/backend-rpp-stark"]
+vendor_electrs = [
+    "dep:rpp-wallet",
+    "rpp-wallet/vendor_electrs",
+]
 
 [dependencies]
+anyhow = "1"
+axum = { version = "0.7", features = ["json"] }
+base64 = "0.21"
+blake2 = "0.10"
+blake3 = "1.8"
+clap = { version = "4.5", features = ["derive"] }
+ed25519-dalek = "2.1"
+hex.workspace = true
+libp2p = { path = "../../vendor/libp2p/libp2p", default-features = false }
+log.workspace = true
+malachite = { version = "=0.4.18", features = ["naturals_and_integers"] }
+metrics.workspace = true
+num-traits = "0.2"
+once_cell = "1.19"
+parking_lot = "0.12"
 prover-backend-interface = { path = "../zk/backend-interface" }
+prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
+reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
+rpp-consensus = { path = "../consensus", default-features = false }
+rpp-p2p = { path = "../p2p" }
+rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
+rpp-wallet = { path = "../wallet", default-features = false, optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+storage-firewood = { path = "../../storage-firewood" }
+stwo = { path = "../zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo", default-features = false, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
+toml = "0.8"
+tower = { version = "0.4", features = ["limit", "util"] }
+tracing.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+# Plonky3 backend dependencies
+p3-air = { workspace = true, optional = true }
+p3-baby-bear = { workspace = true, optional = true }
+p3-challenger = { workspace = true, optional = true }
+p3-commit = { workspace = true, optional = true }
+p3-field = { workspace = true, optional = true }
+p3-matrix = { workspace = true, optional = true }
+p3-mersenne-31 = { workspace = true, optional = true }
+p3-poseidon = { workspace = true, optional = true }
+p3-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+rand = { version = "0.8", features = ["std", "std_rng"] }
+tempfile.workspace = true
+tracing-test = "0.2"
 
 [lints]
 workspace = true
