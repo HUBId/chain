@@ -26,9 +26,44 @@ struct CircuitArtifactConfig {
     circuit: String,
     #[serde(default)]
     _constraints: Option<String>,
-    verifying_key: String,
-    proving_key: String,
+    verifying_key: ArtifactLocation,
+    proving_key: ArtifactLocation,
 }
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ArtifactLocation {
+    Inline(String),
+    Descriptor(ArtifactDescriptor),
+}
+
+#[derive(Deserialize, Default)]
+struct ArtifactDescriptor {
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
+    #[serde(default)]
+    value: Option<String>,
+    #[serde(default)]
+    encoding: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    base64: Option<String>,
+    #[serde(default)]
+    hex: Option<String>,
+}
+
+const REQUIRED_CIRCUITS: &[&str] = &[
+    "identity",
+    "transaction",
+    "state",
+    "pruning",
+    "recursive",
+    "uptime",
+    "consensus",
+];
 
 static CIRCUIT_ARTIFACTS: OnceCell<HashMap<String, CircuitArtifact>> = OnceCell::new();
 
@@ -47,20 +82,93 @@ fn candidate_paths(base: &Path, value: &str) -> Vec<PathBuf> {
     candidates
 }
 
-fn decode_artifact_bytes(
+fn normalize_encoding<'a>(encoding: Option<&'a str>) -> Option<&'a str> {
+    encoding
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+fn decode_blob(value: &str, encoding: Option<&str>) -> Option<Vec<u8>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut attempts = Vec::new();
+    if let Some(explicit) = encoding {
+        attempts.push(explicit.to_ascii_lowercase());
+    }
+    attempts.push(String::new());
+
+    for attempt in attempts {
+        match attempt.as_str() {
+            "" => {
+                let hex_candidate = trimmed
+                    .strip_prefix("hex:")
+                    .or_else(|| trimmed.strip_prefix("0x"))
+                    .unwrap_or(trimmed);
+                if hex_candidate.chars().all(|char| char.is_ascii_hexdigit())
+                    && hex_candidate.len() % 2 == 0
+                {
+                    if let Ok(bytes) = hex::decode(hex_candidate) {
+                        if !bytes.is_empty() {
+                            return Some(bytes);
+                        }
+                    }
+                }
+
+                let base64_candidate = trimmed
+                    .strip_prefix("base64:")
+                    .or_else(|| trimmed.strip_prefix("b64:"))
+                    .unwrap_or(trimmed);
+                if let Ok(bytes) = BASE64_STANDARD.decode(base64_candidate.as_bytes()) {
+                    if !bytes.is_empty() {
+                        return Some(bytes);
+                    }
+                }
+            }
+            "base64" | "b64" => {
+                if let Ok(bytes) = BASE64_STANDARD.decode(trimmed.as_bytes()) {
+                    if !bytes.is_empty() {
+                        return Some(bytes);
+                    }
+                }
+            }
+            "hex" | "base16" => {
+                if let Ok(bytes) = hex::decode(trimmed) {
+                    if !bytes.is_empty() {
+                        return Some(bytes);
+                    }
+                }
+            }
+            other => {
+                let prefix = format!("{other}:");
+                if let Some(stripped) = trimmed.strip_prefix(&prefix) {
+                    if let Ok(bytes) = BASE64_STANDARD.decode(stripped.as_bytes()) {
+                        if !bytes.is_empty() {
+                            return Some(bytes);
+                        }
+                    }
+                    if let Ok(bytes) = hex::decode(stripped) {
+                        if !bytes.is_empty() {
+                            return Some(bytes);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn decode_from_path(
     base: &Path,
     value: &str,
     circuit: &str,
     kind: &str,
-) -> ChainResult<Vec<u8>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(ChainError::Crypto(format!(
-            "{kind} for {circuit} circuit is empty"
-        )));
-    }
-
-    for path in candidate_paths(base, trimmed) {
+) -> ChainResult<Option<Vec<u8>>> {
+    for path in candidate_paths(base, value) {
         if path.exists() {
             let data = fs::read(&path).map_err(|err| {
                 ChainError::Crypto(format!(
@@ -74,41 +182,95 @@ fn decode_artifact_bytes(
                     path.display()
                 )));
             }
-            return Ok(data);
+            return Ok(Some(data));
         }
     }
+    Ok(None)
+}
 
-    let hex_candidate = trimmed
-        .strip_prefix("hex:")
-        .or_else(|| trimmed.strip_prefix("0x"))
-        .unwrap_or(trimmed);
-    if hex_candidate
-        .chars()
-        .all(|char| char.is_ascii_hexdigit())
-        && hex_candidate.len() % 2 == 0
+fn decode_artifact_bytes(
+    base: &Path,
+    location: &ArtifactLocation,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<Vec<u8>> {
+    match location {
+        ArtifactLocation::Inline(value) => decode_artifact_string(base, value, circuit, kind),
+        ArtifactLocation::Descriptor(descriptor) => {
+            decode_artifact_descriptor(base, descriptor, circuit, kind)
+        }
+    }
+}
+
+fn decode_artifact_string(
+    base: &Path,
+    value: &str,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<Vec<u8>> {
+    if value.trim().is_empty() {
+        return Err(ChainError::Crypto(format!(
+            "{kind} for {circuit} circuit is empty"
+        )));
+    }
+    if let Some(bytes) = decode_from_path(base, value, circuit, kind)? {
+        return Ok(bytes);
+    }
+    if let Some(bytes) = decode_blob(value, None) {
+        return Ok(bytes);
+    }
+    Err(ChainError::Crypto(format!(
+        "{kind} for {circuit} circuit must reference a file or contain hex/base64 data",
+    )))
+}
+
+fn decode_artifact_descriptor(
+    base: &Path,
+    descriptor: &ArtifactDescriptor,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<Vec<u8>> {
+    if let Some(path) = descriptor
+        .path
+        .as_ref()
+        .or(descriptor.file.as_ref())
+        .map(|path| path.as_str())
     {
-        if let Ok(bytes) = hex::decode(hex_candidate) {
-            if !bytes.is_empty() {
-                return Ok(bytes);
-            }
+        if let Some(bytes) = decode_from_path(base, path, circuit, kind)? {
+            return Ok(bytes);
         }
     }
 
-    let base64_candidate = trimmed
-        .strip_prefix("base64:")
-        .or_else(|| trimmed.strip_prefix("b64:"))
-        .unwrap_or(trimmed);
-    if let Ok(bytes) = BASE64_STANDARD.decode(base64_candidate.as_bytes()) {
-        if !bytes.is_empty() {
+    if let Some(value) = descriptor.base64.as_ref() {
+        if let Some(bytes) = decode_blob(value, Some("base64")) {
+            return Ok(bytes);
+        }
+    }
+
+    if let Some(value) = descriptor.hex.as_ref() {
+        if let Some(bytes) = decode_blob(value, Some("hex")) {
+            return Ok(bytes);
+        }
+    }
+
+    if let Some(value) = descriptor.value.as_ref() {
+        if let Some(bytes) = decode_blob(
+            value,
+            normalize_encoding(
+                descriptor
+                    .encoding
+                    .as_deref()
+                    .or(descriptor.format.as_deref()),
+            ),
+        ) {
             return Ok(bytes);
         }
     }
 
     Err(ChainError::Crypto(format!(
-        "{kind} for {circuit} circuit must reference a file or contain hex/base64 data"
+        "{kind} for {circuit} circuit must provide a file path or an encoded value",
     )))
 }
-
 fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("config/plonky3/setup");
@@ -150,12 +312,8 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
             &config.circuit,
             "verifying key",
         )?;
-        let proving_key = decode_artifact_bytes(
-            &path,
-            &config.proving_key,
-            &config.circuit,
-            "proving key",
-        )?;
+        let proving_key =
+            decode_artifact_bytes(&path, &config.proving_key, &config.circuit, "proving key")?;
         let verifying_key_hash: [u8; 32] = *blake3::hash(&verifying_key).as_bytes();
         let proving_key_hash: [u8; 32] = *blake3::hash(&proving_key).as_bytes();
         if artifacts
@@ -180,6 +338,13 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
         return Err(ChainError::Crypto(
             "no Plonky3 setup artifacts were found; expected at least one circuit".into(),
         ));
+    }
+    for required in REQUIRED_CIRCUITS {
+        if !artifacts.contains_key(*required) {
+            return Err(ChainError::Crypto(format!(
+                "missing Plonky3 setup artifact for required {required} circuit"
+            )));
+        }
     }
     Ok(artifacts)
 }

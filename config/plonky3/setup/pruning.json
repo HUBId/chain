@@ -1,6 +1,11 @@
 {
   "circuit": "pruning",
-  "constraints": "ed25519-signature",
-  "proving_key": "9bef69acca2111efd623ee8a90f65d528d6ed5081b9dfbda8de40c909f2190bf",
-  "verifying_key": "70c69613f4d8cb577435bfd522c6f638e9defdcb61f8a132e008da6c96353a46"
+  "verifying_key": {
+    "encoding": "base64",
+    "value": "BIQ5awJEILAZRdiq4OQUgNM8utFTk5dM6QSK0a1GQHhkN/VzhfHsjogeEL8NWtRuCOlUg1Ng2X0btqR6xLIMLWLomLfu+0g0ighhVfFUZCeDIkKx1kYKJcw+LqXF0mGF"
+  },
+  "proving_key": {
+    "encoding": "base64",
+    "value": "4IxytKnyh71lw4tyjn9RN9K8GfxtmAacws3tq64AUvJwC2GVedKouw58ggaBb24H7pIXbdge5c5FRh7UJVUc2XOu2yp42EcYR7Izbbxs300QaMnqB3TRr0hgUT9ce7J4ihpHcb5BjkrYg6aTxhnss6WEO8MXFVYCsgjY178Z+FVJILuDq7Kwk/3iTkYOkDmKDYA9AByGLVJ7gRCI8Pl65g=="
+  }
 }

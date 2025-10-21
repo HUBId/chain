@@ -1,6 +1,11 @@
 {
   "circuit": "identity",
-  "constraints": "ed25519-signature",
-  "proving_key": "3ceccb19a646bf5f5ae3c285737166903d72570e0d9692bfcdccfe36a573c5f9",
-  "verifying_key": "6db65084e277b2d3a95ec70af6b2ff12b89292224f5cc07aca4626e754eb9f87"
+  "verifying_key": {
+    "encoding": "base64",
+    "value": "Nuw9nBLpCj9xekNilnLzgX0nGmPDPvmVc4/lDZ1pCwjn9ejqjCOKAMpmpmR9MdbgBMSsq6AFZXYe4ne38dgbugMLpoF60MRhY2O/TR3GIWk+8j7bXM4TTAU4x+u0wE6N"
+  },
+  "proving_key": {
+    "encoding": "base64",
+    "value": "i1jD9W5aYyeC4ZzSCG/Oqs+Pp1Ll5gSZNwzN7czpIuo5e+3gkt4bR+VeelBtdYnmDWcS2LpNRiFhxNuSqR/5yJCvPGNhSOit2Z39ntlyZ9lLP75MPrdrCF6D6SHDFjCxLomQ7J8qTrvA26fwfxc0LXIwwYsQuT4mBc2o/M2ms9i7oJqOiXq6TMCvX0NwTpr2mAWml9ZgSmUFzgJCVizC9bXM14gySjzxbqBU2fxTlXD2t6ZfryK16gNjxhBpoFsJ"
+  }
 }

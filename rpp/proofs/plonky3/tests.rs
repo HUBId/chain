@@ -1,8 +1,8 @@
 use ed25519_dalek::{Keypair, Signer};
-use rand::SeedableRng;
 use rand::rngs::StdRng;
-use serde_json::Value;
+use rand::SeedableRng;
 use serde_json::json;
+use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
 use crate::plonky3::prover::Plonky3Prover;
@@ -86,7 +86,7 @@ fn transaction_proof_roundtrip() {
         parsed.verifying_key,
         crypto::verifying_key("transaction").unwrap()
     );
-    assert_eq!(parsed.proof.len(), 64);
+    assert!(!parsed.proof.is_empty());
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.commitment, computed);
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(

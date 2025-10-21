@@ -1,6 +1,11 @@
 {
   "circuit": "transaction",
-  "constraints": "ed25519-signature",
-  "proving_key": "7613c23f7ed6201636c5afb7c855e4fb46bd61f2e2a3d67dc69879e773d06c6f",
-  "verifying_key": "22df25e2cb36c47067f89b0fd981a3df3dcb44eb66f5631876971556b0f8d4f6"
+  "verifying_key": {
+    "encoding": "base64",
+    "value": "2H2xwQIbToG/jZ5ME461vMuw7Y3I3zg9yCKG3bxy6HskXiZlqrc5mn9X86+ErFVorWBtt/2Uan/yrXgtklXzK2BD8m/GWcAeYxCF/VxcHX32fZIEVxffx4oNAJKkfGeT"
+  },
+  "proving_key": {
+    "encoding": "base64",
+    "value": "zjFVLJrjiv9zN65/Siaz3QiXd9y1gk6LeYgKJuzS7iNFS3AHyZIr7wwiHj1ayHDHXtudnf9bVc33qMvvWZEt6futnWHMEDbiqhX1wXD4qxZlmaByBjIKur2Z/kREi2hTjGvnXUmp3YR8FSDPvIu0BQi0+CVU+GQ00F3PAPLPfwgNizncAGb6MluANVFHXI7Vbz6BtC+hRmmgO9ieb5NWwWQHeCi4JRnaOgXBxqNVDHeSayGuMbTnBvoYG0KqCaqLL2SHvrXVNM5NnjpGx+9ejxrwCK4+wEyoi1qi0tjPKxvpTE4NPeB9BZIaiD9zZ4nQd2CQ4tRGOHJjYMBaxNDsnA=="
+  }
 }
