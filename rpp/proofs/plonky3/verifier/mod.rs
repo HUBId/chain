@@ -1,7 +1,11 @@
 //! Node-side verification plumbing for Plonky3 proof artifacts.
 
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use blake3::Hasher;
+use hex::encode as hex_encode;
 use serde_json::Value;
+use thiserror::Error;
 use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
@@ -12,29 +16,161 @@ use crate::types::{BlockProofBundle, ChainProof};
 use super::crypto;
 use super::proof::Plonky3Proof;
 
+#[derive(Debug, Error)]
+enum Plonky3VerificationError {
+    #[error("{message}")]
+    Malformed { message: String },
+    #[error("{message}")]
+    Misconfigured { message: String },
+    #[error("{message}")]
+    VerificationFailed { message: String },
+}
+
+impl Plonky3VerificationError {
+    fn malformed(circuit: &str, detail: impl Into<String>) -> Self {
+        Self::Malformed {
+            message: format!("plonky3 {circuit} proof is malformed: {}", detail.into()),
+        }
+    }
+
+    fn misconfigured(circuit: &str, detail: impl Into<String>) -> Self {
+        Self::Misconfigured {
+            message: format!(
+                "plonky3 verifier misconfigured for {circuit} circuit: {}",
+                detail.into()
+            ),
+        }
+    }
+
+    fn verification(circuit: &str, detail: impl Into<String>) -> Self {
+        Self::VerificationFailed {
+            message: format!("plonky3 {circuit} proof rejected: {}", detail.into()),
+        }
+    }
+}
+
+impl From<Plonky3VerificationError> for ChainError {
+    fn from(err: Plonky3VerificationError) -> Self {
+        match err {
+            Plonky3VerificationError::Misconfigured { message } => ChainError::Config(message),
+            Plonky3VerificationError::Malformed { message }
+            | Plonky3VerificationError::VerificationFailed { message } => {
+                ChainError::Crypto(message)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ProofBlob<'a> {
+    verifying_key_hash: [u8; 32],
+    payload: &'a [u8],
+}
+
+impl<'a> ProofBlob<'a> {
+    fn parse(bytes: &'a [u8], circuit: &str) -> Result<Self, Plonky3VerificationError> {
+        if bytes.len() != 64 {
+            let detail = format!("proof blob must be 64 bytes, found {}", bytes.len());
+            error!("plonky3 {circuit} proof decode failure: {detail}");
+            return Err(Plonky3VerificationError::malformed(circuit, detail));
+        }
+        let mut verifying_key_hash = [0u8; 32];
+        verifying_key_hash.copy_from_slice(&bytes[..32]);
+        Ok(Self {
+            verifying_key_hash,
+            payload: &bytes[32..],
+        })
+    }
+
+    fn verifying_key_hash(&self) -> &[u8; 32] {
+        &self.verifying_key_hash
+    }
+
+    #[allow(dead_code)]
+    fn payload(&self) -> &'a [u8] {
+        self.payload
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Plonky3Verifier;
 
 impl Plonky3Verifier {
-    fn decode_proof(proof: &ChainProof, expected: &str) -> ChainResult<Plonky3Proof> {
-        let value = match proof {
-            ChainProof::Plonky3(value) => value,
+    fn decode_chain_value<'a>(
+        proof: &'a ChainProof,
+        expected: &str,
+    ) -> Result<&'a serde_json::Value, Plonky3VerificationError> {
+        match proof {
+            ChainProof::Plonky3(value) => Ok(value),
             ChainProof::Stwo(_) => {
-                return Err(ChainError::Crypto(
-                    "received STWO proof where Plonky3 artifact was required".into(),
-                ));
+                let message = "received STWO proof where Plonky3 artifact was required".to_string();
+                error!("plonky3 {expected} proof decode failure: {message}");
+                Err(Plonky3VerificationError::malformed(expected, message))
             }
-        };
-        let parsed = Plonky3Proof::from_value(value)?;
+        }
+    }
+
+    fn load_verifying_key(circuit: &str) -> Result<Vec<u8>, Plonky3VerificationError> {
+        crypto::verifying_key(circuit)
+            .map_err(|err| Plonky3VerificationError::misconfigured(circuit, err.to_string()))
+    }
+
+    fn decode_proof(
+        proof: &ChainProof,
+        expected: &str,
+    ) -> Result<Plonky3Proof, Plonky3VerificationError> {
+        let value = Self::decode_chain_value(proof, expected)?;
+        let parsed = Plonky3Proof::from_value(value).map_err(|err| {
+            error!("plonky3 {expected} proof decode failure: {err}");
+            Plonky3VerificationError::malformed(expected, err.to_string())
+        })?;
         if parsed.circuit != expected {
             let message = format!("expected {expected} circuit, received {}", parsed.circuit);
-            error!("{message}");
-            return Err(ChainError::Crypto(message));
+            error!("plonky3 {expected} proof decode failure: {message}");
+            return Err(Plonky3VerificationError::malformed(expected, message));
         }
-        if let Err(err) = crypto::verify_proof(&parsed) {
-            error!("plonky3 proof verification failed for {expected}: {err}");
-            return Err(err);
+
+        let expected_commitment =
+            crypto::compute_commitment(&parsed.public_inputs).map_err(|err| {
+                error!("plonky3 {expected} proof commitment computation failed: {err}");
+                Plonky3VerificationError::malformed(expected, err.to_string())
+            })?;
+        if parsed.commitment != expected_commitment {
+            let message = format!(
+                "commitment mismatch: expected {expected_commitment}, found {}",
+                parsed.commitment
+            );
+            error!("plonky3 {expected} proof verification failed: {message}");
+            return Err(Plonky3VerificationError::verification(expected, message));
         }
+
+        let verifying_key = Self::load_verifying_key(expected)?;
+        if parsed.verifying_key != verifying_key {
+            let expected_key = BASE64_STANDARD.encode(&verifying_key);
+            let provided = BASE64_STANDARD.encode(&parsed.verifying_key);
+            let message =
+                format!("verifying key mismatch: expected {expected_key}, found {provided}");
+            error!("plonky3 {expected} proof verification failed: {message}");
+            return Err(Plonky3VerificationError::verification(expected, message));
+        }
+
+        let blob = ProofBlob::parse(&parsed.proof, expected)?;
+        let expected_hash = blake3::hash(&verifying_key);
+        if blob.verifying_key_hash() != expected_hash.as_bytes() {
+            let message = format!(
+                "verifying key hash mismatch: expected {}, found {}",
+                hex_encode(expected_hash.as_bytes()),
+                hex_encode(blob.verifying_key_hash())
+            );
+            error!("plonky3 {expected} proof verification failed: {message}");
+            return Err(Plonky3VerificationError::verification(expected, message));
+        }
+
+        crypto::verify_proof(&parsed).map_err(|err| {
+            error!("plonky3 {expected} proof verification failed: {err}");
+            Plonky3VerificationError::verification(expected, err.to_string())
+        })?;
+
         Ok(parsed)
     }
 
@@ -42,57 +178,84 @@ impl Plonky3Verifier {
         proof: &Plonky3Proof,
         expected_commitments: &[String],
         expected_previous: Option<&str>,
-    ) -> ChainResult<()> {
-        let commitments = proof
+    ) -> Result<(), Plonky3VerificationError> {
+        let commitments_field = proof
             .public_inputs
             .get("commitments")
+            .or_else(|| {
+                proof
+                    .public_inputs
+                    .get("witness")
+                    .and_then(Value::as_object)
+                    .and_then(|object| object.get("commitments"))
+            })
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                ChainError::Crypto("recursive proof missing commitments array".into())
+                let detail = "recursive proof missing commitments array";
+                error!("plonky3 recursive proof verification failed: {detail}");
+                Plonky3VerificationError::malformed("recursive", detail)
             })?;
-        let recorded: Vec<String> = commitments
+
+        let recorded: Result<Vec<String>, Plonky3VerificationError> = commitments_field
             .iter()
             .map(|value| {
                 value.as_str().map(str::to_owned).ok_or_else(|| {
-                    ChainError::Crypto("recursive proof commitments must be hex strings".into())
+                    let detail = "recursive proof commitments must be encoded as hex strings";
+                    error!("plonky3 recursive proof verification failed: {detail}");
+                    Plonky3VerificationError::malformed("recursive", detail)
                 })
             })
-            .collect::<ChainResult<_>>()?;
+            .collect();
+        let recorded = recorded?;
+
         for commitment in expected_commitments {
             if !recorded.iter().any(|value| value == commitment) {
                 let message =
                     format!("recursive proof is missing commitment {commitment} from bundle");
-                error!("{message}");
-                return Err(ChainError::Crypto(message));
+                error!("plonky3 recursive proof verification failed: {message}");
+                return Err(Plonky3VerificationError::verification("recursive", message));
             }
         }
+
         if let Some(previous) = expected_previous {
             if !recorded.iter().any(|value| value == previous) {
                 let message =
                     format!("recursive proof does not reference previous accumulator {previous}");
-                error!("{message}");
-                return Err(ChainError::Crypto(message));
+                error!("plonky3 recursive proof verification failed: {message}");
+                return Err(Plonky3VerificationError::verification("recursive", message));
             }
         }
-        let accumulator = proof
+
+        let accumulator_value = proof
             .public_inputs
             .get("accumulator")
+            .or_else(|| {
+                proof
+                    .public_inputs
+                    .get("witness")
+                    .and_then(Value::as_object)
+                    .and_then(|object| object.get("accumulator"))
+            })
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                ChainError::Crypto("recursive proof missing accumulator field".into())
+                let detail = "recursive proof missing accumulator field";
+                error!("plonky3 recursive proof verification failed: {detail}");
+                Plonky3VerificationError::malformed("recursive", detail)
             })?;
+
         let mut hasher = Hasher::new();
         for entry in &recorded {
             hasher.update(entry.as_bytes());
         }
         let expected_accumulator = hasher.finalize().to_hex().to_string();
-        if accumulator != expected_accumulator {
+        if accumulator_value != expected_accumulator {
             let message = format!(
-                "recursive proof accumulator mismatch: expected {expected_accumulator}, found {accumulator}"
+                "accumulator mismatch: expected {expected_accumulator}, found {accumulator_value}"
             );
-            error!("{message}");
-            return Err(ChainError::Crypto(message));
+            error!("plonky3 recursive proof verification failed: {message}");
+            return Err(Plonky3VerificationError::verification("recursive", message));
         }
+
         Ok(())
     }
 
@@ -103,15 +266,18 @@ impl Plonky3Verifier {
     ) -> ChainResult<()> {
         let mut commitments = Vec::new();
         for proof in &bundle.transaction_proofs {
-            let parsed = Self::decode_proof(proof, "transaction")?;
+            let parsed = Self::decode_proof(proof, "transaction").map_err(ChainError::from)?;
             commitments.push(parsed.commitment);
         }
-        let state = Self::decode_proof(&bundle.state_proof, "state")?;
+        let state = Self::decode_proof(&bundle.state_proof, "state").map_err(ChainError::from)?;
         commitments.push(state.commitment.clone());
-        let pruning = Self::decode_proof(&bundle.pruning_proof, "pruning")?;
+        let pruning =
+            Self::decode_proof(&bundle.pruning_proof, "pruning").map_err(ChainError::from)?;
         commitments.push(pruning.commitment.clone());
-        let recursive = Self::decode_proof(&bundle.recursive_proof, "recursive")?;
+        let recursive =
+            Self::decode_proof(&bundle.recursive_proof, "recursive").map_err(ChainError::from)?;
         Self::check_recursive_inputs(&recursive, &commitments, expected_previous_commitment)
+            .map_err(ChainError::from)
     }
 }
 
@@ -121,30 +287,44 @@ impl ProofVerifier for Plonky3Verifier {
     }
 
     fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "transaction").map(|_| ())
+        Self::decode_proof(proof, "transaction")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 
     fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "identity").map(|_| ())
+        Self::decode_proof(proof, "identity")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 
     fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "state").map(|_| ())
+        Self::decode_proof(proof, "state")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 
     fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "pruning").map(|_| ())
+        Self::decode_proof(proof, "pruning")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 
     fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "recursive").map(|_| ())
+        Self::decode_proof(proof, "recursive")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 
     fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "uptime").map(|_| ())
+        Self::decode_proof(proof, "uptime")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 
     fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
-        Self::decode_proof(proof, "consensus").map(|_| ())
+        Self::decode_proof(proof, "consensus")
+            .map(|_| ())
+            .map_err(ChainError::from)
     }
 }
