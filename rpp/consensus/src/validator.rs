@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::convert::TryInto;
+
+use rpp_crypto_vrf::{
+    derive_tier_seed, verify_vrf, PoseidonVrfInput, VrfOutput as CryptoVrfOutput, VrfPublicKey,
+};
 
 pub type ValidatorId = String;
 
@@ -7,6 +12,7 @@ pub type ValidatorId = String;
 pub struct VRFOutput {
     pub validator_id: ValidatorId,
     pub output: [u8; 32],
+    pub preoutput: Vec<u8>,
     pub proof: Vec<u8>,
     pub reputation_tier: u8,
     pub reputation_score: f64,
@@ -143,12 +149,25 @@ pub fn select_validators(
             continue;
         }
 
-        let input =
-            rpp::vrf::PoseidonVrfInput::new(epoch, output.validator_id.clone(), output.seed);
-        let public_key = rpp::vrf::VrfPublicKey::new(output.public_key.clone());
-        let vrf_output = rpp::vrf::VrfOutput::new(output.output, output.proof.clone());
+        let tier_seed = derive_tier_seed(&output.validator_id, output.timetoken_balance);
+        let input = PoseidonVrfInput::new(output.seed, epoch, tier_seed);
 
-        if rpp::vrf::verify_vrf(&input, &public_key, &vrf_output).is_err() {
+        let public_key_bytes: [u8; 32] = match output.public_key.as_slice().try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let public_key = match VrfPublicKey::try_from(public_key_bytes) {
+            Ok(key) => key,
+            Err(_) => continue,
+        };
+
+        let vrf_output =
+            match CryptoVrfOutput::from_bytes(&output.output, &output.preoutput, &output.proof) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+        if verify_vrf(&input, &public_key, &vrf_output).is_err() {
             continue;
         }
 
@@ -183,84 +202,4 @@ pub fn timetoken_balances(validators: &ValidatorSet) -> BTreeMap<ValidatorId, u6
         .iter()
         .map(|v| (v.id.clone(), v.timetoken_balance))
         .collect()
-}
-
-pub mod rpp {
-    pub mod vrf {
-        use blake3::Hasher;
-
-        #[derive(Clone, Debug)]
-        pub struct PoseidonVrfInput {
-            pub epoch: u64,
-            pub validator_id: String,
-            pub seed: [u8; 32],
-        }
-
-        impl PoseidonVrfInput {
-            pub fn new(epoch: u64, validator_id: String, seed: [u8; 32]) -> Self {
-                Self {
-                    epoch,
-                    validator_id,
-                    seed,
-                }
-            }
-        }
-
-        #[derive(Clone, Debug)]
-        pub struct VrfPublicKey {
-            bytes: Vec<u8>,
-        }
-
-        impl VrfPublicKey {
-            pub fn new(bytes: Vec<u8>) -> Self {
-                Self { bytes }
-            }
-
-            pub fn as_bytes(&self) -> &[u8] {
-                &self.bytes
-            }
-        }
-
-        #[derive(Clone, Debug)]
-        pub struct VrfOutput {
-            pub randomness: [u8; 32],
-            pub proof: Vec<u8>,
-        }
-
-        impl VrfOutput {
-            pub fn new(randomness: [u8; 32], proof: Vec<u8>) -> Self {
-                Self { randomness, proof }
-            }
-
-            pub fn randomness(&self) -> &[u8; 32] {
-                &self.randomness
-            }
-        }
-
-        #[derive(Debug, PartialEq, Eq)]
-        pub enum VrfError {
-            VerificationFailed,
-        }
-
-        pub type VrfResult<T> = Result<T, VrfError>;
-
-        pub fn verify_vrf(
-            input: &PoseidonVrfInput,
-            public: &VrfPublicKey,
-            output: &VrfOutput,
-        ) -> VrfResult<()> {
-            let mut hasher = Hasher::new();
-            hasher.update(&input.seed);
-            hasher.update(&input.epoch.to_be_bytes());
-            hasher.update(input.validator_id.as_bytes());
-            hasher.update(public.as_bytes());
-            hasher.update(output.randomness());
-            let digest = hasher.finalize();
-            if output.proof == digest.as_bytes() {
-                Ok(())
-            } else {
-                Err(VrfError::VerificationFailed)
-            }
-        }
-    }
 }

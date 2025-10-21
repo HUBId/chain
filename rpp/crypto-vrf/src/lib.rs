@@ -8,18 +8,220 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::crypto::{VrfPublicKey, VrfSecretKey, vrf_public_key_to_hex};
-use crate::errors::ChainError;
-use crate::reputation::Tier;
-use crate::stwo::params::{FieldElement, StarkParameters};
-use crate::types::Address;
-use malachite::Natural;
 use malachite::base::num::arithmetic::traits::DivRem;
+use malachite::Natural;
+use prover_backend_interface::Blake2sHasher;
+use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
+use schnorrkel::keys::{
+    ExpansionMode, Keypair as VrfKeypairInner, MiniSecretKey, PublicKey as SrPublicKey,
+};
 use schnorrkel::signing_context;
 use schnorrkel::vrf::{VRFPreOut, VRFProof};
+use schnorrkel::SignatureError as VrfSignatureError;
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 use thiserror::Error;
+
+/// Alias used for wallet addresses within the VRF module.
+pub type Address = String;
+
+/// Reputation tiers used when evaluating validator submissions.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Tier {
+    Tl0,
+    Tl1,
+    Tl2,
+    Tl3,
+    Tl4,
+    Tl5,
+}
+
+impl Tier {
+    /// Human-readable name associated with the tier.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Tier::Tl0 => "New",
+            Tier::Tl1 => "Validated",
+            Tier::Tl2 => "Available",
+            Tier::Tl3 => "Committed",
+            Tier::Tl4 => "Reliable",
+            Tier::Tl5 => "Trusted",
+        }
+    }
+
+    /// Textual description of the tier requirements.
+    pub fn requirements(&self) -> &'static str {
+        match self {
+            Tier::Tl0 => "ZSI noch nicht validiert",
+            Tier::Tl1 => "ZSI validiert",
+            Tier::Tl2 => "+24h Uptime",
+            Tier::Tl3 => "Konsens-Runden ohne Fehlverhalten",
+            Tier::Tl4 => "Langfristige Uptime + Konsens",
+            Tier::Tl5 => "Langzeit-Historie, hoher Score",
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            Tier::Tl0 => 0,
+            Tier::Tl1 => 1,
+            Tier::Tl2 => 2,
+            Tier::Tl3 => 3,
+            Tier::Tl4 => 4,
+            Tier::Tl5 => 5,
+        }
+    }
+}
+
+impl fmt::Display for Tier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.name())
+    }
+}
+
+impl Default for Tier {
+    fn default() -> Self {
+        Tier::Tl0
+    }
+}
+
+impl Ord for Tier {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank().cmp(&other.rank())
+    }
+}
+
+impl PartialOrd for Tier {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Errors emitted when encoding or decoding VRF keys.
+#[derive(Debug, Error)]
+pub enum VrfKeyError {
+    #[error("invalid VRF secret key encoding: {0}")]
+    InvalidSecretEncoding(String),
+    #[error("invalid VRF public key encoding: {0}")]
+    InvalidPublicEncoding(String),
+    #[error("invalid VRF secret key length")]
+    InvalidSecretLength,
+    #[error("invalid VRF public key length")]
+    InvalidPublicLength,
+    #[error("invalid VRF secret key bytes: {0}")]
+    InvalidSecretBytes(#[source] VrfSignatureError),
+    #[error("invalid VRF public key bytes: {0}")]
+    InvalidPublicBytes(#[source] VrfSignatureError),
+}
+
+/// VRF mini-secret key wrapper.
+#[derive(Debug, Clone)]
+pub struct VrfSecretKey {
+    inner: MiniSecretKey,
+}
+
+impl VrfSecretKey {
+    pub fn new(inner: MiniSecretKey) -> Self {
+        Self { inner }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.inner.to_bytes()
+    }
+
+    pub fn as_mini_secret(&self) -> &MiniSecretKey {
+        &self.inner
+    }
+
+    pub fn expand_to_keypair(&self) -> VrfKeypairInner {
+        self.inner.expand_to_keypair(ExpansionMode::Uniform)
+    }
+
+    pub fn derive_public(&self) -> VrfPublicKey {
+        VrfPublicKey {
+            inner: self.expand_to_keypair().public,
+        }
+    }
+}
+
+impl TryFrom<[u8; 32]> for VrfSecretKey {
+    type Error = VrfSignatureError;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        MiniSecretKey::from_bytes(&bytes).map(VrfSecretKey::new)
+    }
+}
+
+/// VRF public key wrapper.
+#[derive(Debug, Clone)]
+pub struct VrfPublicKey {
+    inner: SrPublicKey,
+}
+
+impl VrfPublicKey {
+    pub fn new(inner: SrPublicKey) -> Self {
+        Self { inner }
+    }
+
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.inner.to_bytes()
+    }
+
+    pub fn as_public_key(&self) -> &SrPublicKey {
+        &self.inner
+    }
+}
+
+impl TryFrom<[u8; 32]> for VrfPublicKey {
+    type Error = VrfSignatureError;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        SrPublicKey::from_bytes(&bytes).map(VrfPublicKey::new)
+    }
+}
+
+/// VRF keypair consisting of public and secret components.
+#[derive(Debug, Clone)]
+pub struct VrfKeypair {
+    pub public: VrfPublicKey,
+    pub secret: VrfSecretKey,
+}
+
+/// Sample a new VRF keypair using the default Schnorrkel RNG.
+pub fn generate_vrf_keypair() -> VrfKeypair {
+    let secret = VrfSecretKey::new(MiniSecretKey::generate());
+    let public = secret.derive_public();
+    VrfKeypair { public, secret }
+}
+
+/// Decode a VRF public key from a hex string.
+pub fn vrf_public_key_from_hex(data: &str) -> Result<VrfPublicKey, VrfKeyError> {
+    let bytes =
+        hex::decode(data).map_err(|err| VrfKeyError::InvalidPublicEncoding(err.to_string()))?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| VrfKeyError::InvalidPublicLength)?;
+    VrfPublicKey::try_from(bytes).map_err(VrfKeyError::InvalidPublicBytes)
+}
+
+/// Encode a VRF public key as a hex string.
+pub fn vrf_public_key_to_hex(key: &VrfPublicKey) -> String {
+    hex::encode(key.to_bytes())
+}
+
+/// Decode a VRF secret key from a hex string.
+pub fn vrf_secret_key_from_hex(data: &str) -> Result<VrfSecretKey, VrfKeyError> {
+    let bytes =
+        hex::decode(data).map_err(|err| VrfKeyError::InvalidSecretEncoding(err.to_string()))?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| VrfKeyError::InvalidSecretLength)?;
+    VrfSecretKey::try_from(bytes).map_err(VrfKeyError::InvalidSecretBytes)
+}
+
+/// Encode a VRF secret key as a hex string.
+pub fn vrf_secret_key_to_hex(key: &VrfSecretKey) -> String {
+    hex::encode(key.to_bytes())
+}
 
 /// Poseidon domain separator used for deriving VRF inputs.
 pub const POSEIDON_VRF_DOMAIN: &[u8] = b"chain.vrf.poseidon";
@@ -197,12 +399,6 @@ pub enum VrfError {
 
 /// Result alias used throughout the VRF module.
 pub type VrfResult<T> = Result<T, VrfError>;
-
-impl From<VrfError> for ChainError {
-    fn from(err: VrfError) -> Self {
-        ChainError::Crypto(err.to_string())
-    }
-}
 
 /// Serializable VRF proof transported between consensus participants.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1007,7 +1203,6 @@ fn leader_cmp(a: &VerifiedSubmission, b: &VerifiedSubmission) -> std::cmp::Order
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::{VrfKeypair, generate_vrf_keypair};
 
     fn sample_seed() -> [u8; 32] {
         [0x11; 32]
@@ -1022,7 +1217,7 @@ mod tests {
         tier: Tier,
         timetoke_hours: u64,
     ) -> (VrfSubmission, VrfKeypair, VrfOutput) {
-        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let keypair = generate_vrf_keypair();
         let seed = sample_seed();
         let tier_seed = derive_tier_seed(&address.to_string(), timetoke_hours);
         let input = PoseidonVrfInput::new(seed, sample_epoch(), tier_seed);
@@ -1048,7 +1243,7 @@ mod tests {
         let seed = sample_seed();
         let tier_seed = derive_tier_seed(&address.to_string(), timetoke_hours);
         let input = PoseidonVrfInput::new(seed, sample_epoch(), tier_seed);
-        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let keypair = generate_vrf_keypair();
         let proof = VrfProof {
             randomness: randomness.clone(),
             preoutput: "00".repeat(VRF_PREOUTPUT_LENGTH),
@@ -1119,7 +1314,7 @@ mod tests {
 
     #[test]
     fn verify_fails_for_randomness_mismatch() {
-        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let keypair = generate_vrf_keypair();
         let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
         let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
         let mut output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
@@ -1132,7 +1327,7 @@ mod tests {
 
     #[test]
     fn verify_fails_for_tampered_proof() {
-        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let keypair = generate_vrf_keypair();
         let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
         let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
         let mut output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
@@ -1147,7 +1342,7 @@ mod tests {
 
     #[test]
     fn verify_fails_for_tampered_preoutput() {
-        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let keypair = generate_vrf_keypair();
         let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
         let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
         let mut output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
@@ -1160,7 +1355,7 @@ mod tests {
 
     #[test]
     fn vrf_output_parsing_roundtrip() {
-        let keypair = generate_vrf_keypair().expect("vrf keypair");
+        let keypair = generate_vrf_keypair();
         let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
         let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
         let output = generate_vrf(&input, &keypair.secret).expect("generate vrf");
@@ -1200,8 +1395,8 @@ mod tests {
     fn different_keys_produce_distinct_randomness() {
         let tier_seed = derive_tier_seed(&"addr".to_string(), 12);
         let input = PoseidonVrfInput::new(sample_seed(), sample_epoch(), tier_seed);
-        let first = generate_vrf_keypair().expect("generate vrf keypair");
-        let second = generate_vrf_keypair().expect("generate vrf keypair");
+        let first = generate_vrf_keypair();
+        let second = generate_vrf_keypair();
 
         let first_output = generate_vrf(&input, &first.secret).expect("first vrf");
         let second_output = generate_vrf(&input, &second.secret).expect("second vrf");
