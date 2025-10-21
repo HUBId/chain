@@ -5,7 +5,6 @@ use serde_json::Value;
 use serde_json::json;
 
 use crate::crypto::address_from_public_key;
-use crate::plonky3::aggregation::RecursiveAggregator;
 use crate::plonky3::prover::Plonky3Prover;
 use crate::plonky3::verifier::Plonky3Verifier;
 use crate::plonky3::{crypto, proof::Plonky3Proof};
@@ -105,22 +104,61 @@ fn transaction_proof_roundtrip() {
 fn recursive_aggregator_rejects_tampered_inputs() {
     let prover = Plonky3Prover::new();
     let tx = sample_transaction();
-    let good_proof = prover
+    let transaction_proof = prover
         .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
         .unwrap();
 
-    let mut tampered = good_proof.clone();
+    let state_inputs = json!({"witness": {"state_root": "alpha"}});
+    let state_proof = ChainProof::Plonky3(
+        Plonky3Proof::new("state", state_inputs)
+            .unwrap()
+            .into_value()
+            .unwrap(),
+    );
+    let pruning_inputs = json!({"witness": {"removed": []}});
+    let pruning_proof = ChainProof::Plonky3(
+        Plonky3Proof::new("pruning", pruning_inputs)
+            .unwrap()
+            .into_value()
+            .unwrap(),
+    );
+
+    let mut tampered = transaction_proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         if let Some(object) = value.as_object_mut() {
             object.insert("commitment".into(), json!("deadbeef"));
         }
     }
 
-    let aggregator = RecursiveAggregator::new(1, vec![tampered]);
-    assert!(aggregator.finalize().is_err());
+    let tampered_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &[tampered.clone()],
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            &pruning_proof,
+            1,
+        )
+        .unwrap();
+    assert!(prover.prove_recursive(tampered_witness).is_err());
 
-    let aggregator = RecursiveAggregator::new(1, vec![good_proof]);
-    assert!(aggregator.finalize().is_ok());
+    let valid_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &[transaction_proof.clone()],
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            &pruning_proof,
+            1,
+        )
+        .unwrap();
+    assert!(prover.prove_recursive(valid_witness).is_ok());
 }
 
 #[test]
@@ -145,19 +183,20 @@ fn recursive_bundle_verification_detects_tampering() {
             .into_value()
             .unwrap(),
     );
-    let recursive_value = RecursiveAggregator::new(
-        42,
-        vec![
-            transaction_proof.clone(),
-            state_proof.clone(),
-            pruning_proof.clone(),
-        ],
-    )
-    .finalize()
-    .unwrap()
-    .into_value()
-    .unwrap();
-    let recursive_proof = ChainProof::Plonky3(recursive_value);
+    let recursive_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &[transaction_proof.clone()],
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            &pruning_proof,
+            42,
+        )
+        .unwrap();
+    let recursive_proof = prover.prove_recursive(recursive_witness).unwrap();
 
     let bundle = BlockProofBundle::new(
         vec![transaction_proof.clone()],
