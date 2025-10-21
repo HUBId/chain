@@ -5,11 +5,10 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde::Serialize;
-use serde_json::{Map, Number, Value};
+use serde_json::Value;
 
 use crate::consensus::ConsensusCertificate;
-use crate::errors::{ChainError, ChainResult};
+use crate::errors::ChainResult;
 use crate::proof_system::ProofProver;
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
@@ -25,6 +24,7 @@ use super::circuit::recursive::RecursiveWitness;
 use super::circuit::state::StateWitness;
 use super::circuit::transaction::TransactionWitness;
 use super::circuit::uptime::UptimeWitness;
+use super::circuit::Plonky3CircuitWitness;
 use super::crypto;
 use super::params::Plonky3Parameters;
 use super::proof::Plonky3Proof;
@@ -57,64 +57,6 @@ pub(super) struct Plonky3Backend {
     compiled: Arc<Mutex<HashSet<CircuitCacheKey>>>,
 }
 
-trait Plonky3CircuitWitness: Serialize {
-    fn circuit(&self) -> &'static str;
-
-    fn block_height(&self) -> Option<u64> {
-        None
-    }
-}
-
-impl Plonky3CircuitWitness for IdentityWitness {
-    fn circuit(&self) -> &'static str {
-        "identity"
-    }
-}
-
-impl Plonky3CircuitWitness for TransactionWitness {
-    fn circuit(&self) -> &'static str {
-        "transaction"
-    }
-}
-
-impl Plonky3CircuitWitness for StateWitness {
-    fn circuit(&self) -> &'static str {
-        "state"
-    }
-}
-
-impl Plonky3CircuitWitness for PruningWitness {
-    fn circuit(&self) -> &'static str {
-        "pruning"
-    }
-}
-
-impl Plonky3CircuitWitness for RecursiveWitness {
-    fn circuit(&self) -> &'static str {
-        "recursive"
-    }
-
-    fn block_height(&self) -> Option<u64> {
-        Some(self.block_height)
-    }
-}
-
-impl Plonky3CircuitWitness for UptimeWitness {
-    fn circuit(&self) -> &'static str {
-        "uptime"
-    }
-}
-
-impl Plonky3CircuitWitness for ConsensusWitness {
-    fn circuit(&self) -> &'static str {
-        "consensus"
-    }
-
-    fn block_height(&self) -> Option<u64> {
-        Some(self.round)
-    }
-}
-
 impl Plonky3Backend {
     fn ensure_compiled(&self, params: &Plonky3Parameters, circuit: &str) -> ChainResult<()> {
         let key = CircuitCacheKey {
@@ -136,21 +78,6 @@ impl Plonky3Backend {
         Ok(())
     }
 
-    fn encode_public_inputs<W: Plonky3CircuitWitness>(&self, witness: &W) -> ChainResult<Value> {
-        let circuit = witness.circuit();
-        let witness_value = serde_json::to_value(witness).map_err(|err| {
-            ChainError::Crypto(format!(
-                "failed to serialize {circuit} witness for Plonky3 proof generation: {err}"
-            ))
-        })?;
-        let mut public_inputs = Map::new();
-        public_inputs.insert("witness".into(), witness_value);
-        if let Some(height) = witness.block_height() {
-            public_inputs.insert("block_height".into(), Value::Number(Number::from(height)));
-        }
-        Ok(Value::Object(public_inputs))
-    }
-
     fn prove<W: Plonky3CircuitWitness>(
         &self,
         params: &Plonky3Parameters,
@@ -158,7 +85,7 @@ impl Plonky3Backend {
     ) -> ChainResult<Plonky3Proof> {
         let circuit = witness.circuit();
         self.ensure_compiled(params, circuit)?;
-        let public_inputs = self.encode_public_inputs(witness)?;
+        let public_inputs = witness.public_inputs()?;
         Plonky3Proof::new(circuit, public_inputs)
     }
 }

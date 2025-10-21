@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::rpp::GlobalStateCommitments;
 use crate::types::ChainProof;
 
+use super::Plonky3CircuitWitness;
+
 /// Witness structure for recursive aggregation in the Plonky3 backend.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RecursiveWitness {
@@ -41,5 +43,15 @@ impl RecursiveWitness {
             pruning_proof: pruning_proof.clone(),
             block_height,
         }
+    }
+}
+
+impl Plonky3CircuitWitness for RecursiveWitness {
+    fn circuit(&self) -> &'static str {
+        "recursive"
+    }
+
+    fn block_height(&self) -> Option<u64> {
+        Some(self.block_height)
     }
 }

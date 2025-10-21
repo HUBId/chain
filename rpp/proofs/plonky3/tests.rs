@@ -1,3 +1,4 @@
+use blake3::hash as blake3_hash;
 use ed25519_dalek::{Keypair, Signer};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -86,7 +87,9 @@ fn transaction_proof_roundtrip() {
         parsed.verifying_key,
         crypto::verifying_key("transaction").unwrap()
     );
-    assert!(!parsed.proof.is_empty());
+    assert_eq!(parsed.proof.len(), crypto::PROOF_BLOB_LEN);
+    let verifying_hash = blake3_hash(&parsed.verifying_key);
+    assert_eq!(&parsed.proof[..32], verifying_hash.as_bytes());
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.commitment, computed);
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(

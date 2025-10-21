@@ -40,6 +40,7 @@ backend-plonky3 = [
     "dep:p3-mersenne-31",
     "dep:p3-poseidon",
     "dep:p3-util",
+    # Vendored via cargo/config.toml to keep the workspace buildable offline.
 ]
 backend-rpp-stark = ["dep:rpp-stark", "rpp-wallet?/backend-rpp-stark"]
 vendor_electrs = [

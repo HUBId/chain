@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AttestedIdentityRequest, PruningProof, SignedTransaction};
 
+use super::Plonky3CircuitWitness;
+
 /// Witness capturing the pruning relation between consecutive blocks.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PruningWitness {
@@ -24,5 +26,11 @@ impl PruningWitness {
             pruning_proof: pruning_proof.clone(),
             removed_transactions,
         }
+    }
+}
+
+impl Plonky3CircuitWitness for PruningWitness {
+    fn circuit(&self) -> &'static str {
+        "pruning"
     }
 }

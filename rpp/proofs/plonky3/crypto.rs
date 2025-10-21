@@ -21,6 +21,8 @@ struct CircuitArtifact {
     proving_key_hash: [u8; 32],
 }
 
+pub(crate) const PROOF_BLOB_LEN: usize = 96;
+
 #[derive(Deserialize)]
 struct CircuitArtifactConfig {
     circuit: String,
@@ -383,21 +385,28 @@ pub fn compute_commitment(public_inputs: &Value) -> ChainResult<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
-fn transcript_message(
+fn transcript_message_bytes(circuit: &str, commitment: &str, encoded_inputs: &[u8]) -> Vec<u8> {
+    let mut transcript = Vec::with_capacity(
+        circuit.len() + commitment.len() + encoded_inputs.len(),
+    );
+    transcript.extend_from_slice(circuit.as_bytes());
+    transcript.extend_from_slice(commitment.as_bytes());
+    transcript.extend_from_slice(encoded_inputs);
+    transcript
+}
+
+fn transcript_message_and_inputs(
     circuit: &str,
     commitment: &str,
     public_inputs: &Value,
-) -> ChainResult<Vec<u8>> {
+) -> ChainResult<(Vec<u8>, Vec<u8>)> {
     let encoded_inputs = encode_canonical_json(public_inputs).map_err(|err| {
         ChainError::Crypto(format!(
             "failed to encode Plonky3 public inputs for transcript: {err}"
         ))
     })?;
-    let mut transcript = Vec::new();
-    transcript.extend_from_slice(circuit.as_bytes());
-    transcript.extend_from_slice(commitment.as_bytes());
-    transcript.extend_from_slice(&encoded_inputs);
-    Ok(transcript)
+    let message = transcript_message_bytes(circuit, commitment, &encoded_inputs);
+    Ok((message, encoded_inputs))
 }
 
 fn compute_proof(
@@ -406,12 +415,15 @@ fn compute_proof(
     public_inputs: &Value,
     artifact: &CircuitArtifact,
 ) -> ChainResult<Vec<u8>> {
-    let message = transcript_message(circuit, commitment, public_inputs)?;
-    let mut proof = Vec::with_capacity(64);
+    let (message, encoded_inputs) = transcript_message_and_inputs(circuit, commitment, public_inputs)?;
+    let inputs_digest = blake3::hash(&encoded_inputs);
+    let mut fri_hasher = blake3::Hasher::new_keyed(&artifact.proving_key_hash);
+    fri_hasher.update(&message);
+
+    let mut proof = Vec::with_capacity(PROOF_BLOB_LEN);
     proof.extend_from_slice(&artifact.verifying_key_hash);
-    let mut hasher = blake3::Hasher::new_keyed(&artifact.verifying_key_hash);
-    hasher.update(&message);
-    proof.extend_from_slice(hasher.finalize().as_bytes());
+    proof.extend_from_slice(inputs_digest.as_bytes());
+    proof.extend_from_slice(fri_hasher.finalize().as_bytes());
     Ok(proof)
 }
 
@@ -486,25 +498,34 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
             proof.commitment
         )));
     }
-    let message = transcript_message(&proof.circuit, &expected_commitment, &proof.public_inputs)?;
-    if proof.proof.len() != 64 {
+    if proof.proof.len() != PROOF_BLOB_LEN {
         return Err(ChainError::Crypto(format!(
-            "plonky3 proof blob must be 64 bytes, found {}",
+            "plonky3 proof blob must be {PROOF_BLOB_LEN} bytes, found {}",
             proof.proof.len()
         )));
     }
-    let (recorded_hash, recorded_proof) = proof.proof.split_at(32);
     let verifying_hash = blake3::hash(&artifact.verifying_key);
-    if verifying_hash.as_bytes() != recorded_hash {
+    let (hash_segment, rest) = proof.proof.split_at(32);
+    if verifying_hash.as_bytes() != hash_segment {
         return Err(ChainError::Crypto(format!(
             "plonky3 proof verifying key hash mismatch for {} circuit",
             proof.circuit
         )));
     }
-    let mut hasher = blake3::Hasher::new_keyed(verifying_hash.as_bytes());
-    hasher.update(&message);
-    let expected = hasher.finalize();
-    if expected.as_bytes() != recorded_proof {
+    let (inputs_segment, fri_segment) = rest.split_at(32);
+    let (message, encoded_inputs) =
+        transcript_message_and_inputs(&proof.circuit, &expected_commitment, &proof.public_inputs)?;
+    let expected_inputs_hash = blake3::hash(&encoded_inputs);
+    if expected_inputs_hash.as_bytes() != inputs_segment {
+        return Err(ChainError::Crypto(format!(
+            "plonky3 proof public input digest mismatch for {} circuit",
+            proof.circuit
+        )));
+    }
+    let mut fri_hasher = blake3::Hasher::new_keyed(&artifact.proving_key_hash);
+    fri_hasher.update(&message);
+    let expected_fri = fri_hasher.finalize();
+    if expected_fri.as_bytes() != fri_segment {
         return Err(ChainError::Crypto(format!(
             "plonky3 proof verification failed for {} circuit",
             proof.circuit
