@@ -1,6 +1,6 @@
 #[cfg(feature = "official")]
 use crate::official::{
-    circuit::transaction::TransactionWitness,
+    circuit::{consensus::ConsensusWitness, transaction::TransactionWitness},
     proof::{ProofKind, ProofPayload, StarkProof},
 };
 use prover_backend_interface::{
@@ -10,6 +10,8 @@ use prover_backend_interface::{
 
 #[cfg(feature = "official")]
 const TX_CIRCUIT: &str = "tx";
+#[cfg(feature = "official")]
+const CONSENSUS_CIRCUIT: &str = "consensus";
 
 fn ensure_stwo_backend(system: ProofSystemKind, context: &str) -> BackendResult<()> {
     if system == ProofSystemKind::Stwo {
@@ -65,6 +67,35 @@ pub fn decode_tx_witness(witness: &WitnessBytes) -> BackendResult<TransactionWit
 }
 
 #[cfg(feature = "official")]
+fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
+    if proof.kind != ProofKind::Consensus {
+        return Err(BackendError::Failure(format!(
+            "expected consensus proof kind, found {:?}",
+            proof.kind
+        )));
+    }
+    if !matches!(&proof.payload, ProofPayload::Consensus(_)) {
+        return Err(BackendError::Failure(
+            "proof payload does not contain a consensus witness".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "official")]
+pub fn decode_consensus_witness(witness: &WitnessBytes) -> BackendResult<ConsensusWitness> {
+    let (header, witness) = witness.decode::<ConsensusWitness>()?;
+    ensure_witness_header(&header)?;
+    if header.circuit != CONSENSUS_CIRCUIT {
+        return Err(BackendError::Failure(format!(
+            "unexpected consensus witness circuit '{}', expected '{}'",
+            header.circuit, CONSENSUS_CIRCUIT
+        )));
+    }
+    Ok(witness)
+}
+
+#[cfg(feature = "official")]
 pub fn decode_tx_proof(proof: &ProofBytes) -> BackendResult<StarkProof> {
     let (header, proof) = proof.decode::<StarkProof>()?;
     ensure_proof_header(&header)?;
@@ -73,9 +104,30 @@ pub fn decode_tx_proof(proof: &ProofBytes) -> BackendResult<StarkProof> {
 }
 
 #[cfg(feature = "official")]
+pub fn decode_consensus_proof(proof: &ProofBytes) -> BackendResult<StarkProof> {
+    let (header, proof) = proof.decode::<StarkProof>()?;
+    ensure_proof_header(&header)?;
+    if header.circuit != CONSENSUS_CIRCUIT {
+        return Err(BackendError::Failure(format!(
+            "unexpected consensus proof circuit '{}', expected '{}'",
+            header.circuit, CONSENSUS_CIRCUIT
+        )));
+    }
+    ensure_consensus_payload(&proof)?;
+    Ok(proof)
+}
+
+#[cfg(feature = "official")]
 pub fn encode_tx_proof(proof: &StarkProof) -> BackendResult<ProofBytes> {
     ensure_transaction_payload(proof)?;
     let header = ProofHeader::new(ProofSystemKind::Stwo, TX_CIRCUIT);
+    ProofBytes::encode(&header, proof)
+}
+
+#[cfg(feature = "official")]
+pub fn encode_consensus_proof(proof: &StarkProof) -> BackendResult<ProofBytes> {
+    ensure_consensus_payload(proof)?;
+    let header = ProofHeader::new(ProofSystemKind::Stwo, CONSENSUS_CIRCUIT);
     ProofBytes::encode(&header, proof)
 }
 
@@ -114,7 +166,9 @@ mod tests {
             circuit: "tx".into(),
         };
         let result = ensure_witness_header(&header);
-        assert!(matches!(result, Err(BackendError::Failure(message)) if message.contains("unsupported witness format version")));
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("unsupported witness format version"))
+        );
     }
 
     #[test]
@@ -125,6 +179,8 @@ mod tests {
             circuit: "tx".into(),
         };
         let result = ensure_proof_header(&header);
-        assert!(matches!(result, Err(BackendError::Failure(message)) if message.contains("unsupported proof format version")));
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("unsupported proof format version"))
+        );
     }
 }
