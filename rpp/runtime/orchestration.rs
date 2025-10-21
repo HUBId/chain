@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use hex;
 use serde_json;
-use tokio::sync::{Mutex, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::time;
 use tracing::{debug, info, warn};
 
@@ -254,16 +254,9 @@ impl PipelineOrchestrator {
         if let Some(handle) = self.p2p.clone() {
             let gossip_metrics = self.metrics.clone();
             let gossip_shutdown = shutdown_rx;
-            let witness_node = self.node.clone();
             tokio::spawn(async move {
                 let events = handle.subscribe();
-                PipelineOrchestrator::gossip_loop(
-                    witness_node,
-                    gossip_metrics,
-                    events,
-                    gossip_shutdown,
-                )
-                .await;
+                PipelineOrchestrator::gossip_loop(gossip_metrics, events, gossip_shutdown).await;
             });
         }
     }
@@ -511,7 +504,6 @@ impl PipelineOrchestrator {
     }
 
     async fn gossip_loop(
-        node: NodeHandle,
         metrics: Arc<PipelineMetrics>,
         mut events: broadcast::Receiver<NodeEvent>,
         mut shutdown_rx: watch::Receiver<bool>,
@@ -527,7 +519,6 @@ impl PipelineOrchestrator {
                 event = events.recv() => {
                     match event {
                         Ok(NodeEvent::Gossip { topic, data, .. }) => {
-                            node.fanout_witness_gossip(topic, &data);
                             if topic != GossipTopic::Proofs {
                                 continue;
                             }

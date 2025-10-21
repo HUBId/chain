@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use clap::{Args, Parser, Subcommand};
 use parking_lot::RwLock;
 use tokio::runtime::Builder;
@@ -23,21 +23,21 @@ use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
-use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
 };
+use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::types::BlockPayload;
 use rpp_chain::wallet::Wallet;
 
-use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::errors::{ChainError, ChainResult};
+use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
@@ -200,6 +200,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
 
         let handle = node.handle();
         node_handle = Some(handle.clone());
+        handle.attach_p2p(p2p_runtime_handle.clone()).await;
         node_task = Some(tokio::spawn(async move {
             node.start().await.map_err(|err| anyhow!(err))
         }));
@@ -508,7 +509,7 @@ async fn validator_daemon(
     mode: Arc<RwLock<RuntimeMode>>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    use tokio::time::{Duration, interval};
+    use tokio::time::{interval, Duration};
     use tracing::{info, warn};
 
     let mut ticker = interval(Duration::from_secs(3600));

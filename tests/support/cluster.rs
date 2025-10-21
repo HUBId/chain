@@ -249,6 +249,8 @@ impl TestCluster {
             let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config)
                 .with_context(|| format!("failed to initialise libp2p runtime for node {index}"))?;
 
+            node_handle.attach_p2p(p2p_handle.clone()).await;
+
             let (connected_peers, connection_task) =
                 TestClusterNode::spawn_connection_tracker(&p2p_handle);
 
