@@ -1,90 +1,82 @@
 # STWO/Plonky3 Blueprint Coverage Assessment
 
-This document cross-references the blueprint requirements with the current code
-base to confirm implementation completeness.
+This document cross-references the blueprint requirements with the current
+code base to highlight the shape of the abstraction, the status of each
+backend, and the remaining work required for production readiness.
 
-## Motivation & Backend Abstraction
+## Backend abstraction snapshot
 
-* The architecture enumerates STWO and Plonky3 proof systems and threads the
-  selection through the recursive proof descriptor so additional backends can be
-  enabled without changing the block model.【F:src/rpp.rs†L43-L158】【F:src/types/block.rs†L132-L142】
-* Runtime components exchange proofs through the unified `ChainProof` wrapper,
-  which records the originating backend and exposes conversion helpers for STWO
-  artifacts.【F:src/types/proofs.rs†L11-L52】
-* The proof registry instantiates verifier instances for every backend and
-dispatches verification through the shared traits used by wallets and nodes, so
-  block validation logic remains backend-agnostic.【F:src/proof_system/mod.rs†L1-L220】
+* Proof artifacts continue to flow through the unified `ChainProof` enum, so
+  wallets and nodes can exchange bundles without committing to a concrete
+  proving system up front.【F:rpp/runtime/types/proofs.rs†L58-L200】
+* The verifier registry still instantiates a verifier per backend and routes
+  verification requests through shared dispatch helpers, which keeps the block
+  import path backend-agnostic.【F:rpp/proofs/proof_system/mod.rs†L217-L311】
 
-## Wallet (Prover) Responsibilities
+## STWO path status
 
-* `WalletProver` derives witnesses for identity genesis, transactions, state
-  transitions, pruning, uptime, and consensus proofs from local storage and
-  converts them into STARK proofs that satisfy the unified prover trait.【F:src/stwo/prover/mod.rs†L42-L448】
-* Recursive witnesses fold previous commitments together with state roots from
-  `StateCommitmentSnapshot`, ensuring block proofs embed the entire historical
-  chain before being broadcast.【F:src/stwo/prover/mod.rs†L210-L257】【F:src/stwo/aggregation/mod.rs†L10-L206】
+* The blueprint-level STWO prover wiring remains in place: `WalletProver`
+  derives witnesses for every circuit, computes traces, and emits
+  `StarkProof` artifacts that slot into the `ChainProof::Stwo` branch.【F:rpp/proofs/stwo/prover/mod.rs†L42-L360】
+* However, the vendor drop of `stwo::official` still lacks the public API
+  surface the production integration expects (Poseidon2 helpers, FRI wrappers,
+  byte-serialization hooks, etc.), so the repository cannot yet replace the
+  blueprint scaffolding with the real backend.【F:docs/stwo_official_api.md†L1-L37】
+* The staged vendor plan captures the operational prerequisites—most notably
+  the requirement to build the backend with `nightly-2025-07-14`—but those
+  artifacts are not consumed by the runtime today.【F:docs/vendor_log.md†L20-L64】
 
-## Node (Verifier) Responsibilities
+**Net result:** the STWO flow is functionally complete inside the blueprint
+module, yet it remains isolated from the vendor workspace until the missing
+API bridges land and the nightly toolchain path is productionised.
 
-* `NodeVerifier` replays every circuit—transaction, identity, state, pruning,
-  uptime, consensus, and recursive—to check commitments, traces, and FRI proofs
-  deterministically.【F:src/stwo/verifier/mod.rs†L1-L247】
-* The node routes proof verification through the shared registry before adding
-  artifacts to mempools or importing blocks, enforcing consistency across all
-  proof categories.【F:src/proof_system/mod.rs†L90-L220】【F:src/node.rs†L591-L727】
+## Plonky3 path status
 
-## VRF Poseidon Domain & Key Management
+* The Plonky3 prover/verifier pair only exercises the JSON plumbing: witnesses
+  are wrapped, hashed, and converted into `ChainProof::Plonky3` values without
+  generating real proofs.【F:rpp/proofs/plonky3/prover/mod.rs†L154-L259】
+* Proof commitments are derived from canonical JSON, and the “proof” bytes are
+  a Blake3 transcript seeded by the mocked verifying key, confirming that the
+  backend still behaves as a deterministic stub rather than talking to a real
+  Plonky3 engine.【F:rpp/proofs/plonky3/crypto.rs†L360-L436】
 
-* `PoseidonVrfInput` encodes the `(last_block_header, epoch, tier_seed)` tuple,
-  derives Poseidon digests, and exposes fixed-width randomness helpers to match
-  the blueprint domain separation requirements.【F:src/vrf/mod.rs†L16-L102】
-* `generate_vrf` and `verify_vrf` wrap ed25519 signatures over Poseidon digests,
-  hashing proofs into randomness and validating outputs alongside strict proof
-  parsing for consensus use.【F:src/vrf/mod.rs†L103-L208】
-* `select_validators` derives per-epoch thresholds from the epoch number,
-  tier seed, and configurable validator target, blending smoothed binomial
-  expectations with the observed randomness quantile so the committee size
-  adapts to participation instead of the legacy selection window heuristic.【F:src/vrf/mod.rs†L320-L480】
-* Dedicated VRF key lifecycle helpers cover generation, persistence,
-  re-loading, and hex conversion so operators and integration tests share the
-  same storage format.【F:src/crypto.rs†L17-L229】
-* Validator selection emits audit records that the ledger persists per epoch,
-  deduplicating proofs and exposing query hooks so historical VRF decisions can
-  be inspected alongside consensus data.【F:src/vrf/mod.rs†L360-L494】【F:src/ledger.rs†L100-L214】【F:src/node.rs†L1140-L1214】
-* Node status and telemetry snapshots include VRF selection metrics covering the
-  submission pool size, accepted validator count, rejections, and fallback
-  usage so operators can monitor participation over time, alongside
-  `verifier_metrics.per_backend` counters and cumulative durations so backend
-  regressions surface immediately in exported snapshots.【F:src/node.rs†L57-L125】【F:rpp/runtime/node.rs†L220-L238】【F:rpp/runtime/node.rs†L1615-L1626】
+**Net result:** the Plonky3 pathway remains a mock that validates the plumbing
+but provides no cryptographic guarantees until real setup artifacts and prover
+executables are integrated.
 
-## Circuit Palette
+## Outstanding work tracked in the blueprint backlog
 
-* **Transaction Circuit** – enforces signature validity, balance conservation,
-  nonce progression, and reputation tier requirements before exposing public
-  inputs for the STARK prover.【F:src/stwo/circuit/transaction.rs†L1-L200】
-* **Identity Genesis Circuit** – binds public keys, wallet addresses, VRF tags,
-  and Merkle proofs while ensuring zero initial reputation and vacant tree
-  slots.【F:src/stwo/circuit/identity.rs†L1-L200】
-* **Uptime Circuit (Timetoke)** – validates window progression, node clock
-  bounds, head hash format, and Blake2s commitment parity for availability
-  claims.【F:src/stwo/circuit/uptime.rs†L1-L120】
-* **Consensus Circuit (BFT)** – aggregates vote weights across rounds, prevents
-  duplicates, and enforces quorum thresholds for block proposals.【F:src/stwo/circuit/consensus.rs†L1-L172】
-* **Recursive Block Circuit** – folds activity commitments, ledger roots, and
-  pruning data into a Poseidon hash that must match the witnessed aggregate,
-  guaranteeing each block proves the entire prefix.【F:src/stwo/circuit/recursive.rs†L1-L186】
+The end-to-end blueprint keeps the open items for both backends in the
+`rpp::blueprint` catalogue. The tasks below remain in `Todo` state and must be
+closed before the document can claim production readiness:
 
-## Recursive Proof Structure
+* **Firewood ↔ STWO interfaces** – extract lifecycle APIs, persist block
+  metadata, and automate pruning once the real backend is wired in. Tracking:
+  [`state.lifecycle_api`](../rpp/proofs/blueprint/mod.rs#L111-L127),
+  [`state.block_metadata`](../rpp/proofs/blueprint/mod.rs#L117-L120), and
+  [`state.pruning_jobs`](../rpp/proofs/blueprint/mod.rs#L122-L125).
+* **Wallet/STWO workflows** – extend the wallet side with UTXO/tier policies,
+  ZSI flows, and the production STWO circuits so end users can produce the
+  upgraded proofs. Tracking:
+  [`wallet.utxo_policies`](../rpp/proofs/blueprint/mod.rs#L135-L139),
+  [`wallet.zsi_workflow`](../rpp/proofs/blueprint/mod.rs#L141-L145),
+  [`wallet.stwo_circuits`](../rpp/proofs/blueprint/mod.rs#L147-L152), and
+  [`wallet.uptime_proofs`](../rpp/proofs/blueprint/mod.rs#L153-L157).
+* **Plonky3 backend enablement** – replace the deterministic stub with the
+  real proving system, including setup artifact management and integration test
+  coverage. Tracking: addenda to the backend backlog captured in the roadmap’s
+  proof system phase (see
+  [`Schritt 3`](roadmap_implementation_plan.md#3-wallet-zsi-und-stwo-workflows-blueprint-22)).【F:docs/roadmap_implementation_plan.md†L19-L77】
 
-* `RecursiveAggregator` concatenates identity, transaction, uptime, consensus,
-  and state commitments alongside pruning proofs and the prior aggregate to
-  compute the next recursive digest, mirroring the circuit constraints.【F:src/stwo/aggregation/mod.rs†L84-L206】
-* Block headers persist the ledger roots required by the recursive circuit so
-  verifiers can rebuild the same state digest when checking bundles.【F:src/types/block.rs†L35-L99】
+## Follow-up once integrations land
 
-## Conclusion
+When the tasks above are complete and the real backends are enabled:
 
-Every role and circuit described in the blueprint is present in the codebase,
-end-to-end recursive aggregation matches the specified structure, and the
-Plonky3 backend hooks are in place behind the shared abstractions. The blueprint
-is therefore fully implemented.
+1. Refresh this document to confirm end-to-end proof generation and
+   verification against the production stacks (STWO vendor crates via nightly
+   toolchains, Plonky3 setup artifacts, CI coverage).
+2. Document the operational requirements for operators—nightly toolchain
+   availability, artifact provisioning, and any new telemetry knobs—so the
+   blueprint reflects the production-ready posture recorded in the vendor log
+   and release tooling.【F:docs/vendor_log.md†L20-L64】
+
