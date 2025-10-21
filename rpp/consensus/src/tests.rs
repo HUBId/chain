@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::convert::TryFrom;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -16,6 +16,11 @@ use super::state::{ConsensusConfig, GenesisConfig};
 
 use super::validator::{
     select_leader, select_validators, StakeInfo, VRFOutput, Validator, ValidatorLedgerEntry,
+};
+
+use crate::proof_backend::{
+    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofHeader,
+    ProofSystemKind, VerifyingKey,
 };
 
 fn sample_seed(id: &str) -> [u8; 32] {
@@ -69,6 +74,56 @@ fn deterministic_keypair(id: &str) -> VrfKeypair {
             panic!("failed to derive deterministic VRF keypair");
         }
     }
+}
+
+#[derive(Default, Clone)]
+struct TestBackend {
+    fail: bool,
+}
+
+impl TestBackend {
+    fn new() -> Self {
+        Self { fail: false }
+    }
+
+    fn failing() -> Self {
+        Self { fail: true }
+    }
+}
+
+impl ProofBackend for TestBackend {
+    fn name(&self) -> &'static str {
+        "test-consensus"
+    }
+
+    fn verify_consensus(
+        &self,
+        vk: &VerifyingKey,
+        proof: &ProofBytes,
+        circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<()> {
+        if self.fail {
+            return Err(BackendError::Failure("forced failure".into()));
+        }
+        if vk.as_slice().is_empty() {
+            return Err(BackendError::Failure("verifying key empty".into()));
+        }
+        if proof.as_slice().is_empty() {
+            return Err(BackendError::Failure("proof bytes empty".into()));
+        }
+        if circuit.identifier.trim().is_empty() {
+            return Err(BackendError::Failure("circuit identifier empty".into()));
+        }
+        Ok(())
+    }
+}
+
+fn backend() -> Arc<dyn ProofBackend> {
+    Arc::new(TestBackend::new())
+}
+
+fn failing_backend() -> Arc<dyn ProofBackend> {
+    Arc::new(TestBackend::failing())
 }
 
 fn build_ledger(entries: &[(&str, u64, u8, f64)]) -> BTreeMap<String, ValidatorLedgerEntry> {
@@ -140,16 +195,12 @@ fn build_precommit(
 }
 
 fn build_consensus_proof(label: &str) -> ConsensusProof {
-    let commitments = vec![
-        format!("{label}-validator-a"),
-        format!("{label}-validator-b"),
-    ];
-    ConsensusProof::new(
-        format!("commitment-{label}"),
-        format!("witness-{label}"),
-        commitments.len() as u32,
-        commitments,
-    )
+    let circuit = ConsensusCircuitDef::new(format!("consensus-{label}"));
+    let header = ProofHeader::new(ProofSystemKind::Mock, circuit.identifier.clone());
+    let payload = format!("payload-{label}");
+    let proof_bytes = ProofBytes::encode(&header, &payload).expect("encode consensus proof");
+    let verifying_key = VerifyingKey(payload.into_bytes());
+    ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit)
 }
 
 fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -181,7 +232,7 @@ fn bft_flow_reaches_commit() {
         "root".into(),
         config,
     );
-    let state = super::state::ConsensusState::new(genesis).expect("state init");
+    let state = super::state::ConsensusState::new(genesis, backend()).expect("state init");
 
     let handle = thread::spawn(move || {
         let mut state = state;
@@ -254,7 +305,7 @@ fn detects_conflicting_prevotes_triggers_slash() {
         "root".into(),
         config,
     );
-    let state = super::state::ConsensusState::new(genesis).expect("state init");
+    let state = super::state::ConsensusState::new(genesis, backend()).expect("state init");
 
     let handle = thread::spawn(move || {
         let mut state = state;
@@ -375,7 +426,7 @@ fn timeout_triggers_new_proposal_flow() {
         "root".into(),
         config,
     );
-    let state = super::state::ConsensusState::new(genesis).expect("state init");
+    let state = super::state::ConsensusState::new(genesis, backend()).expect("state init");
 
     let handle = thread::spawn(move || {
         let mut state = state;
@@ -418,7 +469,11 @@ fn timeout_triggers_new_proposal_flow() {
         final_state
             .pending_proposals
             .iter()
-            .any(|proposal| proposal.proof.commitment.starts_with("stwo-commitment-")),
+            .any(|proposal| proposal
+                .proof
+                .circuit
+                .identifier
+                .starts_with("consensus-")),
         "expected timeout to trigger a new leader proposal",
     );
     if !final_state
@@ -449,33 +504,34 @@ fn select_validators_rejects_manipulated_proof() {
 }
 
 #[test]
-fn consensus_proof_rejects_tampered_commitment() {
-    let mut proof = build_consensus_proof("tamper");
-    proof.commitments[0].push('x');
-
-    assert_eq!(
-        proof.verify(),
-        Err(ProofVerificationError::InvalidAggregationSignature)
-    );
+fn consensus_proof_verifies_with_backend() {
+    let proof = build_consensus_proof("ok");
+    let backend = backend();
+    assert!(proof.verify(&*backend).is_ok());
 }
 
 #[test]
-fn consensus_proof_rejects_tampered_signature() {
-    let mut proof = build_consensus_proof("tamper-sig");
-    proof.aggregated_signature[0] ^= 0xFF;
-
-    assert_eq!(
-        proof.verify(),
-        Err(ProofVerificationError::InvalidAggregationSignature)
-    );
+fn consensus_proof_propagates_backend_error() {
+    let proof = build_consensus_proof("fail");
+    let backend = failing_backend();
+    assert!(matches!(
+        proof.verify(&*backend),
+        Err(ProofVerificationError::Backend(message)) if message.contains("forced failure")
+    ));
 }
 
 #[test]
-fn consensus_proof_rejects_tampered_hmac() {
-    let mut proof = build_consensus_proof("tamper-mac");
-    proof.hmac[0] ^= 0xFF;
-
-    assert_eq!(proof.verify(), Err(ProofVerificationError::InvalidMac));
+fn consensus_proof_rejects_empty_payload() {
+    let circuit = ConsensusCircuitDef::new("consensus-empty");
+    let header = ProofHeader::new(ProofSystemKind::Mock, circuit.identifier.clone());
+    let proof_bytes = ProofBytes::encode(&header, &Vec::<u8>::new()).expect("encode consensus proof");
+    let verifying_key = VerifyingKey(Vec::new());
+    let proof = ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
+    let backend = backend();
+    assert!(matches!(
+        proof.verify(&*backend),
+        Err(ProofVerificationError::Backend(message)) if message.contains("verifying key empty")
+    ));
 }
 
 #[test]

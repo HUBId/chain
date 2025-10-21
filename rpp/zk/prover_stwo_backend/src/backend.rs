@@ -7,8 +7,8 @@ mod keys;
 pub use io::{decode_tx_proof, decode_tx_witness, encode_tx_proof};
 
 use prover_backend_interface::{
-    BackendError, BackendResult, ProofBackend, ProofBytes, ProvingKey, SecurityLevel, TxCircuitDef,
-    TxPublicInputs, VerifyingKey, WitnessBytes,
+    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProvingKey,
+    SecurityLevel, TxCircuitDef, TxPublicInputs, VerifyingKey, WitnessBytes,
 };
 
 #[cfg(feature = "official")]
@@ -129,6 +129,16 @@ impl ProofBackend for StwoBackend {
             let _ = (vk, proof, public_inputs);
             Err(BackendError::Unsupported("transaction verification"))
         }
+    }
+
+    fn verify_consensus(
+        &self,
+        vk: &VerifyingKey,
+        proof: &ProofBytes,
+        circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<()> {
+        let _ = (vk, proof, circuit);
+        Err(BackendError::Unsupported("consensus verification"))
     }
 }
 

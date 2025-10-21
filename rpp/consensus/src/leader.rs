@@ -2,6 +2,7 @@ use serde_json::json;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::messages::{Block, ConsensusProof, Proposal};
+use crate::proof_backend::{ConsensusCircuitDef, ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey};
 use crate::state::ConsensusState;
 use crate::validator::{Validator, ValidatorSet};
 
@@ -32,18 +33,13 @@ impl Leader {
             timestamp: current_timestamp(),
         };
 
-        let inherited_commitments = state
-            .pending_proofs
-            .iter()
-            .map(|proof| proof.commitment.clone())
-            .collect();
-
-        let proof = ConsensusProof::new(
-            format!("stwo-commitment-{}", block.height),
-            format!("stwo-witness-{}", block.height),
-            state.pending_proofs.len() as u32,
-            inherited_commitments,
-        );
+        let circuit = ConsensusCircuitDef::new(format!("consensus-{}", block.height));
+        let header = ProofHeader::new(ProofSystemKind::Mock, circuit.identifier.clone());
+        let payload = format!("consensus-proof-{}", block.height);
+        let proof_bytes = ProofBytes::encode(&header, &payload)
+            .expect("failed to encode consensus proof placeholder");
+        let verifying_key = VerifyingKey(payload.into_bytes());
+        let proof = ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
 
         Proposal {
             block,
