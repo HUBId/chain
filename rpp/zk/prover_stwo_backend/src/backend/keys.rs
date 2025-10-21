@@ -14,54 +14,101 @@ fn bincode_options() -> impl Options {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SupportedTxCircuit {
+pub enum SupportedCircuit {
     Transaction,
+    Identity,
+    State,
+    Pruning,
+    Recursive,
+    Uptime,
+    Consensus,
 }
 
-impl SupportedTxCircuit {
+impl SupportedCircuit {
     pub fn identifier(&self) -> &'static str {
         match self {
-            SupportedTxCircuit::Transaction => "transaction",
+            SupportedCircuit::Transaction => "transaction",
+            SupportedCircuit::Identity => "identity",
+            SupportedCircuit::State => "state",
+            SupportedCircuit::Pruning => "pruning",
+            SupportedCircuit::Recursive => "recursive",
+            SupportedCircuit::Uptime => "uptime",
+            SupportedCircuit::Consensus => "consensus",
         }
     }
 
     pub fn from_identifier(value: &str) -> BackendResult<Self> {
         let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return Err(BackendError::Failure(
+                "circuit identifier cannot be empty".into(),
+            ));
+        }
+
         if trimmed.eq_ignore_ascii_case("transaction") || trimmed.eq_ignore_ascii_case("tx") {
-            Ok(SupportedTxCircuit::Transaction)
+            Ok(SupportedCircuit::Transaction)
+        } else if trimmed.eq_ignore_ascii_case("identity") {
+            Ok(SupportedCircuit::Identity)
+        } else if trimmed.eq_ignore_ascii_case("state") {
+            Ok(SupportedCircuit::State)
+        } else if trimmed.eq_ignore_ascii_case("pruning") {
+            Ok(SupportedCircuit::Pruning)
+        } else if trimmed.eq_ignore_ascii_case("recursive") {
+            Ok(SupportedCircuit::Recursive)
+        } else if trimmed.eq_ignore_ascii_case("uptime") {
+            Ok(SupportedCircuit::Uptime)
+        } else if trimmed.eq_ignore_ascii_case("consensus") || trimmed.starts_with("consensus-") {
+            Ok(SupportedCircuit::Consensus)
         } else {
             Err(BackendError::Failure(format!(
-                "unsupported transaction circuit '{trimmed}'"
+                "unsupported circuit '{trimmed}'"
             )))
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TxKeyPayload {
+pub struct KeyPayload {
     pub circuit: String,
     pub parameters: StarkParameters,
 }
 
-impl TxKeyPayload {
-    pub fn new(circuit: SupportedTxCircuit, parameters: StarkParameters) -> Self {
+impl KeyPayload {
+    pub fn new(circuit: SupportedCircuit, parameters: StarkParameters) -> Self {
         Self {
             circuit: circuit.identifier().to_string(),
             parameters,
         }
     }
+
+    pub fn circuit_kind(&self) -> BackendResult<SupportedCircuit> {
+        SupportedCircuit::from_identifier(&self.circuit)
+    }
+
+    pub fn ensure_kind(&self, expected: SupportedCircuit) -> BackendResult<()> {
+        let actual = self.circuit_kind()?;
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(BackendError::Failure(format!(
+                "key payload expected {:?} circuit, found {:?}",
+                expected, actual
+            )))
+        }
+    }
 }
 
-pub fn encode_key_payload(payload: &TxKeyPayload) -> BackendResult<Vec<u8>> {
+pub fn encode_key_payload(payload: &KeyPayload) -> BackendResult<Vec<u8>> {
     bincode_options()
         .serialize(payload)
         .map_err(BackendError::Serialization)
 }
 
-pub fn decode_key_payload(bytes: &[u8]) -> BackendResult<TxKeyPayload> {
-    let payload: TxKeyPayload = bincode_options()
+pub fn decode_key_payload(bytes: &[u8]) -> BackendResult<KeyPayload> {
+    let payload: KeyPayload = bincode_options()
         .deserialize(bytes)
         .map_err(BackendError::Serialization)?;
-    SupportedTxCircuit::from_identifier(&payload.circuit)?;
+    // Accept legacy payloads that only set the transaction circuit string.
+    let _ = payload.circuit_kind()?;
     Ok(payload)
 }

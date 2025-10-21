@@ -1,14 +1,23 @@
 //! Shared prover backend interface consumed across the workspace.
 //!
-//! # STWO feature toggles
-//! * `prover-stwo` exposes the STWO backend types.
-//! * `prover-stwo-simd` builds on the STWO backend and signals that the
-//!   accelerator-friendly SIMD pathway is allowed. Downstream crates forward
-//!   this flag to the STWO fork which enables the `parallel` implementation.
-//! * `prover-mock` exposes the lightweight mock backend for deterministic tests.
+//! # Toolchain and feature flags
+//! * The STWO backend currently requires a nightly toolchain because the
+//!   upstream fork ships nightly-only dependencies. The workspace pins an
+//!   appropriate toolchain via `rust-toolchain.toml` so downstream crates simply
+//!   inherit it.
+//! * `prover-stwo` exposes the STWO backend types. This flag should be enabled
+//!   by consumers that intend to prove or verify real STWO circuits.
+//! * `prover-stwo-simd` forwards to the STWO `parallel` feature and enables the
+//!   accelerator-friendly SIMD pathway. Downstream crates can opt into this flag
+//!   when the target platform provides the required intrinsics.
+//! * `prover-mock` exposes the lightweight mock backend for deterministic tests
+//!   that do not need STARKs.
 //!
 //! Consumers opt in or out exclusively through Cargo features; no sample code is
-//! required to change the active backend.
+//! required to change the active backend. The interface enumerates the circuits
+//! supported by the STWO wallet prover so downstream components can request keys
+//! and proofs for identity, state transition, pruning, recursive aggregation,
+//! uptime, consensus, and transaction checks.
 use std::fmt;
 
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
@@ -252,6 +261,119 @@ pub struct TxPublicInputs {
     pub transaction_commitment: [u8; 32],
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IdentityCircuitDef {
+    pub identifier: String,
+}
+
+impl IdentityCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StateCircuitDef {
+    pub identifier: String,
+}
+
+impl StateCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningCircuitDef {
+    pub identifier: String,
+}
+
+impl PruningCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecursiveCircuitDef {
+    pub identifier: String,
+}
+
+impl RecursiveCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UptimeCircuitDef {
+    pub identifier: String,
+}
+
+impl UptimeCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IdentityPublicInputs {
+    pub wallet_address: [u8; 32],
+    pub vrf_tag: Vec<u8>,
+    pub identity_root: [u8; 32],
+    pub state_root: [u8; 32],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StatePublicInputs {
+    pub previous_state_root: [u8; 32],
+    pub new_state_root: [u8; 32],
+    pub transaction_count: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningPublicInputs {
+    pub previous_tx_root: [u8; 32],
+    pub pruned_tx_root: [u8; 32],
+    pub removed_transactions: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecursivePublicInputs {
+    pub previous_commitment: Option<[u8; 32]>,
+    pub aggregated_commitment: [u8; 32],
+    pub transaction_commitments: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UptimePublicInputs {
+    pub wallet_address: [u8; 32],
+    pub node_clock: u64,
+    pub epoch: u64,
+    pub head_hash: [u8; 32],
+    pub window_start: u64,
+    pub window_end: u64,
+    pub commitment: [u8; 32],
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ConsensusPublicInputs {
+    pub block_hash: [u8; 32],
+    pub round: u64,
+    pub leader_proposal: [u8; 32],
+    pub quorum_threshold: u64,
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvingKey(pub Vec<u8>);
 
@@ -316,6 +438,126 @@ pub trait ProofBackend: Send + Sync + 'static {
         Err(BackendError::Unsupported("transaction verification"))
     }
 
+    fn keygen_identity(
+        &self,
+        _circuit: &IdentityCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey)> {
+        Err(BackendError::Unsupported("identity keygen"))
+    }
+
+    fn prove_identity(
+        &self,
+        _pk: &ProvingKey,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<ProofBytes> {
+        Err(BackendError::Unsupported("identity proving"))
+    }
+
+    fn verify_identity(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _public_inputs: &IdentityPublicInputs,
+    ) -> BackendResult<()> {
+        Err(BackendError::Unsupported("identity verification"))
+    }
+
+    fn keygen_state(
+        &self,
+        _circuit: &StateCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey)> {
+        Err(BackendError::Unsupported("state keygen"))
+    }
+
+    fn prove_state(
+        &self,
+        _pk: &ProvingKey,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<ProofBytes> {
+        Err(BackendError::Unsupported("state proving"))
+    }
+
+    fn verify_state(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _public_inputs: &StatePublicInputs,
+    ) -> BackendResult<()> {
+        Err(BackendError::Unsupported("state verification"))
+    }
+
+    fn keygen_pruning(
+        &self,
+        _circuit: &PruningCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey)> {
+        Err(BackendError::Unsupported("pruning keygen"))
+    }
+
+    fn prove_pruning(
+        &self,
+        _pk: &ProvingKey,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<ProofBytes> {
+        Err(BackendError::Unsupported("pruning proving"))
+    }
+
+    fn verify_pruning(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _public_inputs: &PruningPublicInputs,
+    ) -> BackendResult<()> {
+        Err(BackendError::Unsupported("pruning verification"))
+    }
+
+    fn keygen_recursive(
+        &self,
+        _circuit: &RecursiveCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey)> {
+        Err(BackendError::Unsupported("recursive keygen"))
+    }
+
+    fn prove_recursive(
+        &self,
+        _pk: &ProvingKey,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<ProofBytes> {
+        Err(BackendError::Unsupported("recursive proving"))
+    }
+
+    fn verify_recursive(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _public_inputs: &RecursivePublicInputs,
+    ) -> BackendResult<()> {
+        Err(BackendError::Unsupported("recursive verification"))
+    }
+
+    fn keygen_uptime(
+        &self,
+        _circuit: &UptimeCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey)> {
+        Err(BackendError::Unsupported("uptime keygen"))
+    }
+
+    fn prove_uptime(
+        &self,
+        _pk: &ProvingKey,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<ProofBytes> {
+        Err(BackendError::Unsupported("uptime proving"))
+    }
+
+    fn verify_uptime(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _public_inputs: &UptimePublicInputs,
+    ) -> BackendResult<()> {
+        Err(BackendError::Unsupported("uptime verification"))
+    }
+
     fn prove_consensus(
         &self,
         _witness: &WitnessBytes,
@@ -328,6 +570,7 @@ pub trait ProofBackend: Send + Sync + 'static {
         _vk: &VerifyingKey,
         _proof: &ProofBytes,
         _circuit: &ConsensusCircuitDef,
+        _public_inputs: &ConsensusPublicInputs,
     ) -> BackendResult<()> {
         Err(BackendError::Unsupported("consensus verification"))
     }

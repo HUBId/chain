@@ -1,4 +1,5 @@
 use blake3::Hasher;
+use hex;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -6,8 +7,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::proof_backend::{
-    BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofSystemKind, VerifyingKey,
-    WitnessBytes, WitnessHeader,
+    BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend, ProofBytes,
+    ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use crate::validator::ValidatorId;
 
@@ -60,6 +61,8 @@ pub struct ConsensusProof {
     pub proof_bytes: ProofBytes,
     pub verifying_key: VerifyingKey,
     pub circuit: ConsensusCircuitDef,
+    #[serde(default)]
+    pub public_inputs: ConsensusPublicInputs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,11 +85,13 @@ impl ConsensusProof {
         proof_bytes: ProofBytes,
         verifying_key: VerifyingKey,
         circuit: ConsensusCircuitDef,
+        public_inputs: ConsensusPublicInputs,
     ) -> Self {
         Self {
             proof_bytes,
             verifying_key,
             circuit,
+            public_inputs,
         }
     }
 
@@ -94,8 +99,9 @@ impl ConsensusProof {
         proof_bytes: ProofBytes,
         verifying_key: VerifyingKey,
         circuit: ConsensusCircuitDef,
+        public_inputs: ConsensusPublicInputs,
     ) -> Self {
-        Self::new(proof_bytes, verifying_key, circuit)
+        Self::new(proof_bytes, verifying_key, circuit, public_inputs)
     }
 
     pub fn proof_bytes(&self) -> &ProofBytes {
@@ -110,13 +116,29 @@ impl ConsensusProof {
         &self.circuit
     }
 
-    pub fn into_backend_artifacts(self) -> (ProofBytes, VerifyingKey, ConsensusCircuitDef) {
-        (self.proof_bytes, self.verifying_key, self.circuit)
+    pub fn public_inputs(&self) -> &ConsensusPublicInputs {
+        &self.public_inputs
+    }
+
+    pub fn into_backend_artifacts(
+        self,
+    ) -> (ProofBytes, VerifyingKey, ConsensusCircuitDef, ConsensusPublicInputs) {
+        (
+            self.proof_bytes,
+            self.verifying_key,
+            self.circuit,
+            self.public_inputs,
+        )
     }
 
     pub fn verify<B: ProofBackend>(&self, backend: &B) -> Result<(), ProofVerificationError> {
         backend
-            .verify_consensus(&self.verifying_key, &self.proof_bytes, &self.circuit)
+            .verify_consensus(
+                &self.verifying_key,
+                &self.proof_bytes,
+                &self.circuit,
+                &self.public_inputs,
+            )
             .map_err(|err| ProofVerificationError::Backend(err.to_string()))
     }
 }
@@ -220,5 +242,30 @@ impl ConsensusCertificate {
     pub fn encode_witness(&self, backend: ProofSystemKind) -> BackendResult<WitnessBytes> {
         let header = WitnessHeader::new(backend, self.circuit_identifier());
         WitnessBytes::encode(&header, self)
+    }
+
+    pub fn consensus_public_inputs(&self) -> BackendResult<ConsensusPublicInputs> {
+        fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
+            let bytes = hex::decode(value).map_err(|err| {
+                BackendError::Failure(format!("invalid {label} encoding: {err}"))
+            })?;
+            if bytes.len() != 32 {
+                return Err(BackendError::Failure(format!(
+                    "{label} must encode 32 bytes"
+                )));
+            }
+            let mut array = [0u8; 32];
+            array.copy_from_slice(&bytes);
+            Ok(array)
+        }
+
+        let block_hash = decode_hash("block hash", &self.block_hash.0)?;
+        let leader_proposal = block_hash;
+        Ok(ConsensusPublicInputs {
+            block_hash,
+            round: self.round,
+            leader_proposal,
+            quorum_threshold: self.quorum_threshold,
+        })
     }
 }

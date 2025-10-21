@@ -42,7 +42,13 @@ impl Leader {
         let witness = certificate.encode_witness(system).ok()?;
         let (proof_bytes, verifying_key, circuit) =
             state.proof_backend.prove_consensus(&witness).ok()?;
-        let proof = ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
+        let public_inputs = certificate.consensus_public_inputs().ok()?;
+        let proof = ConsensusProof::from_backend_artifacts(
+            proof_bytes,
+            verifying_key,
+            circuit,
+            public_inputs,
+        );
 
         Some(Proposal {
             block,

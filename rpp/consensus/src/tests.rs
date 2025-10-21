@@ -20,8 +20,8 @@ use super::validator::{
 };
 
 use crate::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofHeader,
-    ProofSystemKind, VerifyingKey, WitnessBytes,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey, WitnessBytes,
 };
 
 #[cfg(feature = "prover-mock")]
@@ -105,6 +105,7 @@ impl ProofBackend for FixtureBackend {
         vk: &VerifyingKey,
         proof: &ProofBytes,
         circuit: &ConsensusCircuitDef,
+        _public_inputs: &ConsensusPublicInputs,
     ) -> BackendResult<()> {
         if self.fail {
             return Err(BackendError::Failure("forced failure".into()));
@@ -249,8 +250,15 @@ fn prove_consensus_certificate(
     let (proof_bytes, verifying_key, circuit) = backend
         .prove_consensus(&witness)
         .expect("prove consensus witness");
-    let proof =
-        ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
+    let public_inputs = certificate
+        .consensus_public_inputs()
+        .expect("consensus public inputs");
+    let proof = ConsensusProof::from_backend_artifacts(
+        proof_bytes,
+        verifying_key,
+        circuit,
+        public_inputs,
+    );
     if let Err(err) = proof.verify(backend) {
         if !matches!(
             err,
@@ -609,7 +617,12 @@ fn consensus_proof_rejects_empty_payload() {
     let proof_bytes =
         ProofBytes::encode(&header, &Vec::<u8>::new()).expect("encode consensus proof");
     let verifying_key = VerifyingKey(Vec::new());
-    let proof = ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
+    let proof = ConsensusProof::from_backend_artifacts(
+        proof_bytes,
+        verifying_key,
+        circuit,
+        ConsensusPublicInputs::default(),
+    );
     let backend = backend();
     assert!(matches!(
         proof.verify(&*backend),

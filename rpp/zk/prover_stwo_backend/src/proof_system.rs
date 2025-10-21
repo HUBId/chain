@@ -1,6 +1,6 @@
 use crate::errors::ChainResult;
-use crate::types::ChainProof;
 use crate::proof_backend::ProofSystemKind;
+use crate::types::ChainProof;
 
 /// Minimal trait capturing the verification hooks exposed by the blueprint
 /// proof backends.  Downstream crates rely on the interface to remain stable
