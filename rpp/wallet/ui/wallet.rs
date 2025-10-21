@@ -1,24 +1,24 @@
-use std::collections::{btree_map::Entry as BTreeEntry, BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, btree_map::Entry as BTreeEntry};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::proof_backend::Blake2sHasher;
 use ed25519_dalek::Keypair;
 use malachite::Natural;
-use parking_lot::RwLock;
 #[cfg(feature = "vendor_electrs")]
 use parking_lot::Mutex;
-#[cfg(feature = "vendor_electrs")]
-use tokio::sync::broadcast;
-#[cfg(feature = "vendor_electrs")]
-use tokio::sync::watch;
+use parking_lot::RwLock;
 use serde::{Serialize, de::DeserializeOwned};
-use crate::proof_backend::Blake2sHasher;
-use tokio::sync::Mutex as AsyncMutex;
 #[cfg(feature = "vendor_electrs")]
 use serde_json;
 #[cfg(feature = "vendor_electrs")]
 use std::path::Path;
+use tokio::sync::Mutex as AsyncMutex;
+#[cfg(feature = "vendor_electrs")]
+use tokio::sync::broadcast;
+#[cfg(feature = "vendor_electrs")]
+use tokio::sync::watch;
 #[cfg(feature = "vendor_electrs")]
 use tokio::task::JoinHandle;
 #[cfg(feature = "vendor_electrs")]
@@ -46,38 +46,35 @@ use crate::types::{
 };
 #[cfg(feature = "vendor_electrs")]
 use crate::{
-    runtime::node::PendingTransactionSummary,
-    runtime::types::ChainProof,
-    stwo::proof::ProofPayload,
+    runtime::node::PendingTransactionSummary, runtime::types::ChainProof, stwo::proof::ProofPayload,
 };
 #[cfg(feature = "vendor_electrs")]
 use log::{debug, warn};
 #[cfg(feature = "vendor_electrs")]
 use rpp::runtime::node::MempoolStatus;
 #[cfg(feature = "vendor_electrs")]
+use rpp_p2p::GossipTopic;
+#[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
+#[cfg(all(feature = "vendor_electrs", feature = "backend-rpp-stark"))]
+use rpp_wallet::vendor::electrs::StoredVrfAudit;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
-#[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::{
-    HistoryEntry as ElectrsHistoryEntry, HistoryEntryWithMetadata, ScriptHashStatus,
-};
+use rpp_wallet::vendor::electrs::init::{ElectrsHandles, initialize};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::Script;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::types::{
     LedgerScriptPayload, ScriptHash, StatusDigest, encode_ledger_script,
 };
-#[cfg(all(feature = "vendor_electrs", feature = "backend-rpp-stark"))]
-use rpp_wallet::vendor::electrs::StoredVrfAudit;
+#[cfg(feature = "vendor_electrs")]
+use rpp_wallet::vendor::electrs::{
+    HistoryEntry as ElectrsHistoryEntry, HistoryEntryWithMetadata, ScriptHashStatus,
+};
 #[cfg(feature = "vendor_electrs")]
 use sha2::{Digest, Sha256};
-#[cfg(feature = "vendor_electrs")]
-use rpp_p2p::GossipTopic;
 
-use super::workflows::synthetic_account_utxos;
 use super::{WalletNodeRuntime, start_node};
 
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
@@ -285,10 +282,12 @@ fn run_tracker_iteration(
     }
 
     let mempool_fingerprint = tracker.mempool_status().and_then(|status| {
-        compute_mempool_fingerprint(status).map_err(|err| {
-            warn!(target: "wallet::tracker", "mempool fingerprint error: {err}");
-            err
-        }).ok()
+        compute_mempool_fingerprint(status)
+            .map_err(|err| {
+                warn!(target: "wallet::tracker", "mempool fingerprint error: {err}");
+                err
+            })
+            .ok()
     });
 
     *snapshot.write() = Some(TrackerSnapshot {
@@ -611,10 +610,8 @@ impl Wallet {
             }
         }
 
-        let mut history: Vec<HistoryEntry> = aggregated
-            .into_values()
-            .map(|(_, entry)| entry)
-            .collect();
+        let mut history: Vec<HistoryEntry> =
+            aggregated.into_values().map(|(_, entry)| entry).collect();
 
         if !mempool.is_empty() {
             let submitted_at = SystemTime::now()
@@ -623,12 +620,8 @@ impl Wallet {
                 .as_secs();
             for (tx_hash, summary) in mempool.into_iter() {
                 let signed_tx = Self::signed_transaction_from_summary(&summary);
-                let mut entry = HistoryEntry::pending(
-                    tx_hash,
-                    signed_tx.clone(),
-                    Some(summary),
-                    submitted_at,
-                );
+                let mut entry =
+                    HistoryEntry::pending(tx_hash, signed_tx.clone(), Some(summary), submitted_at);
                 if let Some(tx) = signed_tx {
                     entry.reputation_delta = self.estimate_reputation_delta(&tx);
                 }
@@ -660,7 +653,7 @@ impl Wallet {
                         timestamp,
                         reputation_delta,
                     )
-                },
+                }
                 (false, None) => HistoryEntry::pruned(tx_hash.to_string(), height as u64),
             };
             entry = apply_tracker_metadata(entry, view);
@@ -783,7 +776,6 @@ impl Wallet {
         Some(metadata)
     }
 
-
     #[cfg(feature = "vendor_electrs")]
     pub fn persist_electrs_config(&self, config: &ElectrsConfig) -> ChainResult<()> {
         let mut encoded = serde_json::to_vec(config).map_err(|err| {
@@ -794,7 +786,8 @@ impl Wallet {
         if encoded.is_empty() {
             encoded = b"{}".to_vec();
         }
-        self.storage.write_metadata_blob(ELECTRS_CONFIG_KEY, encoded)?;
+        self.storage
+            .write_metadata_blob(ELECTRS_CONFIG_KEY, encoded)?;
         *self.electrs_config.write() = Some(config.clone());
         Ok(())
     }
@@ -827,8 +820,8 @@ impl Wallet {
         let Some(config) = self.load_electrs_config()? else {
             return Ok(());
         };
-        let handles = initialize(&config, firewood_dir, index_dir, runtime_adapters)
-            .map_err(|err| {
+        let handles =
+            initialize(&config, firewood_dir, index_dir, runtime_adapters).map_err(|err| {
                 ChainError::Config(format!(
                     "failed to reinitialise wallet electrs handles: {err}"
                 ))
@@ -1219,13 +1212,12 @@ impl Wallet {
     pub fn unspent_utxos(&self, owner: &Address) -> ChainResult<Vec<UtxoRecord>> {
         let accounts = self.storage.load_accounts()?;
         let (ledger, has_snapshot) = self.load_ledger_from_accounts(accounts)?;
-        let mut records = ledger.utxos_for_owner(owner);
-        if records.is_empty() && !has_snapshot {
-            if let Some(account) = ledger.get_account(owner) {
-                records = synthetic_account_utxos(owner, account.balance);
-            }
+        if !has_snapshot {
+            return Err(ChainError::Config(
+                "wallet utxo snapshot not available".into(),
+            ));
         }
-        Ok(records)
+        Ok(ledger.utxos_for_owner(owner))
     }
 
     pub fn build_transaction(
@@ -1421,16 +1413,16 @@ impl Wallet {
         #[cfg(not(feature = "vendor_electrs"))]
         let tracker_metrics: Option<(u64, Option<String>, u64)> = None;
 
-        let (latest_block_height, latest_block_hash, total_blocks) = if let Some(metrics) = tracker_metrics
-        {
-            metrics
-        } else {
-            let tip = self.storage.tip()?;
-            let latest_height = tip.as_ref().map(|meta| meta.height).unwrap_or(0);
-            let latest_hash = tip.as_ref().map(|meta| meta.hash.clone());
-            let total = self.storage.load_blockchain()?.len() as u64;
-            (latest_height, latest_hash, total)
-        };
+        let (latest_block_height, latest_block_hash, total_blocks) =
+            if let Some(metrics) = tracker_metrics {
+                metrics
+            } else {
+                let tip = self.storage.tip()?;
+                let latest_height = tip.as_ref().map(|meta| meta.height).unwrap_or(0);
+                let latest_hash = tip.as_ref().map(|meta| meta.hash.clone());
+                let total = self.storage.load_blockchain()?.len() as u64;
+                (latest_height, latest_hash, total)
+            };
         Ok(NodeTabMetrics {
             reputation_score: account.reputation.score,
             tier: account.reputation.tier.clone(),
