@@ -21,8 +21,11 @@ use super::validator::{
 
 use crate::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofHeader,
-    ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
+    ProofSystemKind, VerifyingKey, WitnessBytes,
 };
+
+#[cfg(feature = "prover-mock")]
+use prover_mock_backend::MockBackend;
 
 fn sample_seed(id: &str) -> [u8; 32] {
     let mut seed = [0u8; 32];
@@ -78,11 +81,11 @@ fn deterministic_keypair(id: &str) -> VrfKeypair {
 }
 
 #[derive(Default, Clone)]
-struct TestBackend {
+struct FixtureBackend {
     fail: bool,
 }
 
-impl TestBackend {
+impl FixtureBackend {
     fn new() -> Self {
         Self { fail: false }
     }
@@ -92,9 +95,9 @@ impl TestBackend {
     }
 }
 
-impl ProofBackend for TestBackend {
+impl ProofBackend for FixtureBackend {
     fn name(&self) -> &'static str {
-        "test-consensus"
+        "consensus-fixture"
     }
 
     fn verify_consensus(
@@ -126,7 +129,7 @@ impl ProofBackend for TestBackend {
             return Err(BackendError::Failure("forced failure".into()));
         }
         let digest = blake3::hash(witness.as_slice());
-        let identifier = format!("test.consensus.{}", digest.to_hex());
+        let identifier = format!("fixture.consensus.{}", digest.to_hex());
         let circuit = ConsensusCircuitDef::new(identifier.clone());
         let header = ProofHeader::new(ProofSystemKind::Mock, identifier.clone());
         let proof = ProofBytes::encode(&header, witness.as_slice())?;
@@ -136,11 +139,16 @@ impl ProofBackend for TestBackend {
 }
 
 fn backend() -> Arc<dyn ProofBackend> {
-    Arc::new(TestBackend::new())
+    #[cfg(feature = "prover-mock")]
+    {
+        return Arc::new(MockBackend::new());
+    }
+
+    Arc::new(FixtureBackend::new())
 }
 
 fn failing_backend() -> Arc<dyn ProofBackend> {
-    Arc::new(TestBackend::failing())
+    Arc::new(FixtureBackend::failing())
 }
 
 fn build_ledger(entries: &[(&str, u64, u8, f64)]) -> BTreeMap<String, ValidatorLedgerEntry> {
@@ -211,15 +219,55 @@ fn build_precommit(
     }
 }
 
-fn build_consensus_proof(label: &str, certificate: &ConsensusCertificate) -> ConsensusProof {
-    let witness_header = WitnessHeader::new(ProofSystemKind::Mock, format!("consensus-{label}"));
-    let witness =
-        WitnessBytes::encode(&witness_header, certificate).expect("encode consensus witness");
-    let backend = TestBackend::new();
+fn backend_system(backend: &dyn ProofBackend) -> ProofSystemKind {
+    match backend.name() {
+        "mock" => ProofSystemKind::Mock,
+        "consensus-fixture" => ProofSystemKind::Mock,
+        "stwo" => ProofSystemKind::Stwo,
+        "plonky3" => ProofSystemKind::Plonky3,
+        "plonky2" => ProofSystemKind::Plonky2,
+        "halo2" => ProofSystemKind::Halo2,
+        "rpp-stark" => ProofSystemKind::RppStark,
+        _ => ProofSystemKind::Mock,
+    }
+}
+
+fn encode_consensus_witness(
+    backend: &dyn ProofBackend,
+    certificate: &ConsensusCertificate,
+) -> WitnessBytes {
+    certificate
+        .encode_witness(backend_system(backend))
+        .expect("encode consensus witness")
+}
+
+fn prove_consensus_certificate(
+    backend: &dyn ProofBackend,
+    certificate: &ConsensusCertificate,
+) -> ConsensusProof {
+    let witness = encode_consensus_witness(backend, certificate);
     let (proof_bytes, verifying_key, circuit) = backend
         .prove_consensus(&witness)
         .expect("prove consensus witness");
-    ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit)
+    let proof =
+        ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit);
+    if let Err(err) = proof.verify(backend) {
+        if !matches!(
+            err,
+            ProofVerificationError::Backend(message)
+                if message.contains("not implemented")
+                    || message.contains("unsupported")
+        ) {
+            panic!("unexpected consensus verification failure: {err:?}");
+        }
+    }
+    proof
+}
+
+fn certificate_with_block(label: &str) -> ConsensusCertificate {
+    let mut certificate = ConsensusCertificate::genesis();
+    certificate.block_hash = BlockId(format!("consensus-{label}"));
+    certificate
 }
 
 fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -251,7 +299,8 @@ fn bft_flow_reaches_commit() {
         "root".into(),
         config,
     );
-    let state = super::state::ConsensusState::new(genesis, backend()).expect("state init");
+    let backend = backend();
+    let state = super::state::ConsensusState::new(genesis, backend.clone()).expect("state init");
 
     let handle = thread::spawn(move || {
         let mut state = state;
@@ -263,7 +312,8 @@ fn bft_flow_reaches_commit() {
 
     let validator_set = select_validators(0, &vrf_outputs, &ledger);
     let leader = select_leader(&validator_set).expect("leader");
-    let certificate = ConsensusCertificate::genesis();
+    let certificate = certificate_with_block("bft-1");
+    let proof = prove_consensus_certificate(backend.as_ref(), &certificate);
     let proposal = Proposal {
         block: Block {
             height: 1,
@@ -271,7 +321,7 @@ fn bft_flow_reaches_commit() {
             payload: serde_json::json!({"tx": []}),
             timestamp: 0,
         },
-        proof: build_consensus_proof("bft-1", &certificate),
+        proof,
         certificate,
         leader_id: leader.id.clone(),
     };
@@ -326,7 +376,8 @@ fn detects_conflicting_prevotes_triggers_slash() {
         "root".into(),
         config,
     );
-    let state = super::state::ConsensusState::new(genesis, backend()).expect("state init");
+    let backend = backend();
+    let state = super::state::ConsensusState::new(genesis, backend.clone()).expect("state init");
 
     let handle = thread::spawn(move || {
         let mut state = state;
@@ -350,7 +401,8 @@ fn detects_conflicting_prevotes_triggers_slash() {
         peers.insert(validator.id.clone(), PeerId::random());
     }
 
-    let certificate = ConsensusCertificate::genesis();
+    let certificate_a = certificate_with_block("double-a");
+    let proof_a = prove_consensus_certificate(backend.as_ref(), &certificate_a);
     let proposal_a = Proposal {
         block: Block {
             height: 1,
@@ -358,11 +410,13 @@ fn detects_conflicting_prevotes_triggers_slash() {
             payload: serde_json::json!({"tx": [1]}),
             timestamp: 10,
         },
-        proof: build_consensus_proof("double-a", &certificate),
-        certificate: certificate.clone(),
+        proof: proof_a,
+        certificate: certificate_a.clone(),
         leader_id: leader.id.clone(),
     };
 
+    let certificate_b = certificate_with_block("double-b");
+    let proof_b = prove_consensus_certificate(backend.as_ref(), &certificate_b);
     let proposal_b = Proposal {
         block: Block {
             height: 1,
@@ -370,8 +424,8 @@ fn detects_conflicting_prevotes_triggers_slash() {
             payload: serde_json::json!({"tx": [2]}),
             timestamp: 20,
         },
-        proof: build_consensus_proof("double-b", &certificate),
-        certificate,
+        proof: proof_b,
+        certificate: certificate_b.clone(),
         leader_id: leader.id.clone(),
     };
 
@@ -450,7 +504,8 @@ fn timeout_triggers_new_proposal_flow() {
         "root".into(),
         config,
     );
-    let state = super::state::ConsensusState::new(genesis, backend()).expect("state init");
+    let backend = backend();
+    let state = super::state::ConsensusState::new(genesis, backend.clone()).expect("state init");
 
     let handle = thread::spawn(move || {
         let mut state = state;
@@ -463,7 +518,8 @@ fn timeout_triggers_new_proposal_flow() {
     let validator_set = select_validators(0, &vrf_outputs, &ledger);
     let leader = select_leader(&validator_set).expect("leader");
 
-    let certificate = ConsensusCertificate::genesis();
+    let certificate = certificate_with_block("manual");
+    let proof = prove_consensus_certificate(backend.as_ref(), &certificate);
     let manual_proposal = Proposal {
         block: Block {
             height: 1,
@@ -471,7 +527,7 @@ fn timeout_triggers_new_proposal_flow() {
             payload: serde_json::json!({"tx": []}),
             timestamp: 0,
         },
-        proof: build_consensus_proof("manual", &certificate),
+        proof,
         certificate,
         leader_id: leader.id.clone(),
     };
@@ -528,16 +584,17 @@ fn select_validators_rejects_manipulated_proof() {
 
 #[test]
 fn consensus_proof_verifies_with_backend() {
-    let certificate = ConsensusCertificate::genesis();
-    let proof = build_consensus_proof("ok", &certificate);
     let backend = backend();
+    let certificate = certificate_with_block("roundtrip-ok");
+    let proof = prove_consensus_certificate(backend.as_ref(), &certificate);
     assert!(proof.verify(&*backend).is_ok());
 }
 
 #[test]
 fn consensus_proof_propagates_backend_error() {
-    let certificate = ConsensusCertificate::genesis();
-    let proof = build_consensus_proof("fail", &certificate);
+    let backend = backend();
+    let certificate = certificate_with_block("roundtrip-fail");
+    let proof = prove_consensus_certificate(backend.as_ref(), &certificate);
     let backend = failing_backend();
     assert!(matches!(
         proof.verify(&*backend),

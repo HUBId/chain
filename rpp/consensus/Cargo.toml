@@ -16,7 +16,10 @@ prover-stwo-simd = [
     "prover-backend-interface/prover-stwo-simd",
     "prover_stwo_backend/simd",
 ]
-prover-mock = ["prover-backend-interface/prover-mock"]
+prover-mock = [
+    "prover-backend-interface/prover-mock",
+    "dep:prover_mock_backend",
+]
 
 [dependencies]
 serde = { version = "=1.0.225", features = ["derive"] }
@@ -27,6 +30,7 @@ libp2p = { path = "../../vendor/libp2p/libp2p", default-features = false }
 prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
 rpp-crypto-vrf = { path = "../crypto-vrf" }
+prover_mock_backend = { path = "../zk/prover_mock_backend", optional = true }
 
 [workspace]
 
