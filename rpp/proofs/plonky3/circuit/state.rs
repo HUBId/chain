@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{AttestedIdentityRequest, SignedTransaction};
 
+use super::Plonky3CircuitWitness;
+
 /// Witness for the batched state transition circuit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StateWitness {
@@ -24,5 +26,11 @@ impl StateWitness {
             identities: identities.to_vec(),
             transactions: transactions.to_vec(),
         }
+    }
+}
+
+impl Plonky3CircuitWitness for StateWitness {
+    fn circuit(&self) -> &'static str {
+        "state"
     }
 }

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::Plonky3CircuitWitness;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VotePower {
     pub voter: String,
@@ -38,5 +40,15 @@ impl ConsensusWitness {
             pre_commits,
             commit_votes,
         }
+    }
+}
+
+impl Plonky3CircuitWitness for ConsensusWitness {
+    fn circuit(&self) -> &'static str {
+        "consensus"
+    }
+
+    fn block_height(&self) -> Option<u64> {
+        Some(self.round)
     }
 }

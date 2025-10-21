@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::SignedTransaction;
 
+use super::Plonky3CircuitWitness;
+
 /// Witness representation for the transaction validity circuit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionWitness {
@@ -13,5 +15,11 @@ impl TransactionWitness {
         Self {
             transaction: transaction.clone(),
         }
+    }
+}
+
+impl Plonky3CircuitWitness for TransactionWitness {
+    fn circuit(&self) -> &'static str {
+        "transaction"
     }
 }

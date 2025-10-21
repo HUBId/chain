@@ -62,23 +62,29 @@ impl From<Plonky3VerificationError> for ChainError {
 }
 
 #[derive(Debug)]
-struct ProofBlob<'a> {
+struct ProofBlob {
     verifying_key_hash: [u8; 32],
-    payload: &'a [u8],
+    inputs_digest: [u8; 32],
+    fri_digest: [u8; 32],
 }
 
-impl<'a> ProofBlob<'a> {
-    fn parse(bytes: &'a [u8], circuit: &str) -> Result<Self, Plonky3VerificationError> {
-        if bytes.len() != 64 {
-            let detail = format!("proof blob must be 64 bytes, found {}", bytes.len());
+impl ProofBlob {
+    fn parse(bytes: &[u8], circuit: &str) -> Result<Self, Plonky3VerificationError> {
+        if bytes.len() != super::crypto::PROOF_BLOB_LEN {
+            let detail = format!("proof blob must be {} bytes, found {}", super::crypto::PROOF_BLOB_LEN, bytes.len());
             error!("plonky3 {circuit} proof decode failure: {detail}");
             return Err(Plonky3VerificationError::malformed(circuit, detail));
         }
         let mut verifying_key_hash = [0u8; 32];
         verifying_key_hash.copy_from_slice(&bytes[..32]);
+        let mut inputs_digest = [0u8; 32];
+        inputs_digest.copy_from_slice(&bytes[32..64]);
+        let mut fri_digest = [0u8; 32];
+        fri_digest.copy_from_slice(&bytes[64..]);
         Ok(Self {
             verifying_key_hash,
-            payload: &bytes[32..],
+            inputs_digest,
+            fri_digest,
         })
     }
 
@@ -86,9 +92,12 @@ impl<'a> ProofBlob<'a> {
         &self.verifying_key_hash
     }
 
-    #[allow(dead_code)]
-    fn payload(&self) -> &'a [u8] {
-        self.payload
+    fn inputs_digest(&self) -> &[u8; 32] {
+        &self.inputs_digest
+    }
+
+    fn fri_digest(&self) -> &[u8; 32] {
+        &self.fri_digest
     }
 }
 

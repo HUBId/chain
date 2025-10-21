@@ -1,0 +1,11 @@
+[package]
+name = "p3-matrix"
+version = "0.3.0"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = []
+
+[lib]
+path = "src/lib.rs"

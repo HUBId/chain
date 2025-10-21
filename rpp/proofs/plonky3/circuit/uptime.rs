@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::Plonky3CircuitWitness;
+
 /// Witness representation for the uptime (Timetoke) circuit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UptimeWitness {
@@ -32,5 +34,11 @@ impl UptimeWitness {
             window_end,
             commitment: commitment.into(),
         }
+    }
+}
+
+impl Plonky3CircuitWitness for UptimeWitness {
+    fn circuit(&self) -> &'static str {
+        "uptime"
     }
 }
