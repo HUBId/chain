@@ -4,19 +4,34 @@ mod io;
 mod keys;
 
 #[cfg(feature = "official")]
-pub use io::{decode_tx_proof, decode_tx_witness, encode_tx_proof};
+pub use io::{
+    decode_consensus_proof, decode_consensus_witness, decode_tx_proof, decode_tx_witness,
+    encode_consensus_proof, encode_tx_proof,
+};
 
 use prover_backend_interface::{
-    BackendError, BackendResult, ProofBackend, ProofBytes, ProvingKey, SecurityLevel, TxCircuitDef,
-    TxPublicInputs, VerifyingKey, WitnessBytes,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVerifyingKeyMetadata, ProofBackend, ProofBytes, ProvingKey, SecurityLevel,
+    TxCircuitDef, TxPublicInputs, VerifyingKey, WitnessBytes,
 };
 
 #[cfg(feature = "official")]
+use crate::official::circuit::{string_to_field, ConsensusCircuit};
+#[cfg(feature = "official")]
+use crate::official::fri::FriProver;
+#[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
+#[cfg(feature = "official")]
+use crate::official::proof::{ProofKind, ProofPayload, StarkProof};
 #[cfg(feature = "official")]
 use crate::official::verifier::NodeVerifier;
 #[cfg(feature = "official")]
-use keys::{encode_key_payload, SupportedTxCircuit, TxKeyPayload};
+use crate::types::ChainProof;
+#[cfg(feature = "official")]
+use keys::{
+    encode_consensus_key_payload, encode_key_payload, ConsensusKeyPayload,
+    SupportedConsensusCircuit, SupportedTxCircuit, TxKeyPayload,
+};
 
 /// Thin adapter exposing the STWO integration through the shared backend
 /// interface.  The concrete proving routines are wired in lazily to keep the
@@ -130,6 +145,57 @@ impl ProofBackend for StwoBackend {
             Err(BackendError::Unsupported("transaction verification"))
         }
     }
+
+    fn keygen_consensus(
+        &self,
+        circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey, ConsensusVerifyingKeyMetadata)> {
+        #[cfg(feature = "official")]
+        {
+            return keygen_consensus_keys(circuit);
+        }
+
+        #[cfg(not(feature = "official"))]
+        {
+            let _ = circuit;
+            Err(BackendError::Unsupported("consensus keygen"))
+        }
+    }
+
+    fn prove_consensus(
+        &self,
+        pk: &ProvingKey,
+        witness: &WitnessBytes,
+    ) -> BackendResult<(ProofBytes, ConsensusVerifyingKeyMetadata)> {
+        #[cfg(feature = "official")]
+        {
+            return prove_consensus_proof(pk, witness);
+        }
+
+        #[cfg(not(feature = "official"))]
+        {
+            let _ = (pk, witness);
+            Err(BackendError::Unsupported("consensus proving"))
+        }
+    }
+
+    fn verify_consensus(
+        &self,
+        vk: &VerifyingKey,
+        proof: &ProofBytes,
+        public_inputs: &ConsensusPublicInputs,
+    ) -> BackendResult<(bool, ConsensusVerifyingKeyMetadata)> {
+        #[cfg(feature = "official")]
+        {
+            return verify_consensus_proof(vk, proof, public_inputs);
+        }
+
+        #[cfg(not(feature = "official"))]
+        {
+            let _ = (vk, proof, public_inputs);
+            Err(BackendError::Unsupported("consensus verification"))
+        }
+    }
 }
 
 #[cfg(feature = "official")]
@@ -137,10 +203,7 @@ fn rebuild_tx_public_inputs(
     parameters: &StarkParameters,
     inputs: &TxPublicInputs,
 ) -> Vec<FieldElement> {
-    fn digest_chunks(
-        parameters: &StarkParameters,
-        digest: &[u8; 32],
-    ) -> Vec<FieldElement> {
+    fn digest_chunks(parameters: &StarkParameters, digest: &[u8; 32]) -> Vec<FieldElement> {
         digest
             .chunks(8)
             .map(|chunk| parameters.element_from_bytes(chunk))
@@ -148,10 +211,7 @@ fn rebuild_tx_public_inputs(
     }
 
     let mut fields = digest_chunks(parameters, &inputs.utxo_root);
-    fields.extend(digest_chunks(
-        parameters,
-        &inputs.transaction_commitment,
-    ));
+    fields.extend(digest_chunks(parameters, &inputs.transaction_commitment));
     fields
 }
 
@@ -207,6 +267,159 @@ fn decode_tx_circuit_identifier(identifier: &str) -> BackendResult<SupportedTxCi
     SupportedTxCircuit::from_identifier(&parsed)
 }
 
+#[cfg(feature = "official")]
+fn keygen_consensus_keys(
+    circuit: &ConsensusCircuitDef,
+) -> BackendResult<(ProvingKey, VerifyingKey, ConsensusVerifyingKeyMetadata)> {
+    let selected = decode_consensus_circuit_identifier(&circuit.identifier)?;
+    let parameters = StarkParameters::blueprint_default();
+    let payload = ConsensusKeyPayload::new(selected, parameters);
+    let encoded = encode_consensus_key_payload(&payload)?;
+    let metadata = ConsensusVerifyingKeyMetadata::new(payload.circuit.clone(), &encoded);
+
+    Ok((ProvingKey(encoded.clone()), VerifyingKey(encoded), metadata))
+}
+
+#[cfg(feature = "official")]
+fn prove_consensus_proof(
+    pk: &ProvingKey,
+    witness_bytes: &WitnessBytes,
+) -> BackendResult<(ProofBytes, ConsensusVerifyingKeyMetadata)> {
+    let payload = keys::decode_consensus_key_payload(pk.as_slice())?;
+    let witness = decode_consensus_witness(witness_bytes)?;
+    let parameters = payload.parameters;
+    let metadata = ConsensusVerifyingKeyMetadata::new(payload.circuit.clone(), pk.as_slice());
+
+    let circuit = ConsensusCircuit::new(witness.clone());
+    circuit
+        .evaluate_constraints()
+        .map_err(|err| BackendError::Failure(err.to_string()))?;
+    let trace = circuit
+        .generate_trace(&parameters)
+        .map_err(|err| BackendError::Failure(err.to_string()))?;
+    circuit
+        .verify_air(&parameters, &trace)
+        .map_err(|err| BackendError::Failure(err.to_string()))?;
+    let air = circuit
+        .define_air(&parameters, &trace)
+        .map_err(|err| BackendError::Failure(err.to_string()))?;
+
+    let inputs = vec![
+        string_to_field(&parameters, &witness.block_hash),
+        parameters.element_from_u64(witness.round),
+        string_to_field(&parameters, &witness.leader_proposal),
+        parameters.element_from_u64(witness.quorum_threshold),
+    ];
+
+    let fri_prover = FriProver::new(&parameters);
+    let fri_output = fri_prover.prove(&air, &trace, &inputs);
+    let hasher = parameters.poseidon_hasher();
+
+    let proof = StarkProof::new(
+        ProofKind::Consensus,
+        ProofPayload::Consensus(witness),
+        inputs,
+        trace,
+        fri_output.commitment_proof,
+        fri_output.fri_proof,
+        &hasher,
+    );
+
+    let encoded = encode_consensus_proof(&proof)?;
+    Ok((encoded, metadata))
+}
+
+#[cfg(feature = "official")]
+fn verify_consensus_proof(
+    vk: &VerifyingKey,
+    proof_bytes: &ProofBytes,
+    public_inputs: &ConsensusPublicInputs,
+) -> BackendResult<(bool, ConsensusVerifyingKeyMetadata)> {
+    let payload = keys::decode_consensus_key_payload(vk.as_slice())?;
+    let parameters = payload.parameters;
+    let metadata = ConsensusVerifyingKeyMetadata::new(payload.circuit.clone(), vk.as_slice());
+    let decoded = decode_consensus_proof(proof_bytes)?;
+
+    let expected_fields = rebuild_consensus_public_inputs(&parameters, public_inputs);
+    let expected_inputs: Vec<String> = expected_fields.iter().map(FieldElement::to_hex).collect();
+
+    if decoded.public_inputs != expected_inputs {
+        return Err(BackendError::Failure(
+            "consensus public inputs mismatch".into(),
+        ));
+    }
+
+    let hasher = parameters.poseidon_hasher();
+    let expected_commitment = hasher.hash(&expected_fields);
+    if decoded.commitment != expected_commitment.to_hex() {
+        return Err(BackendError::Failure(
+            "consensus commitment mismatch".into(),
+        ));
+    }
+
+    if decoded.commitment_proof.to_official().is_none() {
+        return Err(BackendError::Failure(
+            "missing commitment proof data".into(),
+        ));
+    }
+    if decoded.fri_proof.to_official().is_none() {
+        return Err(BackendError::Failure("missing fri proof data".into()));
+    }
+
+    let chain_proof = ChainProof::Stwo(decoded.clone());
+    let verifier = NodeVerifier::with_parameters(parameters);
+    verifier
+        .verify_consensus(&chain_proof)
+        .map_err(|err| BackendError::Failure(err.to_string()))?;
+
+    Ok((true, metadata))
+}
+
+#[cfg(feature = "official")]
+fn rebuild_consensus_public_inputs(
+    parameters: &StarkParameters,
+    inputs: &ConsensusPublicInputs,
+) -> Vec<FieldElement> {
+    vec![
+        string_to_field(parameters, &hex::encode(inputs.block_hash)),
+        parameters.element_from_u64(inputs.round),
+        string_to_field(parameters, &hex::encode(inputs.leader_proposal)),
+        parameters.element_from_u64(inputs.quorum_threshold),
+    ]
+}
+
+#[cfg(feature = "official")]
+fn decode_consensus_circuit_identifier(
+    identifier: &str,
+) -> BackendResult<SupportedConsensusCircuit> {
+    if identifier.trim().is_empty() {
+        return Err(BackendError::Failure(
+            "consensus circuit identifier cannot be empty".into(),
+        ));
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Identifier<'a> {
+        #[serde(borrow)]
+        circuit: &'a str,
+    }
+
+    let parsed = if identifier.trim_start().starts_with('{') {
+        serde_json::from_str::<Identifier>(identifier)
+            .map(|value| value.circuit.to_string())
+            .map_err(|err| {
+                BackendError::Failure(format!(
+                    "invalid consensus circuit identifier '{}': {err}",
+                    identifier
+                ))
+            })?
+    } else {
+        identifier.to_string()
+    };
+
+    SupportedConsensusCircuit::from_identifier(&parsed)
+}
+
 #[cfg(all(test, feature = "official"))]
 mod tests {
     use super::keys::{decode_key_payload, encode_key_payload, SupportedTxCircuit, TxKeyPayload};
@@ -244,13 +457,17 @@ mod tests {
         payload.circuit = "unsupported".into();
         let encoded = encode_key_payload(&payload).expect("payload serialises");
         let error = decode_key_payload(&encoded).expect_err("unknown circuit is rejected");
-        assert!(matches!(error, BackendError::Failure(message) if message.contains("unsupported transaction circuit")));
+        assert!(
+            matches!(error, BackendError::Failure(message) if message.contains("unsupported transaction circuit"))
+        );
     }
 
     #[test]
     fn rejects_empty_identifiers() {
         let result = decode_tx_circuit_identifier("");
-        assert!(matches!(result, Err(BackendError::Failure(message)) if message.contains("cannot be empty")));
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("cannot be empty"))
+        );
     }
 
     #[test]
@@ -295,7 +512,10 @@ mod tests {
             .expect_err("invalid witness should fail proving");
         match err {
             BackendError::Failure(message) => {
-                assert!(message.contains("nonce"), "unexpected failure message: {message}");
+                assert!(
+                    message.contains("nonce"),
+                    "unexpected failure message: {message}"
+                );
             }
             other => panic!("unexpected backend error variant: {other:?}"),
         }
@@ -402,7 +622,10 @@ mod tests {
         public_inputs.utxo_root[0] ^= 0x01;
 
         let result = backend.verify_tx(&verifying_key, &proof_bytes, &public_inputs);
-        assert!(matches!(result, Err(BackendError::Failure(message)) if message.contains("public inputs") || message.contains("commitment")), "tampered public inputs should be rejected");
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("public inputs") || message.contains("commitment")),
+            "tampered public inputs should be rejected"
+        );
     }
 
     #[test]
@@ -429,7 +652,10 @@ mod tests {
 
         let tampered_bytes = encode_tx_proof(&tampered).expect("encode tampered proof");
         let result = backend.verify_tx(&verifying_key, &tampered_bytes, &public_inputs);
-        assert!(matches!(result, Err(BackendError::Failure(message)) if message.contains("commitment")), "tampered commitment should be rejected");
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("commitment")),
+            "tampered commitment should be rejected"
+        );
     }
 
     fn sample_transaction_witness() -> TransactionWitness {
@@ -461,19 +687,13 @@ mod tests {
         sender_account.reputation.tier = Tier::Tl3;
         sender_account.reputation.last_decay_timestamp = payload.timestamp;
         sender_account.reputation.zsi.validated = true;
-        sender_account
-            .reputation
-            .timetokes
-            .last_decay_timestamp = payload.timestamp;
+        sender_account.reputation.timetokes.last_decay_timestamp = payload.timestamp;
 
         let mut receiver_account = Account::new(receiver, 500, Stake::default());
         receiver_account.reputation.tier = Tier::Tl2;
         receiver_account.reputation.last_decay_timestamp = payload.timestamp;
         receiver_account.reputation.zsi.validated = true;
-        receiver_account
-            .reputation
-            .timetokes
-            .last_decay_timestamp = payload.timestamp;
+        receiver_account.reputation.timetokes.last_decay_timestamp = payload.timestamp;
 
         TransactionWitness {
             signed_tx,

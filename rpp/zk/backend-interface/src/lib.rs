@@ -22,7 +22,7 @@ pub mod blake2s {
     pub struct Blake2sHasher;
 
     /// Wrapper returned by [`Blake2sHasher::hash`] to ease conversions.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub struct Blake2sHash(pub [u8; 32]);
 
     impl Blake2sHasher {
@@ -239,6 +239,55 @@ pub struct TxPublicInputs {
     pub transaction_commitment: [u8; 32],
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusCircuitDef {
+    pub identifier: String,
+}
+
+impl ConsensusCircuitDef {
+    pub fn new(identifier: impl Into<String>) -> Self {
+        Self {
+            identifier: identifier.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusWitnessHeader {
+    pub circuit: String,
+}
+
+impl ConsensusWitnessHeader {
+    pub fn new(circuit: impl Into<String>) -> Self {
+        Self {
+            circuit: circuit.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusPublicInputs {
+    pub block_hash: [u8; 32],
+    pub round: u64,
+    pub leader_proposal: [u8; 32],
+    pub quorum_threshold: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusVerifyingKeyMetadata {
+    pub circuit: String,
+    pub verifying_key_hash: Blake2sHash,
+}
+
+impl ConsensusVerifyingKeyMetadata {
+    pub fn new(circuit: impl Into<String>, verifying_key_bytes: &[u8]) -> Self {
+        Self {
+            circuit: circuit.into(),
+            verifying_key_hash: Blake2sHasher::hash(verifying_key_bytes),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvingKey(pub Vec<u8>);
 
@@ -301,6 +350,30 @@ pub trait ProofBackend: Send + Sync + 'static {
         _public_inputs: &TxPublicInputs,
     ) -> BackendResult<bool> {
         Err(BackendError::Unsupported("transaction verification"))
+    }
+
+    fn keygen_consensus(
+        &self,
+        _circuit: &ConsensusCircuitDef,
+    ) -> BackendResult<(ProvingKey, VerifyingKey, ConsensusVerifyingKeyMetadata)> {
+        Err(BackendError::Unsupported("consensus keygen"))
+    }
+
+    fn prove_consensus(
+        &self,
+        _pk: &ProvingKey,
+        _witness: &WitnessBytes,
+    ) -> BackendResult<(ProofBytes, ConsensusVerifyingKeyMetadata)> {
+        Err(BackendError::Unsupported("consensus proving"))
+    }
+
+    fn verify_consensus(
+        &self,
+        _vk: &VerifyingKey,
+        _proof: &ProofBytes,
+        _public_inputs: &ConsensusPublicInputs,
+    ) -> BackendResult<(bool, ConsensusVerifyingKeyMetadata)> {
+        Err(BackendError::Unsupported("consensus verification"))
     }
 }
 
