@@ -29,12 +29,12 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 #[derive(Clone)]
-pub(super) struct RecordedTransaction {
+pub(crate) struct RecordedTransaction {
     pub signed_transaction: SignedTransaction,
     pub proof: ChainProof,
 }
 
-pub(super) static RECORDED_TRANSACTION: Lazy<RecordedTransaction> = Lazy::new(|| {
+pub(crate) static RECORDED_TRANSACTION: Lazy<RecordedTransaction> = Lazy::new(|| {
     let tx = sample_transaction();
     let temp_dir = tempdir().expect("temporary directory");
     let storage = Storage::open(temp_dir.path()).expect("open storage");
@@ -69,7 +69,7 @@ pub(super) static RECORDED_TRANSACTION: Lazy<RecordedTransaction> = Lazy::new(||
     }
 });
 
-pub(super) fn recorded_transaction_proof() -> RecordedTransaction {
+pub(crate) fn recorded_transaction_proof() -> RecordedTransaction {
     RECORDED_TRANSACTION.clone()
 }
 
@@ -91,7 +91,10 @@ fn sample_transaction() -> SignedTransaction {
     SignedTransaction::new(payload, signature, &keypair.public)
 }
 
-fn populate_wallet_state(storage: &Storage, tx: &SignedTransaction) -> (Account, Account) {
+pub(crate) fn populate_wallet_state(
+    storage: &Storage,
+    tx: &SignedTransaction,
+) -> (Account, Account) {
     let sender_balance = tx
         .payload
         .amount

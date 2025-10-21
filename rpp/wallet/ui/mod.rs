@@ -14,13 +14,13 @@ use crate::node::{
     ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, RolloutStatus,
 };
 
-pub use crate::types::UptimeProof;
+pub use crate::types::{ChainProof, UptimeProof};
 pub use proofs::{ProofGenerator, TxProof};
 pub use tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 pub use wallet::{ConsensusReceipt, Wallet, WalletAccountSummary, WalletNodeRuntimeStatus};
 #[cfg(feature = "vendor_electrs")]
 pub use wallet::{
-    ScriptStatusMetadata, TrackerSnapshot, TrackedScriptSnapshot, TrackerState, WalletTrackerHandle,
+    ScriptStatusMetadata, TrackedScriptSnapshot, TrackerSnapshot, TrackerState, WalletTrackerHandle,
 };
 pub use workflows::{
     IdentityFinalizationPhase, IdentityGenesisPhase, IdentityQuorumPhase, IdentityWorkflow,
