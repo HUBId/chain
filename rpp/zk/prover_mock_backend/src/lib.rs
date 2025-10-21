@@ -1,7 +1,7 @@
 use prover_backend_interface::{
-    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, ProofHeader,
-    ProofSystemKind, ProvingKey, SecurityLevel, TxCircuitDef, TxPublicInputs, VerifyingKey,
-    WitnessBytes, WitnessHeader,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    ProofBytes, ProofHeader, ProofSystemKind, ProvingKey, SecurityLevel, TxCircuitDef,
+    TxPublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +76,7 @@ impl ProofBackend for MockBackend {
         vk: &VerifyingKey,
         proof: &ProofBytes,
         circuit: &ConsensusCircuitDef,
+        _public_inputs: &ConsensusPublicInputs,
     ) -> BackendResult<()> {
         if circuit.identifier.trim().is_empty() {
             return Err(BackendError::Failure(

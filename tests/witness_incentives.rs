@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use rpp_chain::consensus::evidence::{EvidenceRecord, EvidenceType};
 use rpp_chain::consensus::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ProofBackend, ProofBytes, VerifyingKey,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    ProofBytes, VerifyingKey,
 };
 use rpp_chain::consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_chain::consensus::validator::{VRFOutput, ValidatorLedgerEntry};
@@ -21,6 +22,7 @@ impl ProofBackend for FixtureBackend {
         vk: &VerifyingKey,
         proof: &ProofBytes,
         circuit: &ConsensusCircuitDef,
+        _public_inputs: &ConsensusPublicInputs,
     ) -> BackendResult<()> {
         if vk.as_slice().is_empty() || proof.as_slice().is_empty() {
             return Err(BackendError::Failure("empty consensus artifacts".into()));
