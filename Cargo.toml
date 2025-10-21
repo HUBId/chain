@@ -10,11 +10,12 @@ members = [
   "triehash",
   "rpp/p2p",
   "rpp/chain",
+  "rpp/node",
 ]
 resolver = "2"
 
 [workspace.features]
-vendor_electrs = []
+vendor_electrs = ["rpp-chain/vendor_electrs"]
 
 [workspace.package]
 version = "0.0.12"
