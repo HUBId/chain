@@ -6,17 +6,12 @@ rust-version = "1.79"
 
 [features]
 default = ["prover-stwo"]
-prover-stwo = [
-    "prover-backend-interface/prover-stwo",
-    "dep:prover_stwo_backend",
-    "prover_stwo_backend/prover-stwo",
-]
+prover-stwo = ["rpp-chain/prover-stwo"]
 prover-stwo-simd = [
     "prover-stwo",
-    "prover-backend-interface/prover-stwo-simd",
-    "prover_stwo_backend/simd",
+    "rpp-chain/prover-stwo-simd",
 ]
-prover-mock = ["prover-backend-interface/prover-mock"]
+prover-mock = ["rpp-chain/prover-mock"]
 
 [dependencies]
 anyhow = "1.0"
@@ -24,5 +19,4 @@ clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.37", features = ["macros", "rt", "signal", "time"] }
 tracing = "=0.1.41"
 tracing-subscriber = { version = "=0.3.20", features = ["fmt"] }
-prover-backend-interface = { path = "../zk/backend-interface" }
-prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
+rpp-chain = { path = "../chain", default-features = false }
