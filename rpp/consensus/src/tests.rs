@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
+use std::convert::TryFrom;
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
 use libp2p::PeerId;
+use rpp_crypto_vrf::{derive_tier_seed, generate_vrf, PoseidonVrfInput, VrfKeypair, VrfSecretKey};
 
 use super::bft_loop::{run_bft_loop, shutdown, submit_precommit, submit_prevote, submit_proposal};
 use super::evidence::EvidenceType;
@@ -16,10 +18,6 @@ use super::validator::{
     select_leader, select_validators, StakeInfo, VRFOutput, Validator, ValidatorLedgerEntry,
 };
 
-fn sample_public_key(id: &str) -> Vec<u8> {
-    format!("pk-{id}").into_bytes()
-}
-
 fn sample_seed(id: &str) -> [u8; 32] {
     let mut seed = [0u8; 32];
     let id_bytes = id.as_bytes();
@@ -28,42 +26,48 @@ fn sample_seed(id: &str) -> [u8; 32] {
     seed
 }
 
-fn make_proof(
-    epoch: u64,
-    id: &str,
-    seed: [u8; 32],
-    public_key: &[u8],
-    output: [u8; 32],
-) -> Vec<u8> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&seed);
-    hasher.update(&epoch.to_be_bytes());
-    hasher.update(id.as_bytes());
-    hasher.update(public_key);
-    hasher.update(&output);
-    hasher.finalize().as_bytes().to_vec()
-}
-
 fn build_vrf_output(
     epoch: u64,
     id: &str,
-    output: [u8; 32],
+    _output: [u8; 32],
     tier: u8,
     score: f64,
     timetoken: u64,
 ) -> VRFOutput {
     let seed = sample_seed(id);
-    let public_key = sample_public_key(id);
-    let proof = make_proof(epoch, id, seed, &public_key, output);
+    let tier_seed = derive_tier_seed(&id.to_string(), timetoken);
+    let keypair = deterministic_keypair(id);
+    let input = PoseidonVrfInput::new(seed, epoch, tier_seed);
+    let vrf_output = generate_vrf(&input, &keypair.secret).expect("generate vrf output");
     VRFOutput {
         validator_id: id.to_string(),
-        output,
-        proof,
+        output: vrf_output.randomness,
+        preoutput: vrf_output.preoutput.to_vec(),
+        proof: vrf_output.proof.to_vec(),
         reputation_tier: tier,
         reputation_score: score,
         timetoken_balance: timetoken,
         seed,
-        public_key,
+        public_key: keypair.public.to_bytes().to_vec(),
+    }
+}
+
+fn deterministic_keypair(id: &str) -> VrfKeypair {
+    let mut hash = blake3::hash(id.as_bytes()).as_bytes().to_vec();
+    hash.resize(32, 0);
+    let mut tweak = 0u8;
+    loop {
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(&hash);
+        bytes[0] ^= tweak;
+        if let Ok(secret) = VrfSecretKey::try_from(bytes) {
+            let public = secret.derive_public();
+            return VrfKeypair { public, secret };
+        }
+        tweak = tweak.wrapping_add(1);
+        if tweak == 0 {
+            panic!("failed to derive deterministic VRF keypair");
+        }
     }
 }
 

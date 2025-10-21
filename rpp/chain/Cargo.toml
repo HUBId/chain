@@ -67,6 +67,7 @@ prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rpp-consensus = { path = "../consensus", default-features = false }
+rpp-crypto-vrf = { path = "../crypto-vrf" }
 rpp-p2p = { path = "../p2p" }
 rpp-stark = { path = "../../vendor/rpp-stark", optional = true }
 rpp-wallet = { path = "../wallet", default-features = false, optional = true }

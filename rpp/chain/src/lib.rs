@@ -63,8 +63,7 @@ pub mod zk;
 pub mod sync;
 #[path = "../../runtime/types/mod.rs"]
 pub mod types;
-#[path = "../../crypto/vrf/mod.rs"]
-pub mod vrf;
+pub use rpp_crypto_vrf as vrf;
 #[path = "../../wallet/ui/mod.rs"]
 pub mod wallet;
 

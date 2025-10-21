@@ -26,6 +26,7 @@ blake3 = "=1.8.2"
 libp2p = { path = "../../vendor/libp2p/libp2p", default-features = false }
 prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
+rpp-crypto-vrf = { path = "../crypto-vrf" }
 
 [workspace]
 

@@ -8,6 +8,7 @@ members = [
   "storage",
   "storage-firewood",
   "triehash",
+  "rpp/crypto-vrf",
   "rpp/p2p",
   "rpp/chain",
   "rpp/node",

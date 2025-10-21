@@ -1,15 +1,15 @@
-use std::convert::TryFrom;
+use std::convert::TryInto;
 use std::fs;
 use std::path::Path;
 
+use crate::proof_backend::Blake2sHasher;
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer, Verifier};
 use rand::rngs::OsRng;
-use schnorrkel::SignatureError as VrfSignatureError;
-use schnorrkel::keys::{
-    ExpansionMode, Keypair as VrfKeypairInner, MiniSecretKey, PublicKey as SrPublicKey,
+use rpp_crypto_vrf::{self};
+pub use rpp_crypto_vrf::{
+    vrf_public_key_to_hex, vrf_secret_key_to_hex, Tier, VrfKeypair, VrfPublicKey, VrfSecretKey,
 };
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 
@@ -23,76 +23,6 @@ pub struct StoredKeypair {
 pub struct StoredVrfKeypair {
     pub public_key: String,
     pub secret_key: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct VrfSecretKey {
-    inner: MiniSecretKey,
-}
-
-impl VrfSecretKey {
-    pub fn new(inner: MiniSecretKey) -> Self {
-        Self { inner }
-    }
-
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.inner.to_bytes()
-    }
-
-    pub fn as_mini_secret(&self) -> &MiniSecretKey {
-        &self.inner
-    }
-
-    pub fn expand_to_keypair(&self) -> VrfKeypairInner {
-        self.inner.expand_to_keypair(ExpansionMode::Uniform)
-    }
-
-    pub fn derive_public(&self) -> VrfPublicKey {
-        VrfPublicKey {
-            inner: self.expand_to_keypair().public,
-        }
-    }
-}
-
-impl TryFrom<[u8; 32]> for VrfSecretKey {
-    type Error = VrfSignatureError;
-
-    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
-        MiniSecretKey::from_bytes(&bytes).map(VrfSecretKey::new)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct VrfPublicKey {
-    inner: SrPublicKey,
-}
-
-impl VrfPublicKey {
-    pub fn new(inner: SrPublicKey) -> Self {
-        Self { inner }
-    }
-
-    pub fn to_bytes(&self) -> [u8; 32] {
-        self.inner.to_bytes()
-    }
-
-    pub fn as_public_key(&self) -> &SrPublicKey {
-        &self.inner
-    }
-}
-
-impl TryFrom<[u8; 32]> for VrfPublicKey {
-    type Error = VrfSignatureError;
-
-    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
-        SrPublicKey::from_bytes(&bytes).map(VrfPublicKey::new)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct VrfKeypair {
-    pub public: VrfPublicKey,
-    pub secret: VrfSecretKey,
 }
 
 pub fn generate_keypair() -> Keypair {
@@ -178,10 +108,7 @@ fn derive_vrf_public(secret: &VrfSecretKey) -> VrfPublicKey {
 }
 
 pub fn generate_vrf_keypair() -> ChainResult<VrfKeypair> {
-    let secret = MiniSecretKey::generate();
-    let secret = VrfSecretKey::new(secret);
-    let public = derive_vrf_public(&secret);
-    Ok(VrfKeypair { public, secret })
+    Ok(rpp_crypto_vrf::generate_vrf_keypair())
 }
 
 pub fn load_or_generate_vrf_keypair(path: &Path) -> ChainResult<VrfKeypair> {
@@ -240,31 +167,13 @@ pub fn load_vrf_keypair(path: &Path) -> ChainResult<VrfKeypair> {
 }
 
 pub fn vrf_public_key_from_hex(data: &str) -> ChainResult<VrfPublicKey> {
-    let bytes = hex::decode(data)
-        .map_err(|err| ChainError::Config(format!("invalid VRF public key encoding: {err}")))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| ChainError::Config("invalid VRF public key length".to_string()))?;
-    VrfPublicKey::try_from(bytes)
-        .map_err(|err| ChainError::Config(format!("invalid VRF public key bytes: {err}")))
+    rpp_crypto_vrf::vrf_public_key_from_hex(data)
+        .map_err(|err| ChainError::Config(format!("invalid VRF public key encoding: {err}")))
 }
 
 pub fn vrf_secret_key_from_hex(data: &str) -> ChainResult<VrfSecretKey> {
-    let bytes = hex::decode(data)
-        .map_err(|err| ChainError::Config(format!("invalid VRF secret key encoding: {err}")))?;
-    let bytes: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| ChainError::Config("invalid VRF secret key length".to_string()))?;
-    VrfSecretKey::try_from(bytes)
-        .map_err(|err| ChainError::Config(format!("invalid VRF secret key bytes: {err}")))
-}
-
-pub fn vrf_public_key_to_hex(key: &VrfPublicKey) -> String {
-    hex::encode(key.to_bytes())
-}
-
-pub fn vrf_secret_key_to_hex(key: &VrfSecretKey) -> String {
-    hex::encode(key.to_bytes())
+    rpp_crypto_vrf::vrf_secret_key_from_hex(data)
+        .map_err(|err| ChainError::Config(format!("invalid VRF secret key encoding: {err}")))
 }
 
 #[cfg(test)]
