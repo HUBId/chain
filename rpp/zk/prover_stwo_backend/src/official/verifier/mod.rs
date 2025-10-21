@@ -1,8 +1,8 @@
 //! Verifier-side integration for STWO/STARK proofs.
 
 use crate::errors::{ChainError, ChainResult};
+use crate::proof_backend::ProofSystemKind;
 use crate::proof_system::ProofVerifier;
-use crate::rpp::ProofSystemKind;
 use crate::types::ChainProof;
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};

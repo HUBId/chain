@@ -23,14 +23,20 @@
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 
 pub mod backend;
+pub mod errors;
 #[cfg(any(test, feature = "scaffold"))]
 pub mod circuits;
 pub mod core;
+pub mod proof_system;
 #[cfg(feature = "official")]
 pub mod official;
 pub mod params;
+pub mod reputation;
+pub mod state;
+pub mod types;
 pub mod utils;
 
+pub use prover_backend_interface as proof_backend;
 pub use core::vcs::blake2_hash::{Blake2sHash, Blake2sHasher};
 pub use params::{FieldElement, StwoConfig};
 pub use utils::fri::{compress_proof, FriProof, FriProver, FriQuery};
