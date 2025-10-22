@@ -1,5 +1,6 @@
 #![cfg(feature = "prover-stwo")]
 
+use prover_backend_interface::ProofBackend;
 use prover_backend_interface::{
     BackendError, ProofBytes, ProofHeader, ProofSystemKind, TxCircuitDef, TxPublicInputs,
     WitnessBytes, WitnessHeader, PROOF_FORMAT_VERSION, WITNESS_FORMAT_VERSION,
@@ -70,7 +71,8 @@ mod fixture {
 
         let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
         let take = bytes.len().min(chunk.len());
-        chunk[chunk.len() - take..].copy_from_slice(&bytes[bytes.len() - take..]);
+        let start = chunk.len() - take;
+        chunk[start..].copy_from_slice(&bytes[bytes.len() - take..]);
         chunk
     }
 }
@@ -97,11 +99,13 @@ fn transaction_roundtrip_succeeds_with_fixture_witness() {
         "witness header should point to the STWO backend",
     );
     assert_eq!(
-        witness_header.circuit, fixture::TX_CIRCUIT,
+        witness_header.circuit,
+        fixture::TX_CIRCUIT,
         "witness header should describe the transaction circuit",
     );
     assert_eq!(
-        decoded_witness, fixture::witness(),
+        decoded_witness,
+        fixture::witness(),
         "fixture witness should round-trip through serialization",
     );
 
@@ -122,7 +126,8 @@ fn transaction_roundtrip_succeeds_with_fixture_witness() {
         "proof header should point to the STWO backend",
     );
     assert_eq!(
-        proof_header.circuit, fixture::TX_CIRCUIT,
+        proof_header.circuit,
+        fixture::TX_CIRCUIT,
         "proof header should describe the transaction circuit",
     );
     assert_eq!(
@@ -133,7 +138,8 @@ fn transaction_roundtrip_succeeds_with_fixture_witness() {
     match &decoded_proof.payload {
         ProofPayload::Transaction(recovered) => {
             assert_eq!(
-                recovered, &fixture::witness(),
+                recovered,
+                &fixture::witness(),
                 "proving should embed the original witness",
             );
         }
@@ -168,7 +174,10 @@ fn tampered_proof_bytes_are_rejected() {
     let public_inputs = fixture::public_inputs();
 
     let mut tampered = proof_bytes.clone().into_inner();
-    assert!(tampered.len() > 16, "fixture proof bytes should be non-trivial");
+    assert!(
+        tampered.len() > 16,
+        "fixture proof bytes should be non-trivial"
+    );
     tampered[16] ^= 0x42;
     let tampered = ProofBytes(tampered);
 
@@ -209,8 +218,8 @@ fn mismatched_proof_headers_are_rejected() {
         backend: ProofSystemKind::Mock,
         circuit: fixture::TX_CIRCUIT.into(),
     };
-    let tampered_bytes = ProofBytes::encode(&bad_header, &decoded_proof)
-        .expect("tampered proof encodes");
+    let tampered_bytes =
+        ProofBytes::encode(&bad_header, &decoded_proof).expect("tampered proof encodes");
 
     let err = backend
         .verify_tx(&verifying_key, &tampered_bytes, &public_inputs)

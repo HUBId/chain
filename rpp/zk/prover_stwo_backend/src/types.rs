@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -107,12 +109,21 @@ impl SignedTransaction {
     pub fn verify(&self) -> Result<(), SignedTransactionError> {
         let pk_bytes = hex::decode(&self.public_key)
             .map_err(|err| SignedTransactionError::InvalidPublicKey(err.to_string()))?;
+        let pk_array: [u8; 32] = pk_bytes.as_slice().try_into().map_err(|_| {
+            SignedTransactionError::InvalidPublicKey(
+                "ed25519 public key must encode 32 bytes".into(),
+            )
+        })?;
         let sig_bytes = hex::decode(&self.signature)
             .map_err(|err| SignedTransactionError::InvalidSignature(err.to_string()))?;
-        let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
+        let sig_array: [u8; 64] = sig_bytes.as_slice().try_into().map_err(|_| {
+            SignedTransactionError::InvalidSignature(
+                "ed25519 signature must encode 64 bytes".into(),
+            )
+        })?;
+        let verifying_key = VerifyingKey::from_bytes(&pk_array)
             .map_err(|err| SignedTransactionError::InvalidPublicKey(err.to_string()))?;
-        let signature = Signature::from_bytes(&sig_bytes)
-            .map_err(|err| SignedTransactionError::InvalidSignature(err.to_string()))?;
+        let signature = Signature::from_bytes(&sig_array);
         verifying_key
             .verify(&self.payload.canonical_bytes(), &signature)
             .map_err(|_| SignedTransactionError::VerificationFailed)
@@ -190,14 +201,14 @@ pub enum ChainProof {
     #[serde(rename = "stwo")]
     Stwo(crate::official::proof::StarkProof),
     #[serde(other)]
-    Other(serde_json::Value),
+    Other,
 }
 
 #[cfg(not(feature = "official"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ChainProof {
     #[serde(other)]
-    Other(serde_json::Value),
+    Other,
 }
 
 impl ChainProof {
@@ -213,7 +224,7 @@ impl ChainProof {
     pub fn expect_stwo(&self) -> ChainResult<&crate::official::proof::StarkProof> {
         match self {
             ChainProof::Stwo(proof) => Ok(proof),
-            ChainProof::Other(_) => Err(ChainError::Crypto(
+            ChainProof::Other => Err(ChainError::Crypto(
                 "expected STWO proof, received unsupported artifact".into(),
             )),
         }
@@ -223,7 +234,7 @@ impl ChainProof {
     pub fn into_stwo(self) -> ChainResult<crate::official::proof::StarkProof> {
         match self {
             ChainProof::Stwo(proof) => Ok(proof),
-            ChainProof::Other(_) => Err(ChainError::Crypto(
+            ChainProof::Other => Err(ChainError::Crypto(
                 "expected STWO proof, received unsupported artifact".into(),
             )),
         }
