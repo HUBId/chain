@@ -16,14 +16,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{broadcast, mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -36,13 +36,13 @@ use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
 };
 use crate::consensus::{
-    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
-    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
-    SignedBftVote, ValidatorCandidate,
+    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
+    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
+    classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
-    address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair, sign_message,
-    signature_to_hex, vrf_public_key_to_hex, VrfKeypair,
+    VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
+    sign_message, signature_to_hex, vrf_public_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -57,13 +57,12 @@ use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
     node::{
         IdentityProfile as RuntimeIdentityProfile, NodeError as P2pError,
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
-    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
-use libp2p::PeerId;
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -73,9 +72,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
-    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
+    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
+    TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -84,6 +83,7 @@ use crate::vrf::{
 use crate::zk::rpp_adapter::compute_public_digest;
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
+use libp2p::PeerId;
 use rpp_p2p::{
     GossipTopic, HandshakePayload, NetworkLightClientUpdate, NetworkStateSyncChunk,
     NetworkStateSyncPlan, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT,
@@ -723,7 +723,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
+        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -734,8 +734,9 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
+        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field, StarkCircuit,
+        string_to_field,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1487,6 +1488,10 @@ impl NodeHandle {
         self.inner.reputation_audit(address)
     }
 
+    pub fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
+        self.inner.slash_validator(address, reason)
+    }
+
     pub fn bft_membership(&self) -> ChainResult<BftMembership> {
         self.inner.bft_membership()
     }
@@ -1531,10 +1536,7 @@ impl NodeHandle {
         self.inner.state_sync_plan(chunk_size)
     }
 
-    pub fn network_state_sync_plan(
-        &self,
-        chunk_size: usize,
-    ) -> ChainResult<NetworkStateSyncPlan> {
+    pub fn network_state_sync_plan(&self, chunk_size: usize) -> ChainResult<NetworkStateSyncPlan> {
         self.inner.network_state_sync_plan(chunk_size)
     }
 
@@ -2321,10 +2323,7 @@ impl NodeInner {
         engine.state_sync_plan(chunk_size)
     }
 
-    fn network_state_sync_plan(
-        &self,
-        chunk_size: usize,
-    ) -> ChainResult<NetworkStateSyncPlan> {
+    fn network_state_sync_plan(&self, chunk_size: usize) -> ChainResult<NetworkStateSyncPlan> {
         let plan = self.state_sync_plan(chunk_size)?;
         plan.to_network_plan()
     }
@@ -2699,10 +2698,7 @@ impl NodeInner {
         if !self.config.rollout.feature_gates.consensus_enforcement {
             return;
         }
-        if let Err(err) = self
-            .ledger
-            .slash_validator(address, SlashingReason::InvalidIdentity)
-        {
+        if let Err(err) = self.slash_validator(address, SlashingReason::InvalidIdentity) {
             warn!(
                 offender = %address,
                 ?err,
@@ -2823,7 +2819,7 @@ impl NodeInner {
             EvidenceKind::InvalidProof => (SlashingReason::InvalidVote, "invalid-proof"),
             EvidenceKind::InvalidProposal => (SlashingReason::ConsensusFault, "invalid-proposal"),
         };
-        if let Err(err) = self.ledger.slash_validator(&evidence.address, reason) {
+        if let Err(err) = self.slash_validator(&evidence.address, reason) {
             warn!(
                 address = %evidence.address,
                 ?err,
@@ -3214,6 +3210,50 @@ impl NodeInner {
         pool
     }
 
+    fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
+        self.ledger.slash_validator(address, reason)?;
+        self.maybe_refresh_local_identity(address);
+        Ok(())
+    }
+
+    fn maybe_refresh_local_identity(&self, address: &str) {
+        if address != self.address {
+            return;
+        }
+        self.update_runtime_metrics();
+        self.refresh_local_network_identity();
+    }
+
+    fn refresh_local_network_identity(&self) {
+        let profile = match self.network_identity_profile() {
+            Ok(profile) => profile,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "failed to collect network identity profile for refresh"
+                );
+                return;
+            }
+        };
+        let Some(handle) = self.p2p_runtime.lock().clone() else {
+            debug!(tier = ?profile.tier, "p2p runtime not initialised; skipping identity refresh");
+            return;
+        };
+        if tokio::runtime::Handle::try_current().is_err() {
+            warn!(tier = ?profile.tier, "no async runtime available for identity refresh");
+            return;
+        }
+        let tier = profile.tier;
+        let runtime_profile = RuntimeIdentityProfile::from(profile);
+        tokio::spawn(async move {
+            if let Err(err) = handle.update_identity(runtime_profile).await {
+                warn!(?err, tier = ?tier, "failed to update libp2p identity profile");
+            } else {
+                debug!(tier = ?tier, "updated libp2p identity profile");
+            }
+        });
+    }
+
     fn drain_votes_for(&self, height: u64, block_hash: &str) -> Vec<SignedBftVote> {
         let mut mempool = self.vote_mempool.write();
         let mut retained = VecDeque::new();
@@ -3443,9 +3483,8 @@ impl NodeInner {
                     if let Err(err) = result {
                         warn!(?err, voter = %vote.vote.voter, "rejecting invalid consensus vote");
                         if self.config.rollout.feature_gates.consensus_enforcement {
-                            if let Err(slash_err) = self
-                                .ledger
-                                .slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
+                            if let Err(slash_err) =
+                                self.slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
                             {
                                 warn!(
                                     ?slash_err,
@@ -3506,9 +3545,8 @@ impl NodeInner {
                 Err(err) => {
                     warn!(?err, "dropping invalid identity declaration");
                     if self.config.rollout.feature_gates.consensus_enforcement {
-                        if let Err(slash_err) = self
-                            .ledger
-                            .slash_validator(&self.address, SlashingReason::InvalidIdentity)
+                        if let Err(slash_err) =
+                            self.slash_validator(&self.address, SlashingReason::InvalidIdentity)
                         {
                             warn!(?slash_err, "failed to slash proposer for invalid identity");
                         }
@@ -3659,9 +3697,8 @@ impl NodeInner {
             if let Err(err) = result {
                 warn!(?err, voter = %vote.vote.voter, "rejecting invalid consensus vote");
                 if self.config.rollout.feature_gates.consensus_enforcement {
-                    if let Err(slash_err) = self
-                        .ledger
-                        .slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
+                    if let Err(slash_err) =
+                        self.slash_validator(&vote.vote.voter, SlashingReason::InvalidVote)
                     {
                         warn!(
                             ?slash_err,
@@ -4427,9 +4464,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
-        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
-        TimetokeParams, VerifierMetricsSnapshot,
+        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
+        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4437,12 +4474,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{routing::post, Router};
+    use axum::{Router, routing::post};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;
