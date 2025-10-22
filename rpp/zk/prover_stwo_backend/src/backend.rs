@@ -21,7 +21,6 @@ use prover_backend_interface::{
     UptimePublicInputs, VerifyingKey, WitnessBytes,
 };
 
-use crate::identity_tree::{IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
 #[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
 #[cfg(feature = "official")]
