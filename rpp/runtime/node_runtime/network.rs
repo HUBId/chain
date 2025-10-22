@@ -111,7 +111,9 @@ impl NetworkResources {
                 None,
             )
         };
-        let mut network = Network::new(identity.clone(), peerstore, handshake, gossip_state)?;
+        let handshake_snapshot = handshake.clone();
+        let mut network =
+            Network::new(identity.clone(), peerstore.clone(), handshake, gossip_state)?;
         if let Some(profile) = profile {
             network.update_identity(
                 profile.zsi_id,
@@ -120,6 +122,14 @@ impl NetworkResources {
                 profile.vrf_proof,
             )?;
         }
+        let signed_handshake = handshake_snapshot
+            .signed(&identity.clone_keypair())
+            .map_err(|err| {
+                NetworkSetupError::Network(NetworkError::Handshake(format!(
+                    "failed to sign local handshake: {err}"
+                )))
+            })?;
+        peerstore.record_handshake(identity.peer_id(), &signed_handshake)?;
         network.listen_on(config.listen_addr().clone())?;
         for addr in config.bootstrap_peers() {
             if let Err(err) = network.dial(addr.clone()) {
