@@ -9,7 +9,7 @@ license = "MIT"
 
 [features]
 default = []
-official = ["dep:stwo-official"]
+official = ["dep:stwo-official", "dep:tracing"]
 prover = ["official", "stwo-official/prover"]
 fri = ["prover"]
 scaffold = []
@@ -31,3 +31,4 @@ serde_json = "=1.0.145"
 thiserror = "=2.0.12"
 stwo-official = { package = "stwo-official", path = "vendor/stwo-dev/0.1.1/crates/stwo", optional = true }
 ed25519-dalek = "=2.1.1"
+tracing = { version = "=0.1.41", features = ["std"], optional = true }

@@ -10,7 +10,7 @@ use crate::types::{Account, SignedTransaction};
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Witness data required to validate a transaction constraint system.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct TransactionWitness {
     pub signed_tx: SignedTransaction,
     pub sender_account: Account,
@@ -70,7 +70,7 @@ impl TransactionCircuit {
     fn check_tier(&self) -> Result<(), CircuitError> {
         if self.witness.sender_account.reputation.tier < self.witness.required_tier {
             return Err(CircuitError::ConstraintViolation(format!(
-                "sender tier {} below required {}",
+                "sender tier {:?} below required {:?}",
                 self.witness.sender_account.reputation.tier, self.witness.required_tier
             )));
         }

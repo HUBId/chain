@@ -1,0 +1,30 @@
+name: prover-stwo-backend
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: STWO backend integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2025-07-14
+
+      - name: Run prover-stwo backend tests
+        run: >-
+          cargo +nightly-2025-07-14 test
+          -p prover_stwo_backend
+          --tests
+          --no-default-features
+          --features prover-stwo

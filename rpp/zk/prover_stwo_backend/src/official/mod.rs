@@ -1,3 +1,4 @@
+pub mod aggregation;
 pub mod air;
 pub mod circuit;
 pub mod conversions;

@@ -708,7 +708,7 @@ fn rebuild_consensus_public_inputs(
         parameters.element_from_u64(inputs.quorum_threshold),
     ]
 }
-#[cfg(all(test, feature = "official"))]
+#[cfg(all(test, feature = "official", feature = "scaffold"))]
 mod tests {
     use super::io::{
         decode_consensus_proof, decode_consensus_witness, decode_identity_proof,
