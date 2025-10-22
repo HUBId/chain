@@ -15,7 +15,9 @@ mod topics;
 
 pub mod vendor;
 
-pub use admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
+pub use admission::{
+    AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationOutcome,
+};
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
 pub use peerstore::{IdentityVerifier, PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError};

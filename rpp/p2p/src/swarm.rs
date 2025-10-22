@@ -1,6 +1,6 @@
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
@@ -75,7 +75,9 @@ use crate::vendor::{Multiaddr, PeerId};
 ))]
 use crate::NetworkBehaviour;
 
-use crate::admission::{AdmissionControl, AdmissionError, ReputationEvent, ReputationOutcome};
+use crate::admission::{
+    AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationOutcome,
+};
 use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
 use crate::identity::NodeIdentity;
 use crate::peerstore::{Peerstore, PeerstoreError};
@@ -389,7 +391,7 @@ pub enum NetworkEvent {
         peer: PeerId,
         tier: TierLevel,
         score: f64,
-        label: &'static str,
+        label: String,
     },
     PeerBanned {
         peer: PeerId,
@@ -400,6 +402,7 @@ pub enum NetworkEvent {
         topic: GossipTopic,
         reason: AdmissionError,
     },
+    ReputationOutcome(ReputationOutcome),
 }
 
 struct PingReporter {
@@ -671,18 +674,12 @@ impl Network {
         let emit_outcome: Arc<dyn Fn(ReputationOutcome) + Send + Sync> = {
             let push_event = Arc::clone(&push_event);
             Arc::new(move |outcome: ReputationOutcome| {
-                let snapshot = outcome.snapshot.clone();
-                (*push_event)(NetworkEvent::ReputationUpdated {
-                    peer: snapshot.peer_id,
-                    tier: snapshot.tier,
-                    score: snapshot.reputation,
-                    label: outcome.label,
-                });
-                if let Some(until) = snapshot.banned_until {
-                    (*push_event)(NetworkEvent::PeerBanned {
-                        peer: snapshot.peer_id,
-                        until,
-                    });
+                if let Err(err) = push_event(NetworkEvent::ReputationOutcome(outcome)) {
+                    tracing::warn!(
+                        target: "telemetry.admission",
+                        error = %err,
+                        "reputation_outcome_dispatch_failed"
+                    );
                 }
             })
         };
@@ -707,7 +704,7 @@ impl Network {
                             peer_id,
                             ReputationEvent::ManualPenalty {
                                 amount: 0.8,
-                                reason: "unauthorised_publish",
+                                reason: "unauthorised_publish".into(),
                             },
                         ) {
                             Ok(outcome) => (*emit_outcome)(outcome),
@@ -745,7 +742,7 @@ impl Network {
                             peer_id,
                             ReputationEvent::ManualPenalty {
                                 amount: 0.5,
-                                reason: "unauthorised_subscribe",
+                                reason: "unauthorised_subscribe".into(),
                             },
                         ) {
                             Ok(outcome) => (*emit_outcome)(outcome),
@@ -861,7 +858,43 @@ impl Network {
         event: ReputationEvent,
     ) -> Result<(), NetworkError> {
         let outcome = self.admission.record_event(peer, event)?;
-        self.enqueue_outcome(outcome)
+        self.enqueue_outcome(outcome, true)
+    }
+
+    pub fn apply_reputation_broadcast(
+        &mut self,
+        broadcast: ReputationBroadcast,
+    ) -> Result<(), NetworkError> {
+        let peer = broadcast
+            .peer_id()
+            .map_err(|err| NetworkError::Peerstore(PeerstoreError::Encoding(err)))?;
+        let ReputationBroadcast {
+            peer: _,
+            event,
+            reputation,
+            tier: _,
+            banned_until,
+            label,
+        } = broadcast;
+
+        let mut outcome = self.admission.record_event(peer.clone(), event.clone())?;
+        outcome.event = event;
+        let mut snapshot = self.peerstore.set_reputation(peer.clone(), reputation)?;
+
+        if let Some(millis) = banned_until {
+            let until = UNIX_EPOCH + Duration::from_millis(millis);
+            let needs_update = snapshot
+                .banned_until
+                .map(|current| current < until)
+                .unwrap_or(true);
+            if needs_update {
+                snapshot = self.peerstore.ban_peer_until(peer.clone(), until)?;
+            }
+        }
+
+        outcome.snapshot = snapshot;
+        outcome.label = label;
+        self.enqueue_outcome(outcome, false)
     }
 
     fn sign_handshake(&self) -> Result<HandshakePayload, NetworkError> {
@@ -901,51 +934,57 @@ impl Network {
                     self.handle_identify_event(event);
                 }
                 SwarmEvent::Behaviour(RppBehaviourEvent::Ping(_)) => {}
-                SwarmEvent::Behaviour(RppBehaviourEvent::Network(event)) => {
-                    match &event {
-                        NetworkEvent::PingSuccess { peer, rtt } => {
-                            tracing::debug!(
-                                target: "telemetry.ping",
-                                %peer,
-                                latency_ms = rtt.as_millis(),
-                                "ping_success_event"
-                            );
+                SwarmEvent::Behaviour(RppBehaviourEvent::Network(event)) => match event {
+                    NetworkEvent::ReputationOutcome(outcome) => {
+                        self.enqueue_outcome(outcome, true)?;
+                    }
+                    NetworkEvent::PingSuccess { peer, rtt } => {
+                        tracing::debug!(
+                            target: "telemetry.ping",
+                            %peer,
+                            latency_ms = rtt.as_millis(),
+                            "ping_success_event"
+                        );
+                        return Ok(NetworkEvent::PingSuccess { peer, rtt });
+                    }
+                    NetworkEvent::PingFailure {
+                        peer,
+                        reason,
+                        consecutive_failures,
+                    } => {
+                        tracing::debug!(
+                            target: "telemetry.ping",
+                            %peer,
+                            %reason,
+                            failures = consecutive_failures,
+                            "ping_failure_event"
+                        );
+                        if consecutive_failures == PING_FAILURE_REPUTATION_THRESHOLD
+                            && !matches!(reason, PingFailureReason::Unsupported)
+                        {
+                            if let Err(err) = self.penalise_peer(
+                                peer.clone(),
+                                ReputationEvent::ManualPenalty {
+                                    amount: 0.2,
+                                    reason: "ping_failure".into(),
+                                },
+                            ) {
+                                tracing::warn!(
+                                    target: "telemetry.ping",
+                                    %peer,
+                                    error = %err,
+                                    "ping_penalty_failed"
+                                );
+                            }
                         }
-                        NetworkEvent::PingFailure {
+                        return Ok(NetworkEvent::PingFailure {
                             peer,
                             reason,
                             consecutive_failures,
-                        } => {
-                            tracing::debug!(
-                                target: "telemetry.ping",
-                                %peer,
-                                %reason,
-                                failures = *consecutive_failures,
-                                "ping_failure_event"
-                            );
-                            if *consecutive_failures == PING_FAILURE_REPUTATION_THRESHOLD
-                                && !matches!(reason, PingFailureReason::Unsupported)
-                            {
-                                if let Err(err) = self.penalise_peer(
-                                    peer.clone(),
-                                    ReputationEvent::ManualPenalty {
-                                        amount: 0.2,
-                                        reason: "ping_failure",
-                                    },
-                                ) {
-                                    tracing::warn!(
-                                        target: "telemetry.ping",
-                                        %peer,
-                                        error = %err,
-                                        "ping_penalty_failed"
-                                    );
-                                }
-                            }
-                        }
-                        _ => {}
+                        });
                     }
-                    return Ok(event);
-                }
+                    other => return Ok(other),
+                },
                 SwarmEvent::ConnectionClosed { peer_id, .. } => {
                     return Ok(NetworkEvent::PeerDisconnected { peer: peer_id });
                 }
@@ -1027,7 +1066,7 @@ impl Network {
                             propagation_source,
                             ReputationEvent::ManualPenalty {
                                 amount: 1.0,
-                                reason: "gossip_replay",
+                                reason: "gossip_replay".into(),
                             },
                         )?;
                         return Ok(None);
@@ -1042,7 +1081,7 @@ impl Network {
                             propagation_source,
                             ReputationEvent::ManualPenalty {
                                 amount: 0.5,
-                                reason: "gossip_rate_limit",
+                                reason: "gossip_rate_limit".into(),
                             },
                         )?;
                         return Ok(None);
@@ -1056,7 +1095,7 @@ impl Network {
                                 propagation_source,
                                 ReputationEvent::GossipSuccess { topic },
                             )?;
-                            self.enqueue_outcome(outcome)?;
+                            self.enqueue_outcome(outcome, true)?;
                             if let Some(score) = self
                                 .swarm
                                 .behaviour()
@@ -1101,7 +1140,7 @@ impl Network {
                                 propagation_source,
                                 ReputationEvent::ManualPenalty {
                                     amount: 0.8,
-                                    reason: "unauthorised_publish",
+                                    reason: "unauthorised_publish".into(),
                                 },
                             )?;
                             self.swarm
@@ -1137,7 +1176,7 @@ impl Network {
                             peer_id,
                             ReputationEvent::ManualPenalty {
                                 amount: 0.5,
-                                reason: "unauthorised_subscribe",
+                                reason: "unauthorised_subscribe".into(),
                             },
                         )?;
                         self.swarm
@@ -1192,6 +1231,31 @@ impl Network {
         Ok(())
     }
 
+    fn publish_reputation_broadcast(&mut self, outcome: &ReputationOutcome) {
+        let broadcast = ReputationBroadcast::new(outcome);
+        let peer = broadcast.peer.clone();
+        match serde_json::to_vec(&broadcast) {
+            Ok(bytes) => {
+                if let Err(err) = self.publish(GossipTopic::Meta, bytes) {
+                    tracing::warn!(
+                        target: "telemetry.admission",
+                        %peer,
+                        error = %err,
+                        "reputation_broadcast_failed"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    target: "telemetry.admission",
+                    %peer,
+                    error = %err,
+                    "reputation_broadcast_encode_failed"
+                );
+            }
+        }
+    }
+
     fn bootstrap_known_peers(&mut self) {
         let local = self.local_peer_id();
         for record in self.peerstore.known_peers() {
@@ -1236,16 +1300,23 @@ impl Network {
 
     fn penalise_peer(&mut self, peer: PeerId, event: ReputationEvent) -> Result<(), NetworkError> {
         let outcome = self.admission.record_event(peer, event)?;
-        self.enqueue_outcome(outcome)
+        self.enqueue_outcome(outcome, true)
     }
 
-    fn enqueue_outcome(&mut self, outcome: ReputationOutcome) -> Result<(), NetworkError> {
-        let snapshot = outcome.snapshot;
+    fn enqueue_outcome(
+        &mut self,
+        outcome: ReputationOutcome,
+        propagate: bool,
+    ) -> Result<(), NetworkError> {
+        if propagate {
+            self.publish_reputation_broadcast(&outcome);
+        }
+        let snapshot = outcome.snapshot.clone();
         self.push_network_event(NetworkEvent::ReputationUpdated {
             peer: snapshot.peer_id,
             tier: snapshot.tier,
             score: snapshot.reputation,
-            label: outcome.label,
+            label: outcome.label.clone(),
         })?;
         if let Some(until) = snapshot.banned_until {
             self.push_network_event(NetworkEvent::PeerBanned {
@@ -1589,7 +1660,7 @@ mod tests {
                 peer,
                 ReputationEvent::Slash {
                     severity: 1.0,
-                    reason: "slash_test",
+                    reason: "slash_test".into(),
                 },
             )
             .expect("slash");

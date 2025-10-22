@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use rpp_p2p::{
     GossipTopic, HandshakePayload, JsonProofValidator, LightClientSync, MetaTelemetry,
     NetworkError, NetworkEvent, NodeIdentity, PersistentProofStorage, PipelineError, ProofMempool,
-    TierLevel,
+    ReputationBroadcast, TierLevel,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -193,6 +193,13 @@ enum VoteIngestResult {
     DecodeFailed(String),
 }
 
+#[derive(Debug)]
+enum MetaIngestResult {
+    Duplicate,
+    Reputation(ReputationBroadcast),
+    DecodeFailed(String),
+}
+
 impl GossipPipelines {
     fn initialise(config: &NodeRuntimeConfig) -> Result<Self, PipelineError> {
         let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
@@ -308,13 +315,21 @@ impl GossipPipelines {
         }
     }
 
-    fn handle_meta(&mut self, peer: PeerId, data: Vec<u8>) {
+    fn handle_meta(&mut self, peer: PeerId, data: Vec<u8>) -> MetaIngestResult {
         let digest = blake3::hash(&data);
         if !self.meta_cache.insert(digest) {
             debug!(target: "node", ?peer, "duplicate meta gossip ignored");
-            return;
+            return MetaIngestResult::Duplicate;
         }
-        debug!(target: "node", ?peer, "meta gossip ingested");
+        match serde_json::from_slice::<ReputationBroadcast>(&data) {
+            Ok(broadcast) => {
+                debug!(target: "node", ?peer, "meta gossip ingested");
+                MetaIngestResult::Reputation(broadcast)
+            }
+            Err(err) => MetaIngestResult::DecodeFailed(format!(
+                "invalid meta payload encoding: {err}"
+            )),
+        }
     }
 }
 
@@ -577,7 +592,35 @@ impl NodeInner {
                             self.pipelines.handle_snapshots(&data);
                         }
                         GossipTopic::Meta => {
-                            self.pipelines.handle_meta(peer.clone(), data.clone());
+                            match self.pipelines.handle_meta(peer.clone(), data.clone()) {
+                                MetaIngestResult::Duplicate => {}
+                                MetaIngestResult::Reputation(broadcast) => {
+                                    if peer == self.identity.peer_id() {
+                                        debug!(
+                                            target: "node",
+                                            ?peer,
+                                            "ignoring local reputation broadcast"
+                                        );
+                                    } else if let Err(err) =
+                                        self.network.apply_reputation_broadcast(broadcast)
+                                    {
+                                        warn!(
+                                            target: "node",
+                                            ?peer,
+                                            %err,
+                                            "failed to apply reputation broadcast"
+                                        );
+                                    }
+                                }
+                                MetaIngestResult::DecodeFailed(reason) => {
+                                    warn!(
+                                        target: "node",
+                                        ?peer,
+                                        %reason,
+                                        "failed to decode meta gossip"
+                                    );
+                                }
+                            }
                         }
                     }
                     let _ = self.events.send(NodeEvent::Gossip { peer, topic, data });
