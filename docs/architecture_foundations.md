@@ -66,6 +66,8 @@ Die Diagramme verdeutlichen die Abfolge von Wallet-basierten Submit-Flows sowie 
 - **BlockProofBundle**: Aggregiert Transaktions-, State-, Pruning- und Recursive-Proofs und kapselt Backend-spezifische Artefakte über `ChainProof`.【F:rpp/runtime/types/proofs.rs†L11-L94】
 - **UptimeProof**: Speichert Commitment über Online-Fenster, optionale Meta-Daten (Node-Uhr, Epoch, Head-Hash) und den ZK-Proof.【F:rpp/runtime/types/uptime.rs†L10-L114】
 
+Aktuelle JSON-Schema-Snapshots für diese Payloads sowie RPC- und P2P-Themen liegen unter [`docs/interfaces`](interfaces/runtime_payloads.md) und werden im [Interface Changelog](interfaces/CHANGELOG.md) nachgeführt.
+
 ### 4.2 Zustands- & Service-Schnittstellen
 - **ProofProver / WalletProver**: Liefert Zeugen für Identität, Transaktion, State, Pruning und Uptime über lokale Storage-Snapshots, inklusive Reputation-Gewichtung und Tier-Schwellen.【F:rpp/proofs/stwo/prover/mod.rs†L42-L179】
 - **NodeHandle**: Bietet Status- und Submit-Methoden für Transaktionen, Identitäten, Votes und Uptime-Proofs und dient als API-Backbone für das HTTP-Interface.【F:rpp/runtime/node.rs†L1359-L1506】【F:rpp/rpc/api.rs†L1-L195】

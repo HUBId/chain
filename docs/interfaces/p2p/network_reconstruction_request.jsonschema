@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/network_reconstruction_request.json",
+  "title": "NetworkReconstructionRequest",
+  "type": "object",
+  "required": [
+    "height",
+    "block_hash",
+    "tx_root",
+    "state_root",
+    "utxo_root",
+    "reputation_root",
+    "timetoke_root",
+    "zsi_root",
+    "proof_root",
+    "pruning_commitment",
+    "aggregated_commitment"
+  ],
+  "properties": {
+    "height": {"type": "integer", "minimum": 0},
+    "block_hash": {"type": "string"},
+    "tx_root": {"type": "string"},
+    "state_root": {"type": "string"},
+    "utxo_root": {"type": "string"},
+    "reputation_root": {"type": "string"},
+    "timetoke_root": {"type": "string"},
+    "zsi_root": {"type": "string"},
+    "proof_root": {"type": "string"},
+    "pruning_commitment": {"type": "string"},
+    "aggregated_commitment": {"type": "string"},
+    "previous_commitment": {"type": ["string", "null"]},
+    "payload_expectations": {
+      "$ref": "network_payload_expectations.jsonschema"
+    }
+  },
+  "additionalProperties": false
+}

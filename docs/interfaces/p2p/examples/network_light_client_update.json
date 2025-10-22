@@ -1,0 +1,8 @@
+{
+  "height": 4096,
+  "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "proof_commitment": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "previous_commitment": null,
+  "recursive_proof": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+}

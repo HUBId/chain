@@ -77,3 +77,4 @@ schnorrkel = "0.11"
 [dev-dependencies]
 tempfile = "3.10"
 proptest = "1.4"
+jsonschema = "0.17"

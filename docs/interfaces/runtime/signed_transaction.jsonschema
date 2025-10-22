@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/runtime/signed_transaction.json",
+  "title": "SignedTransaction",
+  "type": "object",
+  "required": ["id", "payload", "signature", "public_key"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "payload": {
+      "$ref": "transaction.jsonschema"
+    },
+    "signature": {
+      "type": "string",
+      "description": "Hex-encoded Ed25519 signature"
+    },
+    "public_key": {
+      "type": "string",
+      "description": "Hex-encoded Ed25519 public key"
+    }
+  },
+  "additionalProperties": false
+}

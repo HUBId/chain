@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/sign_tx_request.json",
+  "title": "SignTxRequest",
+  "type": "object",
+  "required": ["transaction"],
+  "properties": {
+    "transaction": {
+      "$ref": "../runtime/transaction.jsonschema"
+    }
+  },
+  "additionalProperties": false
+}

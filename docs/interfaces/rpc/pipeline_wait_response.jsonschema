@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/pipeline_wait_response.json",
+  "title": "PipelineWaitResponse",
+  "type": "object",
+  "required": ["hash", "stage", "completed"],
+  "properties": {
+    "hash": {"type": "string"},
+    "stage": {
+      "type": "string",
+      "enum": [
+        "gossip_received",
+        "mempool_accepted",
+        "leader_elected",
+        "bft_finalised",
+        "rewards_distributed"
+      ]
+    },
+    "completed": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}
