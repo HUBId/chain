@@ -8,10 +8,15 @@ use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
+#[cfg(feature = "prover-stwo")]
+use rpp_chain::proof_system::ProofProver;
+use rpp_chain::proof_system::ProofVerifierRegistry;
+use rpp_chain::storage::Storage;
+#[cfg(feature = "prover-stwo")]
+use rpp_chain::stwo::prover::WalletProver;
 use rpp_chain::types::{
-    Account, ChainProof, ExecutionTrace, ProofKind, ProofPayload, ReputationWeights,
-    SignedTransaction, Stake, StarkProof, Tier, Transaction, TransactionProofBundle,
-    TransactionWitness,
+    Account, ChainProof, ProofPayload, ReputationWeights, SignedTransaction, Stake, Tier,
+    Transaction, TransactionProofBundle, TransactionWitness,
 };
 
 fn sample_node_config(base: &Path, mempool_limit: usize) -> NodeConfig {
@@ -38,10 +43,12 @@ fn sample_node_config(base: &Path, mempool_limit: usize) -> NodeConfig {
     config
 }
 
-fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
+#[cfg(feature = "prover-stwo")]
+fn sample_transaction_bundle(storage: &Storage, to: &str, nonce: u64) -> TransactionProofBundle {
     let keypair = generate_keypair();
     let from = address_from_public_key(&keypair.public);
-    let tx = Transaction::new(from.clone(), to.to_string(), 42, nonce, 1, None);
+    let tx_nonce = nonce.checked_add(1).expect("nonce overflow");
+    let tx = Transaction::new(from.clone(), to.to_string(), 42, 1, tx_nonce, None);
     let signature = sign_message(&keypair, &tx.canonical_bytes());
     let signed_tx = SignedTransaction::new(tx, signature, &keypair.public);
 
@@ -58,29 +65,33 @@ fn sample_transaction_bundle(to: &str, nonce: u64) -> TransactionProofBundle {
         reputation_weights: ReputationWeights::default(),
     };
 
-    let proof_payload = ProofPayload::Transaction(witness.clone());
-    let proof = StarkProof {
-        kind: ProofKind::Transaction,
-        commitment: String::new(),
-        public_inputs: Vec::new(),
-        payload: proof_payload.clone(),
-        trace: ExecutionTrace {
-            segments: Vec::new(),
-        },
-        commitment_proof: Default::default(),
-        fri_proof: Default::default(),
+    let prover = WalletProver::new(storage);
+    let proof = prover
+        .prove_transaction(witness.clone())
+        .expect("generate transaction proof");
+    let proof_payload = match &proof {
+        ChainProof::Stwo(stark) => Some(stark.payload.clone()),
+        #[cfg(feature = "backend-plonky3")]
+        ChainProof::Plonky3(_) => None,
+        #[cfg(feature = "backend-rpp-stark")]
+        ChainProof::RppStark(_) => None,
     };
 
-    TransactionProofBundle::new(
-        signed_tx,
-        ChainProof::Stwo(proof),
-        Some(witness),
-        Some(proof_payload),
-    )
+    TransactionProofBundle::new(signed_tx, proof, Some(witness), proof_payload)
+}
+
+#[cfg(not(feature = "prover-stwo"))]
+fn sample_transaction_bundle(_: &Storage, _: &str, _: u64) -> TransactionProofBundle {
+    unreachable!("transaction proving requires the `prover-stwo` feature");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
+    if !cfg!(feature = "prover-stwo") {
+        eprintln!("skipping mempool overflow test: prover-stwo feature disabled");
+        return Ok(());
+    }
+
     let tempdir = tempdir()?;
     let mempool_limit = 4usize;
     let overflow = 2usize;
@@ -96,9 +107,14 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
     let handle = node.handle();
     let recipient = handle.address().to_string();
 
+    let storage = handle.storage();
+    let verifiers = ProofVerifierRegistry::default();
     let mut accepted_hashes = Vec::with_capacity(mempool_limit);
     for nonce in 0..mempool_limit as u64 {
-        let bundle = sample_transaction_bundle(&recipient, nonce);
+        let bundle = sample_transaction_bundle(&storage, &recipient, nonce);
+        verifiers
+            .verify_transaction(&bundle.proof)
+            .expect("bundle should verify");
         let hash = handle
             .submit_transaction(bundle)
             .expect("transaction accepted");
@@ -106,7 +122,10 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
     }
 
     for nonce in mempool_limit as u64..(mempool_limit + overflow) as u64 {
-        let bundle = sample_transaction_bundle(&recipient, nonce);
+        let bundle = sample_transaction_bundle(&storage, &recipient, nonce);
+        verifiers
+            .verify_transaction(&bundle.proof)
+            .expect("bundle should verify");
         match handle.submit_transaction(bundle) {
             Err(ChainError::Transaction(message)) => {
                 assert_eq!(message, "mempool full");
@@ -127,14 +146,21 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         "mempool should retain initial submissions"
     );
     for tx in &status.transactions {
-        assert!(tx.witness.is_some(), "pending transaction missing witness metadata");
-        assert!(tx.proof.is_some(), "pending transaction missing proof artifact");
+        assert!(
+            tx.witness.is_some(),
+            "pending transaction missing witness metadata"
+        );
+        assert!(
+            tx.proof.is_some(),
+            "pending transaction missing proof artifact"
+        );
         assert!(
             tx.proof_payload.is_some(),
             "pending transaction missing proof payload metadata"
         );
     }
 
+    drop(storage);
     drop(handle);
     drop(node);
 
