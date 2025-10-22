@@ -1,5 +1,9 @@
 {
   "height": 4096,
   "hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "timestamp": 1700003600
+  "timestamp": 1700003600,
+  "previous_state_root": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "new_state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "proof_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "recursion_anchor": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 }

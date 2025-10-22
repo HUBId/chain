@@ -5,9 +5,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::vendor::PeerId;
 use base64::{Engine as _, engine::general_purpose};
 use blake3::Hash;
-use crate::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -529,6 +529,10 @@ pub struct NetworkBlockMetadata {
     pub height: u64,
     pub hash: String,
     pub timestamp: u64,
+    pub previous_state_root: String,
+    pub new_state_root: String,
+    pub proof_hash: String,
+    pub recursion_anchor: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1199,6 +1203,10 @@ mod tests {
                 height: 1,
                 hash: "tip".into(),
                 timestamp: 42,
+                previous_state_root: hex::encode([0x11; 32]),
+                new_state_root: hex::encode([0x22; 32]),
+                proof_hash: hex::encode([0x33; 32]),
+                recursion_anchor: "anchor".into(),
             },
             chunks: vec![NetworkStateSyncChunk {
                 start_height: 0,
@@ -1302,8 +1310,8 @@ mod interface_schemas {
         NetworkStateSyncPlan,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -1313,12 +1321,10 @@ mod interface_schemas {
     }
 
     fn load_json(path: &Path) -> Value {
-        let raw = fs::read_to_string(path).unwrap_or_else(|err| {
-            panic!("unable to read {}: {err}", path.display())
-        });
-        serde_json::from_str(&raw).unwrap_or_else(|err| {
-            panic!("invalid JSON in {}: {err}", path.display())
-        })
+        let raw = fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("unable to read {}: {err}", path.display()));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|err| panic!("invalid JSON in {}: {err}", path.display()))
     }
 
     fn resolve_refs(value: &mut Value, base: &Path) {
@@ -1373,9 +1379,7 @@ mod interface_schemas {
             .compile(&schema)
             .expect("schema compiles");
         let example = load_example(example_file);
-        compiled
-            .validate(&example)
-            .expect("example matches schema");
+        compiled.validate(&example).expect("example matches schema");
         let typed: T = serde_json::from_value(example.clone()).expect("deserialize example");
         let roundtrip = serde_json::to_value(&typed).expect("serialize payload");
         assert_eq!(roundtrip, example);

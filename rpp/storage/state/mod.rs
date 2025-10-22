@@ -8,7 +8,7 @@ pub mod utxo;
 pub mod zsi;
 
 pub use global::GlobalState;
-pub use lifecycle::StateLifecycle;
+pub use lifecycle::{StateLifecycle, StateLifecycleService};
 pub use proof_registry::ProofRegistry;
 pub use reputation::ReputationState;
 pub use timetoke::TimetokeState;

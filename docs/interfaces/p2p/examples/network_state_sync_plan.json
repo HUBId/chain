@@ -15,7 +15,11 @@
   "tip": {
     "height": 4100,
     "hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "timestamp": 1700004200
+    "timestamp": 1700004200,
+    "previous_state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "new_state_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "proof_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "recursion_anchor": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   },
   "chunks": [
     {

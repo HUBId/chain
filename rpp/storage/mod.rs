@@ -22,6 +22,7 @@ const TIP_HEIGHT_KEY: &[u8] = b"tip_height";
 const TIP_HASH_KEY: &[u8] = b"tip_hash";
 const TIP_TIMESTAMP_KEY: &[u8] = b"tip_timestamp";
 const TIP_METADATA_KEY: &[u8] = b"tip_metadata";
+const BLOCK_METADATA_PREFIX: &[u8] = b"block_metadata/";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 const WALLET_UTXO_SNAPSHOT_KEY: &[u8] = b"wallet_utxo_snapshot";
 
@@ -289,9 +290,11 @@ impl Storage {
             metadata_key(TIP_TIMESTAMP_KEY),
             block.header.timestamp.to_be_bytes().to_vec(),
         );
+        let encoded_metadata = bincode::serialize(metadata)?;
+        kv.put(metadata_key(TIP_METADATA_KEY), encoded_metadata.clone());
         kv.put(
-            metadata_key(TIP_METADATA_KEY),
-            bincode::serialize(metadata)?,
+            metadata_key(&block_metadata_suffix(block.header.height)),
+            encoded_metadata,
         );
         kv.commit()?;
         Ok(())
@@ -306,6 +309,33 @@ impl Storage {
                 Ok(Some(record.into_block()))
             }
             None => Ok(None),
+        }
+    }
+
+    pub fn read_block_metadata(&self, height: u64) -> ChainResult<Option<BlockMetadata>> {
+        let suffix = block_metadata_suffix(height);
+        let key = metadata_key(&suffix);
+        let maybe_bytes = {
+            let kv = self.kv.lock();
+            kv.get(&key)
+        };
+        if let Some(bytes) = maybe_bytes {
+            let mut metadata: BlockMetadata = bincode::deserialize(&bytes)?;
+            if metadata.height == 0 {
+                metadata.height = height;
+            }
+            self.populate_metadata_from_block(height, &mut metadata)?;
+            return Ok(Some(metadata));
+        }
+        if let Some(record) = self.read_block_record(height)? {
+            let block = record.into_block();
+            let mut metadata = BlockMetadata::from(&block);
+            metadata.height = block.header.height;
+            metadata.hash = block.hash.clone();
+            metadata.timestamp = block.header.timestamp;
+            Ok(Some(metadata))
+        } else {
+            Ok(None)
         }
     }
 
@@ -405,7 +435,9 @@ impl Storage {
     pub fn tip(&self) -> ChainResult<Option<BlockMetadata>> {
         let kv = self.kv.lock();
         if let Some(metadata) = kv.get(&metadata_key(TIP_METADATA_KEY)) {
-            let metadata: BlockMetadata = bincode::deserialize(&metadata)?;
+            let mut metadata: BlockMetadata = bincode::deserialize(&metadata)?;
+            drop(kv);
+            self.populate_metadata_from_block(metadata.height, &mut metadata)?;
             return Ok(Some(metadata));
         }
 
@@ -437,11 +469,56 @@ impl Storage {
             .get(&block_key(height))
             .ok_or_else(|| ChainError::Config("missing tip block record".into()))?;
         let record: StoredBlock = bincode::deserialize(&block_bytes)?;
-        let mut metadata = BlockMetadata::from(&record.into_block());
+        let block = record.into_block();
+        let mut metadata = BlockMetadata::from(&block);
         metadata.height = height;
         metadata.hash = hash;
         metadata.timestamp = timestamp;
+        if metadata.proof_hash.is_empty() {
+            metadata.proof_hash = block.header.proof_root;
+        }
         Ok(Some(metadata))
+    }
+}
+
+impl Storage {
+    fn populate_metadata_from_block(
+        &self,
+        height: u64,
+        metadata: &mut BlockMetadata,
+    ) -> ChainResult<()> {
+        let needs_backfill = metadata.proof_hash.is_empty()
+            || metadata.previous_state_root.is_empty()
+            || metadata.new_state_root.is_empty()
+            || metadata.pruning_commitment.is_empty()
+            || metadata.hash.is_empty()
+            || metadata.timestamp == 0;
+        if !needs_backfill {
+            return Ok(());
+        }
+
+        if let Some(record) = self.read_block_record(height)? {
+            let block = record.into_block();
+            if metadata.proof_hash.is_empty() {
+                metadata.proof_hash = block.header.proof_root.clone();
+            }
+            if metadata.previous_state_root.is_empty() {
+                metadata.previous_state_root = block.pruning_proof.previous_state_root.clone();
+            }
+            if metadata.new_state_root.is_empty() {
+                metadata.new_state_root = block.header.state_root.clone();
+            }
+            if metadata.pruning_commitment.is_empty() {
+                metadata.pruning_commitment = block.pruning_proof.witness_commitment.clone();
+            }
+            if metadata.hash.is_empty() {
+                metadata.hash = block.hash.clone();
+            }
+            if metadata.timestamp == 0 {
+                metadata.timestamp = block.header.timestamp;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -473,6 +550,13 @@ fn metadata_key(suffix: &[u8]) -> Vec<u8> {
     key.push(PREFIX_METADATA);
     key.extend_from_slice(suffix);
     key
+}
+
+fn block_metadata_suffix(height: u64) -> Vec<u8> {
+    let mut suffix = Vec::with_capacity(BLOCK_METADATA_PREFIX.len() + 8);
+    suffix.extend_from_slice(BLOCK_METADATA_PREFIX);
+    suffix.extend_from_slice(&height.to_be_bytes());
+    suffix
 }
 
 #[cfg(test)]
@@ -677,6 +761,7 @@ mod tests {
         let mut metadata = BlockMetadata::from(&genesis);
         metadata.previous_state_root = "aa".repeat(32);
         metadata.new_state_root = "bb".repeat(32);
+        metadata.proof_hash = "dd".repeat(32);
         metadata.pruning_root = Some("cc".repeat(32));
         storage
             .store_block(&genesis, &metadata)
@@ -689,6 +774,7 @@ mod tests {
         assert_eq!(tip.hash, genesis.hash);
         assert_eq!(tip.previous_state_root, metadata.previous_state_root);
         assert_eq!(tip.new_state_root, metadata.new_state_root);
+        assert_eq!(tip.proof_hash, metadata.proof_hash);
         assert_eq!(tip.pruning_root, metadata.pruning_root);
         assert_eq!(tip.recursive_commitment, metadata.recursive_commitment);
         assert_eq!(tip.recursive_anchor, metadata.recursive_anchor);
@@ -717,10 +803,37 @@ mod tests {
             genesis.pruning_proof.previous_state_root
         );
         assert_eq!(tip.new_state_root, genesis.header.state_root);
+        assert_eq!(tip.proof_hash, genesis.header.proof_root);
         assert_eq!(
             tip.pruning_commitment,
             genesis.pruning_proof.witness_commitment
         );
         assert_eq!(tip.recursive_commitment, genesis.recursive_proof.commitment);
+    }
+
+    #[test]
+    fn block_metadata_roundtrip_with_backfill() {
+        let temp_dir = tempdir().expect("tempdir");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let genesis = make_block(0, None);
+        let mut metadata = BlockMetadata::from(&genesis);
+        metadata.proof_hash.clear();
+        storage
+            .store_block(&genesis, &metadata)
+            .expect("store block");
+
+        let loaded = storage
+            .read_block_metadata(genesis.header.height)
+            .expect("read metadata")
+            .expect("metadata exists");
+        assert_eq!(loaded.height, genesis.header.height);
+        assert_eq!(loaded.hash, genesis.hash);
+        assert_eq!(loaded.timestamp, genesis.header.timestamp);
+        assert_eq!(loaded.proof_hash, genesis.header.proof_root);
+        assert_eq!(
+            loaded.previous_state_root,
+            genesis.pruning_proof.previous_state_root
+        );
+        assert_eq!(loaded.new_state_root, genesis.header.state_root);
     }
 }

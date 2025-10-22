@@ -10,7 +10,7 @@ use ed25519_dalek::{PublicKey, Signature};
 use malachite::Natural;
 use serde::{Deserialize, Serialize};
 
-use crate::consensus::{verify_vrf, BftVoteKind, ConsensusCertificate, SignedBftVote};
+use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, verify_vrf};
 use crate::crypto::{
     signature_from_hex, signature_to_hex, verify_signature, vrf_public_key_from_hex,
 };
@@ -28,8 +28,8 @@ use crate::vrf::VrfProof;
 use serde_json;
 
 use super::{
-    identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
     Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
+    identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
 };
 
 const PRUNING_WITNESS_DOMAIN: &[u8] = b"rpp-pruning-proof";
@@ -1338,16 +1338,17 @@ impl StoredBlock {
 mod tests {
     use super::*;
     use crate::consensus::{
-        evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
+        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::errors::ChainError;
-    use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
+    use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::{ReputationWeights, Tier};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
+        ExecutionTrace, StarkCircuit,
         consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower},
         identity::{IdentityCircuit, IdentityWitness},
         pruning::PruningWitness,
@@ -1355,7 +1356,6 @@ mod tests {
         state::StateWitness,
         string_to_field,
         uptime::UptimeWitness,
-        ExecutionTrace, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1363,8 +1363,8 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::{
-        AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
-        IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+        AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+        IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
     use rand::rngs::OsRng;
@@ -1903,17 +1903,21 @@ mod tests {
 
         let mut missing_witness_block = block.clone();
         missing_witness_block.module_witnesses = ModuleWitnessBundle::default();
-        assert!(missing_witness_block
-            .verify_consensus(Some(&prev_block), &registry)
-            .is_err());
+        assert!(
+            missing_witness_block
+                .verify_consensus(Some(&prev_block), &registry)
+                .is_err()
+        );
 
         let mut mismatched_witness_block = block.clone();
         let mut mismatched_bundle = ModuleWitnessBundle::default();
         mismatched_bundle.record_consensus(ConsensusWitness::new(1, 1, vec!["cafebabe".repeat(4)]));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
-        assert!(mismatched_witness_block
-            .verify_consensus(Some(&prev_block), &registry)
-            .is_err());
+        assert!(
+            mismatched_witness_block
+                .verify_consensus(Some(&prev_block), &registry)
+                .is_err()
+        );
     }
 
     #[test]
@@ -2056,6 +2060,8 @@ pub struct BlockMetadata {
     pub previous_state_root: String,
     pub new_state_root: String,
     #[serde(default)]
+    pub proof_hash: String,
+    #[serde(default)]
     pub pruning_root: Option<String>,
     pub pruning_commitment: String,
     pub recursive_commitment: String,
@@ -2074,6 +2080,7 @@ impl BlockMetadata {
             timestamp: block.header.timestamp,
             previous_state_root: block.pruning_proof.previous_state_root.clone(),
             new_state_root: block.header.state_root.clone(),
+            proof_hash: block.header.proof_root.clone(),
             pruning_root: None,
             pruning_commitment: block.pruning_proof.witness_commitment.clone(),
             recursive_commitment: block.recursive_proof.commitment.clone(),
