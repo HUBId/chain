@@ -13,22 +13,32 @@ backend, and the remaining work required for production readiness.
   verification requests through shared dispatch helpers, which keeps the block
   import path backend-agnostic.【F:rpp/proofs/proof_system/mod.rs†L217-L311】
 
-## STWO path status
+## Backend status summary
 
-* The blueprint-level STWO prover wiring remains in place: `WalletProver`
-  derives witnesses for every circuit, computes traces, and emits
-  `StarkProof` artifacts that slot into the `ChainProof::Stwo` branch.【F:rpp/proofs/stwo/prover/mod.rs†L42-L360】
-* However, the vendor drop of `stwo::official` still lacks the public API
-  surface the production integration expects (Poseidon2 helpers, FRI wrappers,
-  byte-serialization hooks, etc.), so the repository cannot yet replace the
-  blueprint scaffolding with the real backend.【F:docs/stwo_official_api.md†L1-L37】
-* The staged vendor plan captures the operational prerequisites—most notably
-  the requirement to build the backend with `nightly-2025-07-14`—but those
-  artifacts are not consumed by the runtime today.【F:docs/vendor_log.md†L20-L64】
+| Backend | Current integration | Production gaps |
+| --- | --- | --- |
+| **STWO (`official`)** | The [`StwoBackend`](../rpp/zk/prover_stwo_backend/src/backend.rs) now drives key generation, proving, and verification through the vendor crates when the `official` feature is enabled. The adapter wraps the official [`WalletProver`](../rpp/zk/prover_stwo_backend/src/official/prover.rs) for every circuit family and delegates verification to the [`NodeVerifier`](../rpp/zk/prover_stwo_backend/src/official/verifier/mod.rs). Feature wiring is captured in the crate manifest so production builds can opt into the vendor dependency.【F:rpp/zk/prover_stwo_backend/src/backend.rs†L35-L496】【F:rpp/zk/prover_stwo_backend/src/official/prover.rs†L18-L199】【F:rpp/zk/prover_stwo_backend/src/official/verifier/mod.rs†L1-L120】【F:rpp/zk/prover_stwo_backend/Cargo.toml†L1-L21】 | Runtime services still need to surface the proofs to Firewood, wallets, and pruning automation. The relevant blueprint tasks remain in `Todo`: lifecycle services, block metadata, pruning jobs, wallet workflows, and uptime propagation.【F:rpp/proofs/blueprint/mod.rs†L110-L157】 Operationally, operators must provision the nightly toolchain and vendor artifacts recorded in the integration log before enabling the feature in production.【F:docs/vendor_log.md†L20-L68】 |
+| **Plonky3 (mock)** | The mock backend continues to wrap witnesses in JSON and emit deterministic transcripts instead of real proofs, maintaining the blueprint plumbing without cryptographic soundness.【F:rpp/proofs/plonky3/prover/mod.rs†L154-L259】【F:rpp/proofs/plonky3/crypto.rs†L360-L436】 | The roadmap still tracks the work to replace the stub with a full Plonky3 integration, including setup artifact handling and verification coverage.【F:docs/roadmap_implementation_plan.md†L19-L77】 |
 
-**Net result:** the STWO flow is functionally complete inside the blueprint
-module, yet it remains isolated from the vendor workspace until the missing
-API bridges land and the nightly toolchain path is productionised.
+## Official STWO backend details
+
+With the `official` feature enabled, [`StwoBackend`](../rpp/zk/prover_stwo_backend/src/backend.rs) exposes all blueprint
+circuits through the shared backend interface:
+
+* Key generation returns encoded proving/verifying keys for every circuit type by
+  instantiating the official parameter set and embedding the circuit identifier
+  into the payload.【F:rpp/zk/prover_stwo_backend/src/backend.rs†L56-L144】
+* Proving delegates to [`WalletProver`](../rpp/zk/prover_stwo_backend/src/official/prover.rs),
+  which evaluates the official circuits, generates execution traces, runs FRI,
+  and assembles `StarkProof` payloads for transactions, identity, state,
+  pruning, recursive aggregation, uptime, and consensus flows.【F:rpp/zk/prover_stwo_backend/src/backend.rs†L146-L289】【F:rpp/zk/prover_stwo_backend/src/official/prover.rs†L31-L199】
+* Verification reconstructs public inputs, validates commitments, and feeds the
+  decoded proofs into [`NodeVerifier`](../rpp/zk/prover_stwo_backend/src/official/verifier/mod.rs),
+  ensuring the official verifier logic is exercised across all circuits.【F:rpp/zk/prover_stwo_backend/src/backend.rs†L291-L488】【F:rpp/zk/prover_stwo_backend/src/official/verifier/mod.rs†L1-L120】
+
+These adapters provide the concrete keygen/prove/verify hooks the blueprint
+anticipated, making the `official` integration the canonical STWO backend for
+production builds.
 
 ## Plonky3 path status
 
@@ -44,39 +54,31 @@ API bridges land and the nightly toolchain path is productionised.
 but provides no cryptographic guarantees until real setup artifacts and prover
 executables are integrated.
 
-## Outstanding work tracked in the blueprint backlog
+## Production backlog alignment
 
-The end-to-end blueprint keeps the open items for both backends in the
-`rpp::blueprint` catalogue. The tasks below remain in `Todo` state and must be
-closed before the document can claim production readiness:
+The blueprint backlog keeps the remaining integration work visible. The table
+below mirrors the current `Todo` entries so roadmap consumers can cross-check
+progress without digging into the Rust module:
 
-* **Firewood ↔ STWO interfaces** – extract lifecycle APIs, persist block
-  metadata, and automate pruning once the real backend is wired in. Tracking:
-  [`state.lifecycle_api`](../rpp/proofs/blueprint/mod.rs#L111-L127),
-  [`state.block_metadata`](../rpp/proofs/blueprint/mod.rs#L117-L120), and
-  [`state.pruning_jobs`](../rpp/proofs/blueprint/mod.rs#L122-L125).
-* **Wallet/STWO workflows** – extend the wallet side with UTXO/tier policies,
-  ZSI flows, and the production STWO circuits so end users can produce the
-  upgraded proofs. Tracking:
-  [`wallet.utxo_policies`](../rpp/proofs/blueprint/mod.rs#L135-L139),
-  [`wallet.zsi_workflow`](../rpp/proofs/blueprint/mod.rs#L141-L145),
-  [`wallet.stwo_circuits`](../rpp/proofs/blueprint/mod.rs#L147-L152), and
-  [`wallet.uptime_proofs`](../rpp/proofs/blueprint/mod.rs#L153-L157).
-* **Plonky3 backend enablement** – replace the deterministic stub with the
-  real proving system, including setup artifact management and integration test
-  coverage. Tracking: addenda to the backend backlog captured in the roadmap’s
-  proof system phase (see
-  [`Schritt 3`](roadmap_implementation_plan.md#3-wallet-zsi-und-stwo-workflows-blueprint-22)).【F:docs/roadmap_implementation_plan.md†L19-L77】
+| Workstream | Blueprint keys | Status |
+| --- | --- | --- |
+| Firewood ↔ STWO interfaces | `state.lifecycle_api`, `state.block_metadata`, `state.pruning_jobs` | Todo【F:rpp/proofs/blueprint/mod.rs†L110-L127】 |
+| Wallet/STWO workflows | `wallet.utxo_policies`, `wallet.zsi_workflow`, `wallet.stwo_circuits`, `wallet.uptime_proofs` | Todo【F:rpp/proofs/blueprint/mod.rs†L135-L157】 |
+| Plonky3 backend enablement | Roadmap Schritt 3 (Proof system phase) | Todo【F:docs/roadmap_implementation_plan.md†L19-L77】 |
 
-## Follow-up once integrations land
+## Historical note
 
-When the tasks above are complete and the real backends are enabled:
+Earlier revisions of this document warned that the vendor drop lacked the
+necessary Poseidon2, FRI, and serialization helpers. Those gaps have been
+bridged by the in-tree adapters above, but the original survey is preserved for
+context in [`docs/stwo_official_api.md`](stwo_official_api.md), together with
+the staged vendor plan in [`docs/vendor_log.md`](vendor_log.md).【F:docs/stwo_official_api.md†L1-L37】【F:docs/vendor_log.md†L20-L68】
 
-1. Refresh this document to confirm end-to-end proof generation and
-   verification against the production stacks (STWO vendor crates via nightly
-   toolchains, Plonky3 setup artifacts, CI coverage).
-2. Document the operational requirements for operators—nightly toolchain
-   availability, artifact provisioning, and any new telemetry knobs—so the
-   blueprint reflects the production-ready posture recorded in the vendor log
-   and release tooling.【F:docs/vendor_log.md†L20-L64】
+## Follow-up
+
+1. Track the remaining `Todo` items in the blueprint backlog until Firewood,
+   wallet, and pruning services consume the official proofs end-to-end.【F:rpp/proofs/blueprint/mod.rs†L110-L157】
+2. Capture operational readiness (nightly toolchain availability, artifact
+   provisioning, CI coverage) in the release runbooks once operators begin
+   enabling the `official` feature in production.【F:docs/vendor_log.md†L20-L68】
 
