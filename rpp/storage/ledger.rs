@@ -562,7 +562,9 @@ impl Ledger {
                 "uptime proof commitment mismatch".into(),
             ));
         }
-        let zk_proof = proof.proof()?;
+        let zk_proof = proof.proof().map_err(|_| {
+            ChainError::Transaction("uptime proof must include a zk payload".into())
+        })?;
         let registry = ProofVerifierRegistry::default();
         registry.verify_uptime(zk_proof)?;
         let claim = proof.claim()?;
@@ -2069,7 +2071,7 @@ mod tests {
         missing.proof = None;
 
         let err = ledger.apply_uptime_proof(&missing).unwrap_err();
-        assert!(matches!(err, ChainError::Crypto(_)));
+        assert!(matches!(err, ChainError::Transaction(_)));
     }
 
     #[test]
