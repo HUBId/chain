@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/network_block_metadata.json",
+  "title": "NetworkBlockMetadata",
+  "type": "object",
+  "required": ["height", "hash", "timestamp"],
+  "properties": {
+    "height": {"type": "integer", "minimum": 0},
+    "hash": {"type": "string"},
+    "timestamp": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

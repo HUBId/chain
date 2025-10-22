@@ -1,0 +1,14 @@
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "payload": {
+    "from": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "to": "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "amount": 1250000000,
+    "fee": 2500,
+    "nonce": 42,
+    "memo": "Test payment",
+    "timestamp": 1700000000
+  },
+  "signature": "d34db33fd34db33fd34db33fd34db33fd34db33fd34db33fd34db33fd34db33f",
+  "public_key": "9f1c0d9f1c0d9f1c0d9f1c0d9f1c0d9f1c0d9f1c0d9f1c0d9f1c0d9f1c0d9f1c"
+}

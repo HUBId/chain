@@ -1,0 +1,8 @@
+{
+  "transaction_proofs": 8,
+  "transaction_witnesses": 16,
+  "timetoke_witnesses": 4,
+  "reputation_witnesses": 4,
+  "zsi_witnesses": 2,
+  "consensus_witnesses": 2
+}

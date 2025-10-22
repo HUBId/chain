@@ -1,0 +1,10 @@
+{
+  "wallet_address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "window_start": 1699999200,
+  "window_end": 1700002800,
+  "proof_commitment": "9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a",
+  "node_clock": 1700003600,
+  "epoch": 1024,
+  "head_hash": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+  "proof": null
+}

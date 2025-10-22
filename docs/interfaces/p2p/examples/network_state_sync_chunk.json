@@ -1,0 +1,31 @@
+{
+  "start_height": 4000,
+  "end_height": 4100,
+  "requests": [
+    {
+      "height": 4096,
+      "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "tx_root": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "utxo_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "reputation_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "timetoke_root": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "zsi_root": "0101010101010101010101010101010101010101010101010101010101010101",
+      "proof_root": "0202020202020202020202020202020202020202020202020202020202020202",
+      "pruning_commitment": "0303030303030303030303030303030303030303030303030303030303030303",
+      "aggregated_commitment": "0404040404040404040404040404040404040404040404040404040404040404",
+      "previous_commitment": null,
+      "payload_expectations": {
+        "transaction_proofs": 8,
+        "transaction_witnesses": 16,
+        "timetoke_witnesses": 4,
+        "reputation_witnesses": 4,
+        "zsi_witnesses": 2,
+        "consensus_witnesses": 2
+      }
+    }
+  ],
+  "proofs": [
+    "9999999999999999999999999999999999999999999999999999999999999999"
+  ]
+}

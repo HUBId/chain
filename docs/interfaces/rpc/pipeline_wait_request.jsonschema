@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/pipeline_wait_request.json",
+  "title": "PipelineWaitRequest",
+  "type": "object",
+  "required": ["hash", "stage"],
+  "properties": {
+    "hash": {"type": "string"},
+    "stage": {
+      "type": "string",
+      "enum": [
+        "gossip_received",
+        "mempool_accepted",
+        "leader_elected",
+        "bft_finalised",
+        "rewards_distributed"
+      ]
+    },
+    "timeout_ms": {"type": ["integer", "null"], "minimum": 0}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/runtime/transaction.json",
+  "title": "Transaction",
+  "type": "object",
+  "required": ["from", "to", "amount", "fee", "nonce", "timestamp"],
+  "properties": {
+    "from": {"type": "string", "description": "Sender account address"},
+    "to": {"type": "string", "description": "Recipient account address"},
+    "amount": {"type": "integer", "minimum": 0},
+    "fee": {"type": "integer", "minimum": 0},
+    "nonce": {"type": "integer", "minimum": 0},
+    "memo": {"type": ["string", "null"], "description": "Optional user-supplied memo"},
+    "timestamp": {"type": "integer", "minimum": 0, "description": "Unix timestamp (seconds)"}
+  },
+  "additionalProperties": false
+}

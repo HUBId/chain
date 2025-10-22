@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/network_state_sync_plan.json",
+  "title": "NetworkStateSyncPlan",
+  "type": "object",
+  "required": ["snapshot", "tip", "chunks", "light_client_updates"],
+  "properties": {
+    "snapshot": {
+      "type": "object",
+      "required": ["height", "block_hash", "commitments", "chain_commitment"],
+      "properties": {
+        "height": {"type": "integer", "minimum": 0},
+        "block_hash": {"type": "string"},
+        "commitments": {
+          "$ref": "network_global_state_commitments.jsonschema"
+        },
+        "chain_commitment": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "tip": {
+      "$ref": "network_block_metadata.jsonschema"
+    },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "$ref": "network_state_sync_chunk.jsonschema"
+      }
+    },
+    "light_client_updates": {
+      "type": "array",
+      "items": {
+        "$ref": "network_light_client_update.jsonschema"
+      }
+    }
+  },
+  "additionalProperties": false
+}

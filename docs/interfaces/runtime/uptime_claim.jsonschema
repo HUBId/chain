@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/runtime/uptime_claim.json",
+  "title": "UptimeClaim",
+  "type": "object",
+  "required": ["wallet_address", "node_clock", "epoch", "head_hash", "window_start", "window_end"],
+  "properties": {
+    "wallet_address": {"type": "string"},
+    "node_clock": {"type": "integer", "minimum": 0},
+    "epoch": {"type": "integer", "minimum": 0},
+    "head_hash": {"type": "string"},
+    "window_start": {"type": "integer", "minimum": 0},
+    "window_end": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

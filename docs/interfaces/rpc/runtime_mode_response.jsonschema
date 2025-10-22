@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/runtime_mode_response.json",
+  "title": "RuntimeModeResponse",
+  "type": "object",
+  "required": [
+    "mode",
+    "node_available",
+    "wallet_available",
+    "node_enabled",
+    "wallet_enabled",
+    "orchestrator_available",
+    "orchestrator_enabled"
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["node", "wallet", "hybrid", "validator"]
+    },
+    "node_available": {"type": "boolean"},
+    "wallet_available": {"type": "boolean"},
+    "node_enabled": {"type": "boolean"},
+    "wallet_enabled": {"type": "boolean"},
+    "orchestrator_available": {"type": "boolean"},
+    "orchestrator_enabled": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

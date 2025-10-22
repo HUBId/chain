@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/runtime/uptime_proof.json",
+  "title": "UptimeProof",
+  "type": "object",
+  "required": ["wallet_address", "window_start", "window_end", "proof_commitment"],
+  "properties": {
+    "wallet_address": {"type": "string"},
+    "window_start": {"type": "integer", "minimum": 0},
+    "window_end": {"type": "integer", "minimum": 0},
+    "proof_commitment": {"type": "string"},
+    "node_clock": {"type": ["integer", "null"], "minimum": 0},
+    "epoch": {"type": ["integer", "null"], "minimum": 0},
+    "head_hash": {"type": ["string", "null"]},
+    "proof": {
+      "description": "Optional zero-knowledge proof artifact",
+      "oneOf": [
+        {"type": "null"},
+        {"type": "object"}
+      ]
+    }
+  },
+  "additionalProperties": false
+}

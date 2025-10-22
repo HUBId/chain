@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/network_payload_expectations.json",
+  "title": "NetworkPayloadExpectations",
+  "type": "object",
+  "required": [
+    "transaction_proofs",
+    "transaction_witnesses",
+    "timetoke_witnesses",
+    "reputation_witnesses",
+    "zsi_witnesses",
+    "consensus_witnesses"
+  ],
+  "properties": {
+    "transaction_proofs": {"type": "integer", "minimum": 0},
+    "transaction_witnesses": {"type": "integer", "minimum": 0},
+    "timetoke_witnesses": {"type": "integer", "minimum": 0},
+    "reputation_witnesses": {"type": "integer", "minimum": 0},
+    "zsi_witnesses": {"type": "integer", "minimum": 0},
+    "consensus_witnesses": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

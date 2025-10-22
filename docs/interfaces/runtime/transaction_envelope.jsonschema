@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/runtime/transaction_envelope.json",
+  "title": "TransactionEnvelope",
+  "type": "object",
+  "required": ["tx", "hash"],
+  "properties": {
+    "tx": {
+      "$ref": "signed_transaction.jsonschema"
+    },
+    "hash": {
+      "type": "string",
+      "description": "Hex-encoded transaction hash"
+    }
+  },
+  "additionalProperties": false
+}

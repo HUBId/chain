@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/network_state_sync_chunk.json",
+  "title": "NetworkStateSyncChunk",
+  "type": "object",
+  "required": ["start_height", "end_height", "requests"],
+  "properties": {
+    "start_height": {"type": "integer", "minimum": 0},
+    "end_height": {"type": "integer", "minimum": 0},
+    "requests": {
+      "type": "array",
+      "items": {
+        "$ref": "network_reconstruction_request.jsonschema"
+      }
+    },
+    "proofs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": []
+    }
+  },
+  "additionalProperties": false
+}
