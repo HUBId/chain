@@ -25,6 +25,8 @@ use std::ops::Range;
 mod checker;
 mod hashednode;
 mod hashers;
+/// Identity commitment tree compatibility re-exports.
+pub mod identity_tree;
 mod iter;
 mod linear;
 mod node;
@@ -42,6 +44,10 @@ pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use identity_tree::{
+    IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError, IdentityTreeResult,
+    IDENTITY_TREE_DEPTH,
+};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
