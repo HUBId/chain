@@ -21,6 +21,7 @@ use prover_backend_interface::{
     UptimePublicInputs, VerifyingKey, WitnessBytes,
 };
 
+use crate::identity_tree::{IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
 #[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
 #[cfg(feature = "official")]
@@ -720,6 +721,7 @@ mod tests {
     use super::keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
     use super::*;
     use crate::crypto::address_from_public_key;
+    use crate::identity_tree::{IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
     use crate::official::circuit::consensus::{ConsensusWitness, VotePower};
     use crate::official::circuit::identity::IdentityWitness;
     use crate::official::circuit::pruning::PruningWitness;
@@ -733,6 +735,7 @@ mod tests {
     use crate::reputation::{ReputationWeights, Tier};
     use crate::state::compute_merkle_root;
     use crate::types::{Account, Stake, Transaction, UptimeProof};
+    use crate::vrf::VRF_PROOF_LENGTH;
     use ed25519_dalek::{Keypair, Signer};
     use prover_backend_interface::{
         ConsensusCircuitDef, ConsensusPublicInputs, IdentityPublicInputs, ProofSystemKind,
@@ -740,11 +743,6 @@ mod tests {
         UptimePublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
     };
     use rand::{rngs::StdRng, SeedableRng};
-
-    const VRF_PROOF_LENGTH: usize = 80;
-    const IDENTITY_TREE_DEPTH: usize = 32;
-    const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
-    const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
 
     #[test]
     fn key_payload_roundtrip() {
@@ -1102,10 +1100,11 @@ mod tests {
         let epoch_nonce = hex::encode([0x22u8; 32]);
         let state_root = hex::encode([0x33u8; 32]);
 
-        let defaults = identity_default_nodes();
-        let identity_leaf = hex::encode(defaults[IDENTITY_TREE_DEPTH]);
-        let identity_path = identity_siblings(&defaults, &wallet_addr);
-        let identity_root = hex::encode(defaults[0]);
+        let tree = IdentityCommitmentTree::new(IDENTITY_TREE_DEPTH);
+        let proof = tree.proof_for(&wallet_addr);
+        let identity_leaf = proof.leaf.clone();
+        let identity_path = proof.siblings;
+        let identity_root = tree.root_hex();
 
         let hasher = parameters.poseidon_hasher();
         let commitment = hasher
@@ -1309,27 +1308,6 @@ mod tests {
         }
     }
 
-    fn identity_default_nodes() -> Vec<[u8; 32]> {
-        let mut defaults = vec![[0u8; 32]; IDENTITY_TREE_DEPTH + 1];
-        defaults[IDENTITY_TREE_DEPTH] = domain_hash(EMPTY_LEAF_DOMAIN, &[]);
-        for level in (0..IDENTITY_TREE_DEPTH).rev() {
-            let child = defaults[level + 1];
-            defaults[level] = hash_children(&child, &child);
-        }
-        defaults
-    }
-
-    fn identity_siblings(defaults: &[[u8; 32]], wallet_addr: &str) -> Vec<String> {
-        let mut siblings = Vec::with_capacity(IDENTITY_TREE_DEPTH);
-        let mut index = derive_index(wallet_addr);
-        for level in (0..IDENTITY_TREE_DEPTH).rev() {
-            let sibling = defaults[level + 1];
-            siblings.push(hex::encode(sibling));
-            index /= 2;
-        }
-        siblings
-    }
-
     fn recursive_aggregate(
         parameters: &StarkParameters,
         witness: &RecursiveWitness,
@@ -1386,26 +1364,6 @@ mod tests {
             .map(|hash| hex_to_array::<32>(hash))
             .collect::<Vec<_>>();
         hex::encode(compute_merkle_root(&mut leaves))
-    }
-
-    fn domain_hash(label: &[u8], bytes: &[u8]) -> [u8; 32] {
-        let mut data = Vec::with_capacity(label.len() + bytes.len());
-        data.extend_from_slice(label);
-        data.extend_from_slice(bytes);
-        crate::proof_backend::Blake2sHasher::hash(&data).into()
-    }
-
-    fn hash_children(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-        let mut data = Vec::with_capacity(64);
-        data.extend_from_slice(left);
-        data.extend_from_slice(right);
-        domain_hash(NODE_DOMAIN, &data)
-    }
-
-    fn derive_index(wallet_addr: &str) -> u64 {
-        let hash: [u8; 32] =
-            crate::proof_backend::Blake2sHasher::hash(wallet_addr.as_bytes()).into();
-        u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) as u64
     }
 
     fn hex_to_array<const N: usize>(value: &str) -> [u8; N] {

@@ -65,6 +65,7 @@ num-traits = "0.2"
 once_cell = "1.19"
 parking_lot = "0.12"
 prover-backend-interface = { path = "../zk/backend-interface" }
+rpp-identity-tree = { path = "../identity-tree" }
 prover_stwo_backend = { path = "../zk/prover_stwo_backend", default-features = false, optional = true }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rpp-consensus = { path = "../consensus", default-features = false }

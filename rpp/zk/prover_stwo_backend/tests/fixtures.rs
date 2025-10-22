@@ -4,6 +4,7 @@ use prover_backend_interface::{
     ConsensusPublicInputs, IdentityPublicInputs, ProofSystemKind, PruningPublicInputs,
     RecursivePublicInputs, StatePublicInputs, UptimePublicInputs, WitnessBytes, WitnessHeader,
 };
+use prover_stwo_backend::identity_tree::{IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
 use prover_stwo_backend::official::circuit::consensus::{ConsensusWitness, VotePower};
 use prover_stwo_backend::official::circuit::identity::IdentityWitness;
 use prover_stwo_backend::official::circuit::pruning::PruningWitness;
@@ -15,6 +16,7 @@ use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
 use prover_stwo_backend::reputation::{ReputationWeights, Tier};
 use prover_stwo_backend::state::compute_merkle_root;
 use prover_stwo_backend::types::{Account, Stake, UptimeProof};
+use prover_stwo_backend::vrf::VRF_PROOF_LENGTH;
 use prover_stwo_backend::Blake2sHasher;
 
 pub const IDENTITY_CIRCUIT: &str = "identity";
@@ -29,14 +31,15 @@ pub fn identity_witness() -> IdentityWitness {
     let wallet_pk_bytes = [0x11u8; 32];
     let wallet_pk = hex::encode(wallet_pk_bytes);
     let wallet_addr = hex::encode(<[u8; 32]>::from(Blake2sHasher::hash(&wallet_pk_bytes)));
-    let vrf_tag = "55".repeat(vrf_proof_length());
+    let vrf_tag = "55".repeat(VRF_PROOF_LENGTH);
     let epoch_nonce = hex::encode([0x22u8; 32]);
     let state_root = hex::encode([0x33u8; 32]);
 
-    let defaults = identity_default_nodes();
-    let identity_leaf = hex::encode(defaults[identity_tree_depth()]);
-    let identity_path = identity_siblings(&defaults, &wallet_addr);
-    let identity_root = hex::encode(defaults[0]);
+    let tree = IdentityCommitmentTree::new(IDENTITY_TREE_DEPTH);
+    let proof = tree.proof_for(&wallet_addr);
+    let identity_leaf = proof.leaf.clone();
+    let identity_path = proof.siblings.clone();
+    let identity_root = tree.root_hex();
 
     let hasher = parameters.poseidon_hasher();
     let commitment = hasher
@@ -279,35 +282,6 @@ pub fn consensus_public_inputs() -> ConsensusPublicInputs {
     }
 }
 
-fn identity_tree_depth() -> usize {
-    32
-}
-
-fn vrf_proof_length() -> usize {
-    80
-}
-
-fn identity_default_nodes() -> Vec<[u8; 32]> {
-    let mut defaults = vec![[0u8; 32]; identity_tree_depth() + 1];
-    defaults[identity_tree_depth()] = domain_hash(b"rpp-zsi-empty-leaf", &[]);
-    for level in (0..identity_tree_depth()).rev() {
-        let child = defaults[level + 1];
-        defaults[level] = hash_children(&child, &child);
-    }
-    defaults
-}
-
-fn identity_siblings(defaults: &[[u8; 32]], wallet_addr: &str) -> Vec<String> {
-    let mut siblings = Vec::with_capacity(identity_tree_depth());
-    let mut _index = derive_index(wallet_addr);
-    for level in (0..identity_tree_depth()).rev() {
-        let sibling = defaults[level + 1];
-        siblings.push(hex::encode(sibling));
-        _index /= 2;
-    }
-    siblings
-}
-
 fn recursive_aggregate(parameters: &StarkParameters, witness: &RecursiveWitness) -> FieldElement {
     let hasher = parameters.poseidon_hasher();
     let zero = FieldElement::zero(parameters.modulus());
@@ -361,25 +335,6 @@ fn merkle_root(hashes: &[String]) -> String {
         .map(|hash| hex_to_array::<32>(hash))
         .collect::<Vec<_>>();
     hex::encode(compute_merkle_root(&mut leaves))
-}
-
-fn domain_hash(label: &[u8], bytes: &[u8]) -> [u8; 32] {
-    let mut data = Vec::with_capacity(label.len() + bytes.len());
-    data.extend_from_slice(label);
-    data.extend_from_slice(bytes);
-    Blake2sHasher::hash(&data).into()
-}
-
-fn hash_children(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
-    let mut data = Vec::with_capacity(64);
-    data.extend_from_slice(left);
-    data.extend_from_slice(right);
-    domain_hash(b"rpp-zsi-node", &data)
-}
-
-fn derive_index(wallet_addr: &str) -> u64 {
-    let hash: [u8; 32] = Blake2sHasher::hash(wallet_addr.as_bytes()).into();
-    u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) as u64
 }
 
 fn hex_to_array<const N: usize>(value: &str) -> [u8; N] {
