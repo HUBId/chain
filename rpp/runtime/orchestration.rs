@@ -18,7 +18,7 @@ use tokio::time;
 use tracing::{debug, info, warn};
 
 use crate::errors::{ChainError, ChainResult};
-use crate::node::NodeHandle;
+use crate::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
 use crate::reputation::Tier;
 use crate::runtime::node_runtime::{NodeEvent, NodeHandle as P2pHandle};
 use crate::types::{Address, Block, TransactionProofBundle};
@@ -27,7 +27,6 @@ use rpp_p2p::GossipTopic;
 
 /// Default buffer size for the gossip → mempool proof channel.
 const DEFAULT_QUEUE_DEPTH: usize = 64;
-const DEFAULT_STATE_SYNC_CHUNK: usize = 16;
 const PRUNING_SYNC_INTERVAL_SECS: u64 = 30;
 
 /// Enumeration of lifecycle stages the orchestrator tracks for each submission.

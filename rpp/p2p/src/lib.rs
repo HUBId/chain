@@ -22,13 +22,16 @@ pub use peerstore::{IdentityVerifier, PeerRecord, Peerstore, PeerstoreConfig, Pe
 pub use persistence::{GossipStateError, GossipStateStore};
 pub use pipeline::{
     BasicRecursiveProofVerifier, BlockProposal, ConsensusPipeline, JsonProofValidator,
-    LightClientSync, MetaTelemetry, PersistentProofStorage, PipelineError, ProofMempool,
-    ProofRecord, ProofStorage, SnapshotChunk, SnapshotStore, TelemetryEvent, VoteOutcome,
+    LightClientSync, MetaTelemetry, NetworkBlockMetadata, NetworkLightClientUpdate,
+    NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, PersistentProofStorage, PipelineError,
+    ProofMempool, ProofRecord, ProofStorage, SnapshotChunk, SnapshotStore, TelemetryEvent,
+    VoteOutcome,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
+pub use rpp_p2p_macros::NetworkBehaviour;
 pub use security::{RateLimiter, ReplayProtector};
 pub use simulator::{NetworkSimulation, SimulationReport};
 pub use swarm::{Network, NetworkError, NetworkEvent};
 pub use tier::TierLevel;
 pub use topics::GossipTopic;
-pub use rpp_p2p_macros::NetworkBehaviour;
