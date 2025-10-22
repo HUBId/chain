@@ -88,3 +88,54 @@ fn votes_from_multiple_peers_reach_quorum() {
         .expect("duplicate vote handled");
     assert!(matches!(duplicate, VoteOutcome::Duplicate));
 }
+
+#[test]
+fn quorum_requires_majority_of_weighted_voters() {
+    let mut pipeline = ConsensusPipeline::new();
+    pipeline.set_threshold_factor(0.75);
+    let peers: Vec<_> = (0..4).map(|_| PeerId::random()).collect();
+    for peer in &peers {
+        pipeline.register_voter(*peer, 1.0);
+    }
+
+    let block_id = b"proposal-weighted".to_vec();
+    pipeline
+        .ingest_proposal(block_id.clone(), peers[0], b"block".to_vec())
+        .expect("proposal accepted");
+
+    let first = pipeline
+        .ingest_vote(&block_id, peers[0], 0, b"vote-0".to_vec())
+        .expect("first vote accepted");
+    assert!(matches!(
+        first,
+        VoteOutcome::Recorded {
+            reached_quorum: false,
+            ..
+        }
+    ));
+
+    let second = pipeline
+        .ingest_vote(&block_id, peers[1], 0, b"vote-1".to_vec())
+        .expect("second vote accepted");
+    assert!(matches!(
+        second,
+        VoteOutcome::Recorded {
+            reached_quorum: false,
+            ..
+        }
+    ));
+
+    let third = pipeline
+        .ingest_vote(&block_id, peers[2], 0, b"vote-2".to_vec())
+        .expect("third vote accepted");
+    match third {
+        VoteOutcome::Recorded {
+            reached_quorum,
+            power,
+        } => {
+            assert!(reached_quorum, "expected quorum after three voters");
+            assert!(power >= 3.0);
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/gossip_vote.json",
+  "title": "GossipSignedBftVote",
+  "type": "object",
+  "required": ["vote", "public_key", "signature"],
+  "properties": {
+    "vote": {
+      "type": "object",
+      "required": ["round", "height", "block_hash", "voter", "kind"],
+      "properties": {
+        "round": {"type": "integer", "minimum": 0},
+        "height": {"type": "integer", "minimum": 0},
+        "block_hash": {"type": "string"},
+        "voter": {"type": "string"},
+        "kind": {"type": "string", "enum": ["PreVote", "PreCommit"]}
+      },
+      "additionalProperties": false
+    },
+    "public_key": {"type": "string"},
+    "signature": {"type": "string"}
+  },
+  "additionalProperties": false
+}

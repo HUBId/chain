@@ -63,6 +63,7 @@ use crate::runtime::node_runtime::{
     },
     NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
+use libp2p::PeerId;
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -1731,6 +1732,22 @@ impl NodeInner {
                         }
                     }
                     event = events.recv() => match event {
+                        Ok(NodeEvent::BlockProposal { peer, block }) => {
+                            if let Err(err) = ingest.submit_block_proposal(block) {
+                                warn!(?err, %peer, "failed to ingest block proposal from gossip");
+                            }
+                        }
+                        Ok(NodeEvent::BlockRejected { peer, block, reason }) => {
+                            ingest.handle_invalid_block_gossip(&peer, block, &reason);
+                        }
+                        Ok(NodeEvent::Vote { peer, vote }) => {
+                            if let Err(err) = ingest.submit_vote(vote) {
+                                warn!(?err, %peer, "failed to ingest vote from gossip");
+                            }
+                        }
+                        Ok(NodeEvent::VoteRejected { peer, vote, reason }) => {
+                            ingest.handle_invalid_vote_gossip(&peer, vote, &reason);
+                        }
                         Ok(NodeEvent::Gossip { topic, data, .. }) => {
                             ingest.ingest_witness_bytes(topic, data);
                         }
@@ -2704,6 +2721,41 @@ impl NodeInner {
             pool.record_invalid_proof(address, height, round)
         };
         self.apply_evidence(evidence);
+    }
+
+    fn handle_invalid_block_gossip(&self, peer: &PeerId, block: Block, reason: &str) {
+        warn!(
+            target: "node",
+            %peer,
+            height = block.header.height,
+            round = block.consensus.round,
+            proposer = %block.header.proposer,
+            reason = %reason,
+            "invalid block gossip detected"
+        );
+        let evidence = {
+            let mut pool = self.evidence_pool.write();
+            pool.record_invalid_proposal(
+                &block.header.proposer,
+                block.header.height,
+                block.consensus.round,
+                Some(block.hash.clone()),
+            )
+        };
+        self.apply_evidence(evidence);
+    }
+
+    fn handle_invalid_vote_gossip(&self, peer: &PeerId, vote: SignedBftVote, reason: &str) {
+        warn!(
+            target: "node",
+            %peer,
+            height = vote.vote.height,
+            round = vote.vote.round,
+            voter = %vote.vote.voter,
+            reason = %reason,
+            "invalid vote gossip detected"
+        );
+        self.punish_invalid_proof(&vote.vote.voter, vote.vote.height, vote.vote.round);
     }
 
     fn record_double_spend_if_applicable(&self, block: &Block, round: u64, err: &ChainError) {

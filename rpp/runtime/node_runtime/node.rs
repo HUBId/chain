@@ -15,8 +15,10 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
 
 use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
+use crate::consensus::SignedBftVote;
 use crate::node::NetworkIdentityProfile;
 use crate::proof_system::VerifierMetricsSnapshot;
+use crate::types::Block;
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
 use crate::sync::RuntimeRecursiveProofVerifier;
 
@@ -123,6 +125,24 @@ pub enum NodeEvent {
         topic: GossipTopic,
         data: Vec<u8>,
     },
+    BlockProposal {
+        peer: PeerId,
+        block: Block,
+    },
+    BlockRejected {
+        peer: PeerId,
+        block: Block,
+        reason: String,
+    },
+    Vote {
+        peer: PeerId,
+        vote: SignedBftVote,
+    },
+    VoteRejected {
+        peer: PeerId,
+        vote: SignedBftVote,
+        reason: String,
+    },
     PeerConnected {
         peer: PeerId,
         payload: HandshakePayload,
@@ -157,6 +177,22 @@ struct GossipPipelines {
     meta_cache: HashSet<Hash>,
 }
 
+#[derive(Debug)]
+enum BlockIngestResult {
+    Duplicate,
+    Valid(Block),
+    Invalid { block: Block, reason: String },
+    DecodeFailed(String),
+}
+
+#[derive(Debug)]
+enum VoteIngestResult {
+    Duplicate,
+    Valid(SignedBftVote),
+    Invalid { vote: SignedBftVote, reason: String },
+    DecodeFailed(String),
+}
+
 impl GossipPipelines {
     fn initialise(config: &NodeRuntimeConfig) -> Result<Self, PipelineError> {
         let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
@@ -173,32 +209,52 @@ impl GossipPipelines {
         })
     }
 
-    fn handle_gossip(&mut self, peer: PeerId, topic: GossipTopic, data: Vec<u8>) {
-        match topic {
-            GossipTopic::Blocks => self.handle_blocks(peer, data),
-            GossipTopic::Votes => self.handle_votes(peer, data),
-            GossipTopic::Proofs => self.handle_proofs(peer, data),
-            GossipTopic::Snapshots => self.handle_snapshots(&data),
-            GossipTopic::Meta => self.handle_meta(peer, data),
-        }
-    }
-
-    fn handle_blocks(&mut self, peer: PeerId, data: Vec<u8>) {
+    fn handle_blocks(&mut self, _peer: PeerId, data: Vec<u8>) -> BlockIngestResult {
         let digest = blake3::hash(&data);
         if !self.block_cache.insert(digest) {
-            debug!(target: "node", ?peer, "duplicate block gossip ignored");
-            return;
+            return BlockIngestResult::Duplicate;
         }
-        debug!(target: "node", ?peer, "block gossip ingested");
+        let block: Block = match serde_json::from_slice(&data) {
+            Ok(block) => block,
+            Err(err) => {
+                return BlockIngestResult::DecodeFailed(format!(
+                    "invalid block payload encoding: {err}"
+                ));
+            }
+        };
+        let expected_hash = hex::encode(block.header.hash());
+        if block.hash != expected_hash {
+            return BlockIngestResult::Invalid {
+                block,
+                reason: format!(
+                    "block hash mismatch: expected {expected_hash}, received {}",
+                    block.hash
+                ),
+            };
+        }
+        BlockIngestResult::Valid(block)
     }
 
-    fn handle_votes(&mut self, peer: PeerId, data: Vec<u8>) {
+    fn handle_votes(&mut self, _peer: PeerId, data: Vec<u8>) -> VoteIngestResult {
         let digest = blake3::hash(&data);
         if !self.vote_cache.insert(digest) {
-            debug!(target: "node", ?peer, "duplicate vote gossip ignored");
-            return;
+            return VoteIngestResult::Duplicate;
         }
-        debug!(target: "node", ?peer, "vote gossip ingested");
+        let vote: SignedBftVote = match serde_json::from_slice(&data) {
+            Ok(vote) => vote,
+            Err(err) => {
+                return VoteIngestResult::DecodeFailed(format!(
+                    "invalid vote payload encoding: {err}"
+                ));
+            }
+        };
+        if let Err(err) = vote.verify() {
+            return VoteIngestResult::Invalid {
+                vote,
+                reason: format!("vote verification failed: {err}"),
+            };
+        }
+        VoteIngestResult::Valid(vote)
     }
 
     fn handle_proofs(&mut self, peer: PeerId, data: Vec<u8>) {
@@ -435,10 +491,95 @@ impl NodeInner {
                         self.meta_telemetry
                             .record(peer, version.clone(), Duration::from_millis(0));
                     }
-                    let peer_for_pipeline = peer.clone();
-                    let data_for_pipeline = data.clone();
-                    self.pipelines
-                        .handle_gossip(peer_for_pipeline, topic, data_for_pipeline);
+                    match topic {
+                        GossipTopic::Blocks => {
+                            match self.pipelines.handle_blocks(peer.clone(), data.clone()) {
+                                BlockIngestResult::Duplicate => {
+                                    debug!(
+                                        target: "node",
+                                        ?peer,
+                                        "duplicate block gossip ignored"
+                                    );
+                                }
+                                BlockIngestResult::Valid(block) => {
+                                    debug!(target: "node", ?peer, "block gossip ingested");
+                                    let _ = self.events.send(NodeEvent::BlockProposal {
+                                        peer: peer.clone(),
+                                        block,
+                                    });
+                                }
+                                BlockIngestResult::Invalid { block, reason } => {
+                                    warn!(
+                                        target: "node",
+                                        ?peer,
+                                        %reason,
+                                        "invalid block gossip"
+                                    );
+                                    let _ = self.events.send(NodeEvent::BlockRejected {
+                                        peer: peer.clone(),
+                                        block,
+                                        reason,
+                                    });
+                                }
+                                BlockIngestResult::DecodeFailed(reason) => {
+                                    warn!(
+                                        target: "node",
+                                        ?peer,
+                                        %reason,
+                                        "failed to decode block gossip"
+                                    );
+                                }
+                            }
+                        }
+                        GossipTopic::Votes => {
+                            match self.pipelines.handle_votes(peer.clone(), data.clone()) {
+                                VoteIngestResult::Duplicate => {
+                                    debug!(
+                                        target: "node",
+                                        ?peer,
+                                        "duplicate vote gossip ignored"
+                                    );
+                                }
+                                VoteIngestResult::Valid(vote) => {
+                                    debug!(target: "node", ?peer, "vote gossip ingested");
+                                    let _ = self.events.send(NodeEvent::Vote {
+                                        peer: peer.clone(),
+                                        vote,
+                                    });
+                                }
+                                VoteIngestResult::Invalid { vote, reason } => {
+                                    warn!(
+                                        target: "node",
+                                        ?peer,
+                                        %reason,
+                                        "invalid vote gossip"
+                                    );
+                                    let _ = self.events.send(NodeEvent::VoteRejected {
+                                        peer: peer.clone(),
+                                        vote,
+                                        reason,
+                                    });
+                                }
+                                VoteIngestResult::DecodeFailed(reason) => {
+                                    warn!(
+                                        target: "node",
+                                        ?peer,
+                                        %reason,
+                                        "failed to decode vote gossip"
+                                    );
+                                }
+                            }
+                        }
+                        GossipTopic::Proofs => {
+                            self.pipelines.handle_proofs(peer.clone(), data.clone());
+                        }
+                        GossipTopic::Snapshots => {
+                            self.pipelines.handle_snapshots(&data);
+                        }
+                        GossipTopic::Meta => {
+                            self.pipelines.handle_meta(peer.clone(), data.clone());
+                        }
+                    }
                     let _ = self.events.send(NodeEvent::Gossip { peer, topic, data });
                 }
             }
