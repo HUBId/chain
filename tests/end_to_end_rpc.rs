@@ -14,8 +14,8 @@ use rpp_chain::node::NodeHandle;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
-use rpp_chain::stwo::circuit::transaction::TransactionWitness;
 use rpp_chain::stwo::circuit::ExecutionTrace;
+use rpp_chain::stwo::circuit::transaction::TransactionWitness;
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
@@ -448,6 +448,88 @@ async fn validator_membership_endpoint_returns_active_validator() -> Result<()> 
         validators[0]["address"].as_str(),
         Some(node_address.as_str())
     );
+
+    harness.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn uptime_scheduler_endpoints_handle_failure_path() -> Result<()> {
+    let harness = match RpcTestHarness::start().await {
+        Ok(harness) => harness,
+        Err(err) => {
+            eprintln!("skipping uptime scheduler test: {err:?}");
+            return Ok(());
+        }
+    };
+    let client = harness.client();
+    let base_url = harness.base_url().to_string();
+
+    let status_url = format!("{}/wallet/uptime/scheduler", base_url);
+    let trigger_url = format!("{}/wallet/uptime/scheduler/trigger", base_url);
+    let offload_url = format!("{}/wallet/uptime/scheduler/offload", base_url);
+
+    let initial_status = client
+        .get(&status_url)
+        .send()
+        .await
+        .context("failed to fetch initial uptime scheduler status")?;
+    assert_eq!(initial_status.status(), StatusCode::OK);
+    let initial_payload: Value = initial_status
+        .json()
+        .await
+        .context("invalid initial scheduler payload")?;
+    assert_eq!(initial_payload["enabled"].as_bool(), Some(true));
+    assert_eq!(initial_payload["running"].as_bool(), Some(false));
+    assert_eq!(initial_payload["interval_secs"].as_u64(), Some(3_600));
+    assert!(initial_payload.get("last_success").is_none());
+    assert!(initial_payload.get("last_error").is_none());
+
+    let trigger_response = client
+        .post(&trigger_url)
+        .send()
+        .await
+        .context("failed to trigger uptime scheduler")?;
+    assert_eq!(trigger_response.status(), StatusCode::BAD_REQUEST);
+    let trigger_error: Value = trigger_response
+        .json()
+        .await
+        .context("invalid trigger error payload")?;
+    let trigger_message = trigger_error["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        trigger_message.contains("validated genesis identity"),
+        "unexpected trigger error: {}",
+        trigger_message
+    );
+
+    let failure_status = client
+        .get(&status_url)
+        .send()
+        .await
+        .context("failed to fetch failure uptime scheduler status")?;
+    assert_eq!(failure_status.status(), StatusCode::OK);
+    let failure_payload: Value = failure_status
+        .json()
+        .await
+        .context("invalid failure scheduler payload")?;
+    let failure_message = failure_payload["last_error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        failure_message.contains("validated genesis identity"),
+        "unexpected scheduler failure message: {}",
+        failure_message
+    );
+
+    let offload_response = client
+        .post(&offload_url)
+        .send()
+        .await
+        .context("failed to offload uptime proof")?;
+    assert_eq!(offload_response.status(), StatusCode::NOT_FOUND);
 
     harness.shutdown().await?;
     Ok(())

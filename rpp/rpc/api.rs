@@ -6,15 +6,15 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tower::limit::RateLimitLayer;
 use tower::ServiceBuilder;
+use tower::limit::RateLimitLayer;
 use tracing::info;
 
 use crate::consensus::SignedBftVote;
@@ -25,13 +25,14 @@ use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
-    NodeTelemetrySnapshot, PruningJobStatus, RolloutStatus, VrfStatus,
+    NodeTelemetrySnapshot, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
+    UptimeSchedulerStatus, VrfStatus,
 };
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
-use crate::runtime::config::QueueWeightsConfig;
 use crate::runtime::RuntimeMode;
+use crate::runtime::config::QueueWeightsConfig;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
@@ -563,6 +564,18 @@ pub async fn serve(
         .route("/wallet/receive", get(wallet_receive_addresses))
         .route("/wallet/node", get(wallet_node_view))
         .route("/wallet/state/root", get(wallet_state_root))
+        .route(
+            "/wallet/uptime/scheduler",
+            get(wallet_uptime_scheduler_status),
+        )
+        .route(
+            "/wallet/uptime/scheduler/trigger",
+            post(wallet_trigger_uptime_scheduler),
+        )
+        .route(
+            "/wallet/uptime/scheduler/offload",
+            post(wallet_offload_uptime_proof),
+        )
         .route("/wallet/uptime/proof", post(wallet_generate_uptime))
         .route("/wallet/uptime/submit", post(wallet_submit_uptime))
         .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
@@ -1208,6 +1221,33 @@ async fn wallet_state_root(
         .map_err(to_http_error)
 }
 
+async fn wallet_uptime_scheduler_status(
+    State(state): State<ApiContext>,
+) -> Result<Json<UptimeSchedulerStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    Ok(Json(node.uptime_scheduler_status()))
+}
+
+async fn wallet_trigger_uptime_scheduler(
+    State(state): State<ApiContext>,
+) -> Result<Json<UptimeSchedulerRun>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .require_node()?
+        .trigger_uptime_scheduler()
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn wallet_offload_uptime_proof(
+    State(state): State<ApiContext>,
+) -> Result<Json<WalletUptimeProofResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    match node.offload_uptime_proof().map_err(to_http_error)? {
+        Some(proof) => Ok(Json(WalletUptimeProofResponse { proof })),
+        None => Err(not_found("uptime proof not available")),
+    }
+}
+
 async fn wallet_generate_uptime(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletUptimeProofResponse>, (StatusCode, Json<ErrorResponse>)> {
@@ -1333,8 +1373,8 @@ mod interface_schemas {
         SignTxRequest, SignTxResponse,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
