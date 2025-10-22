@@ -122,7 +122,12 @@ impl ConsensusProof {
 
     pub fn into_backend_artifacts(
         self,
-    ) -> (ProofBytes, VerifyingKey, ConsensusCircuitDef, ConsensusPublicInputs) {
+    ) -> (
+        ProofBytes,
+        VerifyingKey,
+        ConsensusCircuitDef,
+        ConsensusPublicInputs,
+    ) {
         (
             self.proof_bytes,
             self.verifying_key,
@@ -246,9 +251,8 @@ impl ConsensusCertificate {
 
     pub fn consensus_public_inputs(&self) -> BackendResult<ConsensusPublicInputs> {
         fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
-            let bytes = hex::decode(value).map_err(|err| {
-                BackendError::Failure(format!("invalid {label} encoding: {err}"))
-            })?;
+            let bytes = hex::decode(value)
+                .map_err(|err| BackendError::Failure(format!("invalid {label} encoding: {err}")))?;
             if bytes.len() != 32 {
                 return Err(BackendError::Failure(format!(
                     "{label} must encode 32 bytes"

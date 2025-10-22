@@ -4,15 +4,20 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use libp2p::identity::Keypair;
 use libp2p::PeerId;
 use rpp_crypto_vrf::{derive_tier_seed, generate_vrf, PoseidonVrfInput, VrfKeypair, VrfSecretKey};
 
 use super::bft_loop::{run_bft_loop, shutdown, submit_precommit, submit_prevote, submit_proposal};
 use super::evidence::EvidenceType;
+#[cfg(feature = "prover-stwo")]
+use super::leader::{Leader, LeaderContext};
 use super::messages::{
     Block, BlockId, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
-    ProofVerificationError, Proposal,
+    ProofVerificationError, Proposal, TalliedVote,
 };
+#[cfg(feature = "prover-stwo")]
+use super::messages::{Commit, Signature};
 use super::state::{ConsensusConfig, GenesisConfig};
 
 use super::validator::{
@@ -26,6 +31,12 @@ use crate::proof_backend::{
 
 #[cfg(feature = "prover-mock")]
 use prover_mock_backend::MockBackend;
+#[cfg(feature = "prover-stwo")]
+use prover_stwo_backend::backend::{decode_consensus_proof, StwoBackend};
+#[cfg(feature = "prover-stwo")]
+use prover_stwo_backend::official::verifier::NodeVerifier;
+#[cfg(feature = "prover-stwo")]
+use prover_stwo_backend::types::ChainProof;
 
 fn sample_seed(id: &str) -> [u8; 32] {
     let mut seed = [0u8; 32];
@@ -145,6 +156,11 @@ fn backend() -> Arc<dyn ProofBackend> {
         return Arc::new(MockBackend::new());
     }
 
+    #[cfg(feature = "prover-stwo")]
+    {
+        return Arc::new(StwoBackend::new());
+    }
+
     Arc::new(FixtureBackend::new())
 }
 
@@ -182,6 +198,87 @@ fn make_vote_signature(
     hasher.update(&height.to_le_bytes());
     hasher.update(phase.as_bytes());
     hasher.finalize().as_bytes().to_vec()
+}
+
+const CONSENSUS_VOTE_WEIGHTS: [(&str, u64); 3] =
+    [("validator-1", 10), ("validator-2", 8), ("validator-3", 6)];
+
+const CONSENSUS_DEFAULT_ROUND: u64 = 5;
+
+fn deterministic_peer(id: &str) -> PeerId {
+    let mut secret = sample_seed(&format!("peer:{id}"));
+    let keypair = Keypair::ed25519_from_bytes(&mut secret).expect("peer key derivation");
+    PeerId::from_public_key(&keypair.public())
+}
+
+fn build_tallied_votes(
+    block_hash: &BlockId,
+    round: u64,
+    height: u64,
+    phase: &str,
+    weights: &[(&str, u64)],
+) -> Vec<TalliedVote> {
+    weights
+        .iter()
+        .map(|(validator_id, weight)| {
+            let peer = deterministic_peer(validator_id);
+            TalliedVote {
+                validator_id: (*validator_id).to_string(),
+                peer_id: peer.clone(),
+                signature: make_vote_signature(&peer, block_hash, round, height, phase),
+                voting_power: *weight,
+            }
+        })
+        .collect()
+}
+
+fn quorum_threshold(total_power: u64) -> u64 {
+    std::cmp::max(1, (total_power * 2) / 3)
+}
+
+#[cfg(feature = "prover-stwo")]
+#[derive(Clone)]
+struct ProofVerifierRegistry {
+    stwo: NodeVerifier,
+}
+
+#[cfg(feature = "prover-stwo")]
+impl Default for ProofVerifierRegistry {
+    fn default() -> Self {
+        Self {
+            stwo: NodeVerifier::new(),
+        }
+    }
+}
+
+#[cfg(feature = "prover-stwo")]
+impl ProofVerifierRegistry {
+    fn verify_consensus(&self, proof: &ChainProof) -> Result<(), String> {
+        self.stwo
+            .verify_consensus(proof)
+            .map_err(|err| err.to_string())
+    }
+}
+
+fn certificate_for_block(block: &Block, round: u64) -> ConsensusCertificate {
+    let block_hash = block.hash();
+    let weights = &CONSENSUS_VOTE_WEIGHTS;
+    let total_power: u64 = weights.iter().map(|(_, weight)| *weight).sum();
+    let prevotes = build_tallied_votes(&block_hash, round, block.height, "prevote", weights);
+    let precommits = build_tallied_votes(&block_hash, round, block.height, "precommit", weights);
+
+    ConsensusCertificate {
+        block_hash,
+        height: block.height,
+        round,
+        total_power,
+        quorum_threshold: quorum_threshold(total_power),
+        prevote_power: total_power,
+        precommit_power: total_power,
+        commit_power: total_power,
+        prevotes,
+        precommits,
+    }
 }
 
 fn build_prevote(
@@ -253,12 +350,8 @@ fn prove_consensus_certificate(
     let public_inputs = certificate
         .consensus_public_inputs()
         .expect("consensus public inputs");
-    let proof = ConsensusProof::from_backend_artifacts(
-        proof_bytes,
-        verifying_key,
-        circuit,
-        public_inputs,
-    );
+    let proof =
+        ConsensusProof::from_backend_artifacts(proof_bytes, verifying_key, circuit, public_inputs);
     if let Err(err) = proof.verify(backend) {
         if !matches!(
             err,
@@ -273,9 +366,31 @@ fn prove_consensus_certificate(
 }
 
 fn certificate_with_block(label: &str) -> ConsensusCertificate {
-    let mut certificate = ConsensusCertificate::genesis();
-    certificate.block_hash = BlockId(format!("consensus-{label}"));
-    certificate
+    let hash_input = format!("consensus-{label}");
+    let block_hash = BlockId(blake3::hash(hash_input.as_bytes()).to_hex().to_string());
+    let weights = &CONSENSUS_VOTE_WEIGHTS;
+    let total_power: u64 = weights.iter().map(|(_, weight)| *weight).sum();
+    let prevotes = build_tallied_votes(&block_hash, CONSENSUS_DEFAULT_ROUND, 1, "prevote", weights);
+    let precommits = build_tallied_votes(
+        &block_hash,
+        CONSENSUS_DEFAULT_ROUND,
+        1,
+        "precommit",
+        weights,
+    );
+
+    ConsensusCertificate {
+        block_hash,
+        height: 1,
+        round: CONSENSUS_DEFAULT_ROUND,
+        total_power,
+        quorum_threshold: quorum_threshold(total_power),
+        prevote_power: total_power,
+        precommit_power: total_power,
+        commit_power: total_power,
+        prevotes,
+        precommits,
+    }
 }
 
 fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -598,6 +713,83 @@ fn consensus_proof_verifies_with_backend() {
     assert!(proof.verify(&*backend).is_ok());
 }
 
+#[cfg(feature = "prover-stwo")]
+#[test]
+fn stwo_leader_builds_proposal_and_registry_verifies() {
+    let _guard = acquire_test_lock();
+
+    let backend = Arc::new(StwoBackend::new());
+    let vrf_outputs = vec![
+        build_vrf_output(0, "validator-1", [1; 32], 4, 1.5, 2_000_000),
+        build_vrf_output(0, "validator-2", [2; 32], 3, 1.2, 1_500_000),
+        build_vrf_output(0, "validator-3", [3; 32], 3, 1.1, 1_300_000),
+    ];
+    let ledger = build_ledger(&[
+        ("validator-1", 10, 4, 1.5),
+        ("validator-2", 8, 3, 1.2),
+        ("validator-3", 6, 3, 1.1),
+    ]);
+
+    let config = ConsensusConfig::new(30, 30, 10, 0.1);
+    let genesis = GenesisConfig::new(0, vrf_outputs, ledger, "root".into(), config);
+    let mut state =
+        super::state::ConsensusState::new(genesis, backend.clone()).expect("state initialises");
+
+    let committed_block = Block {
+        height: 1,
+        epoch: 0,
+        payload: serde_json::json!({"committed": true}),
+        timestamp: 1,
+    };
+    let committed_certificate = certificate_for_block(&committed_block, 0);
+    let committed_proof = prove_consensus_certificate(backend.as_ref(), &committed_certificate);
+    let signatures = committed_certificate
+        .precommits
+        .iter()
+        .map(|vote| Signature {
+            validator_id: vote.validator_id.clone(),
+            peer_id: vote.peer_id.clone(),
+            signature: vote.signature.clone(),
+        })
+        .collect();
+
+    let commit = Commit {
+        block: committed_block,
+        proof: committed_proof,
+        certificate: committed_certificate.clone(),
+        signatures,
+    };
+    state.stage_certificate(committed_certificate);
+    state.apply_commit(commit);
+    state.update_leader();
+
+    let leader_validator = state
+        .current_leader
+        .clone()
+        .expect("leader present after commit");
+    let leader = Leader::new(leader_validator);
+    let context = LeaderContext {
+        epoch: state.epoch,
+        round: state.round,
+    };
+    let proposal = leader
+        .build_proposal(&state, context)
+        .expect("leader builds proposal");
+
+    proposal
+        .proof
+        .verify(backend.as_ref())
+        .expect("backend verifies proposal proof");
+
+    let proof_bytes = proposal.proof.proof_bytes().clone();
+    let (_header, decoded) = decode_consensus_proof(&proof_bytes).expect("consensus proof decodes");
+    let chain_proof = ChainProof::Stwo(decoded);
+    let registry = ProofVerifierRegistry::default();
+    registry
+        .verify_consensus(&chain_proof)
+        .expect("registry verifies proposal proof");
+}
+
 #[test]
 fn consensus_proof_propagates_backend_error() {
     let backend = backend();
@@ -626,7 +818,10 @@ fn consensus_proof_rejects_empty_payload() {
     let backend = backend();
     assert!(matches!(
         proof.verify(&*backend),
-        Err(ProofVerificationError::Backend(message)) if message.contains("verifying key empty")
+        Err(ProofVerificationError::Backend(message))
+            if message.contains("verifying key empty")
+                || message.contains("key payload")
+                || message.contains("serialization")
     ));
 }
 

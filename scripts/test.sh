@@ -190,13 +190,16 @@ run_suite() {
   local suite="$1"
   local backend="$2"
   local -a backend_args=()
+  local -a toolchain=()
 
   case "$backend" in
     default)
       backend_args=()
+      toolchain=("+nightly-2025-07-14")
       ;;
     stwo)
       backend_args=("--no-default-features" "--features" "prover-stwo")
+      toolchain=("+nightly-2025-07-14")
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")
@@ -212,7 +215,7 @@ run_suite() {
 
   backend_args+=("${FEATURE_ARGS[@]}")
 
-  local -a command=(cargo test "${PROFILE_ARGS[@]}" "${backend_args[@]}" "${PASSTHROUGH_ARGS[@]}")
+  local -a command=(cargo "${toolchain[@]}" test "${PROFILE_ARGS[@]}" "${backend_args[@]}" "${PASSTHROUGH_ARGS[@]}")
 
   case "$suite" in
     unit)
@@ -241,12 +244,15 @@ run_integration_focus_tests() {
   fi
 
   local -a backend_args=()
+  local -a toolchain=()
   case "$backend" in
     default)
       backend_args=()
+      toolchain=("+nightly-2025-07-14")
       ;;
     stwo)
       backend_args=("--no-default-features" "--features" "prover-stwo")
+      toolchain=("+nightly-2025-07-14")
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")
@@ -264,7 +270,7 @@ run_integration_focus_tests() {
 
   for test_name in "${INTEGRATION_FOCUSED_TESTS[@]}"; do
     local -a command=(
-      cargo test
+      cargo "${toolchain[@]}" test
       "${PROFILE_ARGS[@]}"
       "${backend_args[@]}"
       "${PASSTHROUGH_ARGS[@]}"
