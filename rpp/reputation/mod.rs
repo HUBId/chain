@@ -618,6 +618,54 @@ impl ReputationProfile {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TierRequirementError {
+    MissingZsiValidation,
+    InsufficientTimetoke { required: u64, available: u64 },
+}
+
+pub fn minimum_transaction_tier(thresholds: &TierThresholds) -> Tier {
+    if thresholds.tier2_min_uptime_hours > 0 {
+        Tier::Tl2
+    } else {
+        Tier::Tl1
+    }
+}
+
+pub fn transaction_tier_requirement(
+    profile: &ReputationProfile,
+    thresholds: &TierThresholds,
+) -> Result<Tier, TierRequirementError> {
+    if !profile.zsi.validated {
+        return Err(TierRequirementError::MissingZsiValidation);
+    }
+
+    let base = minimum_transaction_tier(thresholds);
+    if base >= Tier::Tl2 && profile.timetokes.hours_online < thresholds.tier2_min_uptime_hours {
+        return Err(TierRequirementError::InsufficientTimetoke {
+            required: thresholds.tier2_min_uptime_hours,
+            available: profile.timetokes.hours_online,
+        });
+    }
+
+    let mut required = base;
+    if profile.consensus_success < thresholds.tier3_min_consensus_success {
+        return Ok(required);
+    }
+
+    required = required.max(Tier::Tl3);
+    if profile.consensus_success < thresholds.tier4_min_consensus_success {
+        return Ok(required);
+    }
+
+    required = required.max(Tier::Tl4);
+    if profile.score < thresholds.tier5_min_score {
+        return Ok(required);
+    }
+
+    Ok(required.max(Tier::Tl5))
+}
+
 impl Default for ReputationProfile {
     fn default() -> Self {
         Self::new("default-reputation")

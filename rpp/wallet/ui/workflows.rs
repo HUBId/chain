@@ -3,7 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::Ledger;
-use crate::reputation::Tier;
+use crate::reputation::{
+    minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
+};
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::utxo::{StoredUtxo, UtxoState, locking_script_hash};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
@@ -221,6 +223,23 @@ impl<'a> WalletWorkflows<'a> {
                 "wallet utxo snapshot not available".into(),
             ));
         }
+        let thresholds = ledger.reputation_params().tier_thresholds;
+        let minimum_tier = minimum_transaction_tier(&thresholds);
+        let derived_tier = transaction_tier_requirement(&sender_account.reputation, &thresholds)
+            .map_err(map_tier_requirement_error)?;
+        if sender_account.reputation.tier < minimum_tier {
+            return Err(ChainError::Transaction(format!(
+                "wallet reputation tier {:?} below governance minimum {:?}",
+                sender_account.reputation.tier, minimum_tier
+            )));
+        }
+        let required_tier = derived_tier.max(minimum_tier);
+        if sender_account.reputation.tier < required_tier {
+            return Err(ChainError::Transaction(format!(
+                "wallet reputation tier {:?} below required {:?}",
+                sender_account.reputation.tier, required_tier
+            )));
+        }
         let mut sender_pre_utxos = ledger.utxos_for_owner(self.wallet.address());
         if sender_pre_utxos.is_empty() {
             return Err(ChainError::Transaction(
@@ -304,7 +323,7 @@ impl<'a> WalletWorkflows<'a> {
             )
         };
         let policy = TransactionPolicy {
-            required_tier: Tier::Tl0,
+            required_tier,
             status,
         };
         let state_root = self.wallet.firewood_state_root()?;
@@ -398,6 +417,20 @@ fn planned_utxo(tx_hash: &[u8; 32], index: u32, owner: &Address, value: u128) ->
         asset_type: AssetType::Native,
         script_hash,
         timelock: None,
+    }
+}
+
+fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
+    match err {
+        TierRequirementError::MissingZsiValidation => {
+            ChainError::Transaction("wallet identity must be ZSI-validated".into())
+        }
+        TierRequirementError::InsufficientTimetoke {
+            required,
+            available,
+        } => ChainError::Transaction(format!(
+            "wallet timetoke balance {available}h below required {required}h"
+        )),
     }
 }
 
@@ -535,6 +568,91 @@ mod tests {
             .iter()
             .map(|(outpoint, stored)| stored.to_record(outpoint))
             .collect()
+    }
+
+    #[test]
+    fn transaction_bundle_rejects_when_tier_below_minimum() {
+        let (wallet, address, storage, _tempdir, _snapshot) =
+            wallet_fixture_with_utxos(100_000, &[60_000]);
+        let mut account = storage
+            .read_account(&address)
+            .expect("read account")
+            .expect("account present");
+        account.reputation.tier = Tier::Tl1;
+        account.reputation.timetokes.hours_online = 48;
+        storage.persist_account(&account).expect("persist");
+
+        let error = wallet
+            .build_transaction(address.clone(), 10_000, 100, None)
+            .expect_err("tier check should fail");
+        assert!(matches!(
+            error,
+            ChainError::Transaction(message) if message.contains("governance minimum")
+        ));
+
+        let error = wallet
+            .workflows()
+            .transaction_bundle(address.clone(), 10_000, 100, None)
+            .expect_err("workflow tier check should fail");
+        assert!(matches!(
+            error,
+            ChainError::Transaction(message) if message.contains("governance minimum")
+        ));
+    }
+
+    #[test]
+    fn transaction_bundle_rejects_when_timetoke_below_threshold() {
+        let (wallet, address, storage, _tempdir, _snapshot) =
+            wallet_fixture_with_utxos(120_000, &[80_000, 40_000]);
+        let mut account = storage
+            .read_account(&address)
+            .expect("read account")
+            .expect("account present");
+        account.reputation.timetokes.hours_online = 12;
+        storage.persist_account(&account).expect("persist");
+
+        let error = wallet
+            .build_transaction(address.clone(), 10_000, 100, None)
+            .expect_err("timetoke check should fail");
+        assert!(matches!(
+            error,
+            ChainError::Transaction(message) if message.contains("timetoke")
+        ));
+
+        let error = wallet
+            .workflows()
+            .transaction_bundle(address.clone(), 10_000, 100, None)
+            .expect_err("workflow timetoke check should fail");
+        assert!(matches!(
+            error,
+            ChainError::Transaction(message) if message.contains("timetoke")
+        ));
+    }
+
+    #[test]
+    fn transaction_bundle_succeeds_with_high_score() {
+        let (wallet, address, storage, _tempdir, _snapshot) =
+            wallet_fixture_with_utxos(150_000, &[90_000, 60_000]);
+        let mut account = storage
+            .read_account(&address)
+            .expect("read account")
+            .expect("account present");
+        account.reputation.timetokes.hours_online = 72;
+        account.reputation.consensus_success = 200;
+        account.reputation.score = 0.9;
+        account.reputation.tier = Tier::Tl5;
+        storage.persist_account(&account).expect("persist");
+
+        wallet
+            .build_transaction(address.clone(), 20_000, 150, None)
+            .expect("transaction should build");
+
+        let workflow = wallet
+            .workflows()
+            .transaction_bundle(address.clone(), 20_000, 150, None)
+            .expect("workflow should succeed");
+        assert!(workflow.policy.required_tier >= Tier::Tl2);
+        assert_eq!(workflow.policy.status.tier, Tier::Tl5);
     }
 
     #[test]
