@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
+use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet};
 use std::mem;
 
 use crate::proof_backend::Blake2sHasher;
@@ -7,9 +7,11 @@ use parking_lot::RwLock;
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
 use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
-use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
+use crate::identity_tree::{IdentityCommitmentProof, IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
 use crate::proof_system::ProofVerifierRegistry;
-use crate::reputation::{self, ReputationParams, Tier, TimetokeParams};
+use crate::reputation::{
+    self, ReputationParams, Tier, TierRequirementError, TimetokeParams,
+};
 use crate::rpp::{
     AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
     ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
@@ -158,6 +160,10 @@ impl Ledger {
         self.reputation_params = params;
     }
 
+    pub fn reputation_params(&self) -> ReputationParams {
+        self.reputation_params.clone()
+    }
+
     pub fn timetoke_params(&self) -> TimetokeParams {
         self.timetoke_params.clone()
     }
@@ -219,6 +225,27 @@ impl Ledger {
         &self,
         tx: &SignedTransaction,
     ) -> ChainResult<Vec<UtxoOutpoint>> {
+        let sender_account = self
+            .get_account(tx.payload.from.as_str())
+            .ok_or_else(|| ChainError::Transaction("transaction sender account missing".into()))?;
+        let thresholds = &self.reputation_params.tier_thresholds;
+        let minimum_tier = reputation::minimum_transaction_tier(thresholds);
+        let derived_tier =
+            reputation::transaction_tier_requirement(&sender_account.reputation, thresholds)
+                .map_err(map_tier_requirement_error)?;
+        if sender_account.reputation.tier < minimum_tier {
+            return Err(ChainError::Transaction(format!(
+                "transaction requires at least {:?}, account tier {:?}",
+                minimum_tier, sender_account.reputation.tier
+            )));
+        }
+        let required_tier = derived_tier.max(minimum_tier);
+        if sender_account.reputation.tier < required_tier {
+            return Err(ChainError::Transaction(format!(
+                "transaction requires at least {:?}, account tier {:?}",
+                required_tier, sender_account.reputation.tier
+            )));
+        }
         let required_value = tx
             .payload
             .amount
@@ -1090,6 +1117,20 @@ impl Ledger {
         self.reputation_state.upsert_from_account(account);
         self.timetoke_state.upsert_from_account(account);
         self.zsi_registry.upsert_from_account(account);
+    }
+}
+
+fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
+    match err {
+        TierRequirementError::MissingZsiValidation => {
+            ChainError::Transaction("wallet identity must be ZSI-validated".into())
+        }
+        TierRequirementError::InsufficientTimetoke {
+            required,
+            available,
+        } => ChainError::Transaction(format!(
+            "timetoke balance {available}h below required {required}h for transaction"
+        )),
     }
 }
 

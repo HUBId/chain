@@ -35,7 +35,9 @@ use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
 use crate::node::NodeHandle;
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::proof_system::ProofProver;
-use crate::reputation::Tier;
+use crate::reputation::{
+    minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
+};
 use crate::rpp::{UtxoOutpoint, UtxoRecord};
 use crate::state::StoredUtxo;
 use crate::storage::Storage;
@@ -1231,6 +1233,25 @@ impl Wallet {
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Transaction("wallet account not found".into()))?;
+        let accounts = self.storage.load_accounts()?;
+        let (ledger, _) = self.load_ledger_from_accounts(accounts)?;
+        let thresholds = ledger.reputation_params().tier_thresholds;
+        let minimum_tier = minimum_transaction_tier(&thresholds);
+        let derived_tier = transaction_tier_requirement(&account.reputation, &thresholds)
+            .map_err(map_tier_requirement_error)?;
+        if account.reputation.tier < minimum_tier {
+            return Err(ChainError::Transaction(format!(
+                "wallet reputation tier {:?} below governance minimum {:?}",
+                account.reputation.tier, minimum_tier
+            )));
+        }
+        let required_tier = derived_tier.max(minimum_tier);
+        if account.reputation.tier < required_tier {
+            return Err(ChainError::Transaction(format!(
+                "wallet reputation tier {:?} below required {:?}",
+                account.reputation.tier, required_tier
+            )));
+        }
         let total = amount
             .checked_add(fee as u128)
             .ok_or_else(|| ChainError::Transaction("amount overflow".into()))?;
@@ -1503,6 +1524,20 @@ impl Wallet {
             zsi_commitment: account.reputation.zsi.public_key_commitment.clone(),
             zsi_reputation_proof: account.reputation.zsi.reputation_proof.clone(),
         })
+    }
+}
+
+fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
+    match err {
+        TierRequirementError::MissingZsiValidation => {
+            ChainError::Transaction("wallet identity must be ZSI-validated".into())
+        }
+        TierRequirementError::InsufficientTimetoke {
+            required,
+            available,
+        } => ChainError::Transaction(format!(
+            "wallet timetoke balance {available}h below required {required}h"
+        )),
     }
 }
 
