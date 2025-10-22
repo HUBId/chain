@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="600" viewBox="0 0 1040 600" font-family="Arial,Helvetica,sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a1a1a"/>
+    </marker>
+    <marker id="open" markerWidth="12" markerHeight="12" refX="12" refY="6" orient="auto">
+      <path d="M 12 0 L 0 6 L 12 12" fill="none" stroke="#1a1a1a" stroke-width="2"/>
+    </marker>
+  </defs>
+  <rect x="80" y="100" width="220" height="110" rx="12" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2"/>
+  <text x="190" y="150" text-anchor="middle" font-size="16">Wallet Service</text>
+  <text x="190" y="170" text-anchor="middle" font-size="14">rpp::wallet</text>
+  <rect x="360" y="90" width="240" height="130" rx="12" fill="#ffe6cc" stroke="#d79b00" stroke-width="2"/>
+  <text x="480" y="140" text-anchor="middle" font-size="16">Node Runtime</text>
+  <text x="480" y="160" text-anchor="middle" font-size="14">rpp::runtime::node</text>
+  <rect x="700" y="100" width="240" height="110" rx="12" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <text x="820" y="150" text-anchor="middle" font-size="16">Proof System</text>
+  <text x="820" y="170" text-anchor="middle" font-size="14">rpp::proofs::stwo</text>
+  <rect x="360" y="270" width="260" height="130" rx="12" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+  <text x="490" y="320" text-anchor="middle" font-size="16">Storage &amp; Ledger</text>
+  <text x="490" y="340" text-anchor="middle" font-size="14">rpp::storage, rpp::ledger</text>
+  <rect x="80" y="270" width="240" height="110" rx="12" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+  <text x="200" y="320" text-anchor="middle" font-size="16">Consensus &amp; BFT</text>
+  <text x="200" y="340" text-anchor="middle" font-size="14">rpp::consensus</text>
+  <rect x="700" y="270" width="220" height="110" rx="12" fill="#fff2cc" stroke="#d6b656" stroke-width="2"/>
+  <text x="810" y="320" text-anchor="middle" font-size="16">VRF &amp; Epochs</text>
+  <text x="810" y="340" text-anchor="middle" font-size="14">rpp::vrf</text>
+  <rect x="500" y="440" width="240" height="110" rx="12" fill="#cce5ff" stroke="#2e73b8" stroke-width="2"/>
+  <text x="620" y="490" text-anchor="middle" font-size="16">P2P / Gossip</text>
+  <text x="620" y="510" text-anchor="middle" font-size="14">rpp::p2p</text>
+  <line x1="300" y1="150" x2="360" y2="150" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="330" y="140" text-anchor="middle" font-size="12">submit tx/identity</text>
+  <line x1="360" y1="180" x2="300" y2="180" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="330" y="200" text-anchor="middle" font-size="12">status, snapshots</text>
+  <line x1="600" y1="150" x2="700" y2="150" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="650" y="140" text-anchor="middle" font-size="12">proof requests</text>
+  <line x1="700" y1="180" x2="600" y2="180" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="650" y="200" text-anchor="middle" font-size="12">verification results</text>
+  <line x1="480" y1="220" x2="480" y2="270" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="500" y="250" font-size="12">persist ledger / witnesses</text>
+  <line x1="540" y1="270" x2="540" y2="220" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="560" y="250" font-size="12">state roots</text>
+  <line x1="320" y1="270" x2="320" y2="210" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="320" y="230" font-size="12" text-anchor="middle">BFT votes</text>
+  <line x1="260" y1="210" x2="260" y2="270" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="240" y="240" font-size="12" text-anchor="middle">proposal metadata</text>
+  <line x1="820" y1="270" x2="820" y2="210" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="840" y="240" font-size="12">epoch selection</text>
+  <line x1="760" y1="210" x2="760" y2="270" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="740" y="240" font-size="12">VRF submissions</text>
+  <line x1="600" y1="440" x2="600" y2="220" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="620" y="360" font-size="12">gossip bundles</text>
+  <line x1="660" y1="220" x2="660" y2="440" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="680" y="360" font-size="12">network events</text>
+  <line x1="620" y1="330" x2="700" y2="210" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="670" y="300" font-size="12">witness material</text>
+  <line x1="720" y1="210" x2="640" y2="330" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="690" y="260" font-size="12">commitments</text>
+</svg>

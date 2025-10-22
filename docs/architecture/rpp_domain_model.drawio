@@ -1,0 +1,73 @@
+<mxfile host="app.diagrams.net" modified="2024-05-29T00:00:00.000Z" agent="5.0 (macOS)">
+  <diagram id="LQm9wWyEB4l3l7N3cPgV" name="Domain Model">
+    <mxGraphModel dx="1420" dy="830" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="wallet" value="Wallet Service\n(rpp::wallet)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="120" y="120" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="node" value="Node Runtime\n(rpp::runtime::node)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="420" y="120" width="220" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="proofs" value="Proof System\n(rpp::proofs::stwo)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="760" y="120" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="storage" value="Storage &amp; Ledger\n(rpp::storage, rpp::ledger)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="420" y="280" width="240" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="consensus" value="Consensus &amp; BFT\n(rpp::consensus)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="120" y="280" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="vrf" value="VRF &amp; Epochs\n(rpp::vrf)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="760" y="280" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2p" value="P2P / Gossip\n(rpp::p2p)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#cce5ff;strokeColor=#2e73b8;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="560" y="440" width="220" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_wallet_node" value="submit tx/identity" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="wallet" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_node_wallet" value="status, snapshots" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="wallet" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_node_storage" value="persist ledger / witnesses" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="storage" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_storage_node" value="state roots" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="storage" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_node_proofs" value="proof requests" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="proofs" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_proofs_node" value="verification results" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="proofs" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_consensus_node" value="BFT votes" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="consensus" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_node_consensus" value="proposal metadata" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="consensus" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_vrf_node" value="epoch selection" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="vrf" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_node_vrf" value="VRF submissions" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="vrf" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_node_p2p" value="gossip bundles" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="p2p" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_p2p_node" value="network events" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="p2p" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_storage_proofs" value="witness material" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="storage" target="proofs" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge_proofs_storage" value="commitments" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="proofs" target="storage" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
