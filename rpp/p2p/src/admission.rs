@@ -1,7 +1,9 @@
+use std::borrow::Cow;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::vendor::PeerId;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::identity::IdentityMetadata;
@@ -28,23 +30,32 @@ pub enum AdmissionError {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReputationEvent {
-    GossipSuccess { topic: GossipTopic },
+    GossipSuccess {
+        topic: GossipTopic,
+    },
     UptimeProof,
     VoteIncluded,
-    Slash { severity: f64, reason: &'static str },
-    ManualPenalty { amount: f64, reason: &'static str },
+    Slash {
+        severity: f64,
+        reason: Cow<'static, str>,
+    },
+    ManualPenalty {
+        amount: f64,
+        reason: Cow<'static, str>,
+    },
 }
 
 impl ReputationEvent {
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> &str {
         match self {
             ReputationEvent::GossipSuccess { .. } => "gossip_success",
             ReputationEvent::UptimeProof => "uptime_proof",
             ReputationEvent::VoteIncluded => "vote_included",
-            ReputationEvent::Slash { reason, .. } => reason,
-            ReputationEvent::ManualPenalty { reason, .. } => reason,
+            ReputationEvent::Slash { reason, .. } => reason.as_ref(),
+            ReputationEvent::ManualPenalty { reason, .. } => reason.as_ref(),
         }
     }
 }
@@ -52,7 +63,48 @@ impl ReputationEvent {
 #[derive(Debug, Clone)]
 pub struct ReputationOutcome {
     pub snapshot: ReputationSnapshot,
-    pub label: &'static str,
+    pub label: String,
+    pub event: ReputationEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReputationBroadcast {
+    pub peer: String,
+    pub event: ReputationEvent,
+    pub reputation: f64,
+    pub tier: TierLevel,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub banned_until: Option<u64>,
+    pub label: String,
+}
+
+impl ReputationBroadcast {
+    pub fn new(outcome: &ReputationOutcome) -> Self {
+        let banned_until = outcome
+            .snapshot
+            .banned_until
+            .and_then(|until| until.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as u64);
+        Self {
+            peer: outcome.snapshot.peer_id.to_base58(),
+            event: outcome.event.clone(),
+            reputation: outcome.snapshot.reputation,
+            tier: outcome.snapshot.tier,
+            banned_until,
+            label: outcome.label.clone(),
+        }
+    }
+
+    pub fn peer_id(&self) -> Result<PeerId, String> {
+        self.peer
+            .parse()
+            .map_err(|err| format!("invalid peer id: {err}"))
+    }
+
+    pub fn banned_until_time(&self) -> Option<SystemTime> {
+        self.banned_until
+            .map(|millis| UNIX_EPOCH + Duration::from_millis(millis))
+    }
 }
 
 #[derive(Debug)]
@@ -149,7 +201,7 @@ impl AdmissionControl {
         peer: PeerId,
         event: ReputationEvent,
     ) -> Result<ReputationOutcome, PeerstoreError> {
-        let snapshot = match event {
+        let snapshot = match &event {
             ReputationEvent::GossipSuccess { topic } => {
                 let reward = match topic {
                     GossipTopic::Blocks | GossipTopic::Votes => self.gossip_reward * 2.0,
@@ -157,29 +209,31 @@ impl AdmissionControl {
                     GossipTopic::Snapshots => self.gossip_reward * 1.5,
                     GossipTopic::Meta => self.gossip_reward * 0.5,
                 };
-                self.peerstore.update_reputation(peer, reward)?
+                self.peerstore.update_reputation(peer.clone(), reward)?
             }
-            ReputationEvent::UptimeProof => {
-                self.peerstore.update_reputation(peer, self.uptime_reward)?
-            }
-            ReputationEvent::VoteIncluded => {
-                self.peerstore.update_reputation(peer, self.vote_reward)?
-            }
+            ReputationEvent::UptimeProof => self
+                .peerstore
+                .update_reputation(peer.clone(), self.uptime_reward)?,
+            ReputationEvent::VoteIncluded => self
+                .peerstore
+                .update_reputation(peer.clone(), self.vote_reward)?,
             ReputationEvent::Slash { severity, .. } => {
                 let penalty = -(self.slash_penalty * severity.max(1.0));
-                let snapshot = self.peerstore.update_reputation(peer, penalty)?;
+                let snapshot = self.peerstore.update_reputation(peer.clone(), penalty)?;
                 if severity >= 1.0 || snapshot.reputation < DEFAULT_PENALTY_THRESHOLD {
                     let until = SystemTime::now() + self.ban_window;
-                    self.peerstore.ban_peer_until(peer, until)?
+                    self.peerstore.ban_peer_until(peer.clone(), until)?
                 } else {
                     snapshot
                 }
             }
             ReputationEvent::ManualPenalty { amount, .. } => {
-                let snapshot = self.peerstore.update_reputation(peer, -amount.abs())?;
+                let snapshot = self
+                    .peerstore
+                    .update_reputation(peer.clone(), -amount.abs())?;
                 if snapshot.reputation < DEFAULT_PENALTY_THRESHOLD {
                     let until = SystemTime::now() + self.ban_window;
-                    self.peerstore.ban_peer_until(peer, until)?
+                    self.peerstore.ban_peer_until(peer.clone(), until)?
                 } else {
                     snapshot
                 }
@@ -193,7 +247,8 @@ impl AdmissionControl {
 
         Ok(ReputationOutcome {
             snapshot: final_snapshot,
-            label: event.label(),
+            label: event.label().to_string(),
+            event,
         })
     }
 

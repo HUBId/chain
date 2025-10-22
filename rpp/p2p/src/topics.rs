@@ -1,8 +1,11 @@
+use serde::{Deserialize, Serialize};
+
 #[cfg(feature = "gossipsub")]
 use crate::vendor::gossipsub::{IdentTopic, TopicHash};
 
 /// Canonical GossipSub topics used by the RPP network backbone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum GossipTopic {
     Blocks,
     Votes,

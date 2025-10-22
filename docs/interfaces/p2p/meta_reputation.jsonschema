@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/meta_reputation.json",
+  "title": "MetaReputationBroadcast",
+  "type": "object",
+  "required": ["peer", "event", "reputation", "tier", "label"],
+  "properties": {
+    "peer": {
+      "type": "string",
+      "description": "Base58-encoded libp2p peer identifier of the subject node."
+    },
+    "event": {
+      "description": "Reputation event that triggered the broadcast.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "topic"],
+          "properties": {
+            "type": {"const": "gossip_success"},
+            "topic": {
+              "type": "string",
+              "enum": ["blocks", "votes", "proofs", "snapshots", "meta"]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {"type": {"const": "uptime_proof"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {"type": {"const": "vote_included"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "severity", "reason"],
+          "properties": {
+            "type": {"const": "slash"},
+            "severity": {"type": "number", "minimum": 0.0},
+            "reason": {"type": "string"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "amount", "reason"],
+          "properties": {
+            "type": {"const": "manual_penalty"},
+            "amount": {"type": "number", "minimum": 0.0},
+            "reason": {"type": "string"}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "reputation": {
+      "type": "number",
+      "description": "Resulting reputation score for the peer after the event."
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["tl0", "tl1", "tl2", "tl3", "tl4", "tl5"],
+      "description": "Tier level corresponding to the resulting reputation score."
+    },
+    "banned_until": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional UNIX timestamp in milliseconds indicating when a ban expires."
+    },
+    "label": {
+      "type": "string",
+      "description": "Human-readable label for the reputation event."
+    }
+  },
+  "additionalProperties": false
+}

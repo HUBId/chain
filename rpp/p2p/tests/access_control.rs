@@ -1,15 +1,17 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 
 // NOTE: Vendored libp2p types must be used to avoid pulling upstream crates
 // directly into the test harness.
-use rpp_p2p::vendor::{identity, PeerId};
+use jsonschema::JSONSchema;
 use rand::rngs::OsRng;
+use rpp_p2p::vendor::{identity, PeerId};
 use rpp_p2p::{
     AdmissionControl, AdmissionError, GossipTopic, HandshakePayload, IdentityMetadata,
-    IdentityVerifier, Peerstore, PeerstoreConfig, ReputationEvent, TierLevel, TopicPermission,
-    VRF_HANDSHAKE_CONTEXT,
+    IdentityVerifier, Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, TierLevel,
+    TopicPermission, VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 
@@ -152,7 +154,7 @@ fn ban_after_slash_blocks_remote_access() {
             peer,
             ReputationEvent::Slash {
                 severity: 2.0,
-                reason: "double_sign",
+                reason: "double_sign".into(),
             },
         )
         .expect("slash applied");
@@ -164,5 +166,88 @@ fn ban_after_slash_blocks_remote_access() {
             assert!(until > SystemTime::now());
         }
         other => panic!("expected ban, got {other:?}"),
+    }
+}
+
+#[test]
+fn reputation_broadcast_roundtrip_propagates_ban() {
+    let mut rng = OsRng;
+    let vrf_secret = MiniSecretKey::generate_with(&mut rng);
+    let public = vrf_secret
+        .expand_to_keypair(ExpansionMode::Uniform)
+        .public
+        .to_bytes()
+        .to_vec();
+    let verifier = Arc::new(StaticVerifier::new(vec![(
+        "peer".to_string(),
+        public.clone(),
+    )]));
+    let store_a = Arc::new(
+        Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier.clone()))
+            .expect("peerstore"),
+    );
+    let store_b = Arc::new(
+        Peerstore::open(PeerstoreConfig::memory().with_identity_verifier(verifier))
+            .expect("peerstore"),
+    );
+    let control_a = AdmissionControl::new(store_a.clone(), IdentityMetadata::default());
+    let control_b = AdmissionControl::new(store_b.clone(), IdentityMetadata::default());
+
+    let keypair = identity::Keypair::generate_ed25519();
+    let peer = PeerId::from(keypair.public());
+    let handshake = signed_handshake(&keypair, "peer", TierLevel::Tl3, &vrf_secret);
+
+    store_a
+        .record_handshake(peer, &handshake)
+        .expect("handshake");
+    store_b
+        .record_handshake(peer, &handshake)
+        .expect("handshake");
+
+    let outcome = control_a
+        .record_event(
+            peer,
+            ReputationEvent::Slash {
+                severity: 1.5,
+                reason: "double_sign".into(),
+            },
+        )
+        .expect("slash applied");
+
+    let broadcast = ReputationBroadcast::new(&outcome);
+    let encoded = serde_json::to_string(&broadcast).expect("encode broadcast");
+    let decoded: ReputationBroadcast = serde_json::from_str(&encoded).expect("decode broadcast");
+
+    let schema_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("docs/interfaces/p2p/meta_reputation.jsonschema");
+    let schema_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(schema_path).expect("schema"))
+            .expect("schema json");
+    let compiled = JSONSchema::compile(&schema_json).expect("compile schema");
+    let payload_json: serde_json::Value = serde_json::from_str(&encoded).expect("payload json");
+    assert!(compiled.is_valid(&payload_json), "broadcast schema invalid");
+
+    let remote_outcome = control_b
+        .record_event(peer, decoded.event.clone())
+        .expect("apply broadcast event");
+    assert_eq!(decoded.label, outcome.label);
+    assert!(decoded.banned_until.is_some());
+    assert!(remote_outcome.snapshot.banned_until.is_some());
+
+    control_b
+        .peerstore()
+        .set_reputation(peer, decoded.reputation)
+        .expect("set reputation");
+    if let Some(until) = decoded.banned_until_time() {
+        control_b
+            .peerstore()
+            .ban_peer_until(peer, until)
+            .expect("ban update");
+        let updated = control_b
+            .peerstore()
+            .reputation_snapshot(&peer)
+            .expect("snapshot");
+        assert_eq!(updated.banned_until, Some(until));
     }
 }
