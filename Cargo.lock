@@ -4906,6 +4906,7 @@ dependencies = [
  "prover-backend-interface",
  "rand 0.8.5",
  "rpp-identity-tree",
+ "schnorrkel",
  "serde",
  "serde_json",
  "stwo-official",
