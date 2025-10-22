@@ -1,10 +1,11 @@
+use std::convert::TryFrom;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
-use std::convert::TryFrom;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
+use libp2p::PeerId;
 use tempfile::tempdir;
 use tokio::time;
 
@@ -97,8 +98,7 @@ fn random_listen_addr() -> (String, u16) {
 }
 
 fn system_time_to_millis(time: SystemTime) -> u64 {
-    time
-        .duration_since(std::time::UNIX_EPOCH)
+    time.duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
@@ -159,7 +159,11 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
 
     wait_for_peer(&handle_b_runtime, handle_a_runtime.local_peer_id()).await;
 
-    let processor = Arc::new(NodeGossipProcessor::new(handle_b.clone()));
+    let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs.json");
+    let processor = Arc::new(NodeGossipProcessor::new(
+        handle_b.clone(),
+        proof_storage_path,
+    ));
     let gossip_worker = spawn_node_event_worker(handle_b_runtime.subscribe(), processor, None);
 
     let bundle = sample_transaction_bundle(handle_b.address(), 0);
@@ -197,6 +201,43 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
     gossip_worker.await.expect("gossip worker completed")?;
     task_a.await.expect("p2p a completed");
     task_b.await.expect("p2p b completed");
+
+    Ok(())
+}
+
+#[test]
+fn proof_cache_rehydrates_on_restart() -> Result<()> {
+    let dir = tempdir()?;
+    let config = sample_node_config(dir.path());
+    let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+
+    let node = Node::new(config.clone())?;
+    let handle = node.handle();
+    let processor = NodeGossipProcessor::new(handle.clone(), proof_storage_path.clone());
+
+    let bundle = sample_transaction_bundle(handle.address(), 0);
+    let payload = serde_json::to_vec(&bundle)?;
+    let peer = PeerId::random();
+    processor.handle_proof(&peer, &payload)?;
+
+    assert!(proof_storage_path.exists());
+
+    drop(processor);
+    drop(handle);
+    drop(node);
+
+    let node_restarted = Node::new(config.clone())?;
+    let handle_restarted = node_restarted.handle();
+    assert!(handle_restarted.mempool_status()?.transactions.is_empty());
+
+    let _rehydrated =
+        NodeGossipProcessor::new(handle_restarted.clone(), proof_storage_path.clone());
+
+    let mempool = handle_restarted.mempool_status()?;
+    assert_eq!(mempool.transactions.len(), 1);
+    assert_eq!(mempool.transactions[0].hash, bundle.hash());
+
+    drop(node_restarted);
 
     Ok(())
 }
@@ -249,9 +290,8 @@ async fn meta_telemetry_heartbeat_propagates() -> Result<()> {
     let remote_peer = handle_a_runtime.local_peer_id();
     let local_peer = handle_b_runtime.local_peer_id();
 
-    let (remote_sample, local_view): (PeerTelemetry, PeerTelemetry) = time::timeout(
-        Duration::from_secs(10),
-        async {
+    let (remote_sample, local_view): (PeerTelemetry, PeerTelemetry) =
+        time::timeout(Duration::from_secs(10), async {
             let mut remote_measurement: Option<PeerTelemetry> = None;
             loop {
                 match events_b.recv().await {
@@ -292,9 +332,8 @@ async fn meta_telemetry_heartbeat_propagates() -> Result<()> {
                     Err(err) => return Err(err),
                 }
             }
-        },
-    )
-    .await??;
+        })
+        .await??;
 
     assert_eq!(local_view.peer, remote_peer);
     assert_eq!(remote_sample.peer, local_peer);
