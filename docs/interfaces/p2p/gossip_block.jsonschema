@@ -1,0 +1,383 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/gossip_block.json",
+  "title": "GossipBlockProposal",
+  "type": "object",
+  "required": [
+    "header",
+    "identities",
+    "transactions",
+    "uptime_proofs",
+    "timetoke_updates",
+    "reputation_updates",
+    "bft_votes",
+    "module_witnesses",
+    "proof_artifacts",
+    "pruning_proof",
+    "recursive_proof",
+    "stark",
+    "signature",
+    "consensus",
+    "hash",
+    "pruned"
+  ],
+  "properties": {
+    "header": {"$ref": "#/$defs/BlockHeader"},
+    "identities": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/AttestedIdentityRequest"}
+    },
+    "transactions": {
+      "type": "array",
+      "items": {"$ref": "../runtime/signed_transaction.jsonschema"}
+    },
+    "uptime_proofs": {
+      "type": "array",
+      "items": {"$ref": "../runtime/uptime_proof.jsonschema"}
+    },
+    "timetoke_updates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/TimetokeUpdate"}
+    },
+    "reputation_updates": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/ReputationUpdate"}
+    },
+    "bft_votes": {
+      "type": "array",
+      "items": {"$ref": "gossip_vote.jsonschema"}
+    },
+    "module_witnesses": {"$ref": "#/$defs/ModuleWitnessBundle"},
+    "proof_artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/ProofArtifact"}
+    },
+    "pruning_proof": {"$ref": "#/$defs/PruningProof"},
+    "recursive_proof": {"$ref": "#/$defs/RecursiveProof"},
+    "stark": {"$ref": "#/$defs/BlockProofBundle"},
+    "signature": {"type": "string"},
+    "consensus": {"$ref": "#/$defs/ConsensusCertificate"},
+    "consensus_proof": {
+      "anyOf": [
+        {"$ref": "#/$defs/ChainProof"},
+        {"type": "null"}
+      ]
+    },
+    "hash": {"type": "string"},
+    "pruned": {"type": "boolean"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "BlockHeader": {
+      "type": "object",
+      "required": [
+        "height",
+        "previous_hash",
+        "tx_root",
+        "state_root",
+        "utxo_root",
+        "reputation_root",
+        "timetoke_root",
+        "zsi_root",
+        "proof_root",
+        "total_stake",
+        "randomness",
+        "vrf_public_key",
+        "vrf_preoutput",
+        "vrf_proof",
+        "timestamp",
+        "proposer",
+        "leader_tier",
+        "leader_timetoke"
+      ],
+      "properties": {
+        "height": {"type": "integer", "minimum": 0},
+        "previous_hash": {"type": "string"},
+        "tx_root": {"type": "string"},
+        "state_root": {"type": "string"},
+        "utxo_root": {"type": "string"},
+        "reputation_root": {"type": "string"},
+        "timetoke_root": {"type": "string"},
+        "zsi_root": {"type": "string"},
+        "proof_root": {"type": "string"},
+        "total_stake": {"type": "string"},
+        "randomness": {"type": "string"},
+        "vrf_public_key": {"type": "string"},
+        "vrf_preoutput": {"type": "string"},
+        "vrf_proof": {"type": "string"},
+        "timestamp": {"type": "integer", "minimum": 0},
+        "proposer": {"type": "string"},
+        "leader_tier": {"type": "string"},
+        "leader_timetoke": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "AttestedIdentityRequest": {
+      "type": "object",
+      "required": ["declaration", "attested_votes", "gossip_confirmations"],
+      "properties": {
+        "declaration": {"$ref": "#/$defs/IdentityDeclaration"},
+        "attested_votes": {
+          "type": "array",
+          "items": {"$ref": "gossip_vote.jsonschema"}
+        },
+        "gossip_confirmations": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "IdentityDeclaration": {
+      "type": "object",
+      "required": ["genesis", "proof"],
+      "properties": {
+        "genesis": {"$ref": "#/$defs/IdentityGenesis"},
+        "proof": {"$ref": "#/$defs/IdentityProof"}
+      },
+      "additionalProperties": false
+    },
+    "IdentityGenesis": {
+      "type": "object",
+      "required": [
+        "wallet_pk",
+        "wallet_addr",
+        "vrf_public_key",
+        "vrf_proof",
+        "epoch_nonce",
+        "state_root",
+        "identity_root",
+        "initial_reputation",
+        "commitment_proof"
+      ],
+      "properties": {
+        "wallet_pk": {"type": "string"},
+        "wallet_addr": {"type": "string"},
+        "vrf_public_key": {"type": "string"},
+        "vrf_proof": {"$ref": "#/$defs/VrfProof"},
+        "epoch_nonce": {"type": "string"},
+        "state_root": {"type": "string"},
+        "identity_root": {"type": "string"},
+        "initial_reputation": {"type": "integer"},
+        "commitment_proof": {"$ref": "#/$defs/IdentityCommitmentProof"}
+      },
+      "additionalProperties": false
+    },
+    "IdentityProof": {
+      "type": "object",
+      "required": ["commitment", "zk_proof"],
+      "properties": {
+        "commitment": {"type": "string"},
+        "zk_proof": {"$ref": "#/$defs/ChainProof"}
+      },
+      "additionalProperties": false
+    },
+    "IdentityCommitmentProof": {
+      "type": "object",
+      "required": ["leaf", "siblings"],
+      "properties": {
+        "leaf": {"type": "string"},
+        "siblings": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "VrfProof": {
+      "type": "object",
+      "required": ["randomness", "preoutput", "proof"],
+      "properties": {
+        "randomness": {"type": "string"},
+        "preoutput": {"type": "string"},
+        "proof": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "TimetokeUpdate": {
+      "type": "object",
+      "required": ["identity", "window_start", "window_end", "credited_hours"],
+      "properties": {
+        "identity": {"type": "string"},
+        "window_start": {"type": "integer", "minimum": 0},
+        "window_end": {"type": "integer", "minimum": 0},
+        "credited_hours": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "ReputationUpdate": {
+      "type": "object",
+      "required": [
+        "identity",
+        "new_score",
+        "new_tier",
+        "uptime_hours",
+        "consensus_success",
+        "peer_feedback",
+        "zsi_validated"
+      ],
+      "properties": {
+        "identity": {"type": "string"},
+        "new_score": {"type": "number"},
+        "new_tier": {"type": "string"},
+        "uptime_hours": {"type": "integer", "minimum": 0},
+        "consensus_success": {"type": "integer", "minimum": 0},
+        "peer_feedback": {"type": "integer"},
+        "zsi_validated": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "ModuleWitnessBundle": {
+      "type": "object",
+      "required": ["transactions", "timetoke", "reputation", "zsi", "consensus"],
+      "properties": {
+        "transactions": {"type": "array", "items": {"type": "object"}},
+        "timetoke": {"type": "array", "items": {"type": "object"}},
+        "reputation": {"type": "array", "items": {"type": "object"}},
+        "zsi": {"type": "array", "items": {"type": "object"}},
+        "consensus": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": false
+    },
+    "ProofArtifact": {
+      "type": "object",
+      "required": ["module", "commitment", "proof"],
+      "properties": {
+        "module": {
+          "type": "string",
+          "enum": [
+            "BlockTransition",
+            "Utxo",
+            "Reputation",
+            "Timetoke",
+            "Zsi",
+            "Consensus",
+            "UtxoWitness",
+            "ReputationWitness",
+            "TimetokeWitness",
+            "ZsiWitness",
+            "ConsensusWitness",
+            "BlockWitness"
+          ]
+        },
+        "commitment": {
+          "type": "array",
+          "minItems": 32,
+          "maxItems": 32,
+          "items": {"type": "integer", "minimum": 0, "maximum": 255}
+        },
+        "proof": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0, "maximum": 255}
+        },
+        "verification_key": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {"type": "integer", "minimum": 0, "maximum": 255}
+            },
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "PruningProof": {
+      "type": "object",
+      "required": [
+        "pruned_height",
+        "previous_block_hash",
+        "previous_state_root",
+        "pruned_tx_root",
+        "resulting_state_root",
+        "witness_commitment"
+      ],
+      "properties": {
+        "pruned_height": {"type": "integer", "minimum": 0},
+        "previous_block_hash": {"type": "string"},
+        "previous_state_root": {"type": "string"},
+        "pruned_tx_root": {"type": "string"},
+        "resulting_state_root": {"type": "string"},
+        "witness_commitment": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "RecursiveProof": {
+      "type": "object",
+      "required": ["system", "commitment", "proof"],
+      "properties": {
+        "system": {"type": "string"},
+        "commitment": {"type": "string"},
+        "previous_commitment": {
+          "anyOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "proof": {"$ref": "#/$defs/ChainProof"}
+      },
+      "additionalProperties": false
+    },
+    "BlockProofBundle": {
+      "type": "object",
+      "required": [
+        "transaction_proofs",
+        "state_proof",
+        "pruning_proof",
+        "recursive_proof"
+      ],
+      "properties": {
+        "transaction_proofs": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ChainProof"}
+        },
+        "state_proof": {"$ref": "#/$defs/ChainProof"},
+        "pruning_proof": {"$ref": "#/$defs/ChainProof"},
+        "recursive_proof": {"$ref": "#/$defs/ChainProof"}
+      },
+      "additionalProperties": false
+    },
+    "ChainProof": {
+      "type": "object",
+      "description": "Backend-specific proof artifact"
+    },
+    "ConsensusCertificate": {
+      "type": "object",
+      "required": [
+        "round",
+        "total_power",
+        "quorum_threshold",
+        "pre_vote_power",
+        "pre_commit_power",
+        "commit_power",
+        "observers",
+        "pre_votes",
+        "pre_commits"
+      ],
+      "properties": {
+        "round": {"type": "integer", "minimum": 0},
+        "total_power": {"type": "string"},
+        "quorum_threshold": {"type": "string"},
+        "pre_vote_power": {"type": "string"},
+        "pre_commit_power": {"type": "string"},
+        "commit_power": {"type": "string"},
+        "observers": {"type": "integer", "minimum": 0},
+        "pre_votes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ConsensusVoteRecord"}
+        },
+        "pre_commits": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/ConsensusVoteRecord"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "ConsensusVoteRecord": {
+      "type": "object",
+      "required": ["vote", "weight"],
+      "properties": {
+        "vote": {"$ref": "gossip_vote.jsonschema"},
+        "weight": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

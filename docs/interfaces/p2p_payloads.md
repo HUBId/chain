@@ -5,6 +5,8 @@ Gossip and state sync exchanges rely on structured payloads shared between nodes
 | Topic | Schema | Example |
 | ----- | ------ | ------- |
 | Global state commitments | [`network_global_state_commitments.jsonschema`](p2p/network_global_state_commitments.jsonschema) | [`examples/network_global_state_commitments.json`](p2p/examples/network_global_state_commitments.json) |
+| Block proposal gossip | [`gossip_block.jsonschema`](p2p/gossip_block.jsonschema) | [`examples/gossip_block.json`](p2p/examples/gossip_block.json) |
+| Vote gossip | [`gossip_vote.jsonschema`](p2p/gossip_vote.jsonschema) | [`examples/gossip_vote.json`](p2p/examples/gossip_vote.json) |
 | Block metadata | [`network_block_metadata.jsonschema`](p2p/network_block_metadata.jsonschema) | [`examples/network_block_metadata.json`](p2p/examples/network_block_metadata.json) |
 | Payload expectations | [`network_payload_expectations.jsonschema`](p2p/network_payload_expectations.jsonschema) | [`examples/network_payload_expectations.json`](p2p/examples/network_payload_expectations.json) |
 | Reconstruction request | [`network_reconstruction_request.jsonschema`](p2p/network_reconstruction_request.jsonschema) | [`examples/network_reconstruction_request.json`](p2p/examples/network_reconstruction_request.json) |

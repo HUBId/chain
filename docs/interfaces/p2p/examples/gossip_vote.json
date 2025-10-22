@@ -1,0 +1,11 @@
+{
+  "vote": {
+    "round": 4,
+    "height": 12,
+    "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "voter": "validator-addr-01",
+    "kind": "PreVote"
+  },
+  "public_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "signature": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}
