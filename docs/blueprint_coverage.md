@@ -62,7 +62,7 @@ progress without digging into the Rust module:
 
 | Workstream | Blueprint keys | Status |
 | --- | --- | --- |
-| Firewood ↔ STWO interfaces | `state.lifecycle_api`, `state.block_metadata`, `state.pruning_jobs` | Todo【F:rpp/proofs/blueprint/mod.rs†L110-L127】 |
+| Firewood ↔ STWO interfaces | `state.lifecycle_api`, `state.block_metadata`, `state.pruning_jobs` | Lifecycle-Trait und Block-Metadaten werden inzwischen implementiert und getestet; Pruning-Jobs stehen weiter aus.【F:rpp/storage/state/lifecycle.rs†L11-L218】【F:rpp/storage/mod.rs†L277-L335】【F:rpp/proofs/blueprint/mod.rs†L110-L127】 |
 | Wallet/STWO workflows | `wallet.utxo_policies`, `wallet.zsi_workflow`, `wallet.stwo_circuits`, `wallet.uptime_proofs` | Todo【F:rpp/proofs/blueprint/mod.rs†L135-L157】 |
 | Plonky3 backend enablement | Roadmap Schritt 3 (Proof system phase) | Todo【F:docs/roadmap_implementation_plan.md†L19-L77】 |
 

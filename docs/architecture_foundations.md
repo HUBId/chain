@@ -15,6 +15,8 @@
 - Die Firewood-gestützte Storage-Schicht persistiert Accounts, Blöcke und Metadaten samt Pruner, während Block-Header State-/Proof-Wurzeln, VRF-Metriken und Timetoke-Deltas transportieren.【F:rpp/storage/mod.rs†L15-L139】【F:rpp/runtime/types/block.rs†L37-L149】
 - `ChainProof` abstrahiert STWO-, Plonky3- und RPP-STARK-Bundles und erlaubt dem Node, Zeugen und Payloads je Backend zu verwalten.【F:rpp/runtime/types/proofs.rs†L11-L118】【F:rpp/runtime/node.rs†L120-L183】
 - Das Axum-basierte HTTP-Interface exporiert Status-, Submit- und Telemetrie-Endpunkte für Wallet-, Konsens- und Uptime-Flows und greift dabei auf `NodeHandle` zu.【F:rpp/rpc/api.rs†L1-L208】【F:rpp/runtime/node.rs†L1359-L1506】
+- `StateLifecycleService` kapselt `apply_block`, `prove_transition` und `verify_transition` und erleichtert so Tests für fehlerhafte STWO-Payloads sowie alternative Implementierungen.【F:rpp/storage/state/lifecycle.rs†L11-L153】
+- `Storage::read_block_metadata` liefert pro Block erweiterte Metadaten inklusive Proof-Hash und Rekursionsanker; die P2P-Schemata spiegeln die zusätzlichen Felder wider.【F:rpp/storage/mod.rs†L277-L335】【F:docs/interfaces/p2p/network_block_metadata.jsonschema†L1-L17】
 
 > **Hinweis (Storage-Übergang 2024):** Die ursprüngliche RocksDB-Schicht wurde durch den Firewood-Stack (append-only KV, WAL, Pruner) ersetzt. Historische Deployments erfordern daher eine Migration auf das Firewood-Schema, bevor neue Builds gestartet werden.【F:rpp/storage/mod.rs†L43-L132】【F:storage-firewood/src/kv.rs†L41-L118】
 
@@ -78,3 +80,4 @@ Aktuelle JSON-Schema-Snapshots für diese Payloads sowie RPC- und P2P-Themen lie
 2. **`wallet-workflows`-Tasks:** UTXO/Tier-Policies finalisieren, ZSI-Attestierungsflow dokumentieren und Uptime-Proofs end-to-end testen.
 3. **`libp2p` & `vrf` Tasks:** Gossip-Admission-Control, Snapshot-Sync sowie Epoch-/VRF-Verteilung an den Sequenzfluss ankoppeln und Telemetrie ausbauen.
 4. **`block-lifecycle` & `testing`:** Pipeline-Orchestrierung für Blockproduktion vs. Light-Client-Sync beschreiben und Test-/Simulationsabdeckung nach Blueprint-Anforderungen ausweiten.
+5. **Lifecycle-Testabdeckung:** Unit- und Integrationstests prüfen STWO-Negativpfade sowie Firewood-Metadaten-Backfills.【F:rpp/storage/state/lifecycle.rs†L155-L218】【F:tests/storage_block_metadata.rs†L109-L143】

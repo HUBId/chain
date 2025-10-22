@@ -3,11 +3,23 @@
   "$id": "https://schemas.rpp.dev/p2p/network_block_metadata.json",
   "title": "NetworkBlockMetadata",
   "type": "object",
-  "required": ["height", "hash", "timestamp"],
+  "required": [
+    "height",
+    "hash",
+    "timestamp",
+    "previous_state_root",
+    "new_state_root",
+    "proof_hash",
+    "recursion_anchor"
+  ],
   "properties": {
     "height": {"type": "integer", "minimum": 0},
     "hash": {"type": "string"},
-    "timestamp": {"type": "integer", "minimum": 0}
+    "timestamp": {"type": "integer", "minimum": 0},
+    "previous_state_root": {"type": "string"},
+    "new_state_root": {"type": "string"},
+    "proof_hash": {"type": "string"},
+    "recursion_anchor": {"type": "string"}
   },
   "additionalProperties": false
 }
