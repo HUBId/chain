@@ -26,7 +26,7 @@ use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
     NodeTelemetrySnapshot, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
-    UptimeSchedulerStatus, VrfStatus,
+    UptimeSchedulerStatus, VrfStatus, DEFAULT_STATE_SYNC_CHUNK,
 };
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
@@ -34,6 +34,7 @@ use crate::rpp::TimetokeRecord;
 use crate::runtime::RuntimeMode;
 use crate::runtime::config::QueueWeightsConfig;
 use crate::sync::ReconstructionPlan;
+use rpp_p2p::{NetworkStateSyncChunk, NetworkStateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
     TransactionProofBundle, UptimeProof,
@@ -419,6 +420,11 @@ struct SnapshotPlanQuery {
 }
 
 #[derive(Deserialize)]
+struct StateSyncChunkQuery {
+    start: u64,
+}
+
+#[derive(Deserialize)]
 struct SubmitUptimeRequest {
     proof: Option<UptimeProof>,
 }
@@ -531,6 +537,8 @@ pub async fn serve(
         .route("/proofs/block/:height", get(block_proofs))
         .route("/snapshots/plan", get(snapshot_plan))
         .route("/snapshots/jobs", get(snapshot_jobs))
+        .route("/state-sync/plan", get(state_sync_plan))
+        .route("/state-sync/chunk", get(state_sync_chunk))
         .route("/validator/telemetry", get(validator_telemetry))
         .route("/validator/vrf", get(validator_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
@@ -814,6 +822,27 @@ async fn snapshot_jobs(
 ) -> Result<Json<Option<PruningJobStatus>>, (StatusCode, Json<ErrorResponse>)> {
     let status = state.require_node()?.pruning_job_status();
     Ok(Json(status))
+}
+
+async fn state_sync_plan(
+    State(state): State<ApiContext>,
+) -> Result<Json<NetworkStateSyncPlan>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .require_node()?
+        .network_state_sync_plan(DEFAULT_STATE_SYNC_CHUNK)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn state_sync_chunk(
+    State(state): State<ApiContext>,
+    Query(query): Query<StateSyncChunkQuery>,
+) -> Result<Json<NetworkStateSyncChunk>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .require_node()?
+        .network_state_sync_chunk(DEFAULT_STATE_SYNC_CHUNK, query.start)
+        .map(Json)
+        .map_err(to_http_error)
 }
 
 async fn validator_telemetry(

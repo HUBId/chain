@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use base64::{engine::general_purpose, Engine as _};
 use hex;
 use serde::Serialize;
 
@@ -14,7 +15,11 @@ use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
 use crate::types::StoredBlock;
 use crate::types::{Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem, RecursiveProof};
-use rpp_p2p::{PipelineError, RecursiveProofVerifier};
+use rpp_p2p::{
+    NetworkBlockMetadata, NetworkGlobalStateCommitments, NetworkLightClientUpdate,
+    NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError, RecursiveProofVerifier,
+};
 
 #[derive(Clone, Debug)]
 pub struct RuntimeRecursiveProofVerifier {
@@ -230,6 +235,87 @@ pub struct StateSyncPlan {
     pub tip: BlockMetadata,
     pub chunks: Vec<StateSyncChunk>,
     pub light_client_updates: Vec<LightClientUpdate>,
+}
+
+impl StateSyncPlan {
+    pub fn to_network_plan(&self) -> ChainResult<NetworkStateSyncPlan> {
+        let snapshot = NetworkSnapshotSummary {
+            height: self.snapshot.height,
+            block_hash: self.snapshot.block_hash.clone(),
+            commitments: encode_global_commitments(&self.snapshot.commitments),
+            chain_commitment: self.snapshot.chain_commitment.clone(),
+        };
+        let chunks = self
+            .chunks
+            .iter()
+            .map(|chunk| NetworkStateSyncChunk {
+                start_height: chunk.start_height,
+                end_height: chunk.end_height,
+                requests: chunk
+                    .requests
+                    .iter()
+                    .map(encode_reconstruction_request)
+                    .collect(),
+                proofs: Vec::new(),
+            })
+            .collect();
+        let mut updates = Vec::with_capacity(self.light_client_updates.len());
+        let mut previous_commitment = Some(self.snapshot.chain_commitment.clone());
+        for update in &self.light_client_updates {
+            let commitment = recursive_commitment(&update.recursive_proof)?;
+            updates.push(NetworkLightClientUpdate {
+                height: update.height,
+                block_hash: update.block_hash.clone(),
+                state_root: update.state_root.clone(),
+                proof_commitment: commitment.clone(),
+                previous_commitment: previous_commitment.clone(),
+                recursive_proof: String::new(),
+            });
+            previous_commitment = Some(commitment);
+        }
+        Ok(NetworkStateSyncPlan {
+            snapshot,
+            tip: encode_block_metadata(&self.tip),
+            chunks,
+            light_client_updates: updates,
+        })
+    }
+
+    pub fn chunk_messages(&self) -> ChainResult<Vec<NetworkStateSyncChunk>> {
+        self.chunks.iter().map(encode_chunk).collect()
+    }
+
+    pub fn chunk_message_for(&self, start_height: u64) -> ChainResult<NetworkStateSyncChunk> {
+        let chunk = self
+            .chunks
+            .iter()
+            .find(|chunk| chunk.start_height == start_height)
+            .ok_or_else(|| {
+                ChainError::Config(format!(
+                    "state sync chunk starting at {start_height} not found"
+                ))
+            })?;
+        encode_chunk(chunk)
+    }
+
+    pub fn light_client_messages(&self) -> ChainResult<Vec<NetworkLightClientUpdate>> {
+        let mut updates = Vec::with_capacity(self.light_client_updates.len());
+        let mut previous_commitment = Some(self.snapshot.chain_commitment.clone());
+        for update in &self.light_client_updates {
+            let commitment = recursive_commitment(&update.recursive_proof)?;
+            let proof_bytes = encode_recursive_proof(&update.recursive_proof)?;
+            updates.push(NetworkLightClientUpdate {
+                height: update.height,
+                block_hash: update.block_hash.clone(),
+                state_root: update.state_root.clone(),
+                proof_commitment: commitment.clone(),
+                previous_commitment: previous_commitment.clone(),
+                recursive_proof: proof_bytes,
+            });
+            previous_commitment = Some(commitment);
+        }
+        Ok(updates)
+    }
 }
 
 impl ReconstructionEngine {
@@ -539,6 +625,106 @@ fn decode_digest(value: &str) -> ChainResult<[u8; 32]> {
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&bytes);
     Ok(digest)
+}
+
+fn encode_global_commitments(
+    commitments: &GlobalStateCommitments,
+) -> NetworkGlobalStateCommitments {
+    NetworkGlobalStateCommitments {
+        global_state_root: hex::encode(commitments.global_state_root),
+        utxo_root: hex::encode(commitments.utxo_root),
+        reputation_root: hex::encode(commitments.reputation_root),
+        timetoke_root: hex::encode(commitments.timetoke_root),
+        zsi_root: hex::encode(commitments.zsi_root),
+        proof_root: hex::encode(commitments.proof_root),
+    }
+}
+
+fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
+    NetworkBlockMetadata {
+        height: metadata.height,
+        hash: metadata.hash.clone(),
+        timestamp: metadata.timestamp,
+        previous_state_root: metadata.previous_state_root.clone(),
+        new_state_root: metadata.new_state_root.clone(),
+        proof_hash: metadata.proof_hash.clone(),
+        recursion_anchor: metadata.recursive_anchor.clone(),
+    }
+}
+
+fn encode_payload_expectations(expectations: &PayloadExpectations) -> NetworkPayloadExpectations {
+    NetworkPayloadExpectations {
+        transaction_proofs: expectations.transaction_proofs,
+        transaction_witnesses: expectations.transaction_witnesses,
+        timetoke_witnesses: expectations.timetoke_witnesses,
+        reputation_witnesses: expectations.reputation_witnesses,
+        zsi_witnesses: expectations.zsi_witnesses,
+        consensus_witnesses: expectations.consensus_witnesses,
+    }
+}
+
+fn encode_reconstruction_request(
+    request: &ReconstructionRequest,
+) -> NetworkReconstructionRequest {
+    NetworkReconstructionRequest {
+        height: request.height,
+        block_hash: request.block_hash.clone(),
+        tx_root: request.tx_root.clone(),
+        state_root: request.state_root.clone(),
+        utxo_root: request.utxo_root.clone(),
+        reputation_root: request.reputation_root.clone(),
+        timetoke_root: request.timetoke_root.clone(),
+        zsi_root: request.zsi_root.clone(),
+        proof_root: request.proof_root.clone(),
+        pruning_commitment: request.pruning_commitment.clone(),
+        aggregated_commitment: request.aggregated_commitment.clone(),
+        previous_commitment: request.previous_commitment.clone(),
+        payload_expectations: encode_payload_expectations(&request.payload_expectations),
+    }
+}
+
+fn encode_chunk(chunk: &StateSyncChunk) -> ChainResult<NetworkStateSyncChunk> {
+    let requests = chunk
+        .requests
+        .iter()
+        .map(encode_reconstruction_request)
+        .collect();
+    let mut proofs = Vec::with_capacity(chunk.requests.len());
+    for request in &chunk.requests {
+        proofs.push(aggregated_commitment_base64(&request.aggregated_commitment)?);
+    }
+    Ok(NetworkStateSyncChunk {
+        start_height: chunk.start_height,
+        end_height: chunk.end_height,
+        requests,
+        proofs,
+    })
+}
+
+fn aggregated_commitment_base64(value: &str) -> ChainResult<String> {
+    let digest = decode_digest(value)?;
+    Ok(general_purpose::STANDARD.encode(digest))
+}
+
+fn recursive_commitment(proof: &ChainProof) -> ChainResult<String> {
+    match proof {
+        ChainProof::Stwo(proof) => Ok(proof.commitment.clone()),
+        #[cfg(feature = "backend-plonky3")]
+        ChainProof::Plonky3(_) => Err(ChainError::Config(
+            "plonky3 recursive proofs are not supported for state sync gossip".into(),
+        )),
+        #[cfg(feature = "backend-rpp-stark")]
+        ChainProof::RppStark(_) => Err(ChainError::Config(
+            "rpp-stark recursive proofs are not supported for state sync gossip".into(),
+        )),
+    }
+}
+
+fn encode_recursive_proof(proof: &ChainProof) -> ChainResult<String> {
+    let bytes = serde_json::to_vec(proof).map_err(|err| {
+        ChainError::Config(format!("failed to serialise recursive proof: {err}"))
+    })?;
+    Ok(general_purpose::STANDARD.encode(bytes))
 }
 
 #[cfg(test)]

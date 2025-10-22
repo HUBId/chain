@@ -83,10 +83,14 @@ use crate::vrf::{
 use crate::zk::rpp_adapter::compute_public_digest;
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
-use rpp_p2p::{GossipTopic, HandshakePayload, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT};
+use rpp_p2p::{
+    GossipTopic, HandshakePayload, NetworkLightClientUpdate, NetworkStateSyncChunk,
+    NetworkStateSyncPlan, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT,
+};
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
+pub const DEFAULT_STATE_SYNC_CHUNK: usize = 16;
 #[derive(Clone, Copy)]
 struct ChainTip {
     height: u64,
@@ -1522,6 +1526,26 @@ impl NodeHandle {
         self.inner.pruning_job_status()
     }
 
+    pub fn state_sync_plan(&self, chunk_size: usize) -> ChainResult<StateSyncPlan> {
+        self.inner.state_sync_plan(chunk_size)
+    }
+
+    pub fn network_state_sync_plan(
+        &self,
+        chunk_size: usize,
+    ) -> ChainResult<NetworkStateSyncPlan> {
+        self.inner.network_state_sync_plan(chunk_size)
+    }
+
+    pub fn network_state_sync_chunk(
+        &self,
+        chunk_size: usize,
+        start_height: u64,
+    ) -> ChainResult<NetworkStateSyncChunk> {
+        self.inner
+            .network_state_sync_chunk(chunk_size, start_height)
+    }
+
     pub fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
         self.inner.reconstruction_plan(start_height)
     }
@@ -1570,6 +1594,46 @@ impl NodeInner {
         match serde_json::to_vec(payload) {
             Ok(bytes) => self.emit_witness_bytes(topic, bytes),
             Err(err) => debug!(?err, ?topic, "failed to encode witness gossip payload"),
+        }
+    }
+
+    fn emit_state_sync_artifacts(&self) {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return;
+        }
+        let engine = ReconstructionEngine::new(self.storage.clone());
+        let plan = match engine.state_sync_plan(DEFAULT_STATE_SYNC_CHUNK) {
+            Ok(plan) => plan,
+            Err(err) => {
+                warn!(?err, "failed to build state sync plan for gossip");
+                return;
+            }
+        };
+        let summary = match plan.to_network_plan() {
+            Ok(summary) => summary,
+            Err(err) => {
+                warn!(?err, "failed to encode state sync plan for gossip");
+                return;
+            }
+        };
+        self.emit_witness_json(GossipTopic::Snapshots, &summary);
+
+        match plan.chunk_messages() {
+            Ok(chunks) => {
+                for chunk in chunks {
+                    self.emit_witness_json(GossipTopic::Snapshots, &chunk);
+                }
+            }
+            Err(err) => warn!(?err, "failed to encode state sync chunks for gossip"),
+        }
+
+        match plan.light_client_messages() {
+            Ok(updates) => {
+                for update in updates {
+                    self.emit_witness_json(GossipTopic::Snapshots, &update);
+                }
+            }
+            Err(err) => warn!(?err, "failed to encode light client updates for gossip"),
         }
     }
 
@@ -2228,6 +2292,33 @@ impl NodeInner {
 
     fn pruning_job_status(&self) -> Option<PruningJobStatus> {
         self.pruning_status.read().clone()
+    }
+
+    fn state_sync_plan(&self, chunk_size: usize) -> ChainResult<StateSyncPlan> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let engine = ReconstructionEngine::new(self.storage.clone());
+        engine.state_sync_plan(chunk_size)
+    }
+
+    fn network_state_sync_plan(
+        &self,
+        chunk_size: usize,
+    ) -> ChainResult<NetworkStateSyncPlan> {
+        let plan = self.state_sync_plan(chunk_size)?;
+        plan.to_network_plan()
+    }
+
+    fn network_state_sync_chunk(
+        &self,
+        chunk_size: usize,
+        start_height: u64,
+    ) -> ChainResult<NetworkStateSyncChunk> {
+        let plan = self.state_sync_plan(chunk_size)?;
+        plan.chunk_message_for(start_height)
     }
 
     fn verify_proof_chain(&self) -> ChainResult<()> {
@@ -3808,6 +3899,7 @@ impl NodeInner {
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
         self.update_runtime_metrics();
+        self.emit_state_sync_artifacts();
 
         Ok(FinalizationOutcome::Sealed {
             tip_height: block.header.height,
@@ -4113,6 +4205,7 @@ impl NodeInner {
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
         self.update_runtime_metrics();
+        self.emit_state_sync_artifacts();
 
         Ok(FinalizationOutcome::Sealed {
             tip_height: block.header.height,

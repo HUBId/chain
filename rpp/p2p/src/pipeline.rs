@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::vendor::PeerId;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -789,9 +789,10 @@ impl LightClientSync {
         }
         let mut proofs = Vec::with_capacity(chunk.proofs.len());
         for proof in &chunk.proofs {
-            proofs.push(decode_hex_digest(proof)?);
+            proofs.push(decode_base64_digest(proof)?);
         }
-        let root = compute_merkle_root(&mut proofs);
+        let mut leaves = proofs;
+        let root = compute_merkle_root(&mut leaves);
         if root != expected.expected_root {
             return Err(PipelineError::SnapshotVerification(format!(
                 "chunk root mismatch for start {}",
@@ -976,9 +977,24 @@ fn decode_hex_digest(value: &str) -> Result<[u8; 32], PipelineError> {
     Ok(digest)
 }
 
+fn decode_base64_digest(value: &str) -> Result<[u8; 32], PipelineError> {
+    let bytes = general_purpose::STANDARD
+        .decode(value.as_bytes())
+        .map_err(|err| PipelineError::Validation(format!("invalid base64 digest: {err}")))?;
+    if bytes.len() != 32 {
+        return Err(PipelineError::SnapshotVerification(format!(
+            "expected 32-byte digest, received {} bytes",
+            bytes.len()
+        )));
+    }
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(&bytes);
+    Ok(digest)
+}
+
 fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
-    use blake2::Blake2s256;
     use blake2::digest::Digest;
+    use blake2::Blake2s256;
 
     if leaves.is_empty() {
         let mut hasher = Blake2s256::new();
@@ -1085,11 +1101,9 @@ mod tests {
 
         let peer: PeerId = PeerId::random();
         let payload = b"proof-payload".to_vec();
-        assert!(
-            pipeline
-                .ingest(peer, GossipTopic::Proofs, payload.clone())
-                .unwrap()
-        );
+        assert!(pipeline
+            .ingest(peer, GossipTopic::Proofs, payload.clone())
+            .unwrap());
         assert_eq!(pipeline.len(), 1);
         assert_eq!(*validator.0.lock(), 1);
 
@@ -1263,7 +1277,10 @@ mod tests {
             start_height: 0,
             end_height: 1,
             requests: plan.chunks[0].requests.clone(),
-            proofs: vec![hex::encode(aggregated_one), hex::encode(aggregated_two)],
+            proofs: vec![
+                general_purpose::STANDARD.encode(aggregated_one),
+                general_purpose::STANDARD.encode(aggregated_two),
+            ],
         })
         .expect("chunk encode");
         client.ingest_chunk(&chunk_payload).expect("chunk");
@@ -1310,8 +1327,8 @@ mod interface_schemas {
         NetworkStateSyncPlan,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::Serialize;
     use serde::de::DeserializeOwned;
+    use serde::Serialize;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
