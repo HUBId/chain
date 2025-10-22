@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" font-family="Arial,Helvetica,sans-serif">
+  <rect x="40" y="120" width="180" height="80" rx="12" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2"/>
+  <text x="130" y="155" text-anchor="middle" font-size="16">Wallet UI / CLI</text>
+  <rect x="260" y="110" width="220" height="100" rx="12" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+  <text x="370" y="150" text-anchor="middle" font-size="16">WalletProver</text>
+  <text x="370" y="170" text-anchor="middle" font-size="14">rpp::stwo::prover</text>
+  <rect x="520" y="100" width="240" height="120" rx="12" fill="#ffe6cc" stroke="#d79b00" stroke-width="2"/>
+  <text x="640" y="145" text-anchor="middle" font-size="16">NodeHandle &amp; NodeInner</text>
+  <text x="640" y="165" text-anchor="middle" font-size="14">rpp::runtime::node</text>
+  <rect x="800" y="100" width="240" height="120" rx="12" fill="#f8cecc" stroke="#b85450" stroke-width="2"/>
+  <text x="920" y="145" text-anchor="middle" font-size="16">Storage &amp; Ledger</text>
+  <text x="920" y="165" text-anchor="middle" font-size="14">rpp::storage, rpp::ledger</text>
+  <rect x="1080" y="110" width="200" height="100" rx="12" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <text x="1180" y="150" text-anchor="middle" font-size="16">Proof Registry</text>
+  <text x="1180" y="170" text-anchor="middle" font-size="14">ProofVerifierRegistry</text>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="10" refY="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1a1a1a"/>
+    </marker>
+    <marker id="open" markerWidth="12" markerHeight="12" refX="12" refY="6" orient="auto">
+      <path d="M 12 0 L 0 6 L 12 12" fill="none" stroke="#1a1a1a" stroke-width="2"/>
+    </marker>
+  </defs>
+  <line x1="220" y1="160" x2="260" y2="160" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="240" y="150" text-anchor="middle" font-size="12">1. Build tx/ID</text>
+  <line x1="480" y1="160" x2="520" y2="160" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="500" y="150" text-anchor="middle" font-size="12">2. Witness + proof payload</text>
+  <line x1="760" y1="160" x2="800" y2="160" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="780" y="150" text-anchor="middle" font-size="12">3. Submit API</text>
+  <line x1="1040" y1="160" x2="1080" y2="160" stroke="#1a1a1a" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="1060" y="150" text-anchor="middle" font-size="12">4. Persist bundle</text>
+  <line x1="1080" y1="210" x2="760" y2="210" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="920" y="230" text-anchor="middle" font-size="12">5. Register proof, telemetry</text>
+  <line x1="520" y1="230" x2="220" y2="230" stroke="#1a1a1a" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#open)"/>
+  <text x="370" y="250" text-anchor="middle" font-size="12">6. Status update</text>
+</svg>

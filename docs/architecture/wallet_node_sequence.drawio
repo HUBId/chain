@@ -1,0 +1,43 @@
+<mxfile host="app.diagrams.net" modified="2024-05-29T00:00:00.000Z" agent="5.0 (macOS)">
+  <diagram id="wNs6YfFbA8J5jGJ4bhbS" name="Wallet→Node Sequence">
+    <mxGraphModel dx="1420" dy="830" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="wallet" value="Wallet UI / CLI" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="60" y="120" width="160" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="prover" value="WalletProver\n(rpp::stwo::prover)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="120" width="200" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="node" value="NodeHandle &amp; NodeInner\n(rpp::runtime::node)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="540" y="120" width="220" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="storage" value="Storage &amp; Ledger\n(rpp::storage, rpp::ledger)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="820" y="120" width="220" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="verifier" value="Proof Registry\n(ProofVerifierRegistry)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="120" width="200" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge1" value="1. Build transaction / identity request" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="wallet" target="prover" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge2" value="2. Derive witnesses &amp; STWO proof payload" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="prover" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge3" value="3. Submit via NodeHandle APIs" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="storage" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge4" value="4. Persist bundle &amp; update ledger" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="storage" target="verifier" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge5" value="5. Register proof &amp; expose telemetry" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="verifier" target="node" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge6" value="6. Status update to wallet" style="endArrow=open;dashed=1;html=1;strokeWidth=2;fontSize=12;" edge="1" source="node" target="wallet" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
