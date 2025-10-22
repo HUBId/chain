@@ -10,7 +10,7 @@ const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
 const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
 
 /// Errors that can be produced while manipulating the identity commitment tree.
-#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone)]
 pub enum IdentityTreeError {
     /// Raised when a hex string fails to decode.
     #[error("invalid {label} encoding: {source}")]
