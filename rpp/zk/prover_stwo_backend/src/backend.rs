@@ -720,6 +720,7 @@ mod tests {
     use super::keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
     use super::*;
     use crate::crypto::address_from_public_key;
+    use crate::identity_tree::IDENTITY_TREE_DEPTH;
     use crate::official::circuit::consensus::{ConsensusWitness, VotePower};
     use crate::official::circuit::identity::IdentityWitness;
     use crate::official::circuit::pruning::PruningWitness;
@@ -733,6 +734,7 @@ mod tests {
     use crate::reputation::{ReputationWeights, Tier};
     use crate::state::compute_merkle_root;
     use crate::types::{Account, Stake, Transaction, UptimeProof};
+    use crate::vrf::VRF_PROOF_LENGTH;
     use ed25519_dalek::{Keypair, Signer};
     use prover_backend_interface::{
         ConsensusCircuitDef, ConsensusPublicInputs, IdentityPublicInputs, ProofSystemKind,
@@ -741,8 +743,6 @@ mod tests {
     };
     use rand::{rngs::StdRng, SeedableRng};
 
-    const VRF_PROOF_LENGTH: usize = 80;
-    const IDENTITY_TREE_DEPTH: usize = 32;
     const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
     const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
 
