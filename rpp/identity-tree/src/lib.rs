@@ -1,13 +1,40 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::errors::{ChainError, ChainResult};
-use hex;
-use crate::proof_backend::Blake2sHasher;
+use prover_backend_interface::Blake2sHasher;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// Depth of the sparse identity commitment tree.
 pub const IDENTITY_TREE_DEPTH: usize = 32;
 const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
 const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
+
+/// Errors that can be produced while manipulating the identity commitment tree.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum IdentityTreeError {
+    /// Raised when a hex string fails to decode.
+    #[error("invalid {label} encoding: {source}")]
+    InvalidEncoding {
+        label: String,
+        #[source]
+        source: hex::FromHexError,
+    },
+    /// Raised when a decoded value does not match the required length.
+    #[error("{label} must encode exactly 32 bytes")]
+    InvalidLength { label: String, actual: usize },
+    /// Raised when an existing commitment does not match the expected value.
+    #[error("identity commitment tree mismatch for wallet")]
+    CommitmentMismatch,
+    /// Raised when inserting a commitment that is already present in the tree.
+    #[error("identity commitment already registered")]
+    CommitmentAlreadyRegistered,
+    /// Raised when a provided Merkle path does not match the configured depth.
+    #[error("identity commitment proof has invalid length")]
+    InvalidProofLength { expected: usize, actual: usize },
+}
+
+/// Convenient result alias for identity tree operations.
+pub type IdentityTreeResult<T> = Result<T, IdentityTreeError>;
 
 fn domain_hash(label: &[u8], bytes: &[u8]) -> [u8; 32] {
     let mut data = Vec::with_capacity(label.len() + bytes.len());
@@ -27,13 +54,16 @@ fn default_leaf() -> [u8; 32] {
     domain_hash(EMPTY_LEAF_DOMAIN, &[])
 }
 
-fn decode_hex_leaf(value: &str, label: &str) -> ChainResult<[u8; 32]> {
-    let bytes = hex::decode(value)
-        .map_err(|err| ChainError::Transaction(format!("invalid {label} encoding: {err}")))?;
+fn decode_hex_leaf(value: &str, label: &str) -> IdentityTreeResult<[u8; 32]> {
+    let bytes = hex::decode(value).map_err(|source| IdentityTreeError::InvalidEncoding {
+        label: label.to_string(),
+        source,
+    })?;
     if bytes.len() != 32 {
-        return Err(ChainError::Transaction(format!(
-            "{label} must encode exactly 32 bytes"
-        )));
+        return Err(IdentityTreeError::InvalidLength {
+            label: label.to_string(),
+            actual: bytes.len(),
+        });
     }
     let mut leaf = [0u8; 32];
     leaf.copy_from_slice(&bytes);
@@ -158,21 +188,17 @@ impl IdentityCommitmentTree {
         wallet_addr: &str,
         previous: Option<&str>,
         new_commitment: &str,
-    ) -> ChainResult<()> {
+    ) -> IdentityTreeResult<()> {
         let index = derive_index(wallet_addr);
         let existing = self.slots.get(&index).cloned();
         if let Some(ref stored) = existing {
             if Some(stored.as_str()) != previous {
-                return Err(ChainError::Transaction(
-                    "identity commitment tree mismatch for wallet".into(),
-                ));
+                return Err(IdentityTreeError::CommitmentMismatch);
             }
         }
         if self.commitments.contains(new_commitment) && existing.as_deref() != Some(new_commitment)
         {
-            return Err(ChainError::Transaction(
-                "identity commitment already registered".into(),
-            ));
+            return Err(IdentityTreeError::CommitmentAlreadyRegistered);
         }
 
         let commitment_bytes = decode_hex_leaf(new_commitment, "identity commitment")?;
@@ -185,7 +211,7 @@ impl IdentityCommitmentTree {
         Ok(())
     }
 
-    pub fn force_insert(&mut self, wallet_addr: &str, commitment: &str) -> ChainResult<()> {
+    pub fn force_insert(&mut self, wallet_addr: &str, commitment: &str) -> IdentityTreeResult<()> {
         let index = derive_index(wallet_addr);
         let commitment_bytes = decode_hex_leaf(commitment, "identity commitment")?;
         if let Some(previous) = self.slots.insert(index, commitment.to_string()) {
@@ -204,18 +230,19 @@ impl IdentityCommitmentTree {
 }
 
 /// Commitment proof exposing the Merkle path for a wallet slot.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IdentityCommitmentProof {
     pub leaf: String,
     pub siblings: Vec<String>,
 }
 
 impl IdentityCommitmentProof {
-    pub fn compute_root(&self, wallet_addr: &str) -> ChainResult<String> {
+    pub fn compute_root(&self, wallet_addr: &str) -> IdentityTreeResult<String> {
         if self.siblings.len() != IDENTITY_TREE_DEPTH {
-            return Err(ChainError::Transaction(
-                "identity commitment proof has invalid length".into(),
-            ));
+            return Err(IdentityTreeError::InvalidProofLength {
+                expected: IDENTITY_TREE_DEPTH,
+                actual: self.siblings.len(),
+            });
         }
         let mut value = decode_hex_leaf(&self.leaf, "identity commitment leaf")?;
         let mut index = derive_index(wallet_addr);
@@ -232,8 +259,26 @@ impl IdentityCommitmentProof {
         Ok(encode_hex_leaf(&value))
     }
 
-    pub fn is_vacant(&self) -> ChainResult<bool> {
+    pub fn is_vacant(&self) -> IdentityTreeResult<bool> {
         let leaf = decode_hex_leaf(&self.leaf, "identity commitment leaf")?;
         Ok(leaf == default_leaf())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proof_roundtrip() {
+        let mut tree = IdentityCommitmentTree::new(IDENTITY_TREE_DEPTH);
+        let wallet = "deadbeef";
+        let commitment = "11".repeat(32);
+        tree.force_insert(wallet, &commitment).unwrap();
+
+        let proof = tree.proof_for(wallet);
+        assert_eq!(proof.leaf, commitment);
+        assert_eq!(proof.siblings.len(), IDENTITY_TREE_DEPTH);
+        assert_eq!(proof.compute_root(wallet).unwrap(), tree.root_hex());
     }
 }

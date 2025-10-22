@@ -30,6 +30,7 @@ pub mod backend;
 #[cfg(any(test, feature = "scaffold"))]
 pub mod circuits;
 pub mod core;
+pub mod identity_tree;
 pub mod errors;
 #[cfg(feature = "official")]
 pub mod official;

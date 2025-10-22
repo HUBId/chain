@@ -1,8 +1,9 @@
 use std::io;
 
+use prover_backend_interface::BackendError;
+use rpp_identity_tree::IdentityTreeError;
 use storage_firewood::kv::KvError;
 use thiserror::Error;
-use prover_backend_interface::BackendError;
 
 #[derive(Debug, Error)]
 pub enum ChainError {
@@ -34,5 +35,11 @@ impl From<BackendError> for ChainError {
                 ChainError::Crypto(msg.into())
             }
         }
+    }
+}
+
+impl From<IdentityTreeError> for ChainError {
+    fn from(err: IdentityTreeError) -> Self {
+        ChainError::Transaction(err.to_string())
     }
 }

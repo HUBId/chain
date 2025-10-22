@@ -1,0 +1,11 @@
+[package]
+name = "rpp-identity-tree"
+version = "0.0.12"
+edition = "2024"
+license = "MIT"
+
+[dependencies]
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+prover-backend-interface = { path = "../zk/backend-interface" }
