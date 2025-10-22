@@ -186,24 +186,24 @@ impl Blueprint {
             Section {
                 id: SectionId::Vrf,
                 title: "VRF Validator-Selektion",
-                description: "Validatoren- und Leader-Auswahl über Poseidon-VRF realisieren.",
+                description: "Validatoren- und Leader-Auswahl über Poseidon-VRF realisieren (siehe docs/vrf/poseidon_spec.md für Vertrag & Testplan).",
                 tasks: vec![
                     Task {
                         key: "vrf.poseidon_impl",
                         title: "Poseidon-VRF umsetzen",
-                        detail: "VRF-Beweise generieren und im Netzwerk verifizierbar austauschen.",
+                        detail: "VRF-Beweise generieren und im Netzwerk verifizierbar austauschen – Spezifikationsabgleich gegen docs/vrf/poseidon_spec.md.",
                         status: TaskStatus::Todo,
                     },
                     Task {
                         key: "vrf.epoch_management",
                         title: "Epochenverwaltung",
-                        detail: "Validator-Set-Rotation und gewichtete Lotterie nach Reputation+Timetoken implementieren.",
+                        detail: "Validator-Set-Rotation und gewichtete Lotterie nach Reputation+Timetoken implementieren, inklusive Replay-Schutz wie in docs/vrf/poseidon_spec.md beschrieben.",
                         status: TaskStatus::Todo,
                     },
                     Task {
                         key: "vrf.monitoring",
                         title: "VRF-Monitoring",
-                        detail: "Leistungskennzahlen überwachen und Replay-Schutz sicherstellen.",
+                        detail: "Leistungskennzahlen überwachen und Replay-Schutz sicherstellen; Telemetrie- und Testplan siehe docs/vrf/poseidon_spec.md.",
                         status: TaskStatus::Todo,
                     },
                 ],
