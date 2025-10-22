@@ -1,15 +1,15 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use libp2p::PeerId;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rpp_p2p::{
     GossipTopic, HandshakePayload, JsonProofValidator, LightClientSync, MetaTelemetry,
-    NetworkError, NetworkEvent, NodeIdentity, PersistentProofStorage, PipelineError, ProofMempool,
-    ReputationBroadcast, TierLevel,
+    NetworkError, NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity,
+    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, TierLevel,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -64,6 +64,76 @@ pub struct MetaTelemetryReport {
     pub local_peer_id: PeerId,
     pub peer_count: usize,
     pub peers: Vec<PeerTelemetry>,
+}
+
+fn system_time_to_millis(time: SystemTime) -> u64 {
+    time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn millis_to_system_time(millis: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_millis(millis)
+}
+
+impl From<&PeerTelemetry> for NetworkPeerTelemetry {
+    fn from(telemetry: &PeerTelemetry) -> Self {
+        Self {
+            peer: telemetry.peer.to_base58(),
+            version: telemetry.version.clone(),
+            latency_ms: telemetry.latency_ms,
+            last_seen: system_time_to_millis(telemetry.last_seen),
+        }
+    }
+}
+
+impl TryFrom<NetworkPeerTelemetry> for PeerTelemetry {
+    type Error = String;
+
+    fn try_from(telemetry: NetworkPeerTelemetry) -> Result<Self, Self::Error> {
+        let peer = telemetry
+            .peer
+            .parse()
+            .map_err(|err| format!("invalid peer id: {err}"))?;
+        Ok(Self {
+            peer,
+            version: telemetry.version,
+            latency_ms: telemetry.latency_ms,
+            last_seen: millis_to_system_time(telemetry.last_seen),
+        })
+    }
+}
+
+impl From<&MetaTelemetryReport> for NetworkMetaTelemetryReport {
+    fn from(report: &MetaTelemetryReport) -> Self {
+        Self {
+            local_peer_id: report.local_peer_id.to_base58(),
+            peer_count: report.peer_count,
+            peers: report.peers.iter().map(NetworkPeerTelemetry::from).collect(),
+        }
+    }
+}
+
+impl TryFrom<NetworkMetaTelemetryReport> for MetaTelemetryReport {
+    type Error = String;
+
+    fn try_from(report: NetworkMetaTelemetryReport) -> Result<Self, Self::Error> {
+        let local_peer_id = report
+            .local_peer_id
+            .parse()
+            .map_err(|err| format!("invalid peer id: {err}"))?;
+        let peers = report
+            .peers
+            .into_iter()
+            .map(PeerTelemetry::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            local_peer_id,
+            peer_count: report.peer_count,
+            peers,
+        })
+    }
 }
 
 /// Periodic heartbeat message emitted by the node runtime.
@@ -197,6 +267,7 @@ enum VoteIngestResult {
 enum MetaIngestResult {
     Duplicate,
     Reputation(ReputationBroadcast),
+    Telemetry(MetaTelemetryReport),
     DecodeFailed(String),
 }
 
@@ -326,9 +397,24 @@ impl GossipPipelines {
                 debug!(target: "node", ?peer, "meta gossip ingested");
                 MetaIngestResult::Reputation(broadcast)
             }
-            Err(err) => MetaIngestResult::DecodeFailed(format!(
-                "invalid meta payload encoding: {err}"
-            )),
+            Err(reputation_err) => {
+                match serde_json::from_slice::<NetworkMetaTelemetryReport>(&data) {
+                    Ok(report) => match MetaTelemetryReport::try_from(report) {
+                        Ok(report) => {
+                            debug!(
+                                target: "node",
+                                ?peer,
+                                "meta telemetry gossip ingested"
+                            );
+                            MetaIngestResult::Telemetry(report)
+                        }
+                        Err(err) => MetaIngestResult::DecodeFailed(err),
+                    },
+                    Err(err) => MetaIngestResult::DecodeFailed(format!(
+                        "invalid meta payload encoding: {reputation_err}; {err}"
+                    )),
+                }
+            }
         }
     }
 }
@@ -593,7 +679,13 @@ impl NodeInner {
                         }
                         GossipTopic::Meta => {
                             match self.pipelines.handle_meta(peer.clone(), data.clone()) {
-                                MetaIngestResult::Duplicate => {}
+                                MetaIngestResult::Duplicate => {
+                                    debug!(
+                                        target: "node",
+                                        ?peer,
+                                        "duplicate meta gossip ignored"
+                                    );
+                                }
                                 MetaIngestResult::Reputation(broadcast) => {
                                     if peer == self.identity.peer_id() {
                                         debug!(
@@ -609,6 +701,34 @@ impl NodeInner {
                                             ?peer,
                                             %err,
                                             "failed to apply reputation broadcast"
+                                        );
+                                    }
+                                }
+                                MetaIngestResult::Telemetry(report) => {
+                                    let remote = report.local_peer_id;
+                                    if remote != peer {
+                                        warn!(
+                                            target: "node",
+                                            expected = %peer,
+                                            received = %remote,
+                                            "meta telemetry peer mismatch"
+                                        );
+                                    }
+                                    let version = self
+                                        .known_versions
+                                        .get(&remote)
+                                        .cloned()
+                                        .unwrap_or_else(|| remote.to_base58());
+                                    if let Some(entry) = report
+                                        .peers
+                                        .iter()
+                                        .find(|telemetry| telemetry.peer == self.identity.peer_id())
+                                    {
+                                        self.meta_telemetry.record_at(
+                                            remote,
+                                            version,
+                                            Duration::from_millis(entry.latency_ms),
+                                            entry.last_seen,
                                         );
                                     }
                                 }
@@ -653,7 +773,7 @@ impl NodeInner {
         }
     }
 
-    async fn emit_heartbeat(&self) {
+    async fn emit_heartbeat(&mut self) {
         let metrics = self.metrics.read().clone();
         let peer_count = self.connected_peers.len();
         let verifier_metrics = metrics.verifier_metrics.clone();
@@ -668,6 +788,28 @@ impl NodeInner {
 
         let meta = self.build_meta_report(peer_count);
         let _ = self.events.send(NodeEvent::MetaTelemetry(meta.clone()));
+
+        if self.gossip_enabled {
+            let network_report = NetworkMetaTelemetryReport::from(&meta);
+            match serde_json::to_vec(&network_report) {
+                Ok(payload) => {
+                    if let Err(err) = self.network.publish(GossipTopic::Meta, payload) {
+                        warn!(
+                            target: "node",
+                            %err,
+                            "failed to publish meta telemetry heartbeat"
+                        );
+                    }
+                }
+                Err(err) => {
+                    warn!(
+                        target: "node",
+                        %err,
+                        "failed to encode meta telemetry heartbeat"
+                    );
+                }
+            }
+        }
 
         let snapshot = TelemetrySnapshot {
             block_height: metrics.block_height,

@@ -1058,6 +1058,24 @@ impl MetaTelemetry {
         );
     }
 
+    pub fn record_at(
+        &mut self,
+        peer: PeerId,
+        version: String,
+        latency: Duration,
+        received_at: SystemTime,
+    ) {
+        self.heartbeats.insert(
+            peer,
+            TelemetryEvent {
+                peer,
+                version,
+                latency,
+                received_at,
+            },
+        );
+    }
+
     pub fn offline_peers(&self, threshold: Duration) -> Vec<TelemetryEvent> {
         let now = SystemTime::now();
         self.heartbeats
@@ -1073,6 +1091,21 @@ impl MetaTelemetry {
     pub fn latest(&self, peer: &PeerId) -> Option<&TelemetryEvent> {
         self.heartbeats.get(peer)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NetworkPeerTelemetry {
+    pub peer: String,
+    pub version: String,
+    pub latency_ms: u64,
+    pub last_seen: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NetworkMetaTelemetryReport {
+    pub local_peer_id: String,
+    pub peer_count: usize,
+    pub peers: Vec<NetworkPeerTelemetry>,
 }
 
 #[cfg(test)]
@@ -1455,6 +1488,14 @@ mod interface_schemas {
         assert_roundtrip::<NetworkStateSyncPlan>(
             "p2p/network_state_sync_plan.jsonschema",
             "p2p/examples/network_state_sync_plan.json",
+        );
+    }
+
+    #[test]
+    fn meta_telemetry_schema_roundtrip() {
+        assert_roundtrip::<NetworkMetaTelemetryReport>(
+            "p2p/meta_telemetry.jsonschema",
+            "p2p/examples/meta_telemetry.json",
         );
     }
 }
