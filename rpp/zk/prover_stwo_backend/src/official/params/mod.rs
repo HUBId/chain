@@ -180,7 +180,7 @@ fn mod_inverse(value: &BigUint, modulus: &BigUint) -> Option<BigUint> {
 }
 
 /// Poseidon hash configuration parameters derived from the blueprint.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PoseidonConfig {
     /// State width parameter (t).
     pub width: usize,
@@ -201,7 +201,7 @@ impl Default for PoseidonConfig {
 }
 
 /// Centralized container combining field and hash parameters.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StarkParameters {
     pub field_modulus: BigUint,
     pub poseidon: PoseidonConfig,

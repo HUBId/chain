@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::proof_backend::Blake2sHasher;
@@ -18,6 +19,20 @@ pub enum Tier {
 impl Default for Tier {
     fn default() -> Self {
         Tier::Tl0
+    }
+}
+
+impl fmt::Display for Tier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match self {
+            Tier::Tl0 => "TL0",
+            Tier::Tl1 => "TL1",
+            Tier::Tl2 => "TL2",
+            Tier::Tl3 => "TL3",
+            Tier::Tl4 => "TL4",
+            Tier::Tl5 => "TL5",
+        };
+        f.write_str(label)
     }
 }
 

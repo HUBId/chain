@@ -719,7 +719,6 @@ mod tests {
     };
     use super::keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
     use super::*;
-    use crate::crypto::address_from_public_key;
     use crate::identity_tree::IDENTITY_TREE_DEPTH;
     use crate::official::circuit::consensus::{ConsensusWitness, VotePower};
     use crate::official::circuit::identity::IdentityWitness;
@@ -735,16 +734,22 @@ mod tests {
     use crate::state::compute_merkle_root;
     use crate::types::{Account, Stake, Transaction, UptimeProof};
     use crate::vrf::VRF_PROOF_LENGTH;
-    use ed25519_dalek::{Keypair, Signer};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey as DalekVerifyingKey};
     use prover_backend_interface::{
         ConsensusCircuitDef, ConsensusPublicInputs, IdentityPublicInputs, ProofSystemKind,
         PruningPublicInputs, RecursivePublicInputs, StatePublicInputs, TxPublicInputs,
         UptimePublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
     };
-    use rand::{rngs::StdRng, SeedableRng};
+    use rand::{rngs::StdRng, RngCore, SeedableRng};
 
     const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
     const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
+
+    fn address_from_public_key(public_key: &DalekVerifyingKey) -> String {
+        let hash: [u8; 32] =
+            crate::proof_backend::Blake2sHasher::hash(public_key.as_bytes()).into();
+        hex::encode(hash)
+    }
 
     #[test]
     fn key_payload_roundtrip() {
@@ -973,6 +978,7 @@ mod tests {
             .verify_consensus(
                 &verifying_key,
                 &proof_bytes,
+                &circuit,
                 &consensus_public_inputs(&witness),
             )
             .expect("consensus verification succeeds");
@@ -1046,8 +1052,11 @@ mod tests {
 
     fn sample_transaction_witness() -> TransactionWitness {
         let mut rng = StdRng::seed_from_u64(0xdead_beef_u64);
-        let keypair = Keypair::generate(&mut rng);
-        let sender = address_from_public_key(&keypair.public);
+        let mut secret = [0u8; ed25519_dalek::SECRET_KEY_LENGTH];
+        rng.fill_bytes(&mut secret);
+        let signing_key = SigningKey::from_bytes(&secret);
+        let verifying_key = signing_key.verifying_key();
+        let sender = address_from_public_key(&verifying_key);
         let receiver = hex::encode([0x33u8; 32]);
         let payload = Transaction {
             from: sender.clone(),
@@ -1058,9 +1067,9 @@ mod tests {
             memo: Some("backend-roundtrip".into()),
             timestamp: 1_717_171_717,
         };
-        let signature = keypair.sign(&payload.canonical_bytes());
+        let signature = signing_key.sign(&payload.canonical_bytes());
         let signed_tx =
-            crate::types::SignedTransaction::new(payload.clone(), signature, &keypair.public);
+            crate::types::SignedTransaction::new(payload.clone(), signature, &verifying_key);
 
         let mut sender_account = Account::new(
             sender,
