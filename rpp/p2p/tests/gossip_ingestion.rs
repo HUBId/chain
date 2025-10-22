@@ -139,3 +139,67 @@ fn quorum_requires_majority_of_weighted_voters() {
         other => panic!("unexpected outcome: {other:?}"),
     }
 }
+
+#[test]
+fn tier_weighted_votes_cross_quorum_and_deduplicate() {
+    let mut pipeline = ConsensusPipeline::new();
+    let high = PeerId::random();
+    let mid = PeerId::random();
+    let low = PeerId::random();
+
+    pipeline.register_voter(high, 3.0);
+    pipeline.register_voter(mid, 2.0);
+    pipeline.register_voter(low, 1.0);
+
+    let block_id = b"tier-weighted".to_vec();
+    pipeline
+        .ingest_proposal(block_id.clone(), high, b"block".to_vec())
+        .expect("proposal accepted");
+
+    let first = pipeline
+        .ingest_vote(&block_id, high, 0, b"vote-high".to_vec())
+        .expect("high tier vote accepted");
+    assert!(matches!(
+        first,
+        VoteOutcome::Recorded {
+            reached_quorum: false,
+            ..
+        }
+    ));
+
+    let second = pipeline
+        .ingest_vote(&block_id, mid, 0, b"vote-mid".to_vec())
+        .expect("mid tier vote accepted");
+    match second {
+        VoteOutcome::Recorded {
+            reached_quorum,
+            power,
+        } => {
+            assert!(reached_quorum, "expected quorum after high + mid tiers");
+            assert!(power >= (2.0 / 3.0) * 6.0);
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+
+    let duplicate = pipeline
+        .ingest_vote(&block_id, mid, 0, b"vote-mid-dup".to_vec())
+        .expect("duplicate mid tier vote handled");
+    assert!(matches!(duplicate, VoteOutcome::Duplicate));
+
+    let third = pipeline
+        .ingest_vote(&block_id, low, 0, b"vote-low".to_vec())
+        .expect("low tier vote accepted");
+    match third {
+        VoteOutcome::Recorded {
+            reached_quorum,
+            power,
+        } => {
+            assert!(
+                reached_quorum,
+                "quorum remains satisfied after low tier vote"
+            );
+            assert!(power >= 6.0);
+        }
+        other => panic!("unexpected outcome: {other:?}"),
+    }
+}

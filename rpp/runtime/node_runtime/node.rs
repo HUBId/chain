@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use blake3::Hash;
 use libp2p::PeerId;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rpp_p2p::{
-    GossipTopic, HandshakePayload, JsonProofValidator, LightClientSync, MetaTelemetry,
-    NetworkError, NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity,
-    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, TierLevel,
+    ConsensusPipeline, GossipTopic, HandshakePayload, JsonProofValidator, LightClientSync,
+    MetaTelemetry, NetworkError, NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
+    NodeIdentity, PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast,
+    TierLevel, VoteOutcome,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -245,6 +247,7 @@ struct GossipPipelines {
     block_cache: HashSet<Hash>,
     vote_cache: HashSet<Hash>,
     meta_cache: HashSet<Hash>,
+    consensus: ConsensusPipeline,
 }
 
 #[derive(Debug)]
@@ -284,7 +287,42 @@ impl GossipPipelines {
             block_cache: HashSet::new(),
             vote_cache: HashSet::new(),
             meta_cache: HashSet::new(),
+            consensus: ConsensusPipeline::new(),
         })
+    }
+
+    fn register_voter(&mut self, peer: PeerId, tier: TierLevel) {
+        let power = Self::tier_voting_power(tier);
+        self.consensus.register_voter(peer, power);
+    }
+
+    fn remove_voter(&mut self, peer: &PeerId) {
+        self.consensus.remove_voter(peer);
+    }
+
+    fn ingest_proposal(
+        &mut self,
+        peer: PeerId,
+        block_hash: &str,
+        payload: Vec<u8>,
+    ) -> Result<(), PipelineError> {
+        self.consensus
+            .ingest_proposal(block_hash.as_bytes().to_vec(), peer, payload)
+    }
+
+    fn ingest_vote(
+        &mut self,
+        peer: PeerId,
+        block_hash: &str,
+        round: u64,
+        payload: Vec<u8>,
+    ) -> Result<VoteOutcome, PipelineError> {
+        self.consensus
+            .ingest_vote(block_hash.as_bytes(), peer, round, payload)
+    }
+
+    fn tier_voting_power(tier: TierLevel) -> f64 {
+        tier as u8 as f64
     }
 
     fn handle_blocks(&mut self, _peer: PeerId, data: Vec<u8>) -> BlockIngestResult {
@@ -450,7 +488,8 @@ impl NodeInner {
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, _) = broadcast::channel(256);
         let metrics = Arc::new(RwLock::new(NodeMetrics::default()));
-        let pipelines = GossipPipelines::initialise(&config)?;
+        let mut pipelines = GossipPipelines::initialise(&config)?;
+        pipelines.register_voter(identity.peer_id(), identity.tier());
         let handle = NodeHandle {
             commands: command_tx.clone(),
             metrics: metrics.clone(),
@@ -516,15 +555,20 @@ impl NodeInner {
                 Ok(false)
             }
             NodeCommand::UpdateIdentity { profile, response } => {
+                let tier = profile.tier;
                 let result = self
                     .network
                     .update_identity(
                         profile.zsi_id,
-                        profile.tier,
+                        tier,
                         profile.vrf_public_key,
                         profile.vrf_proof,
                     )
                     .map_err(NodeError::from);
+                if result.is_ok() {
+                    self.pipelines
+                        .register_voter(self.identity.peer_id(), tier);
+                }
                 let _ = response.send(result);
                 Ok(false)
             }
@@ -540,6 +584,8 @@ impl NodeInner {
             NetworkEvent::HandshakeCompleted { peer, payload } => {
                 info!(target: "node", "peer connected: {peer}");
                 self.connected_peers.insert(peer);
+                let tier = payload.tier;
+                self.pipelines.register_voter(peer, tier);
                 let agent_version = payload
                     .telemetry
                     .as_ref()
@@ -555,6 +601,7 @@ impl NodeInner {
                 info!(target: "node", "peer disconnected: {peer}");
                 self.connected_peers.remove(&peer);
                 self.known_versions.remove(&peer);
+                self.pipelines.remove_voter(&peer);
                 let _ = self.events.send(NodeEvent::PeerDisconnected { peer });
             }
             NetworkEvent::PingSuccess { peer, rtt } => {
@@ -604,10 +651,23 @@ impl NodeInner {
                                 }
                                 BlockIngestResult::Valid(block) => {
                                     debug!(target: "node", ?peer, "block gossip ingested");
-                                    let _ = self.events.send(NodeEvent::BlockProposal {
-                                        peer: peer.clone(),
-                                        block,
-                                    });
+                                    if let Err(err) = self.pipelines.ingest_proposal(
+                                        peer.clone(),
+                                        &block.hash,
+                                        data.clone(),
+                                    ) {
+                                        warn!(
+                                            target: "node",
+                                            ?peer,
+                                            ?err,
+                                            "failed to ingest block into consensus pipeline"
+                                        );
+                                    } else {
+                                        let _ = self.events.send(NodeEvent::BlockProposal {
+                                            peer: peer.clone(),
+                                            block,
+                                        });
+                                    }
                                 }
                                 BlockIngestResult::Invalid { block, reason } => {
                                     warn!(
@@ -643,10 +703,42 @@ impl NodeInner {
                                 }
                                 VoteIngestResult::Valid(vote) => {
                                     debug!(target: "node", ?peer, "vote gossip ingested");
-                                    let _ = self.events.send(NodeEvent::Vote {
-                                        peer: peer.clone(),
-                                        vote,
-                                    });
+                                    match self.pipelines.ingest_vote(
+                                        peer.clone(),
+                                        &vote.vote.block_hash,
+                                        vote.vote.round,
+                                        data.clone(),
+                                    ) {
+                                        Ok(VoteOutcome::Recorded { reached_quorum, power }) => {
+                                            if reached_quorum {
+                                                info!(
+                                                    target: "node",
+                                                    ?peer,
+                                                    power = power,
+                                                    "consensus quorum reached via gossip"
+                                                );
+                                            }
+                                            let _ = self.events.send(NodeEvent::Vote {
+                                                peer: peer.clone(),
+                                                vote,
+                                            });
+                                        }
+                                        Ok(VoteOutcome::Duplicate) => {
+                                            debug!(
+                                                target: "node",
+                                                ?peer,
+                                                "duplicate vote ignored by consensus pipeline"
+                                            );
+                                        }
+                                        Err(err) => {
+                                            warn!(
+                                                target: "node",
+                                                ?peer,
+                                                ?err,
+                                                "failed to ingest vote into consensus pipeline"
+                                            );
+                                        }
+                                    }
                                 }
                                 VoteIngestResult::Invalid { vote, reason } => {
                                     warn!(
