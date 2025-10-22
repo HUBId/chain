@@ -266,4 +266,34 @@ mod tests {
         let computed = proof.compute_root(wallet).expect("compute root");
         assert_eq!(root, computed);
     }
+
+    #[test]
+    fn replace_commitment_validates_previous_slot_contents() {
+        let mut tree = IdentityCommitmentTree::new(IDENTITY_TREE_DEPTH);
+        let wallet = "wallet-1";
+        let commitment = hex::encode([0x11u8; 32]);
+        tree.replace_commitment(wallet, None, &commitment)
+            .expect("insert commitment");
+
+        let wrong_previous = hex::encode([0x22u8; 32]);
+        let err = tree
+            .replace_commitment(wallet, Some(&wrong_previous), &commitment)
+            .expect_err("slot mismatch");
+        assert!(matches!(err, IdentityTreeError::SlotMismatch));
+    }
+
+    #[test]
+    fn replace_commitment_rejects_duplicate_commitments() {
+        let mut tree = IdentityCommitmentTree::new(IDENTITY_TREE_DEPTH);
+        let first_wallet = "wallet-1";
+        let second_wallet = "wallet-2";
+        let commitment = hex::encode([0x33u8; 32]);
+
+        tree.replace_commitment(first_wallet, None, &commitment)
+            .expect("insert commitment");
+        let err = tree
+            .replace_commitment(second_wallet, None, &commitment)
+            .expect_err("duplicate commitment");
+        assert!(matches!(err, IdentityTreeError::DuplicateCommitment));
+    }
 }
