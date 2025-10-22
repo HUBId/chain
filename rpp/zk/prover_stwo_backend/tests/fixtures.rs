@@ -86,7 +86,7 @@ pub fn state_witness() -> StateWitness {
     before[0].reputation.tier = Tier::Tl2;
     before[0].reputation.zsi.validated = true;
     before[0].reputation.timetokes.last_decay_timestamp = 1_717_171_717;
-    let mut after = before.clone();
+    let after = before.clone();
 
     let prev_state_root = state_root_for(&before);
     let new_state_root = state_root_for(&after);
@@ -299,11 +299,11 @@ fn identity_default_nodes() -> Vec<[u8; 32]> {
 
 fn identity_siblings(defaults: &[[u8; 32]], wallet_addr: &str) -> Vec<String> {
     let mut siblings = Vec::with_capacity(identity_tree_depth());
-    let mut index = derive_index(wallet_addr);
+    let mut _index = derive_index(wallet_addr);
     for level in (0..identity_tree_depth()).rev() {
         let sibling = defaults[level + 1];
         siblings.push(hex::encode(sibling));
-        index /= 2;
+        _index /= 2;
     }
     siblings
 }

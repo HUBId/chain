@@ -31,6 +31,7 @@ pub mod backend;
 pub mod circuits;
 pub mod core;
 pub mod errors;
+pub mod identity_tree;
 #[cfg(feature = "official")]
 pub mod official;
 pub mod params;
@@ -39,6 +40,7 @@ pub mod reputation;
 pub mod state;
 pub mod types;
 pub mod utils;
+pub mod vrf;
 
 pub use core::vcs::blake2_hash::{Blake2sHash, Blake2sHasher};
 pub use params::{FieldElement, StwoConfig};

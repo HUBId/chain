@@ -1,3 +1,5 @@
+use std::convert::TryInto;
+
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -109,10 +111,15 @@ impl SignedTransaction {
             .map_err(|err| SignedTransactionError::InvalidPublicKey(err.to_string()))?;
         let sig_bytes = hex::decode(&self.signature)
             .map_err(|err| SignedTransactionError::InvalidSignature(err.to_string()))?;
-        let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
+        let pk_array: [u8; 32] = pk_bytes.try_into().map_err(|_| {
+            SignedTransactionError::InvalidPublicKey("public key must be 32 bytes".into())
+        })?;
+        let sig_array: [u8; 64] = sig_bytes.try_into().map_err(|_| {
+            SignedTransactionError::InvalidSignature("signature must be 64 bytes".into())
+        })?;
+        let verifying_key = VerifyingKey::from_bytes(&pk_array)
             .map_err(|err| SignedTransactionError::InvalidPublicKey(err.to_string()))?;
-        let signature = Signature::from_bytes(&sig_bytes)
-            .map_err(|err| SignedTransactionError::InvalidSignature(err.to_string()))?;
+        let signature = Signature::from_bytes(&sig_array);
         verifying_key
             .verify(&self.payload.canonical_bytes(), &signature)
             .map_err(|_| SignedTransactionError::VerificationFailed)
@@ -185,19 +192,50 @@ impl UptimeProof {
 /// verifier.  The enum keeps the shape of the production type but limits the
 /// variants to what the local backend exposes.
 #[cfg(feature = "official")]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg(feature = "official")]
+#[derive(Clone, Debug)]
 pub enum ChainProof {
-    #[serde(rename = "stwo")]
     Stwo(crate::official::proof::StarkProof),
-    #[serde(other)]
-    Other(serde_json::Value),
+    Unsupported(serde_json::Value),
+}
+
+#[cfg(feature = "official")]
+impl Serialize for ChainProof {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            ChainProof::Stwo(proof) => {
+                let value = serde_json::json!({ "stwo": proof });
+                value.serialize(serializer)
+            }
+            ChainProof::Unsupported(value) => value.serialize(serializer),
+        }
+    }
+}
+
+#[cfg(feature = "official")]
+impl<'de> Deserialize<'de> for ChainProof {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Some(proof_value) = value.get("stwo") {
+            let proof = crate::official::proof::StarkProof::deserialize(proof_value)
+                .map_err(serde::de::Error::custom)?;
+            Ok(ChainProof::Stwo(proof))
+        } else {
+            Ok(ChainProof::Unsupported(value))
+        }
+    }
 }
 
 #[cfg(not(feature = "official"))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ChainProof {
-    #[serde(other)]
-    Other(serde_json::Value),
+    Unsupported(serde_json::Value),
 }
 
 impl ChainProof {
@@ -213,7 +251,7 @@ impl ChainProof {
     pub fn expect_stwo(&self) -> ChainResult<&crate::official::proof::StarkProof> {
         match self {
             ChainProof::Stwo(proof) => Ok(proof),
-            ChainProof::Other(_) => Err(ChainError::Crypto(
+            ChainProof::Unsupported(_) => Err(ChainError::Crypto(
                 "expected STWO proof, received unsupported artifact".into(),
             )),
         }
@@ -223,7 +261,7 @@ impl ChainProof {
     pub fn into_stwo(self) -> ChainResult<crate::official::proof::StarkProof> {
         match self {
             ChainProof::Stwo(proof) => Ok(proof),
-            ChainProof::Other(_) => Err(ChainError::Crypto(
+            ChainProof::Unsupported(_) => Err(ChainError::Crypto(
                 "expected STWO proof, received unsupported artifact".into(),
             )),
         }

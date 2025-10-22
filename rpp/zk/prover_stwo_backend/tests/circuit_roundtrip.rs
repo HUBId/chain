@@ -10,10 +10,10 @@ use fixtures::{
     uptime_witness_bytes, CONSENSUS_CIRCUIT, IDENTITY_CIRCUIT, PRUNING_CIRCUIT, RECURSIVE_CIRCUIT,
     STATE_CIRCUIT, UPTIME_CIRCUIT,
 };
+use prover_backend_interface::ProofBackend;
 use prover_backend_interface::{
-    ConsensusCircuitDef, IdentityCircuitDef, ProofHeader, ProofSystemKind, PruningCircuitDef,
-    RecursiveCircuitDef, StateCircuitDef, UptimeCircuitDef, WitnessHeader, PROOF_FORMAT_VERSION,
-    WITNESS_FORMAT_VERSION,
+    IdentityCircuitDef, ProofHeader, ProofSystemKind, PruningCircuitDef, RecursiveCircuitDef,
+    StateCircuitDef, UptimeCircuitDef, WitnessHeader, PROOF_FORMAT_VERSION, WITNESS_FORMAT_VERSION,
 };
 use prover_stwo_backend::backend::StwoBackend;
 use prover_stwo_backend::official::circuit::consensus::ConsensusWitness;

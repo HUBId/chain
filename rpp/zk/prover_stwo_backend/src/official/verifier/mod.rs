@@ -20,7 +20,7 @@ use crate::stwo_official::core::channel::{Channel, MerkleChannel};
 use crate::stwo_official::core::fri::FriProof as OfficialFriProof;
 use crate::stwo_official::core::pcs::CommitmentSchemeVerifier;
 use crate::stwo_official::core::proof::StarkProof as OfficialStarkProof;
-use crate::stwo_official::core::vcs::blake2_merkle::Blake2sMerkleChannel;
+use crate::stwo_official::core::vcs::blake2_merkle::{Blake2sMerkleChannel, Blake2sMerkleHasher};
 use crate::stwo_official::core::verifier::{verify as stwo_verify, VerificationError};
 
 fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
