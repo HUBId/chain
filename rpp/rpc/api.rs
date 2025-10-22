@@ -6,7 +6,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
@@ -19,11 +19,13 @@ use tracing::info;
 
 use crate::consensus::SignedBftVote;
 use crate::errors::{ChainError, ChainResult};
+#[cfg(feature = "vendor_electrs")]
+use crate::interfaces::WalletTrackerSnapshot;
 use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
-    NodeTelemetrySnapshot, RolloutStatus, VrfStatus,
+    NodeTelemetrySnapshot, PruningJobStatus, RolloutStatus, VrfStatus,
 };
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
@@ -38,8 +40,6 @@ use crate::types::{
 use crate::wallet::{
     ConsensusReceipt, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet, WalletAccountSummary,
 };
-#[cfg(feature = "vendor_electrs")]
-use crate::interfaces::WalletTrackerSnapshot;
 #[cfg(feature = "vendor_electrs")]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
 use parking_lot::RwLock;
@@ -64,9 +64,7 @@ impl ApiContext {
         request_limit_per_minute: Option<NonZeroU64>,
     ) -> Self {
         #[cfg(feature = "vendor_electrs")]
-        let tracker = wallet
-            .as_ref()
-            .and_then(|wallet| wallet.tracker_handle());
+        let tracker = wallet.as_ref().and_then(|wallet| wallet.tracker_handle());
 
         Self {
             mode,
@@ -531,6 +529,7 @@ pub async fn serve(
         .route("/ui/bft/membership", get(ui_bft_membership))
         .route("/proofs/block/:height", get(block_proofs))
         .route("/snapshots/plan", get(snapshot_plan))
+        .route("/snapshots/jobs", get(snapshot_jobs))
         .route("/validator/telemetry", get(validator_telemetry))
         .route("/validator/vrf", get(validator_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
@@ -676,11 +675,10 @@ fn wallet_history_payload(
     let script_metadata = wallet.script_status_metadata();
 
     #[cfg(feature = "vendor_electrs")]
-    let tracker = tracker_state
-        .and_then(|state| match state {
-            TrackerState::Ready(snapshot) => Some(WalletTrackerSnapshot::from(snapshot)),
-            TrackerState::Pending | TrackerState::Disabled => None,
-        });
+    let tracker = tracker_state.and_then(|state| match state {
+        TrackerState::Ready(snapshot) => Some(WalletTrackerSnapshot::from(snapshot)),
+        TrackerState::Pending | TrackerState::Disabled => None,
+    });
 
     Ok(WalletHistoryResponse {
         entries,
@@ -796,6 +794,13 @@ async fn snapshot_plan(
         .reconstruction_plan(start)
         .map(Json)
         .map_err(to_http_error)
+}
+
+async fn snapshot_jobs(
+    State(state): State<ApiContext>,
+) -> Result<Json<Option<PruningJobStatus>>, (StatusCode, Json<ErrorResponse>)> {
+    let status = state.require_node()?.pruning_job_status();
+    Ok(Json(status))
 }
 
 async fn validator_telemetry(
@@ -927,9 +932,7 @@ async fn update_mempool_limits(
     State(state): State<ApiContext>,
     Json(request): Json<UpdateMempoolRequest>,
 ) -> Result<Json<MempoolStatus>, (StatusCode, Json<ErrorResponse>)> {
-    if request.limit.is_none()
-        && request.priority_weight.is_none()
-        && request.fee_weight.is_none()
+    if request.limit.is_none() && request.priority_weight.is_none() && request.fee_weight.is_none()
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1326,8 +1329,8 @@ fn not_found(message: &str) -> (StatusCode, Json<ErrorResponse>) {
 #[cfg(test)]
 mod interface_schemas {
     use super::{
-        ErrorResponse, PipelineWaitRequest, PipelineWaitResponse, RuntimeModeResponse, SignTxRequest,
-        SignTxResponse,
+        ErrorResponse, PipelineWaitRequest, PipelineWaitResponse, RuntimeModeResponse,
+        SignTxRequest, SignTxResponse,
     };
     use jsonschema::{Draft, JSONSchema};
     use serde::de::DeserializeOwned;
@@ -1341,12 +1344,10 @@ mod interface_schemas {
     }
 
     fn load_json(path: &Path) -> Value {
-        let raw = fs::read_to_string(path).unwrap_or_else(|err| {
-            panic!("unable to read {}: {err}", path.display())
-        });
-        serde_json::from_str(&raw).unwrap_or_else(|err| {
-            panic!("invalid JSON in {}: {err}", path.display())
-        })
+        let raw = fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("unable to read {}: {err}", path.display()));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|err| panic!("invalid JSON in {}: {err}", path.display()))
     }
 
     fn resolve_refs(value: &mut Value, base: &Path) {
@@ -1401,9 +1402,7 @@ mod interface_schemas {
             .compile(&schema)
             .expect("schema compiles");
         let example = load_example(example_file);
-        compiled
-            .validate(&example)
-            .expect("example matches schema");
+        compiled.validate(&example).expect("example matches schema");
         let typed: T = serde_json::from_value(example.clone()).expect("deserialize example");
         let roundtrip = serde_json::to_value(&typed).expect("serialize payload");
         assert_eq!(roundtrip, example);

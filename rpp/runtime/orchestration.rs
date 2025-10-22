@@ -27,6 +27,8 @@ use rpp_p2p::GossipTopic;
 
 /// Default buffer size for the gossip → mempool proof channel.
 const DEFAULT_QUEUE_DEPTH: usize = 64;
+const DEFAULT_STATE_SYNC_CHUNK: usize = 16;
+const PRUNING_SYNC_INTERVAL_SECS: u64 = 30;
 
 /// Enumeration of lifecycle stages the orchestrator tracks for each submission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -253,12 +255,24 @@ impl PipelineOrchestrator {
 
         if let Some(handle) = self.p2p.clone() {
             let gossip_metrics = self.metrics.clone();
-            let gossip_shutdown = shutdown_rx;
+            let gossip_shutdown = shutdown_rx.clone();
             tokio::spawn(async move {
                 let events = handle.subscribe();
                 PipelineOrchestrator::gossip_loop(gossip_metrics, events, gossip_shutdown).await;
             });
         }
+
+        let pruning_node = self.node.clone();
+        let pruning_shutdown = shutdown_rx;
+        tokio::spawn(async move {
+            PipelineOrchestrator::pruning_loop(
+                pruning_node,
+                DEFAULT_STATE_SYNC_CHUNK,
+                Duration::from_secs(PRUNING_SYNC_INTERVAL_SECS),
+                pruning_shutdown,
+            )
+            .await;
+        });
     }
 
     /// Submit a transaction workflow into the orchestrated pipeline.
@@ -548,6 +562,33 @@ impl PipelineOrchestrator {
                             debug!("p2p event stream closed");
                             break;
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    async fn pruning_loop(
+        node: NodeHandle,
+        chunk_size: usize,
+        interval: Duration,
+        mut shutdown_rx: watch::Receiver<bool>,
+    ) {
+        let mut ticker = time::interval(interval);
+        if let Err(err) = node.run_pruning_cycle(chunk_size) {
+            warn!(?err, "initial pruning cycle failed");
+        }
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => {
+                    if *shutdown_rx.borrow() {
+                        debug!("pruning loop shutting down");
+                        break;
+                    }
+                }
+                _ = ticker.tick() => {
+                    if let Err(err) = node.run_pruning_cycle(chunk_size) {
+                        warn!(?err, "scheduled pruning cycle failed");
                     }
                 }
             }

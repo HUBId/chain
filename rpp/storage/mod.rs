@@ -11,7 +11,7 @@ use storage_firewood::pruning::{FirewoodPruner, PruningProof as FirewoodPruningP
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
-use crate::types::{Account, Block, BlockMetadata, StoredBlock};
+use crate::types::{Account, Block, BlockMetadata, PruningProof, StoredBlock};
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 
@@ -23,6 +23,7 @@ const TIP_HASH_KEY: &[u8] = b"tip_hash";
 const TIP_TIMESTAMP_KEY: &[u8] = b"tip_timestamp";
 const TIP_METADATA_KEY: &[u8] = b"tip_metadata";
 const BLOCK_METADATA_PREFIX: &[u8] = b"block_metadata/";
+const PRUNING_PROOF_PREFIX: &[u8] = b"pruning_proofs/";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 const WALLET_UTXO_SNAPSHOT_KEY: &[u8] = b"wallet_utxo_snapshot";
 
@@ -156,6 +157,23 @@ impl Storage {
         kv.delete(&metadata_key(key));
         kv.commit()?;
         Ok(())
+    }
+
+    pub fn persist_pruning_proof(&self, height: u64, proof: &PruningProof) -> ChainResult<()> {
+        let mut kv = self.kv.lock();
+        let data = bincode::serialize(proof)?;
+        kv.put(metadata_key(&pruning_proof_suffix(height)), data);
+        kv.commit()?;
+        Ok(())
+    }
+
+    pub fn load_pruning_proof(&self, height: u64) -> ChainResult<Option<PruningProof>> {
+        let kv = self.kv.lock();
+        let key = metadata_key(&pruning_proof_suffix(height));
+        Ok(match kv.get(&key) {
+            Some(bytes) => Some(bincode::deserialize(&bytes)?),
+            None => None,
+        })
     }
 
     pub fn persist_utxo_snapshot(
@@ -559,6 +577,13 @@ fn block_metadata_suffix(height: u64) -> Vec<u8> {
     suffix
 }
 
+fn pruning_proof_suffix(height: u64) -> Vec<u8> {
+    let mut suffix = Vec::with_capacity(PRUNING_PROOF_PREFIX.len() + 8);
+    suffix.extend_from_slice(PRUNING_PROOF_PREFIX);
+    suffix.extend_from_slice(&height.to_be_bytes());
+    suffix
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -567,7 +592,7 @@ mod tests {
     use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
-        ExecutionTrace, pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness,
+        pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness, ExecutionTrace,
     };
     use crate::stwo::proof::{
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
