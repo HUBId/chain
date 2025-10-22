@@ -4,8 +4,10 @@ use prover_backend_interface::Blake2sHasher;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Depth of the sparse identity commitment tree.
-pub const IDENTITY_TREE_DEPTH: usize = 32;
+mod constants;
+
+pub use constants::IDENTITY_TREE_DEPTH;
+
 const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
 const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
 
