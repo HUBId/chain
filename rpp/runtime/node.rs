@@ -18,7 +18,7 @@ use std::convert::TryFrom;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
@@ -29,7 +29,7 @@ use tokio::time;
 use tracing::{debug, error, info, warn};
 
 use hex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json;
 
 use crate::config::{
@@ -69,7 +69,7 @@ use crate::storage::{StateTransitionReceipt, Storage};
 use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
-use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan};
+use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
     ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
@@ -300,6 +300,16 @@ pub struct RolloutStatus {
     pub telemetry: TelemetryRuntimeStatus,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PruningJobStatus {
+    pub plan: StateSyncPlan,
+    pub missing_heights: Vec<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persisted_path: Option<String>,
+    pub stored_proofs: Vec<u64>,
+    pub last_updated: u64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct NodeTelemetrySnapshot {
     pub release_channel: ReleaseChannel,
@@ -309,6 +319,7 @@ pub struct NodeTelemetrySnapshot {
     pub mempool: MempoolStatus,
     pub timetoke_params: TimetokeParams,
     pub verifier_metrics: VerifierMetricsSnapshot,
+    pub pruning: Option<PruningJobStatus>,
 }
 
 struct WitnessChannels {
@@ -411,6 +422,7 @@ pub(crate) struct NodeInner {
     consensus_rounds: RwLock<HashMap<u64, u64>>,
     evidence_pool: RwLock<EvidencePool>,
     telemetry_last_height: RwLock<Option<u64>>,
+    pruning_status: RwLock<Option<PruningJobStatus>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
     shutdown: broadcast::Sender<()>,
@@ -662,6 +674,7 @@ impl Node {
             consensus_rounds: RwLock::new(HashMap::new()),
             evidence_pool: RwLock::new(EvidencePool::default()),
             telemetry_last_height: RwLock::new(None),
+            pruning_status: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             verifiers: verifier_registry,
             shutdown,
@@ -1501,6 +1514,14 @@ impl NodeHandle {
         self.inner.telemetry_snapshot()
     }
 
+    pub fn run_pruning_cycle(&self, chunk_size: usize) -> ChainResult<Option<PruningJobStatus>> {
+        self.inner.run_pruning_cycle(chunk_size)
+    }
+
+    pub fn pruning_job_status(&self) -> Option<PruningJobStatus> {
+        self.inner.pruning_job_status()
+    }
+
     pub fn reconstruction_plan(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
         self.inner.reconstruction_plan(start_height)
     }
@@ -2076,6 +2097,7 @@ impl NodeInner {
             mempool,
             timetoke_params: self.ledger.timetoke_params(),
             verifier_metrics,
+            pruning: self.pruning_status.read().clone(),
         })
     }
 
@@ -2143,6 +2165,69 @@ impl NodeInner {
             info!(?path, "persisted reconstruction plan snapshot");
         }
         Ok(plan)
+    }
+
+    fn run_pruning_cycle(&self, chunk_size: usize) -> ChainResult<Option<PruningJobStatus>> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Ok(None);
+        }
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
+        let state_sync_plan = engine.state_sync_plan(chunk_size)?;
+        let reconstruction_plan = engine.full_plan()?;
+        let persisted_path = engine.persist_plan(&reconstruction_plan)?;
+        let mut missing_heights = Vec::new();
+        for chunk in &state_sync_plan.chunks {
+            for request in &chunk.requests {
+                missing_heights.push(request.height);
+            }
+        }
+        let mut stored_proofs = Vec::new();
+        for height in &missing_heights {
+            match self.storage.read_block_record(*height)? {
+                Some(record) => {
+                    self.storage
+                        .persist_pruning_proof(*height, &record.envelope.pruning_proof)?;
+                    stored_proofs.push(*height);
+                }
+                None => {
+                    warn!(height, "missing block record for pruning proof persistence");
+                }
+            }
+        }
+        let last_updated = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let status = PruningJobStatus {
+            plan: state_sync_plan,
+            missing_heights,
+            persisted_path: persisted_path.map(|path| path.to_string_lossy().to_string()),
+            stored_proofs,
+            last_updated,
+        };
+        if let Some(path) = status.persisted_path.as_ref() {
+            info!(?path, "persisted pruning snapshot plan");
+        }
+        if !status.missing_heights.is_empty() {
+            debug!(
+                heights = ?status.missing_heights,
+                proofs = status.stored_proofs.len(),
+                "pruning cycle identified missing history"
+            );
+        }
+        {
+            let mut slot = self.pruning_status.write();
+            *slot = Some(status.clone());
+        }
+        self.emit_witness_json(GossipTopic::Snapshots, &status);
+        Ok(Some(status))
+    }
+
+    fn pruning_job_status(&self) -> Option<PruningJobStatus> {
+        self.pruning_status.read().clone()
     }
 
     fn verify_proof_chain(&self) -> ChainResult<()> {
@@ -4386,6 +4471,7 @@ mod telemetry_tests {
             },
             timetoke_params: TimetokeParams::default(),
             verifier_metrics: VerifierMetricsSnapshot::default(),
+            pruning: None,
         }
     }
 
