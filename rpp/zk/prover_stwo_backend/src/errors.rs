@@ -1,3 +1,4 @@
+use rpp_identity_tree::IdentityTreeError;
 use thiserror::Error;
 
 /// Result alias used by the blueprint verifier and circuits.
@@ -15,4 +16,10 @@ pub enum ChainError {
     /// Raised when witness or transaction data violates basic invariants.
     #[error("transaction error: {0}")]
     Transaction(String),
+}
+
+impl From<IdentityTreeError> for ChainError {
+    fn from(err: IdentityTreeError) -> Self {
+        ChainError::Transaction(err.to_string())
+    }
 }

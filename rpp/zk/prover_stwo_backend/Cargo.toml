@@ -31,3 +31,4 @@ serde_json = "=1.0.145"
 thiserror = "=2.0.12"
 stwo-official = { package = "stwo-official", path = "vendor/stwo-dev/0.1.1/crates/stwo", optional = true }
 ed25519-dalek = "=2.1.1"
+rpp-identity-tree = { path = "../../identity-tree" }

@@ -9,6 +9,7 @@ members = [
   "storage-firewood",
   "triehash",
   "rpp/crypto-vrf",
+  "rpp/identity-tree",
   "rpp/p2p",
   "rpp/chain",
   "rpp/node",
