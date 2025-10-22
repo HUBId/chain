@@ -1,0 +1,12 @@
+{
+  "local_peer_id": "12D3KooWExampleLocalPeerid1111111111111111111111111",
+  "peer_count": 1,
+  "peers": [
+    {
+      "peer": "12D3KooXExampleRemotePeerid2222222222222222222222222",
+      "version": "rpp-node/1.2.3",
+      "latency_ms": 42,
+      "last_seen": 1715443200000
+    }
+  ]
+}

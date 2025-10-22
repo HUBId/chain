@@ -25,10 +25,10 @@ pub use persistence::{GossipStateError, GossipStateStore};
 pub use pipeline::{
     BasicRecursiveProofVerifier, BlockProposal, ConsensusPipeline, JsonProofValidator,
     LightClientSync, MetaTelemetry, NetworkBlockMetadata, NetworkLightClientUpdate,
-    NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, PersistentProofStorage, PipelineError,
-    ProofMempool, ProofRecord, ProofStorage, SnapshotChunk, SnapshotStore, TelemetryEvent,
-    VoteOutcome,
+    NetworkMetaTelemetryReport, NetworkPayloadExpectations, NetworkPeerTelemetry,
+    NetworkReconstructionRequest, NetworkSnapshotSummary, NetworkStateSyncChunk,
+    NetworkStateSyncPlan, PersistentProofStorage, PipelineError, ProofMempool, ProofRecord,
+    ProofStorage, SnapshotChunk, SnapshotStore, TelemetryEvent, VoteOutcome,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
 pub use rpp_p2p_macros::NetworkBehaviour;
