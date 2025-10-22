@@ -260,7 +260,11 @@ impl TestCluster {
             orchestrator.spawn(shutdown_rx.clone());
 
             let events = p2p_handle.subscribe();
-            let processor = Arc::new(NodeGossipProcessor::new(node_handle.clone()));
+            let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+            let processor = Arc::new(NodeGossipProcessor::new(
+                node_handle.clone(),
+                proof_storage_path,
+            ));
             let gossip_task = spawn_node_event_worker(events, processor, Some(shutdown_rx.clone()));
 
             let storage = node_handle.storage();

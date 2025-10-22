@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -13,7 +14,8 @@ use crate::runtime::node_runtime::node::NodeEvent;
 use crate::types::{Block, TransactionProofBundle};
 use parking_lot::Mutex;
 use rpp_p2p::{
-    GossipTopic, JsonProofValidator, PipelineError, ProofMempool, ProofRecord, ProofStorage,
+    GossipTopic, JsonProofValidator, PersistentProofStorage, PipelineError, ProofMempool,
+    ProofRecord,
 };
 
 /// Processes decoded gossip payloads for downstream pipelines.
@@ -38,17 +40,47 @@ pub struct NodeGossipProcessor {
 }
 
 impl NodeGossipProcessor {
-    pub fn new(node: NodeHandle) -> Self {
+    pub fn new(node: NodeHandle, proof_storage_path: impl Into<PathBuf>) -> Self {
         let validator = Arc::new(JsonProofValidator::default());
-        let storage = Arc::new(NullProofStorage::default());
+        let storage_path = proof_storage_path.into();
+        let storage = Arc::new(
+            PersistentProofStorage::open(storage_path)
+                .expect("persistent proof pipeline must initialise"),
+        );
+        let recovered = storage.load().unwrap_or_else(|err| {
+            warn!(?err, "failed to load persisted proof records");
+            Vec::new()
+        });
         let proofs = ProofMempool::new(validator, storage)
             .expect("in-memory proof pipeline must initialise");
-        Self {
+        let processor = Self {
             node,
             proofs: Arc::new(Mutex::new(proofs)),
             seen_blocks: Arc::new(Mutex::new(HashSet::new())),
             seen_votes: Arc::new(Mutex::new(HashSet::new())),
+        };
+        processor.rehydrate(recovered);
+        processor
+    }
+
+    fn rehydrate(&self, records: Vec<ProofRecord>) {
+        if records.is_empty() {
+            return;
         }
+        for record in records {
+            match serde_json::from_slice::<TransactionProofBundle>(&record.payload) {
+                Ok(bundle) => {
+                    if let Err(err) = self.node.submit_transaction(bundle) {
+                        warn!(?err, "failed to resubmit cached proof bundle");
+                    }
+                }
+                Err(err) => {
+                    warn!(?err, "failed to decode cached proof bundle");
+                }
+            }
+        }
+        let mut proofs = self.proofs.lock();
+        while proofs.pop().is_some() {}
     }
 }
 
@@ -105,15 +137,6 @@ impl GossipProcessor for NodeGossipProcessor {
         let mut proofs = self.proofs.lock();
         while proofs.pop().is_some() {}
         outcome
-    }
-}
-
-#[derive(Debug, Default)]
-struct NullProofStorage;
-
-impl ProofStorage for NullProofStorage {
-    fn persist(&self, _record: &ProofRecord) -> Result<(), PipelineError> {
-        Ok(())
     }
 }
 

@@ -216,7 +216,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
 
         if let Some(p2p) = p2p_handle.as_ref() {
             let events = p2p.subscribe();
-            let processor = Arc::new(NodeGossipProcessor::new(handle.clone()));
+            let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+            let processor = Arc::new(NodeGossipProcessor::new(handle.clone(), proof_storage_path));
             let shutdown = orchestrator_shutdown.as_ref().map(|rx| rx.clone());
             gossip_task = Some(spawn_node_event_worker(events, processor, shutdown));
         }
