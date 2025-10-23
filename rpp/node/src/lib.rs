@@ -1,21 +1,686 @@
-//! Node entry point that wires the prover backends into the networking stack.
-//!
-//! # STWO feature toggles
-//! * `prover-stwo` enables the STWO backend (default).
-//! * `prover-stwo-simd` extends `prover-stwo` and turns on the optional SIMD
-//!   acceleration exposed by the STWO fork. Activate it when the target
-//!   architecture supports the vector instructions; leave it disabled to stay on
-//!   the portable scalar implementation.
-//! * `prover-mock` swaps in the mock backend for tests and environments without
-//!   a prover.
-//!
-//! Switching between these options is handled entirely through Cargo features;
-//! no code changes or configuration files are required.
-#[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
-compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
+use std::env;
+use std::num::NonZeroU64;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
-pub use rpp_chain;
-pub use rpp_chain::proof_backend;
+use anyhow::{Context, Result, anyhow};
+use clap::Parser;
+use opentelemetry::KeyValue;
+use opentelemetry::global;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::runtime::Tokio;
+use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
+use parking_lot::RwLock;
+use tokio::task::{JoinError, JoinHandle};
+use tonic::metadata::{MetadataMap, MetadataValue};
+use tracing::{error, info, info_span, warn};
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
-#[cfg(feature = "prover-stwo")]
-pub use rpp_chain::stwo;
+use rpp_chain::api::ApiContext;
+use rpp_chain::config::{NodeConfig, WalletConfig};
+use rpp_chain::crypto::load_or_generate_keypair;
+use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::runtime::RuntimeMode;
+use rpp_chain::storage::Storage;
+use rpp_chain::wallet::Wallet;
+
+pub use rpp_chain::runtime::RuntimeMode;
+
+#[derive(Debug, Parser)]
+#[command(author, version, about = "Run an rpp node", long_about = None)]
+pub struct Cli {
+    /// Select the runtime mode (node, wallet, validator, hybrid)
+    #[arg(long, value_enum, default_value_t = RuntimeMode::Node)]
+    pub mode: RuntimeMode,
+
+    /// Optional path to a node configuration file loaded before starting the runtime
+    #[arg(long)]
+    config: Option<PathBuf>,
+
+    /// Optional path to a wallet configuration file loaded before starting the runtime
+    #[arg(long)]
+    wallet_config: Option<PathBuf>,
+
+    /// Override the data directory defined in the node configuration
+    #[arg(long)]
+    data_dir: Option<PathBuf>,
+
+    /// Override the RPC listen address defined in the node configuration
+    #[arg(long)]
+    rpc_listen: Option<std::net::SocketAddr>,
+
+    /// Override the RPC authentication token defined in the node configuration
+    #[arg(long)]
+    rpc_auth_token: Option<String>,
+
+    /// Override the telemetry endpoint defined in the node configuration
+    #[arg(long)]
+    telemetry_endpoint: Option<String>,
+
+    /// Override the telemetry authentication token defined in the node configuration
+    #[arg(long)]
+    telemetry_auth_token: Option<String>,
+
+    /// Override the telemetry sample interval (seconds) defined in the node configuration
+    #[arg(long)]
+    telemetry_sample_interval: Option<u64>,
+
+    /// Override the log level (also respects RUST_LOG)
+    #[arg(long)]
+    log_level: Option<String>,
+
+    /// Emit logs in JSON format
+    #[arg(long)]
+    log_json: bool,
+
+    /// Persist the resulting configuration into the current working directory
+    #[arg(long)]
+    write_config: bool,
+}
+
+pub async fn run(cli: Cli) -> Result<()> {
+    let mode = cli.mode;
+    let mut node_bundle = load_node_configuration(&cli)?;
+    if let Some(bundle) = node_bundle.as_mut() {
+        apply_overrides(&mut bundle.value, &cli);
+    }
+    let wallet_bundle = load_wallet_configuration(&cli)?;
+
+    let mut default_config = None;
+    let tracing_config = if let Some(bundle) = node_bundle.as_ref() {
+        &bundle.value
+    } else {
+        default_config = Some(NodeConfig::default());
+        default_config.as_ref().unwrap()
+    };
+
+    let _telemetry_guard = init_tracing(tracing_config, cli.log_level.clone(), cli.log_json)
+        .context("failed to initialise logging")?;
+
+    if cli.write_config {
+        if let Some(bundle) = node_bundle.as_ref() {
+            persist_node_config(mode, &bundle.value, bundle.path.as_deref())?;
+        }
+    }
+
+    let runtime_mode = Arc::new(RwLock::new(mode));
+    let mut node_handle: Option<NodeHandle> = None;
+    let mut node_runtime: Option<JoinHandle<()>> = None;
+    let mut rpc_addr: Option<std::net::SocketAddr> = None;
+    let mut rpc_auth: Option<String> = None;
+    let mut rpc_origin: Option<String> = None;
+    let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
+
+    if let Some(bundle) = node_bundle.take() {
+        let config = bundle.value;
+        let preview_node = Node::new(config.clone())
+            .context("failed to build node with the provided configuration")?;
+        info!(
+            address = %preview_node.handle().address(),
+            "node initialised"
+        );
+        drop(preview_node);
+
+        let (handle, runtime) = NodeHandle::start(config.clone())
+            .await
+            .context("failed to start node runtime")?;
+
+        info!(address = %handle.address(), "node runtime started");
+        info!(target = "rpc", listen = %config.rpc_listen, "rpc endpoint configured");
+        if config.rollout.telemetry.enabled {
+            if let Some(endpoint) = &config.rollout.telemetry.endpoint {
+                info!(
+                    target = "telemetry",
+                    endpoint = %endpoint,
+                    sample_interval_secs = config.rollout.telemetry.sample_interval_secs,
+                    "telemetry endpoint configured"
+                );
+            } else {
+                info!(
+                    target = "telemetry",
+                    sample_interval_secs = config.rollout.telemetry.sample_interval_secs,
+                    "telemetry enabled without explicit endpoint"
+                );
+            }
+        } else {
+            info!(target = "telemetry", "telemetry disabled");
+        }
+        info!(
+            target = "p2p",
+            listen_addr = %config.p2p.listen_addr,
+            "p2p endpoint configured"
+        );
+
+        rpc_addr = Some(config.rpc_listen);
+        rpc_auth = config.rpc_auth_token.clone();
+        rpc_origin = config.rpc_allowed_origin.clone();
+        rpc_requests_per_minute = config.rpc_requests_per_minute.and_then(NonZeroU64::new);
+
+        node_handle = Some(handle);
+        node_runtime = Some(runtime);
+    }
+
+    let mut wallet_instance: Option<Arc<Wallet>> = None;
+    if let Some(bundle) = wallet_bundle {
+        let wallet_config = bundle.value;
+        wallet_config
+            .ensure_directories()
+            .map_err(|err| anyhow!(err))?;
+
+        let storage = if let Some(handle) = node_handle.as_ref() {
+            handle.storage()
+        } else {
+            Storage::open(&wallet_config.data_dir.join("db")).map_err(|err| anyhow!(err))?
+        };
+        let keypair =
+            load_or_generate_keypair(&wallet_config.key_path).map_err(|err| anyhow!(err))?;
+        let wallet = Arc::new(Wallet::new(storage, keypair));
+        rpc_addr.get_or_insert(wallet_config.rpc_listen);
+        wallet_instance = Some(wallet);
+    }
+
+    let rpc_addr = rpc_addr.ok_or_else(|| anyhow!("no runtime role selected"))?;
+    if node_handle.is_none() {
+        info!(target = "rpc", listen = %rpc_addr, "rpc endpoint configured");
+    }
+
+    let rpc_context = ApiContext::new(
+        Arc::clone(&runtime_mode),
+        node_handle.clone(),
+        wallet_instance.clone(),
+        None,
+        rpc_requests_per_minute,
+    );
+
+    let rpc_auth_token = rpc_auth.clone();
+    let rpc_allowed_origin = rpc_origin.clone();
+    let rpc_task = tokio::spawn(async move {
+        if let Err(err) =
+            rpp_chain::api::serve(rpc_context, rpc_addr, rpc_auth_token, rpc_allowed_origin).await
+        {
+            error!(?err, "rpc server terminated");
+        }
+    });
+
+    if let Some(wallet) = &wallet_instance {
+        info!(address = %wallet.address(), "wallet runtime initialised");
+    }
+
+    let outcome = match (node_handle.clone(), node_runtime) {
+        (Some(handle), Some(runtime)) => wait_for_node_shutdown(handle, runtime).await,
+        _ => wait_for_signal_shutdown().await,
+    };
+
+    rpc_task.abort();
+    if let Err(err) = rpc_task.await {
+        if !err.is_cancelled() {
+            warn!(?err, "rpc server join failed");
+        }
+    }
+
+    match outcome {
+        ShutdownOutcome::Clean => Ok(()),
+        ShutdownOutcome::Errored(err) => Err(err),
+    }
+}
+
+#[derive(Clone)]
+struct ConfigBundle<T> {
+    value: T,
+    path: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+enum ShutdownEvent {
+    Runtime(std::result::Result<(), JoinError>),
+    CtrlC(std::io::Result<()>),
+    #[cfg(unix)]
+    SigTerm(Option<i32>),
+}
+
+#[derive(Debug)]
+enum ShutdownOutcome {
+    Clean,
+    Errored(anyhow::Error),
+}
+
+async fn wait_for_node_shutdown(
+    handle: NodeHandle,
+    mut runtime: JoinHandle<()>,
+) -> ShutdownOutcome {
+    tokio::pin!(runtime);
+
+    let shutdown_event = {
+        #[cfg(unix)]
+        let mut sigterm =
+            match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    return ShutdownOutcome::Errored(err.into());
+                }
+            };
+
+        tokio::select! {
+            result = &mut runtime => ShutdownEvent::Runtime(result),
+            result = tokio::signal::ctrl_c() => ShutdownEvent::CtrlC(result),
+            #[cfg(unix)]
+            result = sigterm.recv() => ShutdownEvent::SigTerm(result),
+        }
+    };
+
+    let mut runtime_result: Option<std::result::Result<(), JoinError>> = None;
+
+    match shutdown_event {
+        ShutdownEvent::Runtime(result) => {
+            runtime_result = Some(result);
+            if let Err(err) = handle.stop().await {
+                error!(?err, "failed to stop node runtime after completion");
+                return ShutdownOutcome::Errored(err.into());
+            }
+        }
+        ShutdownEvent::CtrlC(result) => {
+            match result {
+                Ok(()) => info!("received ctrl_c signal"),
+                Err(err) => warn!(?err, "failed to listen for ctrl_c"),
+            }
+            if let Err(err) = handle.stop().await {
+                error!(?err, "failed to stop node runtime");
+                return ShutdownOutcome::Errored(err.into());
+            }
+            runtime_result = Some((&mut runtime).await);
+        }
+        #[cfg(unix)]
+        ShutdownEvent::SigTerm(result) => {
+            match result {
+                Some(_) => info!("received termination signal"),
+                None => warn!("termination signal stream closed"),
+            }
+            if let Err(err) = handle.stop().await {
+                error!(?err, "failed to stop node runtime");
+                return ShutdownOutcome::Errored(err.into());
+            }
+            runtime_result = Some((&mut runtime).await);
+        }
+    }
+
+    match runtime_result {
+        Some(Ok(())) => {
+            info!("node runtime exited cleanly");
+            ShutdownOutcome::Clean
+        }
+        Some(Err(err)) => {
+            let error = anyhow::Error::from(err);
+            error!(?error, "node runtime join failed");
+            ShutdownOutcome::Errored(error)
+        }
+        None => ShutdownOutcome::Clean,
+    }
+}
+
+async fn wait_for_signal_shutdown() -> ShutdownOutcome {
+    #[cfg(unix)]
+    let mut sigterm = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    {
+        Ok(signal) => signal,
+        Err(err) => return ShutdownOutcome::Errored(err.into()),
+    };
+
+    let shutdown_event = tokio::select! {
+        result = tokio::signal::ctrl_c() => ShutdownEvent::CtrlC(result),
+        #[cfg(unix)]
+        result = sigterm.recv() => ShutdownEvent::SigTerm(result),
+    };
+
+    match shutdown_event {
+        ShutdownEvent::CtrlC(result) => match result {
+            Ok(()) => info!("received ctrl_c signal"),
+            Err(err) => warn!(?err, "failed to listen for ctrl_c"),
+        },
+        #[cfg(unix)]
+        ShutdownEvent::SigTerm(result) => match result {
+            Some(_) => info!("received termination signal"),
+            None => warn!("termination signal stream closed"),
+        },
+        ShutdownEvent::Runtime(_) => {}
+    }
+
+    ShutdownOutcome::Clean
+}
+
+fn load_node_configuration(cli: &Cli) -> Result<Option<ConfigBundle<NodeConfig>>> {
+    if !cli.mode.includes_node() {
+        return Ok(None);
+    }
+
+    let path = cli
+        .config
+        .clone()
+        .or_else(|| default_node_config_path(cli.mode).map(PathBuf::from));
+    let config = if let Some(ref path) = path {
+        if path.exists() {
+            NodeConfig::load(path)
+                .with_context(|| format!("failed to load configuration from {}", path.display()))?
+        } else {
+            NodeConfig::default()
+        }
+    } else {
+        NodeConfig::default()
+    };
+
+    Ok(Some(ConfigBundle {
+        value: config,
+        path,
+    }))
+}
+
+fn load_wallet_configuration(cli: &Cli) -> Result<Option<ConfigBundle<WalletConfig>>> {
+    if !cli.mode.includes_wallet() {
+        return Ok(None);
+    }
+
+    let path = cli
+        .wallet_config
+        .clone()
+        .or_else(|| default_wallet_config_path(cli.mode).map(PathBuf::from));
+    let config = if let Some(ref path) = path {
+        if path.exists() {
+            WalletConfig::load(path).map_err(|err| anyhow!(err))?
+        } else {
+            WalletConfig::default()
+        }
+    } else {
+        WalletConfig::default()
+    };
+
+    Ok(Some(ConfigBundle {
+        value: config,
+        path,
+    }))
+}
+
+fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
+    if let Some(dir) = cli.data_dir.as_ref() {
+        config.data_dir = dir.clone();
+    }
+    if let Some(addr) = cli.rpc_listen {
+        config.rpc_listen = addr;
+    }
+    if let Some(token) = cli.rpc_auth_token.as_ref() {
+        let token = token.trim();
+        if token.is_empty() {
+            config.rpc_auth_token = None;
+        } else {
+            config.rpc_auth_token = Some(token.to_string());
+        }
+    }
+    if let Some(endpoint) = cli.telemetry_endpoint.as_ref() {
+        let endpoint = endpoint.trim();
+        if endpoint.is_empty() {
+            config.rollout.telemetry.endpoint = None;
+            config.rollout.telemetry.enabled = false;
+        } else {
+            config.rollout.telemetry.endpoint = Some(endpoint.to_string());
+            config.rollout.telemetry.enabled = true;
+        }
+    }
+    if let Some(auth) = cli.telemetry_auth_token.as_ref() {
+        let token = auth.trim();
+        if token.is_empty() {
+            config.rollout.telemetry.auth_token = None;
+        } else {
+            config.rollout.telemetry.auth_token = Some(token.to_string());
+        }
+    }
+    if let Some(interval) = cli.telemetry_sample_interval {
+        config.rollout.telemetry.sample_interval_secs = interval;
+        if config.rollout.telemetry.endpoint.is_some() {
+            config.rollout.telemetry.enabled = true;
+        }
+    }
+}
+
+fn persist_node_config(
+    mode: RuntimeMode,
+    config: &NodeConfig,
+    override_path: Option<&Path>,
+) -> Result<()> {
+    let path = if let Some(path) = override_path {
+        path.to_path_buf()
+    } else {
+        PathBuf::from(format!("{}.toml", mode.as_str()))
+    };
+
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        env::current_dir()
+            .context("failed to resolve current working directory")?
+            .join(path)
+    };
+
+    config
+        .save(&resolved)
+        .with_context(|| format!("failed to persist configuration to {}", resolved.display()))?;
+    info!(path = %resolved.display(), "persisted node configuration");
+    Ok(())
+}
+
+fn init_tracing(
+    config: &NodeConfig,
+    log_level: Option<String>,
+    json: bool,
+) -> Result<Option<OtelGuard>> {
+    let level = log_level.or_else(|| std::env::var("RUST_LOG").ok());
+    let filter = match level {
+        Some(level) => match EnvFilter::try_new(level) {
+            Ok(filter) => filter,
+            Err(err) => {
+                eprintln!("invalid log level override ({err}), falling back to info");
+                EnvFilter::new("info")
+            }
+        },
+        None => EnvFilter::new("info"),
+    };
+
+    let fmt_layer = || {
+        let layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_ansi(!json);
+        if json {
+            layer.json().flatten_event(true).boxed()
+        } else {
+            layer.boxed()
+        }
+    };
+
+    match build_otlp_layer(config)? {
+        Some(OtlpLayer {
+            layer,
+            guard,
+            endpoint,
+        }) => {
+            tracing_subscriber::registry()
+                .with(filter.clone())
+                .with(fmt_layer())
+                .with(layer)
+                .try_init()?;
+
+            let telemetry_span = info_span!(
+                "node.telemetry.init",
+                otlp_enabled = true,
+                otlp_endpoint = endpoint.as_str()
+            );
+            let _span_guard = telemetry_span.enter();
+            info!(target: "telemetry", otlp_endpoint = endpoint, "tracing initialised");
+            Ok(Some(guard))
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer())
+                .try_init()?;
+
+            let telemetry_span = info_span!("node.telemetry.init", otlp_enabled = false);
+            let _span_guard = telemetry_span.enter();
+            info!(target: "telemetry", otlp_enabled = false, "tracing initialised");
+            Ok(None)
+        }
+    }
+}
+
+struct OtelGuard;
+
+impl Drop for OtelGuard {
+    fn drop(&mut self) {
+        if let Err(err) = global::shutdown_tracer_provider() {
+            eprintln!("failed to shutdown otlp tracer provider: {err}");
+        }
+    }
+}
+
+struct OtlpLayer {
+    layer: OpenTelemetryLayer<tracing_subscriber::Registry, Tracer>,
+    guard: OtelGuard,
+    endpoint: String,
+}
+
+struct OtlpSettings {
+    endpoint: String,
+    auth_header: Option<String>,
+    timeout: Duration,
+}
+
+fn build_otlp_layer(config: &NodeConfig) -> Result<Option<OtlpLayer>> {
+    let Some(settings) = otlp_settings(config)? else {
+        return Ok(None);
+    };
+
+    let mut exporter = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(settings.endpoint.clone())
+        .with_timeout(settings.timeout);
+
+    if let Some(header) = settings.auth_header.as_ref() {
+        let mut metadata = MetadataMap::new();
+        let value = MetadataValue::from_str(header)
+            .map_err(|err| anyhow!("invalid telemetry auth token: {err}"))?;
+        metadata.insert("authorization", value);
+        exporter = exporter.with_metadata(metadata);
+    }
+
+    let exporter = exporter.build_span_exporter()?;
+    let batch_config = BatchConfig::default()
+        .with_max_queue_size(2048)
+        .with_max_export_batch_size(512)
+        .with_max_export_timeout(settings.timeout);
+
+    let resource = Resource::new(vec![
+        KeyValue::new("service.name", "rpp-node"),
+        KeyValue::new("service.namespace", "rpp"),
+        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+        KeyValue::new(
+            "rpp.rollout.release_channel",
+            format!("{:?}", config.rollout.release_channel),
+        ),
+        KeyValue::new(
+            "rpp.telemetry.sample_interval_secs",
+            config.rollout.telemetry.sample_interval_secs as i64,
+        ),
+        KeyValue::new(
+            "rpp.telemetry.redact_logs",
+            config.rollout.telemetry.redact_logs,
+        ),
+    ]);
+
+    let provider = trace::TracerProvider::builder()
+        .with_config(trace::Config::default().with_resource(resource))
+        .with_batch_config(batch_config)
+        .with_batch_exporter(exporter, Tokio)
+        .build();
+
+    let tracer = provider.tracer("rpp-node", Some(env!("CARGO_PKG_VERSION")));
+    global::set_tracer_provider(provider);
+
+    let layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    Ok(Some(OtlpLayer {
+        layer,
+        guard: OtelGuard,
+        endpoint: settings.endpoint,
+    }))
+}
+
+fn otlp_settings(config: &NodeConfig) -> Result<Option<OtlpSettings>> {
+    let telemetry = &config.rollout.telemetry;
+
+    let endpoint_override = normalize_option(std::env::var("RPP_NODE_OTLP_ENDPOINT").ok());
+    let env_endpoint = normalize_option(std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok());
+    let endpoint = endpoint_override
+        .clone()
+        .or_else(|| normalize_option(telemetry.endpoint.clone()))
+        .or(env_endpoint.clone());
+
+    let telemetry_enabled =
+        telemetry.enabled || endpoint_override.is_some() || env_endpoint.is_some();
+
+    let Some(endpoint) = endpoint else {
+        if telemetry_enabled {
+            anyhow::bail!("telemetry endpoint required when OTLP is enabled");
+        }
+        return Ok(None);
+    };
+
+    let auth_header = normalize_option(std::env::var("RPP_NODE_OTLP_AUTH_TOKEN").ok())
+        .or_else(|| normalize_option(telemetry.auth_token.clone()))
+        .map(
+            |token| match token.to_ascii_lowercase().starts_with("bearer ") {
+                true => token,
+                false => format!("Bearer {token}"),
+            },
+        );
+
+    let timeout_ms = std::env::var("RPP_NODE_OTLP_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(telemetry.timeout_ms);
+
+    Ok(Some(OtlpSettings {
+        endpoint,
+        auth_header,
+        timeout: Duration::from_millis(timeout_ms),
+    }))
+}
+
+fn normalize_option(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn default_node_config_path(mode: RuntimeMode) -> Option<&'static str> {
+    match mode {
+        RuntimeMode::Node => Some("config/node.toml"),
+        RuntimeMode::Hybrid => Some("config/hybrid.toml"),
+        RuntimeMode::Validator => Some("config/validator.toml"),
+        RuntimeMode::Wallet => None,
+    }
+}
+
+fn default_wallet_config_path(mode: RuntimeMode) -> Option<&'static str> {
+    match mode {
+        RuntimeMode::Wallet => Some("config/wallet.toml"),
+        RuntimeMode::Hybrid => Some("config/wallet.toml"),
+        RuntimeMode::Validator => Some("config/wallet.toml"),
+        RuntimeMode::Node => None,
+    }
+}
