@@ -96,11 +96,13 @@ cluster-level regressions:
 scripts/run_regression.sh
 ```
 
-The suite boots a three-node cluster, performs wallet transactions, verifies
-proof persistence, and restarts a validator to confirm snapshot recovery. Expect
-the workflow to take roughly 20 minutes on a GitHub Actions runner (similar to a
-4 vCPU development machine). Inspect the produced artefacts under
-`ci-artifacts/regression/` (or the directory configured by
+The wrapper pins `cargo +nightly-2025-07-14 test -p rpp-node --test regression
+-- --nocapture` so the vendored libp2p and prover crates compile with their
+nightly-only features. The suite boots a three-node cluster, performs wallet
+transactions, verifies proof persistence, and restarts a validator to confirm
+snapshot recovery. Expect the workflow to take roughly 20 minutes on a GitHub
+Actions runner (similar to a 4 vCPU development machine). Inspect the produced
+artefacts under `ci-artifacts/regression/` (or the directory configured by
 `RPP_REGRESSION_ARTIFACT_DIR`) for logs, metrics and captured snapshots before
 signing the release.
 

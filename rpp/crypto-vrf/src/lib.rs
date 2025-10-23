@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use malachite::base::num::arithmetic::traits::DivRem;
+use malachite::num::arithmetic::traits::DivRem;
 use malachite::Natural;
 use prover_backend_interface::Blake2sHasher;
 use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
@@ -108,9 +108,9 @@ pub enum VrfKeyError {
     #[error("invalid VRF public key length")]
     InvalidPublicLength,
     #[error("invalid VRF secret key bytes: {0}")]
-    InvalidSecretBytes(#[source] VrfSignatureError),
+    InvalidSecretBytes(VrfSignatureError),
     #[error("invalid VRF public key bytes: {0}")]
-    InvalidPublicBytes(#[source] VrfSignatureError),
+    InvalidPublicBytes(VrfSignatureError),
 }
 
 /// VRF mini-secret key wrapper.

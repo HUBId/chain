@@ -15,7 +15,8 @@ runtime regressions:
 
 ## Regression suite
 
-The regression suite lives under `tests/regression/` and currently ships four
+The regression suite lives under `tests/regression/` and is compiled into the
+`rpp-node` integration tests as `regression`. It currently ships four
 scenarios:
 
 1. **Cluster bootstrap** – spins up a three-node validator cluster and verifies
@@ -41,11 +42,13 @@ human-readable log lines into the directory referenced by the
 scripts/run_regression.sh
 ```
 
-By default the script writes artefacts to `ci-artifacts/regression/` relative to
-the repository root. Override the target directory by exporting
-`RPP_REGRESSION_ARTIFACT_DIR` before invoking the script. The suite takes roughly
-20 minutes on a 4 vCPU developer machine due to validator bootstrap time and the
-proof generation path.
+Under the hood the wrapper executes `cargo +nightly-2025-07-14 test -p rpp-node
+--test regression -- --nocapture`, ensuring the vendored libp2p and prover
+dependencies compile with the required nightly features. By default the script
+writes artefacts to `ci-artifacts/regression/` relative to the repository root.
+Override the target directory by exporting `RPP_REGRESSION_ARTIFACT_DIR` before
+invoking the script. The suite takes roughly 20 minutes on a 4 vCPU developer
+machine due to validator bootstrap time and the proof generation path.
 
 ### CI integration
 
