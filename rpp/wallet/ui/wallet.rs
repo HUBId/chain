@@ -6,22 +6,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::proof_backend::Blake2sHasher;
 use ed25519_dalek::Keypair;
 use malachite::Natural;
-#[cfg(feature = "vendor_electrs")]
-use parking_lot::Mutex;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::{de::DeserializeOwned, Serialize};
 #[cfg(feature = "vendor_electrs")]
 use serde_json;
 #[cfg(feature = "vendor_electrs")]
 use std::path::Path;
-#[cfg(feature = "vendor_electrs")]
-use tokio::sync::broadcast;
-#[cfg(feature = "vendor_electrs")]
-use tokio::sync::watch;
-use tokio::sync::Mutex as AsyncMutex;
-#[cfg(feature = "vendor_electrs")]
-use tokio::task::JoinHandle;
-#[cfg(feature = "vendor_electrs")]
+use tokio::sync::{broadcast, watch, Mutex as AsyncMutex};
+use tokio::task::{self, JoinHandle};
 use tokio::time;
 
 use crate::config::NodeConfig;
@@ -34,13 +26,16 @@ use crate::crypto::{
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{Ledger, ReputationAudit, DEFAULT_EPOCH_LENGTH};
 use crate::node::NodeHandle;
-use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
+use crate::orchestration::{
+    FlowSnapshot, PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
+};
 use crate::proof_system::ProofProver;
 use crate::reputation::{
     minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
 };
 use crate::rpp::{UtxoOutpoint, UtxoRecord};
 use crate::state::StoredUtxo;
+use crate::storage::ledger::SlashingEvent;
 use crate::storage::Storage;
 use crate::stwo::prover::WalletProver;
 use crate::types::{
@@ -52,7 +47,8 @@ use crate::{
     runtime::node::PendingTransactionSummary, runtime::types::ChainProof, stwo::proof::ProofPayload,
 };
 #[cfg(feature = "vendor_electrs")]
-use log::{debug, warn};
+use log::debug;
+use log::warn;
 #[cfg(feature = "vendor_electrs")]
 use rpp::runtime::node::MempoolStatus;
 #[cfg(feature = "vendor_electrs")]
@@ -80,7 +76,10 @@ use sha2::{Digest, Sha256};
 
 use super::{start_node, WalletNodeRuntime};
 
-use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
+use super::tabs::{
+    HistoryEntry, HistoryStatus, NodeTabMetrics, PipelineHistoryStatus, ReceiveTabAddress,
+    SendPreview,
+};
 
 const IDENTITY_WORKFLOW_KEY: &[u8] = b"wallet_identity_workflow";
 const IDENTITY_VRF_KEY: &[u8] = b"wallet_identity_vrf_keypair";
@@ -90,6 +89,34 @@ const ELECTRS_CONFIG_KEY: &[u8] = b"wallet_electrs_config";
 #[cfg(feature = "vendor_electrs")]
 type ElectrsHandlesGuard<'a> =
     parking_lot::lock_api::MutexGuard<'a, parking_lot::RawMutex, Option<ElectrsHandles>>;
+
+const PIPELINE_ERROR_LIMIT: usize = 32;
+const PIPELINE_SLASHING_LIMIT: usize = 16;
+const PIPELINE_SLASHING_POLL_SECS: u64 = 30;
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct PipelineFeedState {
+    pub dashboard: PipelineDashboardSnapshot,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<PipelineError>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slashing_events: Vec<SlashingEvent>,
+}
+
+fn publish_pipeline_state<F>(
+    state: &Arc<RwLock<PipelineFeedState>>,
+    tx: &watch::Sender<PipelineFeedState>,
+    mut update: F,
+) where
+    F: FnMut(&mut PipelineFeedState),
+{
+    let snapshot = {
+        let mut guard = state.write();
+        update(&mut guard);
+        guard.clone()
+    };
+    let _ = tx.send(snapshot);
+}
 
 #[cfg(feature = "vendor_electrs")]
 #[derive(Clone)]
@@ -421,6 +448,10 @@ pub struct Wallet {
     address: Address,
     node_runtime: Arc<AsyncMutex<Option<WalletNodeRuntime>>>,
     node_handle: Arc<RwLock<Option<NodeHandle>>>,
+    pipeline_feed: Arc<RwLock<PipelineFeedState>>,
+    pipeline_feed_tx: watch::Sender<PipelineFeedState>,
+    pipeline_feed_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    pipeline_feed_shutdown: Arc<Mutex<Option<watch::Sender<bool>>>>,
     #[cfg(feature = "vendor_electrs")]
     electrs_handles: Arc<Mutex<Option<ElectrsHandles>>>,
     #[cfg(feature = "vendor_electrs")]
@@ -465,12 +496,17 @@ pub struct ConsensusReceipt {
 impl Wallet {
     pub fn new(storage: Storage, keypair: Keypair) -> Self {
         let address = address_from_public_key(&keypair.public);
+        let (pipeline_feed_tx, _pipeline_feed_rx) = watch::channel(PipelineFeedState::default());
         Self {
             storage,
             keypair: Arc::new(keypair),
             address,
             node_runtime: Arc::new(AsyncMutex::new(None)),
             node_handle: Arc::new(RwLock::new(None)),
+            pipeline_feed: Arc::new(RwLock::new(PipelineFeedState::default())),
+            pipeline_feed_tx,
+            pipeline_feed_task: Arc::new(Mutex::new(None)),
+            pipeline_feed_shutdown: Arc::new(Mutex::new(None)),
             #[cfg(feature = "vendor_electrs")]
             electrs_handles: Arc::new(Mutex::new(None)),
             #[cfg(feature = "vendor_electrs")]
@@ -633,6 +669,31 @@ impl Wallet {
         }
         history.sort_by_key(|entry| entry.status.confirmation_height());
         Ok(Some(history))
+    }
+
+    fn annotate_history_with_pipeline(&self, history: &mut [HistoryEntry]) {
+        if history.is_empty() {
+            return;
+        }
+        let feed_state = self.pipeline_feed.read().clone();
+        if feed_state.dashboard.flows.is_empty() {
+            return;
+        }
+        let flow_index: HashMap<String, FlowSnapshot> = feed_state
+            .dashboard
+            .flows
+            .into_iter()
+            .map(|flow| (flow.hash.clone(), flow))
+            .collect();
+        for entry in history.iter_mut() {
+            if let Some(flow) = flow_index.get(&entry.tx_hash) {
+                let timed_out = detect_pipeline_timeout(entry, flow);
+                entry.pipeline = Some(PipelineHistoryStatus {
+                    flow: flow.clone(),
+                    timed_out,
+                });
+            }
+        }
     }
 
     #[cfg(feature = "vendor_electrs")]
@@ -1026,6 +1087,7 @@ impl Wallet {
     pub async fn stop_node_runtime(&self) -> ChainResult<WalletNodeRuntimeStatus> {
         let mut guard = self.node_runtime.lock().await;
         let Some(runtime) = guard.take() else {
+            self.stop_pipeline_feed();
             let config = self.load_node_runtime_config()?;
             return Ok(WalletNodeRuntimeStatus {
                 running: false,
@@ -1036,6 +1098,7 @@ impl Wallet {
         let config = runtime.config().clone();
         *self.node_handle.write() = None;
         runtime.shutdown().await?;
+        self.stop_pipeline_feed();
         Ok(WalletNodeRuntimeStatus {
             running: false,
             config: Some(config),
@@ -1065,6 +1128,141 @@ impl Wallet {
             config,
             address: None,
         })
+    }
+
+    pub fn pipeline_feed_handle(&self) -> Arc<RwLock<PipelineFeedState>> {
+        Arc::clone(&self.pipeline_feed)
+    }
+
+    pub fn pipeline_feed_snapshot(&self) -> PipelineFeedState {
+        self.pipeline_feed.read().clone()
+    }
+
+    pub fn subscribe_pipeline_feed(
+        &self,
+        orchestrator: &PipelineOrchestrator,
+    ) -> watch::Receiver<PipelineFeedState> {
+        self.ensure_pipeline_subscription(orchestrator);
+        self.pipeline_feed_tx.subscribe()
+    }
+
+    fn ensure_pipeline_subscription(&self, orchestrator: &PipelineOrchestrator) {
+        {
+            let mut guard = self.pipeline_feed_task.lock();
+            if let Some(handle) = guard.as_ref() {
+                if !handle.is_finished() {
+                    return;
+                }
+            }
+            guard.take();
+        }
+
+        if let Some(sender) = self.pipeline_feed_shutdown.lock().take() {
+            let _ = sender.send(true);
+        }
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        *self.pipeline_feed_shutdown.lock() = Some(shutdown_tx);
+
+        let mut dashboard_rx = orchestrator.subscribe_dashboard();
+        let mut errors_rx = orchestrator.subscribe_errors();
+        let pipeline_state = Arc::clone(&self.pipeline_feed);
+        let pipeline_tx = self.pipeline_feed_tx.clone();
+        let node_handle = Arc::clone(&self.node_handle);
+
+        let initial_snapshot = dashboard_rx.borrow().clone();
+        publish_pipeline_state(&pipeline_state, &self.pipeline_feed_tx, move |state| {
+            state.dashboard = initial_snapshot;
+        });
+
+        let initial_handle = { self.node_handle.read().clone() };
+        if let Some(handle) = initial_handle {
+            match handle.slashing_events(PIPELINE_SLASHING_LIMIT) {
+                Ok(events) => {
+                    publish_pipeline_state(&pipeline_state, &self.pipeline_feed_tx, move |state| {
+                        state.slashing_events = events;
+                    });
+                }
+                Err(err) => {
+                    warn!(target: "wallet::pipeline", ?err, "failed to prime slashing alerts");
+                }
+            }
+        }
+
+        let task = tokio::spawn(async move {
+            let mut shutdown_rx = shutdown_rx;
+            let mut slashing_interval =
+                time::interval(Duration::from_secs(PIPELINE_SLASHING_POLL_SECS));
+            loop {
+                tokio::select! {
+                    res = shutdown_rx.changed() => {
+                        match res {
+                            Ok(_) => {
+                                if *shutdown_rx.borrow() {
+                                    break;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    res = dashboard_rx.changed() => match res {
+                        Ok(_) => {
+                            let snapshot = dashboard_rx.borrow().clone();
+                            publish_pipeline_state(&pipeline_state, &pipeline_tx, move |state| {
+                                state.dashboard = snapshot;
+                            });
+                        }
+                        Err(_) => break,
+                    },
+                    res = errors_rx.recv() => match res {
+                        Ok(error) => {
+                            publish_pipeline_state(&pipeline_state, &pipeline_tx, move |state| {
+                                if state.errors.len() >= PIPELINE_ERROR_LIMIT {
+                                    state.errors.remove(0);
+                                }
+                                state.errors.push(error);
+                            });
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            warn!(target: "wallet::pipeline", "lagged on pipeline error stream");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    },
+                    _ = slashing_interval.tick() => {
+                        let maybe_handle = { node_handle.read().clone() };
+                        if let Some(handle) = maybe_handle {
+                            let events = match task::spawn_blocking(move || handle.slashing_events(PIPELINE_SLASHING_LIMIT)).await {
+                                Ok(Ok(events)) => events,
+                                Ok(Err(err)) => {
+                                    warn!(target: "wallet::pipeline", ?err, "failed to fetch slashing events");
+                                    continue;
+                                }
+                                Err(err) => {
+                                    warn!(target: "wallet::pipeline", ?err, "slashing event poll cancelled");
+                                    continue;
+                                }
+                            };
+                            publish_pipeline_state(&pipeline_state, &pipeline_tx, move |state| {
+                                state.slashing_events = events;
+                            });
+                        }
+                    }
+                }
+            }
+        });
+        *self.pipeline_feed_task.lock() = Some(task);
+    }
+
+    fn stop_pipeline_feed(&self) {
+        if let Some(sender) = self.pipeline_feed_shutdown.lock().take() {
+            let _ = sender.send(true);
+        }
+        if let Some(handle) = self.pipeline_feed_task.lock().take() {
+            handle.abort();
+        }
+        publish_pipeline_state(&self.pipeline_feed, &self.pipeline_feed_tx, |state| {
+            *state = PipelineFeedState::default();
+        });
     }
 
     pub fn persist_identity_workflow_state<T: Serialize>(&self, state: &T) -> ChainResult<()> {
@@ -1357,11 +1555,14 @@ impl Wallet {
 
     pub fn history(&self) -> ChainResult<Vec<HistoryEntry>> {
         #[cfg(feature = "vendor_electrs")]
-        if let Some(history) = self.history_from_tracker()? {
+        if let Some(mut history) = self.history_from_tracker()? {
+            self.annotate_history_with_pipeline(&mut history);
             return Ok(history);
         }
 
-        self.legacy_history()
+        let mut history = self.legacy_history()?;
+        self.annotate_history_with_pipeline(&mut history);
+        Ok(history)
     }
 
     fn summarize_account(&self, account: &Account) -> WalletAccountSummary {
@@ -1420,6 +1621,7 @@ impl Wallet {
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
+        let feed_state = self.pipeline_feed.read().clone();
         #[cfg(feature = "vendor_electrs")]
         let tracker_metrics = {
             let guard = self.electrs_handles.lock();
@@ -1452,6 +1654,8 @@ impl Wallet {
             latest_block_height,
             latest_block_hash,
             total_blocks,
+            slashing_alerts: feed_state.slashing_events,
+            pipeline_errors: feed_state.errors,
         })
     }
 
@@ -1459,8 +1663,8 @@ impl Wallet {
         &self,
         orchestrator: &PipelineOrchestrator,
     ) -> PipelineDashboardSnapshot {
-        let receiver = orchestrator.subscribe_dashboard();
-        receiver.borrow().clone()
+        self.ensure_pipeline_subscription(orchestrator);
+        self.pipeline_feed.read().dashboard.clone()
     }
 
     pub async fn wait_for_pipeline_stage(
@@ -1475,6 +1679,7 @@ impl Wallet {
 
     pub fn shutdown_pipeline(&self, orchestrator: &PipelineOrchestrator) {
         orchestrator.shutdown();
+        self.stop_pipeline_feed();
     }
 
     pub fn latest_consensus_receipt(&self) -> ChainResult<Option<ConsensusReceipt>> {
@@ -1527,6 +1732,16 @@ fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
             "wallet timetoke balance {available}h below required {required}h"
         )),
     }
+}
+
+fn detect_pipeline_timeout(entry: &HistoryEntry, flow: &FlowSnapshot) -> Option<bool> {
+    if !matches!(entry.status, HistoryStatus::Pending { .. }) {
+        return None;
+    }
+    if flow.stages.is_empty() || !flow.stages.contains_key(&PipelineStage::MempoolAccepted) {
+        return Some(true);
+    }
+    None
 }
 
 #[cfg(feature = "vendor_electrs")]

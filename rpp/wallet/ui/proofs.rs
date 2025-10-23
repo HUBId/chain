@@ -61,7 +61,7 @@ mod tests {
     use std::sync::Arc;
 
     use ed25519_dalek::Keypair;
-    use rand::{SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, SeedableRng};
     use tempfile::tempdir;
 
     use crate::proof_system::ProofVerifierRegistry;

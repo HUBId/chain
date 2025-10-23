@@ -7,7 +7,7 @@ use crate::reputation::{
     minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
 };
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::utxo::{StoredUtxo, UtxoState, locking_script_hash};
+use crate::state::utxo::{locking_script_hash, StoredUtxo, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 use serde::{Deserialize, Serialize};
 
@@ -490,7 +490,7 @@ mod tests {
     use super::*;
     use crate::crypto::address_from_public_key;
     use crate::errors::ChainError;
-    use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
+    use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
     use crate::reputation::{Tier, TimetokeBalance};
     use crate::storage::Storage;
     use crate::types::Stake;
@@ -720,13 +720,11 @@ mod tests {
             .map(|record| record.outpoint.clone())
             .collect();
         assert_eq!(actual_inputs, expected_inputs);
-        assert!(
-            workflow
-                .planned_outputs
-                .iter()
-                .enumerate()
-                .all(|(index, record)| record.outpoint.index == index as u32)
-        );
+        assert!(workflow
+            .planned_outputs
+            .iter()
+            .enumerate()
+            .all(|(index, record)| record.outpoint.index == index as u32));
 
         let accounts = storage.load_accounts().expect("load accounts");
         let utxo_snapshot = storage
@@ -759,12 +757,10 @@ mod tests {
     #[test]
     fn wallet_errors_without_utxo_snapshot() {
         let (wallet, address, storage, _tempdir) = wallet_fixture_legacy(60_000);
-        assert!(
-            storage
-                .load_utxo_snapshot()
-                .expect("load snapshot")
-                .is_none()
-        );
+        assert!(storage
+            .load_utxo_snapshot()
+            .expect("load snapshot")
+            .is_none());
         let error = wallet
             .unspent_utxos(&address)
             .expect_err("missing snapshot should error");
