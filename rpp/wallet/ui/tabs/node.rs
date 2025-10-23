@@ -1,6 +1,8 @@
 use serde::Serialize;
 
+use crate::orchestration::PipelineError;
 use crate::reputation::Tier;
+use crate::storage::ledger::SlashingEvent;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct NodeTabMetrics {
@@ -10,6 +12,10 @@ pub struct NodeTabMetrics {
     pub latest_block_height: u64,
     pub latest_block_hash: Option<String>,
     pub total_blocks: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slashing_alerts: Vec<SlashingEvent>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pipeline_errors: Vec<PipelineError>,
 }
 
 impl NodeTabMetrics {

@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::orchestration::FlowSnapshot;
 use crate::runtime::node::PendingTransactionSummary;
 use crate::types::SignedTransaction;
 use rpp_wallet::vendor::electrs::StatusDigest;
@@ -43,6 +44,8 @@ pub struct HistoryEntry {
     pub double_spend: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conflict: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<PipelineHistoryStatus>,
 }
 
 impl HistoryEntry {
@@ -64,6 +67,7 @@ impl HistoryEntry {
             vrf_audit: None,
             double_spend: None,
             conflict: None,
+            pipeline: None,
         }
     }
 
@@ -86,6 +90,7 @@ impl HistoryEntry {
             vrf_audit: None,
             double_spend: None,
             conflict: None,
+            pipeline: None,
         }
     }
 
@@ -102,6 +107,7 @@ impl HistoryEntry {
             vrf_audit: None,
             double_spend: None,
             conflict: None,
+            pipeline: None,
         }
     }
 
@@ -130,4 +136,11 @@ impl HistoryEntry {
         self.conflict = conflict;
         self
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PipelineHistoryStatus {
+    pub flow: FlowSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timed_out: Option<bool>,
 }

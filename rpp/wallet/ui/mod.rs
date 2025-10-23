@@ -16,8 +16,13 @@ use crate::node::{
 
 pub use crate::types::{ChainProof, UptimeProof};
 pub use proofs::{ProofGenerator, TxProof};
-pub use tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
-pub use wallet::{ConsensusReceipt, Wallet, WalletAccountSummary, WalletNodeRuntimeStatus};
+pub use tabs::{
+    HistoryEntry, HistoryStatus, NodeTabMetrics, PipelineHistoryStatus, ReceiveTabAddress,
+    SendPreview,
+};
+pub use wallet::{
+    ConsensusReceipt, PipelineFeedState, Wallet, WalletAccountSummary, WalletNodeRuntimeStatus,
+};
 #[cfg(feature = "vendor_electrs")]
 pub use wallet::{
     ScriptStatusMetadata, TrackedScriptSnapshot, TrackerSnapshot, TrackerState, WalletTrackerHandle,

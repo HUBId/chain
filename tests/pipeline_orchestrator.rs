@@ -114,6 +114,26 @@ async fn pipeline_dashboard_snapshot_is_initially_empty() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipeline_feed_receiver_caches_initial_state() {
+    let Some(fixture) = tokio::task::spawn_blocking(OrchestratorFixture::new)
+        .await
+        .expect("spawn blocking")
+    else {
+        return;
+    };
+    let receiver = fixture
+        .wallet
+        .subscribe_pipeline_feed(fixture.orchestrator.as_ref());
+    let feed = receiver.borrow().clone();
+    assert!(feed.dashboard.flows.is_empty());
+    assert!(feed.errors.is_empty());
+    assert!(feed.slashing_events.is_empty());
+    fixture
+        .wallet
+        .shutdown_pipeline(fixture.orchestrator.as_ref());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wait_for_stage_times_out_for_unknown_hash() {
     let Some(fixture) = tokio::task::spawn_blocking(OrchestratorFixture::new)
         .await
