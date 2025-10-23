@@ -37,6 +37,6 @@ pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, Wor
 pub use rpp_p2p_macros::NetworkBehaviour;
 pub use security::{RateLimiter, ReplayProtector};
 pub use simulator::{NetworkSimulation, SimulationReport};
-pub use swarm::{Network, NetworkError, NetworkEvent};
+pub use swarm::{Network, NetworkError, NetworkEvent, NetworkMetricsSnapshot};
 pub use tier::TierLevel;
 pub use topics::GossipTopic;

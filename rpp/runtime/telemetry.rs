@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 
 use crate::config::TelemetryConfig;
 use crate::proof_system::VerifierMetricsSnapshot;
+use rpp_p2p::NetworkMetricsSnapshot;
 
 const TELEMETRY_CHANNEL_CAPACITY: usize = 128;
 
@@ -30,6 +31,8 @@ pub struct TelemetrySnapshot {
     pub timestamp: SystemTime,
     /// Aggregated verifier statistics grouped by backend.
     pub verifier_metrics: VerifierMetricsSnapshot,
+    /// Snapshot of libp2p network metrics as observed locally.
+    pub network_metrics: Option<NetworkMetricsSnapshot>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -228,7 +231,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::OnceLock;
     use tokio::sync::oneshot;
-    use tokio::time::{Duration as TokioDuration, sleep};
+    use tokio::time::{sleep, Duration as TokioDuration};
 
     #[tokio::test]
     async fn disabled_configuration_only_logs() {
@@ -326,10 +329,9 @@ mod tests {
         sleep(TokioDuration::from_millis(400)).await;
 
         let logs = logger.drain();
-        assert!(
-            logs.iter()
-                .any(|entry| entry.contains("telemetry HTTP dispatch failed"))
-        );
+        assert!(logs
+            .iter()
+            .any(|entry| entry.contains("telemetry HTTP dispatch failed")));
         handle.shutdown().await.expect("shutdown");
     }
 
@@ -343,6 +345,7 @@ mod tests {
             reputation_score: 0.75,
             timestamp: SystemTime::now(),
             verifier_metrics: VerifierMetricsSnapshot::default(),
+            network_metrics: None,
         }
     }
 
