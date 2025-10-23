@@ -20,6 +20,10 @@ use tower::ServiceBuilder;
 use tracing::info;
 
 use crate::consensus::SignedBftVote;
+use crate::crypto::{
+    generate_vrf_keypair, vrf_public_key_to_hex, vrf_secret_key_to_hex, DynVrfKeyStore,
+    VrfKeyIdentifier, VrfKeypair,
+};
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "vendor_electrs")]
 use crate::interfaces::WalletTrackerSnapshot;
@@ -27,13 +31,15 @@ use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
-    NodeTelemetrySnapshot, PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
-    UptimeSchedulerStatus, VrfStatus, DEFAULT_STATE_SYNC_CHUNK,
+    NodeTelemetrySnapshot, PendingUptimeSummary, PruningJobStatus, RolloutStatus,
+    UptimeSchedulerRun, UptimeSchedulerStatus, VrfStatus, DEFAULT_STATE_SYNC_CHUNK,
 };
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
-use crate::runtime::config::{P2pAllowlistEntry, QueueWeightsConfig};
+use crate::runtime::config::{
+    P2pAllowlistEntry, QueueWeightsConfig, SecretsBackendConfig, SecretsConfig,
+};
 use crate::runtime::RuntimeMode;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
@@ -61,6 +67,7 @@ pub struct ApiContext {
     tracker: Option<WalletTrackerHandle>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     request_limit_per_minute: Option<NonZeroU64>,
+    auth_token_enabled: bool,
 }
 
 impl ApiContext {
@@ -70,6 +77,7 @@ impl ApiContext {
         wallet: Option<Arc<Wallet>>,
         orchestrator: Option<Arc<PipelineOrchestrator>>,
         request_limit_per_minute: Option<NonZeroU64>,
+        auth_token_enabled: bool,
     ) -> Self {
         #[cfg(feature = "vendor_electrs")]
         let tracker = wallet.as_ref().and_then(|wallet| wallet.tracker_handle());
@@ -82,6 +90,7 @@ impl ApiContext {
             tracker,
             orchestrator,
             request_limit_per_minute,
+            auth_token_enabled,
         }
     }
 
@@ -231,6 +240,34 @@ impl ApiContext {
     fn request_limit_per_minute(&self) -> Option<NonZeroU64> {
         self.request_limit_per_minute
     }
+
+    fn auth_enabled(&self) -> bool {
+        self.auth_token_enabled
+    }
+
+    fn ensure_validator_tier(
+        &self,
+        minimum: Tier,
+    ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+        if self.auth_enabled() {
+            return Ok(());
+        }
+        let wallet = self.require_wallet()?;
+        let summary = wallet.account_summary().map_err(to_http_error)?;
+        if summary.tier < minimum {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    error: format!(
+                        "validator tier {} does not meet required tier {}",
+                        summary.tier.name(),
+                        minimum.name()
+                    ),
+                }),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Default)]
@@ -321,6 +358,22 @@ struct ValidatorProofQueueTotals {
     identities: usize,
     votes: usize,
     uptime_proofs: usize,
+}
+
+#[derive(Serialize)]
+struct ValidatorVrfResponse {
+    backend: String,
+    identifier: String,
+    available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public_key: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ValidatorTelemetryResponse {
+    local_peer_id: String,
+    peer_count: usize,
+    peers: Vec<NetworkPeerTelemetry>,
 }
 
 #[derive(Serialize)]
@@ -590,6 +643,7 @@ pub async fn serve(
         .route("/validator/peers", get(validator_peers))
         .route("/validator/telemetry", get(validator_telemetry))
         .route("/validator/vrf", get(validator_vrf))
+        .route("/validator/vrf/rotate", post(validator_rotate_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
         .route("/p2p/peers", get(p2p_meta_telemetry))
         .route("/p2p/access-lists", post(update_access_lists))
@@ -954,20 +1008,40 @@ async fn validator_peers(
 
 async fn validator_telemetry(
     State(state): State<ApiContext>,
-) -> Result<Json<NodeTelemetrySnapshot>, (StatusCode, Json<ErrorResponse>)> {
-    state
+) -> Result<Json<ValidatorTelemetryResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state.ensure_validator_tier(Tier::Tl0)?;
+    let report = state
         .require_node()?
-        .telemetry_snapshot()
-        .map(Json)
-        .map_err(to_http_error)
+        .meta_telemetry_snapshot()
+        .await
+        .map_err(to_http_error)?;
+    let network = NetworkMetaTelemetryReport::from(&report);
+    Ok(Json(ValidatorTelemetryResponse {
+        local_peer_id: network.local_peer_id,
+        peer_count: network.peer_count,
+        peers: network.peers,
+    }))
 }
 
 async fn validator_vrf(
     State(state): State<ApiContext>,
-) -> Result<Json<VrfStatus>, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<Json<ValidatorVrfResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state.ensure_validator_tier(Tier::Tl0)?;
     let node = state.require_node()?;
-    let address = node.address().to_string();
-    node.vrf_status(&address).map(Json).map_err(to_http_error)
+    let (secrets, identifier, store) = node_vrf_store(&node)?;
+    let keypair = store.load(&identifier).map_err(to_http_error)?;
+    Ok(Json(vrf_response(&secrets, &identifier, keypair.as_ref())))
+}
+
+async fn validator_rotate_vrf(
+    State(state): State<ApiContext>,
+) -> Result<Json<ValidatorVrfResponse>, (StatusCode, Json<ErrorResponse>)> {
+    state.ensure_validator_tier(Tier::Tl0)?;
+    let node = state.require_node()?;
+    let (secrets, identifier, store) = node_vrf_store(&node)?;
+    let keypair = generate_vrf_keypair().map_err(to_http_error)?;
+    store.store(&identifier, &keypair).map_err(to_http_error)?;
+    Ok(Json(vrf_response(&secrets, &identifier, Some(&keypair))))
 }
 
 async fn validator_submit_uptime(
@@ -1534,6 +1608,40 @@ async fn wallet_pipeline_shutdown(
     let orchestrator = state.require_orchestrator()?;
     wallet.shutdown_pipeline(orchestrator.as_ref());
     Ok(Json(PipelineShutdownResponse { status: "ok" }))
+}
+
+fn node_vrf_store(
+    node: &NodeHandle,
+) -> Result<(SecretsConfig, VrfKeyIdentifier, DynVrfKeyStore), (StatusCode, Json<ErrorResponse>)> {
+    let secrets = node.vrf_secrets_config();
+    let path = node.vrf_key_path();
+    let identifier = secrets.vrf_identifier(&path).map_err(to_http_error)?;
+    let store = secrets.build_keystore().map_err(to_http_error)?;
+    Ok((secrets, identifier, store))
+}
+
+fn vrf_response(
+    secrets: &SecretsConfig,
+    identifier: &VrfKeyIdentifier,
+    keypair: Option<&VrfKeypair>,
+) -> ValidatorVrfResponse {
+    let backend = match &secrets.backend {
+        SecretsBackendConfig::Filesystem(_) => "filesystem",
+        SecretsBackendConfig::Vault(_) => "vault",
+        SecretsBackendConfig::Hsm(_) => "hsm",
+    }
+    .to_string();
+    let identifier = match identifier {
+        VrfKeyIdentifier::Filesystem(path) => path.display().to_string(),
+        VrfKeyIdentifier::Remote(key) => key.clone(),
+    };
+    let public_key = keypair.map(|pair| vrf_public_key_to_hex(&pair.public));
+    ValidatorVrfResponse {
+        backend,
+        identifier,
+        available: keypair.is_some(),
+        public_key,
+    }
 }
 
 fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {

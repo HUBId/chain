@@ -297,6 +297,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         wallet_instance.clone(),
         orchestrator_instance.clone(),
         rpc_requests_per_minute,
+        rpc_auth_token.is_some(),
     );
     let api_task = tokio::spawn(async move {
         api::serve(

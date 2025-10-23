@@ -4,23 +4,23 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use opentelemetry::KeyValue;
 use opentelemetry::global;
+use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
+use opentelemetry_sdk::Resource;
 use parking_lot::RwLock;
 use tokio::task::{JoinError, JoinHandle};
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tracing::{error, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 
 use rpp_chain::api::ApiContext;
 use rpp_chain::config::{NodeConfig, WalletConfig};
@@ -205,6 +205,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         wallet_instance.clone(),
         orchestrator_instance.clone(),
         rpc_requests_per_minute,
+        rpc_auth.is_some(),
     );
 
     let rpc_auth_token = rpc_auth.clone();

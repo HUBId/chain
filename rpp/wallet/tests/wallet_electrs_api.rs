@@ -19,18 +19,22 @@ use rpp::config::NodeConfig;
 use rpp::crypto::{load_keypair, sign_message};
 use rpp::interfaces::WalletHistoryResponse;
 use rpp::orchestration::PipelineOrchestrator;
+use rpp::proofs::rpp::{
+    encode_transaction_witness, AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness,
+    UtxoOutpoint,
+};
 use rpp::runtime::config::FeatureGates as NodeFeatureGates;
 use rpp::runtime::node::Node;
 use rpp::runtime::sync::{PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier};
-use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
-use rpp::runtime::types::transaction::SignedTransaction;
-use rpp::runtime::types::TransactionProofBundle;
 use rpp::runtime::types::proofs::{ChainProof, RppStarkProof};
+use rpp::runtime::types::transaction::SignedTransaction;
+use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
+use rpp::runtime::types::TransactionProofBundle;
 use rpp::runtime::RuntimeMode;
 use rpp::storage::state::utxo::StoredUtxo;
 use rpp::wallet::config::{
-    CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection as WalletNetworkSelection, P2pConfig,
-    TrackerConfig,
+    CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection as WalletNetworkSelection,
+    P2pConfig, TrackerConfig,
 };
 use rpp::wallet::ui::tabs::history::{HistoryEntry, HistoryStatus};
 use rpp::wallet::ui::wallet::{TrackerState, Wallet};
@@ -42,13 +46,10 @@ use rpp::wallet::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction a
 use rpp::wallet::vendor::electrs::types::{
     bsl_txid, encode_ledger_memo, encode_ledger_script, encode_transaction_metadata,
     LedgerMemoPayload, LedgerScriptPayload, RppStarkProofAudit, RppStarkReportSummary,
-    StatusDigest, StoredTransactionMetadata, StoredVrfAudit, VrfInputDescriptor, VrfOutputDescriptor,
+    StatusDigest, StoredTransactionMetadata, StoredVrfAudit, VrfInputDescriptor,
+    VrfOutputDescriptor,
 };
 use rpp::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher};
-use rpp::proofs::rpp::{
-    encode_transaction_witness, AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness,
-    UtxoOutpoint,
-};
 
 #[derive(Debug, Deserialize)]
 struct WalletSection {
@@ -117,10 +118,20 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         p2p: P2pConfig::default(),
     };
 
-    let handles = initialize(&electrs_config, &firewood_dir, &index_dir, Some(runtime.clone()))?;
+    let handles = initialize(
+        &electrs_config,
+        &firewood_dir,
+        &index_dir,
+        Some(runtime.clone()),
+    )?;
     let storage = (*runtime.storage()).clone();
     let wallet_keypair = load_keypair(&node_config.key_path)?;
-    let wallet = Wallet::with_electrs(storage, wallet_keypair.clone(), electrs_config.clone(), handles)?;
+    let wallet = Wallet::with_electrs(
+        storage,
+        wallet_keypair.clone(),
+        electrs_config.clone(),
+        handles,
+    )?;
 
     let bundle = build_transaction_bundle(&scenario, wallet.address());
 
@@ -147,10 +158,15 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         Some("pending".into()),
     );
     let pending_signature = sign_message(&wallet_keypair, &pending_tx.canonical_bytes());
-    let pending_signed = SignedTransaction::new(pending_tx, pending_signature, &wallet_keypair.public);
+    let pending_signed =
+        SignedTransaction::new(pending_tx, pending_signature, &wallet_keypair.public);
     let pending_bundle = TransactionProofBundle::new(
         pending_signed,
-        ChainProof::RppStark(RppStarkProof::new(vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9])),
+        ChainProof::RppStark(RppStarkProof::new(
+            vec![1, 2, 3],
+            vec![4, 5, 6],
+            vec![7, 8, 9],
+        )),
         None,
         None,
     );
@@ -178,10 +194,7 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         .find(|entry| matches!(entry.status, HistoryStatus::Confirmed { .. }))
         .expect("confirmed entry present");
     assert_eq!(
-        confirmed
-            .status_digest
-            .as_ref()
-            .map(StatusDigest::to_hex),
+        confirmed.status_digest.as_ref().map(StatusDigest::to_hex),
         Some(bundle.expected_digest.to_hex()),
         "confirmed entry should expose tracker digest"
     );
@@ -201,12 +214,12 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         .expect("script metadata available")
         .pop()
         .expect("tracker metadata present");
-    assert_ne!(metadata.mempool_delta, 0, "mempool delta should reflect pending transaction");
+    assert_ne!(
+        metadata.mempool_delta, 0,
+        "mempool delta should reflect pending transaction"
+    );
     assert_eq!(
-        metadata
-            .status_digest
-            .as_ref()
-            .map(StatusDigest::to_hex),
+        metadata.status_digest.as_ref().map(StatusDigest::to_hex),
         Some(bundle.expected_digest.to_hex()),
         "metadata digest should match tracker digest"
     );
@@ -219,10 +232,7 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         "script metadata should surface proof envelope"
     );
     assert_eq!(
-        metadata
-            .vrf_audits
-            .first()
-            .and_then(|value| value.as_ref()),
+        metadata.vrf_audits.first().and_then(|value| value.as_ref()),
         Some(&bundle.vrf_audit),
         "script metadata should surface VRF audit"
     );
@@ -248,7 +258,14 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
     );
 
     let mode = Arc::new(RwLock::new(RuntimeMode::Wallet));
-    let context = ApiContext::new(mode, None, Some(Arc::new(wallet.clone())), None, None);
+    let context = ApiContext::new(
+        mode,
+        None,
+        Some(Arc::new(wallet.clone())),
+        None,
+        None,
+        false,
+    );
 
     let addr = random_loopback()?;
     let server_context = context.clone();
@@ -265,14 +282,14 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         .get(format!("{}/wallet/history", base))
         .send()
         .await?
-        .error_for_status()? 
+        .error_for_status()?
         .json()
         .await?;
     let ui_history: WalletHistoryResponse = client
         .get(format!("{}/ui/history", base))
         .send()
         .await?
-        .error_for_status()? 
+        .error_for_status()?
         .json()
         .await?;
 
@@ -329,7 +346,8 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
     assert!(
         script_metadata
             .iter()
-            .any(|meta| meta.status_digest.as_ref().map(StatusDigest::to_hex) == Some(bundle.expected_digest.to_hex())),
+            .any(|meta| meta.status_digest.as_ref().map(StatusDigest::to_hex)
+                == Some(bundle.expected_digest.to_hex())),
         "RPC metadata should advertise digest"
     );
     assert!(
@@ -407,7 +425,12 @@ fn build_transaction_bundle(scenario: &WalletTrackerScenario, recipient: &str) -
     let mut txid_bytes = [0u8; 32];
     txid_bytes.copy_from_slice(txid.as_bytes());
 
-    let witness = wallet_sample_transaction_witness(txid_bytes, recipient, scenario.blocks.amount, scenario.blocks.fee);
+    let witness = wallet_sample_transaction_witness(
+        txid_bytes,
+        recipient,
+        scenario.blocks.amount,
+        scenario.blocks.fee,
+    );
     let witness_bytes = encode_transaction_witness(&witness).expect("encode witness");
     let proof = RppStarkProof::new(vec![0xAA, 0xBB], vec![0xCC, 0xDD], vec![0xEE, 0xFF]);
     let public_digest = compute_public_digest(proof.public_inputs());
@@ -495,7 +518,8 @@ fn wallet_sample_transaction_witness(
         UtxoOutpoint { tx_id, index: 0 },
         StoredUtxo::new(recipient.to_string(), amount),
     );
-    let sender_before = AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
+    let sender_before =
+        AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
     let sender_after = AccountBalanceWitness::new("sender".to_string(), u128::from(fee), 2);
     let recipient_before = Some(AccountBalanceWitness::new(recipient.to_string(), 0, 0));
     let recipient_after = AccountBalanceWitness::new(recipient.to_string(), amount, 1);
@@ -573,7 +597,10 @@ fn random_loopback() -> Result<SocketAddr> {
 struct DummyPayloadProvider;
 
 impl PayloadProvider for DummyPayloadProvider {
-    fn fetch_payload(&self, request: &ReconstructionRequest) -> rpp::errors::ChainResult<rpp::runtime::types::BlockPayload> {
+    fn fetch_payload(
+        &self,
+        request: &ReconstructionRequest,
+    ) -> rpp::errors::ChainResult<rpp::runtime::types::BlockPayload> {
         Err(rpp::errors::ChainError::Config(format!(
             "no payload available for height {}",
             request.height

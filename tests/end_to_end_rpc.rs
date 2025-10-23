@@ -71,6 +71,7 @@ impl RpcTestHarness {
             Some(wallet),
             Some(orchestrator),
             None,
+            false,
         );
         let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None).await });
 
