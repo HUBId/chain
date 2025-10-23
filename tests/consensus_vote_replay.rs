@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{anyhow, ensure, Context, Result};
 use tokio::sync::broadcast;
 use tokio::time::{sleep, timeout};
 
@@ -84,7 +84,12 @@ async fn restarted_node_does_not_rebroadcast_votes() -> Result<()> {
         let updated = cluster
             .consensus_snapshots()
             .context("post replay snapshot")?;
-        ensure!(baseline.len() == updated.len());
+        ensure!(
+            baseline.len() == updated.len(),
+            "consensus snapshot count changed after replay: before={} after={}",
+            baseline.len(),
+            updated.len()
+        );
         for (index, (before, after)) in baseline.iter().zip(updated.iter()).enumerate() {
             ensure!(
                 before.pending_votes == after.pending_votes,
@@ -96,13 +101,20 @@ async fn restarted_node_does_not_rebroadcast_votes() -> Result<()> {
             );
         }
 
+        let restarted_node = &cluster.nodes()[broadcaster_index];
+        restarted_node.orchestrator.shutdown();
+        restarted_node.p2p_handle.shutdown().await.map_err(|err| {
+            anyhow!("failed to shutdown broadcaster {broadcaster_index} p2p handle: {err}")
+        })?;
+        restarted_node.node_handle.stop().await.map_err(|err| {
+            anyhow!("failed to stop broadcaster {broadcaster_index} runtime after replay: {err}")
+        })?;
+
         Ok(())
     }
     .await;
 
-    if let Err(err) = cluster.shutdown().await {
-        eprintln!("cluster shutdown failed: {err:?}");
-    }
+    cluster.shutdown().await.context("cluster shutdown")?;
 
     result
 }

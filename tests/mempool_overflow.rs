@@ -22,8 +22,8 @@ use rpp_chain::types::{
 fn sample_node_config(base: &Path, mempool_limit: usize) -> NodeConfig {
     let data_dir = base.join("data");
     let keys_dir = base.join("keys");
-    fs::create_dir_all(&data_dir).expect("node data dir");
-    fs::create_dir_all(&keys_dir).expect("node key dir");
+    fs::create_dir_all(&data_dir).expect("create node data directory for mempool overflow test");
+    fs::create_dir_all(&keys_dir).expect("create node key directory for mempool overflow test");
 
     let mut config = NodeConfig::default();
     config.data_dir = data_dir.clone();
@@ -102,8 +102,8 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         move || Node::new(config)
     })
     .await
-    .expect("spawn blocking")
-    .expect("node init");
+    .expect("spawn Node::new blocking task for overflow test")
+    .expect("initialize node before exercising mempool overflow");
     let handle = node.handle();
     let recipient = handle.address().to_string();
 
@@ -114,10 +114,10 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         let bundle = sample_transaction_bundle(&storage, &recipient, nonce);
         verifiers
             .verify_transaction(&bundle.proof)
-            .expect("bundle should verify");
+            .expect("pre-overflow bundle should verify before submission");
         let hash = handle
             .submit_transaction(bundle)
-            .expect("transaction accepted");
+            .expect("mempool should accept transaction before reaching configured limit");
         accepted_hashes.push(hash);
     }
 
@@ -125,17 +125,22 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         let bundle = sample_transaction_bundle(&storage, &recipient, nonce);
         verifiers
             .verify_transaction(&bundle.proof)
-            .expect("bundle should verify");
+            .expect("overflow bundle should verify before rejection");
         match handle.submit_transaction(bundle) {
             Err(ChainError::Transaction(message)) => {
-                assert_eq!(message, "mempool full");
+                assert_eq!(
+                    message, "mempool full",
+                    "overflow rejection should describe mempool capacity"
+                );
             }
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(hash) => panic!("unexpectedly accepted overflow transaction {hash}"),
         }
     }
 
-    let status = handle.mempool_status().expect("mempool status");
+    let status = handle
+        .mempool_status()
+        .expect("fetch mempool status before restart");
     let queued_hashes: Vec<_> = status
         .transactions
         .iter()
@@ -169,13 +174,13 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
         move || Node::new(config)
     })
     .await
-    .expect("spawn blocking")
-    .expect("node init after restart");
+    .expect("spawn Node::new blocking task for restart")
+    .expect("initialize node after restart");
     let restarted_handle = restarted.handle();
 
     let restarted_status = restarted_handle
         .mempool_status()
-        .expect("mempool status after restart");
+        .expect("fetch mempool status after restart");
     assert!(
         restarted_status.transactions.is_empty(),
         "mempool should be empty after restart"

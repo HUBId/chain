@@ -3,19 +3,19 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use libp2p::PeerId;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{broadcast, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, sleep};
+use tokio::time::{sleep, Instant};
 
 use rpp_chain::config::{GenesisAccount, NodeConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
-use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
+use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 use rpp_chain::node::{
     ConsensusStatus as RuntimeConsensusStatus, Node, NodeHandle, NodeStatus as RuntimeNodeStatus,
 };
@@ -41,7 +41,7 @@ use rpp_wallet::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::init::{ElectrsHandles, initialize};
+use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
 
 #[cfg(feature = "vendor_electrs")]
 #[derive(Clone)]
