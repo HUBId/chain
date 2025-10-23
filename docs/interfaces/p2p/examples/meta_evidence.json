@@ -1,0 +1,11 @@
+{
+  "address": "validator-0",
+  "height": 1024,
+  "round": 12,
+  "kind": "InvalidProposal",
+  "vote_kind": null,
+  "block_hashes": [
+    "0xdeadbeefcafebabe",
+    "0x42"
+  ]
+}
