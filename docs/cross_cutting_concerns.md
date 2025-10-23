@@ -32,6 +32,12 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 5. **Netzwerk & Ressourcen**
    * `gossip_fanout`, `max_channel_buffer`, `rate_limit_per_channel` – Stabilität der P2P-Kanäle.
    * `max_block_size`, `max_votes_per_round` – DoS- und Kapazitätsbegrenzung.
+6. **Secrets & Schlüsselmaterial**
+   * `secrets.backend` wählt den VRF-Keystore (Filesystem, Vault, HSM-Placeholder)
+     und kontrolliert, ob Schlüsseldateien lokal angelegt oder per API bezogen
+     werden.【F:config/node.toml†L8-L13】【F:rpp/runtime/config.rs†L328-L367】
+   * `NodeConfig::load_or_generate_vrf_keypair` kapselt die Backend-Auswahl und
+     verhindert Klartext-Logs von Tokens/TLS-Zugangsdaten beim Laden aus Vault & Co.【F:rpp/runtime/config.rs†L567-L574】【F:rpp/runtime/node.rs†L611-L615】【F:rpp/crypto/mod.rs†L262-L316】
 
 ### 1.3 Versionsverwaltung & Migration
 * Konfigurationsschema per SemVer kennzeichnen, z. B. `config_version = "1.0"`.
@@ -111,7 +117,11 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 * Kapazitätsplanung: Ressourcenbedarf pro Node (CPU für Proofs, Speicher für Snapshots, Bandbreite pro Kanal).
 
 ### 5.4 Sicherheitsmaßnahmen
-* Secrets-Management für VRF-Schlüssel (z. B. HSM, Vault-Integration).
+* Secrets-Management für VRF-Schlüssel (z. B. HSM, Vault-Integration) inklusive
+  keystore-spezifischer Zugriffsdaten im `[secrets]`-Abschnitt von
+  `config/node.toml`.【F:config/node.toml†L8-L13】【F:rpp/runtime/config.rs†L328-L367】
+* Runtime-Initialisierung darf keinerlei Klartext-Tokens loggen; die Keystore-
+  Implementierungen kapseln Requests und propagieren nur sanitised Fehlercodes.【F:rpp/crypto/mod.rs†L262-L316】【F:rpp/runtime/node.rs†L611-L615】
 * Härtung der P2P-Schicht (TLS/Noise, Peer-Authentifizierung, Sybil-Resistenz).
 * Regelmäßige Security-Audits & Bug-Bounty-Programme.
 
