@@ -16,16 +16,18 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time;
+use tracing::instrument;
+use tracing::Span;
 use tracing::{debug, error, info, warn};
 
 use hex;
@@ -36,13 +38,13 @@ use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
 };
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
-    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
-    classify_participants, evaluate_vrf,
+    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
+    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
+    SignedBftVote, ValidatorCandidate,
 };
 use crate::crypto::{
-    VrfKeypair, address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
-    vrf_public_key_to_hex,
+    address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
+    vrf_public_key_to_hex, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -57,11 +59,11 @@ use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
-    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
     node::{
         IdentityProfile as RuntimeIdentityProfile, MetaTelemetryReport, NodeError as P2pError,
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
@@ -72,9 +74,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
-    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
-    TransactionProofBundle, UptimeProof,
+    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -834,7 +836,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
+        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -845,9 +847,8 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
-        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field,
+        string_to_field, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1523,6 +1524,16 @@ impl NodeHandle {
         self.inner.submit_identity(request)
     }
 
+    #[instrument(
+        name = "node.consensus.submit_vote",
+        skip(self, vote),
+        fields(
+            height = vote.vote.height,
+            round = vote.vote.round,
+            voter = %vote.vote.voter,
+            kind = ?vote.vote.kind
+        )
+    )]
     pub fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
         self.inner.submit_vote(vote)
     }
@@ -1716,6 +1727,11 @@ impl NodeInner {
         self.witness_channels.publish_local(topic, payload);
     }
 
+    #[instrument(
+        name = "node.gossip.emit_witness",
+        skip(self, payload),
+        fields(topic = ?topic)
+    )]
     fn emit_witness_json<T: Serialize>(&self, topic: GossipTopic, payload: &T) {
         if matches!(topic, GossipTopic::Blocks | GossipTopic::Votes) {
             self.consensus_telemetry.record_witness_event();
@@ -2752,6 +2768,16 @@ impl NodeInner {
         Ok(hash)
     }
 
+    #[instrument(
+        name = "node.consensus.queue_vote",
+        skip(self, vote),
+        fields(
+            height = vote.vote.height,
+            round = vote.vote.round,
+            voter = %vote.vote.voter,
+            kind = ?vote.vote.kind
+        )
+    )]
     fn submit_vote(&self, vote: SignedBftVote) -> ChainResult<String> {
         if self.config.rollout.feature_gates.consensus_enforcement {
             vote.verify()?;
@@ -2974,6 +3000,16 @@ impl NodeInner {
         }
     }
 
+    #[instrument(
+        name = "node.consensus.apply_evidence",
+        skip(self, evidence),
+        fields(
+            address = %evidence.address,
+            height = evidence.height,
+            round = evidence.round,
+            kind = ?evidence.kind
+        )
+    )]
     fn apply_evidence(&self, evidence: EvidenceRecord) {
         let (reason, reason_label) = match evidence.kind {
             EvidenceKind::DoubleSignPrevote | EvidenceKind::DoubleSignPrecommit => {
@@ -3470,6 +3506,14 @@ impl NodeInner {
             .map(|proposal| proposal.block)
     }
 
+    #[instrument(
+        name = "node.proof.collect_artifacts",
+        skip(self, bundle),
+        fields(
+            transaction_proofs = bundle.transaction_proofs.len(),
+            max_bytes = max_bytes
+        )
+    )]
     fn collect_proof_artifacts(
         bundle: &BlockProofBundle,
         max_bytes: usize,
@@ -3498,6 +3542,11 @@ impl NodeInner {
         Ok(artifacts)
     }
 
+    #[instrument(
+        name = "node.proof.encode_artifact",
+        skip(proof),
+        fields(module = ?module, max_bytes = max_bytes)
+    )]
     fn proof_artifact(
         module: ProofModule,
         proof: &ChainProof,
@@ -3539,7 +3588,16 @@ impl NodeInner {
         }
     }
 
+    #[instrument(
+        name = "node.consensus.produce_block",
+        skip(self),
+        fields(
+            height = tracing::field::Empty,
+            round = tracing::field::Empty
+        )
+    )]
     fn produce_block(&self) -> ChainResult<()> {
+        let span = Span::current();
         let mut identity_pending: Vec<AttestedIdentityRequest> = Vec::new();
         {
             let mut mempool = self.identity_mempool.write();
@@ -3577,6 +3635,7 @@ impl NodeInner {
         }
         let tip_snapshot = *self.chain_tip.read();
         let height = tip_snapshot.height + 1;
+        span.record("height", &height);
         self.prune_consensus_rounds_below(height);
         self.ledger.sync_epoch_for_height(height);
         let epoch = self.ledger.current_epoch();
@@ -3584,6 +3643,7 @@ impl NodeInner {
         let (validators, observers) = classify_participants(&accounts_snapshot);
         let vrf_pool = self.gather_vrf_submissions(epoch, tip_snapshot.last_hash, &validators);
         let round_number = self.current_consensus_round(height);
+        span.record("round", &round_number);
         self.observe_consensus_round(height, round_number);
         let mut round = ConsensusRound::new(
             height,
@@ -4653,9 +4713,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
-        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
+        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
+        TimetokeParams, VerifierMetricsSnapshot,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4663,12 +4723,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{Router, routing::post};
+    use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;

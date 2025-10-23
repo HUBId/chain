@@ -109,6 +109,15 @@ threaten block production.
    matching warning is logged on signature or VRF validation failures so that
    operators can detect nodes announcing inconsistent VRF payloads or stale
    metadata during admission.【F:rpp/p2p/src/swarm.rs†L248-L316】
+6. **Forward tracing spans to OTLP.** Enabling `rollout.telemetry.endpoint`
+   (or the `--telemetry-endpoint` CLI override) wires a gRPC OTLP exporter into
+   the tracing subscriber; optional secrets can be supplied via
+   `telemetry_auth_token` or the environment variables
+   `RPP_NODE_OTLP_AUTH_TOKEN`, `RPP_NODE_OTLP_TIMEOUT_MS`, and
+   `RPP_NODE_OTLP_ENDPOINT`. Gossip, consensus, and proof paths now emit spans
+   that ship to the configured collector, and `scripts/smoke_otlp_export.sh`
+   spins up a local OpenTelemetry Collector to verify that `node.telemetry.init`
+   arrives end-to-end.【F:rpp/node/src/main.rs†L314-L447】【F:rpp/runtime/node.rs†L610-L963】【F:rpp/runtime/node_runtime/node.rs†L836-L1356】【F:scripts/smoke_otlp_export.sh†L1-L118】【F:scripts/otel-collector-config.yaml†L1-L19】
 
 ## Health Probes
 

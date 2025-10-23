@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use blake3::Hash;
-use log::{debug, info, warn};
 use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
@@ -21,6 +20,7 @@ use serde::{de, Deserialize, Deserializer};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
+use tracing::{debug, info, info_span, instrument, warn};
 
 use crate::config::{FeatureGates, NodeConfig, P2pConfig, TelemetryConfig};
 use crate::consensus::EvidenceRecord;
@@ -527,6 +527,11 @@ impl GossipPipelines {
         Ok(())
     }
 
+    #[instrument(
+        name = "node.runtime.proof.ingest",
+        skip(self, data),
+        fields(peer = %peer, bytes = data.len())
+    )]
     fn handle_proofs(&mut self, peer: PeerId, data: Vec<u8>) {
         match self.proofs.ingest(peer, GossipTopic::Proofs, data) {
             Ok(_) => while self.proofs.pop().is_some() {},
@@ -554,6 +559,11 @@ impl GossipPipelines {
         }
     }
 
+    #[instrument(
+        name = "node.runtime.proof.penalty",
+        skip(self),
+        fields(peer = %peer, code = ?code)
+    )]
     fn enqueue_proof_penalty(&self, peer: PeerId, code: ProofReputationCode) {
         let peer_for_log = peer.clone();
         let command = NodeCommand::ApplyReputationPenalty { peer, code };
@@ -834,6 +844,8 @@ impl NodeInner {
     }
 
     fn handle_network_event(&mut self, event: NetworkEvent) {
+        let event_span = info_span!("node.runtime.network_event", event = ?event);
+        let _event_guard = event_span.enter();
         match event {
             NetworkEvent::NewListenAddr(addr) => {
                 info!(target: "node", "listening on {addr}");
@@ -911,6 +923,14 @@ impl NodeInner {
                         self.meta_telemetry
                             .record(peer, version.clone(), Duration::from_millis(0));
                     }
+                    let payload_len = data.len();
+                    let gossip_span = info_span!(
+                        "node.runtime.gossip",
+                        peer = %peer,
+                        topic = ?topic,
+                        bytes = payload_len
+                    );
+                    let _gossip_guard = gossip_span.enter();
                     match topic {
                         GossipTopic::Blocks => {
                             match self.pipelines.handle_blocks(peer.clone(), data.clone()) {
@@ -1050,6 +1070,12 @@ impl NodeInner {
                             }
                         }
                         GossipTopic::Proofs => {
+                            let proof_span = info_span!(
+                                "node.runtime.proof.pipeline",
+                                peer = %peer,
+                                bytes = payload_len
+                            );
+                            let _proof_guard = proof_span.enter();
                             self.pipelines.handle_proofs(peer.clone(), data.clone());
                         }
                         GossipTopic::Snapshots => {
@@ -1309,6 +1335,11 @@ impl NodeHandle {
     }
 
     /// Publishes a gossip message via the libp2p network.
+    #[instrument(
+        name = "node.runtime.publish_gossip",
+        skip(self, data),
+        fields(topic = ?topic, bytes = data.len())
+    )]
     pub async fn publish_gossip(&self, topic: GossipTopic, data: Vec<u8>) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
