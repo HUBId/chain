@@ -11,7 +11,7 @@ use tracing::{debug, warn};
 use crate::consensus::SignedBftVote;
 use crate::node::NodeHandle;
 use crate::proof_system::ProofVerifierRegistry;
-use crate::runtime::node_runtime::node::NodeEvent;
+use crate::runtime::node_runtime::node::{NodeEvent, ProofReputationCode};
 use crate::runtime::sync::RuntimeTransactionProofVerifier;
 use crate::types::{Block, TransactionProofBundle};
 use parking_lot::Mutex;
@@ -124,9 +124,18 @@ impl GossipProcessor for NodeGossipProcessor {
         match proofs.ingest(*peer, GossipTopic::Proofs, payload.to_vec()) {
             Ok(_) => {}
             Err(PipelineError::Duplicate) => {
+                drop(proofs);
+                self.record_proof_penalty(peer, ProofReputationCode::DuplicateProof);
                 return Ok(());
             }
+            Err(PipelineError::Validation(err)) => {
+                drop(proofs);
+                self.record_proof_penalty(peer, ProofReputationCode::InvalidProof);
+                return Err(anyhow!("failed to ingest proof gossip: {err}"));
+            }
             Err(err) => {
+                drop(proofs);
+                self.record_proof_penalty(peer, ProofReputationCode::PipelineFailure);
                 return Err(anyhow!("failed to ingest proof gossip: {err}"));
             }
         }
@@ -141,6 +150,24 @@ impl GossipProcessor for NodeGossipProcessor {
         let mut proofs = self.proofs.lock();
         while proofs.pop().is_some() {}
         outcome
+    }
+}
+
+impl NodeGossipProcessor {
+    fn record_proof_penalty(&self, peer: &PeerId, code: ProofReputationCode) {
+        if let Some(handle) = self.node.p2p_handle() {
+            let peer_id = *peer;
+            tokio::spawn(async move {
+                if let Err(err) = handle.apply_reputation_penalty(peer_id, code).await {
+                    warn!(?err, ?peer_id, "failed to apply reputation penalty");
+                }
+            });
+        } else {
+            warn!(
+                ?peer,
+                "p2p runtime handle unavailable for reputation penalty"
+            );
+        }
     }
 }
 

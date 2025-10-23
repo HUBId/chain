@@ -11,7 +11,7 @@ use tokio::time;
 
 use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
-use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
+use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::node_runtime::node::{MetaTelemetryReport, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{
@@ -31,6 +31,8 @@ struct StoredPeerRecordSnapshot {
     peer_id: String,
     reputation: f64,
     tier: TierLevel,
+    #[serde(default)]
+    ban_until: Option<u64>,
 }
 
 fn reputation_floor_for_tier(tier: TierLevel) -> f64 {
@@ -264,6 +266,106 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
             "broadcaster peer {broadcaster_peer_id} reputation did not exceed tier floor after gossip: post={:.3}, tier={:?}, floor={:.3}",
             post_gossip_record.reputation,
             post_gossip_record.tier,
+            tier_floor,
+        );
+    }
+
+    handle_a_runtime.shutdown().await?;
+    handle_b_runtime.shutdown().await?;
+    gossip_worker.await.expect("gossip worker completed")?;
+    task_a.await.expect("p2p a completed");
+    task_b.await.expect("p2p b completed");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
+    let dir_a = tempdir()?;
+    let dir_b = tempdir()?;
+
+    let mut config_a = sample_node_config(dir_a.path());
+    let mut config_b = sample_node_config(dir_b.path());
+
+    let (listen_a, _) = random_listen_addr();
+    let (listen_b, _) = random_listen_addr();
+    config_a.p2p.listen_addr = listen_a.clone();
+    config_b.p2p.listen_addr = listen_b.clone();
+    config_b.p2p.bootstrap_peers = vec![listen_a.clone()];
+
+    let node_a = Node::new(config_a.clone())?;
+    let node_b = Node::new(config_b.clone())?;
+    let handle_a = node_a.handle();
+    let handle_b = node_b.handle();
+
+    let identity_a = node_a.network_identity_profile()?;
+    let identity_b = node_b.network_identity_profile()?;
+
+    let mut runtime_a = NodeRuntimeConfig::from(&config_a);
+    runtime_a.identity = Some(identity_a.into());
+    let mut runtime_b = NodeRuntimeConfig::from(&config_b);
+    runtime_b.identity = Some(identity_b.into());
+
+    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a)?;
+    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b)?;
+
+    let task_a = tokio::spawn(async move {
+        p2p_a.run().await.expect("run p2p a");
+    });
+    let task_b = tokio::spawn(async move {
+        p2p_b.run().await.expect("run p2p b");
+    });
+
+    handle_a.attach_p2p(handle_a_runtime.clone()).await;
+    handle_b.attach_p2p(handle_b_runtime.clone()).await;
+
+    wait_for_peer(&handle_b_runtime, handle_a_runtime.local_peer_id()).await;
+
+    let broadcaster_peer_id = handle_a_runtime.local_peer_id().to_base58();
+    let peerstore_path = config_b.p2p.peerstore_path.clone();
+    let baseline_record = read_peerstore_snapshot(&peerstore_path, &broadcaster_peer_id)?;
+
+    let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs_invalid.json");
+    let processor = Arc::new(NodeGossipProcessor::new(
+        handle_b.clone(),
+        proof_storage_path,
+    ));
+    let gossip_worker = spawn_node_event_worker(handle_b_runtime.subscribe(), processor, None);
+
+    handle_a_runtime
+        .publish_gossip(GossipTopic::Proofs, Vec::new())
+        .await?;
+
+    let peerstore_path_clone = peerstore_path.clone();
+    let broadcaster_peer_id_clone = broadcaster_peer_id.clone();
+    let penalty_record = time::timeout(Duration::from_secs(5), async move {
+        loop {
+            match read_peerstore_snapshot(&peerstore_path_clone, &broadcaster_peer_id_clone) {
+                Ok(Some(record)) => return Ok(record),
+                Ok(None) => {}
+                Err(err) => return Err(err),
+            }
+            time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+
+    let tier_floor = reputation_floor_for_tier(penalty_record.tier);
+    if let Some(baseline) = baseline_record {
+        assert!(
+            penalty_record.reputation < baseline.reputation || penalty_record.ban_until.is_some(),
+            "broadcaster peer {broadcaster_peer_id} reputation did not decrease after invalid gossip: baseline={:.3}, post={:.3}, tier={:?}, floor={:.3}",
+            baseline.reputation,
+            penalty_record.reputation,
+            penalty_record.tier,
+            tier_floor,
+        );
+    } else {
+        assert!(
+            penalty_record.reputation < tier_floor || penalty_record.ban_until.is_some(),
+            "broadcaster peer {broadcaster_peer_id} was not penalised after invalid gossip: post={:.3}, tier={:?}, floor={:.3}",
+            penalty_record.reputation,
+            penalty_record.tier,
             tier_floor,
         );
     }

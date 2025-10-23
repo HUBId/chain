@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,7 +12,8 @@ use rpp_p2p::{
     ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
     NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity,
     PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
-    ReputationBroadcast, RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome,
+    ReputationBroadcast, ReputationEvent, RuntimeProofValidator, SeenDigestRecord, TierLevel,
+    VoteOutcome,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -27,6 +29,13 @@ use crate::types::Block;
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
 
 /// Commands issued to the node runtime.
+#[derive(Debug, Clone, Copy)]
+pub enum ProofReputationCode {
+    InvalidProof,
+    DuplicateProof,
+    PipelineFailure,
+}
+
 #[derive(Debug)]
 enum NodeCommand {
     Publish {
@@ -39,6 +48,10 @@ enum NodeCommand {
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     Shutdown,
+    ApplyReputationPenalty {
+        peer: PeerId,
+        code: ProofReputationCode,
+    },
 }
 
 /// In-memory metrics that are periodically forwarded to the telemetry worker.
@@ -253,6 +266,7 @@ struct GossipPipelines {
     vote_cache: Mutex<HashSet<Hash>>,
     meta_cache: HashSet<Hash>,
     consensus: Mutex<ConsensusPipeline>,
+    commands: mpsc::Sender<NodeCommand>,
 }
 
 #[derive(Debug)]
@@ -280,7 +294,10 @@ enum MetaIngestResult {
 }
 
 impl GossipPipelines {
-    fn initialise(config: &NodeRuntimeConfig) -> Result<Self, PipelineError> {
+    fn initialise(
+        config: &NodeRuntimeConfig,
+        commands: mpsc::Sender<NodeCommand>,
+    ) -> Result<Self, PipelineError> {
         let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
         let registry = ProofVerifierRegistry::default();
         let proof_backend = Arc::new(RuntimeTransactionProofVerifier::new(registry.clone()));
@@ -304,6 +321,7 @@ impl GossipPipelines {
             vote_cache: Mutex::new(vote_cache),
             meta_cache: HashSet::new(),
             consensus: Mutex::new(consensus),
+            commands,
         })
     }
 
@@ -416,13 +434,38 @@ impl GossipPipelines {
             Ok(_) => while self.proofs.pop().is_some() {},
             Err(PipelineError::Duplicate) => {
                 debug!(target: "node", "duplicate proof gossip ignored");
+                self.enqueue_proof_penalty(peer, ProofReputationCode::DuplicateProof);
+            }
+            Err(PipelineError::Validation(reason)) => {
+                warn!(
+                    target: "node",
+                    %peer,
+                    reason = %reason,
+                    "failed to ingest proof gossip: validation error"
+                );
+                self.enqueue_proof_penalty(peer, ProofReputationCode::InvalidProof);
             }
             Err(err) => {
                 warn!(
                     target: "node",
+                    %peer,
                     "failed to ingest proof gossip: {err:?}"
                 );
+                self.enqueue_proof_penalty(peer, ProofReputationCode::PipelineFailure);
             }
+        }
+    }
+
+    fn enqueue_proof_penalty(&self, peer: PeerId, code: ProofReputationCode) {
+        let peer_for_log = peer.clone();
+        let command = NodeCommand::ApplyReputationPenalty { peer, code };
+        if let Err(err) = self.commands.try_send(command) {
+            warn!(
+                target: "node",
+                %peer_for_log,
+                ?err,
+                "failed to enqueue reputation penalty command"
+            );
         }
     }
 
@@ -526,7 +569,7 @@ impl NodeInner {
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, _) = broadcast::channel(256);
         let metrics = Arc::new(RwLock::new(NodeMetrics::default()));
-        let mut pipelines = GossipPipelines::initialise(&config)?;
+        let mut pipelines = GossipPipelines::initialise(&config, command_tx.clone())?;
         pipelines.register_voter(identity.peer_id(), identity.tier());
         let handle = NodeHandle {
             commands: command_tx.clone(),
@@ -610,6 +653,17 @@ impl NodeInner {
                 Ok(false)
             }
             NodeCommand::Shutdown => Ok(true),
+            NodeCommand::ApplyReputationPenalty { peer, code } => {
+                if let Err(err) = self.apply_reputation_penalty(peer, code) {
+                    warn!(
+                        target: "node",
+                        %peer,
+                        ?err,
+                        "failed to apply reputation penalty"
+                    );
+                }
+                Ok(false)
+            }
         }
     }
 
@@ -916,6 +970,38 @@ impl NodeInner {
         }
     }
 
+    fn apply_reputation_penalty(
+        &mut self,
+        peer: PeerId,
+        code: ProofReputationCode,
+    ) -> Result<(), NodeError> {
+        let event = match code {
+            ProofReputationCode::InvalidProof => ReputationEvent::ManualPenalty {
+                amount: 1.0,
+                reason: Cow::Borrowed("invalid_proof"),
+            },
+            ProofReputationCode::DuplicateProof => ReputationEvent::ManualPenalty {
+                amount: 0.2,
+                reason: Cow::Borrowed("duplicate_proof"),
+            },
+            ProofReputationCode::PipelineFailure => ReputationEvent::ManualPenalty {
+                amount: 0.5,
+                reason: Cow::Borrowed("proof_pipeline_error"),
+            },
+        };
+        let label = event.label().to_string();
+        self.network
+            .apply_reputation_event(peer.clone(), event)
+            .map_err(NodeError::from)?;
+        debug!(
+            target: "node",
+            %peer,
+            label = %label,
+            "applied reputation penalty"
+        );
+        Ok(())
+    }
+
     async fn emit_heartbeat(&mut self) {
         let metrics = self.metrics.read().clone();
         let peer_count = self.connected_peers.len();
@@ -1022,6 +1108,17 @@ impl NodeHandle {
             .map_err(|_| NodeError::CommandChannelClosed)?;
         let result = rx.await.map_err(|_| NodeError::CommandChannelClosed)?;
         result
+    }
+
+    pub async fn apply_reputation_penalty(
+        &self,
+        peer: PeerId,
+        code: ProofReputationCode,
+    ) -> Result<(), NodeError> {
+        self.commands
+            .send(NodeCommand::ApplyReputationPenalty { peer, code })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)
     }
 
     /// Updates the handshake identity used for peer admission and gossip permissions.
@@ -1219,10 +1316,12 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(records
-                    .as_array()
-                    .map(|array| !array.is_empty())
-                    .unwrap_or(false));
+                assert!(
+                    records
+                        .as_array()
+                        .map(|array| !array.is_empty())
+                        .unwrap_or(false)
+                );
             })
             .await;
     }
