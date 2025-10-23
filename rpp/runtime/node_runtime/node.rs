@@ -9,12 +9,13 @@ use log::{debug, info, warn};
 use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
-    AllowlistedPeer, ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync,
-    MetaTelemetry, NetworkError, NetworkEvent, NetworkFeatureAnnouncement,
-    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity, PeerstoreError,
-    PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
-    ReputationBroadcast, ReputationEvent, RuntimeProofValidator, SeenDigestRecord, TierLevel,
-    VoteOutcome,
+    decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
+    AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
+    GossipVoteValidator, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
+    NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
+    NodeIdentity, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage,
+    PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent, RuntimeProofValidator,
+    SeenDigestRecord, TierLevel, VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer};
 use serde_json::Value;
@@ -160,9 +161,8 @@ impl<'de> Deserialize<'de> for MetaPayload {
         if let Ok(announcement) =
             serde_json::from_value::<NetworkFeatureAnnouncement>(value.clone())
         {
-            let announcement = FeatureAnnouncement::try_from(announcement).map_err(|err| {
-                de::Error::custom(format!("invalid feature announcement: {err}"))
-            })?;
+            let announcement = FeatureAnnouncement::try_from(announcement)
+                .map_err(|err| de::Error::custom(format!("invalid feature announcement: {err}")))?;
             return Ok(Self::FeatureAnnouncement(announcement));
         }
         Err(de::Error::custom("unknown meta payload format"))
@@ -469,25 +469,20 @@ impl GossipPipelines {
         if !self.block_cache.insert(digest) {
             return BlockIngestResult::Duplicate;
         }
-        let block: Block = match serde_json::from_slice(&data) {
+        let block: Block = match decode_gossip_payload(&data) {
             Ok(block) => block,
-            Err(err) => {
-                return BlockIngestResult::DecodeFailed(format!(
-                    "invalid block payload encoding: {err}"
-                ));
+            Err(GossipPayloadError::Decode(reason))
+            | Err(GossipPayloadError::Validation(reason)) => {
+                return BlockIngestResult::DecodeFailed(reason);
             }
         };
-        let expected_hash = hex::encode(block.header.hash());
-        if block.hash != expected_hash {
-            return BlockIngestResult::Invalid {
-                block,
-                reason: format!(
-                    "block hash mismatch: expected {expected_hash}, received {}",
-                    block.hash
-                ),
-            };
+        match validate_block_payload(&block) {
+            Ok(()) => BlockIngestResult::Valid(block),
+            Err(GossipPayloadError::Validation(reason)) => {
+                BlockIngestResult::Invalid { block, reason }
+            }
+            Err(GossipPayloadError::Decode(reason)) => BlockIngestResult::DecodeFailed(reason),
         }
-        BlockIngestResult::Valid(block)
     }
 
     fn handle_votes(&mut self, _peer: PeerId, data: Vec<u8>) -> VoteIngestResult {
@@ -498,23 +493,29 @@ impl GossipPipelines {
                 return VoteIngestResult::Duplicate;
             }
         }
-        let vote: SignedBftVote = match serde_json::from_slice(&data) {
+        let vote: SignedBftVote = match decode_gossip_payload(&data) {
             Ok(vote) => vote,
             Err(err) => {
                 self.vote_cache.lock().remove(&digest);
-                return VoteIngestResult::DecodeFailed(format!(
-                    "invalid vote payload encoding: {err}"
-                ));
+                let reason = match err {
+                    GossipPayloadError::Decode(reason) | GossipPayloadError::Validation(reason) => {
+                        reason
+                    }
+                };
+                return VoteIngestResult::DecodeFailed(reason);
             }
         };
-        if let Err(err) = vote.verify() {
-            self.vote_cache.lock().remove(&digest);
-            return VoteIngestResult::Invalid {
-                vote,
-                reason: format!("vote verification failed: {err}"),
-            };
+        match validate_vote_payload(&vote) {
+            Ok(()) => VoteIngestResult::Valid { vote, digest },
+            Err(GossipPayloadError::Validation(reason)) => {
+                self.vote_cache.lock().remove(&digest);
+                VoteIngestResult::Invalid { vote, reason }
+            }
+            Err(GossipPayloadError::Decode(reason)) => {
+                self.vote_cache.lock().remove(&digest);
+                VoteIngestResult::DecodeFailed(reason)
+            }
         }
-        VoteIngestResult::Valid { vote, digest }
     }
 
     fn prune(&self, block_hash: &str) -> Result<(), PipelineError> {
@@ -608,15 +609,35 @@ impl GossipPipelines {
             debug!(target: "node", ?peer, "duplicate meta gossip ignored");
             return MetaIngestResult::Duplicate;
         }
-        match serde_json::from_slice::<MetaPayload>(&data) {
-            Ok(payload) => {
-                debug!(target: "node", ?peer, "meta gossip ingested");
-                MetaIngestResult::Payload(payload)
-            }
-            Err(err) => {
-                MetaIngestResult::DecodeFailed(format!("invalid meta payload encoding: {err}"))
-            }
+        match decode_meta_payload(&data) {
+            Ok(value) => match serde_json::from_value::<MetaPayload>(value) {
+                Ok(payload) => {
+                    debug!(target: "node", ?peer, "meta gossip ingested");
+                    MetaIngestResult::Payload(payload)
+                }
+                Err(err) => {
+                    MetaIngestResult::DecodeFailed(format!("invalid meta payload encoding: {err}"))
+                }
+            },
+            Err(GossipPayloadError::Decode(reason)) => MetaIngestResult::DecodeFailed(reason),
+            Err(GossipPayloadError::Validation(reason)) => MetaIngestResult::DecodeFailed(reason),
         }
+    }
+}
+
+impl GossipBlockValidator for Block {
+    fn advertised_block_hash(&self) -> &str {
+        &self.hash
+    }
+
+    fn computed_block_hash(&self) -> Result<String, String> {
+        Ok(hex::encode(self.header.hash()))
+    }
+}
+
+impl GossipVoteValidator for SignedBftVote {
+    fn verify_vote(&self) -> Result<(), String> {
+        self.verify().map_err(|err| err.to_string())
     }
 }
 
@@ -1108,8 +1129,10 @@ impl NodeInner {
                                                 "feature announcement peer mismatch",
                                             );
                                         }
-                                        self.peer_features
-                                            .insert(announcement.peer_id, announcement.feature_gates);
+                                        self.peer_features.insert(
+                                            announcement.peer_id,
+                                            announcement.feature_gates,
+                                        );
                                     }
                                 },
                                 MetaIngestResult::DecodeFailed(reason) => {

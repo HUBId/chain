@@ -25,10 +25,12 @@ pub use peerstore::{
 };
 pub use persistence::{GossipStateError, GossipStateStore};
 pub use pipeline::{
-    BasicRecursiveProofVerifier, BlockProposal, ConsensusPipeline, JsonProofValidator,
-    LightClientSync, MetaTelemetry, NetworkBlockMetadata, NetworkFeatureAnnouncement,
-    NetworkLightClientUpdate, NetworkMetaTelemetryReport, NetworkPayloadExpectations,
-    NetworkPeerTelemetry,
+    decode_gossip_payload, decode_meta_payload, sanitize_block_payload, sanitize_meta_payload,
+    sanitize_vote_payload, validate_block_payload, validate_vote_payload,
+    BasicRecursiveProofVerifier, BlockProposal, ConsensusPipeline, GossipBlockValidator,
+    GossipPayloadError, GossipVoteValidator, JsonProofValidator, LightClientSync, MetaTelemetry,
+    NetworkBlockMetadata, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
+    NetworkMetaTelemetryReport, NetworkPayloadExpectations, NetworkPeerTelemetry,
     NetworkReconstructionRequest, NetworkSnapshotSummary, NetworkStateSyncChunk,
     NetworkStateSyncPlan, PersistentProofStorage, PipelineError, ProofMempool, ProofRecord,
     ProofStorage, RuntimeProofValidator, SnapshotChunk, SnapshotStore, TelemetryEvent,

@@ -10,6 +10,7 @@ use crate::vendor::PeerId;
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
 use parking_lot::Mutex;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -42,6 +43,105 @@ pub trait ProofValidator: std::fmt::Debug + Send + Sync + 'static {
 /// admission into the local proof mempool.
 pub trait TransactionProofVerifier: std::fmt::Debug + Send + Sync + 'static {
     fn verify(&self, payload: &[u8]) -> Result<(), PipelineError>;
+}
+
+/// Error raised while decoding or validating gossip payloads.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum GossipPayloadError {
+    #[error("invalid payload encoding: {0}")]
+    Decode(String),
+    #[error("payload validation failed: {0}")]
+    Validation(String),
+}
+
+impl GossipPayloadError {
+    fn decode(err: serde_json::Error) -> Self {
+        Self::Decode(err.to_string())
+    }
+
+    fn validation(message: impl Into<String>) -> Self {
+        Self::Validation(message.into())
+    }
+}
+
+/// Trait describing the validation hooks required for gossip block payloads.
+pub trait GossipBlockValidator: DeserializeOwned {
+    /// Returns the hash advertised within the payload.
+    fn advertised_block_hash(&self) -> &str;
+
+    /// Computes the canonical block hash derived from the header.
+    fn computed_block_hash(&self) -> Result<String, String>;
+}
+
+/// Trait describing the validation hooks required for gossip vote payloads.
+pub trait GossipVoteValidator: DeserializeOwned {
+    /// Performs contextual vote verification, returning an error message when
+    /// validation fails.
+    fn verify_vote(&self) -> Result<(), String>;
+}
+
+/// Attempts to decode a gossip payload into the requested type.
+pub fn decode_gossip_payload<T>(payload: &[u8]) -> Result<T, GossipPayloadError>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_slice(payload).map_err(GossipPayloadError::decode)
+}
+
+/// Validates a decoded block payload using the supplied [`GossipBlockValidator`]
+/// implementation.
+pub fn validate_block_payload<T>(block: &T) -> Result<(), GossipPayloadError>
+where
+    T: GossipBlockValidator,
+{
+    let advertised = block.advertised_block_hash();
+    let computed = block
+        .computed_block_hash()
+        .map_err(GossipPayloadError::validation)?;
+    if advertised != computed {
+        return Err(GossipPayloadError::validation(format!(
+            "block hash mismatch: expected {computed}, received {advertised}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validates a decoded vote payload using the supplied [`GossipVoteValidator`]
+/// implementation.
+pub fn validate_vote_payload<T>(vote: &T) -> Result<(), GossipPayloadError>
+where
+    T: GossipVoteValidator,
+{
+    vote.verify_vote()
+        .map_err(|err| GossipPayloadError::validation(format!("vote verification failed: {err}")))
+}
+
+/// Sanitises and validates a block payload in a single step.
+pub fn sanitize_block_payload<T>(payload: &[u8]) -> Result<(), GossipPayloadError>
+where
+    T: GossipBlockValidator,
+{
+    let block: T = decode_gossip_payload(payload)?;
+    validate_block_payload(&block)
+}
+
+/// Sanitises and validates a vote payload in a single step.
+pub fn sanitize_vote_payload<T>(payload: &[u8]) -> Result<(), GossipPayloadError>
+where
+    T: GossipVoteValidator,
+{
+    let vote: T = decode_gossip_payload(payload)?;
+    validate_vote_payload(&vote)
+}
+
+/// Parses a meta gossip payload into a generic JSON value.
+pub fn decode_meta_payload(payload: &[u8]) -> Result<serde_json::Value, GossipPayloadError> {
+    serde_json::from_slice(payload).map_err(GossipPayloadError::decode)
+}
+
+/// Sanitises a meta gossip payload, ensuring the JSON encoding is well formed.
+pub fn sanitize_meta_payload(payload: &[u8]) -> Result<(), GossipPayloadError> {
+    decode_meta_payload(payload).map(|_| ())
 }
 
 #[derive(Clone)]

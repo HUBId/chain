@@ -90,6 +90,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 ## Cross-Cutting Deliverables
 - **Dokumentation:** Architekturgrafik, Config-Referenz, Operator-Guides.
 - **CI-Integration:** Linting, Unit-Tests, Integrationstests, Simulation Entry-Points.
+- **Fuzzing:** Nightly GitHub-Action `nightly-fuzz` führt `cargo fuzz run` für `handle_meta`, `handle_blocks`, `handle_votes` und `admission_evaluate_publish` mit Seed `0x5A17F00D` aus (`-max_total_time=120`, `-timeout=5`). Die jeweils aktualisierten Corpora werden nach `rpp/p2p/fuzz/corpus/<target>` exportiert und als Workflow-Artefakt abgelegt. Regressionen werden über `rpp/p2p/tests/fuzz_regressions.rs` aus diesen minimierten Fällen gespeist.
 - **Observability:** Logs (structured), Tracing spans, Metrics.
 
 ## Abhängigkeiten & Milestones

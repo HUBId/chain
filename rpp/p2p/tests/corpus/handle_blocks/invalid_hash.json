@@ -1,0 +1,71 @@
+{
+  "header": {
+    "height": 42,
+    "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "tx_root": "1111111111111111111111111111111111111111111111111111111111111111",
+    "state_root": "2222222222222222222222222222222222222222222222222222222222222222",
+    "utxo_root": "3333333333333333333333333333333333333333333333333333333333333333",
+    "reputation_root": "4444444444444444444444444444444444444444444444444444444444444444",
+    "timetoke_root": "5555555555555555555555555555555555555555555555555555555555555555",
+    "zsi_root": "6666666666666666666666666666666666666666666666666666666666666666",
+    "proof_root": "7777777777777777777777777777777777777777777777777777777777777777",
+    "total_stake": "9000000000000000000000000000000000000000",
+    "randomness": "8888888888888888888888888888888888888888888888888888888888888888",
+    "vrf_public_key": "9999999999999999999999999999999999999999999999999999999999999999",
+    "vrf_preoutput": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "vrf_proof": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "timestamp": 1730000000,
+    "proposer": "validator-addr-01",
+    "leader_tier": "Tl5",
+    "leader_timetoke": 72
+  },
+  "identities": [],
+  "transactions": [],
+  "uptime_proofs": [],
+  "timetoke_updates": [],
+  "reputation_updates": [],
+  "bft_votes": [],
+  "module_witnesses": {
+    "transactions": [],
+    "timetoke": [],
+    "reputation": [],
+    "zsi": [],
+    "consensus": []
+  },
+  "proof_artifacts": [],
+  "pruning_proof": {
+    "pruned_height": 41,
+    "previous_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "previous_state_root": "2222222222222222222222222222222222222222222222222222222222222222",
+    "pruned_tx_root": "3333333333333333333333333333333333333333333333333333333333333333",
+    "resulting_state_root": "2222222222222222222222222222222222222222222222222222222222222222",
+    "witness_commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "recursive_proof": {
+    "system": "Stwo",
+    "commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "previous_commitment": null,
+    "proof": {"placeholder": true}
+  },
+  "stark": {
+    "transaction_proofs": [],
+    "state_proof": {"placeholder": true},
+    "pruning_proof": {"placeholder": true},
+    "recursive_proof": {"placeholder": true}
+  },
+  "signature": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "consensus": {
+    "round": 7,
+    "total_power": "1024",
+    "quorum_threshold": "685",
+    "pre_vote_power": "1024",
+    "pre_commit_power": "1024",
+    "commit_power": "1024",
+    "observers": 0,
+    "pre_votes": [],
+    "pre_commits": []
+  },
+  "consensus_proof": null,
+  "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "pruned": false
+}

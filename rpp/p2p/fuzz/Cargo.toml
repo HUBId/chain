@@ -1,0 +1,45 @@
+[package]
+name = "rpp-p2p-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+once_cell = "1.19"
+serde_json = "1.0"
+
+[dependencies.rpp-p2p]
+path = ".."
+
+[dependencies.rpp-chain]
+path = "../../chain"
+default-features = false
+
+[[bin]]
+name = "handle_meta"
+path = "fuzz_targets/handle_meta.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "handle_blocks"
+path = "fuzz_targets/handle_blocks.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "handle_votes"
+path = "fuzz_targets/handle_votes.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "admission_evaluate_publish"
+path = "fuzz_targets/admission_evaluate_publish.rs"
+test = false
+doc = false
