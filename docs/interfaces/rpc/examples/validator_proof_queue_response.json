@@ -1,0 +1,16 @@
+{
+  "uptime_proofs": [
+    {
+      "identity": "rpp1identity",
+      "window_start": 1700000000,
+      "window_end": 1700003600,
+      "credited_hours": 6
+    }
+  ],
+  "totals": {
+    "transactions": 3,
+    "identities": 1,
+    "votes": 2,
+    "uptime_proofs": 1
+  }
+}

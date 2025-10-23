@@ -1,0 +1,53 @@
+{
+  "consensus": {
+    "height": 1024,
+    "block_hash": "0xabc123",
+    "proposer": "rpp1validator",
+    "round": 4,
+    "total_power": "1000",
+    "quorum_threshold": "667",
+    "pre_vote_power": "900",
+    "pre_commit_power": "850",
+    "commit_power": "880",
+    "quorum_reached": true,
+    "observers": 3,
+    "epoch": 12,
+    "epoch_nonce": "0x01",
+    "pending_votes": 2,
+    "round_latencies_ms": [120, 110],
+    "leader_changes": 1,
+    "quorum_latency_ms": 98,
+    "witness_events": 5,
+    "slashing_events": 0,
+    "failed_votes": 0
+  },
+  "node": {
+    "address": "rpp1validator",
+    "height": 1024,
+    "last_hash": "0xabc123",
+    "epoch": 12,
+    "epoch_nonce": "0x01",
+    "pending_transactions": 3,
+    "pending_identities": 1,
+    "pending_votes": 2,
+    "pending_uptime_proofs": 1,
+    "vrf_metrics": {
+      "pool_entries": 42,
+      "target_validator_count": 21
+    },
+    "tip": {
+      "height": 1024,
+      "hash": "0xabc123",
+      "timestamp": 1700000000,
+      "previous_state_root": "0xprev",
+      "new_state_root": "0xnew",
+      "proof_hash": "0xproof",
+      "pruning_root": null,
+      "pruning_commitment": "0xprune",
+      "recursive_commitment": "0xrecursive",
+      "recursive_previous_commitment": null,
+      "recursive_system": "rpp",
+      "recursive_anchor": "0xanchor"
+    }
+  }
+}

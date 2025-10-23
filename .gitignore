@@ -10,3 +10,5 @@ vendor/**/*.crate
 
 vendor/**/chunks/*.part*
 vendor/**/chunks/*.tmp
+validator-ui/node_modules/
+validator-ui/dist/

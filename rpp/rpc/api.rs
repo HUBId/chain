@@ -27,7 +27,7 @@ use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
-    NodeTelemetrySnapshot, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
+    NodeTelemetrySnapshot, PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
     UptimeSchedulerStatus, VrfStatus, DEFAULT_STATE_SYNC_CHUNK,
 };
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
@@ -48,7 +48,8 @@ use crate::wallet::{TrackerState, WalletTrackerHandle};
 use parking_lot::RwLock;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    AllowlistedPeer, NetworkMetaTelemetryReport, NetworkStateSyncChunk, NetworkStateSyncPlan,
+    AllowlistedPeer, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk,
+    NetworkStateSyncPlan,
 };
 
 #[derive(Clone)]
@@ -300,6 +301,33 @@ struct RuntimeModeResponse {
     wallet_enabled: bool,
     orchestrator_available: bool,
     orchestrator_enabled: bool,
+}
+
+#[derive(Serialize)]
+struct ValidatorStatusResponse {
+    consensus: ConsensusStatus,
+    node: NodeStatus,
+}
+
+#[derive(Serialize)]
+struct ValidatorProofQueueResponse {
+    uptime_proofs: Vec<PendingUptimeSummary>,
+    totals: ValidatorProofQueueTotals,
+}
+
+#[derive(Serialize)]
+struct ValidatorProofQueueTotals {
+    transactions: usize,
+    identities: usize,
+    votes: usize,
+    uptime_proofs: usize,
+}
+
+#[derive(Serialize)]
+struct ValidatorPeerResponse {
+    local_peer_id: String,
+    peer_count: usize,
+    peers: Vec<NetworkPeerTelemetry>,
 }
 
 #[derive(Deserialize)]
@@ -557,6 +585,9 @@ pub async fn serve(
         .route("/snapshots/jobs", get(snapshot_jobs))
         .route("/state-sync/plan", get(state_sync_plan))
         .route("/state-sync/chunk", get(state_sync_chunk))
+        .route("/validator/status", get(validator_status))
+        .route("/validator/proofs", get(validator_proofs))
+        .route("/validator/peers", get(validator_peers))
         .route("/validator/telemetry", get(validator_telemetry))
         .route("/validator/vrf", get(validator_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
@@ -868,6 +899,57 @@ async fn state_sync_chunk(
         .network_state_sync_chunk(DEFAULT_STATE_SYNC_CHUNK, query.start)
         .map(Json)
         .map_err(to_http_error)
+}
+
+async fn validator_status(
+    State(state): State<ApiContext>,
+) -> Result<Json<ValidatorStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let consensus = node.consensus_status().map_err(to_http_error)?;
+    let node_status = node.node_status().map_err(to_http_error)?;
+
+    Ok(Json(ValidatorStatusResponse {
+        consensus,
+        node: node_status,
+    }))
+}
+
+async fn validator_proofs(
+    State(state): State<ApiContext>,
+) -> Result<Json<ValidatorProofQueueResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let mempool = state
+        .require_node()?
+        .mempool_status()
+        .map_err(to_http_error)?;
+
+    let totals = ValidatorProofQueueTotals {
+        transactions: mempool.transactions.len(),
+        identities: mempool.identities.len(),
+        votes: mempool.votes.len(),
+        uptime_proofs: mempool.uptime_proofs.len(),
+    };
+
+    Ok(Json(ValidatorProofQueueResponse {
+        uptime_proofs: mempool.uptime_proofs,
+        totals,
+    }))
+}
+
+async fn validator_peers(
+    State(state): State<ApiContext>,
+) -> Result<Json<ValidatorPeerResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let report = state
+        .require_node()?
+        .meta_telemetry_snapshot()
+        .await
+        .map_err(to_http_error)?;
+    let snapshot = NetworkMetaTelemetryReport::from(&report);
+
+    Ok(Json(ValidatorPeerResponse {
+        local_peer_id: snapshot.local_peer_id,
+        peer_count: snapshot.peer_count,
+        peers: snapshot.peers,
+    }))
 }
 
 async fn validator_telemetry(

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/validator_proof_queue_response.json",
+  "title": "ValidatorProofQueueResponse",
+  "type": "object",
+  "required": ["uptime_proofs", "totals"],
+  "properties": {
+    "uptime_proofs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["identity", "window_start", "window_end", "credited_hours"],
+        "properties": {
+          "identity": {"type": "string"},
+          "window_start": {"type": "integer", "minimum": 0},
+          "window_end": {"type": "integer", "minimum": 0},
+          "credited_hours": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    },
+    "totals": {
+      "type": "object",
+      "required": ["transactions", "identities", "votes", "uptime_proofs"],
+      "properties": {
+        "transactions": {"type": "integer", "minimum": 0},
+        "identities": {"type": "integer", "minimum": 0},
+        "votes": {"type": "integer", "minimum": 0},
+        "uptime_proofs": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
