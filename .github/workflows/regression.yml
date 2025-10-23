@@ -1,0 +1,70 @@
+name: Regression scenarios
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/regression/**'
+      - 'scripts/run_regression.sh'
+      - '.github/workflows/regression.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'src/**'
+  pull_request:
+    paths:
+      - 'tests/regression/**'
+      - 'scripts/run_regression.sh'
+      - '.github/workflows/regression.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'src/**'
+  workflow_dispatch:
+
+jobs:
+  regression:
+    name: Tokio regression harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_LOG: info
+      RUST_BACKTRACE: 1
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@1.89.0
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: regression-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build dependencies
+        run: cargo fetch
+
+      - name: Run regression harness
+        env:
+          RPP_REGRESSION_ARTIFACT_DIR: ${{ github.workspace }}/ci-artifacts/regression
+        run: ./scripts/run_regression.sh
+
+      - name: Upload regression artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-suite
+          path: ci-artifacts/regression
+
+      - name: Document runtime expectations
+        run: |
+          {
+            echo "### Regression scenarios";
+            echo "- Expected runtime: ~20 minutes on ${{ runner.os }} GitHub runners.";
+            echo "- Artifacts: metrics JSON, scenario logs, captured snapshots.";
+          } >> "$GITHUB_STEP_SUMMARY"

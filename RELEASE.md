@@ -87,6 +87,23 @@ git cliff --tag v0.0.13 > CHANGELOG.md
 > release. Open a PR with the updated versions and merge it before continuing to
 > the next step.
 
+### Regression scenarios
+
+Run the orchestrated regression harness before tagging a release to capture
+cluster-level regressions:
+
+```bash
+scripts/run_regression.sh
+```
+
+The suite boots a three-node cluster, performs wallet transactions, verifies
+proof persistence, and restarts a validator to confirm snapshot recovery. Expect
+the workflow to take roughly 20 minutes on a GitHub Actions runner (similar to a
+4 vCPU development machine). Inspect the produced artefacts under
+`ci-artifacts/regression/` (or the directory configured by
+`RPP_REGRESSION_ARTIFACT_DIR`) for logs, metrics and captured snapshots before
+signing the release.
+
 ## Publish
 
 To trigger a release, push a tag to the main branch matching the new version,
