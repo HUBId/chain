@@ -8,10 +8,10 @@ use libp2p::PeerId;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use rpp_p2p::{
-    ConsensusPipeline, GossipTopic, HandshakePayload, JsonProofValidator, LightClientSync,
-    MetaTelemetry, NetworkError, NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
-    NodeIdentity, PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast,
-    TierLevel, VoteOutcome,
+    ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
+    NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity,
+    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast,
+    RuntimeProofValidator, TierLevel, VoteOutcome,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -19,10 +19,10 @@ use tokio::time;
 use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
 use crate::consensus::SignedBftVote;
 use crate::node::NetworkIdentityProfile;
-use crate::proof_system::VerifierMetricsSnapshot;
-use crate::types::Block;
+use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
-use crate::sync::RuntimeRecursiveProofVerifier;
+use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
+use crate::types::Block;
 
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
 
@@ -69,8 +69,7 @@ pub struct MetaTelemetryReport {
 }
 
 fn system_time_to_millis(time: SystemTime) -> u64 {
-    time
-        .duration_since(UNIX_EPOCH)
+    time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
@@ -112,7 +111,11 @@ impl From<&MetaTelemetryReport> for NetworkMetaTelemetryReport {
         Self {
             local_peer_id: report.local_peer_id.to_base58(),
             peer_count: report.peer_count,
-            peers: report.peers.iter().map(NetworkPeerTelemetry::from).collect(),
+            peers: report
+                .peers
+                .iter()
+                .map(NetworkPeerTelemetry::from)
+                .collect(),
         }
     }
 }
@@ -277,9 +280,11 @@ enum MetaIngestResult {
 impl GossipPipelines {
     fn initialise(config: &NodeRuntimeConfig) -> Result<Self, PipelineError> {
         let storage = Arc::new(PersistentProofStorage::open(&config.proof_storage_path)?);
-        let validator = Arc::new(JsonProofValidator::default());
+        let registry = ProofVerifierRegistry::default();
+        let proof_backend = Arc::new(RuntimeTransactionProofVerifier::new(registry.clone()));
+        let validator = Arc::new(RuntimeProofValidator::new(proof_backend));
         let proofs = ProofMempool::new(validator, storage)?;
-        let verifier = Arc::new(RuntimeRecursiveProofVerifier::default());
+        let verifier = Arc::new(RuntimeRecursiveProofVerifier::new(registry));
         let light_client = LightClientSync::new(verifier);
         Ok(Self {
             proofs,
@@ -566,8 +571,7 @@ impl NodeInner {
                     )
                     .map_err(NodeError::from);
                 if result.is_ok() {
-                    self.pipelines
-                        .register_voter(self.identity.peer_id(), tier);
+                    self.pipelines.register_voter(self.identity.peer_id(), tier);
                 }
                 let _ = response.send(result);
                 Ok(false)
@@ -709,7 +713,10 @@ impl NodeInner {
                                         vote.vote.round,
                                         data.clone(),
                                     ) {
-                                        Ok(VoteOutcome::Recorded { reached_quorum, power }) => {
+                                        Ok(VoteOutcome::Recorded {
+                                            reached_quorum,
+                                            power,
+                                        }) => {
                                             if reached_quorum {
                                                 info!(
                                                     target: "node",
@@ -1162,10 +1169,12 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(records
-                    .as_array()
-                    .map(|array| !array.is_empty())
-                    .unwrap_or(false));
+                assert!(
+                    records
+                        .as_array()
+                        .map(|array| !array.is_empty())
+                        .unwrap_or(false)
+                );
             })
             .await;
     }

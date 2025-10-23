@@ -4,8 +4,9 @@ use std::sync::Arc;
 // directly into the test harness.
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
-    ConsensusPipeline, GossipTopic, JsonProofValidator, PipelineError, ProofMempool, ProofRecord,
-    ProofStorage, VoteOutcome,
+    AdmissionControl, ConsensusPipeline, GossipTopic, IdentityMetadata, JsonProofValidator,
+    Peerstore, PeerstoreConfig, PipelineError, ProofMempool, ProofRecord, ProofStorage,
+    ReputationEvent, RuntimeProofValidator, TransactionProofVerifier, VoteOutcome,
 };
 
 #[derive(Debug, Default)]
@@ -14,6 +15,52 @@ struct EphemeralProofStorage;
 impl ProofStorage for EphemeralProofStorage {
     fn persist(&self, _record: &ProofRecord) -> Result<(), PipelineError> {
         Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+struct CommitmentVerifier;
+
+impl TransactionProofVerifier for CommitmentVerifier {
+    fn verify(&self, payload: &[u8]) -> Result<(), PipelineError> {
+        let value: serde_json::Value = serde_json::from_slice(payload)
+            .map_err(|err| PipelineError::Validation(format!("invalid proof payload: {err}")))?;
+        let commitment = value
+            .pointer("/proof/stwo/commitment")
+            .and_then(|field| field.as_str())
+            .ok_or_else(|| PipelineError::Validation("missing proof commitment".into()))?;
+        if commitment == "aa".repeat(32) {
+            Ok(())
+        } else {
+            Err(PipelineError::Validation(
+                "proof commitment mismatch".into(),
+            ))
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct WitnessVerifier;
+
+impl TransactionProofVerifier for WitnessVerifier {
+    fn verify(&self, payload: &[u8]) -> Result<(), PipelineError> {
+        let value: serde_json::Value = serde_json::from_slice(payload)
+            .map_err(|err| PipelineError::Validation(format!("invalid proof payload: {err}")))?;
+        let tx_id = value
+            .pointer("/transaction/id")
+            .and_then(|field| field.as_str())
+            .ok_or_else(|| PipelineError::Validation("missing transaction id".into()))?;
+        let witness_id = value
+            .pointer("/witness/id")
+            .and_then(|field| field.as_str())
+            .ok_or_else(|| PipelineError::Validation("missing witness id".into()))?;
+        if tx_id == witness_id {
+            Ok(())
+        } else {
+            Err(PipelineError::Validation(
+                "witness does not match transaction".into(),
+            ))
+        }
     }
 }
 
@@ -36,13 +83,88 @@ fn proof_ingestion_deduplicates_across_peers() {
     let peer_one = PeerId::random();
     let peer_two = PeerId::random();
 
-    assert!(mempool
-        .ingest(peer_one, GossipTopic::Proofs, bytes.clone())
-        .expect("first ingest"));
+    assert!(
+        mempool
+            .ingest(peer_one, GossipTopic::Proofs, bytes.clone())
+            .expect("first ingest")
+    );
     let err = mempool
         .ingest(peer_two, GossipTopic::Proofs, bytes)
         .expect_err("duplicate proof should be rejected");
     assert!(matches!(err, PipelineError::Duplicate));
+}
+
+#[test]
+fn runtime_validator_rejects_invalid_commitment() {
+    let backend: Arc<dyn TransactionProofVerifier> = Arc::new(CommitmentVerifier::default());
+    let validator = Arc::new(RuntimeProofValidator::new(backend));
+    let storage = Arc::new(EphemeralProofStorage::default());
+    let mut mempool = ProofMempool::new(validator, storage).expect("proof mempool");
+
+    let payload = serde_json::json!({
+        "transaction": {"id": "tx-1"},
+        "proof": {"stwo": {"commitment": "ff".repeat(32)}},
+    });
+    let bytes = serde_json::to_vec(&payload).expect("encode payload");
+    let peer = PeerId::random();
+    let err = mempool
+        .ingest(peer, GossipTopic::Proofs, bytes)
+        .expect_err("invalid commitment must be rejected");
+    assert!(matches!(err, PipelineError::Validation(message) if message.contains("commitment")));
+}
+
+#[test]
+fn runtime_validator_rejects_mismatched_witness() {
+    let backend: Arc<dyn TransactionProofVerifier> = Arc::new(WitnessVerifier::default());
+    let validator = Arc::new(RuntimeProofValidator::new(backend));
+    let storage = Arc::new(EphemeralProofStorage::default());
+    let mut mempool = ProofMempool::new(validator, storage).expect("proof mempool");
+
+    let payload = serde_json::json!({
+        "transaction": {"id": "tx-1"},
+        "proof": {"stwo": {"commitment": "aa".repeat(32)}},
+        "witness": {"id": "tx-2"},
+    });
+    let bytes = serde_json::to_vec(&payload).expect("encode payload");
+    let peer = PeerId::random();
+    let err = mempool
+        .ingest(peer, GossipTopic::Proofs, bytes)
+        .expect_err("mismatched witness must be rejected");
+    assert!(matches!(err, PipelineError::Validation(message) if message.contains("witness")));
+}
+
+#[test]
+fn invalid_proof_triggers_penalty_record() {
+    let backend: Arc<dyn TransactionProofVerifier> = Arc::new(CommitmentVerifier::default());
+    let validator = Arc::new(RuntimeProofValidator::new(backend));
+    let storage = Arc::new(EphemeralProofStorage::default());
+    let mut mempool = ProofMempool::new(validator, storage).expect("proof mempool");
+
+    let payload = serde_json::json!({
+        "transaction": {"id": "tx-penalty"},
+        "proof": {"stwo": {"commitment": "00".repeat(32)}},
+    });
+    let bytes = serde_json::to_vec(&payload).expect("encode payload");
+    let peer = PeerId::random();
+    let err = mempool
+        .ingest(peer, GossipTopic::Proofs, bytes)
+        .expect_err("invalid commitment must be rejected");
+    assert!(matches!(err, PipelineError::Validation(_)));
+
+    let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
+    let control = AdmissionControl::new(store.clone(), IdentityMetadata::default());
+    store.set_reputation(peer, 0.5).expect("seed reputation");
+    let outcome = control
+        .record_event(
+            peer,
+            ReputationEvent::ManualPenalty {
+                amount: 1.0,
+                reason: "invalid_proof".into(),
+            },
+        )
+        .expect("penalty recorded");
+    assert!(outcome.snapshot.banned_until.is_some());
+    assert!(outcome.snapshot.reputation < 0.5);
 }
 
 #[test]

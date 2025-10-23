@@ -28,7 +28,8 @@ pub use pipeline::{
     NetworkMetaTelemetryReport, NetworkPayloadExpectations, NetworkPeerTelemetry,
     NetworkReconstructionRequest, NetworkSnapshotSummary, NetworkStateSyncChunk,
     NetworkStateSyncPlan, PersistentProofStorage, PipelineError, ProofMempool, ProofRecord,
-    ProofStorage, SnapshotChunk, SnapshotStore, TelemetryEvent, VoteOutcome,
+    ProofStorage, RuntimeProofValidator, SnapshotChunk, SnapshotStore, TelemetryEvent,
+    TransactionProofVerifier, VoteOutcome,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
 pub use rpp_p2p_macros::NetworkBehaviour;
