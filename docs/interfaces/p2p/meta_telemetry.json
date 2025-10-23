@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/meta_telemetry.json",
+  "title": "MetaTelemetryReport",
+  "type": "object",
+  "required": ["local_peer_id", "peer_count", "peers"],
+  "properties": {
+    "local_peer_id": {
+      "type": "string",
+      "description": "Base58-encoded libp2p peer identifier of the reporting node"
+    },
+    "peer_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of peers currently connected to the reporting node"
+    },
+    "peers": {
+      "type": "array",
+      "description": "Telemetry snapshot for each connected peer",
+      "items": {
+        "type": "object",
+        "required": ["peer", "version", "latency_ms", "last_seen"],
+        "properties": {
+          "peer": {
+            "type": "string",
+            "description": "Base58-encoded identifier of the remote peer"
+          },
+          "version": {
+            "type": "string",
+            "description": "Agent or client version reported during the handshake"
+          },
+          "latency_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Observed round-trip latency to the peer in milliseconds"
+          },
+          "last_seen": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix timestamp in milliseconds when telemetry was last updated"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

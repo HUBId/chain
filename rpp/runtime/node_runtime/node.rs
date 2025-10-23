@@ -15,7 +15,7 @@ use rpp_p2p::{
     ReputationBroadcast, ReputationEvent, RuntimeProofValidator, SeenDigestRecord, TierLevel,
     VoteOutcome,
 };
-use serde::{Deserialize, Deserializer, de};
+use serde::{de, Deserialize, Deserializer};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -49,6 +49,9 @@ enum NodeCommand {
     UpdateIdentity {
         profile: IdentityProfile,
         response: oneshot::Sender<Result<(), NodeError>>,
+    },
+    MetaTelemetrySnapshot {
+        response: oneshot::Sender<Result<MetaTelemetryReport, NodeError>>,
     },
     Shutdown,
     ApplyReputationPenalty {
@@ -672,6 +675,12 @@ impl NodeInner {
                 let _ = response.send(result);
                 Ok(false)
             }
+            NodeCommand::MetaTelemetrySnapshot { response } => {
+                let peer_count = self.connected_peers.len();
+                let report = self.build_meta_report(peer_count);
+                let _ = response.send(Ok(report));
+                Ok(false)
+            }
             NodeCommand::Shutdown => Ok(true),
             NodeCommand::ApplyReputationPenalty { peer, code } => {
                 if let Err(err) = self.apply_reputation_penalty(peer, code) {
@@ -1165,6 +1174,16 @@ impl NodeHandle {
         rx.await.map_err(|_| NodeError::CommandChannelClosed)?
     }
 
+    /// Collects the latest meta telemetry snapshot across known peers.
+    pub async fn meta_telemetry_snapshot(&self) -> Result<MetaTelemetryReport, NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::MetaTelemetrySnapshot { response: tx })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)??
+    }
+
     /// Signals the runtime to shut down.
     pub async fn shutdown(&self) -> Result<(), NodeError> {
         self.commands
@@ -1347,12 +1366,10 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(
-                    records
-                        .as_array()
-                        .map(|array| !array.is_empty())
-                        .unwrap_or(false)
-                );
+                assert!(records
+                    .as_array()
+                    .map(|array| !array.is_empty())
+                    .unwrap_or(false));
             })
             .await;
     }

@@ -6,15 +6,15 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tower::ServiceBuilder;
 use tower::limit::RateLimitLayer;
+use tower::ServiceBuilder;
 use tracing::info;
 
 use crate::consensus::SignedBftVote;
@@ -31,10 +31,9 @@ use crate::node::{
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
-use crate::runtime::RuntimeMode;
 use crate::runtime::config::QueueWeightsConfig;
+use crate::runtime::RuntimeMode;
 use crate::sync::ReconstructionPlan;
-use rpp_p2p::{NetworkStateSyncChunk, NetworkStateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
     TransactionProofBundle, UptimeProof,
@@ -45,6 +44,7 @@ use crate::wallet::{
 #[cfg(feature = "vendor_electrs")]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
 use parking_lot::RwLock;
+use rpp_p2p::{NetworkMetaTelemetryReport, NetworkStateSyncChunk, NetworkStateSyncPlan};
 
 #[derive(Clone)]
 pub struct ApiContext {
@@ -542,6 +542,7 @@ pub async fn serve(
         .route("/validator/telemetry", get(validator_telemetry))
         .route("/validator/vrf", get(validator_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
+        .route("/p2p/peers", get(p2p_meta_telemetry))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
         .route("/control/mempool", post(update_mempool_limits))
@@ -948,6 +949,17 @@ async fn account_info(
         .get_account(&address)
         .map(Json)
         .map_err(to_http_error)
+}
+
+async fn p2p_meta_telemetry(
+    State(state): State<ApiContext>,
+) -> Result<Json<NetworkMetaTelemetryReport>, (StatusCode, Json<ErrorResponse>)> {
+    let report = state
+        .require_node()?
+        .meta_telemetry_snapshot()
+        .await
+        .map_err(to_http_error)?;
+    Ok(Json(NetworkMetaTelemetryReport::from(&report)))
 }
 
 async fn node_status(
@@ -1402,8 +1414,8 @@ mod interface_schemas {
         SignTxRequest, SignTxResponse,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::Serialize;
     use serde::de::DeserializeOwned;
+    use serde::Serialize;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
