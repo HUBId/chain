@@ -8,28 +8,29 @@ use blake3::Hash;
 use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
-    decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
     AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
     GossipVoteValidator, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
     NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
     NodeIdentity, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage,
     PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent, RuntimeProofValidator,
-    SeenDigestRecord, TierLevel, VoteOutcome,
+    SeenDigestRecord, TierLevel, VoteOutcome, decode_gossip_payload, decode_meta_payload,
+    validate_block_payload, validate_vote_payload,
 };
-use serde::{de, Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, de};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
 use tracing::{debug, info, info_span, instrument, warn};
 
 use crate::config::{FeatureGates, NodeConfig, P2pConfig, TelemetryConfig};
-use crate::consensus::EvidenceRecord;
-use crate::consensus::SignedBftVote;
+use crate::consensus::{ConsensusCertificate, EvidenceRecord, SignedBftVote};
 use crate::node::NetworkIdentityProfile;
 use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
+use crate::rpp::GlobalStateCommitments;
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
 use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
-use crate::types::Block;
+use crate::types::{Address, Block};
+use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
 
@@ -338,6 +339,28 @@ pub enum NodeEvent {
     },
     Heartbeat(Heartbeat),
     MetaTelemetry(MetaTelemetryReport),
+    VrfLeadership {
+        height: u64,
+        round: u64,
+        proposer: Address,
+        randomness: String,
+        block_hash: Option<String>,
+    },
+    BftFinalised {
+        height: u64,
+        round: u64,
+        block_hash: String,
+        commitments: GlobalStateCommitments,
+        certificate: ConsensusCertificate,
+    },
+    FirewoodCommitment {
+        height: u64,
+        round: u64,
+        block_hash: String,
+        previous_root: String,
+        new_root: String,
+        pruning_proof: Option<FirewoodPruningProof>,
+    },
 }
 
 /// Errors raised by the node runtime.
@@ -1588,10 +1611,12 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(records
-                    .as_array()
-                    .map(|array| !array.is_empty())
-                    .unwrap_or(false));
+                assert!(
+                    records
+                        .as_array()
+                        .map(|array| !array.is_empty())
+                        .unwrap_or(false)
+                );
             })
             .await;
     }

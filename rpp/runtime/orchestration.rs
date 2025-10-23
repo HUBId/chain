@@ -9,18 +9,18 @@
 //! be cancelled during shutdown via [`NodeHandle`].
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hex;
 use serde_json;
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::time;
 use tracing::{debug, info, warn};
 
 use crate::errors::{ChainError, ChainResult};
-use crate::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
+use crate::node::{DEFAULT_STATE_SYNC_CHUNK, NodeHandle, PipelineObservation};
 use crate::reputation::Tier;
-use crate::runtime::node_runtime::{node::MetaTelemetryReport, NodeEvent, NodeHandle as P2pHandle};
+use crate::runtime::node_runtime::{NodeEvent, NodeHandle as P2pHandle, node::MetaTelemetryReport};
 use crate::types::{Address, Block, TransactionProofBundle};
 use crate::wallet::workflows::TransactionWorkflow;
 use rpp_p2p::GossipTopic;
@@ -40,6 +40,8 @@ pub enum PipelineStage {
     LeaderElected,
     /// Malachite BFT finalised the block that applies the transaction.
     BftFinalised,
+    /// Firewood persisted the state commitment and pruning proof for the block.
+    FirewoodCommitted,
     /// Ledger rewards and nonce updates materialised for the originating wallet.
     RewardsDistributed,
 }
@@ -68,6 +70,40 @@ impl PipelineDashboardSnapshot {
             .find(|flow| flow.hash == hash)
             .and_then(|flow| flow.stages.get(&stage))
             .is_some()
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct PipelineError {
+    pub stage: &'static str,
+    pub height: u64,
+    pub round: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<String>,
+    pub message: String,
+    pub observed_at_ms: u128,
+}
+
+impl PipelineError {
+    fn new(
+        stage: &'static str,
+        height: u64,
+        round: u64,
+        block_hash: Option<String>,
+        message: String,
+    ) -> Self {
+        let observed_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        Self {
+            stage,
+            height,
+            round,
+            block_hash,
+            message,
+            observed_at_ms,
+        }
     }
 }
 
@@ -104,10 +140,8 @@ impl FlowMetrics {
         self.stage_times.entry(stage).or_insert(at);
     }
 
-    fn record_commit(&mut self, height: u64, at: Instant) {
+    fn set_commit_height(&mut self, height: u64) {
         self.commit_height = Some(height);
-        self.record_stage(PipelineStage::LeaderElected, at);
-        self.record_stage(PipelineStage::BftFinalised, at);
     }
 
     fn latency_ms(&self, stage: PipelineStage) -> Option<u128> {
@@ -123,6 +157,7 @@ impl FlowMetrics {
             PipelineStage::MempoolAccepted,
             PipelineStage::LeaderElected,
             PipelineStage::BftFinalised,
+            PipelineStage::FirewoodCommitted,
             PipelineStage::RewardsDistributed,
         ] {
             if let Some(latency) = self.latency_ms(stage) {
@@ -170,10 +205,10 @@ impl PipelineMetrics {
         self.publish().await;
     }
 
-    async fn record_commit(&self, hash: &str, height: u64, at: Instant) {
+    async fn record_commit_height(&self, hash: &str, height: u64) {
         let mut flows = self.flows.lock().await;
         if let Some(flow) = flows.get_mut(hash) {
-            flow.record_commit(height, at);
+            flow.set_commit_height(height);
         }
         drop(flows);
         self.publish().await;
@@ -208,6 +243,7 @@ pub struct PipelineOrchestrator {
     submissions: mpsc::Sender<PipelineSubmission>,
     submissions_rx: Arc<Mutex<Option<mpsc::Receiver<PipelineSubmission>>>>,
     shutdown: watch::Sender<bool>,
+    errors: broadcast::Sender<PipelineError>,
 }
 
 impl PipelineOrchestrator {
@@ -216,6 +252,7 @@ impl PipelineOrchestrator {
         let (tx, rx) = mpsc::channel(DEFAULT_QUEUE_DEPTH);
         let metrics = Arc::new(PipelineMetrics::new());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (error_tx, _error_rx) = broadcast::channel(DEFAULT_QUEUE_DEPTH);
         (
             Self {
                 node,
@@ -224,9 +261,14 @@ impl PipelineOrchestrator {
                 submissions: tx,
                 submissions_rx: Arc::new(Mutex::new(Some(rx))),
                 shutdown: shutdown_tx,
+                errors: error_tx,
             },
             shutdown_rx,
         )
+    }
+
+    pub fn subscribe_errors(&self) -> broadcast::Receiver<PipelineError> {
+        self.errors.subscribe()
     }
 
     /// Spawn the orchestrator loops driving ingestion, observation, and telemetry publishing.
@@ -247,9 +289,15 @@ impl PipelineOrchestrator {
         let observe_node = self.node.clone();
         let observe_metrics = self.metrics.clone();
         let observe_shutdown = shutdown_rx.clone();
+        let observe_errors = self.errors.clone();
         tokio::spawn(async move {
-            PipelineOrchestrator::observe_loop(observe_node, observe_metrics, observe_shutdown)
-                .await;
+            PipelineOrchestrator::observe_loop(
+                observe_node,
+                observe_metrics,
+                observe_shutdown,
+                observe_errors,
+            )
+            .await;
         });
 
         if let Some(handle) = self.p2p.clone() {
@@ -425,8 +473,12 @@ impl PipelineOrchestrator {
         node: NodeHandle,
         metrics: Arc<PipelineMetrics>,
         mut shutdown_rx: watch::Receiver<bool>,
+        errors: broadcast::Sender<PipelineError>,
     ) {
-        let mut seen_heights = HashSet::new();
+        let mut consensus_events = node.subscribe_pipeline();
+        let mut vrf_observations: HashMap<(u64, u64), Instant> = HashMap::new();
+        let mut block_flow_index: HashMap<String, Vec<String>> = HashMap::new();
+        let mut processed_blocks: HashSet<String> = HashSet::new();
         loop {
             tokio::select! {
                 _ = shutdown_rx.changed() => {
@@ -435,20 +487,126 @@ impl PipelineOrchestrator {
                         break;
                     }
                 }
-                _ = time::sleep(Duration::from_millis(100)) => {
-                    if let Err(err) = PipelineOrchestrator::poll_mempool(&node, &metrics).await {
-                        warn!(?err, "unable to poll mempool status");
-                    }
-                    match node.latest_block() {
-                        Ok(Some(block)) => {
-                            if seen_heights.insert(block.header.height) {
-                                if let Err(err) = PipelineOrchestrator::handle_block(&node, &metrics, &block).await {
-                                    warn!(?err, "failed to record block commit");
+                event = consensus_events.recv() => {
+                    match event {
+                        Ok(PipelineObservation::VrfLeadership { height, round, .. }) => {
+                            vrf_observations.insert((height, round), Instant::now());
+                        }
+                        Ok(PipelineObservation::BftFinalised { height, round, block_hash, .. }) => {
+                            if processed_blocks.contains(&block_hash) {
+                                continue;
+                            }
+                            let now = Instant::now();
+                            match node.get_block(height) {
+                                Ok(Some(block)) => {
+                                    if block.hash != block_hash {
+                                        let message = format!(
+                                            "block hash mismatch for finalised block: expected {} got {}",
+                                            block_hash,
+                                            block.hash
+                                        );
+                                        let _ = errors.send(PipelineError::new(
+                                            "bft_finalised",
+                                            height,
+                                            round,
+                                            Some(block_hash.clone()),
+                                            message,
+                                        ));
+                                        continue;
+                                    }
+                                    match PipelineOrchestrator::handle_block(&node, &metrics, &block).await {
+                                        Ok(tracked) => {
+                                            processed_blocks.insert(block_hash.clone());
+                                            if let Some(vrf_at) = vrf_observations.remove(&(height, round)) {
+                                                for hash in &tracked {
+                                                    metrics
+                                                        .record_stage(hash, PipelineStage::LeaderElected, vrf_at)
+                                                        .await;
+                                                }
+                                            }
+                                            for hash in &tracked {
+                                                metrics
+                                                    .record_stage(hash, PipelineStage::BftFinalised, now)
+                                                    .await;
+                                            }
+                                            block_flow_index.insert(block_hash.clone(), tracked);
+                                        }
+                                        Err(err) => {
+                                            let _ = errors.send(PipelineError::new(
+                                                "bft_finalised",
+                                                height,
+                                                round,
+                                                Some(block_hash.clone()),
+                                                format!("failed to process block: {err}"),
+                                            ));
+                                        }
+                                    }
+                                }
+                                Ok(None) => {
+                                    let _ = errors.send(PipelineError::new(
+                                        "bft_finalised",
+                                        height,
+                                        round,
+                                        Some(block_hash.clone()),
+                                        "finalised block not found".to_string(),
+                                    ));
+                                }
+                                Err(err) => {
+                                    let _ = errors.send(PipelineError::new(
+                                        "bft_finalised",
+                                        height,
+                                        round,
+                                        Some(block_hash.clone()),
+                                        format!("failed to fetch block: {err}"),
+                                    ));
                                 }
                             }
                         }
-                        Ok(None) => {}
-                        Err(err) => warn!(?err, "failed to fetch latest block"),
+                        Ok(PipelineObservation::FirewoodCommitment { height, round, block_hash, .. }) => {
+                            let now = Instant::now();
+                            if let Some(tracked) = block_flow_index.remove(&block_hash) {
+                                for hash in &tracked {
+                                    metrics
+                                        .record_stage(hash, PipelineStage::FirewoodCommitted, now)
+                                        .await;
+                                }
+                            } else if let Ok(Some(block)) = node.get_block(height) {
+                                let hashes: Vec<String> = block
+                                    .transactions
+                                    .iter()
+                                    .map(|tx| hex::encode(tx.hash()))
+                                    .collect();
+                                for hash in &hashes {
+                                    metrics
+                                        .record_commit_height(hash, block.header.height)
+                                        .await;
+                                    metrics
+                                        .record_stage(hash, PipelineStage::FirewoodCommitted, now)
+                                        .await;
+                                }
+                            } else {
+                                let _ = errors.send(PipelineError::new(
+                                    "firewood_commitment",
+                                    height,
+                                    round,
+                                    Some(block_hash.clone()),
+                                    "missing transaction context for firewood stage".to_string(),
+                                ));
+                            }
+                            processed_blocks.remove(&block_hash);
+                        }
+                        Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                            warn!(skipped, "lagged on consensus event stream");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            debug!("consensus event stream closed");
+                            break;
+                        }
+                    }
+                }
+                _ = time::sleep(Duration::from_millis(100)) => {
+                    if let Err(err) = PipelineOrchestrator::poll_mempool(&node, &metrics).await {
+                        warn!(?err, "unable to poll mempool status");
                     }
                     if let Err(err) = PipelineOrchestrator::poll_rewards(&node, &metrics).await {
                         warn!(?err, "failed to evaluate reward application");
@@ -473,11 +631,14 @@ impl PipelineOrchestrator {
         node: &NodeHandle,
         metrics: &Arc<PipelineMetrics>,
         block: &Block,
-    ) -> ChainResult<()> {
-        let now = Instant::now();
+    ) -> ChainResult<Vec<String>> {
+        let mut tracked_hashes = Vec::new();
         for tx in &block.transactions {
             let hash = hex::encode(tx.hash());
-            metrics.record_commit(&hash, block.header.height, now).await;
+            metrics
+                .record_commit_height(&hash, block.header.height)
+                .await;
+            tracked_hashes.push(hash);
         }
         let proposer = block.header.proposer.clone();
         let status = node.consensus_status()?;
@@ -487,7 +648,7 @@ impl PipelineOrchestrator {
             quorum = status.quorum_reached,
             "block finalised"
         );
-        Ok(())
+        Ok(tracked_hashes)
     }
 
     async fn poll_rewards(node: &NodeHandle, metrics: &Arc<PipelineMetrics>) -> ChainResult<()> {
@@ -507,6 +668,12 @@ impl PipelineOrchestrator {
                 continue;
             }
             if !flow.stage_times.contains_key(&PipelineStage::BftFinalised) {
+                continue;
+            }
+            if !flow
+                .stage_times
+                .contains_key(&PipelineStage::FirewoodCommitted)
+            {
                 continue;
             }
             let account = node
