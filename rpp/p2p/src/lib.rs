@@ -20,7 +20,9 @@ pub use admission::{
 };
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
-pub use peerstore::{IdentityVerifier, PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError};
+pub use peerstore::{
+    AllowlistedPeer, IdentityVerifier, PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError,
+};
 pub use persistence::{GossipStateError, GossipStateStore};
 pub use pipeline::{
     BasicRecursiveProofVerifier, BlockProposal, ConsensusPipeline, JsonProofValidator,

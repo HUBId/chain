@@ -9,9 +9,9 @@ use jsonschema::JSONSchema;
 use rand::rngs::OsRng;
 use rpp_p2p::vendor::{identity, PeerId};
 use rpp_p2p::{
-    AdmissionControl, AdmissionError, GossipTopic, HandshakePayload, IdentityMetadata,
-    IdentityVerifier, Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, TierLevel,
-    TopicPermission, VRF_HANDSHAKE_CONTEXT,
+    AdmissionControl, AdmissionError, AllowlistedPeer, GossipTopic, HandshakePayload,
+    IdentityMetadata, IdentityVerifier, Peerstore, PeerstoreConfig, ReputationBroadcast,
+    ReputationEvent, TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 
@@ -56,6 +56,53 @@ fn signed_handshake(
     let proof = sign_vrf_message(vrf_secret, &template);
     let template = HandshakePayload::new(zsi.to_string(), Some(public), Some(proof), tier);
     template.signed(keypair).expect("handshake")
+}
+
+#[test]
+fn blocklisted_peers_are_banned_and_rejected() {
+    let keypair = identity::Keypair::generate_ed25519();
+    let peer = PeerId::from(keypair.public());
+    let store = Arc::new(
+        Peerstore::open(PeerstoreConfig::memory().with_blocklist(vec![peer])).expect("peerstore"),
+    );
+
+    assert!(store.is_blocklisted(&peer));
+    let ban_until = store
+        .is_banned(&peer)
+        .expect("blocklisted peer should be banned");
+    assert!(ban_until > SystemTime::now());
+
+    let control = AdmissionControl::new(store.clone(), IdentityMetadata::default());
+    let admission = control.can_remote_publish(&peer, GossipTopic::Votes);
+    match admission {
+        Err(AdmissionError::Banned { until }) => assert!(until >= ban_until),
+        other => panic!("expected banned error, got {other:?}"),
+    }
+
+    let payload = HandshakePayload::new("peer", None, None, TierLevel::Tl0);
+    let error = store
+        .record_handshake(peer, &payload)
+        .expect_err("handshake must be rejected");
+    match error {
+        rpp_p2p::PeerstoreError::Blocklisted { .. } => {}
+        other => panic!("expected blocklisted error, got {other:?}"),
+    }
+}
+
+#[test]
+fn allowlist_initialises_peer_tiers() {
+    let keypair = identity::Keypair::generate_ed25519();
+    let peer = PeerId::from(keypair.public());
+    let allowlist = vec![AllowlistedPeer {
+        peer,
+        tier: TierLevel::Tl3,
+    }];
+
+    let store =
+        Peerstore::open(PeerstoreConfig::memory().with_allowlist(allowlist)).expect("peerstore");
+
+    assert_eq!(store.tier_of(&peer), TierLevel::Tl3);
+    assert!(store.reputation_of(&peer) >= 3.0);
 }
 
 #[test]

@@ -67,6 +67,8 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 12. **Security Hardening**
     - Replay-Schutz (Message-IDs, seqno), Flood-Prevention, Rate-Limits.
     - Fuzzing/Property-Tests für Decoder und Admission-Control.
+    - Konfigurierbare Zugriffslisten: `p2p.allowlist` (Default: `[]`) fixiert Tier-Level erlaubter Peers,
+      `p2p.blocklist` (Default: `[]`) sperrt Peers dauerhaft bereits beim Handshake.
     - DoD: Sicherheits-Tests laufen in CI, bekannte Angriffsvektoren mitigiert.
 
 13. **Simulation & Stresstests**

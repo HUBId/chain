@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use rpp_p2p::TierLevel;
+
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
 
@@ -25,6 +27,10 @@ pub struct P2pConfig {
     pub peerstore_path: PathBuf,
     #[serde(default = "default_gossip_state_path")]
     pub gossip_path: Option<PathBuf>,
+    #[serde(default)]
+    pub allowlist: Vec<P2pAllowlistEntry>,
+    #[serde(default)]
+    pub blocklist: Vec<String>,
 }
 
 impl Default for P2pConfig {
@@ -36,8 +42,16 @@ impl Default for P2pConfig {
             gossip_enabled: true,
             peerstore_path: default_peerstore_path(),
             gossip_path: default_gossip_state_path(),
+            allowlist: Vec::new(),
+            blocklist: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct P2pAllowlistEntry {
+    pub peer_id: String,
+    pub tier: TierLevel,
 }
 
 pub const NODE_CONFIG_VERSION: &str = "1.0";

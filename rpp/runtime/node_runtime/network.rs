@@ -2,16 +2,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use libp2p::Multiaddr;
+use libp2p::{identity::ParseError as PeerIdParseError, Multiaddr};
 use log::warn;
+use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
-    GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network, NetworkError,
-    NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, TierLevel,
+    AllowlistedPeer, GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network,
+    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, TierLevel,
 };
+use std::str::FromStr;
 use thiserror::Error;
 
 use super::node::IdentityProfile;
-use crate::config::P2pConfig;
+use crate::config::{P2pAllowlistEntry, P2pConfig};
 
 /// Resolved libp2p networking configuration used by the runtime.
 #[derive(Clone, Debug)]
@@ -20,6 +22,8 @@ pub struct NetworkConfig {
     bootstrap_peers: Vec<Multiaddr>,
     heartbeat_interval: Duration,
     gossip_enabled: bool,
+    allowlist: Vec<AllowlistedPeer>,
+    blocklist: Vec<PeerId>,
 }
 
 impl NetworkConfig {
@@ -42,12 +46,48 @@ impl NetworkConfig {
             bootstrap_peers.push(multiaddr);
         }
         let heartbeat_interval = Duration::from_millis(config.heartbeat_interval_ms.max(1));
+        let allowlist = Self::parse_allowlist(&config.allowlist)?;
+        let blocklist = Self::parse_blocklist(&config.blocklist)?;
         Ok(Self {
             listen_addr,
             bootstrap_peers,
             heartbeat_interval,
             gossip_enabled: config.gossip_enabled,
+            allowlist,
+            blocklist,
         })
+    }
+
+    fn parse_allowlist(
+        entries: &[P2pAllowlistEntry],
+    ) -> Result<Vec<AllowlistedPeer>, NetworkSetupError> {
+        let mut allowlist = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let peer = PeerId::from_str(&entry.peer_id).map_err(|source| {
+                NetworkSetupError::InvalidPeerId {
+                    peer_id: entry.peer_id.clone(),
+                    source,
+                }
+            })?;
+            allowlist.push(AllowlistedPeer {
+                peer,
+                tier: entry.tier,
+            });
+        }
+        Ok(allowlist)
+    }
+
+    fn parse_blocklist(entries: &[String]) -> Result<Vec<PeerId>, NetworkSetupError> {
+        let mut blocklist = Vec::with_capacity(entries.len());
+        for peer in entries {
+            let parsed =
+                PeerId::from_str(peer).map_err(|source| NetworkSetupError::InvalidPeerId {
+                    peer_id: peer.clone(),
+                    source,
+                })?;
+            blocklist.push(parsed);
+        }
+        Ok(blocklist)
     }
 
     /// Returns the listen address for the libp2p swarm.
@@ -69,6 +109,14 @@ impl NetworkConfig {
     pub fn gossip_enabled(&self) -> bool {
         self.gossip_enabled
     }
+
+    pub fn allowlist(&self) -> &[AllowlistedPeer] {
+        &self.allowlist
+    }
+
+    pub fn blocklist(&self) -> &[PeerId] {
+        &self.blocklist
+    }
 }
 
 /// Helper struct bundling libp2p primitives required by the node runtime.
@@ -86,9 +134,10 @@ impl NetworkResources {
         identity_profile: Option<IdentityProfile>,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
-        let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::persistent(
-            &p2p_config.peerstore_path,
-        ))?);
+        let peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
+            .with_allowlist(config.allowlist().to_vec())
+            .with_blocklist(config.blocklist().to_vec());
+        let peerstore = Arc::new(Peerstore::open(peerstore_config)?);
         let gossip_state = if let Some(path) = p2p_config.gossip_path.as_ref() {
             Some(Arc::new(GossipStateStore::open(path)?))
         } else {
@@ -153,6 +202,12 @@ pub enum NetworkSetupError {
         addr: String,
         #[source]
         source: libp2p::multiaddr::Error,
+    },
+    #[error("invalid peer id {peer_id}: {source}")]
+    InvalidPeerId {
+        peer_id: String,
+        #[source]
+        source: PeerIdParseError,
     },
     #[error("identity error: {0}")]
     Identity(#[from] IdentityError),
