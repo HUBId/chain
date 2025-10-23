@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -219,6 +220,42 @@ impl From<&PeerRecord> for StoredPeerRecord {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct StoredAccessLists {
+    #[serde(default)]
+    allowlist: Vec<StoredAllowlistEntry>,
+    #[serde(default)]
+    blocklist: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredAllowlistEntry {
+    peer_id: String,
+    tier: TierLevel,
+}
+
+impl From<&AllowlistedPeer> for StoredAllowlistEntry {
+    fn from(entry: &AllowlistedPeer) -> Self {
+        Self {
+            peer_id: entry.peer.to_base58(),
+            tier: entry.tier,
+        }
+    }
+}
+
+impl TryFrom<StoredAllowlistEntry> for AllowlistedPeer {
+    type Error = PeerstoreError;
+
+    fn try_from(entry: StoredAllowlistEntry) -> Result<Self, Self::Error> {
+        let peer = PeerId::from_str(&entry.peer_id)
+            .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
+        Ok(Self {
+            peer,
+            tier: entry.tier,
+        })
+    }
+}
+
 impl TryFrom<StoredPeerRecord> for PeerRecord {
     type Error = PeerstoreError;
 
@@ -342,17 +379,23 @@ impl PeerstoreConfig {
 }
 
 pub struct Peerstore {
-    config: PeerstoreConfig,
+    path: Option<PathBuf>,
+    access_path: Option<PathBuf>,
     peers: RwLock<HashMap<PeerId, PeerRecord>>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
-    blocklisted: HashSet<PeerId>,
+    allowlist: RwLock<Vec<AllowlistedPeer>>,
+    blocklisted: RwLock<HashSet<PeerId>>,
 }
 
 impl fmt::Debug for Peerstore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Peerstore")
-            .field("config", &self.config)
-            .finish_non_exhaustive()
+            .field("path", &self.path)
+            .field("access_path", &self.access_path)
+            .field("identity_verifier", &self.identity_verifier.is_some())
+            .field("allowlist_len", &self.allowlist.read().len())
+            .field("blocklisted_len", &self.blocklisted.read().len())
+            .finish()
     }
 }
 
@@ -380,13 +423,52 @@ impl Peerstore {
             HashMap::new()
         };
 
-        let mut store = Self {
-            blocklisted: config.blocklist.iter().cloned().collect(),
-            identity_verifier: config.identity_verifier.clone(),
+        let access_path = config
+            .path
+            .as_ref()
+            .map(|path| path.with_extension("access.json"));
+
+        let (allowlist, blocklisted) = if let Some(path) = &access_path {
+            if path.exists() {
+                let raw = fs::read_to_string(path)?;
+                let stored: StoredAccessLists = serde_json::from_str(&raw)
+                    .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
+                let allowlist = stored
+                    .allowlist
+                    .into_iter()
+                    .map(AllowlistedPeer::try_from)
+                    .collect::<Result<Vec<_>, PeerstoreError>>()?;
+                let blocklisted = stored
+                    .blocklist
+                    .into_iter()
+                    .map(|peer| {
+                        PeerId::from_str(&peer)
+                            .map_err(|err| PeerstoreError::Encoding(err.to_string()))
+                    })
+                    .collect::<Result<HashSet<_>, _>>()?;
+                (allowlist, blocklisted)
+            } else {
+                (
+                    config.allowlist.clone(),
+                    config.blocklist.iter().cloned().collect(),
+                )
+            }
+        } else {
+            (
+                config.allowlist.clone(),
+                config.blocklist.iter().cloned().collect(),
+            )
+        };
+        let store = Self {
+            path: config.path,
+            access_path,
+            identity_verifier: config.identity_verifier,
             peers: RwLock::new(peers),
-            config,
+            allowlist: RwLock::new(allowlist),
+            blocklisted: RwLock::new(blocklisted),
         };
         store.apply_access_control()?;
+        store.persist_access_lists()?;
         Ok(store)
     }
 
@@ -407,6 +489,7 @@ impl Peerstore {
                 .or_insert_with(|| PeerRecord::new(peer_id));
             entry.set_public_key(public_key);
         }
+        self.persist_access_lists()?;
         self.persist()
     }
 
@@ -611,7 +694,7 @@ impl Peerstore {
     }
 
     pub fn is_blocklisted(&self, peer_id: &PeerId) -> bool {
-        self.blocklisted.contains(peer_id)
+        self.blocklisted.read().contains(peer_id)
     }
 
     fn resolve_public_key(&self, peer_id: PeerId) -> Result<identity::PublicKey, PeerstoreError> {
@@ -719,7 +802,7 @@ impl Peerstore {
     }
 
     fn persist(&self) -> Result<(), PeerstoreError> {
-        let Some(path) = &self.config.path else {
+        let Some(path) = &self.path else {
             return Ok(());
         };
         let snapshot: Vec<StoredPeerRecord> = self
@@ -733,28 +816,107 @@ impl Peerstore {
         fs::write(path, encoded)?;
         Ok(())
     }
+
+    fn persist_access_lists(&self) -> Result<(), PeerstoreError> {
+        let Some(path) = &self.access_path else {
+            return Ok(());
+        };
+        let allowlist: Vec<StoredAllowlistEntry> = self
+            .allowlist
+            .read()
+            .iter()
+            .map(StoredAllowlistEntry::from)
+            .collect();
+        let blocklist: Vec<String> = self
+            .blocklisted
+            .read()
+            .iter()
+            .map(|peer| peer.to_base58())
+            .collect();
+        let stored = StoredAccessLists {
+            allowlist,
+            blocklist,
+        };
+        let encoded = serde_json::to_string_pretty(&stored)
+            .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, encoded)?;
+        Ok(())
+    }
 }
 
 impl Peerstore {
-    fn apply_access_control(&mut self) -> Result<(), PeerstoreError> {
-        if self.config.allowlist.is_empty() && self.config.blocklist.is_empty() {
+    fn apply_access_control(&self) -> Result<(), PeerstoreError> {
+        let allowlist = self.allowlist.read().clone();
+        let blocklist: Vec<PeerId> = self.blocklisted.read().iter().cloned().collect();
+
+        if allowlist.is_empty() && blocklist.is_empty() {
             return Ok(());
         }
 
         {
             let mut guard = self.peers.write();
-            for peer in &self.config.blocklist {
+            for peer in &blocklist {
                 let entry = guard.entry(*peer).or_insert_with(|| PeerRecord::new(*peer));
                 entry.set_ban(Self::blocklist_ban_until());
             }
-            for entry in &self.config.allowlist {
+            let blocklist: HashSet<PeerId> = blocklist.into_iter().collect();
+            for entry in &allowlist {
                 let record = guard
                     .entry(entry.peer)
                     .or_insert_with(|| PeerRecord::new(entry.peer));
                 record.apply_allowlist_tier(entry.tier);
-                record.clear_ban_if_elapsed();
+                if !blocklist.contains(&entry.peer) {
+                    record.clear_ban_if_elapsed();
+                }
             }
         }
+        self.persist()
+    }
+
+    pub fn reload_access_lists(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+    ) -> Result<(), PeerstoreError> {
+        let new_blocklisted: HashSet<PeerId> = blocklist.iter().cloned().collect();
+        let previous_blocklisted = {
+            let mut guard = self.blocklisted.write();
+            let previous = guard.clone();
+            *guard = new_blocklisted.clone();
+            previous
+        };
+
+        {
+            let mut guard = self.allowlist.write();
+            *guard = allowlist.clone();
+        }
+
+        {
+            let mut peers = self.peers.write();
+            for removed in previous_blocklisted.difference(&new_blocklisted) {
+                if let Some(record) = peers.get_mut(removed) {
+                    record.remove_ban();
+                }
+            }
+            for peer in &new_blocklisted {
+                let entry = peers.entry(*peer).or_insert_with(|| PeerRecord::new(*peer));
+                entry.set_ban(Self::blocklist_ban_until());
+            }
+            for entry in &allowlist {
+                let record = peers
+                    .entry(entry.peer)
+                    .or_insert_with(|| PeerRecord::new(entry.peer));
+                record.apply_allowlist_tier(entry.tier);
+                if !new_blocklisted.contains(&entry.peer) {
+                    record.clear_ban_if_elapsed();
+                }
+            }
+        }
+
+        self.persist_access_lists()?;
         self.persist()
     }
 

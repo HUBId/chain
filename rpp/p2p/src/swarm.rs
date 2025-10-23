@@ -853,6 +853,14 @@ impl Network {
         Ok(())
     }
 
+    pub fn reload_access_lists(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+    ) -> Result<(), PeerstoreError> {
+        self.peerstore.reload_access_lists(allowlist, blocklist)
+    }
+
     pub fn local_peer_id(&self) -> PeerId {
         *self.swarm.local_peer_id()
     }

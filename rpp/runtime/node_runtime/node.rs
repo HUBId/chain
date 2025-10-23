@@ -5,15 +5,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use blake3::Hash;
-use libp2p::PeerId;
 use log::{debug, info, warn};
 use parking_lot::{Mutex, RwLock};
+use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
-    ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
-    NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity,
-    PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
-    ReputationBroadcast, ReputationEvent, RuntimeProofValidator, SeenDigestRecord, TierLevel,
-    VoteOutcome,
+    AllowlistedPeer, ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync,
+    MetaTelemetry, NetworkError, NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
+    NodeIdentity, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage,
+    PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent, RuntimeProofValidator,
+    SeenDigestRecord, TierLevel, VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer};
 use serde_json::Value;
@@ -52,6 +52,11 @@ enum NodeCommand {
     },
     MetaTelemetrySnapshot {
         response: oneshot::Sender<Result<MetaTelemetryReport, NodeError>>,
+    },
+    ReloadAccessLists {
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+        response: oneshot::Sender<Result<(), NodeError>>,
     },
     Shutdown,
     ApplyReputationPenalty {
@@ -292,6 +297,8 @@ pub enum NodeError {
     Network(#[from] NetworkError),
     #[error("pipeline error: {0}")]
     Pipeline(#[from] PipelineError),
+    #[error("peerstore error: {0}")]
+    Peerstore(#[from] PeerstoreError),
     #[error("command channel closed")]
     CommandChannelClosed,
     #[error("gossip propagation disabled")]
@@ -679,6 +686,18 @@ impl NodeInner {
                 let peer_count = self.connected_peers.len();
                 let report = self.build_meta_report(peer_count);
                 let _ = response.send(Ok(report));
+                Ok(false)
+            }
+            NodeCommand::ReloadAccessLists {
+                allowlist,
+                blocklist,
+                response,
+            } => {
+                let result = self
+                    .network
+                    .reload_access_lists(allowlist, blocklist)
+                    .map_err(NodeError::from);
+                let _ = response.send(result);
                 Ok(false)
             }
             NodeCommand::Shutdown => Ok(true),
@@ -1159,6 +1178,23 @@ impl NodeHandle {
             .send(NodeCommand::ApplyReputationPenalty { peer, code })
             .await
             .map_err(|_| NodeError::CommandChannelClosed)
+    }
+
+    pub async fn reload_access_lists(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+    ) -> Result<(), NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::ReloadAccessLists {
+                allowlist,
+                blocklist,
+                response: tx,
+            })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)??
     }
 
     /// Updates the handshake identity used for peer admission and gossip permissions.
