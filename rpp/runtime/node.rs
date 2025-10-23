@@ -16,14 +16,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -36,13 +36,13 @@ use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
 };
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
-    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
-    classify_participants, evaluate_vrf,
+    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
+    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
+    SignedBftVote, ValidatorCandidate,
 };
 use crate::crypto::{
-    VrfKeypair, address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
-    sign_message, signature_to_hex, vrf_public_key_to_hex,
+    address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair, sign_message,
+    signature_to_hex, vrf_public_key_to_hex, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -57,11 +57,11 @@ use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
-    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
     node::{
         IdentityProfile as RuntimeIdentityProfile, MetaTelemetryReport, NodeError as P2pError,
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
@@ -72,9 +72,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
-    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
-    TransactionProofBundle, UptimeProof,
+    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -243,6 +243,13 @@ pub struct ConsensusStatus {
     pub epoch: u64,
     pub epoch_nonce: String,
     pub pending_votes: usize,
+    pub round_latencies_ms: Vec<u64>,
+    pub leader_changes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quorum_latency_ms: Option<u64>,
+    pub witness_events: u64,
+    pub slashing_events: u64,
+    pub failed_votes: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -326,6 +333,103 @@ pub struct NodeTelemetrySnapshot {
     pub timetoke_params: TimetokeParams,
     pub verifier_metrics: VerifierMetricsSnapshot,
     pub pruning: Option<PruningJobStatus>,
+}
+
+const MAX_ROUND_LATENCY_SAMPLES: usize = 32;
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ConsensusTelemetrySnapshot {
+    pub round_latencies_ms: Vec<u64>,
+    pub leader_changes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quorum_latency_ms: Option<u64>,
+    pub witness_events: u64,
+    pub slashing_events: u64,
+    pub failed_votes: u64,
+}
+
+#[derive(Default)]
+struct ConsensusTelemetryState {
+    round_latencies_ms: VecDeque<u64>,
+    last_round_started: Option<Instant>,
+    last_round_height: Option<u64>,
+    last_round_number: Option<u64>,
+    leader_changes: u64,
+    last_leader: Option<Address>,
+    quorum_latency_ms: Option<u64>,
+    witness_events: u64,
+    slashing_events: u64,
+    failed_votes: u64,
+}
+
+#[derive(Default)]
+pub struct ConsensusTelemetry {
+    state: ParkingMutex<ConsensusTelemetryState>,
+}
+
+impl ConsensusTelemetry {
+    pub fn record_round_start(&self, height: u64, round: u64, leader: &Address) {
+        let mut state = self.state.lock();
+        if let Some(previous) = &state.last_leader {
+            if previous != leader {
+                state.leader_changes = state.leader_changes.saturating_add(1);
+            }
+        }
+        state.last_leader = Some(leader.clone());
+        state.last_round_started = Some(Instant::now());
+        state.last_round_height = Some(height);
+        state.last_round_number = Some(round);
+        state.quorum_latency_ms = None;
+    }
+
+    pub fn record_quorum(&self, height: u64, round: u64) {
+        let mut state = self.state.lock();
+        if state.last_round_height == Some(height) && state.last_round_number == Some(round) {
+            state.quorum_latency_ms = state
+                .last_round_started
+                .map(|started| started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+        }
+    }
+
+    pub fn record_round_end(&self, height: u64, round: u64) {
+        let mut state = self.state.lock();
+        if state.last_round_height == Some(height) && state.last_round_number == Some(round) {
+            if let Some(started) = state.last_round_started.take() {
+                let duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                if state.round_latencies_ms.len() >= MAX_ROUND_LATENCY_SAMPLES {
+                    state.round_latencies_ms.pop_front();
+                }
+                state.round_latencies_ms.push_back(duration_ms);
+            }
+        }
+    }
+
+    pub fn record_witness_event(&self) {
+        let mut state = self.state.lock();
+        state.witness_events = state.witness_events.saturating_add(1);
+    }
+
+    pub fn record_slashing(&self) {
+        let mut state = self.state.lock();
+        state.slashing_events = state.slashing_events.saturating_add(1);
+    }
+
+    pub fn record_failed_vote(&self) {
+        let mut state = self.state.lock();
+        state.failed_votes = state.failed_votes.saturating_add(1);
+    }
+
+    pub fn snapshot(&self) -> ConsensusTelemetrySnapshot {
+        let state = self.state.lock();
+        ConsensusTelemetrySnapshot {
+            round_latencies_ms: state.round_latencies_ms.iter().copied().collect(),
+            leader_changes: state.leader_changes,
+            quorum_latency_ms: state.quorum_latency_ms,
+            witness_events: state.witness_events,
+            slashing_events: state.slashing_events,
+            failed_votes: state.failed_votes,
+        }
+    }
 }
 
 struct WitnessChannels {
@@ -436,6 +540,7 @@ pub(crate) struct NodeInner {
     completion: Notify,
     witness_channels: WitnessChannels,
     p2p_runtime: ParkingMutex<Option<P2pHandle>>,
+    consensus_telemetry: Arc<ConsensusTelemetry>,
 }
 
 enum FinalizationContext {
@@ -656,6 +761,7 @@ impl Node {
             ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
         let mempool_limit = config.mempool_limit;
         let queue_weights = config.queue_weights.clone();
+        let consensus_telemetry = Arc::new(ConsensusTelemetry::default());
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -690,6 +796,7 @@ impl Node {
             completion: Notify::new(),
             witness_channels: WitnessChannels::new(128),
             p2p_runtime: ParkingMutex::new(None),
+            consensus_telemetry,
         });
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
@@ -726,7 +833,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
+        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -737,9 +844,8 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
-        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field,
+        string_to_field, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1609,6 +1715,10 @@ impl NodeInner {
     }
 
     fn emit_witness_json<T: Serialize>(&self, topic: GossipTopic, payload: &T) {
+        if matches!(topic, GossipTopic::Blocks | GossipTopic::Votes) {
+            self.consensus_telemetry.record_witness_event();
+            self.update_runtime_metrics();
+        }
         match serde_json::to_vec(payload) {
             Ok(bytes) => self.emit_witness_bytes(topic, bytes),
             Err(err) => debug!(?err, ?topic, "failed to encode witness gossip payload"),
@@ -1677,12 +1787,19 @@ impl NodeInner {
             .get_account(&self.address)
             .map(|account| account.reputation.score)
             .unwrap_or_default();
+        let consensus_snapshot = self.consensus_telemetry.snapshot();
         Ok(P2pMetrics {
             block_height: status.height,
             block_hash: status.last_hash,
             transaction_count: status.pending_transactions,
             reputation_score,
             verifier_metrics: self.verifiers.metrics_snapshot(),
+            round_latencies_ms: consensus_snapshot.round_latencies_ms,
+            leader_changes: consensus_snapshot.leader_changes,
+            quorum_latency_ms: consensus_snapshot.quorum_latency_ms,
+            witness_events: consensus_snapshot.witness_events,
+            slashing_events: consensus_snapshot.slashing_events,
+            failed_votes: consensus_snapshot.failed_votes,
         })
     }
 
@@ -2794,6 +2911,8 @@ impl NodeInner {
             "invalid vote gossip detected"
         );
         self.punish_invalid_proof(&vote.vote.voter, vote.vote.height, vote.vote.round);
+        self.consensus_telemetry.record_failed_vote();
+        self.update_runtime_metrics();
     }
 
     fn record_double_spend_if_applicable(&self, block: &Block, round: u64, err: &ChainError) {
@@ -3080,6 +3199,7 @@ impl NodeInner {
         let block = self.storage.read_block(tip.height)?;
         let epoch_info = self.ledger.epoch_info();
         let pending_votes = self.vote_mempool.read().len();
+        let telemetry = self.consensus_telemetry.snapshot();
         let (
             block_hash,
             proposer,
@@ -3139,6 +3259,12 @@ impl NodeInner {
             epoch: epoch_info.epoch,
             epoch_nonce: epoch_info.epoch_nonce,
             pending_votes,
+            round_latencies_ms: telemetry.round_latencies_ms,
+            leader_changes: telemetry.leader_changes,
+            quorum_latency_ms: telemetry.quorum_latency_ms,
+            witness_events: telemetry.witness_events,
+            slashing_events: telemetry.slashing_events,
+            failed_votes: telemetry.failed_votes,
         })
     }
 
@@ -3254,6 +3380,8 @@ impl NodeInner {
 
     fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
         self.ledger.slash_validator(address, reason)?;
+        self.consensus_telemetry.record_slashing();
+        self.update_runtime_metrics();
         self.maybe_refresh_local_identity(address);
         Ok(())
     }
@@ -3487,6 +3615,9 @@ impl NodeInner {
                 return Ok(());
             }
         };
+        let round_id = round.round();
+        self.consensus_telemetry
+            .record_round_start(height, round_id, &selection.proposer);
         if selection.proposer != self.address {
             if let Some(proposal) = self.take_verified_proposal(height, &selection.proposer) {
                 info!(
@@ -3503,6 +3634,8 @@ impl NodeInner {
                         ?err,
                         "failed to register local prevote for external proposal"
                     );
+                    self.consensus_telemetry.record_failed_vote();
+                    self.update_runtime_metrics();
                 }
                 let local_precommit = self.build_local_vote(
                     height,
@@ -3515,6 +3648,8 @@ impl NodeInner {
                         ?err,
                         "failed to register local precommit for external proposal"
                     );
+                    self.consensus_telemetry.record_failed_vote();
+                    self.update_runtime_metrics();
                 }
                 let external_votes = self.drain_votes_for(height, &block_hash);
                 for vote in &external_votes {
@@ -3535,10 +3670,12 @@ impl NodeInner {
                                 );
                             }
                         }
+                        self.consensus_telemetry.record_failed_vote();
                     }
                 }
                 if round.commit_reached() {
                     info!(height, proposer = %selection.proposer, "commit quorum observed externally");
+                    self.consensus_telemetry.record_quorum(height, round_id);
                     let previous_block = if height == 0 {
                         None
                     } else {
@@ -3556,6 +3693,8 @@ impl NodeInner {
                     match self.finalize_block(finalization_ctx)? {
                         FinalizationOutcome::Sealed { block, tip_height } => {
                             let _ = (block, tip_height);
+                            self.consensus_telemetry.record_round_end(height, round_id);
+                            self.update_runtime_metrics();
                         }
                         FinalizationOutcome::AwaitingQuorum => {}
                     }
@@ -3749,6 +3888,8 @@ impl NodeInner {
                         );
                     }
                 }
+                self.consensus_telemetry.record_failed_vote();
+                self.update_runtime_metrics();
             }
         }
 
@@ -3774,6 +3915,9 @@ impl NodeInner {
         match self.finalize_block(finalization_ctx)? {
             FinalizationOutcome::Sealed { block, tip_height } => {
                 let _ = (block, tip_height);
+                self.consensus_telemetry.record_quorum(height, round_id);
+                self.consensus_telemetry.record_round_end(height, round_id);
+                self.update_runtime_metrics();
             }
             FinalizationOutcome::AwaitingQuorum => {}
         }
@@ -4506,9 +4650,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
-        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
+        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
+        TimetokeParams, VerifierMetricsSnapshot,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4516,12 +4660,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{Router, routing::post};
+    use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;
@@ -4685,6 +4829,12 @@ mod telemetry_tests {
                 epoch: 0,
                 epoch_nonce: "nonce".into(),
                 pending_votes: 0,
+                round_latencies_ms: Vec::new(),
+                leader_changes: 0,
+                quorum_latency_ms: None,
+                witness_events: 0,
+                slashing_events: 0,
+                failed_votes: 0,
             },
             mempool: MempoolStatus {
                 transactions: Vec::new(),

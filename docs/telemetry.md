@@ -14,6 +14,12 @@ Die Runtime exportiert periodisch `TelemetrySnapshot`-Strukturen an den Telemetr
   "reputation_score": 0.82,
   "timestamp": "2025-01-01T12:00:00Z",
   "verifier_metrics": { "per_backend": {} },
+  "consensus_round_latencies_ms": [320, 275, 410],
+  "consensus_leader_changes": 5,
+  "consensus_quorum_latency_ms": 480,
+  "consensus_witness_events": 128,
+  "consensus_slashing_events": 2,
+  "consensus_failed_votes": 3,
   "network_metrics": {
     "bandwidth": {
       "inbound_bytes": 2048,
@@ -35,6 +41,8 @@ Die Runtime exportiert periodisch `TelemetrySnapshot`-Strukturen an den Telemetr
 ```
 
 Alle Einträge werden über eine gemeinsame `libp2p_metrics::Registry` registriert. Dadurch können Prometheus-Exporter dieselben Daten auslesen, während `NetworkMetricsSnapshot` eine verdichtete Ansicht für Dashboards liefert.
+
+Die neuen Konsensfelder spiegeln unmittelbar die Instrumentierung aus `produce_block` sowie den Gossip-/Vote-Handlern wider. Sie liefern Laufzeit-Histogramme, Zähler für Witness- und Slashing-Ereignisse sowie Fehlstimmen. Damit lassen sich Leader-Rotation, Quorum-Latenzen und Fehlverhalten pro Runde in Dashboards und Alerting-Regeln nachvollziehen.
 
 ## Dashboards
 

@@ -33,6 +33,18 @@ pub struct TelemetrySnapshot {
     pub verifier_metrics: VerifierMetricsSnapshot,
     /// Snapshot of libp2p network metrics as observed locally.
     pub network_metrics: Option<NetworkMetricsSnapshot>,
+    /// Recent consensus round latencies in milliseconds.
+    pub consensus_round_latencies_ms: Vec<u64>,
+    /// Number of observed leader changes for the tracked rounds.
+    pub consensus_leader_changes: u64,
+    /// Latency between round start and reaching quorum in milliseconds.
+    pub consensus_quorum_latency_ms: Option<u64>,
+    /// Total witness events emitted for consensus topics.
+    pub consensus_witness_events: u64,
+    /// Total slashing events recorded by the node.
+    pub consensus_slashing_events: u64,
+    /// Total failed consensus votes observed locally.
+    pub consensus_failed_votes: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -335,6 +347,18 @@ mod tests {
         handle.shutdown().await.expect("shutdown");
     }
 
+    #[test]
+    fn telemetry_snapshot_serializes_consensus_metrics() {
+        let snapshot = sample_snapshot();
+        let value = serde_json::to_value(&snapshot).expect("serialize snapshot");
+        assert!(value.get("consensus_round_latencies_ms").is_some());
+        assert_eq!(value["consensus_leader_changes"], 4);
+        assert_eq!(value["consensus_quorum_latency_ms"], 11);
+        assert_eq!(value["consensus_witness_events"], 9);
+        assert_eq!(value["consensus_slashing_events"], 2);
+        assert_eq!(value["consensus_failed_votes"], 1);
+    }
+
     fn sample_snapshot() -> TelemetrySnapshot {
         TelemetrySnapshot {
             block_height: 42,
@@ -346,6 +370,12 @@ mod tests {
             timestamp: SystemTime::now(),
             verifier_metrics: VerifierMetricsSnapshot::default(),
             network_metrics: None,
+            consensus_round_latencies_ms: vec![12, 24],
+            consensus_leader_changes: 4,
+            consensus_quorum_latency_ms: Some(11),
+            consensus_witness_events: 9,
+            consensus_slashing_events: 2,
+            consensus_failed_votes: 1,
         }
     }
 

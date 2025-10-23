@@ -73,6 +73,12 @@ pub struct NodeMetrics {
     pub transaction_count: usize,
     pub reputation_score: f64,
     pub verifier_metrics: VerifierMetricsSnapshot,
+    pub round_latencies_ms: Vec<u64>,
+    pub leader_changes: u64,
+    pub quorum_latency_ms: Option<u64>,
+    pub witness_events: u64,
+    pub slashing_events: u64,
+    pub failed_votes: u64,
 }
 
 /// Summary of peer activity that is emitted via heartbeat and meta telemetry events.
@@ -1109,6 +1115,12 @@ impl NodeInner {
             timestamp: SystemTime::now(),
             verifier_metrics,
             network_metrics: Some(self.network.metrics_snapshot()),
+            consensus_round_latencies_ms: metrics.round_latencies_ms,
+            consensus_leader_changes: metrics.leader_changes,
+            consensus_quorum_latency_ms: metrics.quorum_latency_ms,
+            consensus_witness_events: metrics.witness_events,
+            consensus_slashing_events: metrics.slashing_events,
+            consensus_failed_votes: metrics.failed_votes,
         };
         if let Err(err) = self.telemetry.send(snapshot).await {
             warn!(target: "telemetry", "failed to enqueue telemetry snapshot: {err}");
@@ -1482,6 +1494,7 @@ mod tests {
                     transaction_count: 4,
                     reputation_score: 0.9,
                     verifier_metrics: VerifierMetricsSnapshot::default(),
+                    ..Default::default()
                 });
 
                 let task = task::spawn_local(async move {
