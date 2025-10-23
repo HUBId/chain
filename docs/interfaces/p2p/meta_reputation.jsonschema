@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.rpp.dev/p2p/meta_reputation.json",
   "title": "MetaReputationBroadcast",
+  "description": "Reputation broadcast payload forwarded on the libp2p meta gossip channel (see also meta_evidence.jsonschema for complementary records).",
   "type": "object",
   "required": ["peer", "event", "reputation", "tier", "label"],
   "properties": {

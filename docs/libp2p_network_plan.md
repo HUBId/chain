@@ -59,6 +59,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 10. **Meta-Kanal & Telemetrie**
     - Peer-Heartbeat, Latenzen, Versionen über `meta` Topic publizieren.
     - Dashboard/Prometheus-Exporter füttern.
+    - Schema-Referenz: `docs/interfaces/p2p/meta_reputation.jsonschema`, `docs/interfaces/p2p/meta_evidence.jsonschema` (inkl. Beispiele unter `docs/interfaces/p2p/examples/`).
     - DoD: Telemetrie-Events sichtbar, Alerts bei Offline-Peers.
 
 ## Phase 3 – Robustheit & Betrieb

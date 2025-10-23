@@ -1750,6 +1750,9 @@ impl NodeInner {
                         Ok(NodeEvent::VoteRejected { peer, vote, reason }) => {
                             ingest.handle_invalid_vote_gossip(&peer, vote, &reason);
                         }
+                        Ok(NodeEvent::Evidence { evidence, .. }) => {
+                            ingest.apply_evidence(evidence);
+                        }
                         Ok(NodeEvent::Gossip { topic, data, .. }) => {
                             ingest.ingest_witness_bytes(topic, data);
                         }

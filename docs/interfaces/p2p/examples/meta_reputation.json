@@ -1,0 +1,12 @@
+{
+  "peer": "12D3KooWKfExamplePeerId",
+  "event": {
+    "type": "slash",
+    "severity": 0.5,
+    "reason": "double-sign"
+  },
+  "reputation": 42.0,
+  "tier": "tl3",
+  "banned_until": 1735689600000,
+  "label": "consensus_fault"
+}

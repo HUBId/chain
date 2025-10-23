@@ -15,10 +15,13 @@ use rpp_p2p::{
     ReputationBroadcast, ReputationEvent, RuntimeProofValidator, SeenDigestRecord, TierLevel,
     VoteOutcome,
 };
+use serde::{Deserialize, Deserializer, de};
+use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
 
 use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
+use crate::consensus::EvidenceRecord;
 use crate::consensus::SignedBftVote;
 use crate::node::NetworkIdentityProfile;
 use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
@@ -79,6 +82,35 @@ pub struct MetaTelemetryReport {
     pub local_peer_id: PeerId,
     pub peer_count: usize,
     pub peers: Vec<PeerTelemetry>,
+}
+
+#[derive(Clone, Debug)]
+pub enum MetaPayload {
+    Reputation(ReputationBroadcast),
+    Evidence(EvidenceRecord),
+    Telemetry(MetaTelemetryReport),
+}
+
+impl<'de> Deserialize<'de> for MetaPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        if let Ok(broadcast) = serde_json::from_value::<ReputationBroadcast>(value.clone()) {
+            return Ok(Self::Reputation(broadcast));
+        }
+        if let Ok(evidence) = serde_json::from_value::<EvidenceRecord>(value.clone()) {
+            return Ok(Self::Evidence(evidence));
+        }
+        if let Ok(report) = serde_json::from_value::<NetworkMetaTelemetryReport>(value.clone()) {
+            let report = MetaTelemetryReport::try_from(report).map_err(|err| {
+                de::Error::custom(format!("invalid meta telemetry report: {err}"))
+            })?;
+            return Ok(Self::Telemetry(report));
+        }
+        Err(de::Error::custom("unknown meta payload format"))
+    }
 }
 
 fn system_time_to_millis(time: SystemTime) -> u64 {
@@ -215,6 +247,10 @@ pub enum NodeEvent {
         topic: GossipTopic,
         data: Vec<u8>,
     },
+    Evidence {
+        peer: PeerId,
+        evidence: EvidenceRecord,
+    },
     BlockProposal {
         peer: PeerId,
         block: Block,
@@ -288,8 +324,7 @@ enum VoteIngestResult {
 #[derive(Debug)]
 enum MetaIngestResult {
     Duplicate,
-    Reputation(ReputationBroadcast),
-    Telemetry(MetaTelemetryReport),
+    Payload(MetaPayload),
     DecodeFailed(String),
 }
 
@@ -511,28 +546,13 @@ impl GossipPipelines {
             debug!(target: "node", ?peer, "duplicate meta gossip ignored");
             return MetaIngestResult::Duplicate;
         }
-        match serde_json::from_slice::<ReputationBroadcast>(&data) {
-            Ok(broadcast) => {
+        match serde_json::from_slice::<MetaPayload>(&data) {
+            Ok(payload) => {
                 debug!(target: "node", ?peer, "meta gossip ingested");
-                MetaIngestResult::Reputation(broadcast)
+                MetaIngestResult::Payload(payload)
             }
-            Err(reputation_err) => {
-                match serde_json::from_slice::<NetworkMetaTelemetryReport>(&data) {
-                    Ok(report) => match MetaTelemetryReport::try_from(report) {
-                        Ok(report) => {
-                            debug!(
-                                target: "node",
-                                ?peer,
-                                "meta telemetry gossip ingested"
-                            );
-                            MetaIngestResult::Telemetry(report)
-                        }
-                        Err(err) => MetaIngestResult::DecodeFailed(err),
-                    },
-                    Err(err) => MetaIngestResult::DecodeFailed(format!(
-                        "invalid meta payload encoding: {reputation_err}; {err}"
-                    )),
-                }
+            Err(err) => {
+                MetaIngestResult::DecodeFailed(format!("invalid meta payload encoding: {err}"))
             }
         }
     }
@@ -883,52 +903,63 @@ impl NodeInner {
                                         "duplicate meta gossip ignored"
                                     );
                                 }
-                                MetaIngestResult::Reputation(broadcast) => {
-                                    if peer == self.identity.peer_id() {
+                                MetaIngestResult::Payload(payload) => match payload {
+                                    MetaPayload::Reputation(broadcast) => {
+                                        if peer == self.identity.peer_id() {
+                                            debug!(
+                                                target: "node",
+                                                ?peer,
+                                                "ignoring local reputation broadcast"
+                                            );
+                                        } else if let Err(err) =
+                                            self.network.apply_reputation_broadcast(broadcast)
+                                        {
+                                            warn!(
+                                                target: "node",
+                                                ?peer,
+                                                %err,
+                                                "failed to apply reputation broadcast"
+                                            );
+                                        }
+                                    }
+                                    MetaPayload::Evidence(evidence) => {
                                         debug!(
                                             target: "node",
                                             ?peer,
-                                            "ignoring local reputation broadcast"
+                                            "meta evidence gossip ingested"
                                         );
-                                    } else if let Err(err) =
-                                        self.network.apply_reputation_broadcast(broadcast)
-                                    {
-                                        warn!(
-                                            target: "node",
-                                            ?peer,
-                                            %err,
-                                            "failed to apply reputation broadcast"
-                                        );
+                                        let _ = self.events.send(NodeEvent::Evidence {
+                                            peer: peer.clone(),
+                                            evidence,
+                                        });
                                     }
-                                }
-                                MetaIngestResult::Telemetry(report) => {
-                                    let remote = report.local_peer_id;
-                                    if remote != peer {
-                                        warn!(
-                                            target: "node",
-                                            expected = %peer,
-                                            received = %remote,
-                                            "meta telemetry peer mismatch"
-                                        );
+                                    MetaPayload::Telemetry(report) => {
+                                        let remote = report.local_peer_id;
+                                        if remote != peer {
+                                            warn!(
+                                                target: "node",
+                                                expected = %peer,
+                                                received = %remote,
+                                                "meta telemetry peer mismatch"
+                                            );
+                                        }
+                                        let version = self
+                                            .known_versions
+                                            .get(&remote)
+                                            .cloned()
+                                            .unwrap_or_else(|| remote.to_base58());
+                                        if let Some(entry) = report.peers.iter().find(|telemetry| {
+                                            telemetry.peer == self.identity.peer_id()
+                                        }) {
+                                            self.meta_telemetry.record_at(
+                                                remote,
+                                                version,
+                                                Duration::from_millis(entry.latency_ms),
+                                                entry.last_seen,
+                                            );
+                                        }
                                     }
-                                    let version = self
-                                        .known_versions
-                                        .get(&remote)
-                                        .cloned()
-                                        .unwrap_or_else(|| remote.to_base58());
-                                    if let Some(entry) = report
-                                        .peers
-                                        .iter()
-                                        .find(|telemetry| telemetry.peer == self.identity.peer_id())
-                                    {
-                                        self.meta_telemetry.record_at(
-                                            remote,
-                                            version,
-                                            Duration::from_millis(entry.latency_ms),
-                                            entry.last_seen,
-                                        );
-                                    }
-                                }
+                                },
                                 MetaIngestResult::DecodeFailed(reason) => {
                                     warn!(
                                         target: "node",

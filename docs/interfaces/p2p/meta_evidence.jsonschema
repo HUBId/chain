@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/meta_evidence.json",
+  "title": "MetaEvidenceRecord",
+  "description": "Slashing evidence propagated on the libp2p meta gossip channel.",
+  "type": "object",
+  "required": ["address", "height", "round", "kind", "block_hashes"],
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Validator address accused of producing faulty consensus artefacts."
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Block height at which the offence was observed."
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Consensus round associated with the evidence."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Classification of the evidence record.",
+      "enum": [
+        "DoubleSignPrevote",
+        "DoubleSignPrecommit",
+        "InvalidProof",
+        "InvalidProposal"
+      ]
+    },
+    "vote_kind": {
+      "description": "Vote variant, only present for double-sign evidence.",
+      "type": ["string", "null"],
+      "enum": ["PreVote", "PreCommit", null]
+    },
+    "block_hashes": {
+      "type": "array",
+      "description": "Set of block hashes referenced by the evidence (e.g. conflicting proposals).",
+      "items": {"type": "string"}
+    }
+  },
+  "additionalProperties": false
+}
