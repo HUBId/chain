@@ -1,13 +1,26 @@
 use std::num::NonZeroU64;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use opentelemetry::global;
+use opentelemetry::KeyValue;
+use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::runtime::Tokio;
+use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
+use opentelemetry_sdk::Resource;
 use parking_lot::RwLock;
 use tokio::task::JoinError;
-use tracing::{error, info, warn};
+use tonic::metadata::{MetadataMap, MetadataValue};
+use tracing::{error, info, info_span, warn};
+use tracing_opentelemetry::OpenTelemetryLayer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 
 use rpp_chain::api::ApiContext;
 use rpp_chain::config::NodeConfig;
@@ -69,10 +82,11 @@ enum ShutdownEvent {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    init_tracing(cli.log_level.clone(), cli.log_json).context("failed to initialise logging")?;
-
     let mut config = load_configuration(&cli)?;
     apply_overrides(&mut config, &cli);
+
+    let _telemetry_guard = init_tracing(&config, cli.log_level.clone(), cli.log_json)
+        .context("failed to initialise logging")?;
 
     if cli.write_config {
         let path = std::env::current_dir()
@@ -284,29 +298,198 @@ fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
     }
 }
 
-fn init_tracing(log_level: Option<String>, json: bool) -> Result<()> {
+fn init_tracing(
+    config: &NodeConfig,
+    log_level: Option<String>,
+    json: bool,
+) -> Result<Option<OtelGuard>> {
     let level = log_level.or_else(|| std::env::var("RUST_LOG").ok());
     let filter = match level {
         Some(level) => match EnvFilter::try_new(level) {
             Ok(filter) => filter,
             Err(err) => {
-                warn!(?err, "invalid log level override, falling back to info");
+                eprintln!("invalid log level override ({err}), falling back to info");
                 EnvFilter::new("info")
             }
         },
         None => EnvFilter::new("info"),
     };
 
-    let builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .with_ansi(!json);
+    let fmt_layer = || {
+        let layer = tracing_subscriber::fmt::layer()
+            .with_target(true)
+            .with_ansi(!json);
+        if json {
+            layer.json().flatten_event(true).boxed()
+        } else {
+            layer.boxed()
+        }
+    };
 
-    if json {
-        builder.json().flatten_event(true).try_init()?;
-    } else {
-        builder.finish().try_init()?;
+    match build_otlp_layer(config)? {
+        Some(OtlpLayer {
+            layer,
+            guard,
+            endpoint,
+        }) => {
+            tracing_subscriber::registry()
+                .with(filter.clone())
+                .with(fmt_layer())
+                .with(layer)
+                .try_init()?;
+
+            let telemetry_span = info_span!(
+                "node.telemetry.init",
+                otlp_enabled = true,
+                otlp_endpoint = endpoint.as_str()
+            );
+            let _span_guard = telemetry_span.enter();
+            info!(target: "telemetry", otlp_endpoint = endpoint, "tracing initialised");
+            Ok(Some(guard))
+        }
+        None => {
+            tracing_subscriber::registry()
+                .with(filter)
+                .with(fmt_layer())
+                .try_init()?;
+
+            let telemetry_span = info_span!("node.telemetry.init", otlp_enabled = false);
+            let _span_guard = telemetry_span.enter();
+            info!(target: "telemetry", otlp_enabled = false, "tracing initialised");
+            Ok(None)
+        }
+    }
+}
+
+struct OtelGuard;
+
+impl Drop for OtelGuard {
+    fn drop(&mut self) {
+        if let Err(err) = global::shutdown_tracer_provider() {
+            eprintln!("failed to shutdown otlp tracer provider: {err}");
+        }
+    }
+}
+
+struct OtlpLayer {
+    layer: OpenTelemetryLayer<tracing_subscriber::Registry, Tracer>,
+    guard: OtelGuard,
+    endpoint: String,
+}
+
+struct OtlpSettings {
+    endpoint: String,
+    auth_header: Option<String>,
+    timeout: Duration,
+}
+
+fn build_otlp_layer(config: &NodeConfig) -> Result<Option<OtlpLayer>> {
+    let Some(settings) = otlp_settings(config)? else {
+        return Ok(None);
+    };
+
+    let mut exporter = opentelemetry_otlp::new_exporter()
+        .tonic()
+        .with_endpoint(settings.endpoint.clone())
+        .with_timeout(settings.timeout);
+
+    if let Some(header) = settings.auth_header.as_ref() {
+        let mut metadata = MetadataMap::new();
+        let value = MetadataValue::from_str(header)
+            .map_err(|err| anyhow!("invalid telemetry auth token: {err}"))?;
+        metadata.insert("authorization", value);
+        exporter = exporter.with_metadata(metadata);
     }
 
-    Ok(())
+    let exporter = exporter.build_span_exporter()?;
+    let batch_config = BatchConfig::default()
+        .with_max_queue_size(2048)
+        .with_max_export_batch_size(512)
+        .with_max_export_timeout(settings.timeout);
+
+    let resource = Resource::new(vec![
+        KeyValue::new("service.name", "rpp-node"),
+        KeyValue::new("service.namespace", "rpp"),
+        KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+        KeyValue::new(
+            "rpp.rollout.release_channel",
+            format!("{:?}", config.rollout.release_channel),
+        ),
+        KeyValue::new(
+            "rpp.telemetry.sample_interval_secs",
+            config.rollout.telemetry.sample_interval_secs as i64,
+        ),
+        KeyValue::new(
+            "rpp.telemetry.redact_logs",
+            config.rollout.telemetry.redact_logs,
+        ),
+    ]);
+
+    let provider = trace::TracerProvider::builder()
+        .with_config(trace::Config::default().with_resource(resource))
+        .with_batch_config(batch_config)
+        .with_batch_exporter(exporter, Tokio)
+        .build();
+
+    let tracer = provider.tracer("rpp-node", Some(env!("CARGO_PKG_VERSION")));
+    global::set_tracer_provider(provider);
+
+    let layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    Ok(Some(OtlpLayer {
+        layer,
+        guard: OtelGuard,
+        endpoint: settings.endpoint,
+    }))
+}
+
+fn otlp_settings(config: &NodeConfig) -> Result<Option<OtlpSettings>> {
+    let telemetry = &config.rollout.telemetry;
+
+    let endpoint_override = normalize_option(std::env::var("RPP_NODE_OTLP_ENDPOINT").ok());
+    let env_endpoint = normalize_option(std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok());
+    let endpoint = endpoint_override
+        .clone()
+        .or_else(|| normalize_option(telemetry.endpoint.clone()))
+        .or(env_endpoint.clone());
+
+    let telemetry_enabled =
+        telemetry.enabled || endpoint_override.is_some() || env_endpoint.is_some();
+
+    let Some(endpoint) = endpoint else {
+        if telemetry_enabled {
+            anyhow::bail!("telemetry endpoint required when OTLP is enabled");
+        }
+        return Ok(None);
+    };
+
+    let auth_header = normalize_option(std::env::var("RPP_NODE_OTLP_AUTH_TOKEN").ok())
+        .or_else(|| normalize_option(telemetry.auth_token.clone()))
+        .map(
+            |token| match token.to_ascii_lowercase().starts_with("bearer ") {
+                true => token,
+                false => format!("Bearer {token}"),
+            },
+        );
+
+    let timeout_ms = std::env::var("RPP_NODE_OTLP_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(telemetry.timeout_ms);
+
+    Ok(Some(OtlpSettings {
+        endpoint,
+        auth_header,
+        timeout: Duration::from_millis(timeout_ms),
+    }))
+}
+
+fn normalize_option(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
