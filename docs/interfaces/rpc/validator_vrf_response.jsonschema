@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/validator_vrf_response.json",
+  "title": "ValidatorVrfResponse",
+  "type": "object",
+  "required": ["backend", "identifier", "available"],
+  "properties": {
+    "backend": {
+      "type": "string",
+      "description": "Secrets backend handling the VRF keypair"
+    },
+    "identifier": {
+      "type": "string",
+      "description": "Backend-specific location for the VRF keypair"
+    },
+    "available": {
+      "type": "boolean",
+      "description": "Whether the VRF keypair is present in the store"
+    },
+    "public_key": {
+      "type": "string",
+      "description": "Hex-encoded VRF public key",
+      "pattern": "^[0-9a-fA-F]+$"
+    }
+  },
+  "additionalProperties": false
+}

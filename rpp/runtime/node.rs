@@ -38,7 +38,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json;
 
 use crate::config::{
-    FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
+    FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
+    TelemetryConfig,
 };
 use crate::consensus::{
     aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
@@ -1807,6 +1808,14 @@ impl NodeHandle {
 
     pub fn storage(&self) -> Storage {
         self.inner.storage.clone()
+    }
+
+    pub fn vrf_secrets_config(&self) -> SecretsConfig {
+        self.inner.config.secrets.clone()
+    }
+
+    pub fn vrf_key_path(&self) -> PathBuf {
+        self.inner.config.vrf_key_path.clone()
     }
 
     pub fn state_root(&self) -> ChainResult<String> {
