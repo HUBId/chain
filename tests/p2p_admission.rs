@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, ensure};
+use anyhow::{anyhow, ensure, Context, Result};
 use tokio::time::sleep;
 
-use rpp_chain::runtime::node_runtime::node::NodeError;
+use rpp_chain::runtime::node_runtime::node::{IdentityProfile, NodeError};
 use rpp_chain::storage::ledger::SlashingReason;
 use rpp_p2p::admission::AdmissionError;
 use rpp_p2p::{GossipTopic, NetworkError, TierLevel};
@@ -91,6 +91,61 @@ async fn slashed_peer_cannot_publish_consensus_gossip() -> Result<()> {
             }
             Ok(()) => return Err(anyhow!("expected consensus gossip publish to be rejected")),
         }
+
+        Ok(())
+    }
+    .await;
+
+    cluster.shutdown().await?;
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tier_two_identity_cannot_publish_votes_gossip() -> Result<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let mut cluster = match TestCluster::start(3).await {
+        Ok(cluster) => cluster,
+        Err(err) => {
+            eprintln!("skipping admission control test: {err:?}");
+            return Ok(());
+        }
+    };
+
+    let result = async {
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh")?;
+
+        let nodes = cluster.nodes();
+        let node = &nodes[0];
+
+        let mut profile: IdentityProfile = node
+            .node_handle
+            .network_identity_profile()
+            .context("fetch identity profile")?
+            .into();
+        profile.tier = TierLevel::Tl2;
+
+        node
+            .p2p_handle
+            .update_identity(profile)
+            .await
+            .context("apply tier downgrade")?;
+
+        let publish_result = node
+            .p2p_handle
+            .publish_gossip(GossipTopic::Votes, b"tier-check".to_vec())
+            .await;
+
+        assert!(
+            matches!(
+                publish_result,
+                Err(NodeError::Network(NetworkError::Admission(_)))
+            ),
+            "expected tier 2 node to be rejected from publishing votes gossip, got {publish_result:?}"
+        );
 
         Ok(())
     }
