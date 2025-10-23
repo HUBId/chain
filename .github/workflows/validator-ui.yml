@@ -1,0 +1,44 @@
+name: validator-ui
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'validator-ui/**'
+      - 'rpp/rpc/**'
+      - 'docs/validator_ui.md'
+      - 'docs/interfaces/rpc/**'
+      - '.github/workflows/validator-ui.yml'
+  pull_request:
+    paths:
+      - 'validator-ui/**'
+      - 'rpp/rpc/**'
+      - 'docs/validator_ui.md'
+      - 'docs/interfaces/rpc/**'
+      - '.github/workflows/validator-ui.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: validator-ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+          cache-dependency-path: validator-ui/package-lock.json
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run tests
+        run: npm test -- --run
+      - name: Build UI
+        run: npm run build
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: validator-ui-dist
+          path: validator-ui/dist
+          if-no-files-found: error

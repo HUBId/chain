@@ -1,0 +1,18 @@
+{
+  "local_peer_id": "12D3KooWExample",
+  "peer_count": 2,
+  "peers": [
+    {
+      "peer": "12D3KooWPeerOne",
+      "version": "1.2.3",
+      "latency_ms": 42,
+      "last_seen": 1700000123
+    },
+    {
+      "peer": "12D3KooWPeerTwo",
+      "version": "1.2.3",
+      "latency_ms": 105,
+      "last_seen": 1700000456
+    }
+  ]
+}

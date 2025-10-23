@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/validator_peer_response.json",
+  "title": "ValidatorPeerResponse",
+  "type": "object",
+  "required": ["local_peer_id", "peer_count", "peers"],
+  "properties": {
+    "local_peer_id": {"type": "string"},
+    "peer_count": {"type": "integer", "minimum": 0},
+    "peers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["peer", "version", "latency_ms", "last_seen"],
+        "properties": {
+          "peer": {"type": "string"},
+          "version": {"type": "string"},
+          "latency_ms": {"type": "integer", "minimum": 0},
+          "last_seen": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
