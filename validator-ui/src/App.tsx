@@ -1,4 +1,6 @@
 import { ConsensusStatusCard } from './components/ConsensusStatusCard';
+import { PipelineAlertsPanel } from './components/PipelineAlertsPanel';
+import { PipelineTimelineCard } from './components/PipelineTimelineCard';
 import { PeerListCard } from './components/PeerListCard';
 import { ProofQueuePanel } from './components/ProofQueuePanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
@@ -37,6 +39,8 @@ export default function App() {
 
   return (
     <main className="dashboard">
+      <PipelineTimelineCard />
+      <PipelineAlertsPanel />
       {status.status === 'ready' && status.data ? (
         <ConsensusStatusCard status={status.data.consensus} />
       ) : status.status === 'error' && status.error ? (

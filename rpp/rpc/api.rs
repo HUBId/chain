@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::str::FromStr;
@@ -8,21 +9,27 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::header;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tower::limit::RateLimitLayer;
+use tokio_stream::Stream;
+use tokio_stream::StreamExt;
+use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tower::ServiceBuilder;
+use tower::limit::RateLimitLayer;
 use tracing::info;
 
 use crate::consensus::SignedBftVote;
 use crate::crypto::{
-    generate_vrf_keypair, vrf_public_key_to_hex, vrf_secret_key_to_hex, DynVrfKeyStore,
-    VrfKeyIdentifier, VrfKeypair,
+    DynVrfKeyStore, VrfKeyIdentifier, VrfKeypair, generate_vrf_keypair, vrf_public_key_to_hex,
+    vrf_secret_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "vendor_electrs")]
@@ -30,17 +37,19 @@ use crate::interfaces::WalletTrackerSnapshot;
 use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
-    BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
-    NodeTelemetrySnapshot, PendingUptimeSummary, PruningJobStatus, RolloutStatus,
-    UptimeSchedulerRun, UptimeSchedulerStatus, VrfStatus, DEFAULT_STATE_SYNC_CHUNK,
+    BftMembership, BlockProofArtifactsView, ConsensusStatus, DEFAULT_STATE_SYNC_CHUNK,
+    MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, PendingUptimeSummary,
+    PruningJobStatus, RolloutStatus, UptimeSchedulerRun, UptimeSchedulerStatus, VrfStatus,
 };
-use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
+use crate::orchestration::{
+    PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
+};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
+use crate::runtime::RuntimeMode;
 use crate::runtime::config::{
     P2pAllowlistEntry, QueueWeightsConfig, SecretsBackendConfig, SecretsConfig,
 };
-use crate::runtime::RuntimeMode;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
@@ -697,6 +706,7 @@ pub async fn serve(
         .route("/wallet/uptime/proof", post(wallet_generate_uptime))
         .route("/wallet/uptime/submit", post(wallet_submit_uptime))
         .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
+        .route("/wallet/pipeline/stream", get(wallet_pipeline_stream))
         .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
         .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
 
@@ -1572,6 +1582,48 @@ async fn wallet_submit_uptime(
         .map_err(to_http_error)
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum PipelineStreamEvent {
+    Dashboard { snapshot: PipelineDashboardSnapshot },
+    Error { error: PipelineError },
+}
+
+async fn wallet_pipeline_stream(
+    State(state): State<ApiContext>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)> {
+    let _wallet = state.require_wallet()?;
+    let orchestrator = state.require_orchestrator()?;
+    let dashboard_rx = orchestrator.subscribe_dashboard();
+    let errors_rx = orchestrator.subscribe_errors();
+
+    let dashboard_stream = WatchStream::new(dashboard_rx).map(|snapshot| {
+        let payload = serde_json::to_string(&PipelineStreamEvent::Dashboard { snapshot })
+            .expect("failed to serialise pipeline dashboard event");
+        Ok(Event::default().event("dashboard").data(payload))
+    });
+
+    let errors_stream = BroadcastStream::new(errors_rx).filter_map(|result| async move {
+        match result {
+            Ok(error) => {
+                let payload = serde_json::to_string(&PipelineStreamEvent::Error { error })
+                    .expect("failed to serialise pipeline error event");
+                Some(Ok(Event::default().event("error").data(payload)))
+            }
+            Err(BroadcastStreamRecvError::Lagged(_)) => None,
+            Err(BroadcastStreamRecvError::Closed) => None,
+        }
+    });
+
+    let stream = dashboard_stream.merge(errors_stream);
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
 async fn wallet_pipeline_dashboard(
     State(state): State<ApiContext>,
 ) -> Result<Json<PipelineDashboardSnapshot>, (StatusCode, Json<ErrorResponse>)> {
@@ -1713,8 +1765,8 @@ mod interface_schemas {
         SignTxRequest, SignTxResponse,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
