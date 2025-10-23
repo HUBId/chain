@@ -3,20 +3,22 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use libp2p::PeerId;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 use rpp_chain::config::{GenesisAccount, NodeConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
-use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
-use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
+use rpp_chain::node::{
+    ConsensusStatus as RuntimeConsensusStatus, Node, NodeHandle, NodeStatus as RuntimeNodeStatus,
+};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
@@ -37,7 +39,7 @@ use rpp_wallet::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+use rpp_wallet::vendor::electrs::init::{ElectrsHandles, initialize};
 
 #[cfg(feature = "vendor_electrs")]
 #[derive(Clone)]
@@ -139,6 +141,30 @@ impl TestClusterNode {
             }
         });
         (peers, task)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ConsensusSnapshot {
+    pub height: u64,
+    pub block_hash: Option<String>,
+    pub pending_votes: usize,
+    pub node_pending_votes: usize,
+}
+
+impl ConsensusSnapshot {
+    fn new(
+        height: u64,
+        block_hash: Option<String>,
+        pending_votes: usize,
+        node_pending_votes: usize,
+    ) -> Self {
+        Self {
+            height,
+            block_hash,
+            pending_votes,
+            node_pending_votes,
+        }
     }
 }
 
@@ -370,6 +396,103 @@ impl TestCluster {
     /// Returns the genesis validator set shared by all nodes.
     pub fn genesis_accounts(&self) -> &[GenesisAccount] {
         &self.genesis_accounts
+    }
+
+    pub fn consensus_snapshots(&self) -> Result<Vec<ConsensusSnapshot>> {
+        self.nodes
+            .iter()
+            .map(|node| {
+                let consensus = node
+                    .node_handle
+                    .consensus_status()
+                    .with_context(|| format!("fetch consensus status for node {}", node.index))?;
+                let status = node
+                    .node_handle
+                    .node_status()
+                    .with_context(|| format!("fetch node status for node {}", node.index))?;
+                Ok(ConsensusSnapshot::new(
+                    consensus.height,
+                    consensus.block_hash.clone(),
+                    consensus.pending_votes,
+                    status.pending_votes,
+                ))
+            })
+            .collect()
+    }
+
+    pub async fn wait_for_quorum_progress(
+        &self,
+        baseline: &[ConsensusSnapshot],
+        timeout: Duration,
+    ) -> Result<()> {
+        if baseline.len() != self.nodes.len() {
+            return Err(anyhow!(
+                "baseline snapshot count {} does not match cluster size {}",
+                baseline.len(),
+                self.nodes.len()
+            ));
+        }
+
+        let deadline = Instant::now() + timeout;
+        let mut pending: Vec<(
+            usize,
+            ConsensusSnapshot,
+            RuntimeConsensusStatus,
+            RuntimeNodeStatus,
+        )> = Vec::with_capacity(self.nodes.len());
+
+        loop {
+            pending.clear();
+
+            for (node, snapshot) in self.nodes.iter().zip(baseline.iter()) {
+                let consensus = node
+                    .node_handle
+                    .consensus_status()
+                    .with_context(|| format!("poll consensus status for node {}", node.index))?;
+                let status = node
+                    .node_handle
+                    .node_status()
+                    .with_context(|| format!("poll node status for node {}", node.index))?;
+
+                let progressed = consensus.quorum_reached
+                    && (consensus.height > snapshot.height
+                        || consensus.block_hash != snapshot.block_hash);
+
+                if progressed {
+                    continue;
+                }
+
+                pending.push((node.index, snapshot.clone(), consensus, status));
+            }
+
+            if pending.is_empty() {
+                return Ok(());
+            }
+
+            if Instant::now() >= deadline {
+                let mut message = String::from("quorum condition not satisfied for nodes: ");
+                for (index, snapshot, consensus, status) in pending.iter() {
+                    use std::fmt::Write;
+                    let _ = write!(
+                        &mut message,
+                        "[node {} baseline height={} hash={:?} pending_votes={} node_pending={} -> height={} hash={:?} quorum={} pending_votes={} node_pending={}] ",
+                        index,
+                        snapshot.height,
+                        snapshot.block_hash,
+                        snapshot.pending_votes,
+                        snapshot.node_pending_votes,
+                        consensus.height,
+                        consensus.block_hash,
+                        consensus.quorum_reached,
+                        consensus.pending_votes,
+                        status.pending_votes
+                    );
+                }
+                return Err(anyhow!(message));
+            }
+
+            sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// Wait until every node has connected to all other peers.
