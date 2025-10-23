@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use hex;
 use serde::Serialize;
 
@@ -10,15 +10,24 @@ use crate::reputation::Tier;
 
 use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
+#[cfg(feature = "backend-plonky3")]
+use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
+use crate::proof_backend::ProofBytes;
 use crate::proof_system::ProofVerifierRegistry;
 use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
+use crate::stwo::circuit::transaction::TransactionWitness;
+use crate::stwo::proof::ProofPayload;
 use crate::types::StoredBlock;
-use crate::types::{Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem, RecursiveProof};
+use crate::types::{
+    Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem, RecursiveProof, SignedTransaction,
+    TransactionProofBundle,
+};
 use rpp_p2p::{
     NetworkBlockMetadata, NetworkGlobalStateCommitments, NetworkLightClientUpdate,
     NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
     NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError, RecursiveProofVerifier,
+    TransactionProofVerifier,
 };
 
 #[derive(Clone, Debug)]
@@ -70,12 +79,12 @@ impl RecursiveProofVerifier for RuntimeRecursiveProofVerifier {
                 Some(actual) => {
                     return Err(PipelineError::SnapshotVerification(format!(
                         "previous commitment mismatch (expected {expected}, got {actual})"
-                    )))
+                    )));
                 }
                 None => {
                     return Err(PipelineError::SnapshotVerification(
                         "recursive proof missing previous commitment".into(),
-                    ))
+                    ));
                 }
             }
         }
@@ -92,6 +101,181 @@ impl RecursiveProofVerifier for RuntimeRecursiveProofVerifier {
             .verify_recursive(&artifact)
             .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
         Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RuntimeTransactionProofVerifier {
+    registry: ProofVerifierRegistry,
+}
+
+impl Default for RuntimeTransactionProofVerifier {
+    fn default() -> Self {
+        Self {
+            registry: ProofVerifierRegistry::default(),
+        }
+    }
+}
+
+impl RuntimeTransactionProofVerifier {
+    pub fn new(registry: ProofVerifierRegistry) -> Self {
+        Self { registry }
+    }
+
+    fn verify_bundle(&self, payload: &[u8]) -> Result<(), PipelineError> {
+        let bundle: TransactionProofBundle = serde_json::from_slice(payload).map_err(|err| {
+            PipelineError::Validation(format!("invalid transaction proof payload: {err}"))
+        })?;
+
+        bundle
+            .transaction
+            .verify()
+            .map_err(|err| PipelineError::Validation(format!("invalid transaction: {err}")))?;
+
+        self.verify_proof_artifact(&bundle)?;
+        Self::ensure_witness_consistency(&bundle)?;
+        Ok(())
+    }
+
+    fn verify_proof_artifact(&self, bundle: &TransactionProofBundle) -> Result<(), PipelineError> {
+        match (&bundle.stwo_proof_bytes, &bundle.stwo_public_inputs) {
+            (Some(bytes), Some(inputs)) => {
+                let proof_bytes = ProofBytes(bytes.clone());
+                self.registry
+                    .verify_stwo_proof_bytes(&proof_bytes, inputs)
+                    .map_err(|err| {
+                        PipelineError::Validation(format!(
+                            "transaction proof byte verification failed: {err}"
+                        ))
+                    })?
+            }
+            (None, None) => self
+                .registry
+                .verify_transaction(&bundle.proof)
+                .map_err(|err| {
+                    PipelineError::Validation(format!(
+                        "transaction proof verification failed: {err}"
+                    ))
+                })?,
+            _ => {
+                return Err(PipelineError::Validation(
+                    "stwo proof bytes must include matching public inputs".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_witness_matches_transaction(
+        witness: &TransactionWitness,
+        transaction: &SignedTransaction,
+    ) -> Result<(), PipelineError> {
+        if &witness.signed_tx != transaction {
+            return Err(PipelineError::Validation(
+                "transaction witness does not match signed transaction".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_optional_witness(
+        bundle: &TransactionProofBundle,
+        witness: &TransactionWitness,
+    ) -> Result<(), PipelineError> {
+        Self::ensure_witness_matches_transaction(witness, &bundle.transaction)?;
+        if let Some(explicit) = &bundle.witness {
+            if explicit != witness {
+                return Err(PipelineError::Validation(
+                    "transaction witness payload mismatch".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_witness_consistency(bundle: &TransactionProofBundle) -> Result<(), PipelineError> {
+        if let Some(witness) = &bundle.witness {
+            Self::ensure_witness_matches_transaction(witness, &bundle.transaction)?;
+        }
+
+        if let Some(payload) = &bundle.proof_payload {
+            match payload {
+                ProofPayload::Transaction(witness) => {
+                    Self::ensure_optional_witness(bundle, witness)?;
+                }
+                other => {
+                    return Err(PipelineError::Validation(format!(
+                        "unexpected proof payload variant for transaction gossip: {other:?}",
+                    )));
+                }
+            }
+        }
+
+        match &bundle.proof {
+            ChainProof::Stwo(stark) => match &stark.payload {
+                ProofPayload::Transaction(witness) => {
+                    Self::ensure_optional_witness(bundle, witness)?;
+                    if let Some(payload) = &bundle.proof_payload {
+                        if let ProofPayload::Transaction(payload_witness) = payload {
+                            if payload_witness != witness {
+                                return Err(PipelineError::Validation(
+                                    "proof payload differs from embedded witness".into(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                other => {
+                    return Err(PipelineError::Validation(format!(
+                        "stwo transaction proof missing witness payload: {other:?}"
+                    )));
+                }
+            },
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(value) => {
+                let witness_value = value
+                    .get("public_inputs")
+                    .and_then(|inputs| inputs.get("witness"))
+                    .cloned()
+                    .ok_or_else(|| {
+                        PipelineError::Validation(
+                            "plonky3 transaction proof missing witness payload".into(),
+                        )
+                    })?;
+                let witness: Plonky3TransactionWitness = serde_json::from_value(witness_value)
+                    .map_err(|err| {
+                        PipelineError::Validation(format!(
+                            "failed to decode plonky3 transaction witness: {err}"
+                        ))
+                    })?;
+                if witness.transaction != bundle.transaction {
+                    return Err(PipelineError::Validation(
+                        "plonky3 transaction witness does not match signed transaction".into(),
+                    ));
+                }
+                if bundle.witness.is_some() {
+                    return Err(PipelineError::Validation(
+                        "raw transaction witness not supported for plonky3 proofs".into(),
+                    ));
+                }
+            }
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => {
+                if bundle.witness.is_some() || bundle.proof_payload.is_some() {
+                    return Err(PipelineError::Validation(
+                        "rpp-stark proofs must omit transaction witnesses".into(),
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl TransactionProofVerifier for RuntimeTransactionProofVerifier {
+    fn verify(&self, payload: &[u8]) -> Result<(), PipelineError> {
+        self.verify_bundle(payload)
     }
 }
 use ed25519_dalek::PublicKey;
@@ -663,9 +847,7 @@ fn encode_payload_expectations(expectations: &PayloadExpectations) -> NetworkPay
     }
 }
 
-fn encode_reconstruction_request(
-    request: &ReconstructionRequest,
-) -> NetworkReconstructionRequest {
+fn encode_reconstruction_request(request: &ReconstructionRequest) -> NetworkReconstructionRequest {
     NetworkReconstructionRequest {
         height: request.height,
         block_hash: request.block_hash.clone(),
@@ -691,7 +873,9 @@ fn encode_chunk(chunk: &StateSyncChunk) -> ChainResult<NetworkStateSyncChunk> {
         .collect();
     let mut proofs = Vec::with_capacity(chunk.requests.len());
     for request in &chunk.requests {
-        proofs.push(aggregated_commitment_base64(&request.aggregated_commitment)?);
+        proofs.push(aggregated_commitment_base64(
+            &request.aggregated_commitment,
+        )?);
     }
     Ok(NetworkStateSyncChunk {
         start_height: chunk.start_height,
@@ -721,9 +905,8 @@ fn recursive_commitment(proof: &ChainProof) -> ChainResult<String> {
 }
 
 fn encode_recursive_proof(proof: &ChainProof) -> ChainResult<String> {
-    let bytes = serde_json::to_vec(proof).map_err(|err| {
-        ChainError::Config(format!("failed to serialise recursive proof: {err}"))
-    })?;
+    let bytes = serde_json::to_vec(proof)
+        .map_err(|err| ChainError::Config(format!("failed to serialise recursive proof: {err}")))?;
     Ok(general_purpose::STANDARD.encode(bytes))
 }
 
@@ -731,7 +914,7 @@ fn encode_recursive_proof(proof: &ChainProof) -> ChainResult<String> {
 mod tests {
     use super::*;
     use crate::consensus::{
-        evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
+        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact};
@@ -1090,8 +1273,10 @@ mod tests {
 
         let light_client_feed = engine.light_client_feed(1).expect("feed from height 1");
         assert_eq!(light_client_feed.len(), 2);
-        assert!(light_client_feed
-            .iter()
-            .all(|update| !update.state_root.is_empty()));
+        assert!(
+            light_client_feed
+                .iter()
+                .all(|update| !update.state_root.is_empty())
+        );
     }
 }

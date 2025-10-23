@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use libp2p::PeerId;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
@@ -10,12 +10,14 @@ use tracing::{debug, warn};
 
 use crate::consensus::SignedBftVote;
 use crate::node::NodeHandle;
+use crate::proof_system::ProofVerifierRegistry;
 use crate::runtime::node_runtime::node::NodeEvent;
+use crate::runtime::sync::RuntimeTransactionProofVerifier;
 use crate::types::{Block, TransactionProofBundle};
 use parking_lot::Mutex;
 use rpp_p2p::{
-    GossipTopic, JsonProofValidator, PersistentProofStorage, PipelineError, ProofMempool,
-    ProofRecord,
+    GossipTopic, PersistentProofStorage, PipelineError, ProofMempool, ProofRecord,
+    RuntimeProofValidator,
 };
 
 /// Processes decoded gossip payloads for downstream pipelines.
@@ -41,7 +43,9 @@ pub struct NodeGossipProcessor {
 
 impl NodeGossipProcessor {
     pub fn new(node: NodeHandle, proof_storage_path: impl Into<PathBuf>) -> Self {
-        let validator = Arc::new(JsonProofValidator::default());
+        let registry = ProofVerifierRegistry::default();
+        let backend = Arc::new(RuntimeTransactionProofVerifier::new(registry));
+        let validator = Arc::new(RuntimeProofValidator::new(backend));
         let storage_path = proof_storage_path.into();
         let storage = Arc::new(
             PersistentProofStorage::open(storage_path)

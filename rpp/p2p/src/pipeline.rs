@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -6,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::vendor::PeerId;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use blake3::Hash;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -34,6 +35,38 @@ pub enum PipelineError {
 /// Handler invoked whenever a gossip proof is received on the `proofs` topic.
 pub trait ProofValidator: std::fmt::Debug + Send + Sync + 'static {
     fn validate(&self, peer: &PeerId, payload: &[u8]) -> Result<(), PipelineError>;
+}
+
+/// Backend responsible for validating gossip transaction proof bundles prior to
+/// admission into the local proof mempool.
+pub trait TransactionProofVerifier: std::fmt::Debug + Send + Sync + 'static {
+    fn verify(&self, payload: &[u8]) -> Result<(), PipelineError>;
+}
+
+#[derive(Clone)]
+pub struct RuntimeProofValidator {
+    verifier: Arc<dyn TransactionProofVerifier>,
+}
+
+impl RuntimeProofValidator {
+    pub fn new(verifier: Arc<dyn TransactionProofVerifier>) -> Self {
+        Self { verifier }
+    }
+}
+
+impl fmt::Debug for RuntimeProofValidator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeProofValidator").finish()
+    }
+}
+
+impl ProofValidator for RuntimeProofValidator {
+    fn validate(&self, _peer: &PeerId, payload: &[u8]) -> Result<(), PipelineError> {
+        if payload.is_empty() {
+            return Err(PipelineError::Validation("empty proof payload".into()));
+        }
+        self.verifier.verify(payload)
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -993,8 +1026,8 @@ fn decode_base64_digest(value: &str) -> Result<[u8; 32], PipelineError> {
 }
 
 fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
-    use blake2::digest::Digest;
     use blake2::Blake2s256;
+    use blake2::digest::Digest;
 
     if leaves.is_empty() {
         let mut hasher = Blake2s256::new();
@@ -1134,9 +1167,11 @@ mod tests {
 
         let peer: PeerId = PeerId::random();
         let payload = b"proof-payload".to_vec();
-        assert!(pipeline
-            .ingest(peer, GossipTopic::Proofs, payload.clone())
-            .unwrap());
+        assert!(
+            pipeline
+                .ingest(peer, GossipTopic::Proofs, payload.clone())
+                .unwrap()
+        );
         assert_eq!(pipeline.len(), 1);
         assert_eq!(*validator.0.lock(), 1);
 
@@ -1360,8 +1395,8 @@ mod interface_schemas {
         NetworkStateSyncPlan,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::de::DeserializeOwned;
     use serde::Serialize;
+    use serde::de::DeserializeOwned;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
