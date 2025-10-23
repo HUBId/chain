@@ -78,7 +78,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 4.1 Testpyramide
 1. **Unit-Tests**: Deterministische Tests für VRF-Thresholds, Reward-Berechnung, Reputation-/Timetoke-Funktionen.
-2. **Property-Based Tests**: QuickCheck/Proptest-Szenarien für Leader-Auswahl, Validator-Set-Größe und Reward-Verteilungen.
+2. **Property-Based Tests**: Proptest-Szenarien decken `ConsensusRound::new` (Quorum, Fallback-Pfade), Reward-Distribution (`distribute_rewards`) und Evidence-Slashings (`submit_evidence`/`slash`) ab. Die Suites laufen mit den Standard-Features (`prover-stwo`) sowie der Minimal-Feature-Matrix über `scripts/test.sh --integration`.
 3. **Integrationstests**: Simulierte Konsensrunden mit Mock-Netzwerk, um Quorum und Proof-Embedding zu verifizieren.
 4. **Systemtests / Testnet**: Mehrknoten-Simulation mit realem Netzwerkstack und Telemetrie-Sammlung.
 5. **Fuzzing**: Eingabe-Fuzzing für Netzwerk-Nachrichten und Proof-Verifizierer.
@@ -86,7 +86,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 4.2 Testautomatisierung
 * **CI/CD**: Pipeline-Stufen `fmt → clippy → unit → integration → fuzz-nightly → performance-weekly`.
-* **Artefakte**: Testberichte, Coverage-Metriken, Benchmark-Charts.
+* **Artefakte**: Testberichte, Coverage-Metriken, Benchmark-Charts. Property-Tests sind über `cargo test -p rpp-consensus --test property_vrf` bzw. `cargo test -p rpp-chain --test property_consensus_round` reproduzierbar; beide Kommandos respektieren die vorhandenen Cargo-Feature-Sets (`--feature-set minimal|default|full`).
 * **Gatekeeper**: Merge nur bei `ci_status == green` und dokumentiertem Blueprint-Fortschritt.
 
 ### 4.3 Testdaten & Fixtures

@@ -101,6 +101,7 @@ rand = { version = "0.8", features = ["std", "std_rng"] }
 tempfile.workspace = true
 tracing-test = "0.2"
 jsonschema = "0.17"
+proptest = "1.4"
 
 [lints]
 workspace = true
