@@ -600,6 +600,7 @@ pub struct NetworkIdentityProfile {
     pub tier: TierLevel,
     pub vrf_public_key: Vec<u8>,
     pub vrf_proof: Vec<u8>,
+    pub feature_gates: FeatureGates,
 }
 
 impl Node {
@@ -4540,6 +4541,7 @@ impl NodeInner {
             tier: tier_level,
             vrf_public_key,
             vrf_proof,
+            feature_gates: self.config.rollout.feature_gates.clone(),
         })
     }
 }

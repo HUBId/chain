@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fs;
 use std::path::Path;
@@ -33,6 +34,8 @@ struct StoredPeerRecordSnapshot {
     tier: TierLevel,
     #[serde(default)]
     ban_until: Option<u64>,
+    #[serde(default)]
+    features: BTreeMap<String, bool>,
 }
 
 fn reputation_floor_for_tier(tier: TierLevel) -> f64 {
@@ -82,6 +85,9 @@ fn sample_node_config(base: &Path) -> NodeConfig {
     config.rollout.feature_gates.recursive_proofs = false;
     config.rollout.feature_gates.reconstruction = false;
     config.rollout.feature_gates.consensus_enforcement = false;
+    config.rollout.feature_gates.malachite_consensus = true;
+    config.rollout.feature_gates.timetoke_rewards = true;
+    config.rollout.feature_gates.witness_network = true;
     config.ensure_directories().expect("node directories");
     config
 }
@@ -252,6 +258,18 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
 
     let tier_floor = reputation_floor_for_tier(post_gossip_record.tier);
     if let Some(baseline) = baseline_record {
+        assert_eq!(
+            baseline.features.get("malachite_consensus"),
+            Some(&true)
+        );
+        assert_eq!(
+            baseline.features.get("timetoke_rewards"),
+            Some(&true)
+        );
+        assert_eq!(
+            baseline.features.get("witness_network"),
+            Some(&true)
+        );
         assert!(
             post_gossip_record.reputation > baseline.reputation,
             "broadcaster peer {broadcaster_peer_id} reputation did not increase after gossip: baseline={:.3}, post={:.3}, tier={:?}, floor={:.3}",
@@ -269,6 +287,21 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
             tier_floor,
         );
     }
+
+    assert_eq!(
+        post_gossip_record
+            .features
+            .get("malachite_consensus"),
+        Some(&true)
+    );
+    assert_eq!(
+        post_gossip_record.features.get("timetoke_rewards"),
+        Some(&true)
+    );
+    assert_eq!(
+        post_gossip_record.features.get("witness_network"),
+        Some(&true)
+    );
 
     handle_a_runtime.shutdown().await?;
     handle_b_runtime.shutdown().await?;
@@ -352,6 +385,18 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
 
     let tier_floor = reputation_floor_for_tier(penalty_record.tier);
     if let Some(baseline) = baseline_record {
+        assert_eq!(
+            baseline.features.get("malachite_consensus"),
+            Some(&true)
+        );
+        assert_eq!(
+            baseline.features.get("timetoke_rewards"),
+            Some(&true)
+        );
+        assert_eq!(
+            baseline.features.get("witness_network"),
+            Some(&true)
+        );
         assert!(
             penalty_record.reputation < baseline.reputation || penalty_record.ban_until.is_some(),
             "broadcaster peer {broadcaster_peer_id} reputation did not decrease after invalid gossip: baseline={:.3}, post={:.3}, tier={:?}, floor={:.3}",
@@ -369,6 +414,21 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
             tier_floor,
         );
     }
+
+    assert_eq!(
+        penalty_record
+            .features
+            .get("malachite_consensus"),
+        Some(&true)
+    );
+    assert_eq!(
+        penalty_record.features.get("timetoke_rewards"),
+        Some(&true)
+    );
+    assert_eq!(
+        penalty_record.features.get("witness_network"),
+        Some(&true)
+    );
 
     handle_a_runtime.shutdown().await?;
     handle_b_runtime.shutdown().await?;

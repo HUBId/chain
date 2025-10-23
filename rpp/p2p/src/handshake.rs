@@ -27,6 +27,8 @@ pub struct HandshakePayload {
     pub signature: Vec<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<TelemetryMetadata>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub features: BTreeMap<String, bool>,
 }
 
 impl HandshakePayload {
@@ -43,11 +45,17 @@ impl HandshakePayload {
             tier,
             signature: Vec::new(),
             telemetry: None,
+            features: BTreeMap::new(),
         }
     }
 
     pub fn with_signature(mut self, signature: Vec<u8>) -> Self {
         self.signature = signature;
+        self
+    }
+
+    pub fn with_features(mut self, features: BTreeMap<String, bool>) -> Self {
+        self.features = features;
         self
     }
 
@@ -79,6 +87,7 @@ impl HandshakePayload {
             self.vrf_public_key.as_deref(),
             self.vrf_proof.as_deref(),
             self.tier,
+            &self.features,
             self.telemetry.as_ref(),
         )
     }
@@ -89,6 +98,7 @@ impl HandshakePayload {
             self.vrf_public_key.as_deref(),
             None,
             self.tier,
+            &self.features,
             self.telemetry.as_ref(),
         );
         digest.to_vec()
@@ -106,6 +116,7 @@ impl HandshakePayload {
         vrf_public_key: Option<&[u8]>,
         vrf_proof: Option<&[u8]>,
         tier: TierLevel,
+        features: &BTreeMap<String, bool>,
         telemetry: Option<&TelemetryMetadata>,
     ) -> [u8; 32] {
         use blake2::digest::Digest;
@@ -131,6 +142,13 @@ impl HandshakePayload {
             None => hasher.update([0u8]),
         }
         hasher.update([tier as u8]);
+        hasher.update((features.len() as u32).to_le_bytes());
+        for (name, enabled) in features {
+            let bytes = name.as_bytes();
+            hasher.update((bytes.len() as u32).to_le_bytes());
+            hasher.update(bytes);
+            hasher.update([*enabled as u8]);
+        }
         match telemetry {
             Some(meta) => {
                 hasher.update([1u8]);

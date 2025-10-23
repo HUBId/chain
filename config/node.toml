@@ -40,6 +40,9 @@ pruning = true
 recursive_proofs = true
 reconstruction = true
 consensus_enforcement = true
+malachite_consensus = false
+timetoke_rewards = false
+witness_network = false
 
 [rollout.telemetry]
 enabled = false
