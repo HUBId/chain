@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use blake3::Hash;
 use crate::vendor::PeerId;
+use blake3::Hash;
 
 #[derive(Debug)]
 pub struct ReplayProtector {
@@ -18,6 +18,10 @@ impl ReplayProtector {
             queue: VecDeque::new(),
             seen: HashSet::new(),
         }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     pub fn preload(&mut self, digests: impl IntoIterator<Item = Hash>) {
@@ -81,6 +85,14 @@ impl RateLimiter {
         }
     }
 
+    pub fn interval(&self) -> Duration {
+        self.interval
+    }
+
+    pub fn limit(&self) -> u64 {
+        self.max_messages
+    }
+
     pub fn allow(&mut self, peer: PeerId) -> bool {
         let window = self.windows.entry(peer).or_insert_with(RateWindow::new);
         if window.last_reset.elapsed() > self.interval {
@@ -109,6 +121,18 @@ mod tests {
     }
 
     #[test]
+    fn replay_protector_tracks_custom_capacity() {
+        let mut protector = ReplayProtector::with_capacity(256);
+        assert_eq!(protector.capacity(), 256);
+        for index in 0..256 {
+            let digest = blake3::hash(&index.to_le_bytes());
+            assert!(protector.observe(digest));
+        }
+        let evicted = blake3::hash(&0u64.to_le_bytes());
+        assert!(protector.observe(evicted));
+    }
+
+    #[test]
     fn rate_limiter_enforces_limits() {
         let mut limiter = RateLimiter::new(Duration::from_millis(50), 2);
         let peer = PeerId::random();
@@ -117,6 +141,14 @@ mod tests {
         assert!(!limiter.allow(peer));
         thread::sleep(Duration::from_millis(60));
         assert!(limiter.allow(peer));
+    }
+
+    #[test]
+    fn rate_limiter_reports_configured_limit() {
+        let limit = 5;
+        let limiter = RateLimiter::new(Duration::from_millis(10), limit);
+        assert_eq!(limiter.limit(), limit);
+        assert_eq!(limiter.interval(), Duration::from_millis(10));
     }
 
     proptest! {

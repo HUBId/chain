@@ -23,6 +23,8 @@ pub struct P2pConfig {
     pub bootstrap_peers: Vec<String>,
     pub heartbeat_interval_ms: u64,
     pub gossip_enabled: bool,
+    pub gossip_rate_limit_per_sec: u64,
+    pub replay_window_size: usize,
     #[serde(default = "default_peerstore_path")]
     pub peerstore_path: PathBuf,
     #[serde(default = "default_gossip_state_path")]
@@ -40,6 +42,8 @@ impl Default for P2pConfig {
             bootstrap_peers: Vec::new(),
             heartbeat_interval_ms: 5_000,
             gossip_enabled: true,
+            gossip_rate_limit_per_sec: default_gossip_rate_limit_per_sec(),
+            replay_window_size: default_replay_window_size(),
             peerstore_path: default_peerstore_path(),
             gossip_path: default_gossip_state_path(),
             allowlist: Vec::new(),
@@ -52,6 +56,22 @@ impl Default for P2pConfig {
 pub struct P2pAllowlistEntry {
     pub peer_id: String,
     pub tier: TierLevel,
+}
+
+impl P2pConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.gossip_rate_limit_per_sec == 0 {
+            return Err(ChainError::Config(
+                "p2p.gossip_rate_limit_per_sec must be greater than 0".into(),
+            ));
+        }
+        if self.replay_window_size == 0 {
+            return Err(ChainError::Config(
+                "p2p.replay_window_size must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub const NODE_CONFIG_VERSION: &str = "1.0";
@@ -138,6 +158,14 @@ fn default_gossip_path() -> PathBuf {
 
 fn default_gossip_state_path() -> Option<PathBuf> {
     Some(default_gossip_path())
+}
+
+fn default_gossip_rate_limit_per_sec() -> u64 {
+    128
+}
+
+fn default_replay_window_size() -> usize {
+    1_024
 }
 
 fn default_consensus_pipeline_path() -> PathBuf {
@@ -268,6 +296,7 @@ impl NodeConfig {
             }
         }
         self.queue_weights.validate()?;
+        self.p2p.validate()?;
         Ok(())
     }
 }

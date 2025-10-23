@@ -24,6 +24,8 @@ pub struct NetworkConfig {
     gossip_enabled: bool,
     allowlist: Vec<AllowlistedPeer>,
     blocklist: Vec<PeerId>,
+    gossip_rate_limit_per_sec: u64,
+    replay_window_size: usize,
 }
 
 impl NetworkConfig {
@@ -55,6 +57,8 @@ impl NetworkConfig {
             gossip_enabled: config.gossip_enabled,
             allowlist,
             blocklist,
+            gossip_rate_limit_per_sec: config.gossip_rate_limit_per_sec,
+            replay_window_size: config.replay_window_size,
         })
     }
 
@@ -117,6 +121,14 @@ impl NetworkConfig {
     pub fn blocklist(&self) -> &[PeerId] {
         &self.blocklist
     }
+
+    pub fn gossip_rate_limit_per_sec(&self) -> u64 {
+        self.gossip_rate_limit_per_sec
+    }
+
+    pub fn replay_window_size(&self) -> usize {
+        self.replay_window_size
+    }
 }
 
 /// Helper struct bundling libp2p primitives required by the node runtime.
@@ -161,8 +173,14 @@ impl NetworkResources {
             )
         };
         let handshake_snapshot = handshake.clone();
-        let mut network =
-            Network::new(identity.clone(), peerstore.clone(), handshake, gossip_state)?;
+        let mut network = Network::new(
+            identity.clone(),
+            peerstore.clone(),
+            handshake,
+            gossip_state,
+            config.gossip_rate_limit_per_sec(),
+            config.replay_window_size(),
+        )?;
         if let Some(profile) = profile {
             network.update_identity(
                 profile.zsi_id,

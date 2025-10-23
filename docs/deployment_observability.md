@@ -34,6 +34,13 @@ operator-driven RPC workflows.
 4. **Run storage migrations prior to rollout.** Execute `cargo run -- migrate`
    against production data before switching binaries to guarantee the RocksDB
    schema matches the proof bundle format.【F:README.md†L96-L107】
+5. **Throttle gossip explicitly.** Adjust `p2p.gossip_rate_limit_per_sec` to cap
+   how many messages a peer may forward every second and set
+   `p2p.replay_window_size` to the number of recent digests tracked by the
+   replay protector. Higher limits improve throughput but reduce abuse
+   protection; lower limits penalise bursty peers sooner. The runtime clamps
+   both fields to be greater than zero and applies them when constructing the
+   libp2p `RateLimiter` and `ReplayProtector`.【F:config/node.toml†L26-L33】【F:rpp/runtime/config.rs†L20-L87】【F:rpp/runtime/node_runtime/network.rs†L19-L126】【F:rpp/p2p/src/swarm.rs†L482-L726】
 
 ## Mempool Retention & Operations
 
