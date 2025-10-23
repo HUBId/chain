@@ -1,0 +1,44 @@
+# Telemetrie-Pipeline & Netzwerkmetriken
+
+Die Runtime exportiert periodisch `TelemetrySnapshot`-Strukturen an den Telemetrie-Worker. Neben Block- und Proof-Daten enthält der Snapshot jetzt einen neuen Abschnitt `network_metrics`, der direkt aus der libp2p-Instrumentierung gespeist wird.
+
+## Struktur `TelemetrySnapshot`
+
+```json
+{
+  "block_height": 123,
+  "block_hash": "0x…",
+  "transaction_count": 42,
+  "peer_count": 8,
+  "node_id": "12D3KooW…",
+  "reputation_score": 0.82,
+  "timestamp": "2025-01-01T12:00:00Z",
+  "verifier_metrics": { "per_backend": {} },
+  "network_metrics": {
+    "bandwidth": {
+      "inbound_bytes": 2048,
+      "outbound_bytes": 4096
+    },
+    "topics": [
+      {
+        "topic": "meta",
+        "inbound_bytes": 1024,
+        "outbound_bytes": 2048,
+        "mesh_peers": 6
+      }
+    ],
+    "peer_scores": [
+      { "peer": "12D3KooW…", "score": 9.5 }
+    ]
+  }
+}
+```
+
+Alle Einträge werden über eine gemeinsame `libp2p_metrics::Registry` registriert. Dadurch können Prometheus-Exporter dieselben Daten auslesen, während `NetworkMetricsSnapshot` eine verdichtete Ansicht für Dashboards liefert.
+
+## Dashboards
+
+* **Bandwidth Overview** – aggregiert `network_metrics.bandwidth` sowie die Topic-spezifischen Byte-Zähler. Ideal für Traffic-Budgets und Alerting bei Anomalien.
+* **Peer Score Drilldown** – visualisiert `network_metrics.peer_scores`, um Abweichungen in Gossip-Qualität oder Reputation schnell zu erkennen.
+
+Bestehende Dashboards sollten das neue Feld als optionales Panel aufnehmen. Backwards-Kompatibilität bleibt erhalten: falls das P2P-Stack ohne Metrics-Feature gebaut wird, liefert `network_metrics` eine leere Default-Struktur.

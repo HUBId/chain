@@ -14,8 +14,10 @@ use rpp_p2p::vendor::protocols::request_response::{self, ProtocolSupport};
 use rpp_p2p::vendor::swarm::{NetworkBehaviour, SwarmEvent};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::vendor::{noise, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};
+use rpp_p2p::{GossipTopic, Network, NodeIdentity, Peerstore, PeerstoreConfig};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use tempfile::tempdir;
 use tokio::time::{timeout, Duration};
 
 #[derive(NetworkBehaviour)]
@@ -226,6 +228,39 @@ async fn vendor_transport_throttles_inbound_streams() {
         permit_counter.load(Ordering::SeqCst) >= 1,
         "permit counter should increment"
     );
+}
+
+#[test]
+fn network_metrics_snapshot_records_outbound_bytes() {
+    let dir = tempdir().expect("tmpdir");
+    let key_path = dir.path().join("node.key");
+    let identity = Arc::new(NodeIdentity::load_or_generate(&key_path).expect("identity"));
+    let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
+    let mut network = Network::new(
+        identity,
+        peerstore,
+        HandshakePayload::new("node", None, None, TierLevel::Tl3),
+        None,
+        128,
+        1_024,
+    )
+    .expect("network");
+
+    let payload = b"hello-metrics".to_vec();
+    let expected = payload.len() as u64;
+    network
+        .publish(GossipTopic::Meta, payload)
+        .expect("publish meta telemetry");
+
+    let snapshot = network.metrics_snapshot();
+    let meta_metrics = snapshot
+        .topics
+        .into_iter()
+        .find(|entry| entry.topic == GossipTopic::Meta)
+        .expect("meta topic metrics available");
+
+    assert_eq!(meta_metrics.outbound_bytes, expected);
+    assert_eq!(snapshot.bandwidth.outbound_bytes, expected);
 }
 
 #[derive(Debug)]

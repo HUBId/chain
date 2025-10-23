@@ -6,6 +6,21 @@ use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
 
+#[cfg(feature = "metrics")]
+use std::collections::HashMap;
+
+#[cfg(feature = "metrics")]
+use libp2p_metrics::Registry;
+#[cfg(feature = "metrics")]
+use prometheus_client::metrics::counter::Counter;
+#[cfg(feature = "metrics")]
+use prometheus_client::metrics::family::Family;
+#[cfg(feature = "metrics")]
+use prometheus_client::metrics::gauge::Gauge;
+#[cfg(feature = "metrics")]
+use prometheus_client::registry::Unit;
+use serde::Serialize;
+
 #[cfg(all(
     feature = "gossipsub",
     feature = "identify",
@@ -13,6 +28,14 @@ use thiserror::Error;
     feature = "request-response"
 ))]
 use crate::vendor::gossipsub::MessageId;
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response",
+    feature = "metrics",
+))]
+use crate::vendor::gossipsub::MetricsConfig;
 #[cfg(all(
     feature = "gossipsub",
     feature = "identify",
@@ -199,7 +222,10 @@ impl From<gossipsub::Event> for RppBehaviourEvent {
     feature = "request-response"
 ))]
 impl RppBehaviour {
-    fn new(identity: &Keypair) -> Result<Self, NetworkError> {
+    fn new(
+        identity: &Keypair,
+        #[cfg(feature = "metrics")] metrics_registry: Option<&mut Registry>,
+    ) -> Result<Self, NetworkError> {
         let protocols = std::iter::once((HANDSHAKE_PROTOCOL.to_string(), ProtocolSupport::Full));
         let cfg = request_response::Config::default();
         let request_response =
@@ -209,7 +235,19 @@ impl RppBehaviour {
             identify::Behaviour::new(identify::Config::new("rpp/0.1.0".into(), identity.public()));
 
         let ping = ping::Behaviour::new(ping::Config::new());
-        let gossipsub = Self::build_gossipsub(identity)?;
+        let mut gossipsub = Self::build_gossipsub(identity)?;
+
+        #[cfg(feature = "metrics")]
+        if let Some(registry) = metrics_registry {
+            let mut metrics_config = MetricsConfig::default();
+            metrics_config.buckets_using_scoring_thresholds(&build_peer_score_thresholds());
+            gossipsub = gossipsub.with_metrics(registry, metrics_config);
+            let topics = GossipTopic::all()
+                .into_iter()
+                .map(|topic| topic.ident().hash())
+                .collect();
+            gossipsub.register_topics_for_metrics(topics);
+        }
 
         Ok(Self {
             request_response,
@@ -405,6 +443,144 @@ pub enum NetworkEvent {
     ReputationOutcome(ReputationOutcome),
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct NetworkMetricsSnapshot {
+    pub bandwidth: NetworkBandwidthSnapshot,
+    pub topics: Vec<GossipTopicMetrics>,
+    pub peer_scores: Vec<PeerScoreMetrics>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+pub struct NetworkBandwidthSnapshot {
+    pub inbound_bytes: u64,
+    pub outbound_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct GossipTopicMetrics {
+    pub topic: GossipTopic,
+    pub inbound_bytes: u64,
+    pub outbound_bytes: u64,
+    pub mesh_peers: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PeerScoreMetrics {
+    pub peer: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct TopicTraffic {
+    inbound: u64,
+    outbound: u64,
+}
+
+#[cfg(feature = "metrics")]
+struct NetworkMetrics {
+    registry: Registry,
+    gossip_bytes: Family<Vec<(String, String)>, Counter>,
+    peer_score_gauge: Family<Vec<(String, String)>, Gauge>,
+    topic_totals: HashMap<GossipTopic, TopicTraffic>,
+}
+
+#[cfg(feature = "metrics")]
+impl NetworkMetrics {
+    fn new(mut registry: Registry) -> Self {
+        let gossip_bytes = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register_with_unit(
+            "rpp_gossip_bytes",
+            "RPP gossip bandwidth by topic and direction",
+            Unit::Bytes,
+            gossip_bytes.clone(),
+        );
+
+        let peer_score_gauge = Family::<Vec<(String, String)>, Gauge>::default();
+        registry.register(
+            "rpp_gossip_peer_score",
+            "Latest observed peer score for gossipsub peers",
+            peer_score_gauge.clone(),
+        );
+
+        Self {
+            registry,
+            gossip_bytes,
+            peer_score_gauge,
+            topic_totals: HashMap::new(),
+        }
+    }
+
+    fn registry_mut(&mut self) -> &mut Registry {
+        &mut self.registry
+    }
+
+    fn record_inbound(&mut self, topic: GossipTopic, bytes: usize) {
+        let labels = vec![
+            ("topic".to_string(), topic.as_str().to_string()),
+            ("direction".to_string(), "inbound".to_string()),
+        ];
+        self.gossip_bytes
+            .get_or_create(&labels)
+            .inc_by(bytes as u64);
+        let entry = self.topic_totals.entry(topic).or_default();
+        entry.inbound = entry.inbound.saturating_add(bytes as u64);
+    }
+
+    fn record_outbound(&mut self, topic: GossipTopic, bytes: usize) {
+        let labels = vec![
+            ("topic".to_string(), topic.as_str().to_string()),
+            ("direction".to_string(), "outbound".to_string()),
+        ];
+        self.gossip_bytes
+            .get_or_create(&labels)
+            .inc_by(bytes as u64);
+        let entry = self.topic_totals.entry(topic).or_default();
+        entry.outbound = entry.outbound.saturating_add(bytes as u64);
+    }
+
+    fn update_peer_score_metric(&self, peer: &PeerId, score: f64) {
+        let labels = vec![("peer".to_string(), peer.to_base58())];
+        self.peer_score_gauge.get_or_create(&labels).set(score);
+    }
+
+    fn snapshot(&self, behaviour: &gossipsub::Behaviour) -> NetworkMetricsSnapshot {
+        let mut topics = Vec::new();
+        let mut bandwidth = NetworkBandwidthSnapshot::default();
+
+        for topic in GossipTopic::all() {
+            let traffic = self.topic_totals.get(&topic).copied().unwrap_or_default();
+            let topic_hash = topic.ident().hash();
+            let mesh_peers = behaviour.mesh_peers(&topic_hash).count();
+            bandwidth.inbound_bytes = bandwidth.inbound_bytes.saturating_add(traffic.inbound);
+            bandwidth.outbound_bytes = bandwidth.outbound_bytes.saturating_add(traffic.outbound);
+            topics.push(GossipTopicMetrics {
+                topic,
+                inbound_bytes: traffic.inbound,
+                outbound_bytes: traffic.outbound,
+                mesh_peers,
+            });
+        }
+
+        let mut peer_scores = Vec::new();
+        for (peer, _) in behaviour.all_peers() {
+            if let Some(score) = behaviour.peer_score(peer) {
+                self.update_peer_score_metric(peer, score);
+                peer_scores.push(PeerScoreMetrics {
+                    peer: peer.to_base58(),
+                    score,
+                });
+            }
+        }
+        peer_scores.sort_by(|a, b| a.peer.cmp(&b.peer));
+
+        NetworkMetricsSnapshot {
+            bandwidth,
+            topics,
+            peer_scores,
+        }
+    }
+}
+
 struct PingReporter {
     peerstore: Arc<Peerstore>,
     events: Arc<ExternalEventHandle<RppBehaviourEvent>>,
@@ -480,6 +656,8 @@ pub struct Network {
     gossip_state: Option<Arc<GossipStateStore>>,
     replay: ReplayProtector,
     rate_limiter: Arc<Mutex<RateLimiter>>,
+    #[cfg(feature = "metrics")]
+    metrics: NetworkMetrics,
 }
 
 #[cfg(not(all(
@@ -522,6 +700,9 @@ impl Network {
         let local_key = identity.clone_keypair();
         let event_handle_slot: Arc<Mutex<Option<Arc<ExternalEventHandle<RppBehaviourEvent>>>>> =
             Arc::new(Mutex::new(None));
+
+        #[cfg(feature = "metrics")]
+        let mut metrics_registry = Registry::default();
 
         let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(
             Duration::from_secs(1),
@@ -652,8 +833,16 @@ impl Network {
             )
             .map_err(|err| NetworkError::Noise(err.to_string()))?
             .with_behaviour(|keypair| {
-                RppBehaviour::new(keypair)
-                    .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
+                #[cfg(feature = "metrics")]
+                {
+                    RppBehaviour::new(keypair, Some(&mut metrics_registry))
+                        .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
+                }
+                #[cfg(not(feature = "metrics"))]
+                {
+                    RppBehaviour::new(keypair)
+                        .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
+                }
             })
             .map_err(|err| NetworkError::Gossipsub(err.to_string()))?;
         let (swarm, raw_events_handle) = builder.build_with_external_event_handle();
@@ -674,6 +863,8 @@ impl Network {
             gossip_state,
             replay: ReplayProtector::with_capacity(replay_window_size),
             rate_limiter,
+            #[cfg(feature = "metrics")]
+            metrics: NetworkMetrics::new(metrics_registry),
         };
         let push_event: Arc<dyn Fn(NetworkEvent) + Send + Sync> = {
             let handle = network.events_handle.clone();
@@ -880,11 +1071,27 @@ impl Network {
             }
             self.replay.observe(digest);
         }
-        self.swarm
+        let len = payload.len();
+        let message_id = self
+            .swarm
             .behaviour_mut()
             .gossipsub
             .publish(topic.ident(), payload)
-            .map_err(|err| NetworkError::Gossipsub(format!("publish error: {err:?}")))
+            .map_err(|err| NetworkError::Gossipsub(format!("publish error: {err:?}")))?;
+        #[cfg(feature = "metrics")]
+        self.metrics.record_outbound(topic, len);
+        Ok(message_id)
+    }
+
+    pub fn metrics_snapshot(&self) -> NetworkMetricsSnapshot {
+        #[cfg(feature = "metrics")]
+        {
+            return self.metrics.snapshot(&self.swarm.behaviour().gossipsub);
+        }
+        #[cfg(not(feature = "metrics"))]
+        {
+            NetworkMetricsSnapshot::default()
+        }
     }
 
     pub fn apply_reputation_event(
@@ -1163,10 +1370,13 @@ impl Network {
                                     );
                                 }
                             }
+                            let data = message.data;
+                            #[cfg(feature = "metrics")]
+                            self.metrics.record_inbound(topic, data.len());
                             return Ok(Some(NetworkEvent::GossipMessage {
                                 peer: propagation_source,
                                 topic,
-                                data: message.data,
+                                data,
                             }));
                         }
                         Err(err) => {

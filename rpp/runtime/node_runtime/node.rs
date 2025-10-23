@@ -1108,6 +1108,7 @@ impl NodeInner {
             reputation_score: metrics.reputation_score,
             timestamp: SystemTime::now(),
             verifier_metrics,
+            network_metrics: Some(self.network.metrics_snapshot()),
         };
         if let Err(err) = self.telemetry.send(snapshot).await {
             warn!(target: "telemetry", "failed to enqueue telemetry snapshot: {err}");

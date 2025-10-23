@@ -14,6 +14,7 @@ default = [
     "tcp",
     "plaintext",
     "yamux",
+    "metrics",
 ]
 
 identify = ["dep:libp2p-identify"]
@@ -43,6 +44,7 @@ yamux = [
     "request-response",
 ]
 quic = ["dep:libp2p-quic"]
+metrics = ["dep:libp2p-metrics", "libp2p-gossipsub?/metrics"]
 
 [dependencies]
 base64 = "=0.21.7"
@@ -59,12 +61,14 @@ libp2p-tcp = { path = "../../vendor/libp2p/transports/tcp", optional = true }
 libp2p-plaintext = { path = "../../vendor/libp2p/transports/plaintext", optional = true }
 libp2p-yamux = { path = "../../vendor/libp2p/muxers/yamux", optional = true }
 libp2p-quic = { path = "../../vendor/libp2p/transports/quic", optional = true }
+libp2p-metrics = { version = "=0.17.0", optional = true }
 rpp-p2p-macros = { path = "macros" }
 libp2p_swarm = { package = "libp2p-swarm", path = "../../vendor/libp2p/swarm", features = ["tokio"] }
 libp2p_identity = { package = "libp2p-identity", path = "../../vendor/libp2p/identity" }
 parking_lot = "0.12"
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = "=1.0.145"
+prometheus-client = "0.23"
 thiserror = "=2.0.12"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8"

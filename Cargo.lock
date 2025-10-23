@@ -3298,6 +3298,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-metrics"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "805a555148522cb3414493a5153451910cb1a146c53ffbf4385708349baf62b7"
+dependencies = [
+    "futures",
+    "libp2p-core",
+    "libp2p-identity",
+    "libp2p-swarm",
+    "pin-project",
+    "prometheus-client",
+    "web-time",
+]
+
+[[package]]
 name = "libp2p-allow-block-list"
 version = "0.6.0"
 dependencies = [
