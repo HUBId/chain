@@ -20,15 +20,15 @@ use rpp_chain::ledger::Ledger;
 use rpp_chain::node::Node;
 use rpp_chain::proof_backend::Blake2sHasher;
 use rpp_chain::stwo::circuit::identity::{IdentityCircuit, IdentityWitness};
-use rpp_chain::stwo::circuit::{string_to_field, StarkCircuit};
+use rpp_chain::stwo::circuit::{StarkCircuit, string_to_field};
 use rpp_chain::stwo::fri::FriProver;
 use rpp_chain::stwo::params::StarkParameters;
 use rpp_chain::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_chain::types::{
-    Account, AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis,
-    IdentityProof, ReputationWeights, SignedTransaction, Stake, Tier, Transaction,
-    TransactionProofBundle, TransactionWitness, IDENTITY_ATTESTATION_GOSSIP_MIN,
-    IDENTITY_ATTESTATION_QUORUM,
+    Account, AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+    IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
+    ReputationWeights, SignedTransaction, Stake, Tier, Transaction, TransactionProofBundle,
+    TransactionWitness,
 };
 
 #[derive(Clone, Debug)]
@@ -359,7 +359,8 @@ fn load_ledger(handle: &rpp_chain::node::NodeHandle, config: &NodeConfig) -> Led
         .expect("load utxo snapshot")
         .unwrap_or_default();
     let mut ledger = Ledger::load(accounts, utxo_snapshot, config.epoch_length);
-    ledger.set_reputation_params(config.reputation.reputation_params());
+    ledger.set_reputation_params(config.reputation_params());
+    ledger.set_timetoke_params(config.timetoke_params());
     ledger
 }
 

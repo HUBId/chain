@@ -3,19 +3,19 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use libp2p::PeerId;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 use rpp_chain::config::{GenesisAccount, NodeConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
-use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
+use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 use rpp_chain::node::{
     ConsensusStatus as RuntimeConsensusStatus, Node, NodeHandle, NodeStatus as RuntimeNodeStatus,
 };
@@ -41,7 +41,7 @@ use rpp_wallet::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+use rpp_wallet::vendor::electrs::init::{ElectrsHandles, initialize};
 
 #[cfg(feature = "vendor_electrs")]
 #[derive(Clone)]
@@ -375,6 +375,7 @@ impl TestCluster {
             config.block_time_ms = 200;
             config.mempool_limit = 256;
             config.target_validator_count = count;
+            config.malachite.validator.validator_set_size = count;
             config.rpc_listen = rpc_socket(index)?;
             let (listen_addr, _) = random_listen_addr()?;
             config.p2p.listen_addr = listen_addr.clone();

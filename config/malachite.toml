@@ -1,0 +1,91 @@
+# Example Malachite blueprint configuration
+#
+# The values documented here mirror the defaults baked into the runtime. They
+# provide a self-contained reference that aligns with the parameter groups
+# described in docs/cross_cutting_concerns.md and can be copied as a starting
+# point for customised deployments.
+
+config_version = "1.0.0"
+
+[validator]
+# Maximum number of validators that take part in a round-robin epoch.
+validator_set_size = 100
+# Number of witnesses that accompany a proposal in each round.
+witness_count = 16
+# Identifier for the VRF threshold function (e.g. linear curve coefficients).
+vrf_threshold_curve = "linear:v0.6-b0.2"
+# Duration of a full epoch (in seconds) used to rotate validator sets.
+epoch_duration_secs = 86400
+# Timeout applied to each consensus round (in milliseconds).
+round_timeout_ms = 6000
+# Maximum number of allowed round extensions before forcing a reset.
+max_round_extensions = 3
+
+[reputation]
+# Interval (seconds) for applying blueprint decay to the global reputation score.
+decay_interval_secs = 86400
+# Percentage of reputation deducted during a decay interval.
+decay_factor = 0.05
+# Interval (seconds) between publishing aggregated reputation snapshots.
+snapshot_interval_secs = 600
+# Longest age (seconds) for accepting remote reputation snapshots.
+max_snapshot_age_secs = 3600
+
+[reputation.tier_thresholds]
+tier2_min_uptime_hours = 24
+tier3_min_consensus_success = 10
+tier4_min_consensus_success = 100
+tier5_min_score = 0.75
+
+[reputation.weights]
+validation = 0.4
+uptime = 0.2
+consensus = 0.2
+peer_feedback = 0.15
+decay = 0.05
+
+[reputation.timetoke]
+# Minimum observation window before uptime accrues (seconds).
+minimum_window_secs = 3600
+# Maximum accrued uptime credit (hours).
+accrual_cap_hours = 720
+# Interval between successive decay applications (seconds).
+decay_interval_secs = 86400
+# Granularity of each decay step (hours).
+decay_step_hours = 1
+# Synchronisation cadence for propagating time-toke snapshots (seconds).
+sync_interval_secs = 600
+
+[rewards]
+# Base payout assigned to each successfully finalised block.
+base_block_reward = 100000000
+# Percentage of the base reward awarded to the leader (0.0 – 1.0).
+leader_bonus_pct = 0.15
+# Percentage of the base reward shared across witnesses.
+witness_reward_pct = 0.25
+# Penalty applied to validators that double-sign (absolute amount).
+double_sign_penalty = 50000000
+# Penalty applied when a submitted proof is invalid (absolute amount).
+fake_proof_penalty = 50000000
+# Penalty for missing mandatory participation windows (absolute amount).
+inactivity_penalty = 25000000
+
+[proof]
+# Maximum number of proofs bundled before dispatching to verifiers.
+proof_batch_size = 64
+# Retention time (seconds) for cached recursive proofs.
+proof_cache_ttl_secs = 900
+# Maximum depth for recursive proof aggregation trees.
+max_recursive_depth = 4
+
+[network]
+# Gossip fanout used when broadcasting consensus artefacts.
+gossip_fanout = 12
+# Size of the bounded channel used for each gossip topic.
+max_channel_buffer = 1024
+# Per-channel rate limit for outbound gossip messages.
+rate_limit_per_channel = 128
+# Hard cap for block payload size (bytes).
+max_block_size_bytes = 2097152
+# Hard cap for vote count processed per round.
+max_votes_per_round = 500

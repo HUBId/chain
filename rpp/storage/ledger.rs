@@ -1,4 +1,4 @@
-use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
 use std::mem;
 
 use crate::proof_backend::Blake2sHasher;
@@ -7,11 +7,9 @@ use parking_lot::RwLock;
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
 use crate::crypto::public_key_from_hex;
 use crate::errors::{ChainError, ChainResult};
-use crate::identity_tree::{IdentityCommitmentProof, IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
+use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
 use crate::proof_system::ProofVerifierRegistry;
-use crate::reputation::{
-    self, ReputationParams, Tier, TierRequirementError, TimetokeParams,
-};
+use crate::reputation::{self, ReputationParams, Tier, TierRequirementError, TimetokeParams};
 use crate::rpp::{
     AccountBalanceWitness, ConsensusWitness, GlobalStateCommitments, ModuleWitnessBundle,
     ProofArtifact, ReputationEventKind, ReputationRecord, ReputationWitness, TimetokeRecord,
@@ -158,6 +156,10 @@ impl Ledger {
 
     pub fn set_reputation_params(&mut self, params: ReputationParams) {
         self.reputation_params = params;
+    }
+
+    pub fn set_timetoke_params(&mut self, params: TimetokeParams) {
+        self.timetoke_params = params;
     }
 
     pub fn reputation_params(&self) -> ReputationParams {
