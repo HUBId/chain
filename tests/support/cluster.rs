@@ -21,7 +21,9 @@ use rpp_chain::node::{
 };
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
-use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
+use rpp_chain::runtime::node_runtime::{
+    IdentityProfile as RuntimeIdentityProfile, NodeHandle as P2pHandle, NodeInner as P2pNode,
+};
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
@@ -141,6 +143,168 @@ impl TestClusterNode {
             }
         });
         (peers, task)
+    }
+
+    pub async fn restart(&mut self) -> Result<()> {
+        let identity = self
+            .node_handle
+            .network_identity_profile()
+            .with_context(|| format!("failed to fetch identity for node {}", self.index))?;
+
+        self.orchestrator.shutdown();
+
+        self.p2p_handle
+            .shutdown()
+            .await
+            .map_err(|err| anyhow!("failed to stop libp2p node {0}: {1}", self.index, err))?;
+
+        self.node_handle
+            .stop()
+            .await
+            .with_context(|| format!("failed to stop node runtime for node {}", self.index))?;
+
+        let old_node_task = std::mem::replace(
+            &mut self.node_task,
+            tokio::spawn(async { Result::<(), anyhow::Error>::Ok(()) }),
+        );
+        let old_p2p_task = std::mem::replace(
+            &mut self.p2p_task,
+            tokio::task::spawn_blocking(|| -> Result<()> { Ok(()) }),
+        );
+        let old_gossip_task = std::mem::replace(&mut self.gossip_task, tokio::spawn(async { () }));
+        let old_connection_task =
+            std::mem::replace(&mut self.connection_task, tokio::spawn(async { () }));
+        let _ = old_node_task.await;
+        let _ = old_p2p_task.await;
+        let _ = old_gossip_task.await;
+        let _ = old_connection_task.await;
+
+        let config = self.config.clone();
+        let node = tokio::task::spawn_blocking({
+            let config = config.clone();
+            move || Node::new(config)
+        })
+        .await
+        .context("node runtime restart task panicked")?
+        .with_context(|| format!("failed to construct node runtime for node {}", self.index))?;
+        let node_handle = node.handle();
+
+        let mut runtime_config = NodeRuntimeConfig::from(&config);
+        runtime_config.identity = Some(RuntimeIdentityProfile::from(identity));
+        let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config).with_context(|| {
+            format!(
+                "failed to initialise libp2p runtime for node {}",
+                self.index
+            )
+        })?;
+
+        node_handle.attach_p2p(p2p_handle.clone()).await;
+
+        let (connected_peers, connection_task) =
+            TestClusterNode::spawn_connection_tracker(&p2p_handle);
+
+        let (orchestrator, shutdown_rx) =
+            PipelineOrchestrator::new(node_handle.clone(), Some(p2p_handle.clone()));
+        let orchestrator = Arc::new(orchestrator);
+        orchestrator.spawn(shutdown_rx.clone());
+
+        let events = p2p_handle.subscribe();
+        let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
+        let processor = Arc::new(NodeGossipProcessor::new(
+            node_handle.clone(),
+            proof_storage_path,
+        ));
+        let gossip_task = spawn_node_event_worker(events, processor, Some(shutdown_rx.clone()));
+
+        let storage = node_handle.storage();
+        #[cfg(feature = "vendor_electrs")]
+        let mut electrs_context: Option<(ElectrsConfig, ElectrsHandles)> = None;
+        #[cfg(feature = "vendor_electrs")]
+        {
+            let mut wallet_config = WalletConfig::default();
+            wallet_config.data_dir = self.temp_dir.path().join("wallet");
+            wallet_config.key_path = config.key_path.clone();
+            wallet_config
+                .ensure_directories()
+                .map_err(|err| anyhow!(err))?;
+            if let Some(cfg) = wallet_config.electrs.clone() {
+                let firewood_dir = wallet_config.electrs_firewood_dir();
+                let index_dir = wallet_config.electrs_index_dir();
+                let provider = Arc::new(ClusterPayloadProvider::new(&storage));
+                let verifier = Arc::new(RuntimeRecursiveProofVerifier::default());
+                let runtime_adapters = RuntimeAdapters::new(
+                    Arc::new(storage.clone()),
+                    node_handle.clone(),
+                    orchestrator.as_ref().clone(),
+                    provider,
+                    verifier,
+                );
+                let handles = initialize(&cfg, firewood_dir, index_dir, Some(runtime_adapters))
+                    .with_context(|| {
+                        format!(
+                            "failed to initialise electrs for cluster node {}",
+                            self.index
+                        )
+                    })?;
+                electrs_context = Some((cfg, handles));
+            }
+        }
+
+        let wallet_key = load_or_generate_keypair(&config.key_path).with_context(|| {
+            format!("failed to load node key for wallet on node {}", self.index)
+        })?;
+        let wallet = {
+            #[cfg(feature = "vendor_electrs")]
+            {
+                if let Some((cfg, handles)) = electrs_context {
+                    Arc::new(
+                        Wallet::with_electrs(storage.clone(), wallet_key, cfg, handles)
+                            .map_err(|err| anyhow!(err))?,
+                    )
+                } else {
+                    Arc::new(Wallet::new(storage.clone(), wallet_key))
+                }
+            }
+            #[cfg(not(feature = "vendor_electrs"))]
+            {
+                Arc::new(Wallet::new(storage.clone(), wallet_key))
+            }
+        };
+
+        let index = self.index;
+        let node_task = tokio::spawn(async move {
+            node.start()
+                .await
+                .with_context(|| format!("node {index} runtime terminated"))
+        });
+
+        let p2p_task = tokio::task::spawn_blocking(move || -> Result<()> {
+            let runtime = Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("failed to build libp2p executor")?;
+            runtime
+                .block_on(async move {
+                    p2p_runtime
+                        .run()
+                        .await
+                        .with_context(|| "libp2p runtime exited unexpectedly")
+                })
+                .with_context(|| "libp2p runtime stopped")?;
+            Ok(())
+        });
+
+        self.node_handle = node_handle;
+        self.p2p_handle = p2p_handle;
+        self.orchestrator = orchestrator;
+        self.wallet = wallet;
+        self.node_task = node_task;
+        self.p2p_task = p2p_task;
+        self.gossip_task = gossip_task;
+        self.connection_task = connection_task;
+        self.connected_peers = connected_peers;
+
+        Ok(())
     }
 }
 
@@ -391,6 +555,10 @@ impl TestCluster {
     /// Returns references to the running cluster nodes.
     pub fn nodes(&self) -> &[TestClusterNode] {
         &self.nodes
+    }
+
+    pub fn nodes_mut(&mut self) -> &mut [TestClusterNode] {
+        &mut self.nodes
     }
 
     /// Returns the genesis validator set shared by all nodes.
