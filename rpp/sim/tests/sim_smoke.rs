@@ -47,7 +47,10 @@ fn run_partition_restart() -> Result<SimulationSummary> {
 }
 
 #[test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "ci-sim"),
+    ignore = "requires --features ci-sim to enable deterministic simulator"
+)]
 fn small_world_smoke_is_deterministic() -> Result<()> {
     let summary_first = run_smoke()?;
     let summary_second = run_smoke()?;
@@ -82,7 +85,10 @@ fn small_world_smoke_is_deterministic() -> Result<()> {
 }
 
 #[test]
-#[ignore]
+#[cfg_attr(
+    not(feature = "ci-sim"),
+    ignore = "requires --features ci-sim to enable deterministic simulator"
+)]
 fn partition_restart_plan_recovers_mesh() -> Result<()> {
     let summary = run_partition_restart()?;
 

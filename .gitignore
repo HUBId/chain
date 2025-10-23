@@ -3,6 +3,7 @@ target/
 data/
 keys/
 logs/
+ci-artifacts/
 rpp/*/Cargo.lock
 storage-firewood/Cargo.lock
 vendor/**/*.crate
