@@ -20,7 +20,7 @@ use tracing::{debug, info, warn};
 use crate::errors::{ChainError, ChainResult};
 use crate::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
 use crate::reputation::Tier;
-use crate::runtime::node_runtime::{NodeEvent, NodeHandle as P2pHandle};
+use crate::runtime::node_runtime::{node::MetaTelemetryReport, NodeEvent, NodeHandle as P2pHandle};
 use crate::types::{Address, Block, TransactionProofBundle};
 use crate::wallet::workflows::TransactionWorkflow;
 use rpp_p2p::GossipTopic;
@@ -272,6 +272,11 @@ impl PipelineOrchestrator {
             )
             .await;
         });
+    }
+
+    /// Returns the latest P2P meta telemetry snapshot as observed by the node runtime.
+    pub async fn meta_telemetry_snapshot(&self) -> ChainResult<MetaTelemetryReport> {
+        self.node.meta_telemetry_snapshot().await
     }
 
     /// Submit a transaction workflow into the orchestrated pipeline.

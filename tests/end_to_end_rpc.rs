@@ -14,8 +14,8 @@ use rpp_chain::node::NodeHandle;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::runtime::RuntimeMode;
-use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::circuit::transaction::TransactionWitness;
+use rpp_chain::stwo::circuit::ExecutionTrace;
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
@@ -225,6 +225,53 @@ async fn status_endpoint_returns_node_snapshot() -> Result<()> {
     assert_eq!(payload["height"].as_u64(), Some(0));
     assert_eq!(payload["pending_transactions"].as_u64(), Some(0));
     assert_eq!(payload["epoch"].as_u64(), Some(0));
+
+    harness.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn p2p_endpoint_returns_meta_telemetry_snapshot() -> Result<()> {
+    let harness = match RpcTestHarness::start().await {
+        Ok(harness) => harness,
+        Err(err) => {
+            eprintln!("skipping p2p telemetry test: {err:?}");
+            return Ok(());
+        }
+    };
+    let client = harness.client();
+    let base_url = harness.base_url().to_string();
+
+    let response = client
+        .get(format!("{}/p2p/peers", base_url))
+        .send()
+        .await
+        .context("failed to fetch p2p meta telemetry")?;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let payload: Value = response
+        .json()
+        .await
+        .context("invalid p2p meta telemetry payload")?;
+    let local_peer = payload["local_peer_id"]
+        .as_str()
+        .context("missing local peer id")?;
+    assert!(!local_peer.is_empty());
+
+    let peer_count = payload["peer_count"]
+        .as_u64()
+        .context("missing peer count")?;
+    assert!(peer_count >= 1, "expected at least one connected peer");
+
+    let peers = payload["peers"].as_array().context("missing peers array")?;
+    assert!(!peers.is_empty(), "expected peer telemetry entries");
+    assert!(peers.len() as u64 <= peer_count);
+    for peer in peers {
+        assert!(peer["peer"].as_str().is_some(), "peer id missing");
+        assert!(peer["version"].as_str().is_some(), "peer version missing");
+        assert!(peer["latency_ms"].as_u64().is_some(), "latency missing");
+        assert!(peer["last_seen"].as_u64().is_some(), "last seen missing");
+    }
 
     harness.shutdown().await?;
     Ok(())
