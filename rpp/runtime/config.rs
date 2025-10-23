@@ -20,6 +20,7 @@ use crate::crypto::{
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
+use crate::runtime::RuntimeMode;
 use crate::types::Stake;
 
 const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
@@ -735,6 +736,51 @@ fn default_max_proof_size_bytes() -> usize {
 }
 
 impl NodeConfig {
+    pub fn for_mode(mode: RuntimeMode) -> Self {
+        match mode {
+            RuntimeMode::Hybrid => Self::for_hybrid(),
+            RuntimeMode::Validator => Self::for_validator(),
+            RuntimeMode::Node | RuntimeMode::Wallet => Self::for_node(),
+        }
+    }
+
+    pub fn for_node() -> Self {
+        Self::default()
+    }
+
+    pub fn for_hybrid() -> Self {
+        let mut config = Self::default();
+        config.apply_hybrid_defaults();
+        config
+    }
+
+    pub fn for_validator() -> Self {
+        let mut config = Self::default();
+        config.apply_validator_defaults();
+        config
+    }
+
+    fn apply_hybrid_defaults(&mut self) {
+        self.rollout.telemetry.enabled = true;
+        self.rollout.telemetry.sample_interval_secs = 30;
+        self.p2p.heartbeat_interval_ms = 4_000;
+        self.p2p.gossip_rate_limit_per_sec = 192;
+        self.malachite.proof.proof_batch_size = 96;
+        self.malachite.proof.proof_cache_ttl_secs = 720;
+        self.malachite.proof.max_recursive_depth = 5;
+    }
+
+    fn apply_validator_defaults(&mut self) {
+        self.rollout.telemetry.enabled = true;
+        self.rollout.telemetry.sample_interval_secs = 15;
+        self.rollout.release_channel = ReleaseChannel::Testnet;
+        self.p2p.heartbeat_interval_ms = 3_000;
+        self.p2p.gossip_rate_limit_per_sec = 256;
+        self.malachite.proof.proof_batch_size = 128;
+        self.malachite.proof.proof_cache_ttl_secs = 600;
+        self.malachite.proof.max_recursive_depth = 6;
+    }
+
     pub fn load(path: &Path) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
         let mut config: Self = toml::from_str(&content)
@@ -1203,6 +1249,64 @@ pub struct WalletNodeRuntimeConfig {
 }
 
 impl WalletConfig {
+    pub fn for_mode(mode: RuntimeMode) -> Self {
+        match mode {
+            RuntimeMode::Hybrid => Self::for_hybrid(),
+            RuntimeMode::Validator => Self::for_validator(),
+            RuntimeMode::Node | RuntimeMode::Wallet => Self::for_wallet(),
+        }
+    }
+
+    pub fn for_wallet() -> Self {
+        Self::default()
+    }
+
+    pub fn for_hybrid() -> Self {
+        let mut config = Self::default();
+        config.apply_hybrid_defaults();
+        config
+    }
+
+    pub fn for_validator() -> Self {
+        let mut config = Self::default();
+        config.apply_hybrid_defaults();
+        config.apply_validator_defaults();
+        config
+    }
+
+    fn apply_hybrid_defaults(&mut self) {
+        self.node.embedded = false;
+        if self.node.gossip_endpoints.is_empty() {
+            self.node
+                .gossip_endpoints
+                .push("/ip4/127.0.0.1/tcp/7600".to_string());
+        }
+
+        #[cfg(feature = "vendor_electrs")]
+        if let Some(electrs) = self.electrs.as_mut() {
+            electrs.features.runtime = true;
+            electrs.features.tracker = true;
+            electrs.cache.telemetry.enabled = true;
+            electrs.tracker.telemetry_endpoint = SocketAddr::from(([127, 0, 0, 1], 9_200));
+            electrs.tracker.notifications.p2p = true;
+            electrs.p2p.enabled = true;
+            electrs.p2p.metrics_endpoint = SocketAddr::from(([127, 0, 0, 1], 9_300));
+            electrs.p2p.network_id = "rpp-hybrid".to_string();
+            electrs.network = rpp_wallet::config::NetworkSelection::Testnet;
+        }
+    }
+
+    fn apply_validator_defaults(&mut self) {
+        #[cfg(feature = "vendor_electrs")]
+        if let Some(electrs) = self.electrs.as_mut() {
+            electrs.cache.telemetry.enabled = true;
+            electrs.tracker.telemetry_endpoint = SocketAddr::from(([127, 0, 0, 1], 9_250));
+            electrs.p2p.metrics_endpoint = SocketAddr::from(([127, 0, 0, 1], 9_350));
+            electrs.p2p.network_id = "rpp-validator".to_string();
+            electrs.tracker.notifications.topic = "/rpp/gossip/finality/1.0.0".to_string();
+        }
+    }
+
     pub fn load(path: &Path) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
         let config: Self = toml::from_str(&content)
