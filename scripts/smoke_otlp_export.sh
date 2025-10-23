@@ -1,9 +1,103 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'USAGE'
+Usage: smoke_otlp_export.sh [options] [-- <binary args...>]
+
+Options:
+  -b, --binary PATH     Run the binary at PATH instead of "cargo run -p rpp-node".
+  -m, --mode MODE       Runtime mode to exercise (node, wallet, hybrid, validator).
+      --subcommand CMD  Optional subcommand to invoke before runtime flags.
+  -s, --expect SIGNAL   Override the telemetry span/name expected in collector logs.
+  -h, --help            Show this message.
+
+Additional arguments after "--" are forwarded verbatim to the binary and take
+precedence over OTLP_NODE_ARGS/default arguments.
+USAGE
+}
+
 if ! command -v docker >/dev/null 2>&1; then
   echo "docker is required to run the OTLP smoke test" >&2
   exit 1
+fi
+
+MODE="node"
+CUSTOM_EXPECT=""
+BINARY_OVERRIDE=""
+SUBCOMMAND=""
+FORWARDED_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -b|--binary)
+      if [[ $# -lt 2 ]]; then
+        echo "--binary requires a path argument" >&2
+        exit 1
+      fi
+      BINARY_OVERRIDE="$2"
+      shift 2
+      ;;
+    -m|--mode)
+      if [[ $# -lt 2 ]]; then
+        echo "--mode requires an argument" >&2
+        exit 1
+      fi
+      MODE="$2"
+      shift 2
+      ;;
+    -s|--expect)
+      if [[ $# -lt 2 ]]; then
+        echo "--expect requires a value" >&2
+        exit 1
+      fi
+      CUSTOM_EXPECT="$2"
+      shift 2
+      ;;
+    --subcommand)
+      if [[ $# -lt 2 ]]; then
+        echo "--subcommand requires a value" >&2
+        exit 1
+      fi
+      SUBCOMMAND="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      FORWARDED_ARGS=("$@")
+      break
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+case "${MODE}" in
+  node|wallet|hybrid|validator)
+    ;;
+  *)
+    echo "unsupported mode: ${MODE}" >&2
+    exit 1
+    ;;
+esac
+
+EXPECTED_SIGNAL="${CUSTOM_EXPECT}"
+if [[ -z "${EXPECTED_SIGNAL}" ]]; then
+  case "${MODE}" in
+    wallet)
+      EXPECTED_SIGNAL="node.telemetry.init"
+      ;;
+    *)
+      EXPECTED_SIGNAL="node.telemetry.init"
+      ;;
+  esac
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,10 +110,21 @@ fi
 COLLECTOR_IMAGE="${OTLP_COLLECTOR_IMAGE:-otel/opentelemetry-collector-contrib:0.97.0}"
 COLLECTOR_NAME="${OTLP_COLLECTOR_NAME:-rpp-node-otel-smoke}"
 SMOKE_TIMEOUT="${OTLP_SMOKE_TIMEOUT:-20}"
-NODE_ARGS=("--telemetry-endpoint" "http://127.0.0.1:4317" "--telemetry-sample-interval" "2" "--log-json")
-if [[ -n "${OTLP_NODE_ARGS:-}" ]]; then
+
+DEFAULT_ARGS=(
+  "--mode" "${MODE}"
+  "--telemetry-endpoint" "http://127.0.0.1:4317"
+  "--telemetry-sample-interval" "2"
+  "--log-json"
+)
+
+if [[ ${#FORWARDED_ARGS[@]} -gt 0 ]]; then
+  NODE_ARGS=("${FORWARDED_ARGS[@]}")
+elif [[ -n "${OTLP_NODE_ARGS:-}" ]]; then
   # shellcheck disable=SC2206
   NODE_ARGS=(${OTLP_NODE_ARGS})
+else
+  NODE_ARGS=("${DEFAULT_ARGS[@]}")
 fi
 
 if docker ps --format '{{.Names}}' | grep -q "^${COLLECTOR_NAME}$"; then
@@ -44,17 +149,24 @@ trap cleanup EXIT
 
 NODE_LOG="$(mktemp -t rpp-node-otel.XXXXXX.log)"
 STATUS=0
-if [[ -n "${RPP_NODE_BIN:-}" ]]; then
-  set +e
-  timeout "${SMOKE_TIMEOUT}" "${RPP_NODE_BIN}" "${NODE_ARGS[@]}" >"${NODE_LOG}" 2>&1
-  STATUS=$?
-  set -e
+COMMAND_PREFIX=()
+if [[ -n "${BINARY_OVERRIDE}" ]]; then
+  COMMAND_PREFIX=("${BINARY_OVERRIDE}")
+elif [[ -n "${RPP_NODE_BIN:-}" ]]; then
+  COMMAND_PREFIX=("${RPP_NODE_BIN}")
 else
-  set +e
-  timeout "${SMOKE_TIMEOUT}" cargo run --quiet -p rpp-node -- "${NODE_ARGS[@]}" >"${NODE_LOG}" 2>&1
-  STATUS=$?
-  set -e
+  COMMAND_PREFIX=("cargo" "run" "--quiet" "-p" "rpp-node" "--")
 fi
+
+RUN_COMMAND=("${COMMAND_PREFIX[@]}")
+if [[ -n "${SUBCOMMAND}" ]]; then
+  RUN_COMMAND+=("${SUBCOMMAND}")
+fi
+
+set +e
+timeout "${SMOKE_TIMEOUT}" "${RUN_COMMAND[@]}" "${NODE_ARGS[@]}" >"${NODE_LOG}" 2>&1
+STATUS=$?
+set -e
 
 if [[ ${STATUS} -ne 0 && ${STATUS} -ne 124 ]]; then
   cat "${NODE_LOG}" >&2
@@ -70,7 +182,7 @@ echo "${COLLECTOR_LOGS}"
 echo "=== node logs ==="
 cat "${NODE_LOG}"
 
-if ! grep -q "node.telemetry.init" <<<"${COLLECTOR_LOGS}"; then
+if ! grep -q "${EXPECTED_SIGNAL}" <<<"${COLLECTOR_LOGS}"; then
   echo "failed to observe exported spans in collector output" >&2
   exit 1
 fi

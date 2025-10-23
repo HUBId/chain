@@ -118,9 +118,18 @@ threaten block production.
    `telemetry_auth_token` or the environment variables
    `RPP_NODE_OTLP_AUTH_TOKEN`, `RPP_NODE_OTLP_TIMEOUT_MS`, and
    `RPP_NODE_OTLP_ENDPOINT`. Gossip, consensus, and proof paths now emit spans
-   that ship to the configured collector, and `scripts/smoke_otlp_export.sh`
-   spins up a local OpenTelemetry Collector to verify that `node.telemetry.init`
-   arrives end-to-end.【F:rpp/node/src/main.rs†L314-L447】【F:rpp/runtime/node.rs†L610-L963】【F:rpp/runtime/node_runtime/node.rs†L836-L1356】【F:scripts/smoke_otlp_export.sh†L1-L118】【F:scripts/otel-collector-config.yaml†L1-L19】
+   that ship to the configured collector, and
+   `scripts/smoke_otlp_export.sh --mode validator --binary ./target/release/rpp-node`
+   spins up a local OpenTelemetry Collector to verify that the selected runtime
+   exported the expected signal (defaulting to `node.telemetry.init`). Pass
+   `--mode hybrid` or `--mode wallet` to exercise the other binaries and
+   `--expect` when you need to assert on a different span name.【F:rpp/node/src/lib.rs†L35-L111】【F:rpp/runtime/node.rs†L610-L963】【F:rpp/runtime/node_runtime/node.rs†L836-L1356】【F:scripts/smoke_otlp_export.sh†L1-L190】【F:scripts/otel-collector-config.yaml†L1-L19】
+7. **Maintain wallet telemetry parity.** Hybrid and validator profiles enable
+   Electrs cache and tracker telemetry so wallet consumers inherit the same
+   visibility targets as the node runtime. When the wallet runs standalone,
+   update `electrs.cache.telemetry` and
+   `electrs.tracker.telemetry_endpoint` to keep forwarding the same signals the
+   validator dashboards expect.【F:config/wallet.toml†L9-L31】【F:rpp/runtime/config.rs†L1269-L1313】
 
 ## Health Probes
 
