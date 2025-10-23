@@ -22,8 +22,42 @@ use rpp_chain::types::{
     SignedTransaction, Stake, StarkProof, Tier, Transaction, TransactionProofBundle,
     TransactionWitness,
 };
-use rpp_p2p::{GossipTopic, NetworkMetaTelemetryReport};
+use rpp_p2p::{GossipTopic, NetworkMetaTelemetryReport, TierLevel};
+use serde::Deserialize;
 use serde_json;
+
+#[derive(Debug, Deserialize, Clone)]
+struct StoredPeerRecordSnapshot {
+    peer_id: String,
+    reputation: f64,
+    tier: TierLevel,
+}
+
+fn reputation_floor_for_tier(tier: TierLevel) -> f64 {
+    match tier {
+        TierLevel::Tl0 => 0.0,
+        TierLevel::Tl1 => 1.0,
+        TierLevel::Tl2 => 2.0,
+        TierLevel::Tl3 => 3.0,
+        TierLevel::Tl4 => 4.0,
+        TierLevel::Tl5 => 5.0,
+    }
+}
+
+fn read_peerstore_snapshot(
+    path: &Path,
+    peer_id: &str,
+) -> anyhow::Result<Option<StoredPeerRecordSnapshot>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read(path)?;
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let records: Vec<StoredPeerRecordSnapshot> = serde_json::from_slice(&raw)?;
+    Ok(records.into_iter().find(|record| record.peer_id == peer_id))
+}
 
 fn sample_node_config(base: &Path) -> NodeConfig {
     let data_dir = base.join("data");
@@ -159,6 +193,10 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
 
     wait_for_peer(&handle_b_runtime, handle_a_runtime.local_peer_id()).await;
 
+    let broadcaster_peer_id = handle_a_runtime.local_peer_id().to_base58();
+    let peerstore_path = config_b.p2p.peerstore_path.clone();
+    let baseline_record = read_peerstore_snapshot(&peerstore_path, &broadcaster_peer_id)?;
+
     let proof_storage_path = config_b.proof_cache_dir.join("gossip_proofs.json");
     let processor = Arc::new(NodeGossipProcessor::new(
         handle_b.clone(),
@@ -194,6 +232,40 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
         }
         time::sleep(Duration::from_millis(100)).await;
         retry += 1;
+    }
+
+    let peerstore_path_clone = peerstore_path.clone();
+    let broadcaster_peer_id_clone = broadcaster_peer_id.clone();
+    let post_gossip_record = time::timeout(Duration::from_secs(5), async move {
+        loop {
+            match read_peerstore_snapshot(&peerstore_path_clone, &broadcaster_peer_id_clone) {
+                Ok(Some(record)) => return Ok(record),
+                Ok(None) => {}
+                Err(err) => return Err(err),
+            }
+            time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+
+    let tier_floor = reputation_floor_for_tier(post_gossip_record.tier);
+    if let Some(baseline) = baseline_record {
+        assert!(
+            post_gossip_record.reputation > baseline.reputation,
+            "broadcaster peer {broadcaster_peer_id} reputation did not increase after gossip: baseline={:.3}, post={:.3}, tier={:?}, floor={:.3}",
+            baseline.reputation,
+            post_gossip_record.reputation,
+            post_gossip_record.tier,
+            tier_floor,
+        );
+    } else {
+        assert!(
+            post_gossip_record.reputation > tier_floor,
+            "broadcaster peer {broadcaster_peer_id} reputation did not exceed tier floor after gossip: post={:.3}, tier={:?}, floor={:.3}",
+            post_gossip_record.reputation,
+            post_gossip_record.tier,
+            tier_floor,
+        );
     }
 
     handle_a_runtime.shutdown().await?;
