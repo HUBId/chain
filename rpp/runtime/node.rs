@@ -14,27 +14,27 @@
 //! Public status/reporting structs are defined alongside the runtime to expose
 //! snapshot views without leaking internal locks.
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{broadcast, mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time;
-use tracing::instrument;
 use tracing::Span;
+use tracing::instrument;
 use tracing::{debug, error, info, warn};
 
 use hex;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json;
 
 use crate::config::{
@@ -42,13 +42,13 @@ use crate::config::{
     TelemetryConfig,
 };
 use crate::consensus::{
-    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
-    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
-    SignedBftVote, ValidatorCandidate,
+    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
+    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
+    classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
-    address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
-    vrf_public_key_to_hex, VrfKeypair,
+    VrfKeypair, address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
+    vrf_public_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -63,11 +63,11 @@ use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
     node::{
         IdentityProfile as RuntimeIdentityProfile, MetaTelemetryReport, NodeError as P2pError,
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
-    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
@@ -78,9 +78,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
-    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
+    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
+    TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -95,6 +95,7 @@ use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, NetworkLightClientUpdate,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
+use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
@@ -341,6 +342,32 @@ pub struct NodeTelemetrySnapshot {
     pub pruning: Option<PruningJobStatus>,
 }
 
+#[derive(Clone, Debug)]
+pub enum PipelineObservation {
+    VrfLeadership {
+        height: u64,
+        round: u64,
+        proposer: Address,
+        randomness: String,
+        block_hash: Option<String>,
+    },
+    BftFinalised {
+        height: u64,
+        round: u64,
+        block_hash: String,
+        commitments: GlobalStateCommitments,
+        certificate: ConsensusCertificate,
+    },
+    FirewoodCommitment {
+        height: u64,
+        round: u64,
+        block_hash: String,
+        previous_root: String,
+        new_root: String,
+        pruning_proof: Option<FirewoodPruningProof>,
+    },
+}
+
 const MAX_ROUND_LATENCY_SAMPLES: usize = 32;
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -542,6 +569,7 @@ pub(crate) struct NodeInner {
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     verifiers: ProofVerifierRegistry,
     shutdown: broadcast::Sender<()>,
+    pipeline_events: broadcast::Sender<PipelineObservation>,
     worker_tasks: Mutex<Vec<JoinHandle<()>>>,
     completion: Notify,
     witness_channels: WitnessChannels,
@@ -926,6 +954,7 @@ impl Node {
         let epoch_manager = VrfEpochManager::new(config.epoch_length, ledger.current_epoch());
 
         let (shutdown, _shutdown_rx) = broadcast::channel(1);
+        let (pipeline_events, _) = broadcast::channel(256);
         let verifier_registry =
             ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
         let mempool_limit = config.mempool_limit;
@@ -962,6 +991,7 @@ impl Node {
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             verifiers: verifier_registry,
             shutdown,
+            pipeline_events,
             worker_tasks: Mutex::new(Vec::new()),
             completion: Notify::new(),
             witness_channels: WitnessChannels::new(128),
@@ -1004,7 +1034,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
+        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -1015,8 +1045,9 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
+        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field, StarkCircuit,
+        string_to_field,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1660,6 +1691,10 @@ impl NodeHandle {
         self.inner.stop().await
     }
 
+    pub fn subscribe_pipeline(&self) -> broadcast::Receiver<PipelineObservation> {
+        self.inner.subscribe_pipeline()
+    }
+
     pub fn finalize_block(
         &self,
         ctx: ExternalFinalizationContext,
@@ -2012,6 +2047,14 @@ impl NodeInner {
                 Err(err) => debug!(?err, "failed to collect runtime metrics"),
             }
         }
+    }
+
+    fn subscribe_pipeline(&self) -> broadcast::Receiver<PipelineObservation> {
+        self.pipeline_events.subscribe()
+    }
+
+    fn publish_pipeline_event(&self, event: PipelineObservation) {
+        let _ = self.pipeline_events.send(event);
     }
 
     async fn meta_telemetry_snapshot(&self) -> ChainResult<MetaTelemetryReport> {
@@ -3983,6 +4026,14 @@ impl NodeInner {
             return Ok(());
         }
 
+        self.publish_pipeline_event(PipelineObservation::VrfLeadership {
+            height,
+            round: round.round(),
+            proposer: selection.proposer.clone(),
+            randomness: selection.randomness.to_string(),
+            block_hash: None,
+        });
+
         let mut accepted_identities: Vec<AttestedIdentityRequest> = Vec::new();
         for request in identity_pending {
             match self.ledger.register_identity(
@@ -4200,6 +4251,26 @@ impl NodeInner {
             FinalizationContext::Local(ctx) => self.finalize_local_block(ctx),
             FinalizationContext::External(ctx) => self.finalize_external_block(ctx),
         }
+    }
+
+    fn decode_commitment(value: &str) -> ChainResult<[u8; 32]> {
+        let bytes = hex::decode(value)
+            .map_err(|err| ChainError::Config(format!("invalid commitment encoding: {err}")))?;
+        let array: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| ChainError::Config("commitment digest must be 32 bytes".into()))?;
+        Ok(array)
+    }
+
+    fn commitments_from_header(header: &BlockHeader) -> ChainResult<GlobalStateCommitments> {
+        Ok(GlobalStateCommitments {
+            global_state_root: Self::decode_commitment(&header.state_root)?,
+            utxo_root: Self::decode_commitment(&header.utxo_root)?,
+            reputation_root: Self::decode_commitment(&header.reputation_root)?,
+            timetoke_root: Self::decode_commitment(&header.timetoke_root)?,
+            zsi_root: Self::decode_commitment(&header.zsi_root)?,
+            proof_root: Self::decode_commitment(&header.proof_root)?,
+        })
     }
 
     fn finalize_local_block(
@@ -4445,6 +4516,27 @@ impl NodeInner {
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
         self.update_runtime_metrics();
+
+        let block_hash = block.hash.clone();
+        let event_round = block.consensus.round;
+        let previous_root_hex = hex::encode(receipt.previous_root);
+        let pruning_proof = receipt.pruning_proof.clone();
+        self.publish_pipeline_event(PipelineObservation::BftFinalised {
+            height,
+            round: event_round,
+            block_hash: block_hash.clone(),
+            commitments,
+            certificate: block.consensus.clone(),
+        });
+        self.publish_pipeline_event(PipelineObservation::FirewoodCommitment {
+            height,
+            round: event_round,
+            block_hash,
+            previous_root: previous_root_hex,
+            new_root: encoded_new_root.clone(),
+            pruning_proof,
+        });
+
         self.emit_state_sync_artifacts();
 
         Ok(FinalizationOutcome::Sealed {
@@ -4753,6 +4845,39 @@ impl NodeInner {
         self.prune_consensus_rounds_below(block.header.height.saturating_add(1));
 
         self.update_runtime_metrics();
+
+        let block_hash = block.hash.clone();
+        let event_round = block.consensus.round;
+        match Self::commitments_from_header(&block.header) {
+            Ok(commitments) => {
+                self.publish_pipeline_event(PipelineObservation::BftFinalised {
+                    height,
+                    round: event_round,
+                    block_hash: block_hash.clone(),
+                    commitments,
+                    certificate: block.consensus.clone(),
+                });
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    height,
+                    round = event_round,
+                    "failed to decode commitments for pipeline event"
+                );
+            }
+        }
+        let previous_root_hex = hex::encode(receipt.previous_root);
+        let pruning_proof = receipt.pruning_proof.clone();
+        self.publish_pipeline_event(PipelineObservation::FirewoodCommitment {
+            height,
+            round: event_round,
+            block_hash,
+            previous_root: previous_root_hex,
+            new_root: encoded_new_root.clone(),
+            pruning_proof,
+        });
+
         self.emit_state_sync_artifacts();
 
         Ok(FinalizationOutcome::Sealed {
@@ -4924,9 +5049,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
-        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
-        TimetokeParams, VerifierMetricsSnapshot,
+        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
+        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4934,12 +5059,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{routing::post, Router};
+    use axum::{Router, routing::post};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;
