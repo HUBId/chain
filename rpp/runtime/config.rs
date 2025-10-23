@@ -1,7 +1,9 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
 use rpp_p2p::TierLevel;
@@ -11,10 +13,439 @@ use rpp_wallet::config::ElectrsConfig;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
-use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds};
+use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
 use crate::types::Stake;
 
 const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
+const MALACHITE_CONFIG_VERSION_REQ: &str = ">=1.0.0, <2.0.0";
+const MALACHITE_CONFIG_VERSION_DEFAULT: &str = "1.0.0";
+const MALACHITE_CONFIG_FILE: &str = "malachite.toml";
+const DEFAULT_MALACHITE_CONFIG_PATH: &str = "config/malachite.toml";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MalachiteConfig {
+    pub config_version: String,
+    pub validator: ValidatorSelectionConfig,
+    pub reputation: MalachiteReputationConfig,
+    pub rewards: MalachiteRewardsConfig,
+    pub proof: MalachiteProofConfig,
+    pub network: MalachiteNetworkConfig,
+}
+
+impl MalachiteConfig {
+    pub fn load_from_path(path: &Path) -> ChainResult<Self> {
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                let mut config: Self = toml::from_str(&content).map_err(|err| {
+                    ChainError::Config(format!("unable to parse malachite config: {err}"))
+                })?;
+                config.validate()?;
+                Ok(config)
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                let mut config = Self::default();
+                config.validate()?;
+                Ok(config)
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn load_default() -> ChainResult<Self> {
+        Self::load_from_path(Path::new(DEFAULT_MALACHITE_CONFIG_PATH))
+    }
+
+    pub fn validate(&self) -> ChainResult<()> {
+        let version = self
+            .config_version
+            .trim()
+            .parse::<Version>()
+            .map_err(|err| {
+                ChainError::Config(format!(
+                    "malachite configuration has invalid config_version `{}`: {err}",
+                    self.config_version
+                ))
+            })?;
+        let requirement = VersionReq::parse(MALACHITE_CONFIG_VERSION_REQ)
+            .expect("static version requirement must be valid");
+        if !requirement.matches(&version) {
+            return Err(ChainError::Config(format!(
+                "malachite configuration config_version {} is incompatible; expected {}",
+                version, MALACHITE_CONFIG_VERSION_REQ
+            )));
+        }
+
+        self.validator.validate()?;
+        self.reputation.validate()?;
+        self.rewards.validate()?;
+        self.proof.validate()?;
+        self.network.validate()?;
+        Ok(())
+    }
+}
+
+impl Default for MalachiteConfig {
+    fn default() -> Self {
+        Self {
+            config_version: MALACHITE_CONFIG_VERSION_DEFAULT.to_string(),
+            validator: ValidatorSelectionConfig::default(),
+            reputation: MalachiteReputationConfig::default(),
+            rewards: MalachiteRewardsConfig::default(),
+            proof: MalachiteProofConfig::default(),
+            network: MalachiteNetworkConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ValidatorSelectionConfig {
+    pub validator_set_size: usize,
+    pub witness_count: usize,
+    pub vrf_threshold_curve: String,
+    pub epoch_duration_secs: u64,
+    pub round_timeout_ms: u64,
+    pub max_round_extensions: u32,
+}
+
+impl ValidatorSelectionConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.validator_set_size == 0 {
+            return Err(ChainError::Config(
+                "malachite validator.validator_set_size must be greater than 0".into(),
+            ));
+        }
+        if self.witness_count == 0 {
+            return Err(ChainError::Config(
+                "malachite validator.witness_count must be greater than 0".into(),
+            ));
+        }
+        if self.vrf_threshold_curve.trim().is_empty() {
+            return Err(ChainError::Config(
+                "malachite validator.vrf_threshold_curve must not be empty".into(),
+            ));
+        }
+        if self.epoch_duration_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite validator.epoch_duration_secs must be greater than 0".into(),
+            ));
+        }
+        if self.round_timeout_ms == 0 {
+            return Err(ChainError::Config(
+                "malachite validator.round_timeout_ms must be greater than 0".into(),
+            ));
+        }
+        if self.max_round_extensions == 0 {
+            return Err(ChainError::Config(
+                "malachite validator.max_round_extensions must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for ValidatorSelectionConfig {
+    fn default() -> Self {
+        Self {
+            validator_set_size: 100,
+            witness_count: 16,
+            vrf_threshold_curve: "linear:v0.6-b0.2".to_string(),
+            epoch_duration_secs: 86_400,
+            round_timeout_ms: 6_000,
+            max_round_extensions: 3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MalachiteReputationConfig {
+    pub tier_thresholds: TierThresholds,
+    pub weights: ReputationWeights,
+    pub decay_interval_secs: u64,
+    pub decay_factor: f64,
+    pub snapshot_interval_secs: u64,
+    pub max_snapshot_age_secs: u64,
+    pub timetoke: MalachiteTimetokeConfig,
+}
+
+impl MalachiteReputationConfig {
+    fn validate(&self) -> ChainResult<()> {
+        self.weights.validate().map_err(|err| {
+            ChainError::Config(format!("malachite reputation.weights invalid: {err}"))
+        })?;
+        if self.decay_interval_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.decay_interval_secs must be greater than 0".into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.decay_factor) {
+            return Err(ChainError::Config(
+                "malachite reputation.decay_factor must be within [0.0, 1.0]".into(),
+            ));
+        }
+        if self.snapshot_interval_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.snapshot_interval_secs must be greater than 0".into(),
+            ));
+        }
+        if self.max_snapshot_age_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.max_snapshot_age_secs must be greater than 0".into(),
+            ));
+        }
+        self.timetoke.validate()?;
+        Ok(())
+    }
+
+    pub fn reputation_params(&self) -> ReputationParams {
+        ReputationParams {
+            weights: self.weights.clone(),
+            tier_thresholds: self.tier_thresholds.clone(),
+            decay_interval_secs: self.decay_interval_secs,
+            decay_factor: self.decay_factor,
+        }
+    }
+
+    pub fn timetoke_params(&self) -> TimetokeParams {
+        TimetokeParams {
+            minimum_window_secs: self.timetoke.minimum_window_secs,
+            accrual_cap_hours: self.timetoke.accrual_cap_hours,
+            decay_interval_secs: self.timetoke.decay_interval_secs,
+            decay_step_hours: self.timetoke.decay_step_hours,
+            sync_interval_secs: self.timetoke.sync_interval_secs,
+        }
+    }
+}
+
+impl Default for MalachiteReputationConfig {
+    fn default() -> Self {
+        let reputation = ReputationParams::default();
+        let timetoke = TimetokeParams::default();
+        Self {
+            tier_thresholds: reputation.tier_thresholds,
+            weights: reputation.weights,
+            decay_interval_secs: reputation.decay_interval_secs,
+            decay_factor: reputation.decay_factor,
+            snapshot_interval_secs: 600,
+            max_snapshot_age_secs: 3_600,
+            timetoke: MalachiteTimetokeConfig {
+                minimum_window_secs: timetoke.minimum_window_secs,
+                accrual_cap_hours: timetoke.accrual_cap_hours,
+                decay_interval_secs: timetoke.decay_interval_secs,
+                decay_step_hours: timetoke.decay_step_hours,
+                sync_interval_secs: timetoke.sync_interval_secs,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MalachiteTimetokeConfig {
+    pub minimum_window_secs: u64,
+    pub accrual_cap_hours: u64,
+    pub decay_interval_secs: u64,
+    pub decay_step_hours: u64,
+    pub sync_interval_secs: u64,
+}
+
+impl MalachiteTimetokeConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.minimum_window_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.timetoke.minimum_window_secs must be greater than 0".into(),
+            ));
+        }
+        if self.accrual_cap_hours == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.timetoke.accrual_cap_hours must be greater than 0".into(),
+            ));
+        }
+        if self.decay_interval_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.timetoke.decay_interval_secs must be greater than 0".into(),
+            ));
+        }
+        if self.decay_step_hours == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.timetoke.decay_step_hours must be greater than 0".into(),
+            ));
+        }
+        if self.sync_interval_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite reputation.timetoke.sync_interval_secs must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for MalachiteTimetokeConfig {
+    fn default() -> Self {
+        let params = TimetokeParams::default();
+        Self {
+            minimum_window_secs: params.minimum_window_secs,
+            accrual_cap_hours: params.accrual_cap_hours,
+            decay_interval_secs: params.decay_interval_secs,
+            decay_step_hours: params.decay_step_hours,
+            sync_interval_secs: params.sync_interval_secs,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MalachiteRewardsConfig {
+    pub base_block_reward: u64,
+    pub leader_bonus_pct: f64,
+    pub witness_reward_pct: f64,
+    pub double_sign_penalty: u64,
+    pub fake_proof_penalty: u64,
+    pub inactivity_penalty: u64,
+}
+
+impl MalachiteRewardsConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.base_block_reward == 0 {
+            return Err(ChainError::Config(
+                "malachite rewards.base_block_reward must be greater than 0".into(),
+            ));
+        }
+        for (name, value) in [
+            ("leader_bonus_pct", self.leader_bonus_pct),
+            ("witness_reward_pct", self.witness_reward_pct),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(ChainError::Config(format!(
+                    "malachite rewards.{name} must be within [0.0, 1.0]"
+                )));
+            }
+        }
+        if self.double_sign_penalty == 0 {
+            return Err(ChainError::Config(
+                "malachite rewards.double_sign_penalty must be greater than 0".into(),
+            ));
+        }
+        if self.fake_proof_penalty == 0 {
+            return Err(ChainError::Config(
+                "malachite rewards.fake_proof_penalty must be greater than 0".into(),
+            ));
+        }
+        if self.inactivity_penalty == 0 {
+            return Err(ChainError::Config(
+                "malachite rewards.inactivity_penalty must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for MalachiteRewardsConfig {
+    fn default() -> Self {
+        Self {
+            base_block_reward: 100_000_000,
+            leader_bonus_pct: 0.15,
+            witness_reward_pct: 0.25,
+            double_sign_penalty: 50_000_000,
+            fake_proof_penalty: 50_000_000,
+            inactivity_penalty: 25_000_000,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MalachiteProofConfig {
+    pub proof_batch_size: usize,
+    pub proof_cache_ttl_secs: u64,
+    pub max_recursive_depth: u32,
+}
+
+impl MalachiteProofConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.proof_batch_size == 0 {
+            return Err(ChainError::Config(
+                "malachite proof.proof_batch_size must be greater than 0".into(),
+            ));
+        }
+        if self.proof_cache_ttl_secs == 0 {
+            return Err(ChainError::Config(
+                "malachite proof.proof_cache_ttl_secs must be greater than 0".into(),
+            ));
+        }
+        if self.max_recursive_depth == 0 {
+            return Err(ChainError::Config(
+                "malachite proof.max_recursive_depth must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for MalachiteProofConfig {
+    fn default() -> Self {
+        Self {
+            proof_batch_size: 64,
+            proof_cache_ttl_secs: 900,
+            max_recursive_depth: 4,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MalachiteNetworkConfig {
+    pub gossip_fanout: usize,
+    pub max_channel_buffer: usize,
+    pub rate_limit_per_channel: u64,
+    pub max_block_size_bytes: usize,
+    pub max_votes_per_round: usize,
+}
+
+impl MalachiteNetworkConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.gossip_fanout == 0 {
+            return Err(ChainError::Config(
+                "malachite network.gossip_fanout must be greater than 0".into(),
+            ));
+        }
+        if self.max_channel_buffer == 0 {
+            return Err(ChainError::Config(
+                "malachite network.max_channel_buffer must be greater than 0".into(),
+            ));
+        }
+        if self.rate_limit_per_channel == 0 {
+            return Err(ChainError::Config(
+                "malachite network.rate_limit_per_channel must be greater than 0".into(),
+            ));
+        }
+        if self.max_block_size_bytes == 0 {
+            return Err(ChainError::Config(
+                "malachite network.max_block_size_bytes must be greater than 0".into(),
+            ));
+        }
+        if self.max_votes_per_round == 0 {
+            return Err(ChainError::Config(
+                "malachite network.max_votes_per_round must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for MalachiteNetworkConfig {
+    fn default() -> Self {
+        Self {
+            gossip_fanout: 12,
+            max_channel_buffer: 1_024,
+            rate_limit_per_channel: 128,
+            max_block_size_bytes: 2_097_152,
+            max_votes_per_round: 500,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -122,6 +553,8 @@ pub struct NodeConfig {
     pub reputation: ReputationConfig,
     #[serde(default)]
     pub queue_weights: QueueWeightsConfig,
+    #[serde(skip)]
+    pub malachite: MalachiteConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -179,8 +612,11 @@ fn default_max_proof_size_bytes() -> usize {
 impl NodeConfig {
     pub fn load(path: &Path) -> ChainResult<Self> {
         let content = fs::read_to_string(path)?;
-        let config: Self = toml::from_str(&content)
+        let mut config: Self = toml::from_str(&content)
             .map_err(|err| ChainError::Config(format!("unable to parse config: {err}")))?;
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let malachite_path = base.join(MALACHITE_CONFIG_FILE);
+        config.malachite = MalachiteConfig::load_from_path(&malachite_path)?;
         config.validate()?;
         Ok(config)
     }
@@ -223,10 +659,20 @@ impl NodeConfig {
     }
 
     pub fn reputation_params(&self) -> ReputationParams {
-        self.reputation.reputation_params()
+        self.reputation
+            .reputation_params(&self.malachite.reputation)
+    }
+
+    pub fn validator_set_size(&self) -> usize {
+        self.malachite.validator.validator_set_size
+    }
+
+    pub fn timetoke_params(&self) -> TimetokeParams {
+        self.malachite.reputation.timetoke_params()
     }
 
     pub fn validate(&self) -> ChainResult<()> {
+        self.malachite.validate()?;
         let version = self.config_version.trim();
         if version.is_empty() {
             return Err(ChainError::Config(
@@ -331,6 +777,7 @@ impl Default for NodeConfig {
             genesis: GenesisConfig::default(),
             reputation: ReputationConfig::default(),
             queue_weights: QueueWeightsConfig::default(),
+            malachite: MalachiteConfig::default(),
         }
     }
 }
@@ -381,28 +828,29 @@ impl Default for QueueWeightsConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReputationConfig {
-    pub tier_thresholds: TierThresholds,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier_thresholds: Option<TierThresholds>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub weights: Option<ReputationWeights>,
 }
 
 impl ReputationConfig {
-    pub fn reputation_params(&self) -> ReputationParams {
-        let weights = self
-            .weights
-            .clone()
-            .unwrap_or_else(ReputationWeights::default);
-        ReputationParams {
-            weights,
-            tier_thresholds: self.tier_thresholds.clone(),
-            ..ReputationParams::default()
+    pub fn reputation_params(&self, defaults: &MalachiteReputationConfig) -> ReputationParams {
+        let mut params = defaults.reputation_params();
+        if let Some(thresholds) = &self.tier_thresholds {
+            params.tier_thresholds = thresholds.clone();
         }
+        if let Some(weights) = &self.weights {
+            params.weights = weights.clone();
+        }
+        params
     }
 }
 
 impl Default for ReputationConfig {
     fn default() -> Self {
         Self {
-            tier_thresholds: TierThresholds::default(),
+            tier_thresholds: None,
             weights: None,
         }
     }
@@ -411,6 +859,8 @@ impl Default for ReputationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn reputation_config_applies_weight_overrides() {
@@ -419,12 +869,13 @@ mod tests {
             weights: Some(custom.clone()),
             ..Default::default()
         };
+        let defaults = MalachiteReputationConfig::default();
 
-        let params = config.reputation_params();
+        let params = config.reputation_params(&defaults);
         assert!((params.weights.validation() - custom.validation()).abs() < f64::EPSILON);
         assert!((params.weights.decay() - custom.decay()).abs() < f64::EPSILON);
 
-        let default_params = ReputationConfig::default().reputation_params();
+        let default_params = ReputationConfig::default().reputation_params(&defaults);
         assert!(
             (default_params.weights.validation() - ReputationWeights::default().validation()).abs()
                 < f64::EPSILON
@@ -521,6 +972,77 @@ mod tests {
             }
             other => panic!("unexpected error: {:?}", other),
         }
+    }
+
+    #[test]
+    fn malachite_config_uses_defaults_when_missing() {
+        let dir = tempdir().expect("tempdir");
+        let missing = dir.path().join("missing.toml");
+        let config = MalachiteConfig::load_from_path(&missing).expect("default malachite config");
+        assert_eq!(
+            config.validator.validator_set_size,
+            ValidatorSelectionConfig::default().validator_set_size
+        );
+    }
+
+    #[test]
+    fn malachite_config_rejects_incompatible_version() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("malachite.toml");
+        fs::write(
+            &path,
+            r#"config_version = "2.0.0"
+
+[validator]
+validator_set_size = 100
+witness_count = 16
+vrf_threshold_curve = "curve"
+epoch_duration_secs = 3600
+round_timeout_ms = 1000
+max_round_extensions = 1
+"#,
+        )
+        .expect("write malachite config");
+
+        let error = MalachiteConfig::load_from_path(&path).expect_err("version check should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("config_version"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_loads_adjacent_malachite_file() {
+        let dir = tempdir().expect("tempdir");
+        let node_path = dir.path().join("node.toml");
+        let malachite_path = dir.path().join("malachite.toml");
+
+        let mut node = NodeConfig::default();
+        node.save(&node_path).expect("write node config");
+
+        fs::write(
+            &malachite_path,
+            r#"config_version = "1.0.0"
+
+[validator]
+validator_set_size = 77
+witness_count = 16
+vrf_threshold_curve = "curve"
+epoch_duration_secs = 7200
+round_timeout_ms = 2000
+max_round_extensions = 2
+"#,
+        )
+        .expect("write malachite config");
+
+        let loaded = NodeConfig::load(&node_path).expect("load node config");
+        assert_eq!(loaded.validator_set_size(), 77);
     }
 }
 
