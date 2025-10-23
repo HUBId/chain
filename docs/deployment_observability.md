@@ -162,6 +162,26 @@ threaten block production.
    handy so operators can replay WALs, restore snapshots, and verify pruning
    checkpoints when a node requires manual repair.【F:docs/storage_recovery.md†L1-L53】
 
+## Reputation & Slashing Audit Trails
+
+1. **Collect signed JSONL exports.** The runtime now persists
+   `/audits/reputation/*.jsonl` and `/audits/slashing/*.jsonl` files beneath the
+   node `data_dir`, rotating them every 24 hours and retaining the newest 30
+   files per stream. Each record includes a deterministic `evidence_hash` and an
+   Ed25519 `signature` produced with the node keypair so operators can prove the
+   node’s view of any reputation change or slashing decision.【F:rpp/runtime/node.rs†L608-L763】【F:rpp/storage/ledger.rs†L88-L131】【F:rpp/storage/ledger.rs†L390-L436】
+2. **Provide on-demand access.** Two new RPC endpoints expose the most recent
+   records without requiring direct filesystem access:
+   `/observability/audits/reputation?limit=N` and
+   `/observability/audits/slashing?limit=N`. Both default to the latest 200
+   events (capped at 1,000) and return the signed payloads as delivered in the
+   export stream.【F:rpp/rpc/api.rs†L1088-L1135】
+3. **Meet compliance retention targets.** Downstream archival systems should
+   ingest the JSONL exports before the node prunes older files. Because each
+   entry carries the node signature and a reproducible evidence hash,
+   environments that require non-repudiation can verify authenticity without
+   re-deriving state from block data.【F:rpp/runtime/node.rs†L330-L370】【F:rpp/runtime/node.rs†L3830-L3890】
+
 With these guardrails, operators can ship the blueprint implementation safely
 and maintain real-time visibility into proof generation, verification, and
 network health.
