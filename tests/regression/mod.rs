@@ -393,6 +393,8 @@ async fn regression_snapshot_recovery_restores_state() -> Result<()> {
         None => return Ok(()),
     };
 
+    let started = Instant::now();
+
     cluster
         .wait_for_full_mesh(NETWORK_TIMEOUT)
         .await
