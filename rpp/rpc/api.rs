@@ -1,5 +1,7 @@
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -31,7 +33,7 @@ use crate::node::{
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
-use crate::runtime::config::QueueWeightsConfig;
+use crate::runtime::config::{P2pAllowlistEntry, QueueWeightsConfig};
 use crate::runtime::RuntimeMode;
 use crate::sync::ReconstructionPlan;
 use crate::types::{
@@ -44,7 +46,10 @@ use crate::wallet::{
 #[cfg(feature = "vendor_electrs")]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
 use parking_lot::RwLock;
-use rpp_p2p::{NetworkMetaTelemetryReport, NetworkStateSyncChunk, NetworkStateSyncPlan};
+use rpp_p2p::vendor::PeerId as NetworkPeerId;
+use rpp_p2p::{
+    AllowlistedPeer, NetworkMetaTelemetryReport, NetworkStateSyncChunk, NetworkStateSyncPlan,
+};
 
 #[derive(Clone)]
 pub struct ApiContext {
@@ -455,6 +460,14 @@ struct UpdateMempoolRequest {
     fee_weight: Option<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct UpdateAccessListsRequest {
+    #[serde(default)]
+    allowlist: Vec<P2pAllowlistEntry>,
+    #[serde(default)]
+    blocklist: Vec<String>,
+}
+
 fn apply_cors_headers(headers: &mut HeaderMap, origin: &HeaderValue) {
     headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.clone());
     headers.insert(
@@ -543,6 +556,7 @@ pub async fn serve(
         .route("/validator/vrf", get(validator_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
         .route("/p2p/peers", get(p2p_meta_telemetry))
+        .route("/p2p/access-lists", post(update_access_lists))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
         .route("/control/mempool", post(update_mempool_limits))
@@ -982,6 +996,58 @@ async fn mempool_status(
         .map_err(to_http_error)
 }
 
+async fn update_access_lists(
+    State(state): State<ApiContext>,
+    Json(request): Json<UpdateAccessListsRequest>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+
+    let mut allowlist = Vec::with_capacity(request.allowlist.len());
+    let mut allow_seen = HashSet::new();
+    for entry in request.allowlist {
+        let peer = NetworkPeerId::from_str(&entry.peer_id).map_err(|err| {
+            bad_request(format!("invalid allowlist peer `{}`: {err}", entry.peer_id))
+        })?;
+        if !allow_seen.insert(peer.clone()) {
+            return Err(bad_request(format!(
+                "duplicate allowlist entry for peer `{}`",
+                entry.peer_id
+            )));
+        }
+        allowlist.push(AllowlistedPeer {
+            peer,
+            tier: entry.tier,
+        });
+    }
+
+    let mut blocklist = Vec::with_capacity(request.blocklist.len());
+    let mut block_seen = HashSet::new();
+    for value in request.blocklist {
+        let peer = NetworkPeerId::from_str(&value)
+            .map_err(|err| bad_request(format!("invalid blocklist peer `{value}`: {err}")))?;
+        if !block_seen.insert(peer.clone()) {
+            return Err(bad_request(format!(
+                "duplicate blocklist entry for peer `{value}`"
+            )));
+        }
+        blocklist.push(peer);
+    }
+
+    for entry in &allowlist {
+        if block_seen.contains(&entry.peer) {
+            return Err(bad_request(format!(
+                "peer `{}` cannot be in allowlist and blocklist",
+                entry.peer.to_base58()
+            )));
+        }
+    }
+
+    node.reload_access_lists(allowlist, blocklist)
+        .await
+        .map_err(to_http_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn update_mempool_limits(
     State(state): State<ApiContext>,
     Json(request): Json<UpdateMempoolRequest>,
@@ -1364,6 +1430,15 @@ fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {
         status,
         Json(ErrorResponse {
             error: err.to_string(),
+        }),
+    )
+}
+
+fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: message.into(),
         }),
     )
 }

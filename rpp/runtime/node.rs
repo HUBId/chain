@@ -84,9 +84,10 @@ use crate::zk::rpp_adapter::compute_public_digest;
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
 use libp2p::PeerId;
+use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    GossipTopic, HandshakePayload, NetworkLightClientUpdate, NetworkStateSyncChunk,
-    NetworkStateSyncPlan, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    AllowlistedPeer, GossipTopic, HandshakePayload, NetworkLightClientUpdate,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -1527,6 +1528,14 @@ impl NodeHandle {
         self.inner.meta_telemetry_snapshot().await
     }
 
+    pub async fn reload_access_lists(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<NetworkPeerId>,
+    ) -> ChainResult<()> {
+        self.inner.reload_access_lists(allowlist, blocklist).await
+    }
+
     pub fn run_pruning_cycle(&self, chunk_size: usize) -> ChainResult<Option<PruningJobStatus>> {
         self.inner.run_pruning_cycle(chunk_size)
     }
@@ -1691,6 +1700,20 @@ impl NodeInner {
             .meta_telemetry_snapshot()
             .await
             .map_err(|err| ChainError::Config(format!("failed to collect meta telemetry: {err}")))
+    }
+
+    async fn reload_access_lists(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<NetworkPeerId>,
+    ) -> ChainResult<()> {
+        let handle = self
+            .p2p_handle()
+            .ok_or_else(|| ChainError::Config("p2p runtime not initialised".into()))?;
+        handle
+            .reload_access_lists(allowlist, blocklist)
+            .await
+            .map_err(|err| ChainError::Config(format!("failed to reload access lists: {err}")))
     }
 
     fn p2p_handle(&self) -> Option<P2pHandle> {

@@ -126,6 +126,50 @@ fn blocklisted_peers_are_banned_and_rejected() {
     }
 }
 
+#[test]
+fn access_lists_can_be_reloaded_and_persisted() {
+    let dir = tempdir().expect("tmp");
+    let path = dir.path().join("peerstore.json");
+    let allow_peer = PeerId::from(identity::Keypair::generate_ed25519().public());
+    let block_peer = PeerId::from(identity::Keypair::generate_ed25519().public());
+
+    {
+        let store = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("peerstore");
+        store
+            .reload_access_lists(
+                vec![AllowlistedPeer {
+                    peer: allow_peer.clone(),
+                    tier: TierLevel::Tl3,
+                }],
+                vec![block_peer.clone()],
+            )
+            .expect("reload");
+        assert!(store.is_blocklisted(&block_peer));
+        assert_eq!(store.tier_of(&allow_peer), TierLevel::Tl3);
+    }
+
+    let reopened = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("peerstore");
+    assert!(reopened.is_blocklisted(&block_peer));
+    assert_eq!(reopened.tier_of(&allow_peer), TierLevel::Tl3);
+}
+
+#[test]
+fn blocklist_reload_clears_removed_entries() {
+    let store = Peerstore::open(PeerstoreConfig::memory()).expect("peerstore");
+    let peer = PeerId::from(identity::Keypair::generate_ed25519().public());
+
+    store
+        .reload_access_lists(Vec::new(), vec![peer.clone()])
+        .expect("reload");
+    assert!(store.is_blocklisted(&peer));
+
+    store
+        .reload_access_lists(Vec::new(), Vec::new())
+        .expect("reload");
+    assert!(!store.is_blocklisted(&peer));
+    assert!(store.is_banned(&peer).is_none());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn custom_gossip_limits_penalise_fast_publishers() {
     let dir = tempdir().expect("tmp");
