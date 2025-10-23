@@ -80,6 +80,8 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
     - Netz-Simulator (lokal via Tokio oder verteilte Container) mit 20+ Peers.
     - Metriken für Latenz, Gossip-Mesh-Stabilität, Reputation-Drift.
     - DoD: Simulation läuft automatisiert, produziert Report.
+    - CI-Integration: `scripts/ci/sim_smoke.sh` ruft `cargo test -p rpp-sim --features ci-sim --test sim_smoke` auf und archiviert `target/sim-smoke-summary.json` sowie Detailverzeichnisse unter `ci-artifacts/sim-smoke/`.
+    - Laufzeitüberwachung: Ziel < 10 Minuten pro Run; Thresholds via GitHub Action Timeout (15 Minuten) oder Pipeline-Konfiguration absichern.
 
 ## Cross-Cutting Deliverables
 - **Dokumentation:** Architekturgrafik, Config-Referenz, Operator-Guides.
