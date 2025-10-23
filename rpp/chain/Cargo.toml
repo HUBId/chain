@@ -50,7 +50,7 @@ vendor_electrs = [
 
 [dependencies]
 anyhow = "1"
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.7", features = ["json", "sse"] }
 base64 = "0.21"
 blake2 = "0.10"
 blake3 = "1.8"
@@ -80,6 +80,7 @@ storage-firewood = { path = "../../storage-firewood" }
 stwo = { package = "stwo-official", path = "../zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo", default-features = false, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 toml = "0.8"
 tower = { version = "0.4", features = ["limit", "util"] }
 tracing.workspace = true

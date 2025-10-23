@@ -100,3 +100,46 @@ export interface NodeTelemetrySnapshot {
   verifier_metrics: Record<string, unknown>;
   pruning?: Record<string, unknown> | null;
 }
+
+export type PipelineStage =
+  | 'GossipReceived'
+  | 'MempoolAccepted'
+  | 'LeaderElected'
+  | 'BftFinalised'
+  | 'FirewoodCommitted'
+  | 'RewardsDistributed';
+
+export const PIPELINE_STAGE_ORDER: readonly PipelineStage[] = [
+  'GossipReceived',
+  'MempoolAccepted',
+  'LeaderElected',
+  'BftFinalised',
+  'FirewoodCommitted',
+  'RewardsDistributed',
+] as const;
+
+export interface PipelineFlowSnapshot {
+  hash: string;
+  origin: string;
+  target_nonce: number;
+  expected_balance: string;
+  stages: Partial<Record<PipelineStage, number>>;
+  commit_height?: number | null;
+}
+
+export interface PipelineDashboardSnapshot {
+  flows: PipelineFlowSnapshot[];
+}
+
+export interface PipelineErrorPayload {
+  stage: string;
+  height: number;
+  round: number;
+  block_hash?: string | null;
+  message: string;
+  observed_at_ms: number;
+}
+
+export type PipelineEvent =
+  | { type: 'dashboard'; snapshot: PipelineDashboardSnapshot }
+  | { type: 'error'; error: PipelineErrorPayload };
