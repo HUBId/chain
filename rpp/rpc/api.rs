@@ -313,6 +313,11 @@ struct SlashingQuery {
 }
 
 #[derive(Deserialize)]
+struct AuditStreamQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
 struct TimetokeSyncRequest {
     records: Vec<TimetokeRecord>,
 }
@@ -571,6 +576,11 @@ pub async fn serve(
         .route("/ledger/timetoke", get(timetoke_snapshot))
         .route("/ledger/timetoke/sync", post(sync_timetoke))
         .route("/ledger/reputation/:address", get(reputation_audit))
+        .route(
+            "/observability/audits/reputation",
+            get(reputation_audit_stream),
+        )
+        .route("/observability/audits/slashing", get(slashing_audit_stream))
         .route("/blocks/latest", get(latest_block))
         .route("/blocks/:height", get(block_by_height))
         .route("/accounts/:address", get(account_info))
@@ -1117,6 +1127,18 @@ async fn slashing_events(
         .map_err(to_http_error)
 }
 
+async fn slashing_audit_stream(
+    State(state): State<ApiContext>,
+    Query(query): Query<AuditStreamQuery>,
+) -> Result<Json<Vec<SlashingEvent>>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(200).min(1000);
+    state
+        .require_node()?
+        .audit_slashing_stream(limit)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
 async fn timetoke_snapshot(
     State(state): State<ApiContext>,
 ) -> Result<Json<Vec<TimetokeRecord>>, (StatusCode, Json<ErrorResponse>)> {
@@ -1145,6 +1167,18 @@ async fn reputation_audit(
     state
         .require_node()?
         .reputation_audit(&address)
+        .map(Json)
+        .map_err(to_http_error)
+}
+
+async fn reputation_audit_stream(
+    State(state): State<ApiContext>,
+    Query(query): Query<AuditStreamQuery>,
+) -> Result<Json<Vec<ReputationAudit>>, (StatusCode, Json<ErrorResponse>)> {
+    let limit = query.limit.unwrap_or(200).min(1000);
+    state
+        .require_node()?
+        .audit_reputation_stream(limit)
         .map(Json)
         .map_err(to_http_error)
 }

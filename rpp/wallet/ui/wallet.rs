@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, btree_map::Entry as BTreeEntry};
+use std::collections::{btree_map::Entry as BTreeEntry, BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -9,16 +9,16 @@ use malachite::Natural;
 #[cfg(feature = "vendor_electrs")]
 use parking_lot::Mutex;
 use parking_lot::RwLock;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Serialize};
 #[cfg(feature = "vendor_electrs")]
 use serde_json;
 #[cfg(feature = "vendor_electrs")]
 use std::path::Path;
-use tokio::sync::Mutex as AsyncMutex;
 #[cfg(feature = "vendor_electrs")]
 use tokio::sync::broadcast;
 #[cfg(feature = "vendor_electrs")]
 use tokio::sync::watch;
+use tokio::sync::Mutex as AsyncMutex;
 #[cfg(feature = "vendor_electrs")]
 use tokio::task::JoinHandle;
 #[cfg(feature = "vendor_electrs")]
@@ -27,11 +27,12 @@ use tokio::time;
 use crate::config::NodeConfig;
 use crate::consensus::evaluate_vrf;
 use crate::crypto::{
-    StoredVrfKeypair, VrfKeypair, address_from_public_key, generate_vrf_keypair, sign_message,
-    vrf_public_key_from_hex, vrf_public_key_to_hex, vrf_secret_key_from_hex, vrf_secret_key_to_hex,
+    address_from_public_key, generate_vrf_keypair, sign_message, vrf_public_key_from_hex,
+    vrf_public_key_to_hex, vrf_secret_key_from_hex, vrf_secret_key_to_hex, StoredVrfKeypair,
+    VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
-use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger, ReputationAudit};
+use crate::ledger::{Ledger, ReputationAudit, DEFAULT_EPOCH_LENGTH};
 use crate::node::NodeHandle;
 use crate::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::proof_system::ProofProver;
@@ -58,18 +59,18 @@ use rpp::runtime::node::MempoolStatus;
 use rpp_p2p::GossipTopic;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
-#[cfg(all(feature = "vendor_electrs", feature = "backend-rpp-stark"))]
-use rpp_wallet::vendor::electrs::StoredVrfAudit;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::init::{ElectrsHandles, initialize};
+use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::Script;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::types::{
-    LedgerScriptPayload, ScriptHash, StatusDigest, encode_ledger_script,
+    encode_ledger_script, LedgerScriptPayload, ScriptHash, StatusDigest,
 };
+#[cfg(all(feature = "vendor_electrs", feature = "backend-rpp-stark"))]
+use rpp_wallet::vendor::electrs::StoredVrfAudit;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::{
     HistoryEntry as ElectrsHistoryEntry, HistoryEntryWithMetadata, ScriptHashStatus,
@@ -77,7 +78,7 @@ use rpp_wallet::vendor::electrs::{
 #[cfg(feature = "vendor_electrs")]
 use sha2::{Digest, Sha256};
 
-use super::{WalletNodeRuntime, start_node};
+use super::{start_node, WalletNodeRuntime};
 
 use super::tabs::{HistoryEntry, HistoryStatus, NodeTabMetrics, ReceiveTabAddress, SendPreview};
 
@@ -1510,20 +1511,7 @@ impl Wallet {
             .storage
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
-        Ok(ReputationAudit {
-            address: account.address.clone(),
-            balance: account.balance,
-            stake: account.stake.to_string(),
-            score: account.reputation.score,
-            tier: account.reputation.tier.clone(),
-            uptime_hours: account.reputation.timetokes.hours_online,
-            consensus_success: account.reputation.consensus_success,
-            peer_feedback: account.reputation.peer_feedback,
-            last_decay_timestamp: account.reputation.last_decay_timestamp,
-            zsi_validated: account.reputation.zsi.validated,
-            zsi_commitment: account.reputation.zsi.public_key_commitment.clone(),
-            zsi_reputation_proof: account.reputation.zsi.reputation_proof.clone(),
-        })
+        Ok(ReputationAudit::from_account(&account))
     }
 }
 

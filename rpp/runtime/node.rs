@@ -15,6 +15,9 @@
 //! snapshot views without leaking internal locks.
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -31,7 +34,7 @@ use tracing::Span;
 use tracing::{debug, error, info, warn};
 
 use hex;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json;
 
 use crate::config::{
@@ -543,6 +546,7 @@ pub(crate) struct NodeInner {
     witness_channels: WitnessChannels,
     p2p_runtime: ParkingMutex<Option<P2pHandle>>,
     consensus_telemetry: Arc<ConsensusTelemetry>,
+    audit_exporter: AuditExporter,
 }
 
 enum FinalizationContext {
@@ -603,6 +607,167 @@ pub struct NetworkIdentityProfile {
     pub vrf_public_key: Vec<u8>,
     pub vrf_proof: Vec<u8>,
     pub feature_gates: FeatureGates,
+}
+
+struct AuditExporter {
+    reputation: AuditStream,
+    slashing: AuditStream,
+}
+
+impl AuditExporter {
+    fn new(base_dir: &Path) -> ChainResult<Self> {
+        fs::create_dir_all(base_dir)?;
+        let reputation = AuditStream::new(base_dir.join("reputation"), "reputation")?;
+        let slashing = AuditStream::new(base_dir.join("slashing"), "slashing")?;
+        Ok(Self {
+            reputation,
+            slashing,
+        })
+    }
+
+    fn export_reputation(&self, audit: &ReputationAudit) -> ChainResult<()> {
+        self.reputation.append(audit)
+    }
+
+    fn export_slashing(&self, event: &SlashingEvent) -> ChainResult<()> {
+        self.slashing.append(event)
+    }
+
+    fn recent_reputation(&self, limit: usize) -> ChainResult<Vec<ReputationAudit>> {
+        self.reputation.tail(limit)
+    }
+
+    fn recent_slashing(&self, limit: usize) -> ChainResult<Vec<SlashingEvent>> {
+        self.slashing.tail(limit)
+    }
+}
+
+struct AuditStream {
+    directory: PathBuf,
+    prefix: &'static str,
+    rotation: Duration,
+    retention: usize,
+    state: ParkingMutex<Option<ActiveAuditFile>>,
+}
+
+impl AuditStream {
+    fn new(directory: PathBuf, prefix: &'static str) -> ChainResult<Self> {
+        fs::create_dir_all(&directory)?;
+        Ok(Self {
+            directory,
+            prefix,
+            rotation: Duration::from_secs(24 * 60 * 60),
+            retention: 30,
+            state: ParkingMutex::new(None),
+        })
+    }
+
+    fn append<T: Serialize>(&self, record: &T) -> ChainResult<()> {
+        let now = SystemTime::now();
+        let mut guard = self.state.lock();
+        let file = self.ensure_file(now, &mut guard)?;
+        serde_json::to_writer(&mut file.writer, record)
+            .map_err(|err| ChainError::Config(format!("failed to encode audit record: {err}")))?;
+        file.writer.write_all(b"\n")?;
+        file.writer.flush()?;
+        Ok(())
+    }
+
+    fn tail<T>(&self, limit: usize) -> ChainResult<Vec<T>>
+    where
+        T: DeserializeOwned,
+    {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if let Some(state) = self.state.lock().as_mut() {
+            state.writer.flush()?;
+        }
+        let mut entries = fs::read_dir(&self.directory)?
+            .filter_map(|entry| match entry {
+                Ok(entry) if entry.path().is_file() => Some(entry.path()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        let mut tail = std::collections::VecDeque::with_capacity(limit);
+        for path in entries {
+            let file = File::open(&path)?;
+            let reader = BufReader::new(file);
+            for line in reader.lines() {
+                let line = line?;
+                let record: T = serde_json::from_str(&line).map_err(|err| {
+                    ChainError::Config(format!(
+                        "failed to decode audit record from {}: {err}",
+                        path.display()
+                    ))
+                })?;
+                if tail.len() == limit {
+                    tail.pop_front();
+                }
+                tail.push_back(record);
+            }
+        }
+        Ok(tail.into_iter().collect())
+    }
+
+    fn ensure_file<'a>(
+        &self,
+        now: SystemTime,
+        state: &'a mut Option<ActiveAuditFile>,
+    ) -> ChainResult<&'a mut ActiveAuditFile> {
+        let rotate = match state {
+            Some(current) => {
+                now.duration_since(current.opened_at).unwrap_or_default() >= self.rotation
+            }
+            None => true,
+        };
+        if rotate {
+            *state = Some(self.open_file(now)?);
+            self.prune_old_files()?;
+        }
+        Ok(state.as_mut().expect("audit file initialized"))
+    }
+
+    fn open_file(&self, now: SystemTime) -> ChainResult<ActiveAuditFile> {
+        let timestamp = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+        let path = self
+            .directory
+            .join(format!("{}-{}.jsonl", self.prefix, timestamp));
+        let file = File::create(&path)?;
+        Ok(ActiveAuditFile {
+            opened_at: now,
+            writer: BufWriter::new(file),
+            path,
+        })
+    }
+
+    fn prune_old_files(&self) -> ChainResult<()> {
+        let mut entries = fs::read_dir(&self.directory)?
+            .filter_map(|entry| match entry {
+                Ok(entry) if entry.path().is_file() => Some(entry.path()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        entries.sort();
+        while entries.len() > self.retention {
+            if let Some(path) = entries.first().cloned() {
+                if let Err(err) = fs::remove_file(&path) {
+                    warn!(?err, ?path, "failed to prune audit file");
+                }
+                entries.remove(0);
+            } else {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+struct ActiveAuditFile {
+    opened_at: SystemTime,
+    writer: BufWriter<File>,
+    path: PathBuf,
 }
 
 impl Node {
@@ -765,6 +930,7 @@ impl Node {
         let mempool_limit = config.mempool_limit;
         let queue_weights = config.queue_weights.clone();
         let consensus_telemetry = Arc::new(ConsensusTelemetry::default());
+        let audit_exporter = AuditExporter::new(&config.data_dir.join("audits"))?;
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -800,6 +966,7 @@ impl Node {
             witness_channels: WitnessChannels::new(128),
             p2p_runtime: ParkingMutex::new(None),
             consensus_telemetry,
+            audit_exporter,
         });
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
@@ -1608,6 +1775,14 @@ impl NodeHandle {
 
     pub fn reputation_audit(&self, address: &str) -> ChainResult<Option<ReputationAudit>> {
         self.inner.reputation_audit(address)
+    }
+
+    pub fn audit_slashing_stream(&self, limit: usize) -> ChainResult<Vec<SlashingEvent>> {
+        self.inner.recent_slashing_audits(limit)
+    }
+
+    pub fn audit_reputation_stream(&self, limit: usize) -> ChainResult<Vec<ReputationAudit>> {
+        self.inner.recent_reputation_audits(limit)
     }
 
     pub fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
@@ -3334,7 +3509,19 @@ impl NodeInner {
     }
 
     fn reputation_audit(&self, address: &str) -> ChainResult<Option<ReputationAudit>> {
-        self.ledger.reputation_audit(address)
+        let audit = self.ledger.reputation_audit(address)?;
+        Ok(audit.map(|mut audit| {
+            self.sign_reputation_audit(&mut audit);
+            audit
+        }))
+    }
+
+    fn recent_slashing_audits(&self, limit: usize) -> ChainResult<Vec<SlashingEvent>> {
+        self.audit_exporter.recent_slashing(limit)
+    }
+
+    fn recent_reputation_audits(&self, limit: usize) -> ChainResult<Vec<ReputationAudit>> {
+        self.audit_exporter.recent_reputation(limit)
     }
 
     fn build_local_vote(
@@ -3417,11 +3604,22 @@ impl NodeInner {
     }
 
     fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
-        self.ledger.slash_validator(address, reason)?;
+        let event = self
+            .ledger
+            .slash_validator(address, reason, Some(&self.keypair))?;
+        self.audit_exporter.export_slashing(&event)?;
         self.consensus_telemetry.record_slashing();
         self.update_runtime_metrics();
         self.maybe_refresh_local_identity(address);
         Ok(())
+    }
+
+    fn sign_reputation_audit(&self, audit: &mut ReputationAudit) {
+        if audit.signature.is_some() {
+            return;
+        }
+        let signature = sign_message(&self.keypair, audit.evidence_hash.as_bytes());
+        audit.signature = Some(signature_to_hex(&signature));
     }
 
     fn maybe_refresh_local_identity(&self, address: &str) {
@@ -3871,7 +4069,9 @@ impl NodeInner {
 
         let mut reputation_updates = Vec::new();
         for identity in touched_identities {
-            if let Some(audit) = self.ledger.reputation_audit(&identity)? {
+            if let Some(mut audit) = self.ledger.reputation_audit(&identity)? {
+                self.sign_reputation_audit(&mut audit);
+                self.audit_exporter.export_reputation(&audit)?;
                 reputation_updates.push(ReputationUpdate::from(audit));
             }
         }
@@ -4482,7 +4682,9 @@ impl NodeInner {
         }
         let mut expected_reputation = Vec::new();
         for identity in touched_identities {
-            if let Some(audit) = self.ledger.reputation_audit(&identity)? {
+            if let Some(mut audit) = self.ledger.reputation_audit(&identity)? {
+                self.sign_reputation_audit(&mut audit);
+                self.audit_exporter.export_reputation(&audit)?;
                 expected_reputation.push(ReputationUpdate::from(audit));
             }
         }

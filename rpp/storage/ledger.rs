@@ -1,13 +1,13 @@
-use std::collections::{BTreeSet, HashMap, HashSet, hash_map::Entry};
+use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet};
 use std::mem;
 
 use crate::proof_backend::Blake2sHasher;
 use parking_lot::RwLock;
 
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
-use crate::crypto::public_key_from_hex;
+use crate::crypto::{public_key_from_hex, sign_message, signature_to_hex};
 use crate::errors::{ChainError, ChainResult};
-use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree};
+use crate::identity_tree::{IdentityCommitmentProof, IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
 use crate::proof_system::ProofVerifierRegistry;
 use crate::reputation::{self, ReputationParams, Tier, TierRequirementError, TimetokeParams};
 use crate::rpp::{
@@ -24,7 +24,7 @@ use crate::types::{
     WalletBindingChange,
 };
 use crate::vrf::{VrfProof, VrfSelectionRecord};
-use ed25519_dalek::PublicKey;
+use ed25519_dalek::{Keypair, PublicKey};
 use hex;
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,9 @@ pub struct SlashingEvent {
     pub reason: SlashingReason,
     pub penalty_percent: u8,
     pub timestamp: u64,
+    pub evidence_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -106,6 +109,30 @@ pub struct ReputationAudit {
     pub zsi_validated: bool,
     pub zsi_commitment: String,
     pub zsi_reputation_proof: Option<String>,
+    pub evidence_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+impl ReputationAudit {
+    pub fn from_account(account: &Account) -> Self {
+        Self {
+            address: account.address.clone(),
+            balance: account.balance,
+            stake: account.stake.to_string(),
+            score: account.reputation.score,
+            tier: account.reputation.tier.clone(),
+            uptime_hours: account.reputation.timetokes.hours_online,
+            consensus_success: account.reputation.consensus_success,
+            peer_feedback: account.reputation.peer_feedback,
+            last_decay_timestamp: account.reputation.last_decay_timestamp,
+            zsi_validated: account.reputation.zsi.validated,
+            zsi_commitment: account.reputation.zsi.public_key_commitment.clone(),
+            zsi_reputation_proof: account.reputation.zsi.reputation_proof.clone(),
+            evidence_hash: reputation_evidence_hash(account),
+            signature: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -387,7 +414,12 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn slash_validator(&self, address: &str, reason: SlashingReason) -> ChainResult<()> {
+    pub fn slash_validator(
+        &self,
+        address: &str,
+        reason: SlashingReason,
+        signer: Option<&Keypair>,
+    ) -> ChainResult<SlashingEvent> {
         let module_before = self.module_records(address);
         let (timestamp, updated_account) = {
             let mut accounts = self.global_state.write_accounts();
@@ -406,12 +438,21 @@ impl Ledger {
             (timestamp, account.clone())
         };
         let mut log = self.slashing_log.write();
-        log.push(SlashingEvent {
+        let penalty_percent = reason.penalty_percent();
+        let evidence_hash = slashing_evidence_hash(address, reason, penalty_percent, timestamp);
+        let signature = signer.map(|signer| {
+            let signature = sign_message(signer, evidence_hash.as_bytes());
+            signature_to_hex(&signature)
+        });
+        let event = SlashingEvent {
             address: address.to_string(),
             reason,
-            penalty_percent: reason.penalty_percent(),
+            penalty_percent,
             timestamp,
-        });
+            evidence_hash,
+            signature,
+        };
+        log.push(event.clone());
         self.index_account_modules(&updated_account);
         let module_after = self.module_records(address);
         if let Some(reputation_after) = module_after.reputation.clone() {
@@ -423,7 +464,7 @@ impl Ledger {
                 reputation_after,
             ));
         }
-        Ok(())
+        Ok(event)
     }
 
     pub fn sync_epoch_for_height(&self, height: u64) {
@@ -1099,20 +1140,9 @@ impl Ledger {
 
     pub fn reputation_audit(&self, address: &str) -> ChainResult<Option<ReputationAudit>> {
         let accounts = self.global_state.read_accounts();
-        Ok(accounts.get(address).map(|account| ReputationAudit {
-            address: account.address.clone(),
-            balance: account.balance,
-            stake: account.stake.to_string(),
-            score: account.reputation.score,
-            tier: account.reputation.tier.clone(),
-            uptime_hours: account.reputation.timetokes.hours_online,
-            consensus_success: account.reputation.consensus_success,
-            peer_feedback: account.reputation.peer_feedback,
-            last_decay_timestamp: account.reputation.last_decay_timestamp,
-            zsi_validated: account.reputation.zsi.validated,
-            zsi_commitment: account.reputation.zsi.public_key_commitment.clone(),
-            zsi_reputation_proof: account.reputation.zsi.reputation_proof.clone(),
-        }))
+        Ok(accounts
+            .get(address)
+            .map(|account| ReputationAudit::from_account(account)))
     }
 
     fn index_account_modules(&self, account: &Account) {
@@ -1134,6 +1164,39 @@ fn map_tier_requirement_error(err: TierRequirementError) -> ChainError {
             "timetoke balance {available}h below required {required}h for transaction"
         )),
     }
+}
+
+fn reputation_evidence_hash(account: &Account) -> String {
+    let mut data = Vec::new();
+    data.extend_from_slice(account.address.as_bytes());
+    data.extend_from_slice(&account.balance.to_be_bytes());
+    data.extend_from_slice(account.stake.to_string().as_bytes());
+    data.extend_from_slice(&account.reputation.score.to_be_bytes());
+    data.push(account.reputation.tier as u8);
+    data.extend_from_slice(&account.reputation.timetokes.hours_online.to_be_bytes());
+    data.extend_from_slice(&account.reputation.consensus_success.to_be_bytes());
+    data.extend_from_slice(&account.reputation.peer_feedback.to_be_bytes());
+    data.extend_from_slice(&account.reputation.last_decay_timestamp.to_be_bytes());
+    data.push(account.reputation.zsi.validated as u8);
+    data.extend_from_slice(account.reputation.zsi.public_key_commitment.as_bytes());
+    if let Some(proof) = &account.reputation.zsi.reputation_proof {
+        data.extend_from_slice(proof.as_bytes());
+    }
+    hex::encode::<[u8; 32]>(Blake2sHasher::hash(&data).into())
+}
+
+fn slashing_evidence_hash(
+    address: &str,
+    reason: SlashingReason,
+    penalty_percent: u8,
+    timestamp: u64,
+) -> String {
+    let mut data = Vec::new();
+    data.extend_from_slice(address.as_bytes());
+    data.push(reason as u8);
+    data.push(penalty_percent);
+    data.extend_from_slice(&timestamp.to_be_bytes());
+    hex::encode::<[u8; 32]>(Blake2sHasher::hash(&data).into())
 }
 
 #[derive(Default, Clone)]
@@ -1222,7 +1285,7 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::{BftVote, BftVoteKind, SignedBftVote, evaluate_vrf};
+    use crate::consensus::{evaluate_vrf, BftVote, BftVoteKind, SignedBftVote};
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::proof_backend::Blake2sHasher;
     use crate::rpp::{
@@ -1231,17 +1294,17 @@ mod tests {
         TimetokeWitness, TransactionWitness, ZsiRecord, ZsiWitness,
     };
     use crate::storage::Storage;
-    use crate::stwo::circuit::StarkCircuit;
     use crate::stwo::circuit::identity::{IdentityCircuit, IdentityWitness};
     use crate::stwo::circuit::string_to_field;
+    use crate::stwo::circuit::StarkCircuit;
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
     use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
     use crate::stwo::prover::WalletProver;
     use crate::types::{
-        AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
-        IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
-        SignedTransaction, Transaction, UptimeClaim, UptimeProof,
+        AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        SignedTransaction, Transaction, UptimeClaim, UptimeProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+        IDENTITY_ATTESTATION_QUORUM,
     };
     use crate::vrf::{VrfProof, VrfSelectionRecord};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
@@ -1571,11 +1634,9 @@ mod tests {
         assert_eq!(canonical_before.len(), 2);
         assert_eq!(canonical_before[0].0, input_outpoint);
         assert_eq!(canonical_before[1].0, extra_outpoint);
-        assert!(
-            canonical_before
-                .iter()
-                .all(|(_, stored)| !stored.is_spent())
-        );
+        assert!(canonical_before
+            .iter()
+            .all(|(_, stored)| !stored.is_spent()));
 
         let owner_unspent_before = ledger.utxos_for_owner(&sender_address);
         assert_eq!(owner_unspent_before.len(), 2);
@@ -1601,18 +1662,14 @@ mod tests {
 
         let snapshot_after = ledger.utxo_state.snapshot();
         let snapshot_map: BTreeMap<_, _> = snapshot_after.iter().cloned().collect();
-        assert!(
-            snapshot_map
-                .get(&input_outpoint)
-                .expect("spent input entry")
-                .is_spent()
-        );
-        assert!(
-            !snapshot_map
-                .get(&extra_outpoint)
-                .expect("secondary output")
-                .is_spent()
-        );
+        assert!(snapshot_map
+            .get(&input_outpoint)
+            .expect("spent input entry")
+            .is_spent());
+        assert!(!snapshot_map
+            .get(&extra_outpoint)
+            .expect("secondary output")
+            .is_spent());
 
         let recipient_outpoint = UtxoOutpoint { tx_id, index: 0 };
         let sender_change_outpoint = UtxoOutpoint { tx_id, index: 1 };
@@ -1734,18 +1791,14 @@ mod tests {
 
         let snapshot_after = ledger.utxo_state.snapshot();
         let snapshot_map: BTreeMap<_, _> = snapshot_after.iter().cloned().collect();
-        assert!(
-            snapshot_map
-                .get(&sender_input)
-                .expect("sender input marked")
-                .is_spent()
-        );
-        assert!(
-            !snapshot_map
-                .get(&recipient_existing)
-                .expect("recipient prior output")
-                .is_spent()
-        );
+        assert!(snapshot_map
+            .get(&sender_input)
+            .expect("sender input marked")
+            .is_spent());
+        assert!(!snapshot_map
+            .get(&recipient_existing)
+            .expect("recipient prior output")
+            .is_spent());
 
         let recipient_outpoint = UtxoOutpoint { tx_id, index: 0 };
         let recipient_entry = snapshot_map
@@ -1757,16 +1810,12 @@ mod tests {
 
         let recipient_snapshot = ledger.utxo_state.snapshot_for_account(&recipient_address);
         assert_eq!(recipient_snapshot.len(), 2);
-        assert!(
-            recipient_snapshot
-                .iter()
-                .any(|(outpoint, stored)| outpoint == &recipient_existing && stored.amount == 300)
-        );
-        assert!(
-            recipient_snapshot
-                .iter()
-                .any(|(outpoint, stored)| outpoint == &recipient_outpoint && stored.amount == 200)
-        );
+        assert!(recipient_snapshot
+            .iter()
+            .any(|(outpoint, stored)| outpoint == &recipient_existing && stored.amount == 300));
+        assert!(recipient_snapshot
+            .iter()
+            .any(|(outpoint, stored)| outpoint == &recipient_outpoint && stored.amount == 200));
     }
 
     #[test]
@@ -1815,12 +1864,10 @@ mod tests {
 
         let snapshot_after = ledger.utxo_state.snapshot();
         let snapshot_map: BTreeMap<_, _> = snapshot_after.iter().cloned().collect();
-        assert!(
-            snapshot_map
-                .get(&existing_outpoint)
-                .expect("existing outpoint")
-                .is_spent()
-        );
+        assert!(snapshot_map
+            .get(&existing_outpoint)
+            .expect("existing outpoint")
+            .is_spent());
 
         let payment_outpoint = UtxoOutpoint { tx_id, index: 0 };
         let payment_entry = snapshot_map.get(&payment_outpoint).expect("payment output");
@@ -1856,7 +1903,7 @@ mod tests {
         ledger.upsert_account(account).unwrap();
 
         ledger
-            .slash_validator(&address, super::SlashingReason::InvalidVote)
+            .slash_validator(&address, super::SlashingReason::InvalidVote, None)
             .unwrap();
 
         let slashed = ledger.get_account(&address).unwrap();
@@ -1877,7 +1924,7 @@ mod tests {
         ledger.upsert_account(account).unwrap();
 
         ledger
-            .slash_validator("validator", SlashingReason::InvalidVote)
+            .slash_validator("validator", SlashingReason::InvalidVote, None)
             .unwrap();
 
         let events = ledger.slashing_events(10);
@@ -1885,6 +1932,8 @@ mod tests {
         let event = &events[0];
         assert_eq!(event.address, "validator");
         assert_eq!(event.reason, SlashingReason::InvalidVote);
+        assert!(event.signature.is_none());
+        assert!(!event.evidence_hash.is_empty());
         assert_eq!(
             event.penalty_percent,
             SlashingReason::InvalidVote.penalty_percent()
