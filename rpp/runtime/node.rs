@@ -16,14 +16,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{broadcast, mpsc, Mutex, Notify};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::{debug, error, info, warn};
@@ -36,13 +36,13 @@ use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, TelemetryConfig,
 };
 use crate::consensus::{
-    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
-    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
-    SignedBftVote, ValidatorCandidate,
+    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
+    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
+    classify_participants, evaluate_vrf,
 };
 use crate::crypto::{
-    address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair, sign_message,
-    signature_to_hex, vrf_public_key_to_hex, VrfKeypair,
+    VrfKeypair, address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
+    vrf_public_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -57,11 +57,11 @@ use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
     node::{
         IdentityProfile as RuntimeIdentityProfile, MetaTelemetryReport, NodeError as P2pError,
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
-    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
@@ -72,9 +72,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
-    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
+    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
+    TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -608,7 +608,7 @@ impl Node {
         config.validate()?;
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
-        let vrf_keypair = load_or_generate_vrf_keypair(&config.vrf_key_path)?;
+        let vrf_keypair = config.load_or_generate_vrf_keypair()?;
         let p2p_identity = Arc::new(
             NodeIdentity::load_or_generate(&config.p2p_key_path)
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
@@ -834,7 +834,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
+        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -845,8 +845,9 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
+        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field, StarkCircuit,
+        string_to_field,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -4652,9 +4653,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
-        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
-        TimetokeParams, VerifierMetricsSnapshot,
+        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
+        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -4662,12 +4663,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{routing::post, Router};
+    use axum::{Router, routing::post};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;

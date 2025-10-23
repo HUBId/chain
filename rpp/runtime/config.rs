@@ -3,6 +3,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -12,6 +13,10 @@ use rpp_p2p::TierLevel;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
 
+use crate::crypto::{
+    DynVrfKeyStore, FilesystemKeystoreConfig, FilesystemVrfKeyStore, HsmKeystoreConfig,
+    VaultKeystoreConfig, VaultVrfKeyStore, VrfKeyIdentifier, VrfKeypair,
+};
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
@@ -22,6 +27,123 @@ const MALACHITE_CONFIG_VERSION_REQ: &str = ">=1.0.0, <2.0.0";
 const MALACHITE_CONFIG_VERSION_DEFAULT: &str = "1.0.0";
 const MALACHITE_CONFIG_FILE: &str = "malachite.toml";
 const DEFAULT_MALACHITE_CONFIG_PATH: &str = "config/malachite.toml";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretsConfig {
+    pub backend: SecretsBackendConfig,
+}
+
+impl SecretsConfig {
+    pub fn build_keystore(&self) -> ChainResult<DynVrfKeyStore> {
+        self.backend.build_keystore()
+    }
+
+    pub fn vrf_identifier(&self, configured: &Path) -> ChainResult<VrfKeyIdentifier> {
+        self.backend.vrf_identifier(configured)
+    }
+
+    pub fn ensure_directories(&self, configured: &Path) -> ChainResult<()> {
+        self.backend.ensure_directories(configured)
+    }
+
+    pub fn validate_with_path(&self, configured: &Path) -> ChainResult<()> {
+        self.backend.validate_with_path(configured)
+    }
+
+    pub fn load_or_generate_vrf_keypair(&self, configured: &Path) -> ChainResult<VrfKeypair> {
+        let identifier = self.vrf_identifier(configured)?;
+        let store = self.build_keystore()?;
+        store.load_or_generate(&identifier)
+    }
+}
+
+impl Default for SecretsConfig {
+    fn default() -> Self {
+        Self {
+            backend: SecretsBackendConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "backend", rename_all = "snake_case")]
+pub enum SecretsBackendConfig {
+    Filesystem(FilesystemKeystoreConfig),
+    Vault(VaultKeystoreConfig),
+    Hsm(HsmKeystoreConfig),
+}
+
+impl Default for SecretsBackendConfig {
+    fn default() -> Self {
+        Self::Filesystem(FilesystemKeystoreConfig::default())
+    }
+}
+
+impl SecretsBackendConfig {
+    fn build_keystore(&self) -> ChainResult<DynVrfKeyStore> {
+        match self {
+            Self::Filesystem(config) => Ok(Arc::new(FilesystemVrfKeyStore::new(config.clone()))),
+            Self::Vault(config) => Ok(Arc::new(VaultVrfKeyStore::new(config.clone())?)),
+            Self::Hsm(_) => Err(ChainError::Config(
+                "HSM secrets backend is not available in this build; configure `filesystem` or `vault`".into(),
+            )),
+        }
+    }
+
+    fn vrf_identifier(&self, configured: &Path) -> ChainResult<VrfKeyIdentifier> {
+        match self {
+            Self::Filesystem(config) => {
+                Ok(VrfKeyIdentifier::filesystem(config.resolve(configured)))
+            }
+            Self::Vault(_) | Self::Hsm(_) => {
+                let raw = configured.to_string_lossy();
+                let trimmed = raw.trim_matches('/');
+                if trimmed.is_empty() {
+                    Err(ChainError::Config(
+                        "secrets backend requires `vrf_key_path` to define a non-empty identifier"
+                            .into(),
+                    ))
+                } else {
+                    Ok(VrfKeyIdentifier::remote(trimmed.to_string()))
+                }
+            }
+        }
+    }
+
+    fn ensure_directories(&self, configured: &Path) -> ChainResult<()> {
+        match self {
+            Self::Filesystem(config) => {
+                let path = config.resolve(configured);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                Ok(())
+            }
+            Self::Vault(_) | Self::Hsm(_) => Ok(()),
+        }
+    }
+
+    fn validate_with_path(&self, configured: &Path) -> ChainResult<()> {
+        match self {
+            Self::Filesystem(_) => Ok(()),
+            Self::Vault(config) => {
+                config.validate()?;
+                let raw = configured.to_string_lossy();
+                if raw.trim_matches('/').is_empty() {
+                    return Err(ChainError::Config(
+                        "vault secrets backend requires `vrf_key_path` to reference a KV path"
+                            .into(),
+                    ));
+                }
+                Ok(())
+            }
+            Self::Hsm(_) => Err(ChainError::Config(
+                "HSM secrets backend is not implemented; configure `filesystem` or `vault`".into(),
+            )),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -521,6 +643,8 @@ pub struct NodeConfig {
     #[serde(default = "default_p2p_key_path")]
     pub p2p_key_path: PathBuf,
     pub vrf_key_path: PathBuf,
+    #[serde(default)]
+    pub secrets: SecretsConfig,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
     #[serde(default = "default_proof_cache_dir")]
@@ -640,9 +764,7 @@ impl NodeConfig {
         if let Some(parent) = self.p2p_key_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        if let Some(parent) = self.vrf_key_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        self.secrets.ensure_directories(&self.vrf_key_path)?;
         fs::create_dir_all(&self.snapshot_dir)?;
         fs::create_dir_all(&self.proof_cache_dir)?;
         if let Some(parent) = self.consensus_pipeline_path.parent() {
@@ -670,6 +792,11 @@ impl NodeConfig {
 
     pub fn timetoke_params(&self) -> TimetokeParams {
         self.malachite.reputation.timetoke_params()
+    }
+
+    pub fn load_or_generate_vrf_keypair(&self) -> ChainResult<VrfKeypair> {
+        self.secrets
+            .load_or_generate_vrf_keypair(&self.vrf_key_path)
     }
 
     pub fn validate(&self) -> ChainResult<()> {
@@ -744,6 +871,7 @@ impl NodeConfig {
         }
         self.queue_weights.validate()?;
         self.p2p.validate()?;
+        self.secrets.validate_with_path(&self.vrf_key_path)?;
         Ok(())
     }
 }
@@ -759,6 +887,7 @@ impl Default for NodeConfig {
             key_path: PathBuf::from("./keys/node.toml"),
             p2p_key_path: default_p2p_key_path(),
             vrf_key_path: PathBuf::from("./keys/vrf.toml"),
+            secrets: SecretsConfig::default(),
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
@@ -1243,7 +1372,7 @@ impl FeatureGates {
                 other => {
                     return Err(ChainError::Config(format!(
                         "unknown feature gate `{other}` in announcement"
-                    )))
+                    )));
                 }
             }
         }

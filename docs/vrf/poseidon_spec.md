@@ -45,12 +45,18 @@ network integrations.
    current epoch.
 
 ## Key Management Requirements
-- Nodes MUST persist VRF key pairs via `save_vrf_keypair()` and load them during
-  startup with `load_or_generate_vrf_keypair()`. Operators MAY rotate keys only
-  at epoch boundaries after broadcasting the new public key through the
-  validator registration flow.
-- All CLI tooling MUST expose hex helpers for encoding/decoding keys. Secrets
-  SHALL be stored alongside existing identity credentials under `config.vrf_key_path`.
+- Nodes MUST persist VRF key pairs via the configured `[secrets]` backend. The
+  runtime resolves the backend at startup through
+  `NodeConfig::load_or_generate_vrf_keypair`, which uses
+  `FilesystemVrfKeyStore` by default and can target remote stores such as
+  HashiCorp Vault without exposing secrets in logs.【F:rpp/runtime/config.rs†L567-L574】【F:rpp/runtime/config.rs†L328-L367】【F:rpp/runtime/node.rs†L611-L615】
+- Operators MAY rotate keys only at epoch boundaries after broadcasting the new
+  public key through the validator registration flow.
+- CLI tooling continues to expose hex helpers and the filesystem helper
+  `save_vrf_keypair()` for manual provisioning. When `secrets.backend =
+  "filesystem"`, the key material resides at `config.vrf_key_path`; secure
+  providers interpret the same field as the secret identifier within the
+  external store.【F:rpp/crypto/mod.rs†L124-L167】【F:config/node.toml†L8-L13】
 
 ## Epoch Manager Responsibilities
 - **Epoch Transition Scheduling** – Epochs advance when block height or wall

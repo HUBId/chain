@@ -73,10 +73,12 @@ history or being reused during identity onboarding.
 
 ## CLI & Configuration
 `cargo run -- keygen` now emits both the Ed25519 identity keypair and a VRF
-keypair. Nodes read the VRF file from `config.vrf_key_path` during startup,
-creating it on demand when operators have not provisioned one yet. The
-`target_validator_count` configuration entry drives the dynamic threshold used
-for per-epoch validator selection.
+keypair. Nodes load VRF material through the configurable keystore abstraction
+exposed by `NodeConfig::load_or_generate_vrf_keypair`; filesystem storage at
+`config.vrf_key_path` remains the default, while production deployments can
+switch to `secrets.backend = "vault"` to keep tokens and TLS credentials
+outside of the node logs. The `target_validator_count` configuration entry
+drives the dynamic threshold used for per-epoch validator selection.【F:rpp/runtime/config.rs†L567-L574】【F:config/node.toml†L8-L13】
 
 ## Telemetry & Metrics
 `GET /status/node` now surfaces a `vrf_metrics` payload containing the submission
