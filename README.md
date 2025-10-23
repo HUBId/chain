@@ -120,6 +120,20 @@ For maximum runtime performance at the cost of compile time,
 use `cargo run --maxperf` instead,
 which enables maximum link time compiler optimizations.
 
+## Validator Operations
+
+- [Validator Quickstart](docs/validator_quickstart.md) walks through initial
+  provisioning, configuration, and telemetry setup using the shared
+  `config/node.toml` template and rollout feature gates.
+- [Validator Troubleshooting](docs/validator_troubleshooting.md) documents
+  remediation steps for VRF mismatches, missing snapshots, and telemetry
+  outages.
+- [Deployment & Observability Playbook](docs/deployment_observability.md)
+  summarises the dashboards, feature-gate policies, and telemetry options that
+  keep validators healthy in production.
+- [RPC CLI Operator Guide](docs/rpc_cli_operator_guide.md) covers authenticated
+  maintenance commands, rate limits, and recovery workflows for node operators.
+
 ### Runtime signal handling
 
 The vendored Electrs harness uses an asynchronous supervisor that wires
