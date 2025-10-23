@@ -67,6 +67,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
     - Peerstore + Gossip-State auf Disk sichern.
     - Rejoin-Logic für Mesh/Topics nach Neustart.
     - DoD: Node rebooted und nimmt Mesh wieder auf ohne manuellen Eingriff.
+    - DoD-Nachweis: `rpp/p2p/tests/gossip_state_rehydration.rs` startet zwei Knoten mit persistentem Peerstore/Gossip-State, stoppt den Konsumentenknoten kontrolliert, rehydriert `bootstrap_subscriptions`/`bootstrap_known_peers` und verifiziert, dass der `ReplayProtector` gespeicherte Digests blockiert.
 
 12. **Security Hardening**
     - Replay-Schutz (Message-IDs, seqno), Flood-Prevention, Rate-Limits.
