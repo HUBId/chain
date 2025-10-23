@@ -31,6 +31,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
    - Reputation-/Tier-Logik anbinden: TL0 (read-only), TL1 (Proof-Publish), TL3+ (Consensus).
    - Subscription-Gating pro Topic, Reject-Mechanismen bei Downgrades oder Sperrlisten.
    - DoD: Integrationstest simuliert Peers verschiedener Tiers und überprüft Zugriffe.
+   - Hinweis: Tier-Gating und Reputation werden gemeinsam durch den Integrationstest `rpp/p2p/tests/access_control.rs` abgesichert.
 
 6. **Reputation-Updates & Sperrlisten**
    - Netzwerkweite Reputation-Events (Uptime, Slashing, Votes) konsumieren und Peerstore aktualisieren.
@@ -47,6 +48,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
    - Blockvorschläge über `blocks` Topic verteilen, Votes über `votes` Topic.
    - Konsensmodul an Gossip-Ereignisse anschließen (Proposal, PreVote, PreCommit).
    - DoD: Multi-Node-Test produziert Block mit >=2/3 Votes.
+   - DoD-Nachweis: `rpp/p2p/tests/multi_node_quorum.rs` deckt Block- und Vote-Gossip ab, inklusive Neustart der Knoten und Persistenzprüfung der Abstimmungszustände.
 
 9. **Snapshots & Light-Client-Sync**
    - Streaming von Firewood-Snapshots via libp2p-Request/Response oder Chunked Gossip.
@@ -83,7 +85,9 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 
 ## Abhängigkeiten & Milestones
 1. *Milestone A (Phasen 0–1):* Funktionsfähiger Gossip-Backbone mit Admission-Control. **Status:** ✅ Tier-basierte Zugriffslogik aktiv, abgesichert durch Integrationstests (`rpp/p2p/tests/access_control.rs`).
-2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich. **Status:** 🚧 Datenpfade folgen nach Abschluss der Gossip-Gating-Tests (`rpp/p2p/tests/access_control.rs`).
+2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich. **Status:** 🚧 Block/Vote-Gossip in `rpp/p2p/tests/multi_node_quorum.rs` aktiv.
+   - Gossip-Quorum nachgewiesen, Persistenz inkl. Neustart-Checks vorhanden.
+   - Snapshot-Pipeline und Light-Client-Sync stehen aus.
 3. *Milestone C (Phase 3):* Produktionsreife mit Security, Persistenz, Simulation.
 
 Jede Milestone-Abnahme setzt neben den DoD-Kriterien auch Peer-to-Peer-Tests über mindestens drei Knoten voraus.
