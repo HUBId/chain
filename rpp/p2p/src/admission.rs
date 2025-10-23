@@ -167,6 +167,13 @@ impl AdmissionControl {
         peer: &PeerId,
         topic: GossipTopic,
     ) -> Result<ReputationSnapshot, AdmissionError> {
+        if self.peerstore.is_blocklisted(peer) {
+            let until = self
+                .peerstore
+                .is_banned(peer)
+                .unwrap_or_else(|| SystemTime::now() + self.ban_window);
+            return Err(AdmissionError::Banned { until });
+        }
         let snapshot = self
             .peerstore
             .reputation_snapshot(peer)
@@ -184,6 +191,13 @@ impl AdmissionControl {
         peer: &PeerId,
         topic: GossipTopic,
     ) -> Result<ReputationSnapshot, AdmissionError> {
+        if self.peerstore.is_blocklisted(peer) {
+            let until = self
+                .peerstore
+                .is_banned(peer)
+                .unwrap_or_else(|| SystemTime::now() + self.ban_window);
+            return Err(AdmissionError::Banned { until });
+        }
         let snapshot = self
             .peerstore
             .reputation_snapshot(peer)

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -30,6 +30,8 @@ pub enum PeerstoreError {
     InvalidSignature { peer: PeerId },
     #[error("invalid vrf proof for peer {peer}: {reason}")]
     InvalidVrf { peer: PeerId, reason: String },
+    #[error("peer {peer} is blocklisted")]
+    Blocklisted { peer: PeerId },
 }
 
 pub trait IdentityVerifier: Send + Sync {
@@ -83,6 +85,12 @@ impl PeerRecord {
 
     fn set_public_key(&mut self, key: identity::PublicKey) {
         self.public_key = Some(key);
+        self.last_seen = Some(SystemTime::now());
+    }
+
+    fn apply_allowlist_tier(&mut self, tier: TierLevel) {
+        self.tier = tier;
+        self.reputation = reputation_floor_for_tier(tier);
         self.last_seen = Some(SystemTime::now());
     }
 
@@ -142,6 +150,17 @@ impl PeerRecord {
     fn record_ping_failure(&mut self) -> u32 {
         self.ping_failures = self.ping_failures.saturating_add(1);
         self.ping_failures
+    }
+}
+
+fn reputation_floor_for_tier(tier: TierLevel) -> f64 {
+    match tier {
+        TierLevel::Tl0 => 0.0,
+        TierLevel::Tl1 => 1.0,
+        TierLevel::Tl2 => 2.0,
+        TierLevel::Tl3 => 3.0,
+        TierLevel::Tl4 => 4.0,
+        TierLevel::Tl5 => 5.0,
     }
 }
 
@@ -256,16 +275,25 @@ pub struct ReputationSnapshot {
     pub banned_until: Option<SystemTime>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AllowlistedPeer {
+    pub peer: PeerId,
+    pub tier: TierLevel,
+}
+
 pub struct PeerstoreConfig {
     path: Option<PathBuf>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
+    allowlist: Vec<AllowlistedPeer>,
+    blocklist: Vec<PeerId>,
 }
 
 impl fmt::Debug for PeerstoreConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeerstoreConfig")
             .field("path", &self.path)
+            .field("allowlist", &self.allowlist)
+            .field("blocklist", &self.blocklist)
             .finish()
     }
 }
@@ -275,6 +303,8 @@ impl PeerstoreConfig {
         Self {
             path: None,
             identity_verifier: None,
+            allowlist: Vec::new(),
+            blocklist: Vec::new(),
         }
     }
 
@@ -282,6 +312,8 @@ impl PeerstoreConfig {
         Self {
             path: Some(path.into()),
             identity_verifier: None,
+            allowlist: Vec::new(),
+            blocklist: Vec::new(),
         }
     }
 
@@ -289,12 +321,31 @@ impl PeerstoreConfig {
         self.identity_verifier = Some(verifier);
         self
     }
+
+    pub fn with_allowlist(mut self, entries: Vec<AllowlistedPeer>) -> Self {
+        self.allowlist = entries;
+        self
+    }
+
+    pub fn with_blocklist(mut self, peers: Vec<PeerId>) -> Self {
+        self.blocklist = peers;
+        self
+    }
+
+    pub fn allowlist(&self) -> &[AllowlistedPeer] {
+        &self.allowlist
+    }
+
+    pub fn blocklist(&self) -> &[PeerId] {
+        &self.blocklist
+    }
 }
 
 pub struct Peerstore {
     config: PeerstoreConfig,
     peers: RwLock<HashMap<PeerId, PeerRecord>>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
+    blocklisted: HashSet<PeerId>,
 }
 
 impl fmt::Debug for Peerstore {
@@ -329,11 +380,14 @@ impl Peerstore {
             HashMap::new()
         };
 
-        Ok(Self {
+        let mut store = Self {
+            blocklisted: config.blocklist.iter().cloned().collect(),
             identity_verifier: config.identity_verifier.clone(),
-            config,
             peers: RwLock::new(peers),
-        })
+            config,
+        };
+        store.apply_access_control()?;
+        Ok(store)
     }
 
     pub fn record_public_key(
@@ -361,6 +415,9 @@ impl Peerstore {
         peer_id: PeerId,
         payload: &HandshakePayload,
     ) -> Result<(), PeerstoreError> {
+        if self.is_blocklisted(&peer_id) {
+            return Err(PeerstoreError::Blocklisted { peer: peer_id });
+        }
         let public_key = self.resolve_public_key(peer_id)?;
         self.verify_signature(peer_id, payload, &public_key)?;
         self.verify_vrf(peer_id, payload)?;
@@ -553,6 +610,10 @@ impl Peerstore {
             .and_then(|snapshot| snapshot.banned_until)
     }
 
+    pub fn is_blocklisted(&self, peer_id: &PeerId) -> bool {
+        self.blocklisted.contains(peer_id)
+    }
+
     fn resolve_public_key(&self, peer_id: PeerId) -> Result<identity::PublicKey, PeerstoreError> {
         if let Some(key) = self
             .peers
@@ -671,6 +732,35 @@ impl Peerstore {
             .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
         fs::write(path, encoded)?;
         Ok(())
+    }
+}
+
+impl Peerstore {
+    fn apply_access_control(&mut self) -> Result<(), PeerstoreError> {
+        if self.config.allowlist.is_empty() && self.config.blocklist.is_empty() {
+            return Ok(());
+        }
+
+        {
+            let mut guard = self.peers.write();
+            for peer in &self.config.blocklist {
+                let entry = guard.entry(*peer).or_insert_with(|| PeerRecord::new(*peer));
+                entry.set_ban(Self::blocklist_ban_until());
+            }
+            for entry in &self.config.allowlist {
+                let record = guard
+                    .entry(entry.peer)
+                    .or_insert_with(|| PeerRecord::new(entry.peer));
+                record.apply_allowlist_tier(entry.tier);
+                record.clear_ban_if_elapsed();
+            }
+        }
+        self.persist()
+    }
+
+    fn blocklist_ban_until() -> SystemTime {
+        const YEARS: u64 = 100;
+        SystemTime::now() + Duration::from_secs(YEARS * 365 * 24 * 60 * 60)
     }
 }
 

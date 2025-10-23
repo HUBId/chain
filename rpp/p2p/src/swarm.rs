@@ -571,6 +571,17 @@ impl Network {
                                         ))
                                     })?;
 
+                                if peerstore.is_blocklisted(&peer_id) {
+                                    tracing::info!(
+                                        target: "telemetry.handshake",
+                                        %peer_id,
+                                        "handshake_blocklisted"
+                                    );
+                                    return Err(noise::HandshakeHookError::new(
+                                        "peer is blocklisted".to_string(),
+                                    ));
+                                }
+
                                 if let Err(err) =
                                     peerstore.record_public_key(peer_id, public_key.clone())
                                 {
