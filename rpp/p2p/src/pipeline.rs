@@ -1528,6 +1528,13 @@ pub struct NetworkMetaTelemetryReport {
     pub peers: Vec<NetworkPeerTelemetry>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkFeatureAnnouncement {
+    pub peer_id: String,
+    #[serde(default)]
+    pub features: BTreeMap<String, bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

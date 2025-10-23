@@ -13,7 +13,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 use super::node::IdentityProfile;
-use crate::config::{P2pAllowlistEntry, P2pConfig};
+use crate::config::{FeatureGates, P2pAllowlistEntry, P2pConfig};
 
 /// Resolved libp2p networking configuration used by the runtime.
 #[derive(Clone, Debug)]
@@ -144,6 +144,7 @@ impl NetworkResources {
         config: &NetworkConfig,
         p2p_config: &P2pConfig,
         identity_profile: Option<IdentityProfile>,
+        feature_gates: FeatureGates,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
         let peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
@@ -157,18 +158,21 @@ impl NetworkResources {
         };
         let node_label = identity.peer_id().to_base58();
         let (handshake, profile) = if let Some(profile) = identity_profile {
+            let features = profile.feature_gates.advertise();
             (
                 HandshakePayload::new(
                     profile.zsi_id.clone(),
                     Some(profile.vrf_public_key.clone()),
                     Some(profile.vrf_proof.clone()),
                     profile.tier,
-                ),
+                )
+                .with_features(features),
                 Some(profile),
             )
         } else {
             (
-                HandshakePayload::new(node_label, None, None, TierLevel::Tl0),
+                HandshakePayload::new(node_label, None, None, TierLevel::Tl0)
+                    .with_features(feature_gates.advertise()),
                 None,
             )
         };
@@ -187,6 +191,7 @@ impl NetworkResources {
                 profile.tier,
                 profile.vrf_public_key,
                 profile.vrf_proof,
+                profile.feature_gates.advertise(),
             )?;
         }
         let signed_handshake = handshake_snapshot

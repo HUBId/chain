@@ -1,0 +1,12 @@
+{
+  "peer_id": "12D3KooWLwExamplePeerId123456789ABCDEFGH",
+  "features": {
+    "pruning": false,
+    "recursive_proofs": true,
+    "reconstruction": true,
+    "consensus_enforcement": false,
+    "malachite_consensus": true,
+    "timetoke_rewards": true,
+    "witness_network": true
+  }
+}

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -54,6 +54,7 @@ pub struct PeerRecord {
     pub telemetry: Option<TelemetryMetadata>,
     pub last_ping_rtt: Option<Duration>,
     pub ping_failures: u32,
+    pub features: BTreeMap<String, bool>,
 }
 
 impl PeerRecord {
@@ -72,6 +73,7 @@ impl PeerRecord {
             telemetry: None,
             last_ping_rtt: None,
             ping_failures: 0,
+            features: BTreeMap::new(),
         }
     }
 
@@ -82,6 +84,7 @@ impl PeerRecord {
         self.tier = payload.tier;
         self.last_seen = Some(SystemTime::now());
         self.telemetry = payload.telemetry.clone();
+        self.features = payload.features.clone();
     }
 
     fn set_public_key(&mut self, key: identity::PublicKey) {
@@ -182,6 +185,8 @@ struct StoredPeerRecord {
     last_ping_rtt_ms: Option<u64>,
     #[serde(default)]
     ping_failures: u32,
+    #[serde(default)]
+    features: BTreeMap<String, bool>,
 }
 
 impl From<&PeerRecord> for StoredPeerRecord {
@@ -216,6 +221,7 @@ impl From<&PeerRecord> for StoredPeerRecord {
                 .last_ping_rtt
                 .map(|rtt| (rtt.as_millis().min(u128::from(u64::MAX))) as u64),
             ping_failures: record.ping_failures,
+            features: record.features.clone(),
         }
     }
 }
@@ -300,6 +306,7 @@ impl TryFrom<StoredPeerRecord> for PeerRecord {
         record.telemetry = value.telemetry;
         record.last_ping_rtt = value.last_ping_rtt_ms.map(Duration::from_millis);
         record.ping_failures = value.ping_failures;
+        record.features = value.features;
         Ok(record)
     }
 }

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/meta_feature_announcement.json",
+  "title": "NetworkFeatureAnnouncement",
+  "type": "object",
+  "required": ["peer_id", "features"],
+  "properties": {
+    "peer_id": {
+      "type": "string",
+      "description": "Base58-encoded libp2p peer identifier of the announcing node"
+    },
+    "features": {
+      "type": "object",
+      "description": "Advertised feature gate configuration",
+      "properties": {
+        "pruning": {"type": "boolean"},
+        "recursive_proofs": {"type": "boolean"},
+        "reconstruction": {"type": "boolean"},
+        "consensus_enforcement": {"type": "boolean"},
+        "malachite_consensus": {"type": "boolean"},
+        "timetoke_rewards": {"type": "boolean"},
+        "witness_network": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

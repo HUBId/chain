@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -42,6 +43,8 @@ struct StoredPeerRecordSnapshot {
     last_seen: Option<u64>,
     #[serde(default)]
     ping_failures: u32,
+    #[serde(default)]
+    features: BTreeMap<String, bool>,
 }
 
 fn sample_node_config(base: &Path) -> NodeConfig {
@@ -65,6 +68,9 @@ fn sample_node_config(base: &Path) -> NodeConfig {
     config.rollout.feature_gates.recursive_proofs = false;
     config.rollout.feature_gates.reconstruction = false;
     config.rollout.feature_gates.consensus_enforcement = false;
+    config.rollout.feature_gates.malachite_consensus = true;
+    config.rollout.feature_gates.timetoke_rewards = true;
+    config.rollout.feature_gates.witness_network = true;
     config.ensure_directories().expect("node directories");
     config
 }
@@ -240,6 +246,22 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     let initial_peer_record = read_peerstore_snapshot(&peerstore_path, &broadcaster_peer)?
         .expect("peerstore snapshot for broadcaster");
     assert!(!initial_peer_record.addresses.is_empty());
+    assert_eq!(
+        initial_peer_record.features.get("pruning"),
+        Some(&false)
+    );
+    assert_eq!(
+        initial_peer_record.features.get("malachite_consensus"),
+        Some(&true)
+    );
+    assert_eq!(
+        initial_peer_record.features.get("timetoke_rewards"),
+        Some(&true)
+    );
+    assert_eq!(
+        initial_peer_record.features.get("witness_network"),
+        Some(&true)
+    );
 
     handle_b_runtime.shutdown().await?;
     gossip_worker.await.expect("gossip worker completed")?;
@@ -327,6 +349,20 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     assert_eq!(restart_peer_record.peer_id, broadcaster_peer);
     assert!(restart_peer_record.reputation >= initial_peer_record.reputation);
     assert_eq!(restart_peer_record.ping_failures, 0);
+    assert_eq!(
+        restart_peer_record
+            .features
+            .get("malachite_consensus"),
+        Some(&true)
+    );
+    assert_eq!(
+        restart_peer_record.features.get("timetoke_rewards"),
+        Some(&true)
+    );
+    assert_eq!(
+        restart_peer_record.features.get("witness_network"),
+        Some(&true)
+    );
     if let (Some(before_seen), Some(after_seen)) =
         (initial_peer_record.last_seen, restart_peer_record.last_seen)
     {

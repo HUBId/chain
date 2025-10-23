@@ -10,17 +10,18 @@ use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     AllowlistedPeer, ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync,
-    MetaTelemetry, NetworkError, NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
-    NodeIdentity, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage,
-    PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent, RuntimeProofValidator,
-    SeenDigestRecord, TierLevel, VoteOutcome,
+    MetaTelemetry, NetworkError, NetworkEvent, NetworkFeatureAnnouncement,
+    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity, PeerstoreError,
+    PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
+    ReputationBroadcast, ReputationEvent, RuntimeProofValidator, SeenDigestRecord, TierLevel,
+    VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
 
-use crate::config::{NodeConfig, P2pConfig, TelemetryConfig};
+use crate::config::{FeatureGates, NodeConfig, P2pConfig, TelemetryConfig};
 use crate::consensus::EvidenceRecord;
 use crate::consensus::SignedBftVote;
 use crate::node::NetworkIdentityProfile;
@@ -90,6 +91,38 @@ pub struct PeerTelemetry {
     pub last_seen: SystemTime,
 }
 
+#[derive(Clone, Debug)]
+pub struct FeatureAnnouncement {
+    pub peer_id: PeerId,
+    pub feature_gates: FeatureGates,
+}
+
+impl From<&FeatureAnnouncement> for NetworkFeatureAnnouncement {
+    fn from(announcement: &FeatureAnnouncement) -> Self {
+        Self {
+            peer_id: announcement.peer_id.to_base58(),
+            features: announcement.feature_gates.advertise(),
+        }
+    }
+}
+
+impl TryFrom<NetworkFeatureAnnouncement> for FeatureAnnouncement {
+    type Error = String;
+
+    fn try_from(announcement: NetworkFeatureAnnouncement) -> Result<Self, Self::Error> {
+        let peer_id = announcement
+            .peer_id
+            .parse()
+            .map_err(|err| format!("invalid peer id: {err}"))?;
+        let feature_gates = FeatureGates::from_advertisement(&announcement.features)
+            .map_err(|err| err.to_string())?;
+        Ok(Self {
+            peer_id,
+            feature_gates,
+        })
+    }
+}
+
 /// Aggregate telemetry information for all known peers.
 #[derive(Clone, Debug)]
 pub struct MetaTelemetryReport {
@@ -103,6 +136,7 @@ pub enum MetaPayload {
     Reputation(ReputationBroadcast),
     Evidence(EvidenceRecord),
     Telemetry(MetaTelemetryReport),
+    FeatureAnnouncement(FeatureAnnouncement),
 }
 
 impl<'de> Deserialize<'de> for MetaPayload {
@@ -122,6 +156,14 @@ impl<'de> Deserialize<'de> for MetaPayload {
                 de::Error::custom(format!("invalid meta telemetry report: {err}"))
             })?;
             return Ok(Self::Telemetry(report));
+        }
+        if let Ok(announcement) =
+            serde_json::from_value::<NetworkFeatureAnnouncement>(value.clone())
+        {
+            let announcement = FeatureAnnouncement::try_from(announcement).map_err(|err| {
+                de::Error::custom(format!("invalid feature announcement: {err}"))
+            })?;
+            return Ok(Self::FeatureAnnouncement(announcement));
         }
         Err(de::Error::custom("unknown meta payload format"))
     }
@@ -219,6 +261,7 @@ pub struct NodeRuntimeConfig {
     pub identity: Option<IdentityProfile>,
     pub proof_storage_path: PathBuf,
     pub consensus_storage_path: PathBuf,
+    pub feature_gates: FeatureGates,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -230,6 +273,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             identity: None,
             proof_storage_path: config.proof_cache_dir.join("gossip_proofs.json"),
             consensus_storage_path: config.consensus_pipeline_path.clone(),
+            feature_gates: config.rollout.feature_gates.clone(),
         }
     }
 }
@@ -240,6 +284,7 @@ pub struct IdentityProfile {
     pub tier: TierLevel,
     pub vrf_public_key: Vec<u8>,
     pub vrf_proof: Vec<u8>,
+    pub feature_gates: FeatureGates,
 }
 
 impl From<NetworkIdentityProfile> for IdentityProfile {
@@ -249,6 +294,7 @@ impl From<NetworkIdentityProfile> for IdentityProfile {
             tier: profile.tier,
             vrf_public_key: profile.vrf_public_key,
             vrf_proof: profile.vrf_proof,
+            feature_gates: profile.feature_gates,
         }
     }
 }
@@ -584,6 +630,8 @@ pub struct NodeInner {
     telemetry: TelemetryHandle,
     connected_peers: HashSet<PeerId>,
     known_versions: HashMap<PeerId, String>,
+    peer_features: HashMap<PeerId, FeatureGates>,
+    local_features: FeatureGates,
     meta_telemetry: MetaTelemetry,
     heartbeat_interval: Duration,
     gossip_enabled: bool,
@@ -600,6 +648,7 @@ impl NodeInner {
             &network_config,
             &config.p2p,
             config.identity.clone(),
+            config.feature_gates.clone(),
         )?;
         let (network, identity) = resources.into_parts();
         let (command_tx, command_rx) = mpsc::channel(64);
@@ -613,6 +662,11 @@ impl NodeInner {
             events: event_tx.clone(),
             local_peer_id: identity.peer_id(),
         };
+        let local_features = config
+            .identity
+            .as_ref()
+            .map(|profile| profile.feature_gates.clone())
+            .unwrap_or_else(|| config.feature_gates.clone());
         let inner = Self {
             network,
             identity,
@@ -626,6 +680,8 @@ impl NodeInner {
             heartbeat_interval: network_config.heartbeat_interval(),
             gossip_enabled: network_config.gossip_enabled(),
             pipelines,
+            peer_features: HashMap::new(),
+            local_features,
         };
         Ok((inner, handle))
     }
@@ -633,6 +689,9 @@ impl NodeInner {
     /// Main async loop that drives network events and periodic telemetry.
     pub async fn run(mut self) -> Result<(), NodeError> {
         let mut heartbeat = time::interval(self.heartbeat_interval);
+        if self.gossip_enabled {
+            self.publish_feature_announcement();
+        }
         loop {
             tokio::select! {
                 Some(command) = self.commands.recv() => {
@@ -651,6 +710,34 @@ impl NodeInner {
         }
         let _ = self.telemetry.shutdown().await;
         Ok(())
+    }
+
+    fn publish_feature_announcement(&mut self) {
+        if !self.gossip_enabled {
+            return;
+        }
+        let announcement = FeatureAnnouncement {
+            peer_id: self.identity.peer_id(),
+            feature_gates: self.local_features.clone(),
+        };
+        let payload = match serde_json::to_vec(&NetworkFeatureAnnouncement::from(&announcement)) {
+            Ok(payload) => payload,
+            Err(err) => {
+                warn!(
+                    target: "node",
+                    %err,
+                    "failed to encode feature announcement",
+                );
+                return;
+            }
+        };
+        if let Err(err) = self.network.publish(GossipTopic::Meta, payload) {
+            warn!(
+                target: "node",
+                %err,
+                "failed to publish feature announcement",
+            );
+        }
     }
 
     async fn handle_command(&mut self, command: NodeCommand) -> Result<bool, NodeError> {
@@ -673,6 +760,7 @@ impl NodeInner {
             }
             NodeCommand::UpdateIdentity { profile, response } => {
                 let tier = profile.tier;
+                let features = profile.feature_gates.clone();
                 let result = self
                     .network
                     .update_identity(
@@ -680,10 +768,13 @@ impl NodeInner {
                         tier,
                         profile.vrf_public_key,
                         profile.vrf_proof,
+                        profile.feature_gates.advertise(),
                     )
                     .map_err(NodeError::from);
                 if result.is_ok() {
+                    self.local_features = features;
                     self.pipelines.register_voter(self.identity.peer_id(), tier);
+                    self.publish_feature_announcement();
                 }
                 let _ = response.send(result);
                 Ok(false)
@@ -731,6 +822,19 @@ impl NodeInner {
                 self.connected_peers.insert(peer);
                 let tier = payload.tier;
                 self.pipelines.register_voter(peer, tier);
+                let features = match FeatureGates::from_advertisement(&payload.features) {
+                    Ok(gates) => gates,
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            ?peer,
+                            %err,
+                            "invalid feature advertisement in handshake"
+                        );
+                        FeatureGates::default()
+                    }
+                };
+                self.peer_features.insert(peer, features);
                 let agent_version = payload
                     .telemetry
                     .as_ref()
@@ -741,11 +845,13 @@ impl NodeInner {
                 self.meta_telemetry
                     .record(peer, agent_version, Duration::from_millis(0));
                 let _ = self.events.send(NodeEvent::PeerConnected { peer, payload });
+                self.publish_feature_announcement();
             }
             NetworkEvent::PeerDisconnected { peer } => {
                 info!(target: "node", "peer disconnected: {peer}");
                 self.connected_peers.remove(&peer);
                 self.known_versions.remove(&peer);
+                self.peer_features.remove(&peer);
                 self.pipelines.remove_voter(&peer);
                 let _ = self.events.send(NodeEvent::PeerDisconnected { peer });
             }
@@ -992,6 +1098,18 @@ impl NodeInner {
                                                 entry.last_seen,
                                             );
                                         }
+                                    }
+                                    MetaPayload::FeatureAnnouncement(announcement) => {
+                                        if announcement.peer_id != peer {
+                                            warn!(
+                                                target: "node",
+                                                expected = %peer,
+                                                announced = %announcement.peer_id,
+                                                "feature announcement peer mismatch",
+                                            );
+                                        }
+                                        self.peer_features
+                                            .insert(announcement.peer_id, announcement.feature_gates);
                                     }
                                 },
                                 MetaIngestResult::DecodeFailed(reason) => {
@@ -1292,6 +1410,7 @@ mod tests {
             identity: None,
             proof_storage_path,
             consensus_storage_path,
+            feature_gates: FeatureGates::default(),
         }
     }
 

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -1201,11 +1202,53 @@ impl Default for ReleaseChannel {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct FeatureGates {
     pub pruning: bool,
     pub recursive_proofs: bool,
     pub reconstruction: bool,
     pub consensus_enforcement: bool,
+    pub malachite_consensus: bool,
+    pub timetoke_rewards: bool,
+    pub witness_network: bool,
+}
+
+impl FeatureGates {
+    pub fn advertise(&self) -> BTreeMap<String, bool> {
+        BTreeMap::from([
+            ("pruning".to_string(), self.pruning),
+            ("recursive_proofs".to_string(), self.recursive_proofs),
+            ("reconstruction".to_string(), self.reconstruction),
+            (
+                "consensus_enforcement".to_string(),
+                self.consensus_enforcement,
+            ),
+            ("malachite_consensus".to_string(), self.malachite_consensus),
+            ("timetoke_rewards".to_string(), self.timetoke_rewards),
+            ("witness_network".to_string(), self.witness_network),
+        ])
+    }
+
+    pub fn from_advertisement(advertisement: &BTreeMap<String, bool>) -> ChainResult<Self> {
+        let mut gates = Self::default();
+        for (key, value) in advertisement {
+            match key.as_str() {
+                "pruning" => gates.pruning = *value,
+                "recursive_proofs" => gates.recursive_proofs = *value,
+                "reconstruction" => gates.reconstruction = *value,
+                "consensus_enforcement" => gates.consensus_enforcement = *value,
+                "malachite_consensus" => gates.malachite_consensus = *value,
+                "timetoke_rewards" => gates.timetoke_rewards = *value,
+                "witness_network" => gates.witness_network = *value,
+                other => {
+                    return Err(ChainError::Config(format!(
+                        "unknown feature gate `{other}` in announcement"
+                    )))
+                }
+            }
+        }
+        Ok(gates)
+    }
 }
 
 impl Default for FeatureGates {
@@ -1215,6 +1258,9 @@ impl Default for FeatureGates {
             recursive_proofs: true,
             reconstruction: true,
             consensus_enforcement: true,
+            malachite_consensus: false,
+            timetoke_rewards: false,
+            witness_network: false,
         }
     }
 }

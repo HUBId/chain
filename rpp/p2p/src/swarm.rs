@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -1028,6 +1029,7 @@ impl Network {
         tier: TierLevel,
         vrf_public_key: Vec<u8>,
         vrf_proof: Vec<u8>,
+        features: BTreeMap<String, bool>,
     ) -> Result<(), NetworkError> {
         {
             let mut guard = self.handshake.write();
@@ -1036,6 +1038,7 @@ impl Network {
                 .clone()
                 .or_else(|| Some(Self::default_handshake_metadata()));
             *guard = HandshakePayload::new(zsi_id, Some(vrf_public_key), Some(vrf_proof), tier)
+                .with_features(features)
                 .with_telemetry(telemetry.unwrap());
         }
         let signed = self.sign_handshake()?;
@@ -1626,6 +1629,7 @@ impl Network {
         _tier: TierLevel,
         _vrf_public_key: Vec<u8>,
         _vrf_proof: Vec<u8>,
+        _features: BTreeMap<String, bool>,
     ) -> Result<(), NetworkError> {
         Err(NetworkError::TransportDisabled)
     }
