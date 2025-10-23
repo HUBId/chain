@@ -42,10 +42,16 @@ cargo build --release -p rpp-node
 The resulting binary lives at `target/release/rpp-node`. Keep the repository
 cloned on the host so future upgrades can pull new releases.
 
-## 3. Configure `config/node.toml`
+## 3. Configure validator, wallet, and hybrid templates
 
-Copy the shipping configuration and adjust it for your deployment. The example
-below highlights the fields new operators typically customise:
+Copy the shipping configuration files and adjust them for your deployment.
+Validator operators should edit both `config/validator.toml` and
+`config/wallet.toml` so the node and wallet runtimes launch with consistent
+paths, secrets, and telemetry defaults, while hybrid installs start from
+`config/hybrid.toml` plus `config/wallet.toml`.【F:config/validator.toml†L1-L59】【F:config/wallet.toml†L1-L33】【F:config/hybrid.toml†L1-L59】
+
+The example below highlights the node-specific fields new operators typically
+customise:
 
 ```toml
 # Copy to /etc/rpp/node.toml or similar and adjust secrets and paths
@@ -83,17 +89,27 @@ gossip_rate_limit_per_sec = 256
 tier2_min_uptime_hours = 48
 ```
 
+After adjusting the node template, apply the same review to your wallet file.
+Validator and hybrid profiles reuse the node key material and enable telemetry
+for the embedded Electrs services, so double-check gossip endpoints and the
+tracker/metrics bindings before pushing the bundle to production.【F:rpp/runtime/config.rs†L1249-L1313】
+
 Key tips while editing the configuration:
 
 - **Feature gates:** All runtime feature toggles share the
   `rollout.feature_gates` map. Keep optional backends like `malachite_consensus`
   and `witness_network` disabled until their circuits are deployed, but leave
   the base proof and pruning gates enabled so block production succeeds.
-- **Telemetry:** Enabling `rollout.telemetry.enabled` without providing an
-  `endpoint` keeps telemetry in structured logs. Set `endpoint` (or pass
-  `--telemetry-endpoint` to the binary) to push snapshots to your collector. A
-  shorter `sample_interval_secs` increases metric freshness at the cost of more
-  network traffic.
+- **Telemetry (node runtime):** Enabling `rollout.telemetry.enabled` without
+  providing an `endpoint` keeps telemetry in structured logs. Set `endpoint`
+  (or pass `--telemetry-endpoint` to the binary) to push snapshots to your
+  collector. A shorter `sample_interval_secs` increases metric freshness at the
+  cost of more network traffic.【F:config/validator.toml†L45-L59】【F:rpp/node/src/lib.rs†L35-L111】
+- **Telemetry (wallet runtime):** Hybrid and validator wallets enable telemetry
+  caches and tracker emission by default. When running the wallet runtime in
+  isolation, either keep the defaults or point `electrs.cache.telemetry` and
+  `electrs.tracker.telemetry_endpoint` at your collector to preserve the same
+  visibility level.【F:config/wallet.toml†L9-L31】【F:rpp/runtime/config.rs†L1269-L1313】
 - **Snapshots and proofs:** Place `snapshot_dir` and `proof_cache_dir` on fast,
   persistent storage. Missing snapshots force peers to re-sync from genesis and
   slow down validator recovery after restarts.
@@ -101,16 +117,34 @@ Key tips while editing the configuration:
   `/status/mempool` telemetry to ensure external users cannot exhaust CPU with
   bursts of submission attempts.
 
-## 4. Launch the Validator
+## 4. Launch the Validator or Hybrid runtime
 
 Create a systemd service, Kubernetes deployment, or supervise the binary with
-`tmux` during testing. The simplest launch command looks like this:
+`tmux` during testing. Launch validator mode with both configuration files so
+the node and wallet components come up together:
 
 ```sh
 RUST_LOG=info ./target/release/rpp-node \
-  --config /etc/rpp/node.toml \
+  --mode validator \
+  --config /etc/rpp/validator.toml \
+  --wallet-config /etc/rpp/wallet.toml \
+  --telemetry-endpoint https://telemetry.example.com:4317 \
+  --telemetry-sample-interval 15
+```
+
+Hybrid deployments that expose wallet functionality alongside a validator can
+swap `--mode hybrid` and point at the hybrid profile instead:
+
+```sh
+RUST_LOG=info ./target/release/rpp-node \
+  --mode hybrid \
+  --config /etc/rpp/hybrid.toml \
+  --wallet-config /etc/rpp/wallet.toml \
   --telemetry-endpoint https://telemetry.example.com:4317
 ```
+
+The CLI also supports `--log-json`, RPC overrides, and other telemetry
+shortcuts when you need to override defaults at launch time.【F:rpp/node/src/lib.rs†L35-L111】
 
 Verify the node has joined the gossip network via `/status/p2p` and confirm the
 release channel, feature-gate state, and telemetry health via
