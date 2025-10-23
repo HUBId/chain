@@ -173,7 +173,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
-        let config = load_or_init_node_config(node_config_path)?;
+        let config = load_or_init_node_config(node_config_path, resolved.mode)?;
         let addr = config.rpc_listen;
         rpc_auth_token = config.rpc_auth_token.clone();
         rpc_allowed_origin = config.rpc_allowed_origin.clone();
@@ -356,7 +356,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
 }
 
 fn generate_config(path: PathBuf) -> Result<()> {
-    let config = NodeConfig::default();
+    let config = node_config_template_for_path(&path, RuntimeMode::Node);
     config.ensure_directories()?;
     config.save(&path)?;
     info!(?path, "wrote default configuration");
@@ -391,7 +391,7 @@ fn migrate_storage(config_path: PathBuf, dry_run: bool) -> Result<()> {
     let config = if config_path.exists() {
         NodeConfig::load(&config_path)?
     } else {
-        NodeConfig::default()
+        node_config_template_for_path(&config_path, RuntimeMode::Node)
     };
     let db_path = config.data_dir.join("db");
     if !db_path.exists() {
@@ -430,13 +430,13 @@ fn migrate_storage(config_path: PathBuf, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-fn load_or_init_node_config(path: &Path) -> Result<NodeConfig> {
+fn load_or_init_node_config(path: &Path, mode: RuntimeMode) -> Result<NodeConfig> {
     if path.exists() {
         let config = NodeConfig::load(path)?;
         config.validate()?;
         Ok(config)
     } else {
-        let config = NodeConfig::default();
+        let config = node_config_template_for_path(path, mode);
         config.save(path)?;
         Ok(config)
     }
@@ -449,6 +449,29 @@ fn load_or_init_wallet_config(path: &Path) -> Result<WalletConfig> {
         let config = WalletConfig::default();
         config.save(path)?;
         Ok(config)
+    }
+}
+
+fn default_node_config_path_for_mode(mode: RuntimeMode) -> Option<&'static str> {
+    match mode {
+        RuntimeMode::Node => Some("config/node.toml"),
+        RuntimeMode::Hybrid => Some("config/hybrid.toml"),
+        RuntimeMode::Validator => Some("config/validator.toml"),
+        RuntimeMode::Wallet => None,
+    }
+}
+
+fn node_config_template_for_path(path: &Path, mode: RuntimeMode) -> NodeConfig {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+
+    match file_name {
+        "validator.toml" => NodeConfig::for_validator(),
+        "hybrid.toml" => NodeConfig::for_hybrid(),
+        "node.toml" => NodeConfig::for_node(),
+        _ => NodeConfig::for_mode(mode),
     }
 }
 
@@ -473,7 +496,9 @@ impl StartArgs {
         }
 
         if mode.includes_node() && node_config.is_none() {
-            node_config = Some(PathBuf::from("config/node.toml"));
+            if let Some(default_path) = default_node_config_path_for_mode(mode) {
+                node_config = Some(PathBuf::from(default_path));
+            }
         }
         if mode.includes_wallet() && wallet_config.is_none() {
             wallet_config = Some(PathBuf::from("config/wallet.toml"));
