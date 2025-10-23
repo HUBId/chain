@@ -1,0 +1,40 @@
+name: Nightly fuzzing
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Run fuzzers
+        working-directory: rpp/p2p
+        run: |
+          cargo +nightly fuzz run handle_meta -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_meta-
+          cargo +nightly fuzz run handle_blocks -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_blocks-
+          cargo +nightly fuzz run handle_votes -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_votes-
+          cargo +nightly fuzz run admission_evaluate_publish -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/admission_evaluate_publish-
+
+      - name: Package corpora
+        working-directory: rpp/p2p/fuzz
+        run: |
+          mkdir -p ../../ci-artifacts
+          tar -czf ../../ci-artifacts/nightly-fuzz-corpus.tar.gz corpus
+
+      - name: Upload corpora
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-fuzz-corpus
+          path: ci-artifacts/nightly-fuzz-corpus.tar.gz

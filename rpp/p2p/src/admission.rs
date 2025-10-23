@@ -210,6 +210,22 @@ impl AdmissionControl {
         Ok(snapshot)
     }
 
+    pub fn evaluate_publish(
+        &self,
+        peer: &PeerId,
+        topic: GossipTopic,
+    ) -> Result<ReputationSnapshot, AdmissionError> {
+        self.can_remote_publish(peer, topic)
+    }
+
+    pub fn sanitize_evaluate_publish(
+        &self,
+        peer: &PeerId,
+        topic: GossipTopic,
+    ) -> Result<(), AdmissionError> {
+        self.evaluate_publish(peer, topic).map(|_| ())
+    }
+
     pub fn record_event(
         &self,
         peer: PeerId,
