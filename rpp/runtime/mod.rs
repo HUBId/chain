@@ -134,7 +134,7 @@ mod tests {
         let mut file = fs::File::create(&profile_path).expect("profile file");
         writeln!(
             file,
-            "mode = \"validator\"\nnode_config = \"../node.toml\"\nwallet_config = \"../wallet.toml\""
+            "mode = \"validator\"\nnode_config = \"../validator.toml\"\nwallet_config = \"../wallet.toml\""
         )
         .expect("write profile");
         drop(file);
@@ -143,7 +143,7 @@ mod tests {
         assert_eq!(profile.mode(), Some(RuntimeMode::Validator));
         assert_eq!(
             profile.node_config_path().expect("node path"),
-            profile_path.parent().unwrap().join("../node.toml")
+            profile_path.parent().unwrap().join("../validator.toml")
         );
         assert_eq!(
             profile.wallet_config_path().expect("wallet path"),
