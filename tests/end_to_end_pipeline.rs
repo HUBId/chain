@@ -25,6 +25,10 @@ async fn orchestrated_pipeline_finalises_transaction() {
         .await
         .expect("cluster mesh");
 
+    let consensus_baseline = cluster
+        .consensus_snapshots()
+        .expect("capture consensus baseline");
+
     let (primary_handle, orchestrator, wallet, recipient) = {
         let nodes = cluster.nodes();
         let primary = &nodes[0];
@@ -61,6 +65,11 @@ async fn orchestrated_pipeline_finalises_transaction() {
             .await
             .unwrap_or_else(|err| panic!("stage {stage:?} not reached: {err}"));
     }
+
+    cluster
+        .wait_for_quorum_progress(&consensus_baseline, STAGE_TIMEOUT)
+        .await
+        .expect("quorum progress");
 
     let account = primary_handle
         .get_account(wallet.address())
