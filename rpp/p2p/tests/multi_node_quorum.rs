@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
@@ -5,6 +6,7 @@ use libp2p::PeerId;
 use tokio::sync::broadcast;
 use tokio::time::{self, timeout};
 
+use rpp_chain::consensus::BftVoteKind;
 use rpp_chain::runtime::node_runtime::node::{NodeError, NodeEvent};
 use rpp_chain::types::block::Block;
 use rpp_p2p::{GossipTopic, NetworkError, TierLevel};
@@ -15,7 +17,7 @@ mod cluster;
 mod consensus;
 
 use cluster::{TestCluster, TestClusterNode};
-use consensus::signed_votes_for_round;
+use consensus::{consensus_round_for_block, signed_votes_for_round};
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -54,57 +56,97 @@ async fn multi_node_votes_reach_quorum() -> Result<()> {
             );
         }
 
+        let mut subscriptions: Vec<(usize, PeerId, broadcast::Receiver<NodeEvent>)> = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.index,
+                    node.p2p_handle.local_peer_id(),
+                    node.p2p_handle.subscribe(),
+                )
+            })
+            .collect();
+
         let leader = &nodes[0];
-        let mut events = leader.p2p_handle.subscribe();
+        let broadcaster = &nodes[1];
+        let broadcaster_peer = broadcaster.p2p_handle.local_peer_id();
 
         let tip_block = wait_for_tip_block(leader).await?;
+        let round = consensus_round_for_block(leader, &tip_block, nodes)
+            .context("rebuild consensus round for block")?;
+        ensure!(
+            round.round() == tip_block.consensus.round,
+            "rebuilt round {} did not match block round {}",
+            round.round(),
+            tip_block.consensus.round
+        );
+        ensure!(
+            round.height() == tip_block.header.height,
+            "rebuilt height {} did not match block height {}",
+            round.height(),
+            tip_block.header.height
+        );
+
         let proposal = serde_json::to_vec(&tip_block).context("encode block proposal")?;
 
-        nodes[1]
+        broadcaster
             .p2p_handle
             .publish_gossip(GossipTopic::Blocks, proposal)
             .await
             .context("publish block proposal")?;
 
-        wait_for_block_proposal(&mut events, nodes[1].p2p_handle.local_peer_id()).await?;
+        for (node_index, _, events) in subscriptions.iter_mut() {
+            wait_for_block_proposal(*node_index, events, broadcaster_peer, &tip_block.hash).await?;
+        }
 
-        let commit_pairs = signed_votes_for_round(
-            nodes,
-            tip_block.header.height,
-            tip_block.consensus.round,
-            &tip_block.hash,
-        )
-        .context("assemble quorum votes")?;
+        let vote_pairs =
+            signed_votes_for_round(nodes, round.height(), round.round(), &tip_block.hash)
+                .context("assemble quorum votes")?;
 
-        for (node, (_, precommit)) in nodes.iter().zip(commit_pairs.into_iter()) {
-            if node.index == leader.index {
-                continue;
+        let expected_vote_counts: HashMap<PeerId, usize> = nodes
+            .iter()
+            .map(|node| (node.p2p_handle.local_peer_id(), 2))
+            .collect();
+
+        for (node, (prevote, precommit)) in nodes.iter().zip(vote_pairs.into_iter()) {
+            for vote in [prevote, precommit] {
+                let payload = serde_json::to_vec(&vote).context("encode vote payload")?;
+                let vote_kind = match &vote.vote.kind {
+                    BftVoteKind::PreVote => "prevote",
+                    BftVoteKind::PreCommit => "precommit",
+                };
+                match node
+                    .p2p_handle
+                    .publish_gossip(GossipTopic::Votes, payload)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(NodeError::Network(NetworkError::Admission(err))) => {
+                        return Err(anyhow!(
+                            "peer {0} was not permitted to publish {1} votes: {2:?}",
+                            node.index,
+                            vote_kind,
+                            err
+                        ));
+                    }
+                    Err(err) => {
+                        return Err(anyhow!(
+                            "failed to publish {0} vote from peer {1}: {2:?}",
+                            vote_kind,
+                            node.index,
+                            err
+                        ));
+                    }
+                }
             }
+        }
 
-            let payload = serde_json::to_vec(&precommit).context("encode vote payload")?;
-            match node
-                .p2p_handle
-                .publish_gossip(GossipTopic::Votes, payload)
+        for (node_index, peer_id, events) in subscriptions.iter_mut() {
+            wait_for_votes(*node_index, events, &tip_block.hash, &expected_vote_counts)
                 .await
-            {
-                Ok(()) => {}
-                Err(NodeError::Network(NetworkError::Admission(err))) => {
-                    return Err(anyhow!(
-                        "peer {0} was not permitted to publish votes: {1:?}",
-                        node.index,
-                        err
-                    ));
-                }
-                Err(err) => {
-                    return Err(anyhow!(
-                        "failed to publish vote from peer {0}: {1:?}",
-                        node.index,
-                        err
-                    ));
-                }
-            }
-
-            wait_for_vote(&mut events, node.p2p_handle.local_peer_id()).await?;
+                .with_context(|| {
+                    format!("node {node_index} (peer {peer_id:?}) waiting for votes")
+                })?;
         }
 
         Ok(())
@@ -142,17 +184,25 @@ async fn wait_for_tip_block(node: &TestClusterNode) -> Result<Block> {
 }
 
 async fn wait_for_block_proposal(
+    node_index: usize,
     events: &mut broadcast::Receiver<NodeEvent>,
     expected_peer: PeerId,
+    expected_hash: &str,
 ) -> Result<()> {
     timeout(EVENT_TIMEOUT, async {
         loop {
             match events.recv().await {
-                Ok(NodeEvent::BlockProposal { peer, .. }) if peer == expected_peer => {
-                    return Ok(());
+                Ok(NodeEvent::BlockProposal { peer, block }) if peer == expected_peer => {
+                    if block.hash == expected_hash {
+                        return Ok(());
+                    }
                 }
-                Ok(NodeEvent::BlockRejected { peer, reason, .. }) if peer == expected_peer => {
-                    return Err(anyhow!("block proposal rejected from {peer:?}: {reason}"));
+                Ok(NodeEvent::BlockRejected { peer, block, reason })
+                    if peer == expected_peer && block.hash == expected_hash =>
+                {
+                    return Err(anyhow!(
+                        "node {node_index} observed block proposal rejection from {peer:?}: {reason}"
+                    ));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -165,18 +215,50 @@ async fn wait_for_block_proposal(
     Ok(())
 }
 
-async fn wait_for_vote(
+async fn wait_for_votes(
+    node_index: usize,
     events: &mut broadcast::Receiver<NodeEvent>,
-    expected_peer: PeerId,
+    expected_hash: &str,
+    expected_counts: &HashMap<PeerId, usize>,
 ) -> Result<()> {
     timeout(EVENT_TIMEOUT, async {
+        let mut remaining: HashMap<PeerId, usize> = expected_counts
+            .iter()
+            .map(|(peer, count)| (peer.clone(), *count))
+            .collect();
+
         loop {
+            if remaining.values().all(|count| *count == 0) {
+                return Ok(());
+            }
+
             match events.recv().await {
-                Ok(NodeEvent::Vote { peer, .. }) if peer == expected_peer => {
-                    return Ok(());
+                Ok(NodeEvent::Vote { peer, vote }) => {
+                    if vote.vote.block_hash != expected_hash {
+                        continue;
+                    }
+
+                    match remaining.get_mut(&peer) {
+                        Some(count) if *count > 0 => {
+                            *count -= 1;
+                            if remaining.values().all(|count| *count == 0) {
+                                return Ok(());
+                            }
+                        }
+                        Some(_) => {}
+                        None => {
+                            return Err(anyhow!(
+                                "node {node_index} observed unexpected vote sender {peer:?} for block {expected_hash}"
+                            ));
+                        }
+                    }
                 }
-                Ok(NodeEvent::VoteRejected { peer, reason, .. }) if peer == expected_peer => {
-                    return Err(anyhow!("vote rejected from {peer:?}: {reason}"));
+                Ok(NodeEvent::VoteRejected { peer, vote, reason })
+                    if vote.vote.block_hash == expected_hash =>
+                {
+                    return Err(anyhow!(
+                        "node {node_index} observed vote rejection from {peer:?}: {reason}"
+                    ));
                 }
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -185,6 +267,6 @@ async fn wait_for_vote(
         }
     })
     .await
-    .context("waiting for vote event")??;
+    .context("waiting for vote events")??;
     Ok(())
 }
