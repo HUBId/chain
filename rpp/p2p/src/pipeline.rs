@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::vendor::PeerId;
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -265,6 +266,324 @@ impl PersistentProofStorage {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct SeenDigestRecord {
+    pub block_id: Vec<u8>,
+    pub digest: Hash,
+    pub received_at: SystemTime,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ConsensusPersistenceCache {
+    proposals: BTreeMap<Vec<u8>, ProposalState>,
+    digests: Vec<SeenDigestRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredConsensusState {
+    proposals: Vec<StoredProposalState>,
+    digests: Vec<StoredDigestRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredProposalState {
+    proposal: StoredBlockProposal,
+    votes: Vec<StoredVoteRecord>,
+    power_accumulated: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredBlockProposal {
+    id: String,
+    proposer: String,
+    payload: String,
+    received_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredVoteRecord {
+    block_id: String,
+    voter: String,
+    round: u64,
+    payload: String,
+    received_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredDigestRecord {
+    block_id: String,
+    digest: String,
+    received_at: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsensusRecoveryState {
+    pub proposals: Vec<(Vec<u8>, ProposalState)>,
+    pub seen_digests: Vec<SeenDigestRecord>,
+}
+
+#[derive(Debug)]
+pub struct PersistentConsensusStorage {
+    path: PathBuf,
+    retain: usize,
+    cache: Mutex<ConsensusPersistenceCache>,
+}
+
+impl StoredBlockProposal {
+    fn from_proposal(proposal: &BlockProposal) -> Self {
+        Self {
+            id: general_purpose::STANDARD.encode(&proposal.id),
+            proposer: proposal.proposer.to_base58(),
+            payload: general_purpose::STANDARD.encode(&proposal.payload),
+            received_at: proposal
+                .received_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+
+    fn try_into_proposal(self) -> Result<BlockProposal, PipelineError> {
+        let id = general_purpose::STANDARD
+            .decode(self.id)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        let proposer = PeerId::from_str(&self.proposer)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        let payload = general_purpose::STANDARD
+            .decode(self.payload)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        Ok(BlockProposal {
+            id,
+            proposer,
+            payload,
+            received_at: UNIX_EPOCH + Duration::from_secs(self.received_at),
+        })
+    }
+}
+
+impl StoredVoteRecord {
+    fn from_vote(record: &VoteRecord) -> Self {
+        Self {
+            block_id: general_purpose::STANDARD.encode(&record.block_id),
+            voter: record.voter.to_base58(),
+            round: record.round,
+            payload: general_purpose::STANDARD.encode(&record.payload),
+            received_at: record
+                .received_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+
+    fn try_into_vote(self) -> Result<VoteRecord, PipelineError> {
+        let block_id = general_purpose::STANDARD
+            .decode(self.block_id)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        let voter = PeerId::from_str(&self.voter)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        let payload = general_purpose::STANDARD
+            .decode(self.payload)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        Ok(VoteRecord {
+            block_id,
+            voter,
+            round: self.round,
+            payload,
+            received_at: UNIX_EPOCH + Duration::from_secs(self.received_at),
+        })
+    }
+}
+
+impl StoredProposalState {
+    fn from_state(state: &ProposalState) -> Self {
+        Self {
+            proposal: StoredBlockProposal::from_proposal(&state.proposal),
+            votes: state
+                .votes
+                .values()
+                .map(StoredVoteRecord::from_vote)
+                .collect(),
+            power_accumulated: state.power_accumulated,
+        }
+    }
+
+    fn try_into_state(self) -> Result<ProposalState, PipelineError> {
+        let proposal = self.proposal.try_into_proposal()?;
+        let mut votes = HashMap::new();
+        for vote in self.votes {
+            let record = vote.try_into_vote()?;
+            votes.insert(record.voter, record);
+        }
+        Ok(ProposalState {
+            proposal,
+            votes,
+            power_accumulated: self.power_accumulated,
+        })
+    }
+}
+
+impl StoredDigestRecord {
+    fn from_record(record: &SeenDigestRecord) -> Self {
+        Self {
+            block_id: general_purpose::STANDARD.encode(&record.block_id),
+            digest: record.digest.to_hex().to_string(),
+            received_at: record
+                .received_at
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+
+    fn try_into_record(self) -> Result<SeenDigestRecord, PipelineError> {
+        let block_id = general_purpose::STANDARD
+            .decode(self.block_id)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        let digest_bytes =
+            hex::decode(self.digest).map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        if digest_bytes.len() != 32 {
+            return Err(PipelineError::Persistence("invalid digest".into()));
+        }
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&digest_bytes);
+        Ok(SeenDigestRecord {
+            block_id,
+            digest: Hash::from(digest),
+            received_at: UNIX_EPOCH + Duration::from_secs(self.received_at),
+        })
+    }
+}
+
+impl PersistentConsensusStorage {
+    pub fn with_capacity(path: impl Into<PathBuf>, retain: usize) -> Result<Self, PipelineError> {
+        let path = path.into();
+        let cache = if path.exists() {
+            let raw = fs::read_to_string(&path)
+                .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+            if raw.trim().is_empty() {
+                ConsensusPersistenceCache::default()
+            } else {
+                let stored: StoredConsensusState = serde_json::from_str(&raw)
+                    .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+                let mut proposals = BTreeMap::new();
+                for state in stored.proposals {
+                    let state = state.try_into_state()?;
+                    proposals.insert(state.proposal.id.clone(), state);
+                }
+                let mut digests = Vec::new();
+                for record in stored.digests {
+                    digests.push(record.try_into_record()?);
+                }
+                ConsensusPersistenceCache { proposals, digests }
+            }
+        } else {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+            }
+            ConsensusPersistenceCache::default()
+        };
+        Ok(Self {
+            path,
+            retain: retain.max(1),
+            cache: Mutex::new(cache),
+        })
+    }
+
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, PipelineError> {
+        Self::with_capacity(path, 1024)
+    }
+
+    pub fn load(&self) -> Result<ConsensusRecoveryState, PipelineError> {
+        let cache = self.cache.lock().clone();
+        Ok(ConsensusRecoveryState {
+            proposals: cache
+                .proposals
+                .into_iter()
+                .map(|(id, state)| (id, state))
+                .collect(),
+            seen_digests: cache.digests,
+        })
+    }
+
+    pub fn persist_proposal(&self, state: &ProposalState) -> Result<(), PipelineError> {
+        let mut cache = self.cache.lock();
+        cache
+            .proposals
+            .insert(state.proposal.id.clone(), state.clone());
+        self.enforce_capacity(&mut cache);
+        self.persist_inner(&cache)
+    }
+
+    pub fn persist_vote(
+        &self,
+        state: &ProposalState,
+        digest_record: SeenDigestRecord,
+    ) -> Result<(), PipelineError> {
+        let mut cache = self.cache.lock();
+        cache
+            .proposals
+            .insert(state.proposal.id.clone(), state.clone());
+        cache.digests.push(digest_record);
+        self.enforce_capacity(&mut cache);
+        self.persist_inner(&cache)
+    }
+
+    pub fn prune(&self, block_id: &[u8]) -> Result<Vec<Hash>, PipelineError> {
+        let mut cache = self.cache.lock();
+        cache.proposals.remove(block_id);
+        let mut removed = Vec::new();
+        cache.digests.retain(|record| {
+            if record.block_id == block_id {
+                removed.push(record.digest);
+                false
+            } else {
+                true
+            }
+        });
+        self.persist_inner(&cache)?;
+        Ok(removed)
+    }
+
+    fn enforce_capacity(&self, cache: &mut ConsensusPersistenceCache) {
+        while cache.proposals.len() > self.retain {
+            if let Some((oldest_key, _)) = cache.proposals.iter().min_by_key(|(_, state)| {
+                state
+                    .proposal
+                    .received_at
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+            }) {
+                let key = oldest_key.clone();
+                cache.proposals.remove(&key);
+                cache.digests.retain(|record| record.block_id != key);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn persist_inner(&self, cache: &ConsensusPersistenceCache) -> Result<(), PipelineError> {
+        let stored = StoredConsensusState {
+            proposals: cache
+                .proposals
+                .values()
+                .map(StoredProposalState::from_state)
+                .collect(),
+            digests: cache
+                .digests
+                .iter()
+                .map(StoredDigestRecord::from_record)
+                .collect(),
+        };
+        let encoded = serde_json::to_string_pretty(&stored)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        fs::write(&self.path, encoded).map_err(|err| PipelineError::Persistence(err.to_string()))
+    }
+}
+
 impl ProofStorage for PersistentProofStorage {
     fn persist(&self, record: &ProofRecord) -> Result<(), PipelineError> {
         let mut guard = self.cache.lock();
@@ -387,6 +706,7 @@ pub struct ConsensusPipeline {
     total_power: f64,
     threshold_factor: f64,
     proposals: HashMap<Vec<u8>, ProposalState>,
+    storage: Option<Arc<PersistentConsensusStorage>>,
 }
 
 impl ConsensusPipeline {
@@ -396,7 +716,23 @@ impl ConsensusPipeline {
             total_power: 0.0,
             threshold_factor: 2.0 / 3.0,
             proposals: HashMap::new(),
+            storage: None,
         }
+    }
+
+    pub fn new_with_storage(
+        storage: Arc<PersistentConsensusStorage>,
+    ) -> Result<(Self, Vec<SeenDigestRecord>), PipelineError> {
+        let state = storage.load()?;
+        let mut pipeline = Self::new();
+        pipeline.storage = Some(storage);
+        let digests = pipeline.rehydrate_from(state);
+        Ok((pipeline, digests))
+    }
+
+    pub fn rehydrate_from(&mut self, state: ConsensusRecoveryState) -> Vec<SeenDigestRecord> {
+        self.proposals = state.proposals.into_iter().collect();
+        state.seen_digests
     }
 
     pub fn register_voter(&mut self, peer: PeerId, power: f64) {
@@ -428,15 +764,16 @@ impl ConsensusPipeline {
             payload,
             received_at: SystemTime::now(),
         };
+        let key = proposal.id.clone();
         self.proposals.insert(
-            id,
+            key.clone(),
             ProposalState {
                 proposal,
                 votes: HashMap::new(),
                 power_accumulated: 0.0,
             },
         );
-        Ok(())
+        self.persist_proposal(&key)
     }
 
     pub fn ingest_vote(
@@ -451,25 +788,34 @@ impl ConsensusPipeline {
             _ => return Err(PipelineError::UnknownVoter),
         };
         let threshold = self.quorum_threshold();
-        let state = self
-            .proposals
-            .get_mut(block_id)
-            .ok_or(PipelineError::UnknownProposal)?;
-        if state.votes.contains_key(&voter) {
-            return Ok(VoteOutcome::Duplicate);
+        let mut power_accumulated;
+        let reached_quorum;
+        let digest;
+        {
+            let state = self
+                .proposals
+                .get_mut(block_id)
+                .ok_or(PipelineError::UnknownProposal)?;
+            if state.votes.contains_key(&voter) {
+                return Ok(VoteOutcome::Duplicate);
+            }
+            digest = blake3::hash(&payload);
+            let record = VoteRecord {
+                block_id: block_id.to_vec(),
+                voter: voter.clone(),
+                round,
+                payload,
+                received_at: SystemTime::now(),
+            };
+            state.power_accumulated += power;
+            power_accumulated = state.power_accumulated;
+            reached_quorum = power_accumulated >= threshold;
+            state.votes.insert(voter.clone(), record);
         }
-        let record = VoteRecord {
-            block_id: block_id.to_vec(),
-            voter,
-            round,
-            payload,
-            received_at: SystemTime::now(),
-        };
-        state.power_accumulated += power;
-        state.votes.insert(voter, record);
+        self.persist_vote(block_id, &voter, digest)?;
         Ok(VoteOutcome::Recorded {
-            reached_quorum: state.power_accumulated >= threshold,
-            power: state.power_accumulated,
+            reached_quorum,
+            power: power_accumulated,
         })
     }
 
@@ -481,6 +827,47 @@ impl ConsensusPipeline {
         self.proposals
             .get(id)
             .map(|state| state.votes.values().cloned().collect())
+    }
+
+    pub fn persist_proposal(&self, id: &[u8]) -> Result<(), PipelineError> {
+        if let Some(storage) = &self.storage {
+            if let Some(state) = self.proposals.get(id) {
+                storage.persist_proposal(state)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn persist_vote(
+        &self,
+        block_id: &[u8],
+        voter: &PeerId,
+        digest: Hash,
+    ) -> Result<(), PipelineError> {
+        let Some(storage) = &self.storage else {
+            return Ok(());
+        };
+        let Some(state) = self.proposals.get(block_id) else {
+            return Ok(());
+        };
+        let Some(record) = state.votes.get(voter) else {
+            return Ok(());
+        };
+        let digest_record = SeenDigestRecord {
+            block_id: block_id.to_vec(),
+            digest,
+            received_at: record.received_at,
+        };
+        storage.persist_vote(state, digest_record)
+    }
+
+    pub fn prune(&mut self, block_id: &[u8]) -> Result<Vec<Hash>, PipelineError> {
+        self.proposals.remove(block_id);
+        if let Some(storage) = &self.storage {
+            storage.prune(block_id)
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     fn quorum_threshold(&self) -> f64 {
@@ -1026,8 +1413,8 @@ fn decode_base64_digest(value: &str) -> Result<[u8; 32], PipelineError> {
 }
 
 fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
-    use blake2::Blake2s256;
     use blake2::digest::Digest;
+    use blake2::Blake2s256;
 
     if leaves.is_empty() {
         let mut hasher = Blake2s256::new();
@@ -1167,11 +1554,9 @@ mod tests {
 
         let peer: PeerId = PeerId::random();
         let payload = b"proof-payload".to_vec();
-        assert!(
-            pipeline
-                .ingest(peer, GossipTopic::Proofs, payload.clone())
-                .unwrap()
-        );
+        assert!(pipeline
+            .ingest(peer, GossipTopic::Proofs, payload.clone())
+            .unwrap());
         assert_eq!(pipeline.len(), 1);
         assert_eq!(*validator.0.lock(), 1);
 
@@ -1253,6 +1638,43 @@ mod tests {
         assert!(matches!(
             pipeline
                 .ingest_vote(&block_id, voters[1], 0, b"vote-1".to_vec())
+                .unwrap(),
+            VoteOutcome::Duplicate
+        ));
+    }
+
+    #[tokio::test]
+    async fn consensus_pipeline_persists_across_restarts() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let path = dir.path().join("consensus_pipeline.json");
+        let storage =
+            Arc::new(PersistentConsensusStorage::with_capacity(&path, 8).expect("storage"));
+        let (mut pipeline, recovered) =
+            ConsensusPipeline::new_with_storage(storage.clone()).expect("pipeline");
+        assert!(recovered.is_empty());
+
+        let voter = PeerId::random();
+        pipeline.register_voter(voter, 1.0);
+        let block_id = b"block-1".to_vec();
+        pipeline
+            .ingest_proposal(block_id.clone(), PeerId::random(), b"block".to_vec())
+            .unwrap();
+        assert!(matches!(
+            pipeline
+                .ingest_vote(&block_id, voter, 0, b"vote".to_vec())
+                .unwrap(),
+            VoteOutcome::Recorded { .. }
+        ));
+
+        drop(pipeline);
+
+        let (mut recovered_pipeline, digests) =
+            ConsensusPipeline::new_with_storage(storage).expect("recovered");
+        assert_eq!(digests.len(), 1);
+        recovered_pipeline.register_voter(voter, 1.0);
+        assert!(matches!(
+            recovered_pipeline
+                .ingest_vote(&block_id, voter, 0, b"vote".to_vec())
                 .unwrap(),
             VoteOutcome::Duplicate
         ));
@@ -1395,8 +1817,8 @@ mod interface_schemas {
         NetworkStateSyncPlan,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::Serialize;
     use serde::de::DeserializeOwned;
+    use serde::Serialize;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};

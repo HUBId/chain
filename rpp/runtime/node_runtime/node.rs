@@ -6,12 +6,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use blake3::Hash;
 use libp2p::PeerId;
 use log::{debug, info, warn};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rpp_p2p::{
     ConsensusPipeline, GossipTopic, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
     NetworkEvent, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NodeIdentity,
-    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast,
-    RuntimeProofValidator, TierLevel, VoteOutcome,
+    PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
+    ReputationBroadcast, RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time;
@@ -159,6 +159,7 @@ pub struct NodeRuntimeConfig {
     pub telemetry: TelemetryConfig,
     pub identity: Option<IdentityProfile>,
     pub proof_storage_path: PathBuf,
+    pub consensus_storage_path: PathBuf,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -169,6 +170,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             telemetry: config.rollout.telemetry.clone(),
             identity: None,
             proof_storage_path: config.proof_cache_dir.join("gossip_proofs.json"),
+            consensus_storage_path: config.consensus_pipeline_path.clone(),
         }
     }
 }
@@ -248,9 +250,9 @@ struct GossipPipelines {
     proofs: ProofMempool,
     light_client: LightClientSync,
     block_cache: HashSet<Hash>,
-    vote_cache: HashSet<Hash>,
+    vote_cache: Mutex<HashSet<Hash>>,
     meta_cache: HashSet<Hash>,
-    consensus: ConsensusPipeline,
+    consensus: Mutex<ConsensusPipeline>,
 }
 
 #[derive(Debug)]
@@ -264,7 +266,7 @@ enum BlockIngestResult {
 #[derive(Debug)]
 enum VoteIngestResult {
     Duplicate,
-    Valid(SignedBftVote),
+    Valid { vote: SignedBftVote, digest: Hash },
     Invalid { vote: SignedBftVote, reason: String },
     DecodeFailed(String),
 }
@@ -286,44 +288,61 @@ impl GossipPipelines {
         let proofs = ProofMempool::new(validator, storage)?;
         let verifier = Arc::new(RuntimeRecursiveProofVerifier::new(registry));
         let light_client = LightClientSync::new(verifier);
+        let consensus_storage = Arc::new(PersistentConsensusStorage::open(
+            &config.consensus_storage_path,
+        )?);
+        let (consensus, persisted_digests) =
+            ConsensusPipeline::new_with_storage(consensus_storage)?;
+        let mut vote_cache = HashSet::new();
+        for record in persisted_digests {
+            vote_cache.insert(record.digest);
+        }
         Ok(Self {
             proofs,
             light_client,
             block_cache: HashSet::new(),
-            vote_cache: HashSet::new(),
+            vote_cache: Mutex::new(vote_cache),
             meta_cache: HashSet::new(),
-            consensus: ConsensusPipeline::new(),
+            consensus: Mutex::new(consensus),
         })
     }
 
-    fn register_voter(&mut self, peer: PeerId, tier: TierLevel) {
+    fn register_voter(&self, peer: PeerId, tier: TierLevel) {
         let power = Self::tier_voting_power(tier);
-        self.consensus.register_voter(peer, power);
+        self.consensus.lock().register_voter(peer, power);
     }
 
-    fn remove_voter(&mut self, peer: &PeerId) {
-        self.consensus.remove_voter(peer);
+    fn remove_voter(&self, peer: &PeerId) {
+        self.consensus.lock().remove_voter(peer);
     }
 
     fn ingest_proposal(
-        &mut self,
+        &self,
         peer: PeerId,
         block_hash: &str,
         payload: Vec<u8>,
     ) -> Result<(), PipelineError> {
         self.consensus
+            .lock()
             .ingest_proposal(block_hash.as_bytes().to_vec(), peer, payload)
     }
 
     fn ingest_vote(
-        &mut self,
+        &self,
         peer: PeerId,
         block_hash: &str,
         round: u64,
         payload: Vec<u8>,
+        digest: Hash,
     ) -> Result<VoteOutcome, PipelineError> {
-        self.consensus
-            .ingest_vote(block_hash.as_bytes(), peer, round, payload)
+        let result = self
+            .consensus
+            .lock()
+            .ingest_vote(block_hash.as_bytes(), peer, round, payload);
+        if result.is_err() {
+            self.vote_cache.lock().remove(&digest);
+        }
+        result
     }
 
     fn tier_voting_power(tier: TierLevel) -> f64 {
@@ -358,24 +377,38 @@ impl GossipPipelines {
 
     fn handle_votes(&mut self, _peer: PeerId, data: Vec<u8>) -> VoteIngestResult {
         let digest = blake3::hash(&data);
-        if !self.vote_cache.insert(digest) {
-            return VoteIngestResult::Duplicate;
+        {
+            let mut cache = self.vote_cache.lock();
+            if !cache.insert(digest) {
+                return VoteIngestResult::Duplicate;
+            }
         }
         let vote: SignedBftVote = match serde_json::from_slice(&data) {
             Ok(vote) => vote,
             Err(err) => {
+                self.vote_cache.lock().remove(&digest);
                 return VoteIngestResult::DecodeFailed(format!(
                     "invalid vote payload encoding: {err}"
                 ));
             }
         };
         if let Err(err) = vote.verify() {
+            self.vote_cache.lock().remove(&digest);
             return VoteIngestResult::Invalid {
                 vote,
                 reason: format!("vote verification failed: {err}"),
             };
         }
-        VoteIngestResult::Valid(vote)
+        VoteIngestResult::Valid { vote, digest }
+    }
+
+    fn prune(&self, block_hash: &str) -> Result<(), PipelineError> {
+        let digests = self.consensus.lock().prune(block_hash.as_bytes())?;
+        let mut cache = self.vote_cache.lock();
+        for digest in digests {
+            cache.remove(&digest);
+        }
+        Ok(())
     }
 
     fn handle_proofs(&mut self, peer: PeerId, data: Vec<u8>) {
@@ -705,13 +738,14 @@ impl NodeInner {
                                         "duplicate vote gossip ignored"
                                     );
                                 }
-                                VoteIngestResult::Valid(vote) => {
+                                VoteIngestResult::Valid { vote, digest } => {
                                     debug!(target: "node", ?peer, "vote gossip ingested");
                                     match self.pipelines.ingest_vote(
                                         peer.clone(),
                                         &vote.vote.block_hash,
                                         vote.vote.round,
                                         data.clone(),
+                                        digest,
                                     ) {
                                         Ok(VoteOutcome::Recorded {
                                             reached_quorum,
@@ -724,6 +758,16 @@ impl NodeInner {
                                                     power = power,
                                                     "consensus quorum reached via gossip"
                                                 );
+                                                if let Err(err) =
+                                                    self.pipelines.prune(&vote.vote.block_hash)
+                                                {
+                                                    warn!(
+                                                        target: "node",
+                                                        ?peer,
+                                                        ?err,
+                                                        "failed to prune consensus pipeline"
+                                                    );
+                                                }
                                             }
                                             let _ = self.events.send(NodeEvent::Vote {
                                                 peer: peer.clone(),
@@ -1027,6 +1071,11 @@ mod tests {
             .map(|path| path.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
             .join("proofs.json");
+        let consensus_storage_path = identity_path
+            .parent()
+            .map(|path| path.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("consensus_pipeline.json");
         let mut p2p = P2pConfig::default();
         p2p.listen_addr = listen;
         p2p.bootstrap_peers = bootstrap;
@@ -1046,6 +1095,7 @@ mod tests {
             },
             identity: None,
             proof_storage_path,
+            consensus_storage_path,
         }
     }
 
@@ -1169,12 +1219,10 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(
-                    records
-                        .as_array()
-                        .map(|array| !array.is_empty())
-                        .unwrap_or(false)
-                );
+                assert!(records
+                    .as_array()
+                    .map(|array| !array.is_empty())
+                    .unwrap_or(false));
             })
             .await;
     }
