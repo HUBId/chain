@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 // NOTE: Vendored libp2p types must be used to avoid pulling upstream crates
 // directly into the test harness.
@@ -10,10 +10,13 @@ use rand::rngs::OsRng;
 use rpp_p2p::vendor::{identity, PeerId};
 use rpp_p2p::{
     AdmissionControl, AdmissionError, AllowlistedPeer, GossipTopic, HandshakePayload,
-    IdentityMetadata, IdentityVerifier, Peerstore, PeerstoreConfig, ReputationBroadcast,
-    ReputationEvent, TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
+    IdentityMetadata, IdentityVerifier, Network, NetworkError, NetworkEvent, NodeIdentity,
+    Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, TierLevel, TopicPermission,
+    VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
+use tempfile::tempdir;
+use tokio::time::timeout;
 
 struct StaticVerifier {
     expected: HashMap<String, Vec<u8>>,
@@ -58,6 +61,40 @@ fn signed_handshake(
     template.signed(keypair).expect("handshake")
 }
 
+fn template_handshake(zsi: &str, tier: TierLevel) -> HandshakePayload {
+    let mut rng = OsRng;
+    let secret = MiniSecretKey::generate_with(&mut rng);
+    let keypair = secret.expand_to_keypair(ExpansionMode::Uniform);
+    let public = keypair.public.to_bytes().to_vec();
+    let template = HandshakePayload::new(zsi.to_string(), Some(public.clone()), None, tier);
+    let proof = keypair
+        .sign_simple(VRF_HANDSHAKE_CONTEXT, &template.vrf_message())
+        .to_bytes()
+        .to_vec();
+    HandshakePayload::new(zsi.to_string(), Some(public), Some(proof), tier)
+}
+
+fn init_network(
+    dir: &tempfile::TempDir,
+    name: &str,
+    tier: TierLevel,
+    rate_limit: u64,
+    replay: usize,
+) -> Network {
+    let key_path = dir.path().join(format!("{name}.key"));
+    let identity = Arc::new(NodeIdentity::load_or_generate(&key_path).expect("identity"));
+    let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
+    Network::new(
+        identity,
+        peerstore,
+        template_handshake(name, tier),
+        None,
+        rate_limit,
+        replay,
+    )
+    .expect("network")
+}
+
 #[test]
 fn blocklisted_peers_are_banned_and_rejected() {
     let keypair = identity::Keypair::generate_ed25519();
@@ -87,6 +124,108 @@ fn blocklisted_peers_are_banned_and_rejected() {
         rpp_p2p::PeerstoreError::Blocklisted { .. } => {}
         other => panic!("expected blocklisted error, got {other:?}"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_gossip_limits_penalise_fast_publishers() {
+    let dir = tempdir().expect("tmp");
+    let mut network_a = init_network(&dir, "a", TierLevel::Tl3, 1, 256);
+    let mut network_b = init_network(&dir, "b", TierLevel::Tl3, 1, 256);
+
+    network_a
+        .listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+        .expect("listen");
+
+    let listen_addr = loop {
+        match timeout(Duration::from_secs(10), network_a.next_event()).await {
+            Ok(Ok(NetworkEvent::NewListenAddr(addr))) => break addr,
+            Ok(_) => continue,
+            other => panic!("unexpected listen event: {other:?}"),
+        }
+    };
+
+    network_b.dial(listen_addr.clone()).expect("dial");
+
+    let mut got_a = false;
+    let mut got_b = false;
+    for _ in 0..40 {
+        if !got_a {
+            if let Ok(Ok(event)) = timeout(Duration::from_millis(250), network_a.next_event()).await
+            {
+                if let NetworkEvent::HandshakeCompleted { .. } = event {
+                    got_a = true;
+                }
+            }
+        }
+        if !got_b {
+            if let Ok(Ok(event)) = timeout(Duration::from_millis(250), network_b.next_event()).await
+            {
+                if let NetworkEvent::HandshakeCompleted { .. } = event {
+                    got_b = true;
+                }
+            }
+        }
+        if got_a && got_b {
+            break;
+        }
+    }
+    assert!(got_a && got_b, "handshake exchange timed out");
+
+    assert_eq!(network_a.gossip_rate_limit().1, 1);
+    assert_eq!(network_a.replay_window_capacity(), 256);
+
+    let mut publish_ok = false;
+    for _ in 0..10 {
+        match network_b.publish(GossipTopic::Blocks, b"block-1".to_vec()) {
+            Ok(_) => {
+                publish_ok = true;
+                break;
+            }
+            Err(NetworkError::Gossipsub(msg)) if msg.contains("InsufficientPeers") => {
+                let _ = timeout(Duration::from_millis(200), network_a.next_event()).await;
+                let _ = timeout(Duration::from_millis(200), network_b.next_event()).await;
+            }
+            Err(err) => panic!("unexpected publish error: {err:?}"),
+        }
+    }
+    assert!(publish_ok, "publish did not succeed due to missing peers");
+
+    let peer_b = network_b.local_peer_id();
+    let mut success_observed = false;
+    for _ in 0..40 {
+        if let Ok(Ok(event)) = timeout(Duration::from_secs(1), network_a.next_event()).await {
+            match event {
+                NetworkEvent::ReputationUpdated { peer, label, .. }
+                    if peer == peer_b && label == "gossip_success" =>
+                {
+                    success_observed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(success_observed, "expected gossip success before penalty");
+
+    network_b
+        .publish(GossipTopic::Blocks, b"block-2".to_vec())
+        .expect("second publish");
+
+    let mut penalty_observed = false;
+    for _ in 0..40 {
+        if let Ok(Ok(event)) = timeout(Duration::from_secs(1), network_a.next_event()).await {
+            match event {
+                NetworkEvent::ReputationUpdated { peer, label, .. }
+                    if peer == peer_b && label == "gossip_rate_limit" =>
+                {
+                    penalty_observed = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(penalty_observed, "gossip rate limit penalty missing");
 }
 
 #[test]

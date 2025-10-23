@@ -508,6 +508,8 @@ impl Network {
         peerstore: Arc<Peerstore>,
         handshake: HandshakePayload,
         gossip_state: Option<Arc<GossipStateStore>>,
+        gossip_rate_limit_per_sec: u64,
+        replay_window_size: usize,
     ) -> Result<Self, NetworkError> {
         let handshake = {
             let mut payload = handshake;
@@ -521,7 +523,10 @@ impl Network {
         let event_handle_slot: Arc<Mutex<Option<Arc<ExternalEventHandle<RppBehaviourEvent>>>>> =
             Arc::new(Mutex::new(None));
 
-        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(Duration::from_secs(1), 128)));
+        let rate_limiter = Arc::new(Mutex::new(RateLimiter::new(
+            Duration::from_secs(1),
+            gossip_rate_limit_per_sec.max(1),
+        )));
         let inbound_permit = {
             let limiter = rate_limiter.clone();
             yamux::allow(move |peer: &PeerId| limiter.lock().allow(peer.clone()))
@@ -667,7 +672,7 @@ impl Network {
             handshake: handshake_state,
             identity,
             gossip_state,
-            replay: ReplayProtector::with_capacity(1024),
+            replay: ReplayProtector::with_capacity(replay_window_size),
             rate_limiter,
         };
         let push_event: Arc<dyn Fn(NetworkEvent) + Send + Sync> = {
@@ -797,6 +802,8 @@ impl Network {
         peerstore: Arc<Peerstore>,
         handshake: HandshakePayload,
         gossip_state: Option<Arc<GossipStateStore>>,
+        _gossip_rate_limit_per_sec: u64,
+        _replay_window_size: usize,
     ) -> Result<Self, NetworkError> {
         Err(NetworkError::TransportDisabled)
     }
@@ -813,6 +820,15 @@ impl Network {
             .dial(addr)
             .map_err(|err| NetworkError::Swarm(err.to_string()))?;
         Ok(())
+    }
+
+    pub fn gossip_rate_limit(&self) -> (Duration, u64) {
+        let guard = self.rate_limiter.lock();
+        (guard.interval(), guard.limit())
+    }
+
+    pub fn replay_window_capacity(&self) -> usize {
+        self.replay.capacity()
     }
 
     pub fn update_identity(
@@ -1479,7 +1495,15 @@ mod tests {
         let key_path = dir.path().join(format!("{name}.key"));
         let identity = temp_identity(&key_path);
         let peerstore = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
-        Network::new(identity, peerstore, template_handshake(name, tier), None).expect("network")
+        Network::new(
+            identity,
+            peerstore,
+            template_handshake(name, tier),
+            None,
+            128,
+            1_024,
+        )
+        .expect("network")
     }
 
     #[test]
@@ -1503,6 +1527,8 @@ mod tests {
             peerstore,
             template_handshake("node", TierLevel::Tl3),
             Some(store.clone()),
+            128,
+            1_024,
         )
         .expect("network");
 

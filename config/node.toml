@@ -27,6 +27,8 @@ listen_addr = "/ip4/0.0.0.0/tcp/7600"
 bootstrap_peers = []
 heartbeat_interval_ms = 5000
 gossip_enabled = true
+gossip_rate_limit_per_sec = 128
+replay_window_size = 1024
 peerstore_path = "./data/p2p/peerstore.json"
 gossip_path = "./data/p2p/gossip.json"
 
