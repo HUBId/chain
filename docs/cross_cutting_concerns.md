@@ -41,7 +41,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 ## 2. Telemetrie, Observability & Auditierbarkeit
 
 ### 2.1 Metriken
-* **Konsens**: Round-Dauer, Leader-Rotation, VRF-Erfolgsrate, Quorum-Latenz, Anzahl Re-Rounds.
+* **Konsens**: Round-Laufzeiten (ms), Leader-Wechsel, VRF-Erfolgsrate, Quorum-Latenzen, Witness-Gossip-Zähler, Slashing-Ereignisse und fehlgeschlagene Votes.
 * **Reputation & Timetoke**: Durchschnittliche Timetoke-Balance, Anzahl Promotion/Demotion-Events, Reputation-Decay-Statistiken.
 * **Rewards**: Verteilte Rewards pro Epoche, Leader-Bonus-Anteil, Witness-Ausschüttungen.
 * **Anti-Abuse**: Detektierte Double-Signs, Fake-Proofs, Zensurmeldungen, angewandte Slashing-Fälle.
