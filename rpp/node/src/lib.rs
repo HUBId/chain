@@ -26,6 +26,7 @@ use rpp_chain::api::ApiContext;
 use rpp_chain::config::{NodeConfig, WalletConfig};
 use rpp_chain::crypto::load_or_generate_keypair;
 use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
@@ -116,6 +117,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     let mut rpc_auth: Option<String> = None;
     let mut rpc_origin: Option<String> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
+    let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
 
     if let Some(bundle) = node_bundle.take() {
         let config = bundle.value;
@@ -162,6 +164,13 @@ pub async fn run(cli: Cli) -> Result<()> {
         rpc_origin = config.rpc_allowed_origin.clone();
         rpc_requests_per_minute = config.rpc_requests_per_minute.and_then(NonZeroU64::new);
 
+        let p2p_handle = handle.p2p_handle();
+        let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone(), p2p_handle);
+        let orchestrator = Arc::new(orchestrator);
+        orchestrator.spawn(shutdown_rx);
+        info!("pipeline orchestrator started");
+        orchestrator_instance = Some(orchestrator.clone());
+
         node_handle = Some(handle);
         node_runtime = Some(runtime);
     }
@@ -194,7 +203,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Arc::clone(&runtime_mode),
         node_handle.clone(),
         wallet_instance.clone(),
-        None,
+        orchestrator_instance.clone(),
         rpc_requests_per_minute,
     );
 
@@ -367,10 +376,10 @@ fn load_node_configuration(cli: &Cli) -> Result<Option<ConfigBundle<NodeConfig>>
             NodeConfig::load(path)
                 .with_context(|| format!("failed to load configuration from {}", path.display()))?
         } else {
-            NodeConfig::default()
+            NodeConfig::for_mode(cli.mode)
         }
     } else {
-        NodeConfig::default()
+        NodeConfig::for_mode(cli.mode)
     };
 
     Ok(Some(ConfigBundle {
@@ -392,10 +401,10 @@ fn load_wallet_configuration(cli: &Cli) -> Result<Option<ConfigBundle<WalletConf
         if path.exists() {
             WalletConfig::load(path).map_err(|err| anyhow!(err))?
         } else {
-            WalletConfig::default()
+            WalletConfig::for_mode(cli.mode)
         }
     } else {
-        WalletConfig::default()
+        WalletConfig::for_mode(cli.mode)
     };
 
     Ok(Some(ConfigBundle {
