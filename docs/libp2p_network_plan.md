@@ -54,6 +54,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
    - Streaming von Firewood-Snapshots via libp2p-Request/Response oder Chunked Gossip.
    - Light-Clients empfangen nur Headers + Recursive Proofs, validieren Roots.
    - DoD: Light-Client-Test lädt Snapshot + Proof, validiert erfolgreich.
+   - DoD-Nachweis: `tests/light_client_sync.rs` publiziert einen State-Sync-Plan über `GossipTopic::Snapshots`, repliziert Chunk- und Proof-Daten und lässt einen `LightClientSync` die Commitments validieren.
 
 10. **Meta-Kanal & Telemetrie**
     - Peer-Heartbeat, Latenzen, Versionen über `meta` Topic publizieren.
