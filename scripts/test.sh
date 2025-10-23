@@ -222,7 +222,7 @@ run_suite() {
       command+=(--lib --bins)
       ;;
     integration)
-      command+=(--tests)
+      command+=(--tests --features integration)
       ;;
     doc)
       command+=(--doc)
@@ -274,6 +274,8 @@ run_integration_focus_tests() {
       "${PROFILE_ARGS[@]}"
       "${backend_args[@]}"
       "${PASSTHROUGH_ARGS[@]}"
+      --features
+      integration
       --test
       "$test_name"
     )
