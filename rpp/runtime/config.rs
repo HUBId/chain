@@ -73,6 +73,8 @@ pub struct NodeConfig {
     pub snapshot_dir: PathBuf,
     #[serde(default = "default_proof_cache_dir")]
     pub proof_cache_dir: PathBuf,
+    #[serde(default = "default_consensus_pipeline_path")]
+    pub consensus_pipeline_path: PathBuf,
     pub rpc_listen: SocketAddr,
     #[serde(default)]
     pub rpc_auth_token: Option<String>,
@@ -138,6 +140,10 @@ fn default_gossip_state_path() -> Option<PathBuf> {
     Some(default_gossip_path())
 }
 
+fn default_consensus_pipeline_path() -> PathBuf {
+    PathBuf::from("./data/p2p/consensus_pipeline.json")
+}
+
 fn default_max_proof_size_bytes() -> usize {
     4 * 1024 * 1024
 }
@@ -174,6 +180,9 @@ impl NodeConfig {
         }
         fs::create_dir_all(&self.snapshot_dir)?;
         fs::create_dir_all(&self.proof_cache_dir)?;
+        if let Some(parent) = self.consensus_pipeline_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         if let Some(parent) = self.p2p.peerstore_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -276,6 +285,7 @@ impl Default for NodeConfig {
             vrf_key_path: PathBuf::from("./keys/vrf.toml"),
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
+            consensus_pipeline_path: default_consensus_pipeline_path(),
             rpc_listen: "127.0.0.1:7070".parse().expect("valid socket addr"),
             rpc_auth_token: None,
             rpc_allowed_origin: None,
