@@ -1,7 +1,7 @@
 #![cfg(feature = "integration")]
 
 use std::io::{BufRead, BufReader};
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -249,6 +249,130 @@ fn binary_dry_run_smoke() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn hybrid_rejects_conflicting_rpc_listeners() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+    let shared_port = pick_free_tcp_port()?;
+    let shared_addr: SocketAddr = format!("127.0.0.1:{shared_port}")
+        .parse()
+        .context("invalid shared rpc listen address")?;
+
+    let node_config = write_node_config_with(temp_dir.path(), Some(TelemetryExpectation::Disabled), |config| {
+        config.rpc_listen = shared_addr;
+    })?;
+
+    let wallet_config =
+        write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = shared_addr)?;
+
+    let output = Command::new(&binary)
+        .arg("hybrid")
+        .arg("--config")
+        .arg(&node_config)
+        .arg("--wallet-config")
+        .arg(&wallet_config)
+        .output()
+        .context("failed to run rpp-node hybrid")?;
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "hybrid mode exited with unexpected status: {:?}",
+        output.status
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("listener conflict"),
+        "stderr missing conflict message: {stderr}"
+    );
+    assert!(
+        stderr.contains("node-config.toml::rpc_listen"),
+        "stderr missing node rpc reference: {stderr}"
+    );
+    assert!(
+        stderr.contains("wallet-config.toml::rpc_listen"),
+        "stderr missing wallet rpc reference: {stderr}"
+    );
+    assert!(
+        stderr.contains(&shared_port.to_string()),
+        "stderr missing shared port {shared_port}: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+
+    let wallet_port = pick_free_tcp_port()?;
+    let wallet_addr: SocketAddr = format!("127.0.0.1:{wallet_port}")
+        .parse()
+        .context("invalid wallet rpc listen address")?;
+
+    let node_rpc_port = loop {
+        let candidate = pick_free_tcp_port()?;
+        if candidate != wallet_port {
+            break candidate;
+        }
+    };
+    let node_rpc_addr: SocketAddr = format!("127.0.0.1:{node_rpc_port}")
+        .parse()
+        .context("invalid node rpc listen address")?;
+    let p2p_multiaddr = format!("/ip4/127.0.0.1/tcp/{wallet_port}");
+
+    let node_config = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::WithEndpoint),
+        |config| {
+            config.rpc_listen = node_rpc_addr;
+            config.p2p.listen_addr = p2p_multiaddr.clone();
+        },
+    )?;
+
+    let wallet_config = write_wallet_config_with(temp_dir.path(), |config| {
+        config.rpc_listen = wallet_addr;
+    })?;
+
+    let output = Command::new(&binary)
+        .arg("validator")
+        .arg("--config")
+        .arg(&node_config)
+        .arg("--wallet-config")
+        .arg(&wallet_config)
+        .output()
+        .context("failed to run rpp-node validator")?;
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "validator mode exited with unexpected status: {:?}",
+        output.status
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("listener conflict"),
+        "stderr missing conflict message: {stderr}"
+    );
+    assert!(
+        stderr.contains("wallet-config.toml::rpc_listen"),
+        "stderr missing wallet rpc reference: {stderr}"
+    );
+    assert!(
+        stderr.contains("p2p.listen_addr"),
+        "stderr missing p2p reference: {stderr}"
+    );
+    assert!(
+        stderr.contains(&wallet_port.to_string()),
+        "stderr missing shared port {wallet_port}: {stderr}"
+    );
+
+    Ok(())
+}
+
 struct ChildTerminationGuard<'a> {
     child: Option<&'a mut Child>,
 }
@@ -288,6 +412,14 @@ impl ModeContext {
 }
 
 fn write_node_config(base: &Path, telemetry: Option<TelemetryExpectation>) -> Result<PathBuf> {
+    write_node_config_with(base, telemetry, |_| {})
+}
+
+fn write_node_config_with(
+    base: &Path,
+    telemetry: Option<TelemetryExpectation>,
+    mut update: impl FnOnce(&mut NodeConfig),
+) -> Result<PathBuf> {
     let mut config = NodeConfig::default();
     let node_root = base.join("node");
     let key_root = node_root.join("keys");
@@ -319,6 +451,8 @@ fn write_node_config(base: &Path, telemetry: Option<TelemetryExpectation>) -> Re
         }
     }
 
+    update(&mut config);
+
     config
         .ensure_directories()
         .context("failed to prepare node directories")?;
@@ -331,6 +465,13 @@ fn write_node_config(base: &Path, telemetry: Option<TelemetryExpectation>) -> Re
 }
 
 fn write_wallet_config(base: &Path) -> Result<PathBuf> {
+    write_wallet_config_with(base, |_| {})
+}
+
+fn write_wallet_config_with(
+    base: &Path,
+    mut update: impl FnOnce(&mut WalletConfig),
+) -> Result<PathBuf> {
     let mut config = WalletConfig::default();
     let wallet_root = base.join("wallet");
     config.data_dir = wallet_root.join("data");
@@ -338,6 +479,8 @@ fn write_wallet_config(base: &Path) -> Result<PathBuf> {
     config.rpc_listen = format!("127.0.0.1:{}", pick_free_tcp_port()?)
         .parse()
         .context("invalid wallet rpc listen address")?;
+
+    update(&mut config);
 
     config
         .ensure_directories()
