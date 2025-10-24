@@ -9,10 +9,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::vendor::PeerId;
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
+use futures::stream::Stream;
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::topics::GossipTopic;
 
@@ -985,7 +987,7 @@ pub struct SnapshotChunk {
 
 #[derive(Debug)]
 pub struct SnapshotStore {
-    snapshots: HashMap<Hash, Vec<u8>>,
+    snapshots: HashMap<Hash, Arc<[u8]>>,
     chunk_size: usize,
 }
 
@@ -999,7 +1001,7 @@ impl SnapshotStore {
 
     pub fn insert(&mut self, payload: Vec<u8>) -> Hash {
         let root = blake3::hash(&payload);
-        self.snapshots.insert(root, payload);
+        self.snapshots.insert(root, Arc::from(payload));
         root
     }
 
@@ -1007,22 +1009,103 @@ impl SnapshotStore {
         self.snapshots.contains_key(root)
     }
 
-    pub fn stream(&self, root: &Hash) -> Result<Vec<SnapshotChunk>, PipelineError> {
+    pub fn stream(&self, root: &Hash) -> Result<SnapshotChunkStream, PipelineError> {
+        let data = self
+            .snapshots
+            .get(root)
+            .ok_or(PipelineError::SnapshotNotFound)?
+            .clone();
+        Ok(SnapshotChunkStream::new(*root, data, self.chunk_size))
+    }
+
+    pub fn chunk(&self, root: &Hash, index: u64) -> Result<SnapshotChunk, PipelineError> {
         let data = self
             .snapshots
             .get(root)
             .ok_or(PipelineError::SnapshotNotFound)?;
-        let mut chunks = Vec::new();
-        let total = ((data.len() as f64) / (self.chunk_size as f64)).ceil() as u64;
-        for (index, window) in data.chunks(self.chunk_size).enumerate() {
-            chunks.push(SnapshotChunk {
-                root: *root,
-                index: index as u64,
-                total,
-                data: window.to_vec(),
-            });
+        SnapshotChunkStream::chunk_for(*root, data, self.chunk_size, index)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotChunkStream {
+    root: Hash,
+    data: Arc<[u8]>,
+    chunk_size: usize,
+    next_index: u64,
+    total: u64,
+}
+
+impl SnapshotChunkStream {
+    fn new(root: Hash, data: Arc<[u8]>, chunk_size: usize) -> Self {
+        let total = Self::total_chunks(data.len(), chunk_size);
+        Self {
+            root,
+            data,
+            chunk_size,
+            next_index: 0,
+            total,
         }
-        Ok(chunks)
+    }
+
+    fn total_chunks(len: usize, chunk_size: usize) -> u64 {
+        if len == 0 {
+            0
+        } else {
+            ((len - 1) / chunk_size + 1) as u64
+        }
+    }
+
+    pub fn total(&self) -> u64 {
+        self.total
+    }
+
+    pub fn root(&self) -> Hash {
+        self.root
+    }
+
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
+    pub fn chunk_for(
+        root: Hash,
+        data: &Arc<[u8]>,
+        chunk_size: usize,
+        index: u64,
+    ) -> Result<SnapshotChunk, PipelineError> {
+        let total = Self::total_chunks(data.len(), chunk_size);
+        if index >= total {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "chunk {index} out of range (total {total})"
+            )));
+        }
+        let start = (index as usize) * chunk_size;
+        let end = ((index as usize + 1) * chunk_size).min(data.len());
+        Ok(SnapshotChunk {
+            root,
+            index,
+            total,
+            data: data[start..end].to_vec(),
+        })
+    }
+}
+
+impl Stream for SnapshotChunkStream {
+    type Item = SnapshotChunk;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        if self.next_index >= self.total {
+            return std::task::Poll::Ready(None);
+        }
+        let index = self.next_index;
+        self.next_index += 1;
+        let chunk = Self::chunk_for(self.root, &self.data, self.chunk_size, index)
+            .expect("chunk index validated by iteration");
+        std::task::Poll::Ready(Some(chunk))
     }
 }
 
@@ -1104,6 +1187,14 @@ pub struct NetworkLightClientUpdate {
     pub recursive_proof: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct LightClientHead {
+    pub height: u64,
+    pub block_hash: String,
+    pub state_root: String,
+    pub proof_commitment: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkStateSyncPlan {
     pub snapshot: NetworkSnapshotSummary,
@@ -1158,6 +1249,9 @@ pub struct LightClientSync {
     plan: Option<ActivePlan>,
     received_chunks: HashMap<usize, [u8; 32]>,
     accepted_updates: HashSet<u64>,
+    emitted_update_index: Option<usize>,
+    head_tx: watch::Sender<Option<LightClientHead>>,
+    latest_head: Option<LightClientHead>,
 }
 
 impl Default for LightClientSync {
@@ -1168,11 +1262,15 @@ impl Default for LightClientSync {
 
 impl LightClientSync {
     pub fn new(verifier: Arc<dyn RecursiveProofVerifier>) -> Self {
+        let (head_tx, _head_rx) = watch::channel(None);
         Self {
             verifier,
             plan: None,
             received_chunks: HashMap::new(),
             accepted_updates: HashSet::new(),
+            emitted_update_index: None,
+            head_tx,
+            latest_head: None,
         }
     }
 
@@ -1183,7 +1281,18 @@ impl LightClientSync {
         self.plan = Some(active);
         self.received_chunks.clear();
         self.accepted_updates.clear();
+        self.emitted_update_index = None;
+        self.latest_head = None;
+        let _ = self.head_tx.send_replace(None);
         Ok(())
+    }
+
+    pub fn subscribe_light_client_heads(&self) -> watch::Receiver<Option<LightClientHead>> {
+        self.head_tx.subscribe()
+    }
+
+    pub fn latest_head(&self) -> Option<LightClientHead> {
+        self.latest_head.clone()
     }
 
     pub fn ingest_light_client_update(&mut self, payload: &[u8]) -> Result<(), PipelineError> {
@@ -1259,6 +1368,7 @@ impl LightClientSync {
         self.verifier
             .verify_recursive(&proof_bytes, &expected.commitment, expected_previous)?;
         self.accepted_updates.insert(update.height);
+        self.try_emit_heads();
         Ok(())
     }
 
@@ -1320,11 +1430,12 @@ impl LightClientSync {
             )));
         }
         self.received_chunks.insert(index, root);
+        self.try_emit_heads();
         Ok(())
     }
 
-    pub fn verify(&self) -> Result<bool, PipelineError> {
-        let Some(plan) = &self.plan else {
+    pub fn verify(&mut self) -> Result<bool, PipelineError> {
+        let Some(plan) = self.plan.as_ref() else {
             return Ok(false);
         };
         if self.received_chunks.len() != plan.chunks.len() {
@@ -1369,7 +1480,37 @@ impl LightClientSync {
                 "snapshot commitment mismatch".into(),
             ));
         }
+        self.try_emit_heads();
         Ok(true)
+    }
+
+    fn try_emit_heads(&mut self) {
+        let Some(plan) = self.plan.as_ref() else {
+            return;
+        };
+        let mut next_index = self
+            .emitted_update_index
+            .map(|index| index + 1)
+            .unwrap_or(0);
+        while next_index < plan.updates.len() {
+            let update = &plan.updates[next_index];
+            if !self.accepted_updates.contains(&update.height) {
+                break;
+            }
+            if !self.received_chunks.contains_key(&update.chunk_index) {
+                break;
+            }
+            let head = LightClientHead {
+                height: update.height,
+                block_hash: update.block_hash.clone(),
+                state_root: update.state_root.clone(),
+                proof_commitment: update.commitment.clone(),
+            };
+            self.latest_head = Some(head.clone());
+            let _ = self.head_tx.send_replace(Some(head));
+            self.emitted_update_index = Some(next_index);
+            next_index += 1;
+        }
     }
 }
 
@@ -1389,6 +1530,7 @@ struct ExpectedUpdate {
     state_root: String,
     commitment: String,
     expected_previous: Option<String>,
+    chunk_index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -1458,16 +1600,26 @@ impl TryFrom<NetworkStateSyncPlan> for ActivePlan {
                     update.height
                 )));
             }
-            let expected_previous = update
-                .previous_commitment
-                .clone()
-                .or_else(|| previous_commitment.clone());
+            let chunk_index = chunks
+                .iter()
+                .find(|chunk| {
+                    update.height >= chunk.start_height && update.height <= chunk.end_height
+                })
+                .map(|chunk| chunk.index)
+                .ok_or_else(|| {
+                    PipelineError::SnapshotVerification(format!(
+                        "no chunk found covering light client height {}",
+                        update.height
+                    ))
+                })?;
+            let expected_previous = previous_commitment.clone();
             updates.push(ExpectedUpdate {
                 height: update.height,
                 block_hash: update.block_hash.clone(),
                 state_root: update.state_root.clone(),
                 commitment: update.proof_commitment.clone(),
                 expected_previous,
+                chunk_index,
             });
             previous_commitment = Some(update.proof_commitment.clone());
         }
