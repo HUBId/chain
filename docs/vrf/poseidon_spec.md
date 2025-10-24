@@ -117,6 +117,40 @@ network integrations.
 - `GET /consensus/vrf/threshold` – Returns the active threshold, committee size
   target, and historical acceptance statistics for UI dashboards.
 
+#### Example Requests
+
+```json
+POST /consensus/vrf/submit
+{
+  "address": "addr_tl3_validator",
+  "public_key": "a4f6c3b21f0e5d8c9a7b6e4d2c1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3",
+  "input": {
+    "last_block_header": "9e7d5c3b1a0f5e4d3c2b1a091827364554433221100ffeedccbb998877665544",
+    "epoch": 142,
+    "tier_seed": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+  },
+  "proof": {
+    "randomness": "148315999884002950905077803550431742122",
+    "preoutput": "84a1ff09c33b8de7717c9b5e61b5a3f72c00bbd8fe4e7f996889d67483f0db68",
+    "proof": "3f7b2c1d0e9f8a7b6c5d4e3f2a1908b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1"
+  },
+  "tier": "Tl3",
+  "timetoke_hours": 96
+}
+```
+
+```json
+GET /consensus/vrf/threshold
+{
+  "epoch": 142,
+  "threshold": "214748364800000000000000000000000000000",
+  "committee_target": 5,
+  "pool_entries": 8,
+  "accepted_validators": 5,
+  "participation_rate": 0.625
+}
+```
+
 ## Telemetry & Observability
 - **Metrics Namespace**: `vrf.*`
   - `vrf.submissions_total{result="accepted|rejected"}` – Counter per outcome.
