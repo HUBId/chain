@@ -3,4 +3,8 @@ pub mod cluster;
 pub mod consensus;
 pub mod transactions;
 
-pub use cluster::{ProcessClusterNode, ProcessTestCluster, TestCluster};
+pub use cluster::{
+    HarnessPipelineDashboardSnapshot, HarnessPipelineError, HarnessPipelineEvent,
+    PipelineEventStream, ProcessClusterNode, ProcessNodeHarness, ProcessNodeOrchestratorClient,
+    ProcessNodeRpcClient, ProcessTestCluster, SubmittedTransaction, TestCluster,
+};

@@ -1,30 +1,36 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::io::{BufRead, BufReader, Read};
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
+use bytes::Bytes;
+use futures::StreamExt;
 use libp2p::PeerId;
 use reqwest::Client;
+use reqwest::Url;
+use serde::Deserialize;
+use serde_json::Value;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 use rpp_chain::config::{GenesisAccount, NodeConfig, WalletConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
-use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
+use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
 use rpp_chain::node::{
     ConsensusStatus as RuntimeConsensusStatus, Node, NodeHandle, NodeStatus as RuntimeNodeStatus,
 };
-use rpp_chain::orchestration::PipelineOrchestrator;
+use rpp_chain::orchestration::{PipelineOrchestrator, PipelineStage};
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{
     IdentityProfile as RuntimeIdentityProfile, NodeHandle as P2pHandle, NodeInner as P2pNode,
@@ -33,6 +39,9 @@ use rpp_chain::runtime::node_runtime::{
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
 };
+use rpp_chain::runtime::types::proofs::TransactionProofBundle;
+use rpp_chain::runtime::types::transaction::{SignedTransaction, Transaction};
+use rpp_chain::types::Address;
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::{
@@ -45,7 +54,7 @@ use rpp_wallet::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
-use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+use rpp_wallet::vendor::electrs::init::{ElectrsHandles, initialize};
 
 const PROCESS_INIT_TIMEOUT: Duration = Duration::from_secs(90);
 const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
@@ -768,6 +777,8 @@ pub struct ProcessClusterNode {
 pub struct ProcessTestCluster {
     nodes: Vec<ProcessClusterNode>,
     genesis_accounts: Vec<GenesisAccount>,
+    binary: String,
+    client: Client,
 }
 
 impl ProcessTestCluster {
@@ -844,6 +855,8 @@ impl ProcessTestCluster {
         Ok(Self {
             nodes,
             genesis_accounts,
+            binary,
+            client,
         })
     }
 
@@ -857,6 +870,14 @@ impl ProcessTestCluster {
 
     pub fn genesis_accounts(&self) -> &[GenesisAccount] {
         &self.genesis_accounts
+    }
+
+    pub fn binary(&self) -> &str {
+        &self.binary
+    }
+
+    pub fn client(&self) -> Client {
+        self.client.clone()
     }
 
     pub async fn shutdown(mut self) -> Result<()> {
@@ -911,7 +932,7 @@ impl ProcessTestCluster {
                     Err(err) => {
                         return Err(err).with_context(|| {
                             format!("failed to query process status for node {}", node.index)
-                        })
+                        });
                     }
                 }
                 sleep(Duration::from_millis(200)).await;
@@ -929,6 +950,708 @@ impl ProcessTestCluster {
 
         Ok(())
     }
+}
+
+impl ProcessClusterNode {
+    pub async fn respawn(&mut self, binary: &str, client: &Client) -> Result<()> {
+        if self.child.id().is_some() {
+            if let Err(err) = send_ctrl_c(&self.child) {
+                tracing::warn!(
+                    target = "tests::cluster::process",
+                    node = self.index,
+                    error = %err,
+                    "failed to send CTRL+C to process cluster node during respawn"
+                );
+            }
+        }
+
+        let started = Instant::now();
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(status)) => {
+                    if !status.success() {
+                        return Err(anyhow!(
+                            "process cluster node {} exited with status {} during respawn",
+                            self.index,
+                            status
+                        ));
+                    }
+                    break;
+                }
+                Ok(None) => {
+                    if started.elapsed() > PROCESS_SHUTDOWN_TIMEOUT {
+                        self.child.kill().with_context(|| {
+                            format!(
+                                "failed to terminate process cluster node {} during respawn",
+                                self.index
+                            )
+                        })?;
+                        let status = self.child.wait().with_context(|| {
+                            format!("failed to reap process cluster node {}", self.index)
+                        })?;
+                        if !status.success() {
+                            return Err(anyhow!(
+                                "process cluster node {} exited with status {} during respawn",
+                                self.index,
+                                status
+                            ));
+                        }
+                        break;
+                    }
+                }
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "failed to query process status for node {} during respawn",
+                            self.index
+                        )
+                    });
+                }
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+
+        if let Some(task) = self.stdout_task.take() {
+            let _ = task.await;
+        }
+        if let Some(task) = self.stderr_task.take() {
+            let _ = task.await;
+        }
+
+        let mut command = Command::new(binary);
+        command
+            .arg("--mode")
+            .arg("node")
+            .arg("--config")
+            .arg(&self.config_path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = command.spawn().with_context(|| {
+            format!(
+                "failed to spawn rpp-node process for node {} during respawn",
+                self.index
+            )
+        })?;
+
+        let stdout_task = spawn_output_task(self.index, "stdout", child.stdout.take());
+        let stderr_task = spawn_output_task(self.index, "stderr", child.stderr.take());
+
+        wait_for_process_ready(client, &mut child, self.rpc_addr, self.index).await?;
+
+        self.child = child;
+        self.stdout_task = stdout_task;
+        self.stderr_task = stderr_task;
+
+        Ok(())
+    }
+
+    pub fn harness(&self) -> Result<ProcessNodeHarness> {
+        ProcessNodeHarness::connect(self)
+    }
+}
+
+#[derive(Clone)]
+pub struct ProcessNodeHarness {
+    client: Client,
+    base_url: Url,
+}
+
+impl ProcessNodeHarness {
+    pub fn connect(node: &ProcessClusterNode) -> Result<Self> {
+        let client = Client::builder()
+            .build()
+            .context("build process node harness client")?;
+        let mut base_url = Url::parse(&format!("http://{}", node.rpc_addr))
+            .context("parse process node RPC URL")?;
+        if base_url.path() != "/" {
+            base_url.set_path("/");
+        }
+        Ok(Self { client, base_url })
+    }
+
+    pub fn rpc(&self) -> ProcessNodeRpcClient {
+        ProcessNodeRpcClient::new(self.client.clone(), self.base_url.clone())
+    }
+
+    pub fn orchestrator(&self) -> ProcessNodeOrchestratorClient {
+        ProcessNodeOrchestratorClient::new(self.client.clone(), self.base_url.clone())
+    }
+
+    pub async fn wait_for_ready(&self, timeout: Duration) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        let url = self
+            .base_url
+            .join("health/ready")
+            .context("construct ready probe URL")?;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(anyhow!("node did not become ready within {:?}", timeout));
+            }
+            match self.client.get(url.clone()).send().await {
+                Ok(response) if response.status().is_success() => return Ok(()),
+                Ok(_) => {}
+                Err(_) => {}
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ProcessNodeRpcClient {
+    client: Client,
+    base_url: Url,
+}
+
+impl ProcessNodeRpcClient {
+    fn new(client: Client, base_url: Url) -> Self {
+        Self { client, base_url }
+    }
+
+    fn url(&self, path: &str) -> Result<Url> {
+        self.base_url.join(path).context("construct RPC URL")
+    }
+
+    pub async fn account_summary(&self) -> Result<WalletAccountSummaryData> {
+        let url = self.url("wallet/account")?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .context("request wallet account summary")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            return Err(anyhow!(
+                "wallet account request failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+        let payload: WalletAccountResponse = response
+            .json()
+            .await
+            .context("decode wallet account response")?;
+        Ok(payload.summary)
+    }
+}
+
+#[derive(Clone)]
+pub struct ProcessNodeOrchestratorClient {
+    client: Client,
+    base_url: Url,
+}
+
+impl ProcessNodeOrchestratorClient {
+    fn new(client: Client, base_url: Url) -> Self {
+        Self { client, base_url }
+    }
+
+    fn url(&self, path: &str) -> Result<Url> {
+        self.base_url
+            .join(path)
+            .context("construct orchestrator URL")
+    }
+
+    pub fn subscribe_events(&self) -> Result<PipelineEventStream> {
+        let url = self.url("wallet/pipeline/stream")?;
+        Ok(PipelineEventStream::new(self.client.clone(), url))
+    }
+
+    pub async fn build_transaction(
+        &self,
+        to: Address,
+        amount: u128,
+        fee: u64,
+        memo: Option<String>,
+    ) -> Result<TxComposeResponseData> {
+        let url = self.url("wallet/tx/build")?;
+        let request = TxComposeRequestData {
+            to,
+            amount,
+            fee,
+            memo,
+        };
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .context("build transaction request")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            return Err(anyhow!(
+                "build transaction failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+        response
+            .json()
+            .await
+            .context("decode build transaction response")
+    }
+
+    pub async fn sign_transaction(&self, transaction: Transaction) -> Result<SignTxResponseData> {
+        let url = self.url("wallet/tx/sign")?;
+        let request = SignTxRequestData { transaction };
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .context("sign transaction request")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            return Err(anyhow!(
+                "sign transaction failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+        response
+            .json()
+            .await
+            .context("decode sign transaction response")
+    }
+
+    pub async fn prove_transaction(
+        &self,
+        signed: SignedTransaction,
+    ) -> Result<ProveTxResponseData> {
+        let url = self.url("wallet/tx/prove")?;
+        let request = ProveTxRequestData { signed };
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .context("prove transaction request")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            return Err(anyhow!(
+                "prove transaction failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+        response
+            .json()
+            .await
+            .context("decode prove transaction response")
+    }
+
+    pub async fn submit_transaction_bundle(
+        &self,
+        bundle: TransactionProofBundle,
+    ) -> Result<SubmitResponseData> {
+        let url = self.url("wallet/tx/submit")?;
+        let request = SubmitTxRequestData { bundle };
+        let response = self
+            .client
+            .post(url)
+            .json(&request)
+            .send()
+            .await
+            .context("submit transaction request")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            return Err(anyhow!(
+                "submit transaction failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+        response
+            .json()
+            .await
+            .context("decode submit transaction response")
+    }
+
+    pub async fn submit_transaction(
+        &self,
+        to: Address,
+        amount: u128,
+        fee: u64,
+        memo: Option<String>,
+    ) -> Result<SubmittedTransaction> {
+        let build = self.build_transaction(to, amount, fee, memo).await?;
+        let signed = self
+            .sign_transaction(build.transaction.clone())
+            .await?
+            .signed;
+        let bundle = self.prove_transaction(signed).await?.bundle;
+        let response = self.submit_transaction_bundle(bundle.clone()).await?;
+        Ok(SubmittedTransaction {
+            hash: response.hash,
+            transaction: bundle.transaction.payload,
+        })
+    }
+
+    pub async fn wait_for_stage(
+        &self,
+        hash: &str,
+        stage: PipelineStage,
+        timeout: Duration,
+    ) -> Result<()> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(anyhow!(
+                    "waiting for stage {:?} timed out after {:?}",
+                    stage,
+                    timeout
+                ));
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let timeout_ms = remaining.as_millis().min(u128::from(u64::MAX)) as u64;
+            let request = PipelineWaitRequestData {
+                hash: hash.to_string(),
+                stage,
+                timeout_ms: Some(timeout_ms),
+            };
+            let url = self.url("wallet/pipeline/wait")?;
+            match self.client.post(url.clone()).json(&request).send().await {
+                Ok(response) if response.status().is_success() => {
+                    let payload: PipelineWaitResponseData = response
+                        .json()
+                        .await
+                        .context("decode pipeline wait response")?;
+                    if payload.completed {
+                        return Ok(());
+                    }
+                }
+                Ok(response) => {
+                    let status = response.status();
+                    let body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "<unavailable>".to_string());
+                    tracing::warn!(
+                        target = "tests::cluster::process",
+                        node = ?url,
+                        %status,
+                        body,
+                        stage = ?stage,
+                        "pipeline wait request returned error"
+                    );
+                }
+                Err(err) => {
+                    tracing::debug!(
+                        target = "tests::cluster::process",
+                        error = %err,
+                        stage = ?stage,
+                        "retrying pipeline wait after error"
+                    );
+                }
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    pub async fn pipeline_dashboard(&self) -> Result<HarnessPipelineDashboardSnapshot> {
+        let url = self.url("wallet/pipeline/dashboard")?;
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .await
+            .context("request pipeline dashboard")?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "<unavailable>".to_string());
+            return Err(anyhow!(
+                "pipeline dashboard request failed with status {}: {}",
+                status,
+                body
+            ));
+        }
+        response
+            .json()
+            .await
+            .context("decode pipeline dashboard response")
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct WalletAccountSummaryData {
+    pub address: Address,
+    pub balance: u128,
+    pub nonce: u64,
+    #[serde(default)]
+    pub reputation_score: Option<f64>,
+    #[serde(default)]
+    pub tier: Option<String>,
+    #[serde(default)]
+    pub uptime_hours: Option<u64>,
+    #[serde(default)]
+    pub mempool_delta: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct WalletAccountResponse {
+    summary: WalletAccountSummaryData,
+}
+
+#[derive(Deserialize)]
+struct TxComposeRequestData {
+    to: Address,
+    amount: u128,
+    fee: u64,
+    memo: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct TxComposeResponseData {
+    pub transaction: Transaction,
+    #[serde(default)]
+    preview: Value,
+}
+
+#[derive(Deserialize)]
+struct SignTxRequestData {
+    transaction: Transaction,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SignTxResponseData {
+    pub signed: SignedTransaction,
+}
+
+#[derive(Deserialize)]
+struct ProveTxRequestData {
+    signed: SignedTransaction,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ProveTxResponseData {
+    pub bundle: TransactionProofBundle,
+}
+
+#[derive(Deserialize)]
+struct SubmitTxRequestData {
+    bundle: TransactionProofBundle,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SubmitResponseData {
+    pub hash: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct SubmittedTransaction {
+    pub hash: String,
+    pub transaction: Transaction,
+}
+
+#[derive(Deserialize)]
+struct PipelineWaitRequestData {
+    hash: String,
+    stage: PipelineStage,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct PipelineWaitResponseData {
+    hash: String,
+    stage: PipelineStage,
+    completed: bool,
+}
+
+pub struct PipelineEventStream {
+    client: Client,
+    url: Url,
+    stream: Option<Pin<Box<dyn futures::Stream<Item = Result<Bytes, reqwest::Error>> + Send>>>,
+    buffer: Vec<u8>,
+}
+
+impl PipelineEventStream {
+    fn new(client: Client, url: Url) -> Self {
+        Self {
+            client,
+            url,
+            stream: None,
+            buffer: Vec::new(),
+        }
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        let response = self
+            .client
+            .get(self.url.clone())
+            .send()
+            .await
+            .context("connect pipeline SSE stream")?;
+        let response = response.error_for_status()?;
+        self.stream = Some(Box::pin(response.bytes_stream()));
+        self.buffer.clear();
+        Ok(())
+    }
+
+    pub async fn next_event(&mut self, timeout: Duration) -> Result<Option<HarnessPipelineEvent>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(event) = self.parse_event()? {
+                return Ok(Some(event));
+            }
+            if Instant::now() >= deadline {
+                return Ok(None);
+            }
+            if self.stream.is_none() {
+                if let Err(err) = self.connect().await {
+                    tracing::debug!(
+                        target = "tests::cluster::process",
+                        error = %err,
+                        "failed to connect pipeline event stream, retrying"
+                    );
+                    sleep(Duration::from_millis(200)).await;
+                    continue;
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let remaining = if remaining.is_zero() {
+                Duration::from_millis(1)
+            } else {
+                remaining
+            };
+            if let Some(stream) = &mut self.stream {
+                match tokio::time::timeout(remaining, stream.next()).await {
+                    Ok(Some(Ok(chunk))) => {
+                        self.buffer.extend_from_slice(&chunk);
+                    }
+                    Ok(Some(Err(err))) => {
+                        tracing::debug!(
+                            target = "tests::cluster::process",
+                            error = %err,
+                            "pipeline SSE stream error, reconnecting"
+                        );
+                        self.stream = None;
+                        self.buffer.clear();
+                    }
+                    Ok(None) => {
+                        self.stream = None;
+                    }
+                    Err(_) => return Ok(None),
+                }
+            }
+        }
+    }
+
+    fn parse_event(&mut self) -> Result<Option<HarnessPipelineEvent>> {
+        let data = match self.buffer.windows(2).position(|w| w == b"\n\n") {
+            Some(index) => {
+                let chunk = self.buffer[..index + 2].to_vec();
+                self.buffer.drain(..index + 2);
+                chunk
+            }
+            None => return Ok(None),
+        };
+        let text = String::from_utf8_lossy(&data);
+        let mut event_type: Option<String> = None;
+        let mut payload = String::new();
+        for line in text.lines() {
+            if line.starts_with(':') {
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("event:") {
+                event_type = Some(rest.trim().to_string());
+            } else if let Some(rest) = line.strip_prefix("data:") {
+                if !payload.is_empty() {
+                    payload.push('\n');
+                }
+                payload.push_str(rest.trim_start());
+            }
+        }
+        let Some(event_type) = event_type else {
+            return Ok(None);
+        };
+        if payload.is_empty() {
+            return Ok(None);
+        }
+        match event_type.as_str() {
+            "dashboard" | "error" => {
+                let event = serde_json::from_str::<HarnessPipelineEvent>(&payload)
+                    .context("decode pipeline SSE payload")?;
+                Ok(Some(event))
+            }
+            _ => Ok(None),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct HarnessPipelineDashboardSnapshot {
+    pub flows: Vec<HarnessFlowSnapshot>,
+}
+
+impl HarnessPipelineDashboardSnapshot {
+    pub fn is_stage_complete(&self, hash: &str, stage: PipelineStage) -> bool {
+        self.flows
+            .iter()
+            .find(|flow| flow.hash == hash)
+            .and_then(|flow| flow.stages.get(&stage))
+            .is_some()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct HarnessFlowSnapshot {
+    pub hash: String,
+    pub origin: Address,
+    pub target_nonce: u64,
+    pub expected_balance: u128,
+    pub stages: HashMap<PipelineStage, u128>,
+    #[serde(default)]
+    pub commit_height: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct HarnessPipelineError {
+    pub stage: String,
+    pub height: u64,
+    pub round: u64,
+    #[serde(default)]
+    pub block_hash: Option<String>,
+    pub message: String,
+    pub observed_at_ms: u128,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HarnessPipelineEvent {
+    Dashboard {
+        snapshot: HarnessPipelineDashboardSnapshot,
+    },
+    Error {
+        error: HarnessPipelineError,
+    },
 }
 
 fn random_listen_addr() -> Result<(String, u16)> {
