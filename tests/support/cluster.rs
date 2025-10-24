@@ -1,17 +1,22 @@
 use std::collections::HashSet;
+use std::env;
+use std::io::{BufRead, BufReader, Read};
 use std::net::{SocketAddr, TcpListener};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use libp2p::PeerId;
+use reqwest::Client;
 use tempfile::TempDir;
 use tokio::runtime::Builder;
 use tokio::sync::{broadcast, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, Instant};
 
-use rpp_chain::config::{GenesisAccount, NodeConfig};
+use rpp_chain::config::{GenesisAccount, NodeConfig, WalletConfig};
 use rpp_chain::crypto::{
     address_from_public_key, load_or_generate_keypair, load_or_generate_vrf_keypair,
 };
@@ -31,7 +36,6 @@ use rpp_chain::runtime::sync::{
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::{
-    config::WalletConfig,
     errors::{ChainError, ChainResult},
     storage::Storage,
     types::BlockPayload,
@@ -42,6 +46,118 @@ use rpp_wallet::config::ElectrsConfig;
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::init::{initialize, ElectrsHandles};
+
+const PROCESS_INIT_TIMEOUT: Duration = Duration::from_secs(90);
+const PROCESS_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
+
+struct PreparedClusterNode {
+    index: usize,
+    temp_dir: TempDir,
+    config: NodeConfig,
+    address: String,
+    listen_addr: String,
+}
+
+struct PreparedCluster {
+    nodes: Vec<PreparedClusterNode>,
+    genesis_accounts: Vec<GenesisAccount>,
+}
+
+impl PreparedCluster {
+    fn prepare_with<F>(count: usize, mut configure: F) -> Result<Self>
+    where
+        F: FnMut(&mut NodeConfig, usize) -> Result<()>,
+    {
+        if count < 3 {
+            return Err(anyhow!("test cluster requires at least three nodes"));
+        }
+
+        let mut prepared = Vec::with_capacity(count);
+        for index in 0..count {
+            let temp_dir = TempDir::new().context("failed to create node temp dir")?;
+            let node_root = temp_dir.path().to_path_buf();
+            let data_dir = node_root.join("data");
+            let keys_dir = node_root.join("keys");
+            std::fs::create_dir_all(&data_dir)
+                .with_context(|| format!("failed to create data dir for node {index}"))?;
+            std::fs::create_dir_all(&keys_dir)
+                .with_context(|| format!("failed to create keys dir for node {index}"))?;
+
+            let mut config = NodeConfig::default();
+            config.data_dir = data_dir.clone();
+            config.snapshot_dir = data_dir.join("snapshots");
+            config.proof_cache_dir = data_dir.join("proofs");
+            config.consensus_pipeline_path = data_dir.join("p2p/consensus_pipeline.json");
+            config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+            config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+            config.key_path = keys_dir.join("node.toml");
+            config.p2p_key_path = keys_dir.join("p2p.toml");
+            config.vrf_key_path = keys_dir.join("vrf.toml");
+            config.block_time_ms = 200;
+            config.mempool_limit = 256;
+            config.target_validator_count = count;
+            config.malachite.validator.validator_set_size = count;
+            config.rpc_listen = rpc_socket(index)?;
+            let (listen_addr, _) = random_listen_addr()?;
+            config.p2p.listen_addr = listen_addr.clone();
+            config.rollout.feature_gates.pruning = false;
+            config.rollout.feature_gates.recursive_proofs = false;
+            config.rollout.feature_gates.reconstruction = false;
+            config.rollout.feature_gates.consensus_enforcement = false;
+
+            let keypair = load_or_generate_keypair(&config.key_path)
+                .with_context(|| format!("failed to initialise node key for node {index}"))?;
+            load_or_generate_vrf_keypair(&config.vrf_key_path)
+                .with_context(|| format!("failed to initialise VRF key for node {index}"))?;
+            let address = address_from_public_key(&keypair.public);
+
+            configure(&mut config, index)?;
+
+            prepared.push(PreparedClusterNode {
+                index,
+                temp_dir,
+                config,
+                address,
+                listen_addr,
+            });
+        }
+
+        let genesis_accounts = prepared
+            .iter()
+            .map(|node| GenesisAccount {
+                address: node.address.clone(),
+                balance: 1_000_000_000,
+                stake: "1000".to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let listen_addrs = prepared
+            .iter()
+            .map(|node| node.listen_addr.clone())
+            .collect::<Vec<_>>();
+
+        for node in prepared.iter_mut() {
+            node.config.genesis.accounts = genesis_accounts.clone();
+            node.config.genesis.chain_id = "test-cluster".to_string();
+            node.config.p2p.bootstrap_peers = listen_addrs
+                .iter()
+                .enumerate()
+                .filter_map(|(peer_index, addr)| {
+                    if peer_index == node.index {
+                        None
+                    } else {
+                        Some(addr.clone())
+                    }
+                })
+                .collect();
+        }
+
+        Ok(Self {
+            nodes: prepared,
+            genesis_accounts,
+        })
+    }
+}
 
 #[cfg(feature = "vendor_electrs")]
 #[derive(Clone)]
@@ -348,82 +464,23 @@ impl TestCluster {
     where
         F: FnMut(&mut NodeConfig, usize) -> Result<()>,
     {
-        if count < 3 {
-            return Err(anyhow!("test cluster requires at least three nodes"));
-        }
+        let prepared =
+            PreparedCluster::prepare_with(count, |config, index| configure(config, index))?;
 
-        let mut prepared = Vec::with_capacity(count);
-        for index in 0..count {
-            let temp_dir = TempDir::new().context("failed to create node temp dir")?;
-            let node_root = temp_dir.path().to_path_buf();
-            let data_dir = node_root.join("data");
-            let keys_dir = node_root.join("keys");
-            std::fs::create_dir_all(&data_dir)
-                .with_context(|| format!("failed to create data dir for node {index}"))?;
-            std::fs::create_dir_all(&keys_dir)
-                .with_context(|| format!("failed to create keys dir for node {index}"))?;
+        let PreparedCluster {
+            nodes: prepared_nodes,
+            genesis_accounts,
+        } = prepared;
 
-            let mut config = NodeConfig::default();
-            config.data_dir = data_dir.clone();
-            config.snapshot_dir = data_dir.join("snapshots");
-            config.proof_cache_dir = data_dir.join("proofs");
-            config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-            config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
-            config.key_path = keys_dir.join("node.toml");
-            config.p2p_key_path = keys_dir.join("p2p.toml");
-            config.vrf_key_path = keys_dir.join("vrf.toml");
-            config.block_time_ms = 200;
-            config.mempool_limit = 256;
-            config.target_validator_count = count;
-            config.malachite.validator.validator_set_size = count;
-            config.rpc_listen = rpc_socket(index)?;
-            let (listen_addr, _) = random_listen_addr()?;
-            config.p2p.listen_addr = listen_addr.clone();
-            config.rollout.feature_gates.pruning = false;
-            config.rollout.feature_gates.recursive_proofs = false;
-            config.rollout.feature_gates.reconstruction = false;
-            config.rollout.feature_gates.consensus_enforcement = false;
-
-            let keypair = load_or_generate_keypair(&config.key_path)
-                .with_context(|| format!("failed to initialise node key for node {index}"))?;
-            load_or_generate_vrf_keypair(&config.vrf_key_path)
-                .with_context(|| format!("failed to initialise VRF key for node {index}"))?;
-            let address = address_from_public_key(&keypair.public);
-
-            configure(&mut config, index)?;
-
-            prepared.push((index, temp_dir, config, address, listen_addr));
-        }
-
-        let genesis_accounts = prepared
-            .iter()
-            .map(|(_, _, _, address, _)| GenesisAccount {
-                address: address.clone(),
-                balance: 1_000_000_000,
-                stake: "1000".to_string(),
-            })
-            .collect::<Vec<_>>();
-
-        let listen_addrs = prepared
-            .iter()
-            .map(|(_, _, _, _, listen)| listen.clone())
-            .collect::<Vec<_>>();
-
-        let mut nodes = Vec::with_capacity(count);
-        for (index, temp_dir, mut config, _address, _listen_addr) in prepared {
-            config.genesis.accounts = genesis_accounts.clone();
-            config.genesis.chain_id = "test-cluster".to_string();
-            config.p2p.bootstrap_peers = listen_addrs
-                .iter()
-                .enumerate()
-                .filter_map(|(peer_index, addr)| {
-                    if peer_index == index {
-                        None
-                    } else {
-                        Some(addr.clone())
-                    }
-                })
-                .collect();
+        let mut nodes = Vec::with_capacity(prepared_nodes.len());
+        for PreparedClusterNode {
+            index,
+            temp_dir,
+            config,
+            ..
+        } in prepared_nodes
+        {
+            let mut config = config;
             let node = tokio::task::spawn_blocking({
                 let config = config.clone();
                 move || Node::new(config)
@@ -697,6 +754,183 @@ impl TestCluster {
     }
 }
 
+pub struct ProcessClusterNode {
+    pub index: usize,
+    pub config_path: PathBuf,
+    pub rpc_addr: SocketAddr,
+    pub p2p_listen_addr: String,
+    pub child: Child,
+    temp_dir: TempDir,
+    stdout_task: Option<JoinHandle<()>>,
+    stderr_task: Option<JoinHandle<()>>,
+}
+
+pub struct ProcessTestCluster {
+    nodes: Vec<ProcessClusterNode>,
+    genesis_accounts: Vec<GenesisAccount>,
+}
+
+impl ProcessTestCluster {
+    pub async fn start(count: usize) -> Result<Self> {
+        Self::start_with(count, |_, _| Ok(())).await
+    }
+
+    pub async fn start_with<F>(count: usize, mut configure: F) -> Result<Self>
+    where
+        F: FnMut(&mut NodeConfig, usize) -> Result<()>,
+    {
+        let prepared =
+            PreparedCluster::prepare_with(count, |config, index| configure(config, index))?;
+
+        let PreparedCluster {
+            nodes: prepared_nodes,
+            genesis_accounts,
+        } = prepared;
+
+        let binary = env::var("CARGO_BIN_EXE_rpp-node")
+            .context("environment variable CARGO_BIN_EXE_rpp-node is not set")?;
+
+        let client = Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .context("failed to build HTTP client for process cluster")?;
+
+        let mut nodes = Vec::with_capacity(prepared_nodes.len());
+        for PreparedClusterNode {
+            index,
+            temp_dir,
+            mut config,
+            ..
+        } in prepared_nodes
+        {
+            let config_path = temp_dir.path().join("node.toml");
+            config
+                .ensure_directories()
+                .with_context(|| format!("failed to prepare directories for node {index}"))?;
+            config
+                .save(&config_path)
+                .with_context(|| format!("failed to persist config for node {index}"))?;
+
+            let mut command = Command::new(&binary);
+            command
+                .arg("--mode")
+                .arg("node")
+                .arg("--config")
+                .arg(&config_path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+
+            let mut child = command
+                .spawn()
+                .with_context(|| format!("failed to spawn rpp-node process for node {index}"))?;
+
+            let stdout_task = spawn_output_task(index, "stdout", child.stdout.take());
+            let stderr_task = spawn_output_task(index, "stderr", child.stderr.take());
+
+            wait_for_process_ready(&client, &mut child, config.rpc_listen, index).await?;
+
+            nodes.push(ProcessClusterNode {
+                index,
+                config_path,
+                rpc_addr: config.rpc_listen,
+                p2p_listen_addr: config.p2p.listen_addr.clone(),
+                child,
+                temp_dir,
+                stdout_task,
+                stderr_task,
+            });
+        }
+
+        Ok(Self {
+            nodes,
+            genesis_accounts,
+        })
+    }
+
+    pub fn nodes(&self) -> &[ProcessClusterNode] {
+        &self.nodes
+    }
+
+    pub fn nodes_mut(&mut self) -> &mut [ProcessClusterNode] {
+        &mut self.nodes
+    }
+
+    pub fn genesis_accounts(&self) -> &[GenesisAccount] {
+        &self.genesis_accounts
+    }
+
+    pub async fn shutdown(mut self) -> Result<()> {
+        for node in &mut self.nodes {
+            if node.child.id().is_some() {
+                if let Err(err) = send_ctrl_c(&node.child) {
+                    tracing::warn!(
+                        target = "tests::cluster::process",
+                        node = node.index,
+                        error = %err,
+                        "failed to send CTRL+C to process cluster node"
+                    );
+                }
+            }
+        }
+
+        for node in &mut self.nodes {
+            let started = Instant::now();
+            loop {
+                match node.child.try_wait() {
+                    Ok(Some(status)) => {
+                        if !status.success() {
+                            return Err(anyhow!(
+                                "process cluster node {} exited with status {}",
+                                node.index,
+                                status
+                            ));
+                        }
+                        break;
+                    }
+                    Ok(None) => {
+                        if started.elapsed() > PROCESS_SHUTDOWN_TIMEOUT {
+                            node.child.kill().with_context(|| {
+                                format!(
+                                    "failed to terminate process cluster node {} after timeout",
+                                    node.index
+                                )
+                            })?;
+                            let status = node.child.wait().with_context(|| {
+                                format!("failed to reap process cluster node {}", node.index)
+                            })?;
+                            if !status.success() {
+                                return Err(anyhow!(
+                                    "process cluster node {} exited with status {}",
+                                    node.index,
+                                    status
+                                ));
+                            }
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        return Err(err).with_context(|| {
+                            format!("failed to query process status for node {}", node.index)
+                        })
+                    }
+                }
+                sleep(Duration::from_millis(200)).await;
+            }
+        }
+
+        for mut node in self.nodes {
+            if let Some(task) = node.stdout_task.take() {
+                let _ = task.await;
+            }
+            if let Some(task) = node.stderr_task.take() {
+                let _ = task.await;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 fn random_listen_addr() -> Result<(String, u16)> {
     let listener = TcpListener::bind("127.0.0.1:0").context("failed to bind random port")?;
     let addr = listener
@@ -714,4 +948,87 @@ fn rpc_socket(index: usize) -> Result<SocketAddr> {
     format!("127.0.0.1:{port}")
         .parse()
         .context("failed to parse RPC socket")
+}
+
+fn spawn_output_task<T>(
+    index: usize,
+    label: &'static str,
+    stream: Option<T>,
+) -> Option<JoinHandle<()>>
+where
+    T: Read + Send + 'static,
+{
+    stream.map(|stream| {
+        tokio::task::spawn_blocking(move || {
+            let _ = (index, label);
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
+        })
+    })
+}
+
+async fn wait_for_process_ready(
+    client: &Client,
+    child: &mut Child,
+    rpc_addr: SocketAddr,
+    index: usize,
+) -> Result<()> {
+    let ready_url = format!("http://{}/health/ready", rpc_addr);
+    let deadline = Instant::now() + PROCESS_INIT_TIMEOUT;
+    loop {
+        if Instant::now() > deadline {
+            return Err(anyhow!(
+                "process cluster node {} did not become ready within {:?}",
+                index,
+                PROCESS_INIT_TIMEOUT
+            ));
+        }
+
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("failed to poll process cluster node {index}"))?
+        {
+            return Err(anyhow!(
+                "process cluster node {} exited prematurely with status {}",
+                index,
+                status
+            ));
+        }
+
+        match client.get(&ready_url).send().await {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(_) => {}
+            Err(_) => {}
+        }
+
+        sleep(Duration::from_millis(500)).await;
+    }
+}
+
+#[cfg(unix)]
+fn send_ctrl_c(child: &Child) -> std::io::Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    let id = child
+        .id()
+        .ok_or_else(|| Error::new(ErrorKind::Other, "child process is not running"))?;
+    let result = unsafe { libc::kill(id as libc::pid_t, libc::SIGINT) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn send_ctrl_c(child: &Child) -> std::io::Result<()> {
+    child.kill()
 }
