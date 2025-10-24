@@ -1,0 +1,14 @@
+{
+  "timetoke_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "records": [
+    {
+      "identity": "validator-0",
+      "balance": 96,
+      "epoch_accrual": 0,
+      "decay_rate": 1.0,
+      "last_update": 1680300000,
+      "last_sync": 1680300000,
+      "last_decay": 1680290000
+    }
+  ]
+}

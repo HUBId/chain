@@ -19,24 +19,24 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
 use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{broadcast, mpsc, watch, Mutex, Notify};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::field::display;
-use tracing::Span;
 use tracing::instrument;
+use tracing::Span;
 use tracing::{debug, error, info, warn};
 
 use hex;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json;
 
 use crate::config::{
@@ -44,13 +44,13 @@ use crate::config::{
     TelemetryConfig,
 };
 use crate::consensus::{
-    BftVote, BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool,
-    EvidenceRecord, SignedBftVote, ValidatorCandidate, aggregate_total_stake,
-    classify_participants, evaluate_vrf,
+    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
+    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
+    SignedBftVote, ValidatorCandidate,
 };
 use crate::crypto::{
-    VrfKeypair, address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
-    vrf_public_key_to_hex,
+    address_from_public_key, load_or_generate_keypair, sign_message, signature_to_hex,
+    vrf_public_key_to_hex, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::ledger::{
@@ -65,17 +65,17 @@ use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
-    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
     node::{
         IdentityProfile as RuntimeIdentityProfile, MetaTelemetryReport, NodeError as P2pError,
-        NodeRuntimeConfig as P2pRuntimeConfig,
+        NodeRuntimeConfig as P2pRuntimeConfig, TimetokeDeltaBroadcast,
     },
+    NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
-use crate::runtime::vrf_gossip::{submission_to_gossip, verify_submission};
 use crate::runtime::sync::{
     state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
     stream_state_sync_chunks as runtime_stream_state_sync_chunks,
 };
+use crate::runtime::vrf_gossip::{submission_to_gossip, verify_submission};
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -85,9 +85,9 @@ use crate::stwo::prover::WalletProver;
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration,
-    PruningProof, RecursiveProof, ReputationUpdate, SignedTransaction, Stake, TimetokeUpdate,
-    TransactionProofBundle, UptimeProof,
+    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -534,10 +534,7 @@ impl WitnessChannels {
         *self.publisher.lock() = Some(publisher);
     }
 
-    fn set_backpressure_hook(
-        &self,
-        hook: Arc<dyn Fn(GossipTopic, usize) + Send + Sync>,
-    ) {
+    fn set_backpressure_hook(&self, hook: Arc<dyn Fn(GossipTopic, usize) + Send + Sync>) {
         *self.backpressure_hook.lock() = Some(hook);
     }
 
@@ -1076,8 +1073,9 @@ impl Node {
                         if let Some(runtime) = inner.p2p_runtime.lock().clone() {
                             let topic_clone = topic.clone();
                             tokio::spawn(async move {
-                                if let Err(err) =
-                                    runtime.report_gossip_backpressure(topic_clone.clone(), queue_depth).await
+                                if let Err(err) = runtime
+                                    .report_gossip_backpressure(topic_clone.clone(), queue_depth)
+                                    .await
                                 {
                                     warn!(
                                         target: "node",
@@ -1127,7 +1125,7 @@ mod tests {
     use super::*;
     use crate::config::{GenesisAccount, NodeConfig};
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusRound, SignedBftVote, classify_participants, evaluate_vrf,
+        classify_participants, evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, SignedBftVote,
     };
     use crate::crypto::{
         address_from_public_key, generate_vrf_keypair, load_or_generate_keypair,
@@ -1138,9 +1136,8 @@ mod tests {
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::Tier;
     use crate::stwo::circuit::{
-        StarkCircuit,
         identity::{IdentityCircuit, IdentityWitness},
-        string_to_field,
+        string_to_field, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -2098,6 +2095,53 @@ impl NodeInner {
         }
     }
 
+    fn persist_timetoke_accounts(&self, addresses: &[Address]) -> ChainResult<()> {
+        for address in addresses {
+            if let Some(account) = self.ledger.get_account(address) {
+                self.storage.persist_account(&account)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn emit_timetoke_meta(&self, records: &[TimetokeRecord]) {
+        if records.is_empty() {
+            return;
+        }
+        let commitments = self.ledger.global_commitments();
+        let payload = TimetokeDeltaBroadcast {
+            timetoke_root: hex::encode(commitments.timetoke_root),
+            records: records.to_vec(),
+        };
+        self.emit_witness_json(GossipTopic::Meta, &payload);
+    }
+
+    fn apply_remote_timetoke_delta(
+        &self,
+        peer: &PeerId,
+        delta: TimetokeDeltaBroadcast,
+    ) -> ChainResult<()> {
+        let updated = self.ledger.sync_timetoke_records(&delta.records)?;
+        self.persist_timetoke_accounts(&updated)?;
+        if !updated.is_empty() {
+            if let Ok(bytes) = serde_json::to_vec(&updated) {
+                self.ingest_witness_bytes(GossipTopic::Snapshots, bytes);
+            }
+        }
+        let commitments = self.ledger.global_commitments();
+        let local_root = hex::encode(commitments.timetoke_root);
+        if local_root != delta.timetoke_root {
+            warn!(
+                target: "node",
+                %peer,
+                expected = %delta.timetoke_root,
+                actual = %local_root,
+                "timetoke root mismatch after applying delta"
+            );
+        }
+        Ok(())
+    }
+
     fn emit_state_sync_artifacts(&self) {
         if !self.config.rollout.feature_gates.reconstruction {
             return;
@@ -2207,10 +2251,9 @@ impl NodeInner {
         let handle = self
             .p2p_handle()
             .ok_or_else(|| ChainError::Config("p2p runtime not initialised".into()))?;
-        let snapshot = handle
-            .heuristics_snapshot()
-            .await
-            .map_err(|err| ChainError::Config(format!("failed to collect p2p heuristics: {err}")))?;
+        let snapshot = handle.heuristics_snapshot().await.map_err(|err| {
+            ChainError::Config(format!("failed to collect p2p heuristics: {err}"))
+        })?;
         let entries = snapshot
             .into_iter()
             .map(|(peer, counters)| P2pCensorshipEntry {
@@ -2314,6 +2357,11 @@ impl NodeInner {
                         }
                         Ok(NodeEvent::Evidence { evidence, .. }) => {
                             ingest.apply_evidence(evidence);
+                        }
+                        Ok(NodeEvent::TimetokeDelta { peer, delta }) => {
+                            if let Err(err) = ingest.apply_remote_timetoke_delta(&peer, delta) {
+                                warn!(?err, %peer, "failed to apply timetoke delta from gossip");
+                            }
                         }
                         Ok(NodeEvent::Gossip { topic, data, .. }) => {
                             ingest.ingest_witness_bytes(topic, data);
@@ -3552,25 +3600,23 @@ impl NodeInner {
 
     fn timetoke_snapshot(&self) -> ChainResult<Vec<TimetokeRecord>> {
         let records = self.ledger.timetoke_snapshot();
-        for record in &records {
-            if let Some(account) = self.ledger.get_account(&record.identity) {
-                self.storage.persist_account(&account)?;
-            }
-        }
+        let addresses: Vec<Address> = records
+            .iter()
+            .map(|record| record.identity.clone())
+            .collect();
+        self.persist_timetoke_accounts(&addresses)?;
         self.emit_witness_json(GossipTopic::Snapshots, &records);
+        self.emit_timetoke_meta(&records);
         Ok(records)
     }
 
     fn sync_timetoke_records(&self, records: Vec<TimetokeRecord>) -> ChainResult<Vec<Address>> {
         let updated = self.ledger.sync_timetoke_records(&records)?;
-        for address in &updated {
-            if let Some(account) = self.ledger.get_account(address) {
-                self.storage.persist_account(&account)?;
-            }
-        }
+        self.persist_timetoke_accounts(&updated)?;
         if !updated.is_empty() {
             self.emit_witness_json(GossipTopic::Snapshots, &updated);
         }
+        self.emit_timetoke_meta(&records);
         Ok(updated)
     }
 
@@ -5299,9 +5345,9 @@ mod telemetry_tests {
     #[cfg(feature = "backend-rpp-stark")]
     use super::NodeInner;
     use super::{
-        ConsensusStatus, FeatureGates, MempoolStatus, NodeStatus, NodeTelemetrySnapshot,
-        ReleaseChannel, TelemetryConfig, TimetokeParams, VerifierMetricsSnapshot,
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking,
+        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
+        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
+        TimetokeParams, VerifierMetricsSnapshot,
     };
     #[cfg(feature = "backend-rpp-stark")]
     use crate::errors::ChainError;
@@ -5309,12 +5355,12 @@ mod telemetry_tests {
     use crate::types::{ChainProof, RppStarkProof};
     use crate::vrf::VrfSelectionMetrics;
     use axum::http::StatusCode;
-    use axum::{Router, routing::post};
+    use axum::{routing::post, Router};
     use parking_lot::RwLock;
     use reqwest::Client;
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     #[cfg(feature = "backend-rpp-stark")]
     use std::time::Duration;
     use tokio::sync::oneshot;

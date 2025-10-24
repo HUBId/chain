@@ -14,6 +14,7 @@ Gossip and state sync exchanges rely on structured payloads shared between nodes
 | State sync chunk stream | [`state_sync_chunk_stream.jsonschema`](p2p/state_sync_chunk_stream.jsonschema) | [`examples/state_sync_chunk_stream.json`](p2p/examples/state_sync_chunk_stream.json) |
 | Light client update | [`network_light_client_update.jsonschema`](p2p/network_light_client_update.jsonschema) | [`examples/network_light_client_update.json`](p2p/examples/network_light_client_update.json) |
 | Light client head | [`network_light_client_head.jsonschema`](p2p/network_light_client_head.jsonschema) | [`examples/network_light_client_head.json`](p2p/examples/network_light_client_head.json) |
+| Meta timetoke delta | [`meta_timetoke.jsonschema`](p2p/meta_timetoke.jsonschema) | [`examples/meta_timetoke.json`](p2p/examples/meta_timetoke.json) |
 | State sync plan | [`network_state_sync_plan.jsonschema`](p2p/network_state_sync_plan.jsonschema) | [`examples/network_state_sync_plan.json`](p2p/examples/network_state_sync_plan.json) |
 
 Referencing schemas use canonical IDs to enable downstream tooling to resolve dependencies without additional context.

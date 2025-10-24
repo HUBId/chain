@@ -8,15 +8,15 @@ use blake3::Hash;
 use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
+    decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
     AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
     GossipVoteValidator, HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry,
     NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport,
     NetworkPeerTelemetry, NodeIdentity, PeerstoreError, PersistentConsensusStorage,
     PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent,
     ReputationHeuristics, RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome,
-    decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
 };
-use serde::{Deserialize, Deserializer, de};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time;
@@ -25,10 +25,12 @@ use tracing::{debug, info, info_span, instrument, warn};
 use crate::config::{FeatureGates, NodeConfig, P2pConfig, TelemetryConfig};
 use crate::consensus::{ConsensusCertificate, EvidenceRecord, SignedBftVote};
 use crate::node::NetworkIdentityProfile;
+use crate::proof_backend::Blake2sHasher;
 use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
-use crate::rpp::GlobalStateCommitments;
+use crate::rpp::{GlobalStateCommitments, TimetokeRecord};
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
 use crate::runtime::vrf_gossip::{gossip_to_submission, verify_submission, GossipVrfSubmission};
+use crate::state::merkle::compute_merkle_root;
 use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
 use crate::types::{Address, Block};
 use crate::vrf::VrfSubmission;
@@ -43,6 +45,7 @@ pub enum ProofReputationCode {
     DuplicateProof,
     PipelineFailure,
     InvalidVrfSubmission,
+    InvalidTimetokeDelta,
 }
 
 #[derive(Debug)]
@@ -150,12 +153,19 @@ pub struct MetaTelemetryReport {
     pub peers: Vec<PeerTelemetry>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TimetokeDeltaBroadcast {
+    pub timetoke_root: String,
+    pub records: Vec<TimetokeRecord>,
+}
+
 #[derive(Clone, Debug)]
 pub enum MetaPayload {
     Reputation(ReputationBroadcast),
     Evidence(EvidenceRecord),
     Telemetry(MetaTelemetryReport),
     FeatureAnnouncement(FeatureAnnouncement),
+    TimetokeDelta(TimetokeDeltaBroadcast),
 }
 
 impl<'de> Deserialize<'de> for MetaPayload {
@@ -182,6 +192,9 @@ impl<'de> Deserialize<'de> for MetaPayload {
             let announcement = FeatureAnnouncement::try_from(announcement)
                 .map_err(|err| de::Error::custom(format!("invalid feature announcement: {err}")))?;
             return Ok(Self::FeatureAnnouncement(announcement));
+        }
+        if let Ok(delta) = serde_json::from_value::<TimetokeDeltaBroadcast>(value.clone()) {
+            return Ok(Self::TimetokeDelta(delta));
         }
         Err(de::Error::custom("unknown meta payload format"))
     }
@@ -329,6 +342,10 @@ pub enum NodeEvent {
         peer: PeerId,
         evidence: EvidenceRecord,
     },
+    TimetokeDelta {
+        peer: PeerId,
+        delta: TimetokeDeltaBroadcast,
+    },
     BlockProposal {
         peer: PeerId,
         block: Block,
@@ -407,6 +424,7 @@ struct GossipPipelines {
     block_cache: HashSet<Hash>,
     vote_cache: Mutex<HashSet<Hash>>,
     meta_cache: HashSet<Hash>,
+    timetoke_roots: HashSet<[u8; 32]>,
     consensus: Mutex<ConsensusPipeline>,
     commands: mpsc::Sender<NodeCommand>,
 }
@@ -461,9 +479,31 @@ impl GossipPipelines {
             block_cache: HashSet::new(),
             vote_cache: Mutex::new(vote_cache),
             meta_cache: HashSet::new(),
+            timetoke_roots: HashSet::new(),
             consensus: Mutex::new(consensus),
             commands,
         })
+    }
+
+    fn decode_timetoke_root(root_hex: &str) -> Result<[u8; 32], String> {
+        let bytes = hex::decode(root_hex)
+            .map_err(|err| format!("invalid timetoke root encoding: {err}"))?;
+        if bytes.len() != 32 {
+            return Err("timetoke root must be a 32-byte hex digest".into());
+        }
+        let mut root = [0u8; 32];
+        root.copy_from_slice(&bytes);
+        Ok(root)
+    }
+
+    fn commitment_from_records(records: &[TimetokeRecord]) -> Result<[u8; 32], String> {
+        let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(records.len());
+        for record in records {
+            let encoded = serde_json::to_vec(record)
+                .map_err(|err| format!("encode timetoke record: {err}"))?;
+            leaves.push(Blake2sHasher::hash(&encoded).into());
+        }
+        Ok(compute_merkle_root(&mut leaves))
     }
 
     fn register_voter(&self, peer: PeerId, tier: TierLevel) {
@@ -591,7 +631,9 @@ impl GossipPipelines {
                     "failed to ingest proof gossip: validation error"
                 );
                 let lower_reason = reason.to_lowercase();
-                if lower_reason.contains("missing proof") || lower_reason.contains("missing commitment") {
+                if lower_reason.contains("missing proof")
+                    || lower_reason.contains("missing commitment")
+                {
                     self.apply_reputation_event(
                         peer.clone(),
                         ReputationEvent::ProofRelayMissed {
@@ -629,6 +671,10 @@ impl GossipPipelines {
                 "failed to enqueue reputation penalty command"
             );
         }
+    }
+
+    fn enqueue_meta_penalty(&self, peer: PeerId) {
+        self.enqueue_proof_penalty(peer, ProofReputationCode::InvalidTimetokeDelta);
     }
 
     fn handle_snapshots(&mut self, payload: &[u8]) {
@@ -675,6 +721,57 @@ impl GossipPipelines {
         }
         match decode_meta_payload(&data) {
             Ok(value) => match serde_json::from_value::<MetaPayload>(value) {
+                Ok(MetaPayload::TimetokeDelta(delta)) => {
+                    let root_bytes = match Self::decode_timetoke_root(&delta.timetoke_root) {
+                        Ok(root) => root,
+                        Err(reason) => {
+                            warn!(
+                                target: "node",
+                                ?peer,
+                                %reason,
+                                "rejected timetoke delta gossip"
+                            );
+                            self.enqueue_meta_penalty(peer);
+                            return MetaIngestResult::DecodeFailed(reason);
+                        }
+                    };
+                    let commitment = match Self::commitment_from_records(&delta.records) {
+                        Ok(commitment) => commitment,
+                        Err(reason) => {
+                            warn!(
+                                target: "node",
+                                ?peer,
+                                %reason,
+                                "failed to hash timetoke delta gossip"
+                            );
+                            self.enqueue_meta_penalty(peer);
+                            return MetaIngestResult::DecodeFailed(reason);
+                        }
+                    };
+                    if commitment != root_bytes {
+                        warn!(
+                            target: "node",
+                            ?peer,
+                            expected = hex::encode(root_bytes),
+                            computed = hex::encode(commitment),
+                            "timetoke delta commitment mismatch"
+                        );
+                        self.enqueue_meta_penalty(peer);
+                        return MetaIngestResult::DecodeFailed(
+                            "timetoke delta commitment mismatch".into(),
+                        );
+                    }
+                    if !self.timetoke_roots.insert(root_bytes) {
+                        debug!(
+                            target: "node",
+                            ?peer,
+                            "duplicate timetoke delta ignored"
+                        );
+                        return MetaIngestResult::Duplicate;
+                    }
+                    debug!(target: "node", ?peer, "timetoke delta gossip ingested");
+                    MetaIngestResult::Payload(MetaPayload::TimetokeDelta(delta))
+                }
                 Ok(payload) => {
                     debug!(target: "node", ?peer, "meta gossip ingested");
                     MetaIngestResult::Payload(payload)
@@ -1197,7 +1294,9 @@ impl NodeInner {
                             if let Some(submission) =
                                 self.pipelines.handle_vrf_proofs(peer.clone(), data.clone())
                             {
-                                let _ = self.events.send(NodeEvent::VrfSubmission { peer, submission });
+                                let _ = self
+                                    .events
+                                    .send(NodeEvent::VrfSubmission { peer, submission });
                             }
                         }
                         GossipTopic::Proofs | GossipTopic::WitnessProofs => {
@@ -1293,11 +1392,22 @@ impl NodeInner {
                                             announcement.feature_gates,
                                         );
                                     }
+                                    MetaPayload::TimetokeDelta(delta) => {
+                                        debug!(
+                                            target: "node",
+                                            ?peer,
+                                            "meta timetoke delta ingested"
+                                        );
+                                        let _ = self.events.send(NodeEvent::TimetokeDelta {
+                                            peer: peer.clone(),
+                                            delta,
+                                        });
+                                    }
                                 },
                                 MetaIngestResult::DecodeFailed(reason) => {
                                     warn!(
-                                        target: "node",
-                                        ?peer,
+                                    target: "node",
+                                    ?peer,
                                         %reason,
                                         "failed to decode meta gossip"
                                     );
@@ -1357,6 +1467,10 @@ impl NodeInner {
                 amount: 1.0,
                 reason: Cow::Borrowed("invalid_vrf_submission"),
             },
+            ProofReputationCode::InvalidTimetokeDelta => ReputationEvent::ManualPenalty {
+                amount: 1.0,
+                reason: Cow::Borrowed("invalid_timetoke_delta"),
+            },
         };
         let label = event.label().to_string();
         self.network
@@ -1398,10 +1512,7 @@ impl NodeInner {
         if self.connected_peers.is_empty() {
             return;
         }
-        let event = ReputationEvent::GossipBackpressure {
-            topic,
-            queue_depth,
-        };
+        let event = ReputationEvent::GossipBackpressure { topic, queue_depth };
         for peer in self.connected_peers.clone() {
             self.apply_reputation_event(peer, event.clone());
         }
@@ -1587,9 +1698,7 @@ impl NodeHandle {
             .map_err(|_| NodeError::CommandChannelClosed)
     }
 
-    pub async fn heuristics_snapshot(
-        &self,
-    ) -> Result<Vec<(PeerId, PeerHeuristics)>, NodeError> {
+    pub async fn heuristics_snapshot(&self) -> Result<Vec<(PeerId, PeerHeuristics)>, NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(NodeCommand::HeuristicsSnapshot { response: tx })
@@ -1821,12 +1930,10 @@ mod tests {
                 let stored = std::fs::read_to_string(&proof_path).expect("proof storage exists");
                 let records: serde_json::Value =
                     serde_json::from_str(&stored).expect("decode stored proofs");
-                assert!(
-                    records
-                        .as_array()
-                        .map(|array| !array.is_empty())
-                        .unwrap_or(false)
-                );
+                assert!(records
+                    .as_array()
+                    .map(|array| !array.is_empty())
+                    .unwrap_or(false));
             })
             .await;
     }
