@@ -158,6 +158,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
     }
     let wallet_bundle = load_wallet_configuration(mode, &options)?;
 
+    ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())?;
+
     let node_metadata = node_bundle
         .as_ref()
         .and_then(|bundle| bundle.metadata.as_ref().cloned());
@@ -446,11 +448,16 @@ impl ConfigRole {
 }
 
 #[derive(Debug)]
-pub struct ConfigurationError {
-    role: ConfigRole,
-    path: PathBuf,
-    source: ConfigSource,
-    suggestion: Option<String>,
+pub enum ConfigurationError {
+    Missing {
+        role: ConfigRole,
+        path: PathBuf,
+        source: ConfigSource,
+        suggestion: Option<String>,
+    },
+    Conflict {
+        message: String,
+    },
 }
 
 impl ConfigurationError {
@@ -461,32 +468,48 @@ impl ConfigurationError {
         template: Option<&'static str>,
     ) -> Self {
         let suggestion = template.map(|default| format!("cp {default} {}", path.display()));
-        Self {
+        Self::Missing {
             role,
             path,
             source,
             suggestion,
         }
     }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self::Conflict {
+            message: message.into(),
+        }
+    }
 }
 
 impl fmt::Display for ConfigurationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let base = format!(
-            "{} configuration not found at {} (resolved from {})",
-            self.role.as_str(),
-            self.path.display(),
-            self.source.description()
-        );
+        match self {
+            Self::Missing {
+                role,
+                path,
+                source,
+                suggestion,
+            } => {
+                let base = format!(
+                    "{} configuration not found at {} (resolved from {})",
+                    role.as_str(),
+                    path.display(),
+                    source.description()
+                );
 
-        if let Some(suggestion) = &self.suggestion {
-            write!(
-                f,
-                "{}; copy the default template with `{}`",
-                base, suggestion
-            )
-        } else {
-            write!(f, "{}", base)
+                if let Some(suggestion) = suggestion {
+                    write!(
+                        f,
+                        "{}; copy the default template with `{}`",
+                        base, suggestion
+                    )
+                } else {
+                    write!(f, "{}", base)
+                }
+            }
+            Self::Conflict { message } => write!(f, "{}", message),
         }
     }
 }
@@ -497,6 +520,94 @@ impl std::error::Error for ConfigurationError {}
 struct ConfigBundle<T> {
     value: T,
     metadata: Option<ConfigMetadata>,
+}
+
+fn ensure_listener_conflicts(
+    mode: RuntimeMode,
+    node_bundle: Option<&ConfigBundle<NodeConfig>>,
+    wallet_bundle: Option<&ConfigBundle<WalletConfig>>,
+) -> Result<()> {
+    if !(mode.includes_node() && mode.includes_wallet()) {
+        return Ok(());
+    }
+
+    let Some(node_bundle) = node_bundle else {
+        return Ok(());
+    };
+    let Some(wallet_bundle) = wallet_bundle else {
+        return Ok(());
+    };
+
+    let node_metadata = node_bundle.metadata.as_ref();
+    let wallet_metadata = wallet_bundle.metadata.as_ref();
+    let mut conflicts = Vec::new();
+
+    let node_rpc = node_bundle.value.rpc_listen;
+    let wallet_rpc = wallet_bundle.value.rpc_listen;
+    if listeners_conflict(node_rpc, wallet_rpc) {
+        let node_key = describe_config_key(ConfigRole::Node, node_metadata, "rpc_listen");
+        let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, "rpc_listen");
+        conflicts.push(format!(
+            "{node_key} ({node_rpc}) and {wallet_key} ({wallet_rpc}) reuse TCP port {}",
+            node_rpc.port()
+        ));
+    }
+
+    if let Some(port) = extract_tcp_port(&node_bundle.value.p2p.listen_addr) {
+        if port != 0 && port == wallet_rpc.port() {
+            let node_key = describe_config_key(ConfigRole::Node, node_metadata, "p2p.listen_addr");
+            let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, "rpc_listen");
+            conflicts.push(format!(
+                "{wallet_key} ({wallet_rpc}) reuses TCP port {port}, which is already reserved by {node_key} ({})",
+                node_bundle.value.p2p.listen_addr
+            ));
+        }
+    }
+
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        let details = conflicts.join("; ");
+        Err(ConfigurationError::conflict(format!("listener conflict: {details}")).into())
+    }
+}
+
+fn describe_config_key(role: ConfigRole, metadata: Option<&ConfigMetadata>, key: &str) -> String {
+    match metadata {
+        Some(metadata) => format!(
+            "{} configuration ({}::{key})",
+            role.as_str(),
+            metadata.path.display()
+        ),
+        None => format!("{} configuration (defaults::{key})", role.as_str()),
+    }
+}
+
+fn listeners_conflict(node: std::net::SocketAddr, wallet: std::net::SocketAddr) -> bool {
+    if node.port() != wallet.port() {
+        return false;
+    }
+
+    if node.ip().is_unspecified() || wallet.ip().is_unspecified() {
+        return true;
+    }
+
+    node.ip() == wallet.ip()
+}
+
+fn extract_tcp_port(multiaddr: &str) -> Option<u16> {
+    let mut parts = multiaddr.split('/').filter(|segment| !segment.is_empty());
+    while let Some(protocol) = parts.next() {
+        let value = parts.next();
+        if protocol.eq_ignore_ascii_case("tcp") {
+            if let Some(port) = value {
+                if let Ok(port) = port.parse::<u16>() {
+                    return Some(port);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug)]
