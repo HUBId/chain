@@ -859,7 +859,7 @@ fn load_node_configuration(
         return Ok(None);
     }
 
-    let Some(mut resolved) = resolve_node_config_path(mode, options) else {
+    let Some(resolved) = resolve_node_config_path(mode, options) else {
         return Ok(None);
     };
 
@@ -891,7 +891,7 @@ fn load_wallet_configuration(
         return Ok(None);
     }
 
-    let Some(mut resolved) = resolve_wallet_config_path(mode, options) else {
+    let Some(resolved) = resolve_wallet_config_path(mode, options) else {
         return Ok(None);
     };
 
@@ -937,24 +937,13 @@ fn resolve_config_path(
     cli_path: Option<PathBuf>,
     default_path: Option<&'static str>,
 ) -> Option<ResolvedConfigPath> {
-    if let Some(path) = cli_path {
-        return Some(ResolvedConfigPath {
-            path,
-            source: ConfigSource::CommandLine,
-        });
-    }
+    let env_path = env_config_path();
 
-    if let Some(path) = env_config_path() {
-        return Some(ResolvedConfigPath {
-            path,
-            source: ConfigSource::Environment,
-        });
-    }
-
-    default_path.map(|path| ResolvedConfigPath {
-        path: PathBuf::from(path),
-        source: ConfigSource::Default,
-    })
+    resolve_config_from_sources([
+        cli_path.map(|path| (path, ConfigSource::CommandLine)),
+        env_path.map(|path| (path, ConfigSource::Environment)),
+        default_path.map(|path| (PathBuf::from(path), ConfigSource::Default)),
+    ])
 }
 
 fn env_config_path() -> Option<PathBuf> {
@@ -965,6 +954,18 @@ fn env_config_path() -> Option<PathBuf> {
     } else {
         Some(PathBuf::from(trimmed))
     }
+}
+
+fn resolve_config_from_sources(
+    sources: impl IntoIterator<Item = Option<(PathBuf, ConfigSource)>>,
+) -> Option<ResolvedConfigPath> {
+    for candidate in sources {
+        if let Some((path, source)) = candidate {
+            return Some(ResolvedConfigPath { path, source });
+        }
+    }
+
+    None
 }
 
 fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
@@ -1302,4 +1303,106 @@ fn normalize_option(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn env_lock() -> &'static Mutex<()> {
+        ENV_MUTEX.get_or_init(|| Mutex::new(()))
+    }
+
+    struct ConfigEnvGuard {
+        previous: Option<String>,
+    }
+
+    impl ConfigEnvGuard {
+        fn set(value: Option<&str>) -> Self {
+            let previous = std::env::var("RPP_CONFIG").ok();
+            match value {
+                Some(value) => std::env::set_var("RPP_CONFIG", value),
+                None => std::env::remove_var("RPP_CONFIG"),
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for ConfigEnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = self.previous.take() {
+                std::env::set_var("RPP_CONFIG", value);
+            } else {
+                std::env::remove_var("RPP_CONFIG");
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_config_path_prefers_command_line() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(Some("/tmp/env-config.toml"));
+
+        let cli_path = PathBuf::from("/tmp/cli-config.toml");
+        let resolved = resolve_config_path(Some(cli_path.clone()), Some("config/default.toml"))
+            .expect("resolved path");
+
+        assert_eq!(resolved.path, cli_path);
+        assert_eq!(resolved.source, ConfigSource::CommandLine);
+    }
+
+    #[test]
+    fn resolve_config_path_uses_environment_when_cli_absent() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(Some("/tmp/env-config.toml"));
+
+        let resolved = resolve_config_path(None, Some("config/default.toml")).expect("resolved");
+
+        assert_eq!(resolved.path, PathBuf::from("/tmp/env-config.toml"));
+        assert_eq!(resolved.source, ConfigSource::Environment);
+    }
+
+    #[test]
+    fn resolve_config_path_uses_default_when_other_sources_missing() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let resolved = resolve_config_path(None, Some("config/default.toml")).expect("resolved");
+
+        assert_eq!(resolved.path, PathBuf::from("config/default.toml"));
+        assert_eq!(resolved.source, ConfigSource::Default);
+    }
+
+    #[test]
+    fn resolve_config_path_returns_none_when_all_sources_missing() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        assert!(resolve_config_path(None, None).is_none());
+    }
+
+    #[test]
+    fn resolve_config_path_trims_environment_variable() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(Some("  /tmp/env-config.toml  "));
+
+        let resolved = resolve_config_path(None, Some("config/default.toml")).expect("resolved");
+
+        assert_eq!(resolved.path, PathBuf::from("/tmp/env-config.toml"));
+        assert_eq!(resolved.source, ConfigSource::Environment);
+    }
+
+    #[test]
+    fn resolve_config_path_ignores_blank_environment_variable() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(Some("   "));
+
+        let resolved = resolve_config_path(None, Some("config/default.toml")).expect("resolved");
+
+        assert_eq!(resolved.path, PathBuf::from("config/default.toml"));
+        assert_eq!(resolved.source, ConfigSource::Default);
+    }
 }
