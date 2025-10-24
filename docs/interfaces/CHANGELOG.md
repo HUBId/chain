@@ -1,5 +1,10 @@
 # Interface Schema Changelog
 
+## 2025-10-24
+
+- Added RPC schemas describing `/state-sync/head` and `/state-sync/chunk/:id`
+  responses for light-client tooling.
+
 ## 2025-02-20
 
 - Added LightClientHead and SnapshotChunkStream schemas with sample payloads for P2P state sync documentation.

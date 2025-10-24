@@ -1,11 +1,17 @@
 # Validator Tooling
 
-The validator CLI and RPC server expose a small toolkit for managing VRF
-secrets and inspecting gossip telemetry without restarting the node. The CLI
-wraps the new RPC endpoints so operators can automate key rotations or
-incidents directly from the host.
+The validator CLI and RPC server expose a toolkit for managing VRF secrets,
+inspecting gossip telemetry, and now monitoring light-client state-sync
+progress without restarting the node. The CLI wraps the new RPC endpoints so
+operators can automate key rotations, incident response, or snapshot recovery
+directly from the host.
 
 ## CLI subcommands
+
+The CLI offers dedicated namespaces for validator operations and the
+light-client helpers that drive state sync.
+
+### `rpp-node validator`
 
 The `rpp-node validator` namespace bundles two feature areas:
 
@@ -44,6 +50,47 @@ The `rpp-node validator` namespace bundles two feature areas:
      via `--auth-token` and surfaces HTTP errors verbatim so operators can spot
      tier-gating failures or connectivity issues.【F:rpp/node/src/main.rs†L160-L203】
 
+### `rpp-node light-client`
+
+State-sync operations for light clients and snapshot mirroring now ship as
+first-class CLI helpers. All light-client commands require the RPC base URL;
+pass `--rpc-url http://host:port` (defaults to `http://127.0.0.1:7070`) and
+forward any bearer token via `--auth-token <token>` to satisfy secured
+deployments.
+
+* Follow the latest verified light-client head and stream subsequent updates as
+  newline-delimited JSON (one event per line) rendered from the
+  [`/state-sync/head` payload schema](./interfaces/rpc/state_sync_head_response.jsonschema):
+
+  ```sh
+  rpp-node light-client head-follow \
+    --rpc-url http://127.0.0.1:7070 \
+    --auth-token "$RPP_RPC_TOKEN"
+  ```
+
+  The command establishes an SSE connection to `/state-sync/head/stream` and
+  prints the decoded event payload. Use standard UNIX tooling such as
+  `jq --unbuffered` or `awk` to alert on height gaps or stale timestamps.
+
+* Retrieve an individual snapshot chunk and persist the decoded payload, with a
+  JSON summary that matches the
+  [`/state-sync/chunk/:id` schema](./interfaces/rpc/state_sync_chunk_response.jsonschema):
+
+  ```sh
+  rpp-node light-client fetch-chunk \
+    --rpc-url http://127.0.0.1:7070 \
+    --chunk-id 12 \
+    --output chunk-12.bin
+  ```
+
+  When `--output` is provided the tool base64-decodes the payload into the
+  chosen file and echoes the chunk metadata (root, index, total, checksum) to
+  stdout so operators can script integrity checks before applying the chunk.
+
+Both commands fail fast if the node rejects the request (for example, because a
+state-sync session has not been prepared) and bubble up the structured error
+payload emitted by the RPC server.
+
 ## RPC endpoints
 
 The RPC server now exposes dedicated validator tooling routes and enforces a
@@ -59,6 +106,8 @@ The endpoints return structured JSON documented under `docs/interfaces/rpc/`:
 | `/validator/vrf` | `GET` | Returns the backend, identifier, and public key if one is present.【F:rpp/rpc/api.rs†L905-L914】【F:docs/interfaces/rpc/validator_vrf_response.jsonschema†L1-L19】 |
 | `/validator/vrf/rotate` | `POST` | Generates a fresh VRF keypair, stores it via the configured secrets backend, and returns the same payload as the `GET` endpoint.【F:rpp/rpc/api.rs†L916-L926】【F:docs/interfaces/rpc/validator_vrf_rotate_response.jsonschema†L1-L19】 |
 | `/validator/telemetry` | `GET` | Produces a meta telemetry report (local peer ID, peer count, and the observed peers with latency metrics).【F:rpp/rpc/api.rs†L900-L904】【F:docs/interfaces/rpc/validator_telemetry_response.jsonschema†L1-L22】 |
+| `/state-sync/head` | `GET` | Returns the latest verified light-client head. The streaming variant at `/state-sync/head/stream` emits the same payload as SSE events.【F:rpp/rpc/api.rs†L79-L117】【F:docs/interfaces/rpc/state_sync_head_response.jsonschema†L1-L38】 |
+| `/state-sync/chunk/:id` | `GET` | Retrieves a specific snapshot chunk for the active state-sync session. Chunk indices must be in-range for the advertised session metadata.【F:rpp/rpc/api.rs†L1139-L1180】【F:docs/interfaces/rpc/state_sync_chunk_response.jsonschema†L1-L35】 |
 
 Example requests:
 

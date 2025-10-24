@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/state_sync_head_response.json",
+  "title": "StateSyncHeadResponse",
+  "type": "object",
+  "description": "Latest verified light-client head returned by the state-sync RPC endpoint.",
+  "required": [
+    "height",
+    "hash",
+    "state_root",
+    "proof_commitment",
+    "timestamp",
+    "finalized"
+  ],
+  "properties": {
+    "height": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Block height corresponding to the light-client head."
+    },
+    "hash": {
+      "type": "string",
+      "description": "Hex-encoded block hash for the reported head.",
+      "pattern": "^0x[0-9a-fA-F]+$"
+    },
+    "state_root": {
+      "type": "string",
+      "description": "Hex-encoded state root commitment for the head.",
+      "pattern": "^0x[0-9a-fA-F]+$"
+    },
+    "proof_commitment": {
+      "type": "string",
+      "description": "Hex-encoded recursive proof commitment associated with the head.",
+      "pattern": "^0x[0-9a-fA-F]+$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp (seconds) when the head was observed."
+    },
+    "finalized": {
+      "type": "boolean",
+      "description": "Whether the head corresponds to a finalized block."
+    }
+  },
+  "additionalProperties": false
+}
