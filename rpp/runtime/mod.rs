@@ -139,6 +139,11 @@ impl RuntimeProfile {
 pub mod node_runtime;
 pub mod supervisor;
 pub mod telemetry;
+
+pub use telemetry::metrics::{
+    ConsensusStage, ProofKind, RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome,
+    WalletRpcMethod, init_runtime_metrics,
+};
 pub mod vrf_gossip;
 
 #[cfg(test)]
@@ -186,9 +191,7 @@ mod tests {
         ];
 
         for (mode, expected) in expectations {
-            let resolved = mode
-                .default_node_config_path()
-                .expect("node config path");
+            let resolved = mode.default_node_config_path().expect("node config path");
             assert_eq!(resolved, expected);
             assert_template_exists(resolved);
         }

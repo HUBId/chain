@@ -1,3 +1,10 @@
+pub mod metrics;
+
+pub use metrics::{
+    ConsensusStage, ProofKind, RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome,
+    WalletRpcMethod, init_runtime_metrics,
+};
+
 use std::time::{Duration, SystemTime};
 
 use log::{error, info, warn};
@@ -243,7 +250,7 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::OnceLock;
     use tokio::sync::oneshot;
-    use tokio::time::{sleep, Duration as TokioDuration};
+    use tokio::time::{Duration as TokioDuration, sleep};
 
     #[tokio::test]
     async fn disabled_configuration_only_logs() {
@@ -341,9 +348,10 @@ mod tests {
         sleep(TokioDuration::from_millis(400)).await;
 
         let logs = logger.drain();
-        assert!(logs
-            .iter()
-            .any(|entry| entry.contains("telemetry HTTP dispatch failed")));
+        assert!(
+            logs.iter()
+                .any(|entry| entry.contains("telemetry HTTP dispatch failed"))
+        );
         handle.shutdown().await.expect("shutdown");
     }
 
