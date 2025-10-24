@@ -12,18 +12,18 @@ use opentelemetry::KeyValue;
 #[cfg(test)]
 use opentelemetry::Value;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
+use opentelemetry_sdk::Resource;
 use parking_lot::RwLock;
 use tokio::task::{JoinError, JoinHandle};
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tracing::{error, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::Layer;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 
 use rpp_chain::api::ApiContext;
 use rpp_chain::config::{NodeConfig, WalletConfig};
@@ -37,6 +37,37 @@ use rpp_chain::wallet::Wallet;
 pub use rpp_chain::runtime::RuntimeMode;
 
 pub type BootstrapResult<T> = std::result::Result<T, BootstrapError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootstrapErrorKind {
+    Configuration,
+    Startup,
+    Runtime,
+}
+
+impl BootstrapErrorKind {
+    pub fn exit_code(self) -> i32 {
+        match self {
+            BootstrapErrorKind::Configuration => 2,
+            BootstrapErrorKind::Startup => 3,
+            BootstrapErrorKind::Runtime => 4,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BootstrapErrorKind::Configuration => "configuration",
+            BootstrapErrorKind::Startup => "startup",
+            BootstrapErrorKind::Runtime => "runtime",
+        }
+    }
+}
+
+impl fmt::Display for BootstrapErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug)]
 pub enum BootstrapError {
@@ -68,22 +99,18 @@ impl BootstrapError {
     }
 
     pub fn exit_code(&self) -> i32 {
+        self.kind().exit_code()
+    }
+
+    pub fn kind(&self) -> BootstrapErrorKind {
         match self {
-            BootstrapError::Configuration(_) => 2,
-            BootstrapError::Startup(_) => 3,
-            BootstrapError::Runtime(_) => 4,
+            BootstrapError::Configuration(_) => BootstrapErrorKind::Configuration,
+            BootstrapError::Startup(_) => BootstrapErrorKind::Startup,
+            BootstrapError::Runtime(_) => BootstrapErrorKind::Runtime,
         }
     }
 
-    pub fn kind(&self) -> &'static str {
-        match self {
-            BootstrapError::Configuration(_) => "configuration",
-            BootstrapError::Startup(_) => "startup",
-            BootstrapError::Runtime(_) => "runtime",
-        }
-    }
-
-    pub fn source(&self) -> &anyhow::Error {
+    pub fn inner(&self) -> &anyhow::Error {
         match self {
             BootstrapError::Configuration(err)
             | BootstrapError::Startup(err)
@@ -94,13 +121,13 @@ impl BootstrapError {
 
 impl fmt::Display for BootstrapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{0} error: {1}", self.kind(), self.source())
+        write!(f, "{0} error: {1}", self.kind(), self.inner())
     }
 }
 
 impl std::error::Error for BootstrapError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.source().as_ref())
+        Some(self.inner().as_ref())
     }
 }
 
@@ -678,7 +705,11 @@ fn ensure_listener_conflicts(
     let mut mismatches = Vec::new();
     let mut conflicts = Vec::new();
 
-    let shared_listeners = [("rpc_listen", node_bundle.value.rpc_listen, wallet_bundle.value.rpc_listen)];
+    let shared_listeners = [(
+        "rpc_listen",
+        node_bundle.value.rpc_listen,
+        wallet_bundle.value.rpc_listen,
+    )];
     for (key, node_addr, wallet_addr) in shared_listeners {
         if node_addr != wallet_addr {
             let node_key = describe_config_key(ConfigRole::Node, node_metadata, key);

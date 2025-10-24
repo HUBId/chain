@@ -9,7 +9,7 @@ use rpp_chain::crypto::{
     VrfKeyIdentifier, VrfKeyStore,
 };
 use rpp_chain::runtime::config::{NodeConfig, SecretsBackendConfig, SecretsConfig};
-use rpp_node::RuntimeMode;
+use rpp_node::{BootstrapError, RuntimeMode};
 use serde_json::Value;
 
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
@@ -121,30 +121,39 @@ async fn main() -> Result<()> {
     let RootCli { command } = RootCli::parse();
     match command {
         RootCommand::Node(RuntimeCommand { options }) => {
-            run_runtime(RuntimeMode::Node, options).await
+            handle_runtime(run_runtime(RuntimeMode::Node, options).await)
         }
         RootCommand::Wallet(RuntimeCommand { options }) => {
-            run_runtime(RuntimeMode::Wallet, options).await
+            handle_runtime(run_runtime(RuntimeMode::Wallet, options).await)
         }
         RootCommand::Hybrid(RuntimeCommand { options }) => {
-            run_runtime(RuntimeMode::Hybrid, options).await
+            handle_runtime(run_runtime(RuntimeMode::Hybrid, options).await)
         }
         RootCommand::Validator(args) => match args.command {
             Some(ValidatorCommand::Vrf(command)) => handle_vrf_command(command),
             Some(ValidatorCommand::Telemetry(command)) => fetch_telemetry(command).await,
-            None => run_runtime(RuntimeMode::Validator, args.runtime).await,
+            None => handle_runtime(run_runtime(RuntimeMode::Validator, args.runtime).await),
         },
     }
 }
 
-async fn run_runtime(mode: RuntimeMode, options: rpp_node::RuntimeOptions) -> Result<()> {
-    match rpp_node::run(mode, options).await {
+async fn run_runtime(
+    mode: RuntimeMode,
+    options: rpp_node::RuntimeOptions,
+) -> rpp_node::BootstrapResult<()> {
+    rpp_node::run(mode, options).await
+}
+
+fn handle_runtime(result: rpp_node::BootstrapResult<()>) -> Result<()> {
+    match result {
         Ok(()) => Ok(()),
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(err.exit_code());
-        }
+        Err(err) => exit_with_bootstrap_error(err),
     }
+}
+
+fn exit_with_bootstrap_error(err: BootstrapError) -> ! {
+    eprintln!("{err}");
+    std::process::exit(err.exit_code());
 }
 
 fn handle_vrf_command(command: VrfCommand) -> Result<()> {
