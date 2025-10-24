@@ -7,8 +7,8 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use assert_cmd::cargo::CommandCargoExt;
 use assert_cmd::Command as AssertCommand;
+use assert_cmd::cargo::CommandCargoExt;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -104,8 +104,59 @@ fn exit_code_for_pipeline_start_failure() -> Result<()> {
 fn exit_code_for_unexpected_panic() -> Result<()> {
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
     cmd.env("RPP_NODE_TEST_FAILURE_MODE", "panic");
-    cmd.arg("node").arg("--dry-run");
+    cmd.arg("node").arg("--config").arg("config/node.toml");
     cmd.assert().failure().code(4);
+    Ok(())
+}
+
+#[test]
+fn dry_run_skips_runtime_initialisation() -> Result<()> {
+    let mut cmd = AssertCommand::cargo_bin("rpp-node");
+    let assert = cmd
+        .env("RPP_NODE_TEST_FAILURE_MODE", "panic")
+        .arg("node")
+        .arg("--dry-run")
+        .arg("--config")
+        .arg("config/node.toml")
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("dry run completed"),
+        "expected dry run completion log, stderr was: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn dry_run_logs_include_service_attributes() -> Result<()> {
+    let mut cmd = AssertCommand::cargo_bin("rpp-node");
+    let assert = cmd
+        .arg("node")
+        .arg("--dry-run")
+        .arg("--config")
+        .arg("config/node.toml")
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("service.name=\"rpp\""),
+        "missing service.name attribute in logs: {stderr}"
+    );
+    assert!(
+        stderr.contains("service.component=\"rpp-node\""),
+        "missing service.component attribute in logs: {stderr}"
+    );
+    assert!(
+        stderr.contains("rpp.mode=\"node\""),
+        "missing rpp.mode attribute in logs: {stderr}"
+    );
+    assert!(
+        stderr.contains("rpp.config_source=\"cli\""),
+        "missing rpp.config_source attribute in logs: {stderr}"
+    );
     Ok(())
 }
 
