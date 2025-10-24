@@ -7,7 +7,8 @@ use log::warn;
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network,
-    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, TierLevel,
+    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, ReputationHeuristics,
+    TierLevel,
 };
 use std::str::FromStr;
 use thiserror::Error;
@@ -26,6 +27,7 @@ pub struct NetworkConfig {
     blocklist: Vec<PeerId>,
     gossip_rate_limit_per_sec: u64,
     replay_window_size: usize,
+    reputation_heuristics: ReputationHeuristics,
 }
 
 impl NetworkConfig {
@@ -59,6 +61,7 @@ impl NetworkConfig {
             blocklist,
             gossip_rate_limit_per_sec: config.gossip_rate_limit_per_sec,
             replay_window_size: config.replay_window_size,
+            reputation_heuristics: config.reputation_heuristics(),
         })
     }
 
@@ -129,6 +132,10 @@ impl NetworkConfig {
     pub fn replay_window_size(&self) -> usize {
         self.replay_window_size
     }
+
+    pub fn reputation_heuristics(&self) -> ReputationHeuristics {
+        self.reputation_heuristics
+    }
 }
 
 /// Helper struct bundling libp2p primitives required by the node runtime.
@@ -184,6 +191,7 @@ impl NetworkResources {
             gossip_state,
             config.gossip_rate_limit_per_sec(),
             config.replay_window_size(),
+            config.reputation_heuristics(),
         )?;
         if let Some(profile) = profile {
             network.update_identity(

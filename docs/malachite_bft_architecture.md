@@ -104,6 +104,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 * **Fake-Proof Detection**: Proof-Verifier → invalid? → Slash + Audit-Event.
 * **Leader Censorship**: Witness-Feedback-Kanal `meta` meldet Anomalien → Reputation-Decay.
 * **Inaktivität**: Timetoke-Decay & Timeout-Tracking pro Validator.
+* **Gossip-Heuristiken**: Vote-Timeouts, fehlende Proof-Relays und Gossip-Backpressure lösen konfigurierbare Reputationseinbußen aus (`[p2p.reputation_heuristics]`), werden telemetriert und über das RPC `/p2p/censorship` reportet.
 
 ### Netzwerk & Messaging
 * Einführung eines Multiplexers, der folgende Streams bereitstellt:

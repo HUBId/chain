@@ -50,7 +50,7 @@ vendor_electrs = [
 
 [dependencies]
 anyhow = "1"
-axum = { version = "0.7", features = ["json", "sse"] }
+axum = { version = "0.7", features = ["json"] }
 base64 = "0.21"
 blake2 = "0.10"
 blake3 = "1.8"
