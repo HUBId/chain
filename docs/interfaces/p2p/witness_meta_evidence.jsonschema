@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/witness_meta_evidence.json",
+  "title": "WitnessMetaEvidence",
+  "description": "Evidence records broadcast on /rpp/gossip/witness/meta/1.0.0",
+  "allOf": [
+    {"$ref": "./meta_evidence.jsonschema"}
+  ]
+}

@@ -601,7 +601,7 @@ impl PipelineOrchestrator {
                 ))
             })?;
             handle
-                .publish_gossip(GossipTopic::Proofs, payload)
+                .publish_gossip(GossipTopic::WitnessProofs, payload)
                 .await
                 .map_err(|err| {
                     metrics::counter!(
@@ -1052,7 +1052,7 @@ impl PipelineOrchestrator {
                 event = events.recv() => {
                     match event {
                         Ok(NodeEvent::Gossip { topic, data, .. }) => {
-                            if topic != GossipTopic::Proofs {
+                            if topic != GossipTopic::WitnessProofs {
                                 continue;
                             }
                             match serde_json::from_slice::<TransactionProofBundle>(&data) {

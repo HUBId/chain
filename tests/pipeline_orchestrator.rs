@@ -549,7 +549,7 @@ async fn gossip_loop_records_stage_for_matching_payload() {
 
             let payload = serde_json::to_vec(&tx_workflow.bundle).expect("serialize proof bundle");
             publisher_handle
-                .publish_gossip(GossipTopic::Proofs, payload)
+                .publish_gossip(GossipTopic::WitnessProofs, payload)
                 .await
                 .expect("publish gossip");
 

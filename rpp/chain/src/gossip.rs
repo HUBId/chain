@@ -121,7 +121,7 @@ impl GossipProcessor for NodeGossipProcessor {
 
     fn handle_proof(&self, peer: &PeerId, payload: &[u8]) -> Result<()> {
         let mut proofs = self.proofs.lock();
-        match proofs.ingest(*peer, GossipTopic::Proofs, payload.to_vec()) {
+        match proofs.ingest(*peer, GossipTopic::WitnessProofs, payload.to_vec()) {
             Ok(_) => {}
             Err(PipelineError::Duplicate) => {
                 drop(proofs);
@@ -229,7 +229,7 @@ async fn should_stop<P: GossipProcessor>(
                         warn!(?peer, ?err, "failed to handle vote gossip");
                     }
                 }
-                rpp_p2p::GossipTopic::Proofs => {
+                rpp_p2p::GossipTopic::WitnessProofs => {
                     if let Err(err) = processor.handle_proof(&peer, &data) {
                         warn!(?peer, ?err, "failed to handle proof gossip");
                     }
@@ -294,7 +294,7 @@ mod tests {
         }
 
         fn handle_proof(&self, _peer: &PeerId, payload: &[u8]) -> Result<()> {
-            self.record(GossipTopic::Proofs, payload);
+            self.record(GossipTopic::WitnessProofs, payload);
             Ok(())
         }
     }
@@ -320,7 +320,7 @@ mod tests {
         .unwrap();
         tx.send(NodeEvent::Gossip {
             peer,
-            topic: GossipTopic::Proofs,
+            topic: GossipTopic::WitnessProofs,
             data: b"proof".to_vec(),
         })
         .unwrap();
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(topics.len(), 3);
         assert!(topics.contains(&GossipTopic::Blocks));
         assert!(topics.contains(&GossipTopic::Votes));
-        assert!(topics.contains(&GossipTopic::Proofs));
+        assert!(topics.contains(&GossipTopic::WitnessProofs));
     }
 
     #[tokio::test]

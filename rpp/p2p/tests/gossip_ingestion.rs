@@ -83,13 +83,11 @@ fn proof_ingestion_deduplicates_across_peers() {
     let peer_one = PeerId::random();
     let peer_two = PeerId::random();
 
-    assert!(
-        mempool
-            .ingest(peer_one, GossipTopic::Proofs, bytes.clone())
-            .expect("first ingest")
-    );
+    assert!(mempool
+        .ingest(peer_one, GossipTopic::WitnessProofs, bytes.clone())
+        .expect("first ingest"));
     let err = mempool
-        .ingest(peer_two, GossipTopic::Proofs, bytes)
+        .ingest(peer_two, GossipTopic::WitnessProofs, bytes)
         .expect_err("duplicate proof should be rejected");
     assert!(matches!(err, PipelineError::Duplicate));
 }
@@ -108,7 +106,7 @@ fn runtime_validator_rejects_invalid_commitment() {
     let bytes = serde_json::to_vec(&payload).expect("encode payload");
     let peer = PeerId::random();
     let err = mempool
-        .ingest(peer, GossipTopic::Proofs, bytes)
+        .ingest(peer, GossipTopic::WitnessProofs, bytes)
         .expect_err("invalid commitment must be rejected");
     assert!(matches!(err, PipelineError::Validation(message) if message.contains("commitment")));
 }
@@ -128,7 +126,7 @@ fn runtime_validator_rejects_mismatched_witness() {
     let bytes = serde_json::to_vec(&payload).expect("encode payload");
     let peer = PeerId::random();
     let err = mempool
-        .ingest(peer, GossipTopic::Proofs, bytes)
+        .ingest(peer, GossipTopic::WitnessProofs, bytes)
         .expect_err("mismatched witness must be rejected");
     assert!(matches!(err, PipelineError::Validation(message) if message.contains("witness")));
 }
@@ -147,7 +145,7 @@ fn invalid_proof_triggers_penalty_record() {
     let bytes = serde_json::to_vec(&payload).expect("encode payload");
     let peer = PeerId::random();
     let err = mempool
-        .ingest(peer, GossipTopic::Proofs, bytes)
+        .ingest(peer, GossipTopic::WitnessProofs, bytes)
         .expect_err("invalid commitment must be rejected");
     assert!(matches!(err, PipelineError::Validation(_)));
 

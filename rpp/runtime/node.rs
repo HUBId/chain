@@ -515,9 +515,9 @@ impl WitnessChannels {
         match topic {
             GossipTopic::Blocks => self.blocks.subscribe(),
             GossipTopic::Votes => self.votes.subscribe(),
-            GossipTopic::Proofs => self.proofs.subscribe(),
+            GossipTopic::Proofs | GossipTopic::WitnessProofs => self.proofs.subscribe(),
             GossipTopic::Snapshots => self.snapshots.subscribe(),
-            GossipTopic::Meta => self.meta.subscribe(),
+            GossipTopic::Meta | GossipTopic::WitnessMeta => self.meta.subscribe(),
         }
     }
 
@@ -537,9 +537,9 @@ impl WitnessChannels {
         let sender = match topic {
             GossipTopic::Blocks => &self.blocks,
             GossipTopic::Votes => &self.votes,
-            GossipTopic::Proofs => &self.proofs,
+            GossipTopic::Proofs | GossipTopic::WitnessProofs => &self.proofs,
             GossipTopic::Snapshots => &self.snapshots,
-            GossipTopic::Meta => &self.meta,
+            GossipTopic::Meta | GossipTopic::WitnessMeta => &self.meta,
         };
         let _ = sender.send(payload);
     }
@@ -2983,7 +2983,7 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             public_inputs_digest: metadata.public_inputs_digest.clone(),
         };
-        self.emit_witness_json(GossipTopic::Proofs, &summary);
+        self.emit_witness_json(GossipTopic::WitnessProofs, &summary);
         Ok(tx_hash)
     }
 
@@ -3367,7 +3367,7 @@ impl NodeInner {
             reason = reason_label,
             "recorded consensus evidence"
         );
-        self.emit_witness_json(GossipTopic::Meta, &evidence);
+        self.emit_witness_json(GossipTopic::WitnessMeta, &evidence);
         if let Some(vote_kind) = evidence.vote_kind {
             let mut mempool = self.vote_mempool.write();
             mempool.retain(|vote| {
