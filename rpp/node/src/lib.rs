@@ -173,13 +173,35 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
         default_config.as_ref().unwrap()
     };
 
+    let config_source = node_metadata
+        .as_ref()
+        .map(|metadata| metadata.source.as_str())
+        .unwrap_or_else(|| {
+            if mode.includes_node() {
+                ConfigSource::Default.as_str()
+            } else {
+                "none"
+            }
+        });
+
     let _telemetry_guard = init_tracing(
         tracing_config,
         node_metadata.as_ref(),
         options.log_level.clone(),
         options.log_json,
+        mode,
+        config_source,
+        options.dry_run,
     )
     .context("failed to initialise logging")?;
+
+    info!(
+        target = "bootstrap",
+        mode = mode.as_str(),
+        config_source = config_source,
+        dry_run = options.dry_run,
+        "bootstrap configuration resolved"
+    );
 
     if let Some(metadata) = node_metadata.as_ref() {
         info!(
@@ -782,6 +804,9 @@ fn init_tracing(
     metadata: Option<&ConfigMetadata>,
     log_level: Option<String>,
     json: bool,
+    mode: RuntimeMode,
+    config_source: &str,
+    dry_run: bool,
 ) -> Result<Option<OtelGuard>> {
     let level = log_level.or_else(|| std::env::var("RUST_LOG").ok());
     let filter = match level {
@@ -806,7 +831,32 @@ fn init_tracing(
         }
     };
 
-    match build_otlp_layer(config, metadata)? {
+    if dry_run {
+        tracing_subscriber::registry()
+            .with(filter.clone())
+            .with(fmt_layer())
+            .try_init()?;
+
+        let telemetry_span = info_span!(
+            "node.telemetry.init",
+            otlp_enabled = false,
+            dry_run = true,
+            mode = mode.as_str(),
+            config_source = config_source
+        );
+        let _span_guard = telemetry_span.enter();
+        info!(
+            target = "telemetry",
+            otlp_enabled = false,
+            dry_run = true,
+            mode = mode.as_str(),
+            config_source = config_source,
+            "tracing initialised"
+        );
+        return Ok(None);
+    }
+
+    match build_otlp_layer(config, metadata, mode, config_source)? {
         Some(OtlpLayer {
             layer,
             guard,
@@ -821,10 +871,21 @@ fn init_tracing(
             let telemetry_span = info_span!(
                 "node.telemetry.init",
                 otlp_enabled = true,
-                otlp_endpoint = endpoint.as_str()
+                otlp_endpoint = endpoint.as_str(),
+                dry_run = false,
+                mode = mode.as_str(),
+                config_source = config_source
             );
             let _span_guard = telemetry_span.enter();
-            info!(target: "telemetry", otlp_endpoint = endpoint, "tracing initialised");
+            info!(
+                target = "telemetry",
+                otlp_enabled = true,
+                otlp_endpoint = endpoint,
+                dry_run = false,
+                mode = mode.as_str(),
+                config_source = config_source,
+                "tracing initialised"
+            );
             Ok(Some(guard))
         }
         None => {
@@ -833,9 +894,22 @@ fn init_tracing(
                 .with(fmt_layer())
                 .try_init()?;
 
-            let telemetry_span = info_span!("node.telemetry.init", otlp_enabled = false);
+            let telemetry_span = info_span!(
+                "node.telemetry.init",
+                otlp_enabled = false,
+                dry_run = false,
+                mode = mode.as_str(),
+                config_source = config_source
+            );
             let _span_guard = telemetry_span.enter();
-            info!(target: "telemetry", otlp_enabled = false, "tracing initialised");
+            info!(
+                target = "telemetry",
+                otlp_enabled = false,
+                dry_run = false,
+                mode = mode.as_str(),
+                config_source = config_source,
+                "tracing initialised"
+            );
             Ok(None)
         }
     }
@@ -866,6 +940,8 @@ struct OtlpSettings {
 fn build_otlp_layer(
     config: &NodeConfig,
     metadata: Option<&ConfigMetadata>,
+    mode: RuntimeMode,
+    config_source: &str,
 ) -> Result<Option<OtlpLayer>> {
     let Some(settings) = otlp_settings(config)? else {
         return Ok(None);
@@ -891,9 +967,12 @@ fn build_otlp_layer(
         .with_max_export_timeout(settings.timeout);
 
     let mut attributes = vec![
-        KeyValue::new("service.name", "rpp-node"),
+        KeyValue::new("service.name", "rpp"),
+        KeyValue::new("service.component", "rpp-node"),
         KeyValue::new("service.namespace", "rpp"),
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
+        KeyValue::new("rpp.mode", mode.as_str()),
+        KeyValue::new("rpp.config_source", config_source.to_string()),
         KeyValue::new(
             "rpp.rollout.release_channel",
             format!("{:?}", config.rollout.release_channel),
