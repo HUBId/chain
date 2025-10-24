@@ -11,7 +11,7 @@ traffic program blends Poisson and bursty phases to stress gossip and proof prop
 Run the scenario locally with:
 
 ```shell
-cargo run --locked --package rpp-sim -- --scenario scenarios/large_cluster.toml
+cargo run --package rpp-sim -- --scenario scenarios/large_cluster.toml
 ```
 
 The default `mode = "compare"` first executes the in-process simulation and then launches the

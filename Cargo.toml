@@ -13,6 +13,7 @@ members = [
   "rpp/p2p",
   "rpp/chain",
   "rpp/node",
+  "rpp/sim",
 ]
 resolver = "2"
 

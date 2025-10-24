@@ -35,7 +35,7 @@ jobs:
           toolchain: 1.89.0
 
       - name: Run large cluster simulation
-        run: cargo run --locked --package rpp-sim -- --scenario scenarios/large_cluster.toml
+        run: cargo run --package rpp-sim -- --scenario scenarios/large_cluster.toml
 
       - name: Verify simulation KPIs
         run: python3 scripts/check_sim_large.py target/sim-large/report.json
