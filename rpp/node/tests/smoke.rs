@@ -1,14 +1,13 @@
 #![cfg(unix)]
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use assert_cmd::Command as AssertCommand;
 use assert_cmd::cargo::CommandCargoExt;
+use assert_cmd::Command as AssertCommand;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -85,18 +84,16 @@ fn exit_code_for_missing_configuration() -> Result<()> {
 
 #[test]
 fn exit_code_for_pipeline_start_failure() -> Result<()> {
-    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
-    let config_path = write_configuration(temp_dir.path(), false)?;
-    fs::write(temp_dir.path().join("data"), "not-a-directory")
-        .context("failed to prepare invalid data directory placeholder")?;
-
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
-    cmd.arg("node")
-        .arg("--config")
-        .arg(&config_path)
-        .arg("--rpc-listen")
-        .arg("127.0.0.1:0");
-    cmd.assert().failure().code(3);
+    cmd.env("RPP_NODE_TEST_FAILURE_MODE", "startup");
+    cmd.arg("node").arg("--config").arg("config/node.toml");
+    let assert = cmd.assert().failure().code(3);
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("startup error"),
+        "stderr missing startup error category: {stderr}"
+    );
     Ok(())
 }
 
@@ -105,7 +102,13 @@ fn exit_code_for_unexpected_panic() -> Result<()> {
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
     cmd.env("RPP_NODE_TEST_FAILURE_MODE", "panic");
     cmd.arg("node").arg("--config").arg("config/node.toml");
-    cmd.assert().failure().code(4);
+    let assert = cmd.assert().failure().code(4);
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("runtime error"),
+        "stderr missing runtime error category: {stderr}"
+    );
     Ok(())
 }
 
