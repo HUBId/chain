@@ -12,6 +12,8 @@ pub enum GossipTopic {
     Proofs,
     Snapshots,
     Meta,
+    WitnessProofs,
+    WitnessMeta,
 }
 
 impl GossipTopic {
@@ -22,6 +24,8 @@ impl GossipTopic {
             GossipTopic::Proofs => "/rpp/gossip/proofs/1.0.0",
             GossipTopic::Snapshots => "/rpp/gossip/snapshots/1.0.0",
             GossipTopic::Meta => "/rpp/gossip/meta/1.0.0",
+            GossipTopic::WitnessProofs => "/rpp/gossip/witness/proofs/1.0.0",
+            GossipTopic::WitnessMeta => "/rpp/gossip/witness/meta/1.0.0",
         }
     }
 
@@ -38,17 +42,21 @@ impl GossipTopic {
             "/rpp/gossip/proofs/1.0.0" => Some(GossipTopic::Proofs),
             "/rpp/gossip/snapshots/1.0.0" => Some(GossipTopic::Snapshots),
             "/rpp/gossip/meta/1.0.0" => Some(GossipTopic::Meta),
+            "/rpp/gossip/witness/proofs/1.0.0" => Some(GossipTopic::WitnessProofs),
+            "/rpp/gossip/witness/meta/1.0.0" => Some(GossipTopic::WitnessMeta),
             _ => None,
         }
     }
 
-    pub const fn all() -> [GossipTopic; 5] {
+    pub const fn all() -> [GossipTopic; 7] {
         [
             GossipTopic::Blocks,
             GossipTopic::Votes,
             GossipTopic::Proofs,
             GossipTopic::Snapshots,
             GossipTopic::Meta,
+            GossipTopic::WitnessProofs,
+            GossipTopic::WitnessMeta,
         ]
     }
 
@@ -59,6 +67,8 @@ impl GossipTopic {
             "/rpp/gossip/proofs/1.0.0" => Some(GossipTopic::Proofs),
             "/rpp/gossip/snapshots/1.0.0" => Some(GossipTopic::Snapshots),
             "/rpp/gossip/meta/1.0.0" => Some(GossipTopic::Meta),
+            "/rpp/gossip/witness/proofs/1.0.0" => Some(GossipTopic::WitnessProofs),
+            "/rpp/gossip/witness/meta/1.0.0" => Some(GossipTopic::WitnessMeta),
             _ => None,
         }
     }

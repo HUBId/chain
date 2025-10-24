@@ -740,7 +740,7 @@ impl ProofMempool {
         if !self.seen.insert(digest) {
             return Err(PipelineError::Duplicate);
         }
-        if topic != GossipTopic::Proofs {
+        if topic != GossipTopic::Proofs && topic != GossipTopic::WitnessProofs {
             return Err(PipelineError::Validation(format!(
                 "unexpected topic: {:?}",
                 topic
@@ -1814,14 +1814,14 @@ mod tests {
         let peer: PeerId = PeerId::random();
         let payload = b"proof-payload".to_vec();
         assert!(pipeline
-            .ingest(peer, GossipTopic::Proofs, payload.clone())
+            .ingest(peer, GossipTopic::WitnessProofs, payload.clone())
             .unwrap());
         assert_eq!(pipeline.len(), 1);
         assert_eq!(*validator.0.lock(), 1);
 
         // duplicate payload should be rejected
         let err = pipeline
-            .ingest(peer, GossipTopic::Proofs, payload.clone())
+            .ingest(peer, GossipTopic::WitnessProofs, payload.clone())
             .unwrap_err();
         assert!(matches!(err, PipelineError::Duplicate));
 
@@ -1844,7 +1844,11 @@ mod tests {
             let mut pipeline =
                 ProofMempool::new(validator.clone(), storage.clone()).expect("pipeline");
             pipeline
-                .ingest(PeerId::random(), GossipTopic::Proofs, b"payload".to_vec())
+                .ingest(
+                    PeerId::random(),
+                    GossipTopic::WitnessProofs,
+                    b"payload".to_vec(),
+                )
                 .expect("ingest");
             assert_eq!(pipeline.len(), 1);
         }

@@ -100,18 +100,20 @@ impl NetworkSimulation {
                         mesh_n_high: 16,
                         mesh_outbound_min: 4,
                     },
-                    GossipTopic::Proofs => TopicMeshConfig {
+                    GossipTopic::Proofs | GossipTopic::WitnessProofs => TopicMeshConfig {
                         mesh_n: 8,
                         mesh_n_low: 6,
                         mesh_n_high: 12,
                         mesh_outbound_min: 3,
                     },
-                    GossipTopic::Snapshots | GossipTopic::Meta => TopicMeshConfig {
-                        mesh_n: 6,
-                        mesh_n_low: 4,
-                        mesh_n_high: 10,
-                        mesh_outbound_min: 2,
-                    },
+                    GossipTopic::Snapshots | GossipTopic::Meta | GossipTopic::WitnessMeta => {
+                        TopicMeshConfig {
+                            mesh_n: 6,
+                            mesh_n_low: 4,
+                            mesh_n_high: 10,
+                            mesh_outbound_min: 2,
+                        }
+                    }
                 };
                 let balance =
                     (config.mesh_n_low as f64 / config.mesh_n_high as f64).clamp(0.0, 1.0);

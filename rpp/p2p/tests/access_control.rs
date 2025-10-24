@@ -314,7 +314,7 @@ fn identity_metadata_controls_topic_thresholds() {
 
     let mut metadata = IdentityMetadata::default();
     metadata.set_topic_policy(
-        GossipTopic::Proofs,
+        GossipTopic::WitnessProofs,
         TopicPermission {
             subscribe: TierLevel::Tl0,
             publish: TierLevel::Tl2,
@@ -340,13 +340,16 @@ fn identity_metadata_controls_topic_thresholds() {
         )
         .expect("high handshake");
 
-    let low_publish = control.can_remote_publish(&peer_low, GossipTopic::Proofs);
+    let low_publish = control.can_remote_publish(&peer_low, GossipTopic::WitnessProofs);
     assert!(
         matches!(low_publish, Err(AdmissionError::TierInsufficient { .. })),
         "low tier must be blocked"
     );
 
-    let high_publish = control.can_remote_publish(&peer_high, GossipTopic::Proofs);
+    let low_meta = control.can_remote_publish(&peer_low, GossipTopic::WitnessMeta);
+    assert!(low_meta.is_ok(), "tier 1 should publish witness meta");
+
+    let high_publish = control.can_remote_publish(&peer_high, GossipTopic::WitnessProofs);
     assert!(high_publish.is_ok(), "high tier should publish proofs");
 
     let high_votes = control.can_remote_publish(&peer_high, GossipTopic::Votes);

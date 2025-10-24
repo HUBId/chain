@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/witness_proof_summary.json",
+  "title": "WitnessProofSummary",
+  "type": "object",
+  "description": "Summary payload broadcast on /rpp/gossip/witness/proofs/1.0.0 containing mempool metadata for a transaction proof.",
+  "required": [
+    "hash",
+    "from",
+    "to",
+    "amount",
+    "fee",
+    "nonce"
+  ],
+  "properties": {
+    "hash": {
+      "type": "string",
+      "description": "Hex encoded transaction hash"
+    },
+    "from": {
+      "type": "string",
+      "description": "Bech32 or hex encoded sender address"
+    },
+    "to": {
+      "type": "string",
+      "description": "Bech32 or hex encoded recipient address"
+    },
+    "amount": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Transfer amount represented as a decimal string"
+    },
+    "fee": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Transaction fee in the smallest denomination"
+    },
+    "nonce": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Sender nonce that the transaction consumes"
+    },
+    "proof": {
+      "type": ["object", "null"],
+      "description": "Canonical ChainProof object as emitted by the prover",
+      "additionalProperties": true
+    },
+    "witness": {
+      "type": ["object", "null"],
+      "description": "Decoded witness payload for the transaction if provided",
+      "additionalProperties": true
+    },
+    "proof_payload": {
+      "type": ["object", "null"],
+      "description": "Backend specific payload that accompanied the proof submission",
+      "additionalProperties": true
+    },
+    "public_inputs_digest": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]+$",
+      "description": "Optional hex digest of the backend public inputs"
+    }
+  },
+  "additionalProperties": false
+}

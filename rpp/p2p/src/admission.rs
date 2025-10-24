@@ -238,6 +238,8 @@ impl AdmissionControl {
                     GossipTopic::Proofs => self.gossip_reward,
                     GossipTopic::Snapshots => self.gossip_reward * 1.5,
                     GossipTopic::Meta => self.gossip_reward * 0.5,
+                    GossipTopic::WitnessProofs => self.gossip_reward * 1.2,
+                    GossipTopic::WitnessMeta => self.gossip_reward * 0.75,
                 };
                 self.peerstore.update_reputation(peer.clone(), reward)?
             }
@@ -368,12 +370,12 @@ mod tests {
         store
             .record_handshake(
                 peer,
-                &signed_handshake(&keypair, TierLevel::Tl1, Some(&secret)),
+                &signed_handshake(&keypair, TierLevel::Tl2, Some(&secret)),
             )
             .expect("handshake");
 
         assert!(control
-            .can_remote_publish(&peer, GossipTopic::Proofs)
+            .can_remote_publish(&peer, GossipTopic::WitnessProofs)
             .is_ok());
         assert!(matches!(
             control.can_remote_publish(&peer, GossipTopic::Votes),
@@ -408,9 +410,9 @@ mod tests {
                 .set_reputation(peer, score)
                 .expect("reputation");
 
-            let proofs_allowed = control.can_remote_publish(&peer, GossipTopic::Proofs).is_ok();
+            let proofs_allowed = control.can_remote_publish(&peer, GossipTopic::WitnessProofs).is_ok();
             let votes_allowed = control.can_remote_publish(&peer, GossipTopic::Votes).is_ok();
-            prop_assert_eq!(proofs_allowed, tier >= TierLevel::Tl1);
+            prop_assert_eq!(proofs_allowed, tier >= TierLevel::Tl2);
             prop_assert_eq!(votes_allowed, tier >= TierLevel::Tl3);
         }
     }

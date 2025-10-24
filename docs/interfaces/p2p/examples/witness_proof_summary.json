@@ -1,0 +1,12 @@
+{
+  "hash": "0x92f4f0cb5f3e2f4f1c2b9d6a0e51f901a4f8e2e5d6c7b8a9d0c1b2a3f4e5d6c7",
+  "from": "rpp1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqh7d9z6",
+  "to": "rpp1ppppppppppppppppppppppppppppppppx4z0f7",
+  "amount": "25000000000",
+  "fee": 5000,
+  "nonce": 42,
+  "proof": null,
+  "witness": null,
+  "proof_payload": null,
+  "public_inputs_digest": null
+}

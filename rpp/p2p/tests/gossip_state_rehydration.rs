@@ -209,12 +209,12 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
 
     wait_for_peer(&handle_b_runtime, handle_a_runtime.local_peer_id()).await?;
 
-    let mut witness_rx = handle_b.subscribe_witness_gossip(GossipTopic::Proofs);
+    let mut witness_rx = handle_b.subscribe_witness_gossip(GossipTopic::WitnessProofs);
     let bundle = sample_transaction_bundle(handle_b.address(), 0);
     let payload = serde_json::to_vec(&bundle)?;
 
     handle_a_runtime
-        .publish_gossip(GossipTopic::Proofs, payload.clone())
+        .publish_gossip(GossipTopic::WitnessProofs, payload.clone())
         .await?;
 
     let witness_payload =
@@ -246,10 +246,7 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     let initial_peer_record = read_peerstore_snapshot(&peerstore_path, &broadcaster_peer)?
         .expect("peerstore snapshot for broadcaster");
     assert!(!initial_peer_record.addresses.is_empty());
-    assert_eq!(
-        initial_peer_record.features.get("pruning"),
-        Some(&false)
-    );
+    assert_eq!(initial_peer_record.features.get("pruning"), Some(&false));
     assert_eq!(
         initial_peer_record.features.get("malachite_consensus"),
         Some(&true)
@@ -297,11 +294,12 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
 
     wait_for_peer(&handle_b_runtime_restart, handle_a_runtime.local_peer_id()).await?;
 
-    let mut witness_rx_restart = handle_b_restart.subscribe_witness_gossip(GossipTopic::Proofs);
+    let mut witness_rx_restart =
+        handle_b_restart.subscribe_witness_gossip(GossipTopic::WitnessProofs);
 
     // Duplicate payload should be ignored after replay cache preload.
     handle_a_runtime
-        .publish_gossip(GossipTopic::Proofs, payload.clone())
+        .publish_gossip(GossipTopic::WitnessProofs, payload.clone())
         .await?;
 
     match time::timeout(Duration::from_secs(3), async {
@@ -322,7 +320,7 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     let bundle_fresh = sample_transaction_bundle(handle_b_restart.address(), 1);
     let payload_fresh = serde_json::to_vec(&bundle_fresh)?;
     handle_a_runtime
-        .publish_gossip(GossipTopic::Proofs, payload_fresh.clone())
+        .publish_gossip(GossipTopic::WitnessProofs, payload_fresh.clone())
         .await?;
 
     let witness_payload_restart = time::timeout(Duration::from_secs(10), async {
@@ -350,9 +348,7 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     assert!(restart_peer_record.reputation >= initial_peer_record.reputation);
     assert_eq!(restart_peer_record.ping_failures, 0);
     assert_eq!(
-        restart_peer_record
-            .features
-            .get("malachite_consensus"),
+        restart_peer_record.features.get("malachite_consensus"),
         Some(&true)
     );
     assert_eq!(

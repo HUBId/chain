@@ -553,10 +553,10 @@ impl GossipPipelines {
     #[instrument(
         name = "node.runtime.proof.ingest",
         skip(self, data),
-        fields(peer = %peer, bytes = data.len())
+        fields(peer = %peer, bytes = data.len(), topic = ?topic)
     )]
-    fn handle_proofs(&mut self, peer: PeerId, data: Vec<u8>) {
-        match self.proofs.ingest(peer, GossipTopic::Proofs, data) {
+    fn handle_proofs(&mut self, peer: PeerId, topic: GossipTopic, data: Vec<u8>) {
+        match self.proofs.ingest(peer, topic, data) {
             Ok(_) => while self.proofs.pop().is_some() {},
             Err(PipelineError::Duplicate) => {
                 debug!(target: "node", "duplicate proof gossip ignored");
@@ -1094,19 +1094,21 @@ impl NodeInner {
                                 }
                             }
                         }
-                        GossipTopic::Proofs => {
+                        GossipTopic::Proofs | GossipTopic::WitnessProofs => {
                             let proof_span = info_span!(
                                 "node.runtime.proof.pipeline",
                                 peer = %peer,
-                                bytes = payload_len
+                                bytes = payload_len,
+                                topic = ?topic
                             );
                             let _proof_guard = proof_span.enter();
-                            self.pipelines.handle_proofs(peer.clone(), data.clone());
+                            self.pipelines
+                                .handle_proofs(peer.clone(), topic, data.clone());
                         }
                         GossipTopic::Snapshots => {
                             self.pipelines.handle_snapshots(&data);
                         }
-                        GossipTopic::Meta => {
+                        GossipTopic::Meta | GossipTopic::WitnessMeta => {
                             match self.pipelines.handle_meta(peer.clone(), data.clone()) {
                                 MetaIngestResult::Duplicate => {
                                     debug!(
@@ -1617,7 +1619,7 @@ mod tests {
 
                 node.handle_network_event(NetworkEvent::GossipMessage {
                     peer,
-                    topic: GossipTopic::Proofs,
+                    topic: GossipTopic::WitnessProofs,
                     data,
                 });
 

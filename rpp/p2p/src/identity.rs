@@ -43,6 +43,14 @@ impl TopicPermission {
                 subscribe: TierLevel::Tl0,
                 publish: TierLevel::Tl0,
             },
+            GossipTopic::WitnessProofs => Self {
+                subscribe: TierLevel::Tl0,
+                publish: TierLevel::Tl2,
+            },
+            GossipTopic::WitnessMeta => Self {
+                subscribe: TierLevel::Tl0,
+                publish: TierLevel::Tl1,
+            },
         }
     }
 }

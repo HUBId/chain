@@ -67,7 +67,7 @@ async fn gossip_pipeline_forwards_evidence_payloads() -> Result<()> {
 
     publisher
         .p2p_handle
-        .publish_gossip(GossipTopic::Meta, payload)
+        .publish_gossip(GossipTopic::WitnessMeta, payload)
         .await
         .context("publish meta evidence")?;
 

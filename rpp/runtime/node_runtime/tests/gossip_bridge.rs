@@ -215,10 +215,10 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
     let bundle = sample_transaction_bundle(handle_b.address(), 0);
     let payload = serde_json::to_vec(&bundle)?;
     handle_a_runtime
-        .publish_gossip(GossipTopic::Proofs, payload)
+        .publish_gossip(GossipTopic::WitnessProofs, payload)
         .await?;
 
-    let mut proofs_rx = handle_b.subscribe_witness_gossip(GossipTopic::Proofs);
+    let mut proofs_rx = handle_b.subscribe_witness_gossip(GossipTopic::WitnessProofs);
     let witness_payload =
         time::timeout(Duration::from_secs(5), async { proofs_rx.recv().await }).await??;
     let received: TransactionProofBundle = serde_json::from_slice(&witness_payload)?;
@@ -366,7 +366,7 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
     let gossip_worker = spawn_node_event_worker(handle_b_runtime.subscribe(), processor, None);
 
     handle_a_runtime
-        .publish_gossip(GossipTopic::Proofs, Vec::new())
+        .publish_gossip(GossipTopic::WitnessProofs, Vec::new())
         .await?;
 
     let peerstore_path_clone = peerstore_path.clone();
