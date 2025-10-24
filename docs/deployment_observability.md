@@ -103,16 +103,21 @@ threaten block production.
    `telemetry` target; payloads contain release channel, active feature gates,
    and health snapshots for dashboards, including the live `timetoke_params`
    (minimum window, accrual cap, decay cadence) for uptime tuning.【F:rpp/runtime/node.rs†L208-L214】【F:rpp/runtime/node.rs†L1207-L1218】
-4. **Track VRF participation.** The node status snapshot includes `vrf_metrics`
+4. **Subscribe to timetoke deltas.** The meta gossip channel now publishes
+   `meta_timetoke` payloads alongside snapshot topics so operators can audit the
+   recorded balances and their commitment root in near real time; forward these
+   JSON blobs to monitoring backends that compare the advertised root with local
+   ledger state.【F:rpp/runtime/node.rs†L3548-L3577】【F:rpp/runtime/node_runtime/node.rs†L154-L192】
+5. **Track VRF participation.** The node status snapshot includes `vrf_metrics`
    with submission counts, accepted validators, rejection totals, and fallback
    usage so dashboards can alert on declining VRF participation or repeated
    fallback elections.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】
-5. **Monitor handshake telemetry.** Each libp2p Noise handshake now emits
+6. **Monitor handshake telemetry.** Each libp2p Noise handshake now emits
    `telemetry.handshake` events with the remote agent string, tier, and ZSI. A
    matching warning is logged on signature or VRF validation failures so that
    operators can detect nodes announcing inconsistent VRF payloads or stale
    metadata during admission.【F:rpp/p2p/src/swarm.rs†L248-L316】
-6. **Forward tracing spans to OTLP.** Enabling `rollout.telemetry.endpoint`
+7. **Forward tracing spans to OTLP.** Enabling `rollout.telemetry.endpoint`
    (or the `--telemetry-endpoint` CLI override) wires a gRPC OTLP exporter into
    the tracing subscriber; optional secrets can be supplied via
    `telemetry_auth_token` or the environment variables
@@ -124,13 +129,13 @@ threaten block production.
    exported the expected signal (defaulting to `node.telemetry.init`). Pass
    `--mode hybrid` or `--mode wallet` to exercise the other binaries and
    `--expect` when you need to assert on a different span name.【F:rpp/node/src/lib.rs†L35-L111】【F:rpp/runtime/node.rs†L610-L963】【F:rpp/runtime/node_runtime/node.rs†L836-L1356】【F:scripts/smoke_otlp_export.sh†L1-L190】【F:scripts/otel-collector-config.yaml†L1-L19】
-7. **Maintain wallet telemetry parity.** Hybrid and validator profiles enable
+8. **Maintain wallet telemetry parity.** Hybrid and validator profiles enable
    Electrs cache and tracker telemetry so wallet consumers inherit the same
    visibility targets as the node runtime. When the wallet runs standalone,
    update `electrs.cache.telemetry` and
    `electrs.tracker.telemetry_endpoint` to keep forwarding the same signals the
    validator dashboards expect.【F:config/wallet.toml†L9-L31】【F:rpp/runtime/config.rs†L1269-L1313】
-8. **Track pipeline health metrics.** The orchestrator exports
+9. **Track pipeline health metrics.** The orchestrator exports
    `pipeline_stage_latency_ms`, `pipeline_errors_total`,
    `pipeline_gossip_events_total`, and
    `pipeline_leader_rotations_total` while exposing an aggregated

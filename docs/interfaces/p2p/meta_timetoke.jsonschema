@@ -1,0 +1,65 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Meta Timetoke Delta",
+  "type": "object",
+  "description": "Delta payload broadcasting time-based participation balances and the resulting timetoke commitment root.",
+  "required": ["timetoke_root", "records"],
+  "properties": {
+    "timetoke_root": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Hex-encoded 32-byte Merkle root of the timetoke ledger after applying the included records."
+    },
+    "records": {
+      "type": "array",
+      "description": "Updated timetoke records sorted by account address.",
+      "items": {
+        "type": "object",
+        "required": [
+          "identity",
+          "balance",
+          "epoch_accrual",
+          "decay_rate",
+          "last_update",
+          "last_sync",
+          "last_decay"
+        ],
+        "properties": {
+          "identity": {
+            "type": "string",
+            "description": "Hex-encoded account address that owns the timetoke balance."
+          },
+          "balance": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total accrued timetoke hours as an unsigned 128-bit value."
+          },
+          "epoch_accrual": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Reserved for future per-epoch accrual accounting."
+          },
+          "decay_rate": {
+            "type": "number",
+            "description": "Decay coefficient applied when reducing the balance during periodic decay."
+          },
+          "last_update": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix timestamp (seconds) of the most recent uptime proof that modified the balance."
+          },
+          "last_sync": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix timestamp (seconds) when this record was last synchronised to peers."
+          },
+          "last_decay": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix timestamp (seconds) of the most recent decay event applied to the balance."
+          }
+        }
+      }
+    }
+  }
+}
