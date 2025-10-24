@@ -38,6 +38,24 @@ impl RuntimeMode {
             RuntimeMode::Validator => "validator",
         }
     }
+
+    pub fn default_node_config_path(self) -> Option<&'static str> {
+        match self {
+            RuntimeMode::Node => Some("config/node.toml"),
+            RuntimeMode::Hybrid => Some("config/hybrid.toml"),
+            RuntimeMode::Validator => Some("config/validator.toml"),
+            RuntimeMode::Wallet => None,
+        }
+    }
+
+    pub fn default_wallet_config_path(self) -> Option<&'static str> {
+        match self {
+            RuntimeMode::Wallet | RuntimeMode::Hybrid | RuntimeMode::Validator => {
+                Some("config/wallet.toml")
+            }
+            RuntimeMode::Node => None,
+        }
+    }
 }
 
 impl Default for RuntimeMode {

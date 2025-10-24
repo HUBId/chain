@@ -453,15 +453,6 @@ fn load_or_init_wallet_config(path: &Path) -> Result<WalletConfig> {
     }
 }
 
-fn default_node_config_path_for_mode(mode: RuntimeMode) -> Option<&'static str> {
-    match mode {
-        RuntimeMode::Node => Some("config/node.toml"),
-        RuntimeMode::Hybrid => Some("config/hybrid.toml"),
-        RuntimeMode::Validator => Some("config/validator.toml"),
-        RuntimeMode::Wallet => None,
-    }
-}
-
 fn node_config_template_for_path(path: &Path, mode: RuntimeMode) -> NodeConfig {
     let file_name = path
         .file_name()
@@ -497,12 +488,14 @@ impl StartArgs {
         }
 
         if mode.includes_node() && node_config.is_none() {
-            if let Some(default_path) = default_node_config_path_for_mode(mode) {
+            if let Some(default_path) = mode.default_node_config_path() {
                 node_config = Some(PathBuf::from(default_path));
             }
         }
         if mode.includes_wallet() && wallet_config.is_none() {
-            wallet_config = Some(PathBuf::from("config/wallet.toml"));
+            if let Some(default_path) = mode.default_wallet_config_path() {
+                wallet_config = Some(PathBuf::from(default_path));
+            }
         }
 
         Ok(ResolvedRuntime {

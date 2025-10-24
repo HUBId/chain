@@ -1,4 +1,5 @@
 use std::env;
+use std::fmt;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -157,6 +158,13 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
     }
     let wallet_bundle = load_wallet_configuration(mode, &options)?;
 
+    let node_metadata = node_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.metadata.as_ref().cloned());
+    let wallet_metadata = wallet_bundle
+        .as_ref()
+        .and_then(|bundle| bundle.metadata.as_ref().cloned());
+
     let mut default_config = None;
     let tracing_config = if let Some(bundle) = node_bundle.as_ref() {
         &bundle.value
@@ -165,27 +173,57 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
         default_config.as_ref().unwrap()
     };
 
-    let _telemetry_guard =
-        init_tracing(tracing_config, options.log_level.clone(), options.log_json)
-            .context("failed to initialise logging")?;
+    let _telemetry_guard = init_tracing(
+        tracing_config,
+        node_metadata.as_ref(),
+        options.log_level.clone(),
+        options.log_json,
+    )
+    .context("failed to initialise logging")?;
+
+    if let Some(metadata) = node_metadata.as_ref() {
+        info!(
+            target = "config",
+            role = "node",
+            source = metadata.source.as_str(),
+            path = %metadata.path.display(),
+            "resolved node configuration"
+        );
+    }
+    if let Some(metadata) = wallet_metadata.as_ref() {
+        info!(
+            target = "config",
+            role = "wallet",
+            source = metadata.source.as_str(),
+            path = %metadata.path.display(),
+            "resolved wallet configuration"
+        );
+    }
 
     if options.write_config {
         if let Some(bundle) = node_bundle.as_ref() {
-            persist_node_config(mode, &bundle.value, bundle.path.as_deref())?;
+            let override_path = node_metadata
+                .as_ref()
+                .map(|metadata| metadata.path.as_path());
+            persist_node_config(mode, &bundle.value, override_path)?;
         }
     }
 
     if options.dry_run {
         info!(
             mode = %mode.as_str(),
-            node_config = node_bundle
+            node_config = node_metadata
                 .as_ref()
-                .and_then(|bundle| bundle.path.as_ref())
-                .map(|path| path.display().to_string()),
-            wallet_config = wallet_bundle
+                .map(|metadata| metadata.path.display().to_string()),
+            node_config_source = node_metadata
                 .as_ref()
-                .and_then(|bundle| bundle.path.as_ref())
-                .map(|path| path.display().to_string()),
+                .map(|metadata| metadata.source.as_str()),
+            wallet_config = wallet_metadata
+                .as_ref()
+                .map(|metadata| metadata.path.display().to_string()),
+            wallet_config_source = wallet_metadata
+                .as_ref()
+                .map(|metadata| metadata.source.as_str()),
             "dry run completed"
         );
         return Ok(());
@@ -321,10 +359,122 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConfigSource {
+    CommandLine,
+    Environment,
+    Default,
+}
+
+impl ConfigSource {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ConfigSource::CommandLine => "cli",
+            ConfigSource::Environment => "env",
+            ConfigSource::Default => "default",
+        }
+    }
+
+    fn description(&self) -> &'static str {
+        match self {
+            ConfigSource::CommandLine => "the command line",
+            ConfigSource::Environment => "the RPP_CONFIG environment variable",
+            ConfigSource::Default => "the default search path",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ConfigMetadata {
+    path: PathBuf,
+    source: ConfigSource,
+}
+
+impl ConfigMetadata {
+    fn new(path: PathBuf, source: ConfigSource) -> Self {
+        Self { path, source }
+    }
+}
+
+#[derive(Clone)]
+struct ResolvedConfigPath {
+    path: PathBuf,
+    source: ConfigSource,
+}
+
+impl ResolvedConfigPath {
+    fn into_metadata(self) -> ConfigMetadata {
+        ConfigMetadata::new(self.path, self.source)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ConfigRole {
+    Node,
+    Wallet,
+}
+
+impl ConfigRole {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ConfigRole::Node => "node",
+            ConfigRole::Wallet => "wallet",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConfigurationError {
+    role: ConfigRole,
+    path: PathBuf,
+    source: ConfigSource,
+    suggestion: Option<String>,
+}
+
+impl ConfigurationError {
+    fn missing(
+        role: ConfigRole,
+        path: PathBuf,
+        source: ConfigSource,
+        template: Option<&'static str>,
+    ) -> Self {
+        let suggestion = template.map(|default| format!("cp {default} {}", path.display()));
+        Self {
+            role,
+            path,
+            source,
+            suggestion,
+        }
+    }
+}
+
+impl fmt::Display for ConfigurationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let base = format!(
+            "{} configuration not found at {} (resolved from {})",
+            self.role.as_str(),
+            self.path.display(),
+            self.source.description()
+        );
+
+        if let Some(suggestion) = &self.suggestion {
+            write!(
+                f,
+                "{}; copy the default template with `{}`",
+                base, suggestion
+            )
+        } else {
+            write!(f, "{}", base)
+        }
+    }
+}
+
+impl std::error::Error for ConfigurationError {}
+
 #[derive(Clone)]
 struct ConfigBundle<T> {
     value: T,
-    path: Option<PathBuf>,
+    metadata: Option<ConfigMetadata>,
 }
 
 #[derive(Debug)]
@@ -452,24 +602,27 @@ fn load_node_configuration(
         return Ok(None);
     }
 
-    let path = options
-        .node_config
-        .clone()
-        .or_else(|| default_node_config_path(mode).map(PathBuf::from));
-    let config = if let Some(ref path) = path {
-        if path.exists() {
-            NodeConfig::load(path)
-                .with_context(|| format!("failed to load configuration from {}", path.display()))?
-        } else {
-            NodeConfig::for_mode(mode)
-        }
-    } else {
-        NodeConfig::for_mode(mode)
+    let Some(mut resolved) = resolve_node_config_path(mode, options) else {
+        return Ok(None);
     };
+
+    if !resolved.path.exists() {
+        let error = ConfigurationError::missing(
+            ConfigRole::Node,
+            resolved.path.clone(),
+            resolved.source,
+            mode.default_node_config_path(),
+        );
+        return Err(error.into());
+    }
+
+    let display_path = resolved.path.display().to_string();
+    let config = NodeConfig::load(&resolved.path)
+        .with_context(|| format!("failed to load configuration from {display_path}"))?;
 
     Ok(Some(ConfigBundle {
         value: config,
-        path,
+        metadata: Some(resolved.into_metadata()),
     }))
 }
 
@@ -481,24 +634,80 @@ fn load_wallet_configuration(
         return Ok(None);
     }
 
-    let path = options
-        .wallet_config
-        .clone()
-        .or_else(|| default_wallet_config_path(mode).map(PathBuf::from));
-    let config = if let Some(ref path) = path {
-        if path.exists() {
-            WalletConfig::load(path).map_err(|err| anyhow!(err))?
-        } else {
-            WalletConfig::for_mode(mode)
-        }
-    } else {
-        WalletConfig::for_mode(mode)
+    let Some(mut resolved) = resolve_wallet_config_path(mode, options) else {
+        return Ok(None);
     };
+
+    if !resolved.path.exists() {
+        let error = ConfigurationError::missing(
+            ConfigRole::Wallet,
+            resolved.path.clone(),
+            resolved.source,
+            mode.default_wallet_config_path(),
+        );
+        return Err(error.into());
+    }
+
+    let display_path = resolved.path.display().to_string();
+    let config = WalletConfig::load(&resolved.path)
+        .map_err(|err| anyhow!(err))
+        .with_context(|| format!("failed to load configuration from {display_path}"))?;
 
     Ok(Some(ConfigBundle {
         value: config,
-        path,
+        metadata: Some(resolved.into_metadata()),
     }))
+}
+
+fn resolve_node_config_path(
+    mode: RuntimeMode,
+    options: &BootstrapOptions,
+) -> Option<ResolvedConfigPath> {
+    resolve_config_path(options.node_config.clone(), mode.default_node_config_path())
+}
+
+fn resolve_wallet_config_path(
+    mode: RuntimeMode,
+    options: &BootstrapOptions,
+) -> Option<ResolvedConfigPath> {
+    resolve_config_path(
+        options.wallet_config.clone(),
+        mode.default_wallet_config_path(),
+    )
+}
+
+fn resolve_config_path(
+    cli_path: Option<PathBuf>,
+    default_path: Option<&'static str>,
+) -> Option<ResolvedConfigPath> {
+    if let Some(path) = cli_path {
+        return Some(ResolvedConfigPath {
+            path,
+            source: ConfigSource::CommandLine,
+        });
+    }
+
+    if let Some(path) = env_config_path() {
+        return Some(ResolvedConfigPath {
+            path,
+            source: ConfigSource::Environment,
+        });
+    }
+
+    default_path.map(|path| ResolvedConfigPath {
+        path: PathBuf::from(path),
+        source: ConfigSource::Default,
+    })
+}
+
+fn env_config_path() -> Option<PathBuf> {
+    let raw = std::env::var("RPP_CONFIG").ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
 }
 
 fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
@@ -570,6 +779,7 @@ fn persist_node_config(
 
 fn init_tracing(
     config: &NodeConfig,
+    metadata: Option<&ConfigMetadata>,
     log_level: Option<String>,
     json: bool,
 ) -> Result<Option<OtelGuard>> {
@@ -596,7 +806,7 @@ fn init_tracing(
         }
     };
 
-    match build_otlp_layer(config)? {
+    match build_otlp_layer(config, metadata)? {
         Some(OtlpLayer {
             layer,
             guard,
@@ -653,7 +863,10 @@ struct OtlpSettings {
     timeout: Duration,
 }
 
-fn build_otlp_layer(config: &NodeConfig) -> Result<Option<OtlpLayer>> {
+fn build_otlp_layer(
+    config: &NodeConfig,
+    metadata: Option<&ConfigMetadata>,
+) -> Result<Option<OtlpLayer>> {
     let Some(settings) = otlp_settings(config)? else {
         return Ok(None);
     };
@@ -677,7 +890,7 @@ fn build_otlp_layer(config: &NodeConfig) -> Result<Option<OtlpLayer>> {
         .with_max_export_batch_size(512)
         .with_max_export_timeout(settings.timeout);
 
-    let resource = Resource::new(vec![
+    let mut attributes = vec![
         KeyValue::new("service.name", "rpp-node"),
         KeyValue::new("service.namespace", "rpp"),
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
@@ -693,7 +906,20 @@ fn build_otlp_layer(config: &NodeConfig) -> Result<Option<OtlpLayer>> {
             "rpp.telemetry.redact_logs",
             config.rollout.telemetry.redact_logs,
         ),
-    ]);
+    ];
+
+    if let Some(metadata) = metadata {
+        attributes.push(KeyValue::new(
+            "rpp.config.node.source",
+            metadata.source.as_str(),
+        ));
+        attributes.push(KeyValue::new(
+            "rpp.config.node.path",
+            metadata.path.display().to_string(),
+        ));
+    }
+
+    let resource = Resource::new(attributes);
 
     let provider = trace::TracerProvider::builder()
         .with_config(trace::Config::default().with_resource(resource))
@@ -762,22 +988,4 @@ fn normalize_option(value: Option<String>) -> Option<String> {
             Some(trimmed.to_string())
         }
     })
-}
-
-fn default_node_config_path(mode: RuntimeMode) -> Option<&'static str> {
-    match mode {
-        RuntimeMode::Node => Some("config/node.toml"),
-        RuntimeMode::Hybrid => Some("config/hybrid.toml"),
-        RuntimeMode::Validator => Some("config/validator.toml"),
-        RuntimeMode::Wallet => None,
-    }
-}
-
-fn default_wallet_config_path(mode: RuntimeMode) -> Option<&'static str> {
-    match mode {
-        RuntimeMode::Wallet => Some("config/wallet.toml"),
-        RuntimeMode::Hybrid => Some("config/wallet.toml"),
-        RuntimeMode::Validator => Some("config/wallet.toml"),
-        RuntimeMode::Node => None,
-    }
 }
