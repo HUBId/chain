@@ -50,6 +50,7 @@ use crate::node::{
 };
 use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
+    PipelineTelemetrySummary,
 };
 use crate::reputation::Tier;
 use crate::rpp::TimetokeRecord;
@@ -861,6 +862,7 @@ pub async fn serve(
         .route("/wallet/uptime/proof", post(wallet_generate_uptime))
         .route("/wallet/uptime/submit", post(wallet_submit_uptime))
         .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
+        .route("/wallet/pipeline/telemetry", get(wallet_pipeline_telemetry))
         .route("/wallet/pipeline/stream", get(wallet_pipeline_stream))
         .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
         .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
@@ -1840,6 +1842,15 @@ async fn wallet_pipeline_dashboard(
     let wallet = state.require_wallet()?;
     let orchestrator = state.require_orchestrator()?;
     Ok(Json(wallet.pipeline_dashboard(orchestrator.as_ref())))
+}
+
+async fn wallet_pipeline_telemetry(
+    State(state): State<ApiContext>,
+) -> Result<Json<PipelineTelemetrySummary>, (StatusCode, Json<ErrorResponse>)> {
+    let _wallet = state.require_wallet()?;
+    let orchestrator = state.require_orchestrator()?;
+    let summary = orchestrator.telemetry_summary().await;
+    Ok(Json(summary))
 }
 
 async fn wallet_pipeline_wait(

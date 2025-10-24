@@ -29,6 +29,7 @@ use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time;
+use tracing::field::display;
 use tracing::Span;
 use tracing::instrument;
 use tracing::{debug, error, info, warn};
@@ -1709,7 +1710,15 @@ impl NodeHandle {
             .finalize_block(FinalizationContext::External(ctx))
     }
 
+    #[instrument(
+        name = "node.submit_transaction",
+        skip(self, bundle),
+        fields(hash = tracing::field::Empty),
+        err
+    )]
     pub fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
+        let hash = bundle.hash();
+        Span::current().record("hash", &display(&hash));
         self.inner.submit_transaction(bundle)
     }
 

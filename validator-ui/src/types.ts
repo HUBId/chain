@@ -133,6 +133,7 @@ export interface PipelineDashboardSnapshot {
 
 export interface PipelineErrorPayload {
   stage: string;
+  reason: string;
   height: number;
   round: number;
   block_hash?: string | null;

@@ -156,12 +156,20 @@ function parsePipelineErrorPayload(raw: unknown): PipelineErrorPayload {
   }
 
   const stage = coerceString((raw as Record<string, unknown>).stage);
+  const reason = coerceString((raw as Record<string, unknown>).reason);
   const height = coerceNumber((raw as Record<string, unknown>).height);
   const round = coerceNumber((raw as Record<string, unknown>).round);
   const message = coerceString((raw as Record<string, unknown>).message);
   const observedAt = coerceNumber((raw as Record<string, unknown>).observed_at_ms);
 
-  if (!stage || height === undefined || round === undefined || !message || observedAt === undefined) {
+  if (
+    !stage ||
+    !reason ||
+    height === undefined ||
+    round === undefined ||
+    !message ||
+    observedAt === undefined
+  ) {
     throw new Error('Incomplete pipeline error payload');
   }
 
@@ -173,6 +181,7 @@ function parsePipelineErrorPayload(raw: unknown): PipelineErrorPayload {
 
   return {
     stage,
+    reason,
     height,
     round,
     block_hash: blockHash,
