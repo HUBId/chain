@@ -250,20 +250,29 @@ fn binary_dry_run_smoke() -> Result<()> {
 }
 
 #[test]
-fn hybrid_rejects_conflicting_rpc_listeners() -> Result<()> {
+fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
     let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
     let temp_dir = TempDir::new().context("failed to create temporary directory")?;
-    let shared_port = pick_free_tcp_port()?;
-    let shared_addr: SocketAddr = format!("127.0.0.1:{shared_port}")
+    let node_port = pick_free_tcp_port()?;
+    let wallet_port = loop {
+        let candidate = pick_free_tcp_port()?;
+        if candidate != node_port {
+            break candidate;
+        }
+    };
+    let node_addr: SocketAddr = format!("127.0.0.1:{node_port}")
         .parse()
-        .context("invalid shared rpc listen address")?;
+        .context("invalid node rpc listen address")?;
+    let wallet_addr: SocketAddr = format!("127.0.0.1:{wallet_port}")
+        .parse()
+        .context("invalid wallet rpc listen address")?;
 
     let node_config = write_node_config_with(temp_dir.path(), Some(TelemetryExpectation::Disabled), |config| {
-        config.rpc_listen = shared_addr;
+        config.rpc_listen = node_addr;
     })?;
 
     let wallet_config =
-        write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = shared_addr)?;
+        write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = wallet_addr)?;
 
     let output = Command::new(&binary)
         .arg("hybrid")
@@ -283,8 +292,8 @@ fn hybrid_rejects_conflicting_rpc_listeners() -> Result<()> {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("listener conflict"),
-        "stderr missing conflict message: {stderr}"
+        stderr.contains("listener mismatch"),
+        "stderr missing mismatch message: {stderr}"
     );
     assert!(
         stderr.contains("node-config.toml::rpc_listen"),
@@ -295,8 +304,84 @@ fn hybrid_rejects_conflicting_rpc_listeners() -> Result<()> {
         "stderr missing wallet rpc reference: {stderr}"
     );
     assert!(
-        stderr.contains(&shared_port.to_string()),
-        "stderr missing shared port {shared_port}: {stderr}"
+        stderr.contains(&node_port.to_string()),
+        "stderr missing node port {node_port}: {stderr}"
+    );
+    assert!(
+        stderr.contains(&wallet_port.to_string()),
+        "stderr missing wallet port {wallet_port}: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+
+    let node_port = pick_free_tcp_port()?;
+    let wallet_port = loop {
+        let candidate = pick_free_tcp_port()?;
+        if candidate != node_port {
+            break candidate;
+        }
+    };
+
+    let node_addr: SocketAddr = format!("127.0.0.1:{node_port}")
+        .parse()
+        .context("invalid node rpc listen address")?;
+    let wallet_addr: SocketAddr = format!("127.0.0.1:{wallet_port}")
+        .parse()
+        .context("invalid wallet rpc listen address")?;
+
+    let node_config = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::WithEndpoint),
+        |config| {
+            config.rpc_listen = node_addr;
+        },
+    )?;
+
+    let wallet_config =
+        write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = wallet_addr)?;
+
+    let output = Command::new(&binary)
+        .arg("validator")
+        .arg("--config")
+        .arg(&node_config)
+        .arg("--wallet-config")
+        .arg(&wallet_config)
+        .output()
+        .context("failed to run rpp-node validator")?;
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "validator mode exited with unexpected status: {:?}",
+        output.status
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("listener mismatch"),
+        "stderr missing mismatch message: {stderr}"
+    );
+    assert!(
+        stderr.contains("node-config.toml::rpc_listen"),
+        "stderr missing node rpc reference: {stderr}"
+    );
+    assert!(
+        stderr.contains("wallet-config.toml::rpc_listen"),
+        "stderr missing wallet rpc reference: {stderr}"
+    );
+    assert!(
+        stderr.contains(&node_port.to_string()),
+        "stderr missing node port {node_port}: {stderr}"
+    );
+    assert!(
+        stderr.contains(&wallet_port.to_string()),
+        "stderr missing wallet port {wallet_port}: {stderr}"
     );
 
     Ok(())

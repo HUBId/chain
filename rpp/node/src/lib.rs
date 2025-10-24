@@ -675,19 +675,21 @@ fn ensure_listener_conflicts(
 
     let node_metadata = node_bundle.metadata.as_ref();
     let wallet_metadata = wallet_bundle.metadata.as_ref();
+    let mut mismatches = Vec::new();
     let mut conflicts = Vec::new();
 
-    let node_rpc = node_bundle.value.rpc_listen;
-    let wallet_rpc = wallet_bundle.value.rpc_listen;
-    if listeners_conflict(node_rpc, wallet_rpc) {
-        let node_key = describe_config_key(ConfigRole::Node, node_metadata, "rpc_listen");
-        let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, "rpc_listen");
-        conflicts.push(format!(
-            "{node_key} ({node_rpc}) and {wallet_key} ({wallet_rpc}) reuse TCP port {}",
-            node_rpc.port()
-        ));
+    let shared_listeners = [("rpc_listen", node_bundle.value.rpc_listen, wallet_bundle.value.rpc_listen)];
+    for (key, node_addr, wallet_addr) in shared_listeners {
+        if node_addr != wallet_addr {
+            let node_key = describe_config_key(ConfigRole::Node, node_metadata, key);
+            let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, key);
+            mismatches.push(format!(
+                "{node_key} ({node_addr}) must match {wallet_key} ({wallet_addr})"
+            ));
+        }
     }
 
+    let wallet_rpc = wallet_bundle.value.rpc_listen;
     if let Some(port) = extract_tcp_port(&node_bundle.value.p2p.listen_addr) {
         if port != 0 && port == wallet_rpc.port() {
             let node_key = describe_config_key(ConfigRole::Node, node_metadata, "p2p.listen_addr");
@@ -699,11 +701,18 @@ fn ensure_listener_conflicts(
         }
     }
 
-    if conflicts.is_empty() {
+    if mismatches.is_empty() && conflicts.is_empty() {
         Ok(())
     } else {
-        let details = conflicts.join("; ");
-        Err(ConfigurationError::conflict(format!("listener conflict: {details}")).into())
+        let mut details = Vec::new();
+        if !mismatches.is_empty() {
+            details.push(format!("listener mismatch: {}", mismatches.join("; ")));
+        }
+        if !conflicts.is_empty() {
+            details.push(format!("listener conflict: {}", conflicts.join("; ")));
+        }
+
+        Err(ConfigurationError::conflict(details.join("; ")).into())
     }
 }
 
@@ -716,18 +725,6 @@ fn describe_config_key(role: ConfigRole, metadata: Option<&ConfigMetadata>, key:
         ),
         None => format!("{} configuration (defaults::{key})", role.as_str()),
     }
-}
-
-fn listeners_conflict(node: std::net::SocketAddr, wallet: std::net::SocketAddr) -> bool {
-    if node.port() != wallet.port() {
-        return false;
-    }
-
-    if node.ip().is_unspecified() || wallet.ip().is_unspecified() {
-        return true;
-    }
-
-    node.ip() == wallet.ip()
 }
 
 fn extract_tcp_port(multiaddr: &str) -> Option<u16> {
