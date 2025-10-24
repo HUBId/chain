@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use clap::Parser;
+use clap::Args;
 use opentelemetry::global;
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
@@ -33,65 +33,129 @@ use rpp_chain::wallet::Wallet;
 
 pub use rpp_chain::runtime::RuntimeMode;
 
-#[derive(Debug, Parser)]
-#[command(author, version, about = "Run an rpp node", long_about = None)]
-pub struct Cli {
-    /// Select the runtime mode (node, wallet, validator, hybrid)
-    #[arg(long, value_enum, default_value_t = RuntimeMode::Node)]
-    pub mode: RuntimeMode,
-
+/// Shared CLI arguments used across runtime entrypoints.
+#[derive(Debug, Clone, Args)]
+pub struct RunArgs {
     /// Optional path to a node configuration file loaded before starting the runtime
-    #[arg(long)]
-    config: Option<PathBuf>,
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
 
     /// Optional path to a wallet configuration file loaded before starting the runtime
-    #[arg(long)]
-    wallet_config: Option<PathBuf>,
+    #[arg(long, value_name = "PATH")]
+    pub wallet_config: Option<PathBuf>,
 
     /// Override the data directory defined in the node configuration
-    #[arg(long)]
-    data_dir: Option<PathBuf>,
+    #[arg(long, value_name = "PATH")]
+    pub data_dir: Option<PathBuf>,
 
     /// Override the RPC listen address defined in the node configuration
-    #[arg(long)]
-    rpc_listen: Option<std::net::SocketAddr>,
+    #[arg(long, value_name = "SOCKET")]
+    pub rpc_listen: Option<std::net::SocketAddr>,
 
     /// Override the RPC authentication token defined in the node configuration
-    #[arg(long)]
-    rpc_auth_token: Option<String>,
+    #[arg(long, value_name = "TOKEN")]
+    pub rpc_auth_token: Option<String>,
 
     /// Override the telemetry endpoint defined in the node configuration
-    #[arg(long)]
-    telemetry_endpoint: Option<String>,
+    #[arg(long, value_name = "URL")]
+    pub telemetry_endpoint: Option<String>,
 
     /// Override the telemetry authentication token defined in the node configuration
-    #[arg(long)]
-    telemetry_auth_token: Option<String>,
+    #[arg(long, value_name = "TOKEN")]
+    pub telemetry_auth_token: Option<String>,
 
     /// Override the telemetry sample interval (seconds) defined in the node configuration
-    #[arg(long)]
-    telemetry_sample_interval: Option<u64>,
+    #[arg(long, value_name = "SECONDS")]
+    pub telemetry_sample_interval: Option<u64>,
 
     /// Override the log level (also respects RUST_LOG)
-    #[arg(long)]
-    log_level: Option<String>,
+    #[arg(long, value_name = "LEVEL")]
+    pub log_level: Option<String>,
 
     /// Emit logs in JSON format
     #[arg(long)]
-    log_json: bool,
+    pub log_json: bool,
+
+    /// Validate configuration and exit without starting the runtime
+    #[arg(long)]
+    pub dry_run: bool,
 
     /// Persist the resulting configuration into the current working directory
     #[arg(long)]
-    write_config: bool,
+    pub write_config: bool,
 }
 
-pub async fn run(cli: Cli) -> Result<()> {
-    let mode = cli.mode;
-    let mut node_bundle = load_node_configuration(&cli)?;
-    if let Some(bundle) = node_bundle.as_mut() {
-        apply_overrides(&mut bundle.value, &cli);
+impl RunArgs {
+    pub fn into_bootstrap_options(self, mode: RuntimeMode) -> BootstrapOptions {
+        let RunArgs {
+            config,
+            wallet_config,
+            data_dir,
+            rpc_listen,
+            rpc_auth_token,
+            telemetry_endpoint,
+            telemetry_auth_token,
+            telemetry_sample_interval,
+            log_level,
+            log_json,
+            dry_run,
+            write_config,
+        } = self;
+
+        let node_config = if mode.includes_node() {
+            config.clone()
+        } else {
+            None
+        };
+
+        let wallet_config = if mode.includes_wallet() {
+            match mode {
+                RuntimeMode::Wallet => wallet_config.or(config),
+                _ => wallet_config,
+            }
+        } else {
+            None
+        };
+
+        BootstrapOptions {
+            node_config,
+            wallet_config,
+            data_dir,
+            rpc_listen,
+            rpc_auth_token,
+            telemetry_endpoint,
+            telemetry_auth_token,
+            telemetry_sample_interval,
+            log_level,
+            log_json,
+            dry_run,
+            write_config,
+        }
     }
-    let wallet_bundle = load_wallet_configuration(&cli)?;
+}
+
+#[derive(Debug, Clone)]
+pub struct BootstrapOptions {
+    pub node_config: Option<PathBuf>,
+    pub wallet_config: Option<PathBuf>,
+    pub data_dir: Option<PathBuf>,
+    pub rpc_listen: Option<std::net::SocketAddr>,
+    pub rpc_auth_token: Option<String>,
+    pub telemetry_endpoint: Option<String>,
+    pub telemetry_auth_token: Option<String>,
+    pub telemetry_sample_interval: Option<u64>,
+    pub log_level: Option<String>,
+    pub log_json: bool,
+    pub dry_run: bool,
+    pub write_config: bool,
+}
+
+pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<()> {
+    let mut node_bundle = load_node_configuration(mode, &options)?;
+    if let Some(bundle) = node_bundle.as_mut() {
+        apply_overrides(&mut bundle.value, &options);
+    }
+    let wallet_bundle = load_wallet_configuration(mode, &options)?;
 
     let mut default_config = None;
     let tracing_config = if let Some(bundle) = node_bundle.as_ref() {
@@ -101,13 +165,30 @@ pub async fn run(cli: Cli) -> Result<()> {
         default_config.as_ref().unwrap()
     };
 
-    let _telemetry_guard = init_tracing(tracing_config, cli.log_level.clone(), cli.log_json)
-        .context("failed to initialise logging")?;
+    let _telemetry_guard =
+        init_tracing(tracing_config, options.log_level.clone(), options.log_json)
+            .context("failed to initialise logging")?;
 
-    if cli.write_config {
+    if options.write_config {
         if let Some(bundle) = node_bundle.as_ref() {
             persist_node_config(mode, &bundle.value, bundle.path.as_deref())?;
         }
+    }
+
+    if options.dry_run {
+        info!(
+            mode = %mode.as_str(),
+            node_config = node_bundle
+                .as_ref()
+                .and_then(|bundle| bundle.path.as_ref())
+                .map(|path| path.display().to_string()),
+            wallet_config = wallet_bundle
+                .as_ref()
+                .and_then(|bundle| bundle.path.as_ref())
+                .map(|path| path.display().to_string()),
+            "dry run completed"
+        );
+        return Ok(());
     }
 
     let runtime_mode = Arc::new(RwLock::new(mode));
@@ -363,24 +444,27 @@ async fn wait_for_signal_shutdown() -> ShutdownOutcome {
     ShutdownOutcome::Clean
 }
 
-fn load_node_configuration(cli: &Cli) -> Result<Option<ConfigBundle<NodeConfig>>> {
-    if !cli.mode.includes_node() {
+fn load_node_configuration(
+    mode: RuntimeMode,
+    options: &BootstrapOptions,
+) -> Result<Option<ConfigBundle<NodeConfig>>> {
+    if !mode.includes_node() {
         return Ok(None);
     }
 
-    let path = cli
-        .config
+    let path = options
+        .node_config
         .clone()
-        .or_else(|| default_node_config_path(cli.mode).map(PathBuf::from));
+        .or_else(|| default_node_config_path(mode).map(PathBuf::from));
     let config = if let Some(ref path) = path {
         if path.exists() {
             NodeConfig::load(path)
                 .with_context(|| format!("failed to load configuration from {}", path.display()))?
         } else {
-            NodeConfig::for_mode(cli.mode)
+            NodeConfig::for_mode(mode)
         }
     } else {
-        NodeConfig::for_mode(cli.mode)
+        NodeConfig::for_mode(mode)
     };
 
     Ok(Some(ConfigBundle {
@@ -389,23 +473,26 @@ fn load_node_configuration(cli: &Cli) -> Result<Option<ConfigBundle<NodeConfig>>
     }))
 }
 
-fn load_wallet_configuration(cli: &Cli) -> Result<Option<ConfigBundle<WalletConfig>>> {
-    if !cli.mode.includes_wallet() {
+fn load_wallet_configuration(
+    mode: RuntimeMode,
+    options: &BootstrapOptions,
+) -> Result<Option<ConfigBundle<WalletConfig>>> {
+    if !mode.includes_wallet() {
         return Ok(None);
     }
 
-    let path = cli
+    let path = options
         .wallet_config
         .clone()
-        .or_else(|| default_wallet_config_path(cli.mode).map(PathBuf::from));
+        .or_else(|| default_wallet_config_path(mode).map(PathBuf::from));
     let config = if let Some(ref path) = path {
         if path.exists() {
             WalletConfig::load(path).map_err(|err| anyhow!(err))?
         } else {
-            WalletConfig::for_mode(cli.mode)
+            WalletConfig::for_mode(mode)
         }
     } else {
-        WalletConfig::for_mode(cli.mode)
+        WalletConfig::for_mode(mode)
     };
 
     Ok(Some(ConfigBundle {
@@ -414,14 +501,14 @@ fn load_wallet_configuration(cli: &Cli) -> Result<Option<ConfigBundle<WalletConf
     }))
 }
 
-fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
-    if let Some(dir) = cli.data_dir.as_ref() {
+fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
+    if let Some(dir) = options.data_dir.as_ref() {
         config.data_dir = dir.clone();
     }
-    if let Some(addr) = cli.rpc_listen {
+    if let Some(addr) = options.rpc_listen {
         config.rpc_listen = addr;
     }
-    if let Some(token) = cli.rpc_auth_token.as_ref() {
+    if let Some(token) = options.rpc_auth_token.as_ref() {
         let token = token.trim();
         if token.is_empty() {
             config.rpc_auth_token = None;
@@ -429,7 +516,7 @@ fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
             config.rpc_auth_token = Some(token.to_string());
         }
     }
-    if let Some(endpoint) = cli.telemetry_endpoint.as_ref() {
+    if let Some(endpoint) = options.telemetry_endpoint.as_ref() {
         let endpoint = endpoint.trim();
         if endpoint.is_empty() {
             config.rollout.telemetry.endpoint = None;
@@ -439,7 +526,7 @@ fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
             config.rollout.telemetry.enabled = true;
         }
     }
-    if let Some(auth) = cli.telemetry_auth_token.as_ref() {
+    if let Some(auth) = options.telemetry_auth_token.as_ref() {
         let token = auth.trim();
         if token.is_empty() {
             config.rollout.telemetry.auth_token = None;
@@ -447,7 +534,7 @@ fn apply_overrides(config: &mut NodeConfig, cli: &Cli) {
             config.rollout.telemetry.auth_token = Some(token.to_string());
         }
     }
-    if let Some(interval) = cli.telemetry_sample_interval {
+    if let Some(interval) = options.telemetry_sample_interval {
         config.rollout.telemetry.sample_interval_secs = interval;
         if config.rollout.telemetry.endpoint.is_some() {
             config.rollout.telemetry.enabled = true;

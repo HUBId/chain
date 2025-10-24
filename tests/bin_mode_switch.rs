@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use rpp_chain::config::{NodeConfig, WalletConfig};
-use rpp_chain::runtime::RuntimeMode;
 use tempfile::TempDir;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -23,28 +22,24 @@ fn binary_mode_switch_smoke() -> Result<()> {
     let specs = [
         ModeSpec {
             name: "node",
-            mode: RuntimeMode::Node,
             needs_node: true,
             needs_wallet: false,
             telemetry: Some(TelemetryExpectation::Disabled),
         },
         ModeSpec {
             name: "wallet",
-            mode: RuntimeMode::Wallet,
             needs_node: false,
             needs_wallet: true,
             telemetry: None,
         },
         ModeSpec {
             name: "hybrid",
-            mode: RuntimeMode::Hybrid,
             needs_node: true,
             needs_wallet: true,
             telemetry: Some(TelemetryExpectation::WithEndpoint),
         },
         ModeSpec {
             name: "validator",
-            mode: RuntimeMode::Validator,
             needs_node: true,
             needs_wallet: true,
             telemetry: Some(TelemetryExpectation::WithEndpoint),
@@ -60,7 +55,6 @@ fn binary_mode_switch_smoke() -> Result<()> {
 
 struct ModeSpec {
     name: &'static str,
-    mode: RuntimeMode,
     needs_node: bool,
     needs_wallet: bool,
     telemetry: Option<TelemetryExpectation>,
@@ -93,8 +87,7 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
 
     let mut command = Command::new(binary);
     command
-        .arg("--mode")
-        .arg(spec.mode.as_str())
+        .arg(spec.name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env(
@@ -107,13 +100,19 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
     }
 
     if let Some(wallet_config) = context.wallet_config.as_ref() {
-        command.arg("--wallet-config").arg(wallet_config);
+        let flag = match spec.name {
+            "wallet" => "--config",
+            _ => "--wallet-config",
+        };
+        command.arg(flag).arg(wallet_config);
     }
 
     let mut child = command.spawn().context("failed to spawn rpp-node")?;
 
     // Ensure the child process is terminated if the test encounters an early failure.
-    let mut child_guard = ChildTerminationGuard { child: Some(&mut child) };
+    let mut child_guard = ChildTerminationGuard {
+        child: Some(&mut child),
+    };
 
     let mut logs = capture_child_output(&mut child);
 
@@ -148,6 +147,56 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn binary_dry_run_smoke() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let spec = ModeSpec {
+        name: "node",
+        needs_node: true,
+        needs_wallet: false,
+        telemetry: Some(TelemetryExpectation::Disabled),
+    };
+
+    let context = ModeContext::prepare(&spec)?;
+
+    let mut command = Command::new(&binary);
+    command
+        .arg(spec.name)
+        .arg("--dry-run")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env(
+            "RUST_LOG",
+            "info,rpp_node=info,rpp-chain=info,rpp_chain=info,rpp_node::runtime=info",
+        );
+
+    if let Some(node_config) = context.node_config.as_ref() {
+        command.arg("--config").arg(node_config);
+    }
+
+    let output = command
+        .output()
+        .context("failed to run rpp-node in dry-run mode")?;
+
+    if !output.status.success() {
+        return Err(anyhow!(
+            "rpp-node dry run exited with status {}",
+            output.status
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{}{}", stdout, stderr);
+    if !combined.contains("dry run completed") {
+        return Err(anyhow!(
+            "dry run logs did not contain confirmation marker: {combined}"
+        ));
+    }
+
+    Ok(())
+}
+
 struct ChildTerminationGuard<'a> {
     child: Option<&'a mut Child>,
 }
@@ -173,7 +222,8 @@ impl ModeContext {
 
         let mut wallet_config = None;
         if spec.needs_wallet {
-            let path = write_wallet_config(temp_dir.path()).context("failed to write wallet configuration")?;
+            let path = write_wallet_config(temp_dir.path())
+                .context("failed to write wallet configuration")?;
             wallet_config = Some(path);
         }
 
@@ -217,7 +267,9 @@ fn write_node_config(base: &Path, telemetry: Option<TelemetryExpectation>) -> Re
         }
     }
 
-    config.ensure_directories().context("failed to prepare node directories")?;
+    config
+        .ensure_directories()
+        .context("failed to prepare node directories")?;
 
     let path = base.join("node-config.toml");
     config
@@ -305,9 +357,7 @@ fn wait_for_log(logs: &mut Receiver<String>, pattern: &str) -> Result<()> {
 }
 
 fn start_log_drain(logs: Receiver<String>) {
-    thread::spawn(move || {
-        for _ in logs {}
-    });
+    thread::spawn(move || for _ in logs {});
 }
 
 fn wait_for_exit(child: &mut Child) -> Result<ExitStatus> {
