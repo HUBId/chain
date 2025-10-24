@@ -1,0 +1,7 @@
+{
+  "$schema": "https://schemas.rpp.dev/p2p/network_light_client_head.json",
+  "height": 4096,
+  "block_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state_root": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "proof_commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/network_light_client_head.json",
+  "title": "LightClientHead",
+  "description": "Light client head notification emitted by the state sync pipeline.",
+  "type": "object",
+  "required": ["height", "block_hash", "state_root", "proof_commitment"],
+  "properties": {
+    "height": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Block height of the head that the light client should follow."
+    },
+    "block_hash": {
+      "type": "string",
+      "description": "Canonical hexadecimal block hash for the advertised head."
+    },
+    "state_root": {
+      "type": "string",
+      "description": "State root commitment associated with the advertised head."
+    },
+    "proof_commitment": {
+      "type": "string",
+      "description": "Recursive proof commitment that enables verification of the head update."
+    }
+  },
+  "additionalProperties": false
+}

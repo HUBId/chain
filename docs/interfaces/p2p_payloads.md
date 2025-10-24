@@ -11,7 +11,9 @@ Gossip and state sync exchanges rely on structured payloads shared between nodes
 | Payload expectations | [`network_payload_expectations.jsonschema`](p2p/network_payload_expectations.jsonschema) | [`examples/network_payload_expectations.json`](p2p/examples/network_payload_expectations.json) |
 | Reconstruction request | [`network_reconstruction_request.jsonschema`](p2p/network_reconstruction_request.jsonschema) | [`examples/network_reconstruction_request.json`](p2p/examples/network_reconstruction_request.json) |
 | State sync chunk | [`network_state_sync_chunk.jsonschema`](p2p/network_state_sync_chunk.jsonschema) | [`examples/network_state_sync_chunk.json`](p2p/examples/network_state_sync_chunk.json) |
+| State sync chunk stream | [`state_sync_chunk_stream.jsonschema`](p2p/state_sync_chunk_stream.jsonschema) | [`examples/state_sync_chunk_stream.json`](p2p/examples/state_sync_chunk_stream.json) |
 | Light client update | [`network_light_client_update.jsonschema`](p2p/network_light_client_update.jsonschema) | [`examples/network_light_client_update.json`](p2p/examples/network_light_client_update.json) |
+| Light client head | [`network_light_client_head.jsonschema`](p2p/network_light_client_head.jsonschema) | [`examples/network_light_client_head.json`](p2p/examples/network_light_client_head.json) |
 | State sync plan | [`network_state_sync_plan.jsonschema`](p2p/network_state_sync_plan.jsonschema) | [`examples/network_state_sync_plan.json`](p2p/examples/network_state_sync_plan.json) |
 
 Referencing schemas use canonical IDs to enable downstream tooling to resolve dependencies without additional context.
