@@ -77,8 +77,10 @@ impl PreparedCluster {
     where
         F: FnMut(&mut NodeConfig, usize) -> Result<()>,
     {
-        if count < 3 {
-            return Err(anyhow!("test cluster requires at least three nodes"));
+        if count < 2 {
+            return Err(anyhow!(
+                "test cluster requires at least two nodes to initialise"
+            ));
         }
 
         let mut prepared = Vec::with_capacity(count);
