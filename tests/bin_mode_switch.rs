@@ -25,24 +25,28 @@ fn binary_mode_switch_smoke() -> Result<()> {
             needs_node: true,
             needs_wallet: false,
             telemetry: Some(TelemetryExpectation::Disabled),
+            config_source: "cli",
         },
         ModeSpec {
             name: "wallet",
             needs_node: false,
             needs_wallet: true,
             telemetry: None,
+            config_source: "none",
         },
         ModeSpec {
             name: "hybrid",
             needs_node: true,
             needs_wallet: true,
             telemetry: Some(TelemetryExpectation::WithEndpoint),
+            config_source: "cli",
         },
         ModeSpec {
             name: "validator",
             needs_node: true,
             needs_wallet: true,
             telemetry: Some(TelemetryExpectation::WithEndpoint),
+            config_source: "cli",
         },
     ];
 
@@ -58,6 +62,7 @@ struct ModeSpec {
     needs_node: bool,
     needs_wallet: bool,
     telemetry: Option<TelemetryExpectation>,
+    config_source: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -116,18 +121,40 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
 
     let mut logs = capture_child_output(&mut child);
 
-    wait_for_log(&mut logs, "node.telemetry.init")?;
+    let bootstrap_log = wait_for_log(&mut logs, "bootstrap configuration resolved")?;
+    assert!(
+        bootstrap_log.contains(&format!("mode=\"{}\"", spec.name)),
+        "bootstrap log missing mode: {}",
+        bootstrap_log
+    );
+    assert!(
+        bootstrap_log.contains(&format!("config_source=\"{}\"", spec.config_source)),
+        "bootstrap log missing config source: {}",
+        bootstrap_log
+    );
+
+    let telemetry_log = wait_for_log(&mut logs, "node.telemetry.init")?;
+    assert!(
+        telemetry_log.contains(&format!("mode=\"{}\"", spec.name)),
+        "telemetry log missing mode: {}",
+        telemetry_log
+    );
+    assert!(
+        telemetry_log.contains(&format!("config_source=\"{}\"", spec.config_source)),
+        "telemetry log missing config source: {}",
+        telemetry_log
+    );
 
     if let Some(expectation) = spec.telemetry {
-        wait_for_log(&mut logs, expectation.expected_log())?;
+        let _ = wait_for_log(&mut logs, expectation.expected_log())?;
     }
 
     if spec.needs_node {
-        wait_for_log(&mut logs, "node runtime started")?;
+        let _ = wait_for_log(&mut logs, "node runtime started")?;
     }
 
     if spec.needs_wallet {
-        wait_for_log(&mut logs, "wallet runtime initialised")?;
+        let _ = wait_for_log(&mut logs, "wallet runtime initialised")?;
     }
 
     // Drain remaining logs so the child process cannot block on a full pipe during shutdown.
@@ -155,6 +182,7 @@ fn binary_dry_run_smoke() -> Result<()> {
         needs_node: true,
         needs_wallet: false,
         telemetry: Some(TelemetryExpectation::Disabled),
+        config_source: "cli",
     };
 
     let context = ModeContext::prepare(&spec)?;
@@ -191,6 +219,30 @@ fn binary_dry_run_smoke() -> Result<()> {
     if !combined.contains("dry run completed") {
         return Err(anyhow!(
             "dry run logs did not contain confirmation marker: {combined}"
+        ));
+    }
+
+    if !combined.contains("bootstrap configuration resolved") {
+        return Err(anyhow!(
+            "dry run logs did not include bootstrap confirmation: {combined}"
+        ));
+    }
+
+    if !combined.contains("mode=\"node\"") {
+        return Err(anyhow!(
+            "dry run logs did not record the runtime mode: {combined}"
+        ));
+    }
+
+    if !combined.contains("config_source=\"cli\"") {
+        return Err(anyhow!(
+            "dry run logs did not record the config source: {combined}"
+        ));
+    }
+
+    if combined.contains("pipeline orchestrator started") {
+        return Err(anyhow!(
+            "dry run logs indicate pipeline orchestrator was started: {combined}"
         ));
     }
 
@@ -326,7 +378,7 @@ where
     });
 }
 
-fn wait_for_log(logs: &mut Receiver<String>, pattern: &str) -> Result<()> {
+fn wait_for_log(logs: &mut Receiver<String>, pattern: &str) -> Result<String> {
     let deadline = Instant::now() + INIT_TIMEOUT;
     let mut collected = Vec::new();
 
@@ -339,7 +391,7 @@ fn wait_for_log(logs: &mut Receiver<String>, pattern: &str) -> Result<()> {
             Ok(line) => {
                 collected.push(line.clone());
                 if line.contains(pattern) {
-                    return Ok(());
+                    return Ok(line);
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
