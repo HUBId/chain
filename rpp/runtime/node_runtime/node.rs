@@ -9,16 +9,16 @@ use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
-    GossipVoteValidator, HandshakePayload, LightClientSync, MetaTelemetry, NetworkError,
-    NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
-    NodeIdentity, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage,
-    PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent, RuntimeProofValidator,
-    SeenDigestRecord, TierLevel, VoteOutcome, decode_gossip_payload, decode_meta_payload,
-    validate_block_payload, validate_vote_payload,
+    GossipVoteValidator, HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry,
+    NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport,
+    NetworkPeerTelemetry, NodeIdentity, PeerstoreError, PersistentConsensusStorage,
+    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent,
+    RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome, decode_gossip_payload,
+    decode_meta_payload, validate_block_payload, validate_vote_payload,
 };
 use serde::{Deserialize, Deserializer, de};
 use serde_json::Value;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time;
 use tracing::{debug, info, info_span, instrument, warn};
 
@@ -709,12 +709,14 @@ impl NodeInner {
         let (event_tx, _) = broadcast::channel(256);
         let metrics = Arc::new(RwLock::new(NodeMetrics::default()));
         let mut pipelines = GossipPipelines::initialise(&config, command_tx.clone())?;
+        let light_client_heads = pipelines.light_client.subscribe_light_client_heads();
         pipelines.register_voter(identity.peer_id(), identity.tier());
         let handle = NodeHandle {
             commands: command_tx.clone(),
             metrics: metrics.clone(),
             events: event_tx.clone(),
             local_peer_id: identity.peer_id(),
+            light_client_heads,
         };
         let local_features = config
             .identity
@@ -1344,12 +1346,23 @@ pub struct NodeHandle {
     metrics: Arc<RwLock<NodeMetrics>>,
     events: broadcast::Sender<NodeEvent>,
     local_peer_id: PeerId,
+    light_client_heads: watch::Receiver<Option<LightClientHead>>,
 }
 
 impl NodeHandle {
     /// Returns a broadcast receiver for node events.
     pub fn subscribe(&self) -> broadcast::Receiver<NodeEvent> {
         self.events.subscribe()
+    }
+
+    /// Subscribes to verified light client head updates emitted by the gossip pipeline.
+    pub fn subscribe_light_client_heads(&self) -> watch::Receiver<Option<LightClientHead>> {
+        self.light_client_heads.clone()
+    }
+
+    /// Returns the latest verified light client head, if any have been observed.
+    pub fn latest_light_client_head(&self) -> Option<LightClientHead> {
+        self.light_client_heads.borrow().clone()
     }
 
     /// Updates the metrics that will be forwarded to telemetry.

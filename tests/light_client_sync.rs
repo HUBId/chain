@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rpp_chain::config::NodeConfig;
+use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::{ReconstructionEngine, RuntimeRecursiveProofVerifier};
 use rpp_p2p::{
     GossipTopic, LightClientSync, NetworkLightClientUpdate, NetworkStateSyncChunk,
-    NetworkStateSyncPlan, PipelineError,
+    NetworkStateSyncPlan, PipelineError, SnapshotStore,
 };
 use serde::Serialize;
 use tempfile::TempDir;
@@ -65,6 +66,33 @@ async fn light_client_stream_verifies_state_sync() {
 
     let verified = light_client.verify().expect("verify snapshot");
     assert!(verified, "snapshot verification should succeed");
+}
+
+#[tokio::test]
+async fn state_sync_chunk_index_errors_surface_chain_error() {
+    let fixture = StateSyncFixture::new();
+    let mut store = SnapshotStore::new(8);
+    let root = store.insert(vec![0u8; 32]);
+
+    let stream = fixture
+        .handle
+        .stream_state_sync_chunks(&store, &root)
+        .expect("stream snapshot chunks");
+    assert_eq!(stream.total(), 4, "chunk stream computes expected length");
+
+    let error = fixture
+        .handle
+        .state_sync_chunk_by_index(&store, &root, 10)
+        .expect_err("invalid chunk index should surface error");
+    match error {
+        ChainError::Config(message) => {
+            assert!(
+                message.contains("chunk 10"),
+                "unexpected error message: {message}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
 }
 
 #[tokio::test]

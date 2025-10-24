@@ -26,7 +26,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
-use tokio::sync::{Mutex, Notify, broadcast, mpsc};
+use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::Span;
@@ -69,6 +69,10 @@ use crate::runtime::node_runtime::{
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
 };
+use crate::runtime::sync::{
+    state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
+    stream_state_sync_chunks as runtime_stream_state_sync_chunks,
+};
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -89,11 +93,13 @@ use crate::vrf::{
 use crate::zk::rpp_adapter::compute_public_digest;
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
+use blake3::Hash;
 use libp2p::PeerId;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    AllowlistedPeer, GossipTopic, HandshakePayload, NetworkLightClientUpdate,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, SnapshotChunk, SnapshotChunkStream,
+    SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
@@ -1935,6 +1941,33 @@ impl NodeHandle {
     ) -> ChainResult<Vec<Block>> {
         self.inner.execute_reconstruction_plan(plan, provider)
     }
+
+    pub fn stream_state_sync_chunks(
+        &self,
+        store: &SnapshotStore,
+        root: &Hash,
+    ) -> ChainResult<SnapshotChunkStream> {
+        self.inner.stream_state_sync_chunks(store, root)
+    }
+
+    pub fn state_sync_chunk_by_index(
+        &self,
+        store: &SnapshotStore,
+        root: &Hash,
+        index: u64,
+    ) -> ChainResult<SnapshotChunk> {
+        self.inner.state_sync_chunk_by_index(store, root, index)
+    }
+
+    pub fn subscribe_light_client_heads(
+        &self,
+    ) -> ChainResult<watch::Receiver<Option<LightClientHead>>> {
+        self.inner.subscribe_light_client_heads()
+    }
+
+    pub fn latest_light_client_head(&self) -> ChainResult<Option<LightClientHead>> {
+        self.inner.latest_light_client_head()
+    }
 }
 
 impl NodeInner {
@@ -2739,6 +2772,70 @@ impl NodeInner {
     ) -> ChainResult<NetworkStateSyncChunk> {
         let plan = self.state_sync_plan(chunk_size)?;
         plan.chunk_message_for(start_height)
+    }
+
+    fn stream_state_sync_chunks(
+        &self,
+        store: &SnapshotStore,
+        root: &Hash,
+    ) -> ChainResult<SnapshotChunkStream> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        runtime_stream_state_sync_chunks(store, root)
+            .map_err(|err| ChainError::Config(format!("failed to stream state sync chunks: {err}")))
+    }
+
+    fn state_sync_chunk_by_index(
+        &self,
+        store: &SnapshotStore,
+        root: &Hash,
+        index: u64,
+    ) -> ChainResult<SnapshotChunk> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        runtime_state_sync_chunk_by_index(store, root, index).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to fetch state sync chunk {index} for snapshot {root:?}: {err}"
+            ))
+        })
+    }
+
+    /// Returns a clone of the light client head subscription channel for external observers.
+    ///
+    /// The returned [`watch::Receiver`] is independent from the node's internal runtime handle,
+    /// allowing callers to await updates without holding any locks on [`NodeInner`]. The
+    /// underlying channel is multi-consumer, so each subscriber should clone the receiver before
+    /// spawning tasks that await notifications.
+    fn subscribe_light_client_heads(
+        &self,
+    ) -> ChainResult<watch::Receiver<Option<LightClientHead>>> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let handle = self
+            .p2p_handle()
+            .ok_or_else(|| ChainError::Config("p2p runtime not initialised".into()))?;
+        Ok(handle.subscribe_light_client_heads())
+    }
+
+    fn latest_light_client_head(&self) -> ChainResult<Option<LightClientHead>> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+        let handle = self
+            .p2p_handle()
+            .ok_or_else(|| ChainError::Config("p2p runtime not initialised".into()))?;
+        Ok(handle.latest_light_client_head())
     }
 
     fn verify_proof_chain(&self) -> ChainResult<()> {
