@@ -70,6 +70,17 @@ fake_proof_penalty = 50000000
 # Penalty for missing mandatory participation windows (absolute amount).
 inactivity_penalty = 25000000
 
+[rewards.treasury_accounts]
+# Dedicated accounts funding validator rewards, witness incentives and fee recycling.
+validator = "treasury-validator"
+witness = "treasury-witness"
+fee_pool = "treasury-fees"
+
+[rewards.witness_pool_weights]
+# Share of witness payouts covered by the treasury versus collected transaction fees.
+treasury = 0.7
+fees = 0.3
+
 [proof]
 # Maximum number of proofs bundled before dispatching to verifiers.
 proof_batch_size = 64

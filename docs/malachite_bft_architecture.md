@@ -16,7 +16,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 ## Ist-Zustand der Codebasis (Kurzfassung)
 * **Reputation & Stake**: Reputation verwaltet Score **und** Tier-Level; Timetoke-Balances werden im Ledger gepflegt und bei Reputation-Audits berücksichtigt.
 * **Validator-/Proposer-Selektion**: VRF-Auswertung nutzt Timetoke-Daten (`derive_tier_seed`) und filtert Kandidaten mit Tier < 3 aus; Leader-Selektion priorisiert Tier → Timetoke → VRF.
-* **Rewards**: `Ledger::distribute_consensus_rewards` verteilt Basis-Rewards gleichmäßig, addiert Gebühren und vergibt einen Leader-Bonus von 20 %.
+* **Rewards**: `Ledger::distribute_consensus_rewards` verteilt Basis-Rewards gleichmäßig, addiert Gebühren und vergibt einen Leader-Bonus von 20 %. Die Auszahlung belastet die in `rewards.treasury_accounts` hinterlegten Treasury-Konten; fehlen dort Mittel, greift der Ledger automatisch auf den Gebühren-Topf zurück und verbucht verbleibende Fehlbeträge.
 * **Proofs**: STWO-Workflow prüft Konsens-, Uptime- und Modul-Witnesses; VRF- und Leader-Daten werden im Blockheader persistiert und während der Finalisierung validiert.
 * **Anti-Abuse**: Allgemeines Slashing vorhanden, jedoch ohne blueprint-spezifische Checks.
 * **Netzwerk**: BFT-Nachrichten sind nicht entlang der geforderten Kanalstruktur organisiert.
@@ -30,7 +30,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 | VRF & Validator-Set | VRF Input = (sk, epoch_nonce, timetoke) + Threshold aus Timetoke | VRF-Seed kombiniert Adresse & Timetoke; Validator-Gewichte berücksichtigen Reputation + Timetoke | **TODO**: Threshold-Parametrisierung & Monitoring der Erfolgsquoten dokumentieren |
 | Leader-Selektion | Priorität: Tier → Timetoke → VRF | `select_leader` sortiert nach Tier, Timetoke, VRF-Ausgabe | ✅ |
 | Witness-Rolle | Externe Verifikation | Tier 1–2 werden als Observer/Witness geführt, Konsens-Witnesses werden erstellt, bepreist und über die Incentive-Pipeline geprüft ([tests/witness_incentives.rs](../tests/witness_incentives.rs)) | **TODO**: Dedizierte Witness-Kanäle (QoS/Topic-Isolation) und Treasury-Anbindung der Witness-Rewards finalisieren |
-| Rewards | Gleichmäßig + Leader-Bonus | Konsens-Rewards teilen Basis-Reward + Gebühren auf Validatoren mit 20 % Leader-Bonus | **TODO**: Konfigurierbare Pools & Witness-Beteiligung einführen |
+| Rewards | Gleichmäßig + Leader-Bonus | Konsens-Rewards teilen Basis-Reward + Gebühren auf Validatoren mit 20 % Leader-Bonus. Treasury- und Gebühren-Pools sind konfigurierbar, Witness-Payouts folgen den in `rewards.witness_pool_weights` definierten Gewichten. | Witness-Pool-Gewichte weiter testen |
 | Proofs | Nachweis VRF/Leader/Quorum in Block-Proof | Nur Signatur-Check | Proof-Komponenten erweitern |
 | Anti-Abuse | Double-Sign, Fake-Proof, Zensur, Inaktivität | Evidence-Pool erzwingt sofortiges Slashing bei Double-Signs und blockiert Reorgs ([tests/reorg_regressions.rs](../tests/reorg_regressions.rs)) | **TODO**: Censorship-/Inaktivitäts-Heuristiken & P2P Admission-Kontrollen ausrollen |
 | Netzwerk | Dedizierte Kanäle | Mischverkehr | Messaging-Layer modularisieren |

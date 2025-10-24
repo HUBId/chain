@@ -13,6 +13,7 @@ use rpp_p2p::TierLevel;
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
 
+use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
 use crate::crypto::{
     DynVrfKeyStore, FilesystemKeystoreConfig, FilesystemVrfKeyStore, HsmKeystoreConfig,
     VaultKeystoreConfig, VaultVrfKeyStore, VrfKeyIdentifier, VrfKeypair,
@@ -428,6 +429,8 @@ pub struct MalachiteRewardsConfig {
     pub double_sign_penalty: u64,
     pub fake_proof_penalty: u64,
     pub inactivity_penalty: u64,
+    pub treasury_accounts: TreasuryAccountsConfig,
+    pub witness_pool_weights: WitnessPoolWeightsConfig,
 }
 
 impl MalachiteRewardsConfig {
@@ -462,7 +465,24 @@ impl MalachiteRewardsConfig {
                 "malachite rewards.inactivity_penalty must be greater than 0".into(),
             ));
         }
+        self.treasury_accounts.validate()?;
+        self.witness_pool_weights.validate()?;
         Ok(())
+    }
+
+    pub fn treasury_accounts(&self) -> TreasuryAccounts {
+        TreasuryAccounts::new(
+            self.treasury_accounts.validator.clone(),
+            self.treasury_accounts.witness.clone(),
+            self.treasury_accounts.fee_pool.clone(),
+        )
+    }
+
+    pub fn witness_pool_weights(&self) -> WitnessPoolWeights {
+        WitnessPoolWeights::new(
+            self.witness_pool_weights.treasury,
+            self.witness_pool_weights.fees,
+        )
     }
 }
 
@@ -475,6 +495,78 @@ impl Default for MalachiteRewardsConfig {
             double_sign_penalty: 50_000_000,
             fake_proof_penalty: 50_000_000,
             inactivity_penalty: 25_000_000,
+            treasury_accounts: TreasuryAccountsConfig::default(),
+            witness_pool_weights: WitnessPoolWeightsConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TreasuryAccountsConfig {
+    pub validator: String,
+    pub witness: String,
+    pub fee_pool: String,
+}
+
+impl TreasuryAccountsConfig {
+    fn validate(&self) -> ChainResult<()> {
+        for (label, value) in [
+            ("validator", &self.validator),
+            ("witness", &self.witness),
+            ("fee_pool", &self.fee_pool),
+        ] {
+            if value.trim().is_empty() {
+                return Err(ChainError::Config(format!(
+                    "malachite rewards.treasury_accounts.{label} must not be empty"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for TreasuryAccountsConfig {
+    fn default() -> Self {
+        Self {
+            validator: "treasury-validator".into(),
+            witness: "treasury-witness".into(),
+            fee_pool: "treasury-fees".into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WitnessPoolWeightsConfig {
+    pub treasury: f64,
+    pub fees: f64,
+}
+
+impl WitnessPoolWeightsConfig {
+    fn validate(&self) -> ChainResult<()> {
+        for (label, value) in [("treasury", self.treasury), ("fees", self.fees)] {
+            if value < 0.0 {
+                return Err(ChainError::Config(format!(
+                    "malachite rewards.witness_pool_weights.{label} must be non-negative"
+                )));
+            }
+        }
+        let total = self.treasury + self.fees;
+        if total <= 0.0 {
+            return Err(ChainError::Config(
+                "malachite rewards.witness_pool_weights must define positive weights".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for WitnessPoolWeightsConfig {
+    fn default() -> Self {
+        Self {
+            treasury: 0.7,
+            fees: 0.3,
         }
     }
 }

@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use libp2p::PeerId;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::bft_loop::ConsensusMessage;
@@ -41,6 +42,8 @@ pub struct ConsensusConfig {
     pub witness_reward: u64,
     pub false_proof_penalty: u64,
     pub censorship_penalty: u64,
+    pub treasury_accounts: TreasuryAccounts,
+    pub witness_pool_weights: WitnessPoolWeights,
 }
 
 impl ConsensusConfig {
@@ -58,6 +61,8 @@ impl ConsensusConfig {
             witness_reward: base_reward.saturating_div(2),
             false_proof_penalty: base_reward,
             censorship_penalty: base_reward.saturating_div(2).max(1),
+            treasury_accounts: TreasuryAccounts::default(),
+            witness_pool_weights: WitnessPoolWeights::default(),
         }
     }
 
@@ -71,6 +76,105 @@ impl ConsensusConfig {
         self.false_proof_penalty = false_proof_penalty;
         self.censorship_penalty = censorship_penalty;
         self
+    }
+
+    pub fn with_treasury_accounts(mut self, accounts: TreasuryAccounts) -> Self {
+        self.treasury_accounts = accounts;
+        self
+    }
+
+    pub fn with_witness_pool_weights(mut self, weights: WitnessPoolWeights) -> Self {
+        self.witness_pool_weights = weights;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TreasuryAccounts {
+    pub validator: String,
+    pub witness: String,
+    pub fee_pool: String,
+}
+
+impl TreasuryAccounts {
+    pub fn new(validator: String, witness: String, fee_pool: String) -> Self {
+        Self {
+            validator,
+            witness,
+            fee_pool,
+        }
+    }
+
+    pub fn validator_account(&self) -> &str {
+        self.validator.as_str()
+    }
+
+    pub fn witness_account(&self) -> &str {
+        self.witness.as_str()
+    }
+
+    pub fn fee_account(&self) -> &str {
+        self.fee_pool.as_str()
+    }
+}
+
+impl Default for TreasuryAccounts {
+    fn default() -> Self {
+        Self {
+            validator: String::new(),
+            witness: String::new(),
+            fee_pool: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct WitnessPoolWeights {
+    pub treasury: f64,
+    pub fees: f64,
+}
+
+impl WitnessPoolWeights {
+    pub fn new(treasury: f64, fees: f64) -> Self {
+        Self { treasury, fees }
+    }
+
+    pub fn total(&self) -> f64 {
+        self.treasury + self.fees
+    }
+
+    pub fn normalized(&self) -> (f64, f64) {
+        let total = self.total();
+        if total <= f64::EPSILON {
+            return (0.0, 0.0);
+        }
+        (self.treasury / total, self.fees / total)
+    }
+
+    pub fn split(&self, amount: u64) -> (u64, u64) {
+        if amount == 0 {
+            return (0, 0);
+        }
+        let (treasury_ratio, fee_ratio) = self.normalized();
+        if treasury_ratio <= f64::EPSILON {
+            return (0, amount);
+        }
+        if fee_ratio <= f64::EPSILON {
+            return (amount, 0);
+        }
+        let treasury_share = ((amount as f64) * treasury_ratio).round() as u64;
+        let treasury_share = treasury_share.min(amount);
+        let fees_share = amount.saturating_sub(treasury_share);
+        (treasury_share, fees_share)
+    }
+}
+
+impl Default for WitnessPoolWeights {
+    fn default() -> Self {
+        Self {
+            treasury: 1.0,
+            fees: 0.0,
+        }
     }
 }
 
