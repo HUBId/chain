@@ -9,19 +9,21 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use opentelemetry::global;
 use opentelemetry::KeyValue;
+#[cfg(test)]
+use opentelemetry::Value;
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
-use opentelemetry_sdk::Resource;
 use parking_lot::RwLock;
 use tokio::task::{JoinError, JoinHandle};
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tracing::{error, info, info_span, warn};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use rpp_chain::api::ApiContext;
 use rpp_chain::config::{NodeConfig, WalletConfig};
@@ -221,38 +223,47 @@ pub struct BootstrapOptions {
 
 pub async fn run(mode: RuntimeMode, options: RuntimeOptions) -> BootstrapResult<()> {
     let bootstrap_mode = mode;
+    let dry_run = options.dry_run;
     let bootstrap_options = options.into_bootstrap_options(mode);
-    let handle = tokio::spawn(async move { bootstrap(bootstrap_mode, bootstrap_options).await });
 
-    match handle.await {
-        Ok(result) => result,
-        Err(join_err) => {
-            if join_err.is_panic() {
-                let message = panic_payload_to_string(join_err.into_panic());
-                Err(BootstrapError::runtime(anyhow!(
-                    "runtime panicked: {message}"
-                )))
-            } else {
-                Err(BootstrapError::runtime(anyhow!(
-                    "runtime task failed: {join_err}"
-                )))
+    if dry_run {
+        bootstrap(bootstrap_mode, bootstrap_options).await
+    } else {
+        let handle =
+            tokio::spawn(async move { bootstrap(bootstrap_mode, bootstrap_options).await });
+
+        match handle.await {
+            Ok(result) => result,
+            Err(join_err) => {
+                if join_err.is_panic() {
+                    let message = panic_payload_to_string(join_err.into_panic());
+                    Err(BootstrapError::runtime(anyhow!(
+                        "runtime panicked: {message}"
+                    )))
+                } else {
+                    Err(BootstrapError::runtime(anyhow!(
+                        "runtime task failed: {join_err}"
+                    )))
+                }
             }
         }
     }
 }
 
 pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> BootstrapResult<()> {
-    if let Ok(request) = env::var("RPP_NODE_TEST_FAILURE_MODE") {
-        match request.as_str() {
-            "startup" => {
-                return Err(BootstrapError::startup(anyhow!(
-                    "simulated pipeline startup failure"
-                )));
+    if !options.dry_run {
+        if let Ok(request) = env::var("RPP_NODE_TEST_FAILURE_MODE") {
+            match request.as_str() {
+                "startup" => {
+                    return Err(BootstrapError::startup(anyhow!(
+                        "simulated pipeline startup failure"
+                    )));
+                }
+                "panic" => {
+                    panic!("simulated panic requested via RPP_NODE_TEST_FAILURE_MODE");
+                }
+                _ => {}
             }
-            "panic" => {
-                panic!("simulated panic requested via RPP_NODE_TEST_FAILURE_MODE");
-            }
-            _ => {}
         }
     }
 
@@ -1075,6 +1086,10 @@ fn init_tracing(
 
         let telemetry_span = info_span!(
             "node.telemetry.init",
+            service.name = "rpp",
+            service.component = "rpp-node",
+            rpp.mode = mode.as_str(),
+            rpp.config_source = config_source,
             otlp_enabled = false,
             dry_run = true,
             mode = mode.as_str(),
@@ -1083,6 +1098,10 @@ fn init_tracing(
         let _span_guard = telemetry_span.enter();
         info!(
             target = "telemetry",
+            service.name = "rpp",
+            service.component = "rpp-node",
+            rpp.mode = mode.as_str(),
+            rpp.config_source = config_source,
             otlp_enabled = false,
             dry_run = true,
             mode = mode.as_str(),
@@ -1106,6 +1125,10 @@ fn init_tracing(
 
             let telemetry_span = info_span!(
                 "node.telemetry.init",
+                service.name = "rpp",
+                service.component = "rpp-node",
+                rpp.mode = mode.as_str(),
+                rpp.config_source = config_source,
                 otlp_enabled = true,
                 otlp_endpoint = endpoint.as_str(),
                 dry_run = false,
@@ -1115,6 +1138,10 @@ fn init_tracing(
             let _span_guard = telemetry_span.enter();
             info!(
                 target = "telemetry",
+                service.name = "rpp",
+                service.component = "rpp-node",
+                rpp.mode = mode.as_str(),
+                rpp.config_source = config_source,
                 otlp_enabled = true,
                 otlp_endpoint = endpoint,
                 dry_run = false,
@@ -1132,6 +1159,10 @@ fn init_tracing(
 
             let telemetry_span = info_span!(
                 "node.telemetry.init",
+                service.name = "rpp",
+                service.component = "rpp-node",
+                rpp.mode = mode.as_str(),
+                rpp.config_source = config_source,
                 otlp_enabled = false,
                 dry_run = false,
                 mode = mode.as_str(),
@@ -1140,6 +1171,10 @@ fn init_tracing(
             let _span_guard = telemetry_span.enter();
             info!(
                 target = "telemetry",
+                service.name = "rpp",
+                service.component = "rpp-node",
+                rpp.mode = mode.as_str(),
+                rpp.config_source = config_source,
                 otlp_enabled = false,
                 dry_run = false,
                 mode = mode.as_str(),
@@ -1202,6 +1237,31 @@ fn build_otlp_layer(
         .with_max_export_batch_size(512)
         .with_max_export_timeout(settings.timeout);
 
+    let resource = telemetry_resource(config, metadata, mode, config_source);
+
+    let provider = trace::TracerProvider::builder()
+        .with_config(trace::Config::default().with_resource(resource))
+        .with_batch_config(batch_config)
+        .with_batch_exporter(exporter, Tokio)
+        .build();
+
+    let tracer = provider.tracer("rpp-node", Some(env!("CARGO_PKG_VERSION")));
+    global::set_tracer_provider(provider);
+
+    let layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    Ok(Some(OtlpLayer {
+        layer,
+        guard: OtelGuard,
+        endpoint: settings.endpoint,
+    }))
+}
+
+fn telemetry_resource(
+    config: &NodeConfig,
+    metadata: Option<&ConfigMetadata>,
+    mode: RuntimeMode,
+    config_source: &str,
+) -> Resource {
     let mut attributes = vec![
         KeyValue::new("service.name", "rpp"),
         KeyValue::new("service.component", "rpp-node"),
@@ -1234,23 +1294,7 @@ fn build_otlp_layer(
         ));
     }
 
-    let resource = Resource::new(attributes);
-
-    let provider = trace::TracerProvider::builder()
-        .with_config(trace::Config::default().with_resource(resource))
-        .with_batch_config(batch_config)
-        .with_batch_exporter(exporter, Tokio)
-        .build();
-
-    let tracer = provider.tracer("rpp-node", Some(env!("CARGO_PKG_VERSION")));
-    global::set_tracer_provider(provider);
-
-    let layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    Ok(Some(OtlpLayer {
-        layer,
-        guard: OtelGuard,
-        endpoint: settings.endpoint,
-    }))
+    Resource::new(attributes)
 }
 
 fn otlp_settings(config: &NodeConfig) -> Result<Option<OtlpSettings>> {
@@ -1308,6 +1352,7 @@ fn normalize_option(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
 
     static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1404,5 +1449,52 @@ mod tests {
 
         assert_eq!(resolved.path, PathBuf::from("config/default.toml"));
         assert_eq!(resolved.source, ConfigSource::Default);
+    }
+
+    #[test]
+    fn telemetry_resource_includes_service_attributes() {
+        let config = NodeConfig::default();
+        let resource = telemetry_resource(&config, None, RuntimeMode::Node, "default");
+        let attributes: HashMap<_, _> = resource
+            .iter()
+            .map(|kv| (kv.key.as_str().to_string(), kv.value.clone()))
+            .collect();
+
+        fn value_to_string(value: &Value) -> Option<String> {
+            match value {
+                Value::String(value) => Some(value.to_string()),
+                Value::Bool(value) => Some(value.to_string()),
+                Value::F64(value) => Some(value.to_string()),
+                Value::I64(value) => Some(value.to_string()),
+                Value::Bytes(value) => Some(format!("{:?}", value)),
+                Value::Array(values) => Some(format!("{:?}", values)),
+                Value::Map(values) => Some(format!("{:?}", values)),
+            }
+        }
+
+        assert_eq!(
+            attributes
+                .get("service.name")
+                .and_then(|value| value_to_string(value)),
+            Some("rpp".to_string())
+        );
+        assert_eq!(
+            attributes
+                .get("service.component")
+                .and_then(|value| value_to_string(value)),
+            Some("rpp-node".to_string())
+        );
+        assert_eq!(
+            attributes
+                .get("rpp.mode")
+                .and_then(|value| value_to_string(value)),
+            Some("node".to_string())
+        );
+        assert_eq!(
+            attributes
+                .get("rpp.config_source")
+                .and_then(|value| value_to_string(value)),
+            Some("default".to_string())
+        );
     }
 }
