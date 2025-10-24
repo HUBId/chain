@@ -24,6 +24,10 @@ All notable changes to this project will be documented in this file.
 - *(metrics-check)* Re-use previous comment instead of spamming new ones ([#1232](https://github.com/ava-labs/firewood/pull/1232))
 - Nuke grpc-testtool ([#1220](https://github.com/ava-labs/firewood/pull/1220))
 
+### 🧪 Tests
+
+- Add regression coverage for pipeline error propagation across node restarts and UI alerts.
+
 ## [0.0.11] - 2025-08-20
 
 ### 🚀 Features
