@@ -1,0 +1,48 @@
+name: sim-large
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rpp/sim/**'
+      - 'scenarios/**'
+      - 'scripts/check_sim_large.py'
+      - 'docs/testing_strategy.md'
+      - 'docs/simulation_playbook.md'
+      - '.github/workflows/sim_large.yml'
+  pull_request:
+    paths:
+      - 'rpp/sim/**'
+      - 'scenarios/**'
+      - 'scripts/check_sim_large.py'
+      - 'docs/testing_strategy.md'
+      - 'docs/simulation_playbook.md'
+      - '.github/workflows/sim_large.yml'
+
+jobs:
+  run-simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+
+      - name: Run large cluster simulation
+        run: cargo run --locked --package rpp-sim -- --scenario scenarios/large_cluster.toml
+
+      - name: Verify simulation KPIs
+        run: python3 scripts/check_sim_large.py target/sim-large/report.json
+
+      - name: Upload simulation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-large-report
+          path: target/sim-large
+          if-no-files-found: error

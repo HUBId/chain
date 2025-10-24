@@ -1,0 +1,89 @@
+[sim]
+seed = 240706
+duration_ms = 90000
+mode = "compare"
+
+[topology]
+type = "small_world"
+n = 120
+k = 8
+rewire_p = 0.22
+
+[cluster]
+validators = 20
+wallets = 100
+
+[regions]
+assignments = [
+  # validators 0-19
+  "validator-core", "validator-core", "validator-core", "validator-core", "validator-core",
+  "validator-core", "validator-core", "validator-core", "validator-core", "validator-core",
+  "validator-core", "validator-core", "validator-core", "validator-core", "validator-core",
+  "validator-core", "validator-core", "validator-core", "validator-core", "validator-core",
+  # wallets eu 20-44
+  "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu",
+  "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu",
+  "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu",
+  "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu",
+  "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu", "wallet-eu",
+  # wallets us 45-69
+  "wallet-us", "wallet-us", "wallet-us", "wallet-us", "wallet-us",
+  "wallet-us", "wallet-us", "wallet-us", "wallet-us", "wallet-us",
+  "wallet-us", "wallet-us", "wallet-us", "wallet-us", "wallet-us",
+  "wallet-us", "wallet-us", "wallet-us", "wallet-us", "wallet-us",
+  "wallet-us", "wallet-us", "wallet-us", "wallet-us", "wallet-us",
+  # wallets apac 70-94
+  "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac",
+  "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac",
+  "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac",
+  "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac",
+  "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac", "wallet-apac",
+  # wallets latam 95-119
+  "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam",
+  "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam",
+  "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam",
+  "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam",
+  "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam", "wallet-latam",
+]
+
+[links]
+validator-core-validator-core = { delay_ms = 8, jitter_ms = 2, loss = 0.0005 }
+validator-core-wallet-eu = { delay_ms = 25, jitter_ms = 5, loss = 0.0015 }
+validator-core-wallet-us = { delay_ms = 28, jitter_ms = 6, loss = 0.0015 }
+validator-core-wallet-apac = { delay_ms = 180, jitter_ms = 24, loss = 0.0025 }
+validator-core-wallet-latam = { delay_ms = 140, jitter_ms = 18, loss = 0.0020 }
+wallet-eu-wallet-us = { delay_ms = 80, jitter_ms = 12, loss = 0.0020 }
+wallet-eu-wallet-apac = { delay_ms = 190, jitter_ms = 30, loss = 0.0030 }
+wallet-eu-wallet-latam = { delay_ms = 110, jitter_ms = 16, loss = 0.0025 }
+wallet-us-wallet-apac = { delay_ms = 165, jitter_ms = 28, loss = 0.0030 }
+wallet-us-wallet-latam = { delay_ms = 90, jitter_ms = 14, loss = 0.0022 }
+wallet-apac-wallet-latam = { delay_ms = 210, jitter_ms = 35, loss = 0.0035 }
+intra = { delay_ms = 12, jitter_ms = 3, loss = 0.0010 }
+default = { delay_ms = 60, jitter_ms = 8, loss = 0.0025 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 0.8 }
+
+[[traffic.tx.phases]]
+name = "warmup"
+duration_ms = 15000
+model = "poisson"
+lambda_per_sec = 18.0
+
+[[traffic.tx.phases]]
+name = "peak"
+duration_ms = 45000
+model = "on_off_bursty"
+on_lambda_per_sec = 32.0
+on_duration_ms = 2500
+off_duration_ms = 800
+
+[[traffic.tx.phases]]
+name = "cooldown"
+duration_ms = 30000
+model = "poisson"
+lambda_per_sec = 12.0
+
+[metrics]
+json = "target/sim-large/report.json"
+csv = "target/sim-large/report.csv"
