@@ -28,8 +28,10 @@ use crate::node::NetworkIdentityProfile;
 use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::rpp::GlobalStateCommitments;
 use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
+use crate::runtime::vrf_gossip::{gossip_to_submission, verify_submission, GossipVrfSubmission};
 use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
 use crate::types::{Address, Block};
+use crate::vrf::VrfSubmission;
 use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
@@ -40,6 +42,7 @@ pub enum ProofReputationCode {
     InvalidProof,
     DuplicateProof,
     PipelineFailure,
+    InvalidVrfSubmission,
 }
 
 #[derive(Debug)]
@@ -343,6 +346,10 @@ pub enum NodeEvent {
         peer: PeerId,
         vote: SignedBftVote,
         reason: String,
+    },
+    VrfSubmission {
+        peer: PeerId,
+        submission: VrfSubmission,
     },
     PeerConnected {
         peer: PeerId,
@@ -678,6 +685,47 @@ impl GossipPipelines {
             },
             Err(GossipPayloadError::Decode(reason)) => MetaIngestResult::DecodeFailed(reason),
             Err(GossipPayloadError::Validation(reason)) => MetaIngestResult::DecodeFailed(reason),
+        }
+    }
+
+    fn handle_vrf_proofs(&mut self, peer: PeerId, data: Vec<u8>) -> Option<VrfSubmission> {
+        let payload = match serde_json::from_slice::<GossipVrfSubmission>(&data) {
+            Ok(payload) => payload,
+            Err(err) => {
+                warn!(
+                    target: "node",
+                    %peer,
+                    error = %err,
+                    "failed to decode VRF gossip payload"
+                );
+                self.enqueue_proof_penalty(peer, ProofReputationCode::InvalidVrfSubmission);
+                return None;
+            }
+        };
+        let submission = match gossip_to_submission(payload) {
+            Ok(submission) => submission,
+            Err(err) => {
+                warn!(
+                    target: "node",
+                    %peer,
+                    error = %err,
+                    "invalid VRF gossip payload"
+                );
+                self.enqueue_proof_penalty(peer, ProofReputationCode::InvalidVrfSubmission);
+                return None;
+            }
+        };
+        if let Err(err) = verify_submission(&submission) {
+            warn!(
+                target: "node",
+                %peer,
+                error = %err,
+                "VRF submission verification failed"
+            );
+            self.enqueue_proof_penalty(peer, ProofReputationCode::InvalidVrfSubmission);
+            None
+        } else {
+            Some(submission)
         }
     }
 }
@@ -1145,6 +1193,13 @@ impl NodeInner {
                                 }
                             }
                         }
+                        GossipTopic::VrfProofs => {
+                            if let Some(submission) =
+                                self.pipelines.handle_vrf_proofs(peer.clone(), data.clone())
+                            {
+                                let _ = self.events.send(NodeEvent::VrfSubmission { peer, submission });
+                            }
+                        }
                         GossipTopic::Proofs | GossipTopic::WitnessProofs => {
                             let proof_span = info_span!(
                                 "node.runtime.proof.pipeline",
@@ -1297,6 +1352,10 @@ impl NodeInner {
             ProofReputationCode::PipelineFailure => ReputationEvent::ManualPenalty {
                 amount: 0.5,
                 reason: Cow::Borrowed("proof_pipeline_error"),
+            },
+            ProofReputationCode::InvalidVrfSubmission => ReputationEvent::ManualPenalty {
+                amount: 1.0,
+                reason: Cow::Borrowed("invalid_vrf_submission"),
             },
         };
         let label = event.label().to_string();

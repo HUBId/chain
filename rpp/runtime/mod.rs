@@ -121,6 +121,7 @@ impl RuntimeProfile {
 pub mod node_runtime;
 pub mod supervisor;
 pub mod telemetry;
+pub mod vrf_gossip;
 
 #[cfg(test)]
 mod tests {
