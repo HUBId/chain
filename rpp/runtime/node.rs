@@ -840,6 +840,10 @@ impl Node {
             let mut ledger = Ledger::load(accounts.clone(), utxo_snapshot, config.epoch_length);
             ledger.set_reputation_params(reputation_params.clone());
             ledger.set_timetoke_params(config.timetoke_params());
+            ledger.configure_reward_pools(
+                config.malachite.rewards.treasury_accounts(),
+                config.malachite.rewards.witness_pool_weights(),
+            );
             let module_witnesses = ledger.drain_module_witnesses();
             let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
             let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
@@ -944,6 +948,10 @@ impl Node {
         let mut ledger = Ledger::load(accounts, utxo_snapshot, config.epoch_length);
         ledger.set_reputation_params(reputation_params);
         ledger.set_timetoke_params(config.timetoke_params());
+        ledger.configure_reward_pools(
+            config.malachite.rewards.treasury_accounts(),
+            config.malachite.rewards.witness_pool_weights(),
+        );
 
         let node_pk_hex = hex::encode(keypair.public.to_bytes());
         if ledger.get_account(&address).is_none() {

@@ -18,7 +18,7 @@ use super::messages::{
 };
 #[cfg(feature = "prover-stwo")]
 use super::messages::{Commit, Signature};
-use super::state::{ConsensusConfig, GenesisConfig};
+use super::state::{ConsensusConfig, GenesisConfig, TreasuryAccounts, WitnessPoolWeights};
 
 use super::validator::{
     select_leader, select_validators, StakeInfo, VRFOutput, Validator, ValidatorLedgerEntry,
@@ -603,6 +603,27 @@ fn detects_conflicting_prevotes_triggers_slash() {
         conflicting.timetoken_balance - 1
     );
     assert_eq!(punished.reputation_tier, conflicting.reputation_tier - 1);
+}
+
+#[test]
+fn consensus_config_accepts_reward_pools() {
+    let accounts = TreasuryAccounts::new(
+        "validator-treasury".into(),
+        "witness-treasury".into(),
+        "fee-pool".into(),
+    );
+    let weights = WitnessPoolWeights::new(0.25, 0.75);
+    let config = ConsensusConfig::new(40, 40, 10, 0.1)
+        .with_treasury_accounts(accounts.clone())
+        .with_witness_pool_weights(weights);
+    assert_eq!(
+        config.treasury_accounts.validator_account(),
+        "validator-treasury"
+    );
+    let (treasury_share, fee_share) = config.witness_pool_weights.split(200);
+    assert_eq!(treasury_share + fee_share, 200);
+    assert!(treasury_share > 0);
+    assert!(fee_share > treasury_share);
 }
 
 #[test]

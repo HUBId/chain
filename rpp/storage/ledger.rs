@@ -1,10 +1,11 @@
-use std::collections::{hash_map::Entry, BTreeSet, HashMap, HashSet};
+use std::collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet};
 use std::mem;
 
 use crate::proof_backend::Blake2sHasher;
 use parking_lot::RwLock;
 
 use crate::consensus::ValidatorProfile as ConsensusValidatorProfile;
+use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
 use crate::crypto::{public_key_from_hex, sign_message, signature_to_hex};
 use crate::errors::{ChainError, ChainResult};
 use crate::identity_tree::{IdentityCommitmentProof, IdentityCommitmentTree, IDENTITY_TREE_DEPTH};
@@ -82,6 +83,9 @@ pub struct Ledger {
     vrf_history_tags: RwLock<HashMap<u64, HashSet<String>>>,
     reputation_params: ReputationParams,
     timetoke_params: TimetokeParams,
+    treasury_accounts: RwLock<TreasuryAccounts>,
+    witness_pool_weights: RwLock<WitnessPoolWeights>,
+    reward_shortfall: RwLock<u128>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -176,9 +180,21 @@ impl Ledger {
             vrf_history_tags: RwLock::new(HashMap::new()),
             reputation_params: ReputationParams::default(),
             timetoke_params: TimetokeParams::default(),
+            treasury_accounts: RwLock::new(TreasuryAccounts::default()),
+            witness_pool_weights: RwLock::new(WitnessPoolWeights::default()),
+            reward_shortfall: RwLock::new(0),
         };
         ledger.sync_epoch_for_height(0);
         ledger
+    }
+
+    pub fn configure_reward_pools(
+        &self,
+        accounts: TreasuryAccounts,
+        weights: WitnessPoolWeights,
+    ) {
+        *self.treasury_accounts.write() = accounts;
+        *self.witness_pool_weights.write() = weights;
     }
 
     pub fn set_reputation_params(&mut self, params: ReputationParams) {
@@ -195,6 +211,10 @@ impl Ledger {
 
     pub fn timetoke_params(&self) -> TimetokeParams {
         self.timetoke_params.clone()
+    }
+
+    pub fn reward_shortfall(&self) -> u128 {
+        *self.reward_shortfall.read()
     }
 
     pub fn load(
@@ -928,51 +948,21 @@ impl Ledger {
             }
         }
 
+        self.credit_fee_pool_account(tx.payload.fee);
+
         Ok(tx.payload.fee)
     }
 
     pub fn reward_proposer(&self, address: &str, reward: u64) -> ChainResult<()> {
-        let module_before = self.module_records(address);
-        let updated_account = {
-            let mut accounts = self.global_state.write_accounts();
-            match accounts.entry(address.to_string()) {
-                Entry::Occupied(mut entry) => {
-                    let account = entry.get_mut();
-                    account.bind_node_identity()?;
-                    account.balance = account.balance.saturating_add(reward as u128);
-                    account.reputation.record_consensus_success();
-                    let now = crate::reputation::current_timestamp();
-                    account
-                        .reputation
-                        .recompute_with_params(&self.reputation_params, now);
-                    account.reputation.update_decay_reference(now);
-                    account.clone()
-                }
-                Entry::Vacant(entry) => {
-                    let mut account = Account::new(address.to_string(), 0, Stake::default());
-                    account.bind_node_identity()?;
-                    account.balance = account.balance.saturating_add(reward as u128);
-                    account.reputation.record_consensus_success();
-                    let now = crate::reputation::current_timestamp();
-                    account
-                        .reputation
-                        .recompute_with_params(&self.reputation_params, now);
-                    account.reputation.update_decay_reference(now);
-                    let inserted = entry.insert(account);
-                    inserted.clone()
-                }
-            }
-        };
-        self.index_account_modules(&updated_account);
-        let module_after = self.module_records(address);
-        if let Some(reputation_after) = module_after.reputation.clone() {
-            let mut book = self.module_witnesses.write();
-            book.record_reputation(ReputationWitness::new(
-                updated_account.address.clone(),
-                ReputationEventKind::ConsensusReward,
-                module_before.reputation,
-                reputation_after,
-            ));
+        self.reward_with_source(address, reward, RewardSource::Validator)
+    }
+
+    pub fn distribute_witness_payouts(
+        &self,
+        payouts: &BTreeMap<Address, u64>,
+    ) -> ChainResult<()> {
+        for (address, reward) in payouts {
+            self.reward_with_source(address, *reward, RewardSource::Witness)?;
         }
         Ok(())
     }
@@ -1027,6 +1017,147 @@ impl Ledger {
         }
 
         Ok(())
+    }
+
+    fn reward_with_source(
+        &self,
+        address: &str,
+        reward: u64,
+        source: RewardSource,
+    ) -> ChainResult<()> {
+        let module_before = self.module_records(address);
+        let paid = self.withdraw_reward(reward, source);
+        let updated_account = {
+            let mut accounts = self.global_state.write_accounts();
+            match accounts.entry(address.to_string()) {
+                Entry::Occupied(mut entry) => {
+                    let account = entry.get_mut();
+                    account.bind_node_identity()?;
+                    account.balance = account.balance.saturating_add(paid as u128);
+                    account.reputation.record_consensus_success();
+                    let now = crate::reputation::current_timestamp();
+                    account
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
+                    account.reputation.update_decay_reference(now);
+                    account.clone()
+                }
+                Entry::Vacant(entry) => {
+                    let mut account = Account::new(address.to_string(), 0, Stake::default());
+                    account.bind_node_identity()?;
+                    account.balance = account.balance.saturating_add(paid as u128);
+                    account.reputation.record_consensus_success();
+                    let now = crate::reputation::current_timestamp();
+                    account
+                        .reputation
+                        .recompute_with_params(&self.reputation_params, now);
+                    account.reputation.update_decay_reference(now);
+                    let inserted = entry.insert(account);
+                    inserted.clone()
+                }
+            }
+        };
+        self.index_account_modules(&updated_account);
+        let module_after = self.module_records(address);
+        if let Some(reputation_after) = module_after.reputation.clone() {
+            let mut book = self.module_witnesses.write();
+            book.record_reputation(ReputationWitness::new(
+                updated_account.address.clone(),
+                ReputationEventKind::ConsensusReward,
+                module_before.reputation,
+                reputation_after,
+            ));
+        }
+        Ok(())
+    }
+
+    fn withdraw_reward(&self, reward: u64, source: RewardSource) -> u64 {
+        if reward == 0 {
+            return 0;
+        }
+
+        let accounts = self.treasury_accounts.read().clone();
+        let weights = *self.witness_pool_weights.read();
+
+        let (treasury_target, fee_target) = match source {
+            RewardSource::Validator => (reward, 0),
+            RewardSource::Witness => weights.split(reward),
+        };
+
+        let treasury_address = match source {
+            RewardSource::Validator => accounts.validator_account().to_string(),
+            RewardSource::Witness => accounts.witness_account().to_string(),
+        };
+        let fee_address = accounts.fee_account().to_string();
+
+        let mut covered = self.withdraw_from_account(&treasury_address, treasury_target as u128);
+        let mut remaining = (reward as u128).saturating_sub(covered);
+
+        let fee_allocation = (fee_target as u128).saturating_add(remaining);
+        if fee_allocation > 0 {
+            let fee_withdrawn = self.withdraw_from_account(&fee_address, fee_allocation);
+            covered = covered.saturating_add(fee_withdrawn);
+            remaining = (reward as u128).saturating_sub(covered);
+        }
+
+        if remaining > 0 {
+            let mut shortfall = self.reward_shortfall.write();
+            *shortfall = shortfall.saturating_add(remaining);
+        }
+
+        covered.min(reward as u128) as u64
+    }
+
+    fn withdraw_from_account(&self, address: &str, amount: u128) -> u128 {
+        if address.is_empty() || amount == 0 {
+            return 0;
+        }
+
+        let mut updated: Option<Account> = None;
+        let mut withdrawn = 0u128;
+        {
+            let mut accounts = self.global_state.write_accounts();
+            if let Some(account) = accounts.get_mut(address) {
+                let take = account.balance.min(amount);
+                if take > 0 {
+                    account.balance -= take;
+                    withdrawn = take;
+                    updated = Some(account.clone());
+                }
+            }
+        }
+        if let Some(account) = updated {
+            self.index_account_modules(&account);
+        }
+        withdrawn
+    }
+
+    fn credit_fee_pool_account(&self, amount: u64) {
+        if amount == 0 {
+            return;
+        }
+        let address = self.treasury_accounts.read().fee_account().to_string();
+        if address.is_empty() {
+            return;
+        }
+        let updated_account = {
+            let mut accounts = self.global_state.write_accounts();
+            match accounts.entry(address.clone()) {
+                Entry::Occupied(mut entry) => {
+                    let account = entry.get_mut();
+                    account.balance = account.balance.saturating_add(amount as u128);
+                    Some(account.clone())
+                }
+                Entry::Vacant(entry) => {
+                    let mut account = Account::new(address.clone(), 0, Stake::default());
+                    account.balance = amount as u128;
+                    Some(entry.insert(account).clone())
+                }
+            }
+        };
+        if let Some(account) = updated_account {
+            self.index_account_modules(&account);
+        }
     }
 
     pub fn global_commitments(&self) -> GlobalStateCommitments {
@@ -1233,6 +1364,12 @@ impl TransactionUtxoSets {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RewardSource {
+    Validator,
+    Witness,
+}
+
 #[derive(Default)]
 struct ModuleWitnessBook {
     transactions: Vec<TransactionWitness>,
@@ -1285,6 +1422,13 @@ fn derive_epoch_nonce(epoch: u64, state_root: &[u8; 32]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod rewards {
+        use super::*;
+        use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
+        use std::collections::BTreeMap;
+
+        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/rpp/storage/tests/rewards.rs"));
+    }
     use crate::consensus::{evaluate_vrf, BftVote, BftVoteKind, SignedBftVote};
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::proof_backend::Blake2sHasher;
