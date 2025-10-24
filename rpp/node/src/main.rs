@@ -9,6 +9,7 @@ use rpp_chain::crypto::{
     VrfKeyIdentifier, VrfKeyStore,
 };
 use rpp_chain::runtime::config::{NodeConfig, SecretsBackendConfig, SecretsConfig};
+use rpp_node::RuntimeMode;
 use serde_json::Value;
 
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
@@ -16,22 +17,29 @@ const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
 #[derive(Parser)]
 #[command(author, version, about = "Run an rpp node", long_about = None)]
 struct RootCli {
-    #[command(flatten)]
-    run: rpp_node::Cli,
-
     #[command(subcommand)]
-    command: Option<RootCommand>,
+    command: RootCommand,
 }
 
 #[derive(Subcommand)]
 enum RootCommand {
+    /// Run the node runtime
+    Node(rpp_node::RunArgs),
+    /// Run the wallet runtime
+    Wallet(rpp_node::RunArgs),
+    /// Run the hybrid runtime (node + wallet)
+    Hybrid(rpp_node::RunArgs),
+    /// Validator runtime and tooling
     Validator(ValidatorArgs),
 }
 
 #[derive(Args)]
 struct ValidatorArgs {
+    #[command(flatten)]
+    run: rpp_node::RunArgs,
+
     #[command(subcommand)]
-    command: ValidatorCommand,
+    command: Option<ValidatorCommand>,
 }
 
 #[derive(Subcommand)]
@@ -98,14 +106,22 @@ struct TelemetryCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let RootCli { run, command } = RootCli::parse();
+    let RootCli { command } = RootCli::parse();
     match command {
-        Some(RootCommand::Validator(args)) => match args.command {
-            ValidatorCommand::Vrf(command) => handle_vrf_command(command),
-            ValidatorCommand::Telemetry(command) => fetch_telemetry(command).await,
+        RootCommand::Node(args) => run_runtime(RuntimeMode::Node, args).await,
+        RootCommand::Wallet(args) => run_runtime(RuntimeMode::Wallet, args).await,
+        RootCommand::Hybrid(args) => run_runtime(RuntimeMode::Hybrid, args).await,
+        RootCommand::Validator(args) => match args.command {
+            Some(ValidatorCommand::Vrf(command)) => handle_vrf_command(command),
+            Some(ValidatorCommand::Telemetry(command)) => fetch_telemetry(command).await,
+            None => run_runtime(RuntimeMode::Validator, args.run).await,
         },
-        None => rpp_node::run(run).await,
     }
+}
+
+async fn run_runtime(mode: RuntimeMode, args: rpp_node::RunArgs) -> Result<()> {
+    let options = args.into_bootstrap_options(mode);
+    rpp_node::bootstrap(mode, options).await
 }
 
 fn handle_vrf_command(command: VrfCommand) -> Result<()> {

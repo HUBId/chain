@@ -35,3 +35,19 @@ serde_json = "1.0"
 assert_cmd = "2.0.17"
 libc = "0.2"
 tempfile = "3.10"
+
+[[bin]]
+name = "node"
+path = "../bin/node.rs"
+
+[[bin]]
+name = "wallet"
+path = "../bin/wallet.rs"
+
+[[bin]]
+name = "hybrid"
+path = "../bin/hybrid.rs"
+
+[[bin]]
+name = "validator"
+path = "../bin/validator.rs"
