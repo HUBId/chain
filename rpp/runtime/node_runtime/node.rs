@@ -13,8 +13,8 @@ use rpp_p2p::{
     NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport,
     NetworkPeerTelemetry, NodeIdentity, PeerstoreError, PersistentConsensusStorage,
     PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent,
-    RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome, decode_gossip_payload,
-    decode_meta_payload, validate_block_payload, validate_vote_payload,
+    ReputationHeuristics, RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome,
+    decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
 };
 use serde::{Deserialize, Deserializer, de};
 use serde_json::Value;
@@ -66,6 +66,13 @@ enum NodeCommand {
         peer: PeerId,
         code: ProofReputationCode,
     },
+    ReportBackpressure {
+        topic: GossipTopic,
+        queue_depth: usize,
+    },
+    HeuristicsSnapshot {
+        response: oneshot::Sender<Vec<(PeerId, PeerHeuristics)>>,
+    },
 }
 
 /// In-memory metrics that are periodically forwarded to the telemetry worker.
@@ -82,6 +89,13 @@ pub struct NodeMetrics {
     pub witness_events: u64,
     pub slashing_events: u64,
     pub failed_votes: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PeerHeuristics {
+    pub vote_timeouts: u64,
+    pub proof_relay_misses: u64,
+    pub gossip_backpressure_events: u64,
 }
 
 /// Summary of peer activity that is emitted via heartbeat and meta telemetry events.
@@ -569,6 +583,16 @@ impl GossipPipelines {
                     reason = %reason,
                     "failed to ingest proof gossip: validation error"
                 );
+                let lower_reason = reason.to_lowercase();
+                if lower_reason.contains("missing proof") || lower_reason.contains("missing commitment") {
+                    self.apply_reputation_event(
+                        peer.clone(),
+                        ReputationEvent::ProofRelayMissed {
+                            height: None,
+                            reason: Some(Cow::Owned(reason.clone())),
+                        },
+                    );
+                }
                 self.enqueue_proof_penalty(peer, ProofReputationCode::InvalidProof);
             }
             Err(err) => {
@@ -689,7 +713,9 @@ pub struct NodeInner {
     meta_telemetry: MetaTelemetry,
     heartbeat_interval: Duration,
     gossip_enabled: bool,
+    reputation_heuristics: ReputationHeuristics,
     pipelines: GossipPipelines,
+    heuristic_counters: HashMap<PeerId, PeerHeuristics>,
 }
 
 impl NodeInner {
@@ -723,6 +749,7 @@ impl NodeInner {
             .as_ref()
             .map(|profile| profile.feature_gates.clone())
             .unwrap_or_else(|| config.feature_gates.clone());
+        let heuristics = network_config.reputation_heuristics();
         let inner = Self {
             network,
             identity,
@@ -735,9 +762,11 @@ impl NodeInner {
             meta_telemetry: MetaTelemetry::new(),
             heartbeat_interval: network_config.heartbeat_interval(),
             gossip_enabled: network_config.gossip_enabled(),
+            reputation_heuristics: heuristics,
             pipelines,
             peer_features: HashMap::new(),
             local_features,
+            heuristic_counters: HashMap::new(),
         };
         Ok((inner, handle))
     }
@@ -863,6 +892,15 @@ impl NodeInner {
                         "failed to apply reputation penalty"
                     );
                 }
+                Ok(false)
+            }
+            NodeCommand::ReportBackpressure { topic, queue_depth } => {
+                self.report_gossip_backpressure(topic, queue_depth);
+                Ok(false)
+            }
+            NodeCommand::HeuristicsSnapshot { response } => {
+                let snapshot = self.heuristics_snapshot();
+                let _ = response.send(snapshot);
                 Ok(false)
             }
         }
@@ -1078,6 +1116,19 @@ impl NodeInner {
                                         %reason,
                                         "invalid vote gossip"
                                     );
+                                    let reason_lower = reason.to_lowercase();
+                                    if reason_lower.contains("timeout")
+                                        || reason_lower.contains("expired")
+                                        || reason_lower.contains("stale")
+                                    {
+                                        self.apply_reputation_event(
+                                            peer.clone(),
+                                            ReputationEvent::VoteTimeout {
+                                                height: vote.vote.height,
+                                                round: vote.vote.round,
+                                            },
+                                        );
+                                    }
                                     let _ = self.events.send(NodeEvent::VoteRejected {
                                         peer: peer.clone(),
                                         vote,
@@ -1261,6 +1312,69 @@ impl NodeInner {
         Ok(())
     }
 
+    fn apply_reputation_event(&mut self, peer: PeerId, event: ReputationEvent) {
+        let label = event.label().to_string();
+        self.update_peer_heuristics(&peer, &event);
+        if let Err(err) = self.network.apply_reputation_event(peer.clone(), event) {
+            warn!(
+                target: "node",
+                %peer,
+                ?err,
+                "failed to apply reputation heuristic event"
+            );
+        } else {
+            debug!(
+                target: "node",
+                %peer,
+                label = %label,
+                "applied reputation heuristic"
+            );
+        }
+    }
+
+    fn report_gossip_backpressure(&mut self, topic: GossipTopic, queue_depth: usize) {
+        if queue_depth < self.reputation_heuristics.gossip_backpressure_threshold {
+            return;
+        }
+        if self.connected_peers.is_empty() {
+            return;
+        }
+        let event = ReputationEvent::GossipBackpressure {
+            topic,
+            queue_depth,
+        };
+        for peer in self.connected_peers.clone() {
+            self.apply_reputation_event(peer, event.clone());
+        }
+    }
+
+    fn update_peer_heuristics(&mut self, peer: &PeerId, event: &ReputationEvent) {
+        let counters = self
+            .heuristic_counters
+            .entry(peer.clone())
+            .or_insert_with(PeerHeuristics::default);
+        match event {
+            ReputationEvent::VoteTimeout { .. } => {
+                counters.vote_timeouts = counters.vote_timeouts.saturating_add(1);
+            }
+            ReputationEvent::ProofRelayMissed { .. } => {
+                counters.proof_relay_misses = counters.proof_relay_misses.saturating_add(1);
+            }
+            ReputationEvent::GossipBackpressure { .. } => {
+                counters.gossip_backpressure_events =
+                    counters.gossip_backpressure_events.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+
+    fn heuristics_snapshot(&self) -> Vec<(PeerId, PeerHeuristics)> {
+        self.heuristic_counters
+            .iter()
+            .map(|(peer, counters)| (peer.clone(), counters.clone()))
+            .collect()
+    }
+
     async fn emit_heartbeat(&mut self) {
         let metrics = self.metrics.read().clone();
         let peer_count = self.connected_peers.len();
@@ -1401,6 +1515,28 @@ impl NodeHandle {
             .send(NodeCommand::ApplyReputationPenalty { peer, code })
             .await
             .map_err(|_| NodeError::CommandChannelClosed)
+    }
+
+    pub async fn report_gossip_backpressure(
+        &self,
+        topic: GossipTopic,
+        queue_depth: usize,
+    ) -> Result<(), NodeError> {
+        self.commands
+            .send(NodeCommand::ReportBackpressure { topic, queue_depth })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)
+    }
+
+    pub async fn heuristics_snapshot(
+        &self,
+    ) -> Result<Vec<(PeerId, PeerHeuristics)>, NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::HeuristicsSnapshot { response: tx })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)
     }
 
     pub async fn reload_access_lists(

@@ -100,7 +100,8 @@ use crate::vendor::{Multiaddr, PeerId};
 use crate::NetworkBehaviour;
 
 use crate::admission::{
-    AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationOutcome,
+    AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
+    ReputationOutcome,
 };
 use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
 use crate::identity::NodeIdentity;
@@ -692,6 +693,7 @@ impl Network {
         gossip_state: Option<Arc<GossipStateStore>>,
         gossip_rate_limit_per_sec: u64,
         replay_window_size: usize,
+        heuristics: ReputationHeuristics,
     ) -> Result<Self, NetworkError> {
         let handshake = {
             let mut payload = handshake;
@@ -853,9 +855,10 @@ impl Network {
         let events_handle = Arc::new(raw_events_handle);
         *event_handle_slot.lock() = Some(events_handle.clone());
 
-        let admission = Arc::new(AdmissionControl::new(
+        let admission = Arc::new(AdmissionControl::with_heuristics(
             peerstore.clone(),
             identity.metadata().clone(),
+            heuristics,
         ));
         let mut network = Self {
             swarm,
@@ -1727,6 +1730,7 @@ mod tests {
             None,
             128,
             1_024,
+            ReputationHeuristics::default(),
         )
         .expect("network")
     }
@@ -1754,6 +1758,7 @@ mod tests {
             Some(store.clone()),
             128,
             1_024,
+            ReputationHeuristics::default(),
         )
         .expect("network");
 

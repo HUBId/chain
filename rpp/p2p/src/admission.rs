@@ -38,6 +38,20 @@ pub enum ReputationEvent {
     },
     UptimeProof,
     VoteIncluded,
+    VoteTimeout {
+        height: u64,
+        round: u64,
+    },
+    ProofRelayMissed {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        height: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<Cow<'static, str>>,
+    },
+    GossipBackpressure {
+        topic: GossipTopic,
+        queue_depth: usize,
+    },
     Slash {
         severity: f64,
         reason: Cow<'static, str>,
@@ -54,8 +68,30 @@ impl ReputationEvent {
             ReputationEvent::GossipSuccess { .. } => "gossip_success",
             ReputationEvent::UptimeProof => "uptime_proof",
             ReputationEvent::VoteIncluded => "vote_included",
+            ReputationEvent::VoteTimeout { .. } => "vote_timeout",
+            ReputationEvent::ProofRelayMissed { .. } => "proof_relay_missed",
+            ReputationEvent::GossipBackpressure { .. } => "gossip_backpressure",
             ReputationEvent::Slash { reason, .. } => reason.as_ref(),
             ReputationEvent::ManualPenalty { reason, .. } => reason.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ReputationHeuristics {
+    pub vote_timeout_penalty: f64,
+    pub proof_relay_penalty: f64,
+    pub gossip_backpressure_penalty: f64,
+    pub gossip_backpressure_threshold: usize,
+}
+
+impl Default for ReputationHeuristics {
+    fn default() -> Self {
+        Self {
+            vote_timeout_penalty: 0.4,
+            proof_relay_penalty: 0.6,
+            gossip_backpressure_penalty: 0.25,
+            gossip_backpressure_threshold: 4,
         }
     }
 }
@@ -116,10 +152,19 @@ pub struct AdmissionControl {
     vote_reward: f64,
     slash_penalty: f64,
     ban_window: Duration,
+    heuristics: ReputationHeuristics,
 }
 
 impl AdmissionControl {
     pub fn new(peerstore: Arc<Peerstore>, metadata: IdentityMetadata) -> Self {
+        Self::with_heuristics(peerstore, metadata, ReputationHeuristics::default())
+    }
+
+    pub fn with_heuristics(
+        peerstore: Arc<Peerstore>,
+        metadata: IdentityMetadata,
+        heuristics: ReputationHeuristics,
+    ) -> Self {
         Self {
             peerstore,
             metadata,
@@ -128,6 +173,7 @@ impl AdmissionControl {
             vote_reward: DEFAULT_VOTE_REWARD,
             slash_penalty: DEFAULT_SLASH_PENALTY,
             ban_window: Duration::from_secs(180),
+            heuristics,
         }
     }
 
@@ -249,6 +295,25 @@ impl AdmissionControl {
             ReputationEvent::VoteIncluded => self
                 .peerstore
                 .update_reputation(peer.clone(), self.vote_reward)?,
+            ReputationEvent::VoteTimeout { .. } => self
+                .peerstore
+                .update_reputation(peer.clone(), -self.heuristics.vote_timeout_penalty)?,
+            ReputationEvent::ProofRelayMissed { .. } => self
+                .peerstore
+                .update_reputation(peer.clone(), -self.heuristics.proof_relay_penalty)?,
+            ReputationEvent::GossipBackpressure { queue_depth, .. } => {
+                if *queue_depth < self.heuristics.gossip_backpressure_threshold {
+                    match self.peerstore.reputation_snapshot(&peer) {
+                        Some(snapshot) => snapshot,
+                        None => self.peerstore.update_reputation(peer.clone(), 0.0)?,
+                    }
+                } else {
+                    self.peerstore.update_reputation(
+                        peer.clone(),
+                        -self.heuristics.gossip_backpressure_penalty,
+                    )?
+                }
+            }
             ReputationEvent::Slash { severity, .. } => {
                 let penalty = -(self.slash_penalty * severity.max(1.0));
                 let snapshot = self.peerstore.update_reputation(peer.clone(), penalty)?;

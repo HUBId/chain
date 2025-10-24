@@ -45,8 +45,9 @@ use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, DEFAULT_STATE_SYNC_CHUNK,
-    MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, PendingUptimeSummary,
-    PruningJobStatus, RolloutStatus, UptimeSchedulerRun, UptimeSchedulerStatus, VrfStatus,
+    MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, P2pCensorshipReport,
+    PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
+    UptimeSchedulerStatus, VrfStatus,
 };
 use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
@@ -811,6 +812,7 @@ pub async fn serve(
         .route("/validator/vrf/rotate", post(validator_rotate_vrf))
         .route("/validator/uptime", post(validator_submit_uptime))
         .route("/p2p/peers", get(p2p_meta_telemetry))
+        .route("/p2p/censorship", get(p2p_censorship_report))
         .route("/p2p/access-lists", post(update_access_lists))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
@@ -1362,6 +1364,17 @@ async fn p2p_meta_telemetry(
         .await
         .map_err(to_http_error)?;
     Ok(Json(NetworkMetaTelemetryReport::from(&report)))
+}
+
+async fn p2p_censorship_report(
+    State(state): State<ApiContext>,
+) -> Result<Json<P2pCensorshipReport>, (StatusCode, Json<ErrorResponse>)> {
+    state
+        .require_node()?
+        .p2p_censorship_report()
+        .await
+        .map(Json)
+        .map_err(to_http_error)
 }
 
 async fn node_status(

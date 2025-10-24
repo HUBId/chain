@@ -14,7 +14,9 @@ use rpp_p2p::vendor::protocols::request_response::{self, ProtocolSupport};
 use rpp_p2p::vendor::swarm::{NetworkBehaviour, SwarmEvent};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::vendor::{noise, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};
-use rpp_p2p::{GossipTopic, Network, NodeIdentity, Peerstore, PeerstoreConfig};
+use rpp_p2p::{
+    GossipTopic, Network, NodeIdentity, Peerstore, PeerstoreConfig, ReputationHeuristics,
+};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -243,6 +245,7 @@ fn network_metrics_snapshot_records_outbound_bytes() {
         None,
         128,
         1_024,
+        ReputationHeuristics::default(),
     )
     .expect("network");
 

@@ -27,6 +27,7 @@ use ed25519_dalek::Keypair;
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::{Mutex, Notify, broadcast, mpsc, watch};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::field::display;
@@ -126,6 +127,19 @@ pub struct NodeStatus {
     pub pending_uptime_proofs: usize,
     pub vrf_metrics: crate::vrf::VrfSelectionMetrics,
     pub tip: Option<BlockMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct P2pCensorshipEntry {
+    pub peer: String,
+    pub vote_timeouts: u64,
+    pub proof_relay_misses: u64,
+    pub gossip_backpressure_events: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct P2pCensorshipReport {
+    pub entries: Vec<P2pCensorshipEntry>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -479,6 +493,8 @@ struct WitnessChannels {
     snapshots: broadcast::Sender<Vec<u8>>,
     meta: broadcast::Sender<Vec<u8>>,
     publisher: ParkingMutex<Option<mpsc::Sender<(GossipTopic, Vec<u8>)>>>,
+    backpressure_hook: ParkingMutex<Option<Arc<dyn Fn(GossipTopic, usize) + Send + Sync>>>,
+    queue_capacity: usize,
 }
 
 impl WitnessChannels {
@@ -495,11 +511,20 @@ impl WitnessChannels {
             snapshots,
             meta,
             publisher: ParkingMutex::new(None),
+            backpressure_hook: ParkingMutex::new(None),
+            queue_capacity: capacity,
         }
     }
 
     fn attach_publisher(&self, publisher: mpsc::Sender<(GossipTopic, Vec<u8>)>) {
         *self.publisher.lock() = Some(publisher);
+    }
+
+    fn set_backpressure_hook(
+        &self,
+        hook: Arc<dyn Fn(GossipTopic, usize) + Send + Sync>,
+    ) {
+        *self.backpressure_hook.lock() = Some(hook);
     }
 
     fn publish_local(&self, topic: GossipTopic, payload: Vec<u8>) {
@@ -523,12 +548,24 @@ impl WitnessChannels {
 
     fn forward_to_network(&self, topic: GossipTopic, payload: Vec<u8>) {
         if let Some(sender) = self.publisher.lock().as_ref() {
-            if let Err(err) = sender.try_send((topic, payload)) {
-                warn!(
-                    ?err,
-                    ?topic,
-                    "failed to enqueue witness gossip for publishing"
-                );
+            match sender.try_send((topic.clone(), payload)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    warn!(
+                        ?topic,
+                        queue_depth = self.queue_capacity,
+                        "failed to enqueue witness gossip for publishing"
+                    );
+                    if let Some(callback) = self.backpressure_hook.lock().as_ref() {
+                        callback(topic, self.queue_capacity);
+                    }
+                }
+                Err(TrySendError::Closed(_)) => {
+                    warn!(
+                        ?topic,
+                        "failed to enqueue witness gossip for publishing: channel closed"
+                    );
+                }
             }
         }
     }
@@ -1014,6 +1051,31 @@ impl Node {
             consensus_telemetry,
             audit_exporter,
         });
+        {
+            let weak_inner = Arc::downgrade(&inner);
+            inner
+                .witness_channels
+                .set_backpressure_hook(Arc::new(move |topic, queue_depth| {
+                    if let Some(inner) = weak_inner.upgrade() {
+                        if let Some(runtime) = inner.p2p_runtime.lock().clone() {
+                            let topic_clone = topic.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) =
+                                    runtime.report_gossip_backpressure(topic_clone.clone(), queue_depth).await
+                                {
+                                    warn!(
+                                        target: "node",
+                                        ?topic_clone,
+                                        queue_depth,
+                                        ?err,
+                                        "failed to report gossip backpressure"
+                                    );
+                                }
+                            });
+                        }
+                    }
+                }));
+        }
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
         Ok(Self { inner })
@@ -1892,6 +1954,10 @@ impl NodeHandle {
         self.inner.meta_telemetry_snapshot().await
     }
 
+    pub async fn p2p_censorship_report(&self) -> ChainResult<P2pCensorshipReport> {
+        self.inner.p2p_censorship_report().await
+    }
+
     pub async fn reload_access_lists(
         &self,
         allowlist: Vec<AllowlistedPeer>,
@@ -2115,6 +2181,26 @@ impl NodeInner {
             .meta_telemetry_snapshot()
             .await
             .map_err(|err| ChainError::Config(format!("failed to collect meta telemetry: {err}")))
+    }
+
+    async fn p2p_censorship_report(&self) -> ChainResult<P2pCensorshipReport> {
+        let handle = self
+            .p2p_handle()
+            .ok_or_else(|| ChainError::Config("p2p runtime not initialised".into()))?;
+        let snapshot = handle
+            .heuristics_snapshot()
+            .await
+            .map_err(|err| ChainError::Config(format!("failed to collect p2p heuristics: {err}")))?;
+        let entries = snapshot
+            .into_iter()
+            .map(|(peer, counters)| P2pCensorshipEntry {
+                peer: peer.to_base58(),
+                vote_timeouts: counters.vote_timeouts,
+                proof_relay_misses: counters.proof_relay_misses,
+                gossip_backpressure_events: counters.gossip_backpressure_events,
+            })
+            .collect();
+        Ok(P2pCensorshipReport { entries })
     }
 
     async fn reload_access_lists(

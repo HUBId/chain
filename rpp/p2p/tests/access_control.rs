@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -11,8 +12,8 @@ use rpp_p2p::vendor::{identity, PeerId};
 use rpp_p2p::{
     AdmissionControl, AdmissionError, AllowlistedPeer, GossipTopic, HandshakePayload,
     IdentityMetadata, IdentityVerifier, Network, NetworkError, NetworkEvent, NodeIdentity,
-    Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, TierLevel, TopicPermission,
-    VRF_HANDSHAKE_CONTEXT,
+    Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
+    TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 use tempfile::tempdir;
@@ -91,8 +92,118 @@ fn init_network(
         None,
         rate_limit,
         replay,
+        ReputationHeuristics::default(),
     )
     .expect("network")
+}
+
+#[test]
+fn heuristics_vote_timeout_penalises_peer() {
+    let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
+    let peer = PeerId::random();
+    store
+        .update_reputation(peer.clone(), 2.0)
+        .expect("baseline reputation");
+    let heuristics = ReputationHeuristics {
+        vote_timeout_penalty: 0.7,
+        ..Default::default()
+    };
+    let control =
+        AdmissionControl::with_heuristics(store.clone(), IdentityMetadata::default(), heuristics);
+
+    let outcome = control
+        .record_event(
+            peer.clone(),
+            ReputationEvent::VoteTimeout {
+                height: 42,
+                round: 3,
+            },
+        )
+        .expect("penalty applied");
+
+    assert!(
+        (outcome.snapshot.reputation - 1.3).abs() < f64::EPSILON,
+        "expected vote timeout penalty to be applied"
+    );
+}
+
+#[test]
+fn heuristics_proof_relay_penalty_respects_configuration() {
+    let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
+    let peer = PeerId::random();
+    store
+        .update_reputation(peer.clone(), 1.5)
+        .expect("baseline reputation");
+    let heuristics = ReputationHeuristics {
+        proof_relay_penalty: 0.5,
+        ..Default::default()
+    };
+    let control =
+        AdmissionControl::with_heuristics(store.clone(), IdentityMetadata::default(), heuristics);
+
+    let outcome = control
+        .record_event(
+            peer.clone(),
+            ReputationEvent::ProofRelayMissed {
+                height: Some(12),
+                reason: Some(Cow::Borrowed("missing proof commitment")),
+            },
+        )
+        .expect("penalty applied");
+
+    assert!(
+        (outcome.snapshot.reputation - 1.0).abs() < f64::EPSILON,
+        "expected proof relay penalty to reduce reputation"
+    );
+}
+
+#[test]
+fn heuristics_gossip_backpressure_threshold() {
+    let store = Arc::new(Peerstore::open(PeerstoreConfig::memory()).expect("peerstore"));
+    let peer = PeerId::random();
+    store
+        .update_reputation(peer.clone(), 1.0)
+        .expect("baseline reputation");
+    let heuristics = ReputationHeuristics {
+        gossip_backpressure_penalty: 0.25,
+        gossip_backpressure_threshold: 5,
+        ..Default::default()
+    };
+    let control =
+        AdmissionControl::with_heuristics(store.clone(), IdentityMetadata::default(), heuristics);
+
+    // Below threshold should leave reputation unchanged.
+    control
+        .record_event(
+            peer.clone(),
+            ReputationEvent::GossipBackpressure {
+                topic: GossipTopic::Blocks,
+                queue_depth: 3,
+            },
+        )
+        .expect("event accepted");
+    let snapshot = store
+        .reputation_snapshot(&peer)
+        .expect("snapshot available");
+    assert!(
+        (snapshot.reputation - 1.0).abs() < f64::EPSILON,
+        "no penalty expected below threshold"
+    );
+
+    // Above threshold should apply penalty.
+    let outcome = control
+        .record_event(
+            peer.clone(),
+            ReputationEvent::GossipBackpressure {
+                topic: GossipTopic::Blocks,
+                queue_depth: 6,
+            },
+        )
+        .expect("penalty applied");
+    assert!(
+        (outcome.snapshot.reputation - 0.75).abs() < f64::EPSILON,
+        "expected backpressure penalty to be applied"
+    );
 }
 
 #[test]

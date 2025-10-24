@@ -8,7 +8,7 @@ use std::sync::Arc;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
-use rpp_p2p::TierLevel;
+use rpp_p2p::{ReputationHeuristics, TierLevel};
 
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
@@ -665,6 +665,37 @@ impl Default for MalachiteNetworkConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+pub struct ReputationHeuristicsConfig {
+    pub vote_timeout_penalty: f64,
+    pub proof_relay_penalty: f64,
+    pub gossip_backpressure_penalty: f64,
+    pub gossip_backpressure_threshold: usize,
+}
+
+impl Default for ReputationHeuristicsConfig {
+    fn default() -> Self {
+        Self {
+            vote_timeout_penalty: 0.4,
+            proof_relay_penalty: 0.6,
+            gossip_backpressure_penalty: 0.25,
+            gossip_backpressure_threshold: 4,
+        }
+    }
+}
+
+impl From<&ReputationHeuristicsConfig> for ReputationHeuristics {
+    fn from(config: &ReputationHeuristicsConfig) -> Self {
+        Self {
+            vote_timeout_penalty: config.vote_timeout_penalty,
+            proof_relay_penalty: config.proof_relay_penalty,
+            gossip_backpressure_penalty: config.gossip_backpressure_penalty,
+            gossip_backpressure_threshold: config.gossip_backpressure_threshold,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct P2pConfig {
     pub listen_addr: String,
     pub bootstrap_peers: Vec<String>,
@@ -680,6 +711,8 @@ pub struct P2pConfig {
     pub allowlist: Vec<P2pAllowlistEntry>,
     #[serde(default)]
     pub blocklist: Vec<String>,
+    #[serde(default)]
+    pub reputation_heuristics: ReputationHeuristicsConfig,
 }
 
 impl Default for P2pConfig {
@@ -695,6 +728,7 @@ impl Default for P2pConfig {
             gossip_path: default_gossip_state_path(),
             allowlist: Vec::new(),
             blocklist: Vec::new(),
+            reputation_heuristics: ReputationHeuristicsConfig::default(),
         }
     }
 }
@@ -718,6 +752,10 @@ impl P2pConfig {
             ));
         }
         Ok(())
+    }
+
+    pub fn reputation_heuristics(&self) -> ReputationHeuristics {
+        ReputationHeuristics::from(&self.reputation_heuristics)
     }
 }
 
