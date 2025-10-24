@@ -2,7 +2,7 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
 use tempfile::tempdir;
@@ -165,6 +165,7 @@ async fn pipeline_feed_propagates_errors_from_event_stream() {
 
     let error = PipelineError {
         stage: "bft_finalised",
+        reason: "timeout",
         height: 42,
         round: 7,
         block_hash: Some("feeddeadbeef".into()),
@@ -177,7 +178,8 @@ async fn pipeline_feed_propagates_errors_from_event_stream() {
 
     fixture
         .orchestrator
-        .publish_error_for_testing(error.clone());
+        .publish_error_for_testing(error.clone())
+        .await;
 
     let snapshot = time::timeout(Duration::from_secs(1), async {
         loop {
@@ -218,6 +220,7 @@ async fn pipeline_feed_retains_errors_after_orchestrator_restart() {
 
     let error = PipelineError {
         stage: "firewood_commitment",
+        reason: "missing_context",
         height: 64,
         round: 3,
         block_hash: Some("c0ffee00ff00".into()),
@@ -230,7 +233,8 @@ async fn pipeline_feed_retains_errors_after_orchestrator_restart() {
 
     fixture
         .orchestrator
-        .publish_error_for_testing(error.clone());
+        .publish_error_for_testing(error.clone())
+        .await;
 
     let _ = time::timeout(Duration::from_secs(1), async {
         loop {
@@ -266,6 +270,72 @@ async fn pipeline_feed_retains_errors_after_orchestrator_restart() {
     fixture
         .wallet
         .shutdown_pipeline(fixture.orchestrator.as_ref());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipeline_telemetry_summary_reports_latency_and_alerts() {
+    let Some(mut fixture) = tokio::task::spawn_blocking(OrchestratorFixture::new)
+        .await
+        .expect("spawn blocking")
+    else {
+        return;
+    };
+
+    let orchestrator = fixture.orchestrator.clone();
+    let origin = fixture.wallet.address().clone();
+    let now = Instant::now();
+    let hash = "cafedeadbeef".to_string();
+
+    orchestrator
+        .seed_flow_for_testing(hash.clone(), origin, 2, 512, now - Duration::from_millis(300))
+        .await;
+    orchestrator
+        .record_stage_for_testing(&hash, PipelineStage::GossipReceived, now - Duration::from_millis(250))
+        .await;
+    orchestrator
+        .record_stage_for_testing(&hash, PipelineStage::MempoolAccepted, now - Duration::from_millis(150))
+        .await;
+    orchestrator
+        .record_stage_for_testing(&hash, PipelineStage::LeaderElected, now - Duration::from_millis(75))
+        .await;
+    orchestrator
+        .record_stage_for_testing(&hash, PipelineStage::BftFinalised, now - Duration::from_millis(25))
+        .await;
+
+    orchestrator.record_gossip_success_for_testing();
+    orchestrator
+        .record_gossip_failure_for_testing("decode")
+        .await;
+    orchestrator
+        .record_error_for_testing("ingest", "submit_failed")
+        .await;
+    orchestrator.record_leader_observation_for_testing();
+
+    let summary = orchestrator.telemetry_summary().await;
+    assert_eq!(summary.active_flows, 1);
+
+    let bft_stats = summary
+        .stage_latency_ms
+        .get(&PipelineStage::BftFinalised)
+        .expect("bft latency stats");
+    assert_eq!(bft_stats.count, 1);
+    assert!(bft_stats.average_ms > 0.0);
+
+    assert_eq!(summary.gossip.success_total, 1);
+    assert_eq!(summary.gossip.failure_total, 1);
+    assert_eq!(summary.gossip.failure_reasons.get("decode"), Some(&1));
+
+    let ingest_errors = summary
+        .errors
+        .get("ingest")
+        .expect("ingest errors present");
+    assert_eq!(ingest_errors.get("submit_failed"), Some(&1));
+
+    assert!(summary.leader_observations >= 1);
+
+    fixture
+        .wallet
+        .shutdown_pipeline(orchestrator.as_ref());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

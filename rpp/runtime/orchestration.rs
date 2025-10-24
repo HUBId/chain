@@ -9,13 +9,15 @@
 //! be cancelled during shutdown via [`NodeHandle`].
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hex;
 use serde_json;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::time;
-use tracing::{debug, info, warn};
+use tracing::field::display;
+use tracing::{Span, debug, info, warn};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::node::{DEFAULT_STATE_SYNC_CHUNK, NodeHandle, PipelineObservation};
@@ -44,6 +46,19 @@ pub enum PipelineStage {
     FirewoodCommitted,
     /// Ledger rewards and nonce updates materialised for the originating wallet.
     RewardsDistributed,
+}
+
+impl PipelineStage {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PipelineStage::GossipReceived => "gossip_received",
+            PipelineStage::MempoolAccepted => "mempool_accepted",
+            PipelineStage::LeaderElected => "leader_elected",
+            PipelineStage::BftFinalised => "bft_finalised",
+            PipelineStage::FirewoodCommitted => "firewood_committed",
+            PipelineStage::RewardsDistributed => "rewards_distributed",
+        }
+    }
 }
 
 /// Snapshot of the tracked metrics for a single pipeline item.
@@ -76,6 +91,7 @@ impl PipelineDashboardSnapshot {
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PipelineError {
     pub stage: &'static str,
+    pub reason: &'static str,
     pub height: u64,
     pub round: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +103,7 @@ pub struct PipelineError {
 impl PipelineError {
     fn new(
         stage: &'static str,
+        reason: &'static str,
         height: u64,
         round: u64,
         block_hash: Option<String>,
@@ -98,6 +115,7 @@ impl PipelineError {
             .as_millis();
         Self {
             stage,
+            reason,
             height,
             round,
             block_hash,
@@ -136,8 +154,16 @@ impl FlowMetrics {
         }
     }
 
-    fn record_stage(&mut self, stage: PipelineStage, at: Instant) {
-        self.stage_times.entry(stage).or_insert(at);
+    fn record_stage(&mut self, stage: PipelineStage, at: Instant) -> bool {
+        use std::collections::hash_map::Entry;
+
+        match self.stage_times.entry(stage) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(entry) => {
+                entry.insert(at);
+                true
+            }
+        }
     }
 
     fn set_commit_height(&mut self, height: u64) {
@@ -178,6 +204,11 @@ impl FlowMetrics {
 struct PipelineMetrics {
     flows: Mutex<HashMap<String, FlowMetrics>>,
     dashboard: watch::Sender<PipelineDashboardSnapshot>,
+    gossip_success: AtomicU64,
+    gossip_failure: AtomicU64,
+    gossip_failure_reasons: Mutex<HashMap<&'static str, u64>>,
+    error_counts: Mutex<HashMap<&'static str, HashMap<&'static str, u64>>>,
+    leader_observations: AtomicU64,
 }
 
 impl PipelineMetrics {
@@ -186,22 +217,44 @@ impl PipelineMetrics {
         Self {
             flows: Mutex::new(HashMap::new()),
             dashboard: tx,
+            gossip_success: AtomicU64::new(0),
+            gossip_failure: AtomicU64::new(0),
+            gossip_failure_reasons: Mutex::new(HashMap::new()),
+            error_counts: Mutex::new(HashMap::new()),
+            leader_observations: AtomicU64::new(0),
         }
     }
 
     async fn register(&self, hash: String, metrics: FlowMetrics) {
-        let mut flows = self.flows.lock().await;
-        flows.insert(hash.clone(), metrics);
-        drop(flows);
+        let active = {
+            let mut flows = self.flows.lock().await;
+            flows.insert(hash.clone(), metrics);
+            flows.len()
+        };
+        metrics::gauge!(METRIC_PIPELINE_ACTIVE_FLOWS, active as f64);
         self.publish().await;
     }
 
     async fn record_stage(&self, hash: &str, stage: PipelineStage, at: Instant) {
-        let mut flows = self.flows.lock().await;
-        if let Some(flow) = flows.get_mut(hash) {
-            flow.record_stage(stage, at);
+        let (latency, first_recorded) = {
+            let mut flows = self.flows.lock().await;
+            let mut latency = None;
+            let mut newly_recorded = false;
+            if let Some(flow) = flows.get_mut(hash) {
+                newly_recorded = flow.record_stage(stage, at);
+                latency = flow
+                    .latency_ms(stage)
+                    .map(|value| value.min(u128::from(u64::MAX)) as u64);
+            }
+            (latency, newly_recorded)
+        };
+        if let Some(latency) = latency {
+            metrics::histogram!(
+                METRIC_PIPELINE_STAGE_LATENCY,
+                latency as f64,
+                "stage" => stage.as_str(),
+            );
         }
-        drop(flows);
         self.publish().await;
     }
 
@@ -232,6 +285,163 @@ impl PipelineMetrics {
     async fn hashes(&self) -> Vec<String> {
         self.flows.lock().await.keys().cloned().collect::<Vec<_>>()
     }
+
+    fn record_gossip_success(&self) {
+        self.gossip_success.fetch_add(1, Ordering::Relaxed);
+        metrics::counter!(METRIC_PIPELINE_GOSSIP_EVENTS, 1, "outcome" => "success");
+    }
+
+    async fn record_gossip_failure(&self, reason: &'static str) {
+        self.gossip_failure.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut reasons = self.gossip_failure_reasons.lock().await;
+            *reasons.entry(reason).or_insert(0) += 1;
+        }
+        metrics::counter!(
+            METRIC_PIPELINE_GOSSIP_EVENTS,
+            1,
+            "outcome" => "failure",
+            "reason" => reason,
+        );
+    }
+
+    async fn record_error(&self, stage: &'static str, reason: &'static str) {
+        let mut errors = self.error_counts.lock().await;
+        let stage_entry = errors.entry(stage).or_insert_with(HashMap::new);
+        *stage_entry.entry(reason).or_insert(0) += 1;
+        metrics::counter!(
+            METRIC_PIPELINE_ERRORS,
+            1,
+            "stage" => stage,
+            "reason" => reason,
+        );
+    }
+
+    fn record_leader_observation(&self) {
+        self.leader_observations.fetch_add(1, Ordering::Relaxed);
+        metrics::counter!(METRIC_PIPELINE_LEADER_ROTATIONS, 1, "source" => "pipeline");
+    }
+
+    async fn telemetry_summary(&self) -> PipelineTelemetrySummary {
+        let flows = self.flows.lock().await;
+        let active = flows.len();
+        let mut stage_samples: HashMap<PipelineStage, Vec<u64>> = HashMap::new();
+        for metrics in flows.values() {
+            for stage in PIPELINE_STAGES {
+                if let Some(latency) = metrics.latency_ms(stage) {
+                    let value = latency.min(u128::from(u64::MAX)) as u64;
+                    stage_samples.entry(stage).or_default().push(value);
+                }
+            }
+        }
+        drop(flows);
+
+        let mut stage_latency_ms = HashMap::new();
+        for (stage, mut samples) in stage_samples {
+            if samples.is_empty() {
+                continue;
+            }
+            samples.sort_unstable();
+            let count = samples.len() as u64;
+            let total: u128 = samples.iter().map(|value| u128::from(*value)).sum();
+            let average = if count == 0 {
+                0.0
+            } else {
+                total as f64 / count as f64
+            };
+            let max = samples.last().copied();
+            let p95 = if count == 0 {
+                None
+            } else {
+                let index = ((count as f64 * 0.95).ceil() as usize).saturating_sub(1);
+                samples.get(index.min(samples.len() - 1)).copied()
+            };
+            stage_latency_ms.insert(
+                stage,
+                PipelineStageLatencySummary {
+                    count,
+                    average_ms: average,
+                    p95_ms: p95.map(|value| value as f64),
+                    max_ms: max,
+                },
+            );
+        }
+
+        let gossip_failure_reasons = {
+            let reasons = self.gossip_failure_reasons.lock().await;
+            reasons
+                .iter()
+                .map(|(reason, count)| (reason.to_string(), *count))
+                .collect()
+        };
+        let errors = {
+            let error_counts = self.error_counts.lock().await;
+            error_counts
+                .iter()
+                .map(|(stage, reasons)| {
+                    let inner = reasons
+                        .iter()
+                        .map(|(reason, count)| (reason.to_string(), *count))
+                        .collect();
+                    (stage.to_string(), inner)
+                })
+                .collect()
+        };
+
+        PipelineTelemetrySummary {
+            active_flows: active,
+            stage_latency_ms,
+            gossip: PipelineGossipTelemetry {
+                success_total: self.gossip_success.load(Ordering::Relaxed),
+                failure_total: self.gossip_failure.load(Ordering::Relaxed),
+                failure_reasons: gossip_failure_reasons,
+            },
+            errors,
+            leader_observations: self.leader_observations.load(Ordering::Relaxed),
+        }
+    }
+}
+
+const PIPELINE_STAGES: [PipelineStage; 6] = [
+    PipelineStage::GossipReceived,
+    PipelineStage::MempoolAccepted,
+    PipelineStage::LeaderElected,
+    PipelineStage::BftFinalised,
+    PipelineStage::FirewoodCommitted,
+    PipelineStage::RewardsDistributed,
+];
+
+const METRIC_PIPELINE_STAGE_LATENCY: &str = "pipeline_stage_latency_ms";
+const METRIC_PIPELINE_GOSSIP_EVENTS: &str = "pipeline_gossip_events_total";
+const METRIC_PIPELINE_ERRORS: &str = "pipeline_errors_total";
+const METRIC_PIPELINE_LEADER_ROTATIONS: &str = "pipeline_leader_rotations_total";
+const METRIC_PIPELINE_ACTIVE_FLOWS: &str = "pipeline_active_flows";
+const METRIC_PIPELINE_SUBMISSIONS: &str = "pipeline_submissions_total";
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct PipelineStageLatencySummary {
+    pub count: u64,
+    pub average_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub p95_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct PipelineGossipTelemetry {
+    pub success_total: u64,
+    pub failure_total: u64,
+    pub failure_reasons: HashMap<String, u64>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct PipelineTelemetrySummary {
+    pub active_flows: usize,
+    pub stage_latency_ms: HashMap<PipelineStage, PipelineStageLatencySummary>,
+    pub gossip: PipelineGossipTelemetry,
+    pub errors: HashMap<String, HashMap<String, u64>>,
+    pub leader_observations: u64,
 }
 
 /// Public handle to the orchestrator allowing pipeline submissions and telemetry queries.
@@ -328,24 +538,44 @@ impl PipelineOrchestrator {
     }
 
     /// Submit a transaction workflow into the orchestrated pipeline.
+    #[instrument(
+        name = "pipeline.submit_transaction",
+        skip(self, workflow),
+        fields(hash = tracing::field::Empty, origin = tracing::field::Empty),
+        err
+    )]
     pub async fn submit_transaction(&self, workflow: TransactionWorkflow) -> ChainResult<String> {
         if workflow.policy.required_tier < Tier::Tl1 {
+            metrics::counter!(
+                METRIC_PIPELINE_SUBMISSIONS,
+                1,
+                "result" => "rejected",
+                "reason" => "tier_requirement",
+            );
             return Err(ChainError::Transaction(
                 "transaction workflow does not meet TL1 submission requirements".into(),
             ));
         }
         let sender = workflow.preview.from.clone();
+        Span::current().record("origin", &display(&sender));
         let account = self
             .node
             .get_account(sender.as_str())?
             .ok_or_else(|| ChainError::Transaction("origin account missing from ledger".into()))?;
         if account.reputation.tier < workflow.policy.required_tier {
+            metrics::counter!(
+                METRIC_PIPELINE_SUBMISSIONS,
+                1,
+                "result" => "rejected",
+                "reason" => "account_tier",
+            );
             return Err(ChainError::Transaction(
                 "account tier insufficient for orchestrated submission".into(),
             ));
         }
         let bundle = workflow.bundle.clone();
         let hash = bundle.hash();
+        Span::current().record("hash", &display(&hash));
         let expected_balance = workflow
             .sender_post_utxos
             .iter()
@@ -360,6 +590,12 @@ impl PipelineOrchestrator {
         self.metrics.register(hash.clone(), metrics).await;
         if let Some(handle) = &self.p2p {
             let payload = serde_json::to_vec(&bundle).map_err(|err| {
+                metrics::counter!(
+                    METRIC_PIPELINE_SUBMISSIONS,
+                    1,
+                    "result" => "rejected",
+                    "reason" => "gossip_encode",
+                );
                 ChainError::Config(format!(
                     "failed to serialise proofs bundle for {hash}: {err}"
                 ))
@@ -368,6 +604,12 @@ impl PipelineOrchestrator {
                 .publish_gossip(GossipTopic::Proofs, payload)
                 .await
                 .map_err(|err| {
+                    metrics::counter!(
+                        METRIC_PIPELINE_SUBMISSIONS,
+                        1,
+                        "result" => "rejected",
+                        "reason" => "gossip_publish",
+                    );
                     ChainError::Config(format!("failed to publish proofs gossip for {hash}: {err}"))
                 })?;
         }
@@ -380,12 +622,22 @@ impl PipelineOrchestrator {
             .send(submission)
             .await
             .map_err(|_| ChainError::Config("pipeline submission channel closed".into()))?;
+        metrics::counter!(
+            METRIC_PIPELINE_SUBMISSIONS,
+            1,
+            "result" => "accepted",
+        );
         Ok(hash)
     }
 
     /// Subscribe to dashboard snapshots for observability dashboards.
     pub fn subscribe_dashboard(&self) -> watch::Receiver<PipelineDashboardSnapshot> {
         self.metrics.subscribe()
+    }
+
+    /// Summarise pipeline telemetry for monitoring endpoints.
+    pub async fn telemetry_summary(&self) -> PipelineTelemetrySummary {
+        self.metrics.telemetry_summary().await
     }
 
     /// Await a specific stage for the given transaction hash.
@@ -438,10 +690,58 @@ impl PipelineOrchestrator {
     /// This helper is primarily intended for integration tests that need to
     /// deterministically drive the pipeline error feed without spinning up the
     /// full validator stack.
-    pub fn publish_error_for_testing(&self, error: PipelineError) {
+    pub async fn publish_error_for_testing(&self, error: PipelineError) {
+        self.metrics.record_error(error.stage, error.reason).await;
         let _ = self.errors.send(error);
     }
 
+    #[cfg(test)]
+    pub(crate) async fn seed_flow_for_testing(
+        &self,
+        hash: String,
+        origin: Address,
+        target_nonce: u64,
+        expected_balance: u128,
+        started_at: Instant,
+    ) {
+        let metrics = FlowMetrics::new(origin, target_nonce, expected_balance, started_at);
+        self.metrics.register(hash, metrics).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn record_stage_for_testing(
+        &self,
+        hash: &str,
+        stage: PipelineStage,
+        at: Instant,
+    ) {
+        self.metrics.record_stage(hash, stage, at).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn record_error_for_testing(&self, stage: &'static str, reason: &'static str) {
+        self.metrics.record_error(stage, reason).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn record_gossip_failure_for_testing(&self, reason: &'static str) {
+        self.metrics.record_gossip_failure(reason).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_gossip_success_for_testing(&self) {
+        self.metrics.record_gossip_success();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_leader_observation_for_testing(&self) {
+        self.metrics.record_leader_observation();
+    }
+
+    #[instrument(
+        name = "pipeline.ingest_loop",
+        skip(node, metrics, submissions_rx, shutdown_rx)
+    )]
     async fn ingest_loop(
         node: NodeHandle,
         metrics: Arc<PipelineMetrics>,
@@ -470,6 +770,7 @@ impl PipelineOrchestrator {
                         }
                         Err(err) => {
                             warn!(?hash, ?err, "failed to submit transaction to mempool");
+                            metrics.record_error("ingest", "submit_failed").await;
                             continue;
                         }
                     }
@@ -478,6 +779,10 @@ impl PipelineOrchestrator {
         }
     }
 
+    #[instrument(
+        name = "pipeline.observe_loop",
+        skip(node, metrics, shutdown_rx, errors)
+    )]
     async fn observe_loop(
         node: NodeHandle,
         metrics: Arc<PipelineMetrics>,
@@ -499,6 +804,7 @@ impl PipelineOrchestrator {
                 event = consensus_events.recv() => {
                     match event {
                         Ok(PipelineObservation::VrfLeadership { height, round, .. }) => {
+                            metrics.record_leader_observation();
                             vrf_observations.insert((height, round), Instant::now());
                         }
                         Ok(PipelineObservation::BftFinalised { height, round, block_hash, .. }) => {
@@ -514,8 +820,12 @@ impl PipelineOrchestrator {
                                             block_hash,
                                             block.hash
                                         );
+                                        metrics
+                                            .record_error("bft_finalised", "hash_mismatch")
+                                            .await;
                                         let _ = errors.send(PipelineError::new(
                                             "bft_finalised",
+                                            "hash_mismatch",
                                             height,
                                             round,
                                             Some(block_hash.clone()),
@@ -541,8 +851,12 @@ impl PipelineOrchestrator {
                                             block_flow_index.insert(block_hash.clone(), tracked);
                                         }
                                         Err(err) => {
+                                            metrics
+                                                .record_error("bft_finalised", "handle_block")
+                                                .await;
                                             let _ = errors.send(PipelineError::new(
                                                 "bft_finalised",
+                                                "handle_block",
                                                 height,
                                                 round,
                                                 Some(block_hash.clone()),
@@ -552,8 +866,12 @@ impl PipelineOrchestrator {
                                     }
                                 }
                                 Ok(None) => {
+                                    metrics
+                                        .record_error("bft_finalised", "not_found")
+                                        .await;
                                     let _ = errors.send(PipelineError::new(
                                         "bft_finalised",
+                                        "not_found",
                                         height,
                                         round,
                                         Some(block_hash.clone()),
@@ -561,8 +879,12 @@ impl PipelineOrchestrator {
                                     ));
                                 }
                                 Err(err) => {
+                                    metrics
+                                        .record_error("bft_finalised", "fetch_failed")
+                                        .await;
                                     let _ = errors.send(PipelineError::new(
                                         "bft_finalised",
+                                        "fetch_failed",
                                         height,
                                         round,
                                         Some(block_hash.clone()),
@@ -594,8 +916,12 @@ impl PipelineOrchestrator {
                                         .await;
                                 }
                             } else {
+                                metrics
+                                    .record_error("firewood_commitment", "missing_context")
+                                    .await;
                                 let _ = errors.send(PipelineError::new(
                                     "firewood_commitment",
+                                    "missing_context",
                                     height,
                                     round,
                                     Some(block_hash.clone()),
@@ -616,15 +942,18 @@ impl PipelineOrchestrator {
                 _ = time::sleep(Duration::from_millis(100)) => {
                     if let Err(err) = PipelineOrchestrator::poll_mempool(&node, &metrics).await {
                         warn!(?err, "unable to poll mempool status");
+                        metrics.record_error("mempool", "poll_failed").await;
                     }
                     if let Err(err) = PipelineOrchestrator::poll_rewards(&node, &metrics).await {
                         warn!(?err, "failed to evaluate reward application");
+                        metrics.record_error("rewards", "poll_failed").await;
                     }
                 }
             }
         }
     }
 
+    #[instrument(name = "pipeline.poll_mempool", skip(node, metrics), err)]
     async fn poll_mempool(node: &NodeHandle, metrics: &Arc<PipelineMetrics>) -> ChainResult<()> {
         let mempool = node.mempool_status()?;
         let now = Instant::now();
@@ -636,11 +965,19 @@ impl PipelineOrchestrator {
         Ok(())
     }
 
+    #[instrument(
+        name = "pipeline.handle_block",
+        skip(node, metrics, block),
+        fields(height = tracing::field::Empty, proposer = tracing::field::Empty),
+        err
+    )]
     async fn handle_block(
         node: &NodeHandle,
         metrics: &Arc<PipelineMetrics>,
         block: &Block,
     ) -> ChainResult<Vec<String>> {
+        Span::current().record("height", &display(block.header.height));
+        Span::current().record("proposer", &display(&block.header.proposer));
         let mut tracked_hashes = Vec::new();
         for tx in &block.transactions {
             let hash = hex::encode(tx.hash());
@@ -660,6 +997,7 @@ impl PipelineOrchestrator {
         Ok(tracked_hashes)
     }
 
+    #[instrument(name = "pipeline.poll_rewards", skip(node, metrics), err)]
     async fn poll_rewards(node: &NodeHandle, metrics: &Arc<PipelineMetrics>) -> ChainResult<()> {
         let hashes = metrics.hashes().await;
         for hash in hashes {
@@ -697,6 +1035,7 @@ impl PipelineOrchestrator {
         Ok(())
     }
 
+    #[instrument(name = "pipeline.gossip_loop", skip(metrics, events, shutdown_rx))]
     async fn gossip_loop(
         metrics: Arc<PipelineMetrics>,
         mut events: broadcast::Receiver<NodeEvent>,
@@ -718,6 +1057,7 @@ impl PipelineOrchestrator {
                             }
                             match serde_json::from_slice::<TransactionProofBundle>(&data) {
                                 Ok(bundle) => {
+                                    metrics.record_gossip_success();
                                     let hash = bundle.hash();
                                     if metrics.hashes().await.iter().any(|tracked| tracked == &hash) {
                                         metrics
@@ -731,12 +1071,14 @@ impl PipelineOrchestrator {
                                 }
                                 Err(err) => {
                                     warn!(?err, "invalid proofs gossip payload");
+                                    metrics.record_gossip_failure("decode").await;
                                 }
                             }
                         }
                         Ok(_) => {}
                         Err(broadcast::error::RecvError::Lagged(skipped)) => {
                             warn!(skipped, "lagged on gossip event stream");
+                            metrics.record_gossip_failure("lagged").await;
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             debug!("p2p event stream closed");

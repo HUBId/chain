@@ -38,6 +38,7 @@ describe('PipelineAlertsPanel', () => {
     const observedAt = Date.UTC(2024, 0, 1, 12, 34, 56);
     const payload: PipelineErrorPayload = {
       stage: 'bft_finalised',
+      reason: 'hash_mismatch',
       height: 128,
       round: 5,
       block_hash: 'ffffffffffffffffffffffffffffffff',
@@ -61,6 +62,7 @@ describe('PipelineAlertsPanel', () => {
     expect(screen.queryByText('No pipeline issues detected.')).toBeNull();
     expect(screen.getByText('Simulated pipeline failure')).toBeInTheDocument();
     expect(screen.getByText('Bft Finalised')).toBeInTheDocument();
+    expect(screen.getByText('Hash Mismatch')).toBeInTheDocument();
     expect(screen.getByText('128')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(screen.getByText('ffffffff…ffffff')).toBeInTheDocument();

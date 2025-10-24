@@ -130,6 +130,13 @@ threaten block production.
    update `electrs.cache.telemetry` and
    `electrs.tracker.telemetry_endpoint` to keep forwarding the same signals the
    validator dashboards expect.【F:config/wallet.toml†L9-L31】【F:rpp/runtime/config.rs†L1269-L1313】
+8. **Track pipeline health metrics.** The orchestrator exports
+   `pipeline_stage_latency_ms`, `pipeline_errors_total`,
+   `pipeline_gossip_events_total`, and
+   `pipeline_leader_rotations_total` while exposing an aggregated
+   `/wallet/pipeline/telemetry` snapshot for dashboards. Run
+   `scripts/ci/pipeline_observability.sh` alongside deployments to smoke-test
+   the telemetry feed.【F:rpp/runtime/orchestration.rs†L160-L287】【F:rpp/runtime/orchestration.rs†L747-L940】【F:rpp/rpc/api.rs†L1833-L1876】【F:scripts/ci/pipeline_observability.sh†L1-L9】
 
 ## Health Probes
 
@@ -155,9 +162,13 @@ threaten block production.
    cumulative durations to catch spikes in rejection rates or verification
    latency regressions; notify operators when any backend reports sustained
    failures or multi-second runtimes.【F:rpp/runtime/node.rs†L220-L238】【F:rpp/proofs/proof_system/mod.rs†L150-L260】
-3. **Consensus availability.** Track uptime/consensus proof counts per block in
+4. **Consensus availability.** Track uptime/consensus proof counts per block in
    telemetry to ensure validators continue submitting the expected auxiliary
    proofs; deviations indicate failing wallets or byzantine participants.【F:src/node.rs†L489-L517】
+5. **Pipeline latency & error budget.** Import
+   `docs/observability/pipeline_grafana.json` to chart stage percentile
+   latency, gossip failures, and leader rotations directly from the Prometheus
+   metrics exposed by the orchestrator.【F:docs/observability/pipeline_grafana.json†L1-L52】
 
 ## Deployment Guardrails
 

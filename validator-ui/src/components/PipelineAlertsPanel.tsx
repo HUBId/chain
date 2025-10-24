@@ -97,6 +97,10 @@ export function PipelineAlertsPanel() {
                     <dd>{alert.round}</dd>
                   </div>
                   <div>
+                    <dt>Reason</dt>
+                    <dd>{formatStage(alert.reason)}</dd>
+                  </div>
+                  <div>
                     <dt>Block</dt>
                     <dd>{formatHash(alert.block_hash ?? null)}</dd>
                   </div>

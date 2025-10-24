@@ -1,0 +1,53 @@
+{
+  "title": "Pipeline Observability",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Stage Duration (p95)",
+      "description": "Pipeline stage latency at the 95th percentile.",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(pipeline_stage_latency_ms_bucket{stage=\"bft_finalised\"}[5m])) by (le))",
+          "legendFormat": "BFT Finalised"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(pipeline_stage_latency_ms_bucket{stage=\"firewood_committed\"}[5m])) by (le))",
+          "legendFormat": "Firewood Committed"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Pipeline Error Rate",
+      "description": "Rate of orchestrator error paths by reason (per 5m).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "expr": "sum by (stage, reason)(increase(pipeline_errors_total[5m]))",
+          "legendFormat": "{{stage}} :: {{reason}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Leader Rotations",
+      "description": "Observed leader rotation events from the pipeline.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "targets": [
+        {
+          "expr": "sum(increase(pipeline_leader_rotations_total[5m]))",
+          "legendFormat": "Leader rotations"
+        }
+      ]
+    }
+  ]
+}
