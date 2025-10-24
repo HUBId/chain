@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/p2p/state_sync_chunk_stream.json",
+  "title": "SnapshotChunkStream",
+  "description": "State sync chunk stream response metadata returned when streaming snapshot payloads.",
+  "type": "object",
+  "required": ["root", "index", "total", "data"],
+  "properties": {
+    "root": {
+      "type": "string",
+      "description": "Hexadecimal hash of the snapshot payload being streamed."
+    },
+    "index": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Zero-based chunk index within the snapshot stream."
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of chunks that compose the snapshot payload."
+    },
+    "data": {
+      "type": "string",
+      "description": "Base64-encoded chunk bytes representing a slice of the snapshot payload.",
+      "contentEncoding": "base64"
+    }
+  },
+  "additionalProperties": false
+}

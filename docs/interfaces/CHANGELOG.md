@@ -1,5 +1,9 @@
 # Interface Schema Changelog
 
+## 2025-02-20
+
+- Added LightClientHead and SnapshotChunkStream schemas with sample payloads for P2P state sync documentation.
+
 ## 2025-02-14
 
 - Added canonical JSON Schema snapshots for runtime transaction and uptime payloads.
