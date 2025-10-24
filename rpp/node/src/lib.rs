@@ -1,5 +1,6 @@
 use std::env;
 use std::fmt;
+use std::io::Write;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,11 +17,17 @@ use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
 use opentelemetry_sdk::Resource;
 use parking_lot::RwLock;
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use sha2::{Digest, Sha256};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use tokio::task::{JoinError, JoinHandle};
 use tonic::metadata::{MetadataMap, MetadataValue};
-use tracing::{error, info, info_span, warn};
+use tracing::field::{Field, Visit};
+use tracing::{error, info, info_span, warn, Event, Subscriber};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
@@ -170,7 +177,7 @@ pub struct RuntimeOptions {
     #[arg(long, value_name = "LEVEL")]
     pub log_level: Option<String>,
 
-    /// Emit logs in JSON format
+    /// (Deprecated) Logs are always emitted in structured JSON format
     #[arg(long)]
     pub log_json: bool,
 
@@ -1078,7 +1085,7 @@ fn init_tracing(
     config: &NodeConfig,
     metadata: Option<&ConfigMetadata>,
     log_level: Option<String>,
-    json: bool,
+    _json: bool,
     mode: RuntimeMode,
     config_source: &str,
     dry_run: bool,
@@ -1095,16 +1102,9 @@ fn init_tracing(
         None => EnvFilter::new("info"),
     };
 
-    let fmt_layer = || {
-        let layer = tracing_subscriber::fmt::layer()
-            .with_target(true)
-            .with_ansi(!json);
-        if json {
-            layer.json().flatten_event(true).boxed()
-        } else {
-            layer.boxed()
-        }
-    };
+    let instance_id = resolve_instance_id(metadata, mode);
+    let redact_logs = config.rollout.telemetry.redact_logs;
+    let fmt_layer = || structured_log_layer(mode, config_source, &instance_id, redact_logs);
 
     if dry_run {
         tracing_subscriber::registry()
@@ -1118,6 +1118,7 @@ fn init_tracing(
             service.component = "rpp-node",
             rpp.mode = mode.as_str(),
             rpp.config_source = config_source,
+            instance.id = instance_id.as_str(),
             otlp_enabled = false,
             dry_run = true,
             mode = mode.as_str(),
@@ -1130,6 +1131,7 @@ fn init_tracing(
             service.component = "rpp-node",
             rpp.mode = mode.as_str(),
             rpp.config_source = config_source,
+            instance.id = instance_id.as_str(),
             otlp_enabled = false,
             dry_run = true,
             mode = mode.as_str(),
@@ -1139,7 +1141,7 @@ fn init_tracing(
         return Ok(None);
     }
 
-    match build_otlp_layer(config, metadata, mode, config_source)? {
+    match build_otlp_layer(config, metadata, mode, config_source, &instance_id)? {
         Some(OtlpLayer {
             layer,
             guard,
@@ -1157,6 +1159,7 @@ fn init_tracing(
                 service.component = "rpp-node",
                 rpp.mode = mode.as_str(),
                 rpp.config_source = config_source,
+                instance.id = instance_id.as_str(),
                 otlp_enabled = true,
                 otlp_endpoint = endpoint.as_str(),
                 dry_run = false,
@@ -1170,6 +1173,7 @@ fn init_tracing(
                 service.component = "rpp-node",
                 rpp.mode = mode.as_str(),
                 rpp.config_source = config_source,
+                instance.id = instance_id.as_str(),
                 otlp_enabled = true,
                 otlp_endpoint = endpoint,
                 dry_run = false,
@@ -1191,6 +1195,7 @@ fn init_tracing(
                 service.component = "rpp-node",
                 rpp.mode = mode.as_str(),
                 rpp.config_source = config_source,
+                instance.id = instance_id.as_str(),
                 otlp_enabled = false,
                 dry_run = false,
                 mode = mode.as_str(),
@@ -1203,6 +1208,7 @@ fn init_tracing(
                 service.component = "rpp-node",
                 rpp.mode = mode.as_str(),
                 rpp.config_source = config_source,
+                instance.id = instance_id.as_str(),
                 otlp_enabled = false,
                 dry_run = false,
                 mode = mode.as_str(),
@@ -1212,6 +1218,248 @@ fn init_tracing(
             Ok(None)
         }
     }
+}
+
+fn structured_log_layer(
+    mode: RuntimeMode,
+    config_source: &str,
+    instance_id: &str,
+    redact_sensitive: bool,
+) -> StructuredLogLayer {
+    StructuredLogLayer::new(mode, config_source, instance_id, redact_sensitive)
+}
+
+fn resolve_instance_id(metadata: Option<&ConfigMetadata>, mode: RuntimeMode) -> String {
+    if let Ok(value) = env::var("RPP_INSTANCE_ID") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(metadata) = metadata {
+        if let Some(file_name) = metadata.path.file_name().and_then(|name| name.to_str()) {
+            return format!("{}-{file_name}", metadata.source.as_str());
+        }
+    }
+
+    if let Ok(host) = env::var("HOSTNAME") {
+        let trimmed = host.trim();
+        if !trimmed.is_empty() {
+            return format!("{trimmed}-{}", std::process::id());
+        }
+    }
+
+    format!("{}-{}", mode.as_str(), std::process::id())
+}
+
+#[derive(Clone)]
+struct StructuredLogLayer {
+    mode: RuntimeMode,
+    config_source: String,
+    instance_id: String,
+    redact_sensitive: bool,
+}
+
+impl StructuredLogLayer {
+    fn new(
+        mode: RuntimeMode,
+        config_source: &str,
+        instance_id: &str,
+        redact_sensitive: bool,
+    ) -> Self {
+        Self {
+            mode,
+            config_source: config_source.to_string(),
+            instance_id: instance_id.to_string(),
+            redact_sensitive,
+        }
+    }
+}
+
+impl<S> Layer<S> for StructuredLogLayer
+where
+    S: Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = JsonEventVisitor::default();
+        event.record(&mut visitor);
+        let mut fields = visitor.into_fields();
+
+        let message = fields
+            .remove("message")
+            .and_then(|value| match value {
+                JsonValue::String(value) => Some(value),
+                JsonValue::Null => None,
+                other => Some(other.to_string()),
+            })
+            .unwrap_or_default();
+
+        let mut log = fields;
+        log.insert("msg".to_string(), JsonValue::String(message));
+        log.insert("ts".to_string(), JsonValue::String(current_timestamp()));
+        log.insert(
+            "level".to_string(),
+            JsonValue::String(event.metadata().level().as_str().to_lowercase()),
+        );
+        log.insert(
+            "target".to_string(),
+            JsonValue::String(event.metadata().target().to_string()),
+        );
+        log.insert(
+            "service.name".to_string(),
+            JsonValue::String("rpp".to_string()),
+        );
+        log.insert(
+            "service.component".to_string(),
+            JsonValue::String("rpp-node".to_string()),
+        );
+        let mode_value = JsonValue::String(self.mode.as_str().to_string());
+        log.insert("rpp.mode".to_string(), mode_value.clone());
+        log.insert("mode".to_string(), mode_value);
+        let config_source_value = JsonValue::String(self.config_source.clone());
+        log.insert("rpp.config_source".to_string(), config_source_value.clone());
+        log.insert("config_source".to_string(), config_source_value);
+        log.insert(
+            "instance.id".to_string(),
+            JsonValue::String(self.instance_id.clone()),
+        );
+
+        if self.redact_sensitive {
+            redact_sensitive_fields(&mut log);
+        }
+
+        let payload = serde_json::to_string(&JsonValue::Object(log)).or_else(|err| {
+            let mut fallback = JsonMap::new();
+            fallback.insert("level".to_string(), JsonValue::String("error".to_string()));
+            fallback.insert(
+                "msg".to_string(),
+                JsonValue::String("failed to serialize log event".to_string()),
+            );
+            fallback.insert("error".to_string(), JsonValue::String(err.to_string()));
+            serde_json::to_string(&JsonValue::Object(fallback))
+        });
+
+        if let Ok(line) = payload {
+            let mut stderr = std::io::stderr().lock();
+            let _ = writeln!(stderr, "{line}");
+        }
+    }
+}
+
+#[derive(Default)]
+struct JsonEventVisitor {
+    fields: JsonMap<String, JsonValue>,
+}
+
+impl JsonEventVisitor {
+    fn insert_value(&mut self, field: &Field, value: JsonValue) {
+        self.fields.insert(field.name().to_string(), value);
+    }
+
+    fn into_fields(self) -> JsonMap<String, JsonValue> {
+        self.fields
+    }
+}
+
+impl Visit for JsonEventVisitor {
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.insert_value(field, JsonValue::Bool(value));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.insert_value(field, JsonValue::Number(value.into()));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.insert_value(field, JsonValue::Number(value.into()));
+    }
+
+    fn record_i128(&mut self, field: &Field, value: i128) {
+        self.insert_value(field, JsonValue::String(value.to_string()));
+    }
+
+    fn record_u128(&mut self, field: &Field, value: u128) {
+        self.insert_value(field, JsonValue::String(value.to_string()));
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        if let Some(number) = serde_json::Number::from_f64(value) {
+            self.insert_value(field, JsonValue::Number(number));
+        } else {
+            self.insert_value(field, JsonValue::String(value.to_string()));
+        }
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.insert_value(field, JsonValue::String(value.to_string()));
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.insert_value(field, JsonValue::String(value.to_string()));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.insert_value(field, JsonValue::String(format!("{value:?}")));
+    }
+
+    fn record_bytes(&mut self, field: &Field, value: &[u8]) {
+        let encoded = value
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect::<String>();
+        self.insert_value(field, JsonValue::String(encoded));
+    }
+}
+
+fn current_timestamp() -> String {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn redact_sensitive_fields(fields: &mut JsonMap<String, JsonValue>) {
+    let keys: Vec<String> = fields
+        .keys()
+        .filter(|key| should_redact_key(key))
+        .cloned()
+        .collect();
+
+    for key in keys {
+        if let Some(value) = fields.get(&key).cloned() {
+            if let Some(hash) = hash_sensitive_value(&value) {
+                fields.insert(key, JsonValue::String(format!("sha256:{hash}")));
+            } else {
+                fields.insert(key, JsonValue::Null);
+            }
+        }
+    }
+}
+
+fn should_redact_key(key: &str) -> bool {
+    const SENSITIVE_SUBSTRINGS: &[&str] = &["token", "secret", "password", "auth"];
+    let lower = key.to_ascii_lowercase();
+    SENSITIVE_SUBSTRINGS
+        .iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+fn hash_sensitive_value(value: &JsonValue) -> Option<String> {
+    let raw = match value {
+        JsonValue::Null => return None,
+        JsonValue::String(inner) => inner.clone(),
+        other => other.to_string(),
+    };
+
+    if raw.is_empty() {
+        return None;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(raw.as_bytes());
+    let digest = hasher.finalize();
+    let hash = digest.iter().map(|byte| format!("{:02x}", byte)).collect();
+    Some(hash)
 }
 
 struct OtelGuard;
@@ -1241,6 +1489,7 @@ fn build_otlp_layer(
     metadata: Option<&ConfigMetadata>,
     mode: RuntimeMode,
     config_source: &str,
+    instance_id: &str,
 ) -> Result<Option<OtlpLayer>> {
     let Some(settings) = otlp_settings(config)? else {
         return Ok(None);
@@ -1265,7 +1514,7 @@ fn build_otlp_layer(
         .with_max_export_batch_size(512)
         .with_max_export_timeout(settings.timeout);
 
-    let resource = telemetry_resource(config, metadata, mode, config_source);
+    let resource = telemetry_resource(config, metadata, mode, config_source, instance_id);
 
     let provider = trace::TracerProvider::builder()
         .with_config(trace::Config::default().with_resource(resource))
@@ -1289,6 +1538,7 @@ fn telemetry_resource(
     metadata: Option<&ConfigMetadata>,
     mode: RuntimeMode,
     config_source: &str,
+    instance_id: &str,
 ) -> Resource {
     let mut attributes = vec![
         KeyValue::new("service.name", "rpp"),
@@ -1297,6 +1547,8 @@ fn telemetry_resource(
         KeyValue::new("service.version", env!("CARGO_PKG_VERSION")),
         KeyValue::new("rpp.mode", mode.as_str()),
         KeyValue::new("rpp.config_source", config_source.to_string()),
+        KeyValue::new("instance.id", instance_id.to_string()),
+        KeyValue::new("schema.version", config.config_version.clone()),
         KeyValue::new(
             "rpp.rollout.release_channel",
             format!("{:?}", config.rollout.release_channel),
@@ -1482,7 +1734,8 @@ mod tests {
     #[test]
     fn telemetry_resource_includes_service_attributes() {
         let config = NodeConfig::default();
-        let resource = telemetry_resource(&config, None, RuntimeMode::Node, "default");
+        let resource =
+            telemetry_resource(&config, None, RuntimeMode::Node, "default", "test-instance");
         let attributes: HashMap<_, _> = resource
             .iter()
             .map(|kv| (kv.key.as_str().to_string(), kv.value.clone()))
@@ -1523,6 +1776,18 @@ mod tests {
                 .get("rpp.config_source")
                 .and_then(|value| value_to_string(value)),
             Some("default".to_string())
+        );
+        assert_eq!(
+            attributes
+                .get("instance.id")
+                .and_then(|value| value_to_string(value)),
+            Some("test-instance".to_string())
+        );
+        assert_eq!(
+            attributes
+                .get("schema.version")
+                .and_then(|value| value_to_string(value)),
+            Some(config.config_version.clone())
         );
     }
 }
