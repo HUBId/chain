@@ -194,6 +194,20 @@ threaten block production.
    environments that require non-repudiation can verify authenticity without
    re-deriving state from block data.【F:rpp/runtime/node.rs†L330-L370】【F:rpp/runtime/node.rs†L3830-L3890】
 
+## State-Sync Interfaces
+
+1. **Subscribe to light-client heads via SSE.** The `/state-sync/head/stream`
+   endpoint upgrades to Server-Sent Events once authentication succeeds,
+   returning the current light-client head and subsequent updates. Heartbeat
+   comments (`:hb`) are emitted every 10 seconds; clients should treat a missing
+   heartbeat as a cue to reconnect with exponential backoff.
+2. **Fetch state snapshots chunk-by-chunk.** The `/state-sync/chunk/:id`
+   endpoint emits JSON metadata alongside a base64 payload and SHA-256 checksum
+   for the requested chunk. It validates the requested index against the active
+   state-sync session and returns `400` for out-of-range values, `404` when a
+   chunk is missing, or `503` while no session is available. The legacy
+   `/state-sync/chunk?index=` route remains available for older clients.
+
 With these guardrails, operators can ship the blueprint implementation safely
 and maintain real-time visibility into proof generation, verification, and
 network health.

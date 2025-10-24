@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::convert::Infallible;
+use std::fmt;
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::{Path, Query, Request, State};
@@ -16,15 +18,20 @@ use axum::response::Response;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use hex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tower::ServiceBuilder;
 use tower::limit::RateLimitLayer;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::consensus::SignedBftVote;
 use crate::crypto::{
@@ -60,12 +67,98 @@ use crate::wallet::{
 };
 #[cfg(feature = "vendor_electrs")]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
+use blake3::Hash as Blake3Hash;
 use parking_lot::RwLock;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    AllowlistedPeer, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk,
-    NetworkStateSyncPlan,
+    AllowlistedPeer, LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, SnapshotChunk,
 };
+
+#[derive(Clone, Debug, Serialize)]
+pub struct LightHeadSse {
+    pub height: u64,
+    pub hash: String,
+    pub state_root: String,
+    pub proof_commitment: String,
+    pub timestamp: u64,
+    pub finalized: bool,
+}
+
+impl From<LightClientHead> for LightHeadSse {
+    fn from(head: LightClientHead) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            height: head.height,
+            hash: head.block_hash,
+            state_root: head.state_root,
+            proof_commitment: head.proof_commitment,
+            timestamp,
+            finalized: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct StateSyncSessionInfo {
+    pub root: Blake3Hash,
+    pub total_chunks: u32,
+}
+
+#[derive(Debug, Clone)]
+pub enum StateSyncErrorKind {
+    MissingRuntime,
+    NoActiveSession,
+    BuildFailed,
+    ChunkIndexOutOfRange { index: u32, total: u32 },
+    ChunkNotFound { index: u32 },
+    Unauthorized,
+    Internal,
+}
+
+#[derive(Debug, Clone)]
+pub struct StateSyncError {
+    pub kind: StateSyncErrorKind,
+    pub message: Option<String>,
+}
+
+impl StateSyncError {
+    pub fn new(kind: StateSyncErrorKind, message: impl Into<Option<String>>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for StateSyncError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.message {
+            Some(message) => write!(f, "{message}"),
+            None => write!(f, "state sync error: {:?}", self.kind),
+        }
+    }
+}
+
+impl std::error::Error for StateSyncError {}
+
+#[async_trait]
+pub trait StateSyncApi: Send + Sync {
+    fn watch_light_client_heads(
+        &self,
+    ) -> Result<watch::Receiver<Option<LightClientHead>>, StateSyncError>;
+
+    fn latest_light_client_head(&self) -> Result<Option<LightClientHead>, StateSyncError>;
+
+    fn ensure_state_sync_session(&self) -> Result<(), StateSyncError>;
+
+    fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError>;
+
+    async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError>;
+}
 
 #[derive(Clone)]
 pub struct ApiContext {
@@ -77,6 +170,7 @@ pub struct ApiContext {
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     request_limit_per_minute: Option<NonZeroU64>,
     auth_token_enabled: bool,
+    state_sync_api: Option<Arc<dyn StateSyncApi>>,
 }
 
 impl ApiContext {
@@ -91,6 +185,10 @@ impl ApiContext {
         #[cfg(feature = "vendor_electrs")]
         let tracker = wallet.as_ref().and_then(|wallet| wallet.tracker_handle());
 
+        let state_sync_api = node
+            .as_ref()
+            .map(|handle| Arc::new(handle.clone()) as Arc<dyn StateSyncApi>);
+
         Self {
             mode,
             node,
@@ -100,6 +198,7 @@ impl ApiContext {
             orchestrator,
             request_limit_per_minute,
             auth_token_enabled,
+            state_sync_api,
         }
     }
 
@@ -154,6 +253,27 @@ impl ApiContext {
 
     fn wallet_handle(&self) -> Option<Arc<Wallet>> {
         self.wallet.as_ref().map(Arc::clone)
+    }
+
+    fn state_sync_api(&self) -> Option<Arc<dyn StateSyncApi>> {
+        self.state_sync_api.as_ref().map(Arc::clone)
+    }
+
+    fn require_state_sync_api(
+        &self,
+    ) -> Result<Arc<dyn StateSyncApi>, (StatusCode, Json<ErrorResponse>)> {
+        let Some(api) = self.state_sync_api() else {
+            return Err(not_started("node"));
+        };
+        if self.node_available() && !self.node_enabled() {
+            return Err(unavailable("node"));
+        }
+        Ok(api)
+    }
+
+    pub fn with_state_sync_api(mut self, api: Arc<dyn StateSyncApi>) -> Self {
+        self.state_sync_api = Some(api);
+        self
     }
 
     #[cfg(feature = "vendor_electrs")]
@@ -525,6 +645,39 @@ struct StateSyncChunkQuery {
 }
 
 #[derive(Deserialize)]
+struct ChunkIdPath {
+    id: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SnapshotChunkJson {
+    root: String,
+    index: u32,
+    total: u32,
+    length: u32,
+    payload: String,
+    sha256: String,
+}
+
+impl SnapshotChunkJson {
+    fn from_chunk(chunk: SnapshotChunk) -> Self {
+        let index = u32::try_from(chunk.index).unwrap_or(u32::MAX);
+        let total = u32::try_from(chunk.total).unwrap_or(u32::MAX);
+        let length = u32::try_from(chunk.data.len()).unwrap_or(u32::MAX);
+        let payload = BASE64_ENGINE.encode(&chunk.data);
+        let sha256 = Sha256::digest(&chunk.data);
+        Self {
+            root: format!("0x{}", hex::encode(chunk.root.as_bytes())),
+            index,
+            total,
+            length,
+            payload,
+            sha256: format!("0x{}", hex::encode(sha256)),
+        }
+    }
+}
+
+#[derive(Deserialize)]
 struct SubmitUptimeRequest {
     proof: Option<UptimeProof>,
 }
@@ -646,7 +799,9 @@ pub async fn serve(
         .route("/snapshots/plan", get(snapshot_plan))
         .route("/snapshots/jobs", get(snapshot_jobs))
         .route("/state-sync/plan", get(state_sync_plan))
+        .route("/state-sync/head/stream", get(state_sync_head_stream))
         .route("/state-sync/chunk", get(state_sync_chunk))
+        .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
         .route("/validator/status", get(validator_status))
         .route("/validator/proofs", get(validator_proofs))
         .route("/validator/peers", get(validator_peers))
@@ -954,6 +1109,33 @@ async fn state_sync_plan(
         .map_err(to_http_error)
 }
 
+pub async fn state_sync_head_stream(
+    State(state): State<ApiContext>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)> {
+    let api = state.require_state_sync_api()?;
+    let receiver = api
+        .watch_light_client_heads()
+        .map_err(state_sync_error_to_http)?;
+
+    let stream = WatchStream::new(receiver)
+        .filter_map(|head| async move { head.map(LightHeadSse::from) })
+        .map(
+            |payload| match Event::default().event("head").json_data(&payload) {
+                Ok(event) => Ok(event),
+                Err(err) => {
+                    warn!(?err, "failed to encode light client head for SSE");
+                    Ok(Event::default().event("head"))
+                }
+            },
+        );
+
+    Ok(Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .comment("hb"),
+    ))
+}
+
 async fn state_sync_chunk(
     State(state): State<ApiContext>,
     Query(query): Query<StateSyncChunkQuery>,
@@ -963,6 +1145,34 @@ async fn state_sync_chunk(
         .network_state_sync_chunk(DEFAULT_STATE_SYNC_CHUNK, query.start)
         .map(Json)
         .map_err(to_http_error)
+}
+
+pub async fn state_sync_chunk_by_id(
+    State(state): State<ApiContext>,
+    Path(path): Path<ChunkIdPath>,
+) -> Result<Json<SnapshotChunkJson>, (StatusCode, Json<ErrorResponse>)> {
+    let api = state.require_state_sync_api()?;
+    api.ensure_state_sync_session()
+        .map_err(state_sync_error_to_http)?;
+    let session = api
+        .state_sync_active_session()
+        .map_err(state_sync_error_to_http)?;
+    if path.id >= session.total_chunks {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "chunk index {} out of range (total {})",
+                    path.id, session.total_chunks
+                ),
+            }),
+        ));
+    }
+    let chunk = api
+        .state_sync_chunk_by_index(path.id)
+        .await
+        .map_err(state_sync_error_to_http)?;
+    Ok(Json(SnapshotChunkJson::from_chunk(chunk)))
 }
 
 async fn validator_status(
@@ -1710,6 +1920,21 @@ fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {
     )
 }
 
+fn state_sync_error_to_http(err: StateSyncError) -> (StatusCode, Json<ErrorResponse>) {
+    let kind = err.kind.clone();
+    let message = err.to_string();
+    let status = match kind {
+        StateSyncErrorKind::MissingRuntime
+        | StateSyncErrorKind::NoActiveSession
+        | StateSyncErrorKind::BuildFailed => StatusCode::SERVICE_UNAVAILABLE,
+        StateSyncErrorKind::ChunkIndexOutOfRange { .. } => StatusCode::BAD_REQUEST,
+        StateSyncErrorKind::ChunkNotFound { .. } => StatusCode::NOT_FOUND,
+        StateSyncErrorKind::Unauthorized => StatusCode::UNAUTHORIZED,
+        StateSyncErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(ErrorResponse { error: message }))
+}
+
 fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
     (
         StatusCode::BAD_REQUEST,
@@ -1756,6 +1981,57 @@ fn not_found(message: &str) -> (StatusCode, Json<ErrorResponse>) {
             error: message.to_string(),
         }),
     )
+}
+
+fn chain_error_to_state_sync(err: ChainError) -> StateSyncError {
+    match err {
+        ChainError::Config(message) => {
+            StateSyncError::new(StateSyncErrorKind::MissingRuntime, Some(message))
+        }
+        ChainError::Unauthorized(message) => {
+            StateSyncError::new(StateSyncErrorKind::Unauthorized, Some(message))
+        }
+        other => StateSyncError::new(StateSyncErrorKind::Internal, Some(other.to_string())),
+    }
+}
+
+#[async_trait]
+impl StateSyncApi for NodeHandle {
+    fn watch_light_client_heads(
+        &self,
+    ) -> Result<watch::Receiver<Option<LightClientHead>>, StateSyncError> {
+        self.subscribe_light_client_heads()
+            .map_err(chain_error_to_state_sync)
+    }
+
+    fn latest_light_client_head(&self) -> Result<Option<LightClientHead>, StateSyncError> {
+        self.latest_light_client_head()
+            .map_err(chain_error_to_state_sync)
+    }
+
+    fn ensure_state_sync_session(&self) -> Result<(), StateSyncError> {
+        Err(StateSyncError::new(
+            StateSyncErrorKind::NoActiveSession,
+            Some("state sync session unavailable".into()),
+        ))
+    }
+
+    fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError> {
+        Err(StateSyncError::new(
+            StateSyncErrorKind::NoActiveSession,
+            Some("state sync session unavailable".into()),
+        ))
+    }
+
+    async fn state_sync_chunk_by_index(
+        &self,
+        _index: u32,
+    ) -> Result<SnapshotChunk, StateSyncError> {
+        Err(StateSyncError::new(
+            StateSyncErrorKind::NoActiveSession,
+            Some("state sync session unavailable".into()),
+        ))
+    }
 }
 
 #[cfg(test)]
