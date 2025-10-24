@@ -8,7 +8,7 @@ Usage: smoke_otlp_export.sh [options] [-- <binary args...>]
 Options:
   -b, --binary PATH     Run the binary at PATH instead of "cargo run -p rpp-node".
   -m, --mode MODE       Runtime mode to exercise (node, wallet, hybrid, validator).
-      --subcommand CMD  Optional subcommand to invoke before runtime flags.
+      --subcommand CMD  Optional subcommand to invoke after the runtime mode.
   -s, --expect SIGNAL   Override the telemetry span/name expected in collector logs.
   -h, --help            Show this message.
 
@@ -112,7 +112,6 @@ COLLECTOR_NAME="${OTLP_COLLECTOR_NAME:-rpp-node-otel-smoke}"
 SMOKE_TIMEOUT="${OTLP_SMOKE_TIMEOUT:-20}"
 
 DEFAULT_ARGS=(
-  "--mode" "${MODE}"
   "--telemetry-endpoint" "http://127.0.0.1:4317"
   "--telemetry-sample-interval" "2"
   "--log-json"
@@ -158,10 +157,12 @@ else
   COMMAND_PREFIX=("cargo" "run" "--quiet" "-p" "rpp-node" "--")
 fi
 
-RUN_COMMAND=("${COMMAND_PREFIX[@]}")
+MODE_ARGS=("${MODE}")
 if [[ -n "${SUBCOMMAND}" ]]; then
-  RUN_COMMAND+=("${SUBCOMMAND}")
+  MODE_ARGS+=("${SUBCOMMAND}")
 fi
+
+RUN_COMMAND=("${COMMAND_PREFIX[@]}" "${MODE_ARGS[@]}")
 
 set +e
 timeout "${SMOKE_TIMEOUT}" "${RUN_COMMAND[@]}" "${NODE_ARGS[@]}" >"${NODE_LOG}" 2>&1

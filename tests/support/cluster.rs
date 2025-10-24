@@ -826,7 +826,6 @@ impl ProcessTestCluster {
 
             let mut command = Command::new(&binary);
             command
-                .arg("--mode")
                 .arg("node")
                 .arg("--config")
                 .arg(&config_path)
@@ -1022,7 +1021,6 @@ impl ProcessClusterNode {
 
         let mut command = Command::new(binary);
         command
-            .arg("--mode")
             .arg("node")
             .arg("--config")
             .arg(&self.config_path)

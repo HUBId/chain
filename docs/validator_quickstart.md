@@ -124,8 +124,7 @@ Create a systemd service, Kubernetes deployment, or supervise the binary with
 the node and wallet components come up together:
 
 ```sh
-RUST_LOG=info ./target/release/rpp-node \
-  --mode validator \
+RUST_LOG=info ./target/release/rpp-node validator \
   --config /etc/rpp/validator.toml \
   --wallet-config /etc/rpp/wallet.toml \
   --telemetry-endpoint https://telemetry.example.com:4317 \
@@ -133,11 +132,11 @@ RUST_LOG=info ./target/release/rpp-node \
 ```
 
 Hybrid deployments that expose wallet functionality alongside a validator can
-swap `--mode hybrid` and point at the hybrid profile instead:
+swap the `validator` subcommand for `hybrid` and point at the hybrid profile
+instead:
 
 ```sh
-RUST_LOG=info ./target/release/rpp-node \
-  --mode hybrid \
+RUST_LOG=info ./target/release/rpp-node hybrid \
   --config /etc/rpp/hybrid.toml \
   --wallet-config /etc/rpp/wallet.toml \
   --telemetry-endpoint https://telemetry.example.com:4317

@@ -58,7 +58,8 @@ async fn node_smoke_shutdown_with_telemetry() -> Result<()> {
 #[test]
 fn exit_code_for_missing_configuration() -> Result<()> {
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
-    cmd.arg("--config")
+    cmd.arg("node")
+        .arg("--config")
         .arg("/nonexistent/config.toml")
         .arg("--dry-run");
     cmd.assert().failure().code(2);
@@ -73,7 +74,8 @@ fn exit_code_for_pipeline_start_failure() -> Result<()> {
         .context("failed to prepare invalid data directory placeholder")?;
 
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
-    cmd.arg("--config")
+    cmd.arg("node")
+        .arg("--config")
         .arg(&config_path)
         .arg("--rpc-listen")
         .arg("127.0.0.1:0");
@@ -85,7 +87,7 @@ fn exit_code_for_pipeline_start_failure() -> Result<()> {
 fn exit_code_for_unexpected_panic() -> Result<()> {
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
     cmd.env("RPP_NODE_TEST_FAILURE_MODE", "panic");
-    cmd.arg("--dry-run");
+    cmd.arg("node").arg("--dry-run");
     cmd.assert().failure().code(4);
     Ok(())
 }
@@ -96,6 +98,7 @@ async fn spawn_node(config_path: &Path, extra_args: &[&str]) -> Result<Child> {
     let mut command = Command::new(binary);
     command
         .kill_on_drop(true)
+        .arg("node")
         .arg("--config")
         .arg(config_path)
         .arg("--rpc-listen")
