@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RPP VRF Gossip Submission",
+  "description": "Poseidon VRF submission payload propagated on the /rpp/gossip/vrf/proofs/1.0.0 topic.",
+  "type": "object",
+  "required": [
+    "address",
+    "input",
+    "proof",
+    "tier",
+    "timetoke_hours"
+  ],
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Validator identity publishing the VRF submission."
+    },
+    "public_key": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "Hex-encoded 32-byte VRF public key, omitted when the publisher withholds the key."
+    },
+    "input": {
+      "type": "object",
+      "required": ["last_block_header", "epoch", "tier_seed"],
+      "properties": {
+        "last_block_header": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Hex-encoded Poseidon preimage component referencing the previous block header hash."
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Epoch number associated with the submission."
+        },
+        "tier_seed": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Hex-encoded Timetoke-derived tier seed."
+        }
+      }
+    },
+    "proof": {
+      "type": "object",
+      "required": ["randomness", "preoutput", "proof"],
+      "properties": {
+        "randomness": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "Poseidon randomness expressed as a decimal-encoded natural number."
+        },
+        "preoutput": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Hex-encoded VRF pre-output bytes."
+        },
+        "proof": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]+$",
+          "description": "Hex-encoded Schnorrkel VRF proof bytes."
+        }
+      }
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["Tl0", "Tl1", "Tl2", "Tl3", "Tl4", "Tl5"],
+      "description": "Reputation tier of the validator when the submission was produced."
+    },
+    "timetoke_hours": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Observed Timetoke hours credited to the validator."
+    }
+  }
+}

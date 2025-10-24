@@ -71,6 +71,7 @@ use crate::runtime::node_runtime::{
         NodeRuntimeConfig as P2pRuntimeConfig,
     },
 };
+use crate::runtime::vrf_gossip::{submission_to_gossip, verify_submission};
 use crate::runtime::sync::{
     state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
     stream_state_sync_chunks as runtime_stream_state_sync_chunks,
@@ -2287,6 +2288,11 @@ impl NodeInner {
                         Ok(NodeEvent::VoteRejected { peer, vote, reason }) => {
                             ingest.handle_invalid_vote_gossip(&peer, vote, &reason);
                         }
+                        Ok(NodeEvent::VrfSubmission { peer, submission }) => {
+                            if let Err(err) = ingest.submit_vrf_submission(submission) {
+                                warn!(?err, %peer, "failed to ingest VRF submission from gossip");
+                            }
+                        }
                         Ok(NodeEvent::Evidence { evidence, .. }) => {
                             ingest.apply_evidence(evidence);
                         }
@@ -3476,6 +3482,7 @@ impl NodeInner {
     fn submit_vrf_submission(&self, submission: VrfSubmission) -> ChainResult<()> {
         let address = submission.address.clone();
         let epoch = submission.input.epoch;
+        verify_submission(&submission)?;
         {
             let mut epoch_manager = self.vrf_epoch.write();
             if !epoch_manager.register_submission(&submission) {
@@ -3496,7 +3503,15 @@ impl NodeInner {
         } else {
             debug!(address = %address, epoch, "recorded VRF submission");
         }
+        let local_payload = if address == self.address {
+            Some(submission_to_gossip(&submission))
+        } else {
+            None
+        };
         vrf::submit_vrf(&mut pool, submission);
+        if let Some(payload) = local_payload {
+            self.emit_witness_json(GossipTopic::VrfProofs, &payload);
+        }
         Ok(())
     }
 

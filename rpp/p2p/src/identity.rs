@@ -39,9 +39,17 @@ impl TopicPermission {
                 subscribe: TierLevel::Tl0,
                 publish: TierLevel::Tl1,
             },
+            GossipTopic::VrfProofs => Self {
+                subscribe: TierLevel::Tl0,
+                publish: TierLevel::Tl2,
+            },
             GossipTopic::Meta => Self {
                 subscribe: TierLevel::Tl0,
                 publish: TierLevel::Tl0,
+            },
+            GossipTopic::VrfMeta => Self {
+                subscribe: TierLevel::Tl0,
+                publish: TierLevel::Tl1,
             },
             GossipTopic::WitnessProofs => Self {
                 subscribe: TierLevel::Tl0,

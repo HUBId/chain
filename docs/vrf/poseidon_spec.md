@@ -93,7 +93,8 @@ network integrations.
 ### Gossip Payloads
 - **Channel**: `vrf.proofs`
   - Payload: `{ epoch, round_id, validator_id, tier, timetoke_balance,
-    randomness, proof_bytes }`
+    randomness, proof_bytes }` (see
+    [`docs/interfaces/p2p/vrf_proof.jsonschema`](../interfaces/p2p/vrf_proof.jsonschema))
   - Validation: Signature verification, tier/timetoke thresholds, replay check
     against epoch cache.
 - **Channel**: `meta`

@@ -287,20 +287,23 @@ impl RppBehaviour {
                     mesh_n_high: 16,
                     mesh_outbound_min: 4,
                 },
-                GossipTopic::Proofs | GossipTopic::WitnessProofs => TopicMeshConfig {
-                    mesh_n: 8,
-                    mesh_n_low: 6,
-                    mesh_n_high: 12,
-                    mesh_outbound_min: 3,
-                },
-                GossipTopic::Snapshots | GossipTopic::Meta | GossipTopic::WitnessMeta => {
+                GossipTopic::Proofs | GossipTopic::VrfProofs | GossipTopic::WitnessProofs => {
                     TopicMeshConfig {
-                        mesh_n: 6,
-                        mesh_n_low: 4,
-                        mesh_n_high: 10,
-                        mesh_outbound_min: 2,
+                        mesh_n: 8,
+                        mesh_n_low: 6,
+                        mesh_n_high: 12,
+                        mesh_outbound_min: 3,
                     }
                 }
+                GossipTopic::Snapshots
+                | GossipTopic::Meta
+                | GossipTopic::VrfMeta
+                | GossipTopic::WitnessMeta => TopicMeshConfig {
+                    mesh_n: 6,
+                    mesh_n_low: 4,
+                    mesh_n_high: 10,
+                    mesh_outbound_min: 2,
+                },
             };
             config_builder.set_topic_config(ident.hash(), mesh_config);
         }
@@ -347,9 +350,10 @@ fn build_peer_score_params() -> gossipsub::PeerScoreParams {
         let mut config = gossipsub::TopicScoreParams::default();
         config.topic_weight = match topic {
             GossipTopic::Blocks | GossipTopic::Votes => 1.6,
-            GossipTopic::Proofs | GossipTopic::WitnessProofs => 1.2,
+            GossipTopic::Proofs | GossipTopic::VrfProofs | GossipTopic::WitnessProofs => 1.2,
             GossipTopic::Snapshots => 1.0,
             GossipTopic::Meta => 0.4,
+            GossipTopic::VrfMeta => 0.5,
             GossipTopic::WitnessMeta => 0.6,
         };
         config.time_in_mesh_cap = 900.0;

@@ -282,8 +282,10 @@ impl AdmissionControl {
                 let reward = match topic {
                     GossipTopic::Blocks | GossipTopic::Votes => self.gossip_reward * 2.0,
                     GossipTopic::Proofs => self.gossip_reward,
+                    GossipTopic::VrfProofs => self.gossip_reward * 1.1,
                     GossipTopic::Snapshots => self.gossip_reward * 1.5,
                     GossipTopic::Meta => self.gossip_reward * 0.5,
+                    GossipTopic::VrfMeta => self.gossip_reward * 0.6,
                     GossipTopic::WitnessProofs => self.gossip_reward * 1.2,
                     GossipTopic::WitnessMeta => self.gossip_reward * 0.75,
                 };
