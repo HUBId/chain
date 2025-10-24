@@ -34,6 +34,74 @@ use rpp_chain::wallet::Wallet;
 
 pub use rpp_chain::runtime::RuntimeMode;
 
+pub type BootstrapResult<T> = std::result::Result<T, BootstrapError>;
+
+#[derive(Debug)]
+pub enum BootstrapError {
+    Configuration(anyhow::Error),
+    Startup(anyhow::Error),
+    Runtime(anyhow::Error),
+}
+
+impl BootstrapError {
+    pub fn configuration<E>(error: E) -> Self
+    where
+        E: Into<anyhow::Error>,
+    {
+        Self::Configuration(error.into())
+    }
+
+    pub fn startup<E>(error: E) -> Self
+    where
+        E: Into<anyhow::Error>,
+    {
+        Self::Startup(error.into())
+    }
+
+    pub fn runtime<E>(error: E) -> Self
+    where
+        E: Into<anyhow::Error>,
+    {
+        Self::Runtime(error.into())
+    }
+
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            BootstrapError::Configuration(_) => 2,
+            BootstrapError::Startup(_) => 3,
+            BootstrapError::Runtime(_) => 4,
+        }
+    }
+
+    pub fn kind(&self) -> &'static str {
+        match self {
+            BootstrapError::Configuration(_) => "configuration",
+            BootstrapError::Startup(_) => "startup",
+            BootstrapError::Runtime(_) => "runtime",
+        }
+    }
+
+    pub fn source(&self) -> &anyhow::Error {
+        match self {
+            BootstrapError::Configuration(err)
+            | BootstrapError::Startup(err)
+            | BootstrapError::Runtime(err) => err,
+        }
+    }
+}
+
+impl fmt::Display for BootstrapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{0} error: {1}", self.kind(), self.source())
+    }
+}
+
+impl std::error::Error for BootstrapError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source().as_ref())
+    }
+}
+
 /// Shared CLI arguments used across runtime entrypoints.
 #[derive(Debug, Clone, Args)]
 pub struct RunArgs {
@@ -151,14 +219,31 @@ pub struct BootstrapOptions {
     pub write_config: bool,
 }
 
-pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<()> {
-    let mut node_bundle = load_node_configuration(mode, &options)?;
+pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> BootstrapResult<()> {
+    if let Ok(request) = env::var("RPP_NODE_TEST_FAILURE_MODE") {
+        match request.as_str() {
+            "startup" => {
+                return Err(BootstrapError::startup(anyhow!(
+                    "simulated pipeline startup failure"
+                )));
+            }
+            "panic" => {
+                panic!("simulated panic requested via RPP_NODE_TEST_FAILURE_MODE");
+            }
+            _ => {}
+        }
+    }
+
+    let mut node_bundle =
+        load_node_configuration(mode, &options).map_err(BootstrapError::configuration)?;
     if let Some(bundle) = node_bundle.as_mut() {
         apply_overrides(&mut bundle.value, &options);
     }
-    let wallet_bundle = load_wallet_configuration(mode, &options)?;
+    let wallet_bundle =
+        load_wallet_configuration(mode, &options).map_err(BootstrapError::configuration)?;
 
-    ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())?;
+    ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())
+        .map_err(BootstrapError::configuration)?;
 
     let node_metadata = node_bundle
         .as_ref()
@@ -195,7 +280,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
         config_source,
         options.dry_run,
     )
-    .context("failed to initialise logging")?;
+    .with_context(|| "failed to initialise logging")
+    .map_err(BootstrapError::startup)?;
 
     info!(
         target = "bootstrap",
@@ -229,7 +315,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
             let override_path = node_metadata
                 .as_ref()
                 .map(|metadata| metadata.path.as_path());
-            persist_node_config(mode, &bundle.value, override_path)?;
+            persist_node_config(mode, &bundle.value, override_path)
+                .map_err(BootstrapError::configuration)?;
         }
     }
 
@@ -265,7 +352,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
     if let Some(bundle) = node_bundle.take() {
         let config = bundle.value;
         let preview_node = Node::new(config.clone())
-            .context("failed to build node with the provided configuration")?;
+            .context("failed to build node with the provided configuration")
+            .map_err(BootstrapError::startup)?;
         info!(
             address = %preview_node.handle().address(),
             "node initialised"
@@ -274,7 +362,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
 
         let (handle, runtime) = NodeHandle::start(config.clone())
             .await
-            .context("failed to start node runtime")?;
+            .context("failed to start node runtime")
+            .map_err(BootstrapError::startup)?;
 
         info!(address = %handle.address(), "node runtime started");
         info!(target = "rpc", listen = %config.rpc_listen, "rpc endpoint configured");
@@ -323,21 +412,24 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
         let wallet_config = bundle.value;
         wallet_config
             .ensure_directories()
-            .map_err(|err| anyhow!(err))?;
+            .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
 
         let storage = if let Some(handle) = node_handle.as_ref() {
             handle.storage()
         } else {
-            Storage::open(&wallet_config.data_dir.join("db")).map_err(|err| anyhow!(err))?
+            Storage::open(&wallet_config.data_dir.join("db"))
+                .map_err(|err| BootstrapError::startup(anyhow!(err)))?
         };
-        let keypair =
-            load_or_generate_keypair(&wallet_config.key_path).map_err(|err| anyhow!(err))?;
+        let keypair = load_or_generate_keypair(&wallet_config.key_path)
+            .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
         let wallet = Arc::new(Wallet::new(storage, keypair));
         rpc_addr.get_or_insert(wallet_config.rpc_listen);
         wallet_instance = Some(wallet);
     }
 
-    let rpc_addr = rpc_addr.ok_or_else(|| anyhow!("no runtime role selected"))?;
+    let rpc_addr = rpc_addr
+        .ok_or_else(|| anyhow!("no runtime role selected"))
+        .map_err(BootstrapError::configuration)?;
     if node_handle.is_none() {
         info!(target = "rpc", listen = %rpc_addr, "rpc endpoint configured");
     }
@@ -379,7 +471,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Result<(
 
     match outcome {
         ShutdownOutcome::Clean => Ok(()),
-        ShutdownOutcome::Errored(err) => Err(err),
+        ShutdownOutcome::Errored(err) => Err(BootstrapError::runtime(err)),
     }
 }
 
