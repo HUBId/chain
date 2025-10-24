@@ -25,6 +25,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
+use opentelemetry::KeyValue;
+use opentelemetry_sdk::Resource;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{broadcast, mpsc, watch, Mutex, Notify};
@@ -71,6 +73,8 @@ use crate::runtime::node_runtime::{
     },
     NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
+use crate::runtime::telemetry::TelemetryHandle;
+use crate::runtime::{init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard};
 use crate::runtime::sync::{
     state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
     stream_state_sync_chunks as runtime_stream_state_sync_chunks,
@@ -595,6 +599,7 @@ impl WitnessChannels {
 
 pub struct Node {
     inner: Arc<NodeInner>,
+    runtime_metrics_guard: RuntimeMetricsGuard,
 }
 
 pub(crate) struct NodeInner {
@@ -632,6 +637,7 @@ pub(crate) struct NodeInner {
     p2p_runtime: ParkingMutex<Option<P2pHandle>>,
     consensus_telemetry: Arc<ConsensusTelemetry>,
     audit_exporter: AuditExporter,
+    runtime_metrics: Arc<RuntimeMetrics>,
 }
 
 enum FinalizationContext {
@@ -865,6 +871,14 @@ impl Node {
             NodeIdentity::load_or_generate(&config.p2p_key_path)
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
         );
+        let instance_id = p2p_identity.peer_id().to_base58();
+        let resource = Resource::new(vec![
+            KeyValue::new("service.name", "rpp-node"),
+            KeyValue::new("service.instance.id", instance_id.clone()),
+        ]);
+        let (runtime_metrics, runtime_metrics_guard) =
+            init_runtime_metrics(&config.rollout.telemetry, resource)
+                .map_err(|err| ChainError::Config(format!("failed to initialise runtime metrics: {err}")))?;
         let address = address_from_public_key(&keypair.public);
         let reputation_params = config.reputation_params();
         let db_path = config.data_dir.join("db");
@@ -1063,6 +1077,7 @@ impl Node {
             p2p_runtime: ParkingMutex::new(None),
             consensus_telemetry,
             audit_exporter,
+            runtime_metrics: runtime_metrics.clone(),
         });
         {
             let weak_inner = Arc::downgrade(&inner);
@@ -1092,13 +1107,20 @@ impl Node {
         }
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            runtime_metrics_guard,
+        })
     }
 
     pub fn handle(&self) -> NodeHandle {
         NodeHandle {
             inner: self.inner.clone(),
         }
+    }
+
+    pub fn runtime_metrics(&self) -> Arc<RuntimeMetrics> {
+        self.inner.runtime_metrics.clone()
     }
 
     pub fn subscribe_witness_gossip(&self, topic: GossipTopic) -> broadcast::Receiver<Vec<u8>> {
@@ -1110,9 +1132,16 @@ impl Node {
     }
 
     pub async fn start(self) -> ChainResult<()> {
-        let join = self.inner.spawn_runtime();
-        join.await
-            .map_err(|err| ChainError::Config(format!("node runtime join error: {err}")))
+        let Node {
+            inner,
+            runtime_metrics_guard,
+        } = self;
+        let join = inner.spawn_runtime();
+        let result = join
+            .await
+            .map_err(|err| ChainError::Config(format!("node runtime join error: {err}")));
+        drop(runtime_metrics_guard);
+        result
     }
 
     pub fn network_identity_profile(&self) -> ChainResult<NetworkIdentityProfile> {
@@ -2194,6 +2223,7 @@ impl NodeInner {
         let mut config = P2pRuntimeConfig::from(&self.config);
         let profile = self.network_identity_profile()?;
         config.identity = Some(RuntimeIdentityProfile::from(profile));
+        config.metrics = self.runtime_metrics.clone();
         Ok(config)
     }
 
@@ -2648,8 +2678,8 @@ impl NodeInner {
         let node = Node::new(config)?;
         let handle = node.handle();
         let runtime_config = handle.inner.runtime_config()?;
-        let (p2p_inner, p2p_handle) =
-            P2pRuntime::new(runtime_config).map_err(|err: P2pError| {
+        let telemetry = TelemetryHandle::spawn(runtime_config.telemetry.clone());
+        let (p2p_inner, p2p_handle) = P2pRuntime::new(runtime_config, telemetry).map_err(|err: P2pError| {
                 ChainError::Config(format!("failed to initialise p2p runtime: {err}"))
             })?;
         let p2p_task = tokio::spawn(async move {

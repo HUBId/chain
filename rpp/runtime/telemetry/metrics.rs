@@ -148,6 +148,12 @@ impl RuntimeMetrics {
         }
     }
 
+    /// Returns a no-op metrics handle backed by a [`NoopMeterProvider`].
+    pub fn noop() -> Arc<Self> {
+        let meter = NoopMeterProvider::new().meter(METER_NAME);
+        Arc::new(Self::from_meter(&meter))
+    }
+
     /// Record the duration of a consensus stage.
     pub fn record_consensus_stage_duration(&self, stage: ConsensusStage, duration: Duration) {
         self.consensus_block_duration

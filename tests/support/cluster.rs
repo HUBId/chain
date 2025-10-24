@@ -39,8 +39,10 @@ use rpp_chain::runtime::node_runtime::{
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
 };
+use rpp_chain::runtime::telemetry::TelemetryHandle;
 use rpp_chain::runtime::types::proofs::TransactionProofBundle;
 use rpp_chain::runtime::types::transaction::{SignedTransaction, Transaction};
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::types::Address;
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
@@ -317,13 +319,16 @@ impl TestClusterNode {
         let node_handle = node.handle();
 
         let mut runtime_config = NodeRuntimeConfig::from(&config);
+        runtime_config.metrics = RuntimeMetrics::noop();
         runtime_config.identity = Some(RuntimeIdentityProfile::from(identity));
-        let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config).with_context(|| {
-            format!(
-                "failed to initialise libp2p runtime for node {}",
-                self.index
-            )
-        })?;
+        let telemetry = TelemetryHandle::spawn(runtime_config.telemetry.clone());
+        let (p2p_runtime, p2p_handle) =
+            P2pNode::new(runtime_config, telemetry).with_context(|| {
+                format!(
+                    "failed to initialise libp2p runtime for node {}",
+                    self.index
+                )
+            })?;
 
         node_handle.attach_p2p(p2p_handle.clone()).await;
 
@@ -504,8 +509,10 @@ impl TestCluster {
                 .network_identity_profile()
                 .with_context(|| format!("failed to derive network identity for node {index}"))?;
             let mut runtime_config = NodeRuntimeConfig::from(&config);
+            runtime_config.metrics = RuntimeMetrics::noop();
             runtime_config.identity = Some(network_identity.into());
-            let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config)
+            let telemetry = TelemetryHandle::spawn(runtime_config.telemetry.clone());
+            let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config, telemetry)
                 .with_context(|| format!("failed to initialise libp2p runtime for node {index}"))?;
 
             node_handle.attach_p2p(p2p_handle.clone()).await;
