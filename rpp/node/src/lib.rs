@@ -104,7 +104,7 @@ impl std::error::Error for BootstrapError {
 
 /// Shared CLI arguments used across runtime entrypoints.
 #[derive(Debug, Clone, Args)]
-pub struct RunArgs {
+pub struct RuntimeOptions {
     /// Optional path to a node configuration file loaded before starting the runtime
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
@@ -154,9 +154,9 @@ pub struct RunArgs {
     pub write_config: bool,
 }
 
-impl RunArgs {
+impl RuntimeOptions {
     pub fn into_bootstrap_options(self, mode: RuntimeMode) -> BootstrapOptions {
-        let RunArgs {
+        let RuntimeOptions {
             config,
             wallet_config,
             data_dir,
@@ -217,6 +217,28 @@ pub struct BootstrapOptions {
     pub log_json: bool,
     pub dry_run: bool,
     pub write_config: bool,
+}
+
+pub async fn run(mode: RuntimeMode, options: RuntimeOptions) -> BootstrapResult<()> {
+    let bootstrap_mode = mode;
+    let bootstrap_options = options.into_bootstrap_options(mode);
+    let handle = tokio::spawn(async move { bootstrap(bootstrap_mode, bootstrap_options).await });
+
+    match handle.await {
+        Ok(result) => result,
+        Err(join_err) => {
+            if join_err.is_panic() {
+                let message = panic_payload_to_string(join_err.into_panic());
+                Err(BootstrapError::runtime(anyhow!(
+                    "runtime panicked: {message}"
+                )))
+            } else {
+                Err(BootstrapError::runtime(anyhow!(
+                    "runtime task failed: {join_err}"
+                )))
+            }
+        }
+    }
 }
 
 pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> BootstrapResult<()> {
@@ -472,6 +494,16 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     match outcome {
         ShutdownOutcome::Clean => Ok(()),
         ShutdownOutcome::Errored(err) => Err(BootstrapError::runtime(err)),
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Ok(message) = payload.downcast::<String>() {
+        *message
+    } else if let Ok(message) = payload.downcast::<&'static str>() {
+        (*message).to_string()
+    } else {
+        "unknown panic".to_string()
     }
 }
 

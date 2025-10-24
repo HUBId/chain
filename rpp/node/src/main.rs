@@ -30,19 +30,25 @@ struct RootCli {
 #[derive(Subcommand)]
 enum RootCommand {
     /// Run the node runtime
-    Node(rpp_node::RunArgs),
+    Node(RuntimeCommand),
     /// Run the wallet runtime
-    Wallet(rpp_node::RunArgs),
+    Wallet(RuntimeCommand),
     /// Run the hybrid runtime (node + wallet)
-    Hybrid(rpp_node::RunArgs),
+    Hybrid(RuntimeCommand),
     /// Validator runtime and tooling
     Validator(ValidatorArgs),
+}
+
+#[derive(Args, Clone)]
+struct RuntimeCommand {
+    #[command(flatten)]
+    options: rpp_node::RuntimeOptions,
 }
 
 #[derive(Args)]
 struct ValidatorArgs {
     #[command(flatten)]
-    run: rpp_node::RunArgs,
+    runtime: rpp_node::RuntimeOptions,
 
     #[command(subcommand)]
     command: Option<ValidatorCommand>,
@@ -114,47 +120,30 @@ struct TelemetryCommand {
 async fn main() -> Result<()> {
     let RootCli { command } = RootCli::parse();
     match command {
-        RootCommand::Node(args) => run_runtime(RuntimeMode::Node, args).await,
-        RootCommand::Wallet(args) => run_runtime(RuntimeMode::Wallet, args).await,
-        RootCommand::Hybrid(args) => run_runtime(RuntimeMode::Hybrid, args).await,
+        RootCommand::Node(RuntimeCommand { options }) => {
+            run_runtime(RuntimeMode::Node, options).await
+        }
+        RootCommand::Wallet(RuntimeCommand { options }) => {
+            run_runtime(RuntimeMode::Wallet, options).await
+        }
+        RootCommand::Hybrid(RuntimeCommand { options }) => {
+            run_runtime(RuntimeMode::Hybrid, options).await
+        }
         RootCommand::Validator(args) => match args.command {
             Some(ValidatorCommand::Vrf(command)) => handle_vrf_command(command),
             Some(ValidatorCommand::Telemetry(command)) => fetch_telemetry(command).await,
-            None => run_runtime(RuntimeMode::Validator, args.run).await,
+            None => run_runtime(RuntimeMode::Validator, args.runtime).await,
         },
     }
 }
 
-async fn run_runtime(mode: RuntimeMode, args: rpp_node::RunArgs) -> Result<()> {
-    let options = args.into_bootstrap_options(mode);
-    let runtime_mode = mode;
-    let handle = tokio::spawn(async move { rpp_node::bootstrap(runtime_mode, options).await });
-
-    match handle.await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(err)) => {
+async fn run_runtime(mode: RuntimeMode, options: rpp_node::RuntimeOptions) -> Result<()> {
+    match rpp_node::run(mode, options).await {
+        Ok(()) => Ok(()),
+        Err(err) => {
             eprintln!("{err}");
             std::process::exit(err.exit_code());
         }
-        Err(join_err) => {
-            if join_err.is_panic() {
-                let message = panic_payload_to_string(join_err.into_panic());
-                eprintln!("runtime panicked: {message}");
-            } else {
-                eprintln!("runtime task failed: {join_err}");
-            }
-            std::process::exit(4);
-        }
-    }
-}
-
-fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
-    if let Ok(message) = payload.downcast::<String>() {
-        *message
-    } else if let Ok(message) = payload.downcast::<&'static str>() {
-        (*message).to_string()
-    } else {
-        "unknown panic".to_string()
     }
 }
 
