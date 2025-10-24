@@ -28,11 +28,21 @@ async fn light_client_stream_verifies_state_sync() {
         .ingest_plan(&plan_bytes)
         .expect("ingest state sync plan");
 
+    let mut head_rx = light_client.subscribe_light_client_heads();
+    assert!(
+        head_rx.borrow().is_none(),
+        "head channel should start empty"
+    );
+
     for chunk in &fixture.chunk_messages {
         let bytes = publish_snapshot(&fixture.handle, &mut receiver, chunk).await;
         light_client
             .ingest_chunk(&bytes)
             .expect("ingest state sync chunk");
+        assert!(
+            head_rx.borrow().is_none(),
+            "chunks alone should not emit heads"
+        );
     }
 
     for update in &fixture.updates {
@@ -41,6 +51,17 @@ async fn light_client_stream_verifies_state_sync() {
             .ingest_light_client_update(&bytes)
             .expect("ingest light client update");
     }
+
+    timeout(GOSSIP_TIMEOUT, head_rx.changed())
+        .await
+        .expect("head update notification")
+        .expect("head channel not closed");
+    let latest_head = head_rx
+        .borrow()
+        .clone()
+        .expect("verified head should be available");
+    let expected_height = fixture.updates.last().expect("fixture has updates").height;
+    assert_eq!(latest_head.height, expected_height);
 
     let verified = light_client.verify().expect("verify snapshot");
     assert!(verified, "snapshot verification should succeed");

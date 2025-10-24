@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use base64::{Engine as _, engine::general_purpose};
+use base64::{engine::general_purpose, Engine as _};
 use hex;
 use serde::Serialize;
 
@@ -23,12 +23,39 @@ use crate::types::{
     Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem, RecursiveProof, SignedTransaction,
     TransactionProofBundle,
 };
+use blake3::Hash;
 use rpp_p2p::{
-    NetworkBlockMetadata, NetworkGlobalStateCommitments, NetworkLightClientUpdate,
-    NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError, RecursiveProofVerifier,
+    LightClientHead, LightClientSync, NetworkBlockMetadata, NetworkGlobalStateCommitments,
+    NetworkLightClientUpdate, NetworkPayloadExpectations, NetworkReconstructionRequest,
+    NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError,
+    RecursiveProofVerifier, SnapshotChunk, SnapshotChunkStream, SnapshotStore,
     TransactionProofVerifier,
 };
+
+pub fn stream_state_sync_chunks(
+    store: &SnapshotStore,
+    root: &Hash,
+) -> Result<SnapshotChunkStream, PipelineError> {
+    store.stream(root)
+}
+
+pub fn state_sync_chunk_by_index(
+    store: &SnapshotStore,
+    root: &Hash,
+    index: u64,
+) -> Result<SnapshotChunk, PipelineError> {
+    store.chunk(root, index)
+}
+
+pub fn subscribe_light_client_heads(
+    client: &LightClientSync,
+) -> tokio::sync::watch::Receiver<Option<LightClientHead>> {
+    client.subscribe_light_client_heads()
+}
+
+pub fn latest_light_client_head(client: &LightClientSync) -> Option<LightClientHead> {
+    client.latest_head()
+}
 
 #[derive(Clone, Debug)]
 pub struct RuntimeRecursiveProofVerifier {
@@ -914,7 +941,7 @@ fn encode_recursive_proof(proof: &ChainProof) -> ChainResult<String> {
 mod tests {
     use super::*;
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
+        evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact};
@@ -1273,10 +1300,8 @@ mod tests {
 
         let light_client_feed = engine.light_client_feed(1).expect("feed from height 1");
         assert_eq!(light_client_feed.len(), 2);
-        assert!(
-            light_client_feed
-                .iter()
-                .all(|update| !update.state_root.is_empty())
-        );
+        assert!(light_client_feed
+            .iter()
+            .all(|update| !update.state_root.is_empty()));
     }
 }
