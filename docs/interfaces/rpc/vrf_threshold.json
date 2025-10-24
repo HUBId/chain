@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/vrf_threshold.json",
+  "$ref": "./vrf_threshold/v1.jsonschema"
+}

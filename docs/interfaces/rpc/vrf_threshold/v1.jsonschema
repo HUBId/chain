@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/vrf_threshold/v1.json",
+  "title": "VrfThresholdStatus",
+  "description": "Response payload returned by GET /consensus/vrf/threshold.",
+  "type": "object",
+  "required": [
+    "committee_target",
+    "pool_entries",
+    "accepted_validators",
+    "participation_rate"
+  ],
+  "properties": {
+    "epoch": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Epoch identifier associated with the recorded threshold"
+    },
+    "threshold": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9]+$",
+      "description": "Base threshold applied to the epoch as a decimal string"
+    },
+    "committee_target": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Target number of validators in the committee"
+    },
+    "pool_entries": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of VRF submissions observed for the epoch"
+    },
+    "accepted_validators": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of submissions that passed the threshold"
+    },
+    "participation_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Acceptance ratio of the VRF pool"
+    }
+  },
+  "additionalProperties": false
+}

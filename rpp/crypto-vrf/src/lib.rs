@@ -8,16 +8,16 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use malachite::base::num::arithmetic::traits::DivRem;
 use malachite::Natural;
+use malachite::base::num::arithmetic::traits::DivRem;
 use prover_backend_interface::Blake2sHasher;
 use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
+use schnorrkel::SignatureError as VrfSignatureError;
 use schnorrkel::keys::{
     ExpansionMode, Keypair as VrfKeypairInner, MiniSecretKey, PublicKey as SrPublicKey,
 };
 use schnorrkel::signing_context;
 use schnorrkel::vrf::{VRFPreOut, VRFProof};
-use schnorrkel::SignatureError as VrfSignatureError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -594,6 +594,8 @@ pub struct VrfSelectionMetrics {
     pub entropy_beacon: String,
     pub latest_epoch: Option<u64>,
     pub latest_round: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_epoch_threshold: Option<String>,
 }
 
 impl VrfSelectionMetrics {
@@ -619,6 +621,10 @@ impl VrfSelectionMetrics {
 
     pub fn set_round(&mut self, round: u64) {
         self.latest_round = Some(round);
+    }
+
+    fn set_active_threshold(&mut self, threshold: &Natural) {
+        self.active_epoch_threshold = Some(threshold.to_string());
     }
 }
 
@@ -853,6 +859,9 @@ pub fn select_validators(
             continue;
         };
         result.metrics.record_epoch(epoch);
+        result
+            .metrics
+            .set_active_threshold(strategy.base_threshold());
         for submission in submissions {
             let threshold = strategy.threshold_for_seed(&submission.input.tier_seed);
             if submission.weighted_randomness < threshold {
@@ -1163,7 +1172,6 @@ impl EpochThresholdStrategy {
         }
     }
 
-    #[cfg(test)]
     fn base_threshold(&self) -> &Natural {
         &self.base_threshold
     }

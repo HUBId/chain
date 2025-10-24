@@ -290,6 +290,18 @@ pub struct VrfStatus {
     pub proof: crate::vrf::VrfProof,
 }
 
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct VrfThresholdStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<String>,
+    pub committee_target: usize,
+    pub pool_entries: usize,
+    pub accepted_validators: usize,
+    pub participation_rate: f64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ValidatorMembershipEntry {
     pub address: Address,
@@ -362,6 +374,7 @@ pub struct NodeTelemetrySnapshot {
     pub timetoke_params: TimetokeParams,
     pub verifier_metrics: VerifierMetricsSnapshot,
     pub pruning: Option<PruningJobStatus>,
+    pub vrf_threshold: VrfThresholdStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -612,6 +625,7 @@ pub(crate) struct NodeInner {
     telemetry_last_height: RwLock<Option<u64>>,
     pruning_status: RwLock<Option<PruningJobStatus>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
+    vrf_threshold: RwLock<VrfThresholdStatus>,
     verifiers: ProofVerifierRegistry,
     shutdown: broadcast::Sender<()>,
     pipeline_events: broadcast::Sender<PipelineObservation>,
@@ -1042,6 +1056,7 @@ impl Node {
             telemetry_last_height: RwLock::new(None),
             pruning_status: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
+            vrf_threshold: RwLock::new(VrfThresholdStatus::default()),
             verifiers: verifier_registry,
             shutdown,
             pipeline_events,
@@ -1881,6 +1896,10 @@ impl NodeHandle {
 
     pub fn consensus_status(&self) -> ChainResult<ConsensusStatus> {
         self.inner.consensus_status()
+    }
+
+    pub fn vrf_threshold(&self) -> VrfThresholdStatus {
+        self.inner.vrf_threshold()
     }
 
     pub fn vrf_status(&self, address: &str) -> ChainResult<VrfStatus> {
@@ -2727,6 +2746,7 @@ impl NodeInner {
             timetoke_params: self.ledger.timetoke_params(),
             verifier_metrics,
             pruning: self.pruning_status.read().clone(),
+            vrf_threshold: self.vrf_threshold(),
         })
     }
 
@@ -3586,6 +3606,10 @@ impl NodeInner {
         })
     }
 
+    fn vrf_threshold(&self) -> VrfThresholdStatus {
+        self.vrf_threshold.read().clone()
+    }
+
     fn mempool_status(&self) -> ChainResult<MempoolStatus> {
         let mempool = self.mempool.read();
         let metadata_store = self.pending_transaction_metadata.read();
@@ -4123,6 +4147,17 @@ impl NodeInner {
         {
             let mut metrics = self.vrf_metrics.write();
             *metrics = round_metrics.clone();
+        }
+        {
+            let mut threshold = self.vrf_threshold.write();
+            *threshold = VrfThresholdStatus {
+                epoch: round_metrics.latest_epoch,
+                threshold: round_metrics.active_epoch_threshold.clone(),
+                committee_target: round_metrics.target_validator_count,
+                pool_entries: round_metrics.pool_entries,
+                accepted_validators: round_metrics.accepted_validators,
+                participation_rate: round_metrics.participation_rate,
+            };
         }
         if let Some(epoch_value) = round_metrics.latest_epoch {
             if let Ok(bytes) = hex::decode(&round_metrics.entropy_beacon) {
@@ -5460,6 +5495,7 @@ mod telemetry_tests {
             timetoke_params: TimetokeParams::default(),
             verifier_metrics: VerifierMetricsSnapshot::default(),
             pruning: None,
+            vrf_threshold: VrfThresholdStatus::default(),
         }
     }
 

@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/vrf_submit/v1.json",
+  "title": "SubmitVrfProofRequest",
+  "description": "Payload accepted by POST /consensus/vrf/submit.",
+  "type": "object",
+  "required": [
+    "address",
+    "public_key",
+    "input",
+    "proof",
+    "tier",
+    "timetoke_hours"
+  ],
+  "properties": {
+    "address": {
+      "type": "string",
+      "description": "Validator identity submitting the VRF proof"
+    },
+    "public_key": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]+$",
+      "description": "Hex-encoded VRF public key associated with the validator"
+    },
+    "input": {
+      "type": "object",
+      "required": ["last_block_header", "epoch", "tier_seed"],
+      "properties": {
+        "last_block_header": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Hex-encoded hash of the previous block header"
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Active consensus epoch referenced by the proof"
+        },
+        "tier_seed": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$",
+          "description": "Hex-encoded tier seed derived from address and Timetoke balance"
+        }
+      },
+      "additionalProperties": false
+    },
+    "proof": {
+      "type": "object",
+      "required": ["randomness", "preoutput", "proof"],
+      "properties": {
+        "randomness": {
+          "type": "string",
+          "pattern": "^[0-9]+$",
+          "description": "Poseidon randomness encoded as a base-10 integer"
+        },
+        "preoutput": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]+$",
+          "description": "Hex-encoded VRF pre-output"
+        },
+        "proof": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]+$",
+          "description": "Hex-encoded VRF proof bytes"
+        }
+      },
+      "additionalProperties": false
+    },
+    "tier": {
+      "type": "string",
+      "enum": ["Tl0", "Tl1", "Tl2", "Tl3", "Tl4", "Tl5"],
+      "description": "Validator tier at the time of submission"
+    },
+    "timetoke_hours": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Timetoke balance in hours advertised by the validator"
+    }
+  },
+  "additionalProperties": false
+}

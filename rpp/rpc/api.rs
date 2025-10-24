@@ -35,8 +35,8 @@ use tracing::{info, warn};
 
 use crate::consensus::SignedBftVote;
 use crate::crypto::{
-    DynVrfKeyStore, VrfKeyIdentifier, VrfKeypair, generate_vrf_keypair, vrf_public_key_to_hex,
-    vrf_secret_key_to_hex,
+    DynVrfKeyStore, VrfKeyIdentifier, VrfKeypair, generate_vrf_keypair, vrf_public_key_from_hex,
+    vrf_public_key_to_hex, vrf_secret_key_to_hex,
 };
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "vendor_electrs")]
@@ -47,7 +47,7 @@ use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, DEFAULT_STATE_SYNC_CHUNK,
     MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, P2pCensorshipReport,
     PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
-    UptimeSchedulerStatus, VrfStatus,
+    UptimeSchedulerStatus, VrfStatus, VrfThresholdStatus,
 };
 use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
@@ -64,6 +64,7 @@ use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
     TransactionProofBundle, UptimeProof,
 };
+use crate::vrf::{PoseidonVrfInput, VrfProof, VrfSubmission};
 use crate::wallet::{
     ConsensusReceipt, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet, WalletAccountSummary,
 };
@@ -449,8 +450,30 @@ struct SubmitResponse {
 }
 
 #[derive(Serialize)]
+struct SubmitVrfProofResponse {
+    status: &'static str,
+}
+
+#[derive(Serialize)]
 struct UptimeResponse {
     credited_hours: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubmitVrfInput {
+    last_block_header: String,
+    epoch: u64,
+    tier_seed: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubmitVrfProofRequest {
+    address: Address,
+    public_key: Option<String>,
+    input: SubmitVrfInput,
+    proof: VrfProof,
+    tier: Tier,
+    timetoke_hours: u64,
 }
 
 #[derive(Serialize)]
@@ -819,6 +842,8 @@ pub async fn serve(
         .route("/control/mempool", post(update_mempool_limits))
         .route("/status/consensus", get(consensus_status))
         .route("/status/rollout", get(rollout_status))
+        .route("/consensus/vrf/submit", post(submit_vrf_proof))
+        .route("/consensus/vrf/threshold", get(vrf_threshold))
         .route("/consensus/vrf/:address", get(vrf_status))
         .route("/transactions", post(submit_transaction))
         .route("/identities", post(submit_identity))
@@ -1279,6 +1304,22 @@ async fn validator_submit_uptime(
         .map_err(to_http_error)
 }
 
+async fn submit_vrf_proof(
+    State(state): State<ApiContext>,
+    Json(request): Json<SubmitVrfProofRequest>,
+) -> Result<(StatusCode, Json<SubmitVrfProofResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let submission = build_vrf_submission(request)?;
+    node
+        .submit_vrf_submission(submission)
+        .map_err(to_http_error)?;
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(SubmitVrfProofResponse { status: "queued" }),
+    ))
+}
+
 async fn submit_transaction(
     State(state): State<ApiContext>,
     Json(bundle): Json<TransactionProofBundle>,
@@ -1299,6 +1340,13 @@ async fn submit_identity(
         .submit_identity(request)
         .map(|hash| Json(SubmitResponse { hash }))
         .map_err(to_http_error)
+}
+
+async fn vrf_threshold(
+    State(state): State<ApiContext>,
+) -> Result<Json<VrfThresholdStatus>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    Ok(Json(node.vrf_threshold()))
 }
 
 async fn submit_vote(
@@ -1504,6 +1552,83 @@ async fn vrf_status(
         .vrf_status(&address)
         .map(Json)
         .map_err(to_http_error)
+}
+
+fn build_vrf_submission(
+    request: SubmitVrfProofRequest,
+) -> Result<VrfSubmission, (StatusCode, Json<ErrorResponse>)> {
+    let SubmitVrfProofRequest {
+        address,
+        public_key,
+        input,
+        proof,
+        tier,
+        timetoke_hours,
+    } = request;
+
+    let SubmitVrfInput {
+        last_block_header,
+        epoch,
+        tier_seed,
+    } = input;
+
+    let last_block_header =
+        decode_hex_array::<32>(&last_block_header, "input.last_block_header")?;
+    let tier_seed = decode_hex_array::<32>(&tier_seed, "input.tier_seed")?;
+
+    let public_key_hex = public_key
+        .and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .ok_or_else(|| invalid_vrf_request("public_key is required"))?;
+
+    let public_key = vrf_public_key_from_hex(&public_key_hex)
+        .map_err(|err| invalid_vrf_request(format!("invalid VRF public key: {err}")))?;
+
+    Ok(VrfSubmission {
+        address,
+        public_key: Some(public_key),
+        input: PoseidonVrfInput::new(last_block_header, epoch, tier_seed),
+        proof,
+        tier,
+        timetoke_hours,
+    })
+}
+
+fn decode_hex_array<const N: usize>(
+    value: &str,
+    field: &'static str,
+) -> Result<[u8; N], (StatusCode, Json<ErrorResponse>)> {
+    let decoded = hex::decode(value).map_err(|_| {
+        invalid_vrf_request(format!(
+            "{field} must be a {N}-byte hex string"
+        ))
+    })?;
+
+    if decoded.len() != N {
+        return Err(invalid_vrf_request(format!(
+            "{field} must be {N} bytes (found {})",
+            decoded.len()
+        )));
+    }
+
+    let mut buffer = [0u8; N];
+    buffer.copy_from_slice(&decoded);
+    Ok(buffer)
+}
+
+fn invalid_vrf_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: message.into(),
+        }),
+    )
 }
 
 async fn slashing_events(

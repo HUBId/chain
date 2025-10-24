@@ -9,7 +9,9 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 
 use rpp_chain::api;
-use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
+use rpp_chain::crypto::{
+    address_from_public_key, generate_keypair, sign_message, vrf_public_key_to_hex,
+};
 use rpp_chain::node::NodeHandle;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::reputation::{ReputationWeights, Tier};
@@ -23,6 +25,7 @@ use rpp_chain::stwo::verifier::NodeVerifier;
 use rpp_chain::types::{
     Account, ChainProof, SignedTransaction, Stake, Transaction, TransactionProofBundle,
 };
+use rpp_chain::vrf::{derive_tier_seed, generate_vrf, PoseidonVrfInput, VrfProof};
 
 mod support;
 
@@ -578,6 +581,71 @@ async fn uptime_scheduler_endpoints_handle_failure_path() -> Result<()> {
         .await
         .context("failed to offload uptime proof")?;
     assert_eq!(offload_response.status(), StatusCode::NOT_FOUND);
+
+    harness.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn vrf_submit_and_threshold_endpoints() -> Result<()> {
+    let harness = RpcTestHarness::start().await?;
+
+    let status = harness
+        .node_handle
+        .node_status()
+        .context("failed to fetch node status")?;
+
+    let secrets = harness.node_handle.vrf_secrets_config();
+    let key_path = harness.node_handle.vrf_key_path();
+    let keypair = secrets
+        .load_or_generate_vrf_keypair(&key_path)
+        .context("failed to load VRF keypair")?;
+
+    let timetoke_hours = 96;
+    let tier_seed = derive_tier_seed(&status.address, timetoke_hours);
+    let last_hash_bytes = hex::decode(&status.last_hash).context("invalid tip hash encoding")?;
+    let mut last_block_header = [0u8; 32];
+    last_block_header.copy_from_slice(&last_hash_bytes);
+    let input = PoseidonVrfInput::new(last_block_header, status.epoch, tier_seed);
+    let output = generate_vrf(&input, &keypair.secret).context("failed to generate VRF output")?;
+    let proof = VrfProof::from_output(&output);
+
+    let request = serde_json::json!({
+        "address": status.address,
+        "public_key": vrf_public_key_to_hex(&keypair.public),
+        "input": {
+            "last_block_header": status.last_hash,
+            "epoch": status.epoch,
+            "tier_seed": hex::encode(tier_seed),
+        },
+        "proof": proof,
+        "tier": Tier::Tl3,
+        "timetoke_hours": timetoke_hours,
+    });
+
+    let submit_response = harness
+        .client()
+        .post(format!("{}/consensus/vrf/submit", harness.base_url()))
+        .json(&request)
+        .send()
+        .await
+        .context("failed to submit VRF proof")?;
+    assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+
+    let threshold_response = harness
+        .client()
+        .get(format!("{}/consensus/vrf/threshold", harness.base_url()))
+        .send()
+        .await
+        .context("failed to fetch VRF threshold status")?;
+    assert_eq!(threshold_response.status(), StatusCode::OK);
+
+    let payload: Value = threshold_response
+        .json()
+        .await
+        .context("invalid VRF threshold payload")?;
+    assert!(payload.get("committee_target").is_some());
+    assert!(payload.get("participation_rate").is_some());
 
     harness.shutdown().await?;
     Ok(())
