@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -28,7 +29,7 @@ use crate::node::NetworkIdentityProfile;
 use crate::proof_backend::Blake2sHasher;
 use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::rpp::{GlobalStateCommitments, TimetokeRecord};
-use crate::runtime::telemetry::{TelemetryHandle, TelemetrySnapshot};
+use crate::runtime::telemetry::{RuntimeMetrics, TelemetryHandle, TelemetrySnapshot};
 use crate::runtime::vrf_gossip::{gossip_to_submission, verify_submission, GossipVrfSubmission};
 use crate::state::merkle::compute_merkle_root;
 use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
@@ -284,11 +285,12 @@ pub struct Heartbeat {
 }
 
 /// Public configuration wrapper used by the node runtime.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NodeRuntimeConfig {
     pub identity_path: PathBuf,
     pub p2p: P2pConfig,
     pub telemetry: TelemetryConfig,
+    pub metrics: Arc<RuntimeMetrics>,
     pub identity: Option<IdentityProfile>,
     pub proof_storage_path: PathBuf,
     pub consensus_storage_path: PathBuf,
@@ -301,11 +303,26 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             identity_path: config.p2p_key_path.clone(),
             p2p: config.p2p.clone(),
             telemetry: config.rollout.telemetry.clone(),
+            metrics: RuntimeMetrics::noop(),
             identity: None,
             proof_storage_path: config.proof_cache_dir.join("gossip_proofs.json"),
             consensus_storage_path: config.consensus_pipeline_path.clone(),
             feature_gates: config.rollout.feature_gates.clone(),
         }
+    }
+}
+
+impl fmt::Debug for NodeRuntimeConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeRuntimeConfig")
+            .field("identity_path", &self.identity_path)
+            .field("p2p", &self.p2p)
+            .field("telemetry", &self.telemetry)
+            .field("identity", &self.identity)
+            .field("proof_storage_path", &self.proof_storage_path)
+            .field("consensus_storage_path", &self.consensus_storage_path)
+            .field("feature_gates", &self.feature_gates)
+            .finish()
     }
 }
 
@@ -850,6 +867,7 @@ pub struct NodeInner {
     commands: mpsc::Receiver<NodeCommand>,
     events: broadcast::Sender<NodeEvent>,
     metrics: Arc<RwLock<NodeMetrics>>,
+    runtime_metrics: Arc<RuntimeMetrics>,
     telemetry: TelemetryHandle,
     connected_peers: HashSet<PeerId>,
     known_versions: HashMap<PeerId, String>,
@@ -865,9 +883,11 @@ pub struct NodeInner {
 
 impl NodeInner {
     /// Builds a new [`NodeInner`] alongside its corresponding [`NodeHandle`].
-    pub fn new(config: NodeRuntimeConfig) -> Result<(Self, NodeHandle), NodeError> {
+    pub fn new(
+        config: NodeRuntimeConfig,
+        telemetry: TelemetryHandle,
+    ) -> Result<(Self, NodeHandle), NodeError> {
         let network_config = NetworkConfig::from_config(&config.p2p)?;
-        let telemetry = TelemetryHandle::spawn(config.telemetry.clone());
         let resources = NetworkResources::initialise(
             &config.identity_path,
             &network_config,
@@ -885,6 +905,7 @@ impl NodeInner {
         let handle = NodeHandle {
             commands: command_tx.clone(),
             metrics: metrics.clone(),
+            runtime_metrics: config.metrics.clone(),
             events: event_tx.clone(),
             local_peer_id: identity.peer_id(),
             light_client_heads,
@@ -901,6 +922,7 @@ impl NodeInner {
             commands: command_rx,
             events: event_tx,
             metrics,
+            runtime_metrics: config.metrics,
             telemetry,
             connected_peers: HashSet::new(),
             known_versions: HashMap::new(),
@@ -1630,6 +1652,7 @@ impl NodeInner {
 pub struct NodeHandle {
     commands: mpsc::Sender<NodeCommand>,
     metrics: Arc<RwLock<NodeMetrics>>,
+    runtime_metrics: Arc<RuntimeMetrics>,
     events: broadcast::Sender<NodeEvent>,
     local_peer_id: PeerId,
     light_client_heads: watch::Receiver<Option<LightClientHead>>,
@@ -1803,6 +1826,7 @@ mod tests {
                 sample_interval_secs: 1,
                 redact_logs: true,
             },
+            metrics: RuntimeMetrics::noop(),
             identity: None,
             proof_storage_path,
             consensus_storage_path,
@@ -1838,8 +1862,12 @@ mod tests {
                     vec![addr_one.clone()],
                 );
 
-                let (node_one, handle_one) = NodeInner::new(config_one).expect("node1");
-                let (node_two, handle_two) = NodeInner::new(config_two).expect("node2");
+                let telemetry_one = TelemetryHandle::spawn(config_one.telemetry.clone());
+                let telemetry_two = TelemetryHandle::spawn(config_two.telemetry.clone());
+                let (node_one, handle_one) =
+                    NodeInner::new(config_one, telemetry_one).expect("node1");
+                let (node_two, handle_two) =
+                    NodeInner::new(config_two, telemetry_two).expect("node2");
                 let mut events_two = handle_two.subscribe();
 
                 let task_one = task::spawn_local(async move {
@@ -1890,7 +1918,9 @@ mod tests {
                 let identity_path = dir.path().join("node.key");
                 let config = test_config(identity_path, listen, Vec::new());
                 let proof_path = config.proof_storage_path.clone();
-                let (mut node, _handle) = NodeInner::new(config).expect("node runtime");
+                let telemetry = TelemetryHandle::spawn(config.telemetry.clone());
+                let (mut node, _handle) =
+                    NodeInner::new(config, telemetry).expect("node runtime");
 
                 let payload = json!({
                     "transaction": {
@@ -1959,8 +1989,12 @@ mod tests {
                     vec![addr_one.clone()],
                 );
 
-                let (node_one, handle_one) = NodeInner::new(config_one).expect("node1");
-                let (node_two, handle_two) = NodeInner::new(config_two).expect("node2");
+                let telemetry_one = TelemetryHandle::spawn(config_one.telemetry.clone());
+                let telemetry_two = TelemetryHandle::spawn(config_two.telemetry.clone());
+                let (node_one, handle_one) =
+                    NodeInner::new(config_one, telemetry_one).expect("node1");
+                let (node_two, handle_two) =
+                    NodeInner::new(config_two, telemetry_two).expect("node2");
                 let mut events_two = handle_two.subscribe();
 
                 let task_one = task::spawn_local(async move {
@@ -2000,7 +2034,9 @@ mod tests {
                 let dir = tempdir().expect("tempdir");
                 let (addr, _) = random_listen_addr();
                 let config = test_config(dir.path().join("node.key"), addr, Vec::new());
-                let (node, handle) = NodeInner::new(config).expect("node");
+                let telemetry = TelemetryHandle::spawn(config.telemetry.clone());
+                let (node, handle) =
+                    NodeInner::new(config, telemetry).expect("node");
                 let mut events = handle.subscribe();
 
                 handle.update_metrics(NodeMetrics {

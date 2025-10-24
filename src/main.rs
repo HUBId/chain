@@ -23,6 +23,7 @@ use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
+use rpp_chain::runtime::telemetry::TelemetryHandle;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
@@ -182,8 +183,10 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             .network_identity_profile()
             .map_err(|err| anyhow!(err))?;
         let mut p2p_config = NodeRuntimeConfig::from(&config);
+        p2p_config.metrics = node.runtime_metrics();
         p2p_config.identity = Some(network_identity.into());
-        let (p2p_runtime, p2p_runtime_handle) = P2pNode::new(p2p_config)
+        let telemetry = TelemetryHandle::spawn(p2p_config.telemetry.clone());
+        let (p2p_runtime, p2p_runtime_handle) = P2pNode::new(p2p_config, telemetry)
             .map_err(|err| anyhow!("failed to initialise p2p runtime: {err}"))?;
         let p2p_join = tokio::task::spawn_blocking(move || -> Result<()> {
             let runtime = Builder::new_current_thread()
