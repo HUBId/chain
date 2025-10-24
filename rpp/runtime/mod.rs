@@ -145,6 +145,7 @@ pub mod vrf_gossip;
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::PathBuf;
 
     #[test]
     fn load_profile_from_relative_paths() {
@@ -174,5 +175,63 @@ mod tests {
     fn missing_profile_returns_error() {
         let result = RuntimeProfile::load_from_path(Path::new("/tmp/does/not/exist.toml"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn node_modes_use_expected_default_config_paths() {
+        let expectations = [
+            (RuntimeMode::Node, "config/node.toml"),
+            (RuntimeMode::Hybrid, "config/hybrid.toml"),
+            (RuntimeMode::Validator, "config/validator.toml"),
+        ];
+
+        for (mode, expected) in expectations {
+            let resolved = mode
+                .default_node_config_path()
+                .expect("node config path");
+            assert_eq!(resolved, expected);
+            assert_template_exists(resolved);
+        }
+    }
+
+    #[test]
+    fn wallet_modes_use_expected_default_config_paths() {
+        let expectations = [
+            (RuntimeMode::Wallet, "config/wallet.toml"),
+            (RuntimeMode::Hybrid, "config/wallet.toml"),
+            (RuntimeMode::Validator, "config/wallet.toml"),
+        ];
+
+        for (mode, expected) in expectations {
+            let resolved = mode
+                .default_wallet_config_path()
+                .expect("wallet config path");
+            assert_eq!(resolved, expected);
+            assert_template_exists(resolved);
+        }
+    }
+
+    #[test]
+    fn wallet_mode_has_no_node_default_path() {
+        assert!(RuntimeMode::Wallet.default_node_config_path().is_none());
+    }
+
+    #[test]
+    fn node_mode_has_no_wallet_default_path() {
+        assert!(RuntimeMode::Node.default_wallet_config_path().is_none());
+    }
+
+    fn assert_template_exists(relative: &str) {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root");
+        let absolute = workspace_root.join(relative);
+        assert!(
+            absolute.exists(),
+            "expected template {relative} to exist at {}",
+            absolute.display()
+        );
     }
 }

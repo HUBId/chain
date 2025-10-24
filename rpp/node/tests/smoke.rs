@@ -58,11 +58,28 @@ async fn node_smoke_shutdown_with_telemetry() -> Result<()> {
 #[test]
 fn exit_code_for_missing_configuration() -> Result<()> {
     let mut cmd = AssertCommand::cargo_bin("rpp-node");
-    cmd.arg("node")
+    let assert = cmd
+        .arg("node")
         .arg("--config")
         .arg("/nonexistent/config.toml")
-        .arg("--dry-run");
-    cmd.assert().failure().code(2);
+        .arg("--dry-run")
+        .assert()
+        .failure()
+        .code(2);
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains(
+            "node configuration not found at /nonexistent/config.toml (resolved from the command line)",
+        ),
+        "stderr missing configuration error: {stderr}"
+    );
+    assert!(
+        stderr.contains(
+            r"copy the default template with `cp config/node.toml /nonexistent/config.toml`",
+        ),
+        "stderr missing remediation hint: {stderr}"
+    );
     Ok(())
 }
 
