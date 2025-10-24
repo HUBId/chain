@@ -2,7 +2,7 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use parking_lot::RwLock;
 use tempfile::tempdir;
@@ -13,8 +13,8 @@ use tokio::time;
 use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::load_keypair;
 use rpp_chain::errors::ChainError;
-use rpp_chain::node::Node;
-use rpp_chain::orchestration::{PipelineOrchestrator, PipelineStage};
+use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::orchestration::{PipelineError, PipelineOrchestrator, PipelineStage};
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeEvent, NodeInner as P2pNode};
 use rpp_chain::runtime::RuntimeMode;
@@ -59,6 +59,7 @@ struct OrchestratorFixture {
     wallet: Arc<Wallet>,
     orchestrator: Arc<PipelineOrchestrator>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    node_handle: NodeHandle,
     _mode: Arc<RwLock<RuntimeMode>>,
     _tempdir: tempfile::TempDir,
 }
@@ -90,9 +91,25 @@ impl OrchestratorFixture {
             wallet,
             orchestrator,
             shutdown_rx: shutdown_observer,
+            node_handle: handle,
             _mode: mode,
             _tempdir: tempdir,
         })
+    }
+
+    async fn restart_orchestrator(&mut self) {
+        self.orchestrator.shutdown();
+        // Allow the runtime tasks to observe the shutdown signal before the new
+        // orchestrator is created. The short delay keeps the test deterministic
+        // without materially affecting the overall runtime.
+        time::sleep(Duration::from_millis(25)).await;
+
+        let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(self.node_handle.clone(), None);
+        let orchestrator = Arc::new(orchestrator);
+        let observer = shutdown_rx.clone();
+        orchestrator.spawn(shutdown_rx);
+        self.shutdown_rx = observer;
+        self.orchestrator = orchestrator;
     }
 }
 
@@ -128,6 +145,124 @@ async fn pipeline_feed_receiver_caches_initial_state() {
     assert!(feed.dashboard.flows.is_empty());
     assert!(feed.errors.is_empty());
     assert!(feed.slashing_events.is_empty());
+    fixture
+        .wallet
+        .shutdown_pipeline(fixture.orchestrator.as_ref());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipeline_feed_propagates_errors_from_event_stream() {
+    let Some(mut fixture) = tokio::task::spawn_blocking(OrchestratorFixture::new)
+        .await
+        .expect("spawn blocking")
+    else {
+        return;
+    };
+
+    let mut receiver = fixture
+        .wallet
+        .subscribe_pipeline_feed(fixture.orchestrator.as_ref());
+
+    let error = PipelineError {
+        stage: "bft_finalised",
+        height: 42,
+        round: 7,
+        block_hash: Some("feeddeadbeef".into()),
+        message: "simulated consensus timeout".into(),
+        observed_at_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    };
+
+    fixture
+        .orchestrator
+        .publish_error_for_testing(error.clone());
+
+    let snapshot = time::timeout(Duration::from_secs(1), async {
+        loop {
+            if receiver.changed().await.is_err() {
+                break receiver.borrow().clone();
+            }
+            let feed = receiver.borrow().clone();
+            if !feed.errors.is_empty() {
+                break feed;
+            }
+        }
+    })
+    .await
+    .expect("pipeline error state")
+    .errors;
+
+    assert!(snapshot
+        .iter()
+        .any(|item| item.message == error.message && item.stage == error.stage));
+
+    fixture
+        .wallet
+        .shutdown_pipeline(fixture.orchestrator.as_ref());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pipeline_feed_retains_errors_after_orchestrator_restart() {
+    let Some(mut fixture) = tokio::task::spawn_blocking(OrchestratorFixture::new)
+        .await
+        .expect("spawn blocking")
+    else {
+        return;
+    };
+
+    let mut receiver = fixture
+        .wallet
+        .subscribe_pipeline_feed(fixture.orchestrator.as_ref());
+
+    let error = PipelineError {
+        stage: "firewood_commitment",
+        height: 64,
+        round: 3,
+        block_hash: Some("c0ffee00ff00".into()),
+        message: "mocked firewood replay failure".into(),
+        observed_at_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    };
+
+    fixture
+        .orchestrator
+        .publish_error_for_testing(error.clone());
+
+    let _ = time::timeout(Duration::from_secs(1), async {
+        loop {
+            if receiver.changed().await.is_err() {
+                break;
+            }
+            if !receiver.borrow().errors.is_empty() {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("initial pipeline error propagation");
+
+    drop(receiver);
+
+    fixture.restart_orchestrator().await;
+
+    // Allow the wallet pipeline task to observe the closed channels before we
+    // subscribe again.
+    time::sleep(Duration::from_millis(50)).await;
+
+    let receiver = fixture
+        .wallet
+        .subscribe_pipeline_feed(fixture.orchestrator.as_ref());
+    let feed = receiver.borrow().clone();
+
+    assert!(feed
+        .errors
+        .iter()
+        .any(|item| item.message == error.message && item.stage == error.stage));
+
     fixture
         .wallet
         .shutdown_pipeline(fixture.orchestrator.as_ref());

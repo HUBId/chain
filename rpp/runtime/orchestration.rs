@@ -433,6 +433,15 @@ impl PipelineOrchestrator {
         let _ = self.shutdown.send(true);
     }
 
+    /// Publish a pipeline error to all subscribers.
+    ///
+    /// This helper is primarily intended for integration tests that need to
+    /// deterministically drive the pipeline error feed without spinning up the
+    /// full validator stack.
+    pub fn publish_error_for_testing(&self, error: PipelineError) {
+        let _ = self.errors.send(error);
+    }
+
     async fn ingest_loop(
         node: NodeHandle,
         metrics: Arc<PipelineMetrics>,
