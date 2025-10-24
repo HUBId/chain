@@ -15,7 +15,13 @@ use serde_json::Value;
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
 
 #[derive(Parser)]
-#[command(author, version, about = "Run an rpp node", long_about = None)]
+#[command(
+    author,
+    version,
+    about = "Run an rpp node",
+    long_about = None,
+    after_help = "Exit codes:\n  0 - runtime exited cleanly\n  2 - configuration validation failed\n  3 - runtime startup failed\n  4 - unexpected runtime error"
+)]
 struct RootCli {
     #[command(subcommand)]
     command: RootCommand,
@@ -121,7 +127,35 @@ async fn main() -> Result<()> {
 
 async fn run_runtime(mode: RuntimeMode, args: rpp_node::RunArgs) -> Result<()> {
     let options = args.into_bootstrap_options(mode);
-    rpp_node::bootstrap(mode, options).await
+    let runtime_mode = mode;
+    let handle = tokio::spawn(async move { rpp_node::bootstrap(runtime_mode, options).await });
+
+    match handle.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => {
+            eprintln!("{err}");
+            std::process::exit(err.exit_code());
+        }
+        Err(join_err) => {
+            if join_err.is_panic() {
+                let message = panic_payload_to_string(join_err.into_panic());
+                eprintln!("runtime panicked: {message}");
+            } else {
+                eprintln!("runtime task failed: {join_err}");
+            }
+            std::process::exit(4);
+        }
+    }
+}
+
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Ok(message) = payload.downcast::<String>() {
+        *message
+    } else if let Ok(message) = payload.downcast::<&'static str>() {
+        (*message).to_string()
+    } else {
+        "unknown panic".to_string()
+    }
 }
 
 fn handle_vrf_command(command: VrfCommand) -> Result<()> {

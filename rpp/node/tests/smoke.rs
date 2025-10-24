@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -7,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use assert_cmd::cargo::CommandCargoExt;
+use assert_cmd::Command as AssertCommand;
 use tempfile::TempDir;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
@@ -51,6 +53,41 @@ async fn node_smoke_shutdown_with_telemetry() -> Result<()> {
 
     send_ctrl_c(&child).context("failed to send SIGINT to node process")?;
     verify_clean_exit(child).await
+}
+
+#[test]
+fn exit_code_for_missing_configuration() -> Result<()> {
+    let mut cmd = AssertCommand::cargo_bin("rpp-node");
+    cmd.arg("--config")
+        .arg("/nonexistent/config.toml")
+        .arg("--dry-run");
+    cmd.assert().failure().code(2);
+    Ok(())
+}
+
+#[test]
+fn exit_code_for_pipeline_start_failure() -> Result<()> {
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+    let config_path = write_configuration(temp_dir.path(), false)?;
+    fs::write(temp_dir.path().join("data"), "not-a-directory")
+        .context("failed to prepare invalid data directory placeholder")?;
+
+    let mut cmd = AssertCommand::cargo_bin("rpp-node");
+    cmd.arg("--config")
+        .arg(&config_path)
+        .arg("--rpc-listen")
+        .arg("127.0.0.1:0");
+    cmd.assert().failure().code(3);
+    Ok(())
+}
+
+#[test]
+fn exit_code_for_unexpected_panic() -> Result<()> {
+    let mut cmd = AssertCommand::cargo_bin("rpp-node");
+    cmd.env("RPP_NODE_TEST_FAILURE_MODE", "panic");
+    cmd.arg("--dry-run");
+    cmd.assert().failure().code(4);
+    Ok(())
 }
 
 async fn spawn_node(config_path: &Path, extra_args: &[&str]) -> Result<Child> {
