@@ -61,7 +61,12 @@ pub mod runtime;
 pub mod state;
 #[path = "../../storage/mod.rs"]
 pub mod storage;
+#[cfg(feature = "prover-stwo")]
 #[path = "../../proofs/stwo/mod.rs"]
+pub mod stwo;
+
+#[cfg(not(feature = "prover-stwo"))]
+#[path = "stwo_stub.rs"]
 pub mod stwo;
 #[cfg(feature = "backend-rpp-stark")]
 pub mod zk;
