@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 FUZZ_DIR="${REPO_ROOT}/fuzz"
 MAX_TIME="${FUZZ_MAX_TOTAL_TIME:-45}"
 SEED="${FUZZ_SEED:-0x5A17F00D}"
@@ -15,7 +15,7 @@ fi
 pushd "${FUZZ_DIR}" >/dev/null
 for target in "${TARGETS[@]}"; do
   echo "==> Running fuzz smoke for ${target}"
-  mkdir -p "artifacts/${target}"
+  mkdir -p "artifacts/${target}" "corpus/${target}"
   dict_path="dictionaries/${target}.dict"
   args=(
     -seed="${SEED}"
