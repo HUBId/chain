@@ -1,7 +1,10 @@
 # Releasing firewood
 
 Releasing firewood is straightforward and can mostly be done in CI. Updating the
-Cargo.toml file is currently manual.
+Cargo.toml file is currently manual. Review the companion
+[secure release runbook](RELEASES.md) and [security policy](SECURITY.md) for the
+CI/CD gates, signing requirements, and advisory coordination expectations that
+apply to every tagged release.
 
 ## Automated release pipeline
 

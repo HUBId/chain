@@ -1,5 +1,9 @@
 # Release Notes
 
+For the secure release process, see the updated [RELEASES.md](RELEASES.md)
+runbook and [SECURITY.md](SECURITY.md) policy that describe the CI gates,
+signing requirements, and advisory flow enforced by the latest pipelines.
+
 ## Stable Toolchain Workflow
 
 The project is standardised on the Rust `1.79.0` toolchain. Each release must confirm that this stable pin continues to compile, format, and lint cleanly before the artefact is tagged. Toolchain health is summarised in [`docs/STABLE_MIGRATION_REPORT.md`](docs/STABLE_MIGRATION_REPORT.md), and migration criteria are tracked in `MIGRATION.md`.
