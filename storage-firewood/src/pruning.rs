@@ -150,3 +150,6 @@ impl FirewoodPruner {
         position == 0 && computed == proof.commitment_root
     }
 }
+
+#[cfg(test)]
+mod tests_prop;

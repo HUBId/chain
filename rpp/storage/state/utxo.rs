@@ -459,3 +459,6 @@ mod tests {
         assert_eq!(mirror.commitment(), commitment_a);
     }
 }
+
+#[cfg(test)]
+mod tests_prop;

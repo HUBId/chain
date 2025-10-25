@@ -2096,3 +2096,6 @@ impl From<&Block> for BlockMetadata {
         BlockMetadata::from_block(block)
     }
 }
+
+#[cfg(test)]
+mod tests_prop;

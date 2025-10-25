@@ -249,3 +249,6 @@ pub enum NetworkSetupError {
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
 }
+
+#[cfg(test)]
+mod tests_prop;
