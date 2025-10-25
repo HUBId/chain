@@ -59,6 +59,11 @@ use crate::ledger::{
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_backend::{Blake2sHasher, ProofBytes};
+#[cfg(feature = "prover-stwo")]
+use crate::proof_backend::{
+    ConsensusCircuitDef, PruningCircuitDef, RecursiveCircuitDef, StateCircuitDef, WitnessBytes,
+    WitnessHeader,
+};
 use crate::proof_system::{ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
@@ -86,7 +91,13 @@ use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
 use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
+#[cfg(feature = "prover-stwo")]
 use crate::stwo::prover::WalletProver;
+#[cfg(feature = "prover-stwo")]
+use prover_stwo_backend::backend::{
+    decode_consensus_proof, decode_pruning_proof, decode_recursive_proof, decode_state_proof,
+    StwoBackend,
+};
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
@@ -768,6 +779,14 @@ pub(crate) struct NodeInner {
     runtime_metrics: Arc<RuntimeMetrics>,
 }
 
+#[cfg_attr(not(feature = "prover-stwo"), allow(dead_code))]
+struct LocalProofArtifacts {
+    bundle: BlockProofBundle,
+    consensus_proof: Option<ChainProof>,
+    module_witnesses: ModuleWitnessBundle,
+    proof_artifacts: Vec<ProofArtifact>,
+}
+
 enum FinalizationContext {
     Local(LocalFinalizationContext),
     #[allow(dead_code)]
@@ -1027,8 +1046,6 @@ impl Node {
                 config.malachite.rewards.treasury_accounts(),
                 config.malachite.rewards.witness_pool_weights(),
             );
-            let module_witnesses = ledger.drain_module_witnesses();
-            let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
             let mut tx_hashes: Vec<[u8; 32]> = Vec::new();
             let tx_root = compute_merkle_root(&mut tx_hashes);
             let commitments = ledger.global_commitments();
@@ -1057,47 +1074,35 @@ impl Node {
                 0,
             );
             let pruning_proof = PruningProof::genesis(&state_root_hex);
-            let prover = WalletProver::new(&storage);
             let transactions: Vec<SignedTransaction> = Vec::new();
             let transaction_proofs: Vec<ChainProof> = Vec::new();
             let identity_proofs: Vec<ChainProof> = Vec::new();
-            let state_witness = prover.build_state_witness(
-                &pruning_proof.previous_state_root,
-                &header.state_root,
-                &Vec::new(),
-                &transactions,
-            )?;
-            let state_proof = prover.prove_state_transition(state_witness)?;
-            let pruning_witness = prover.build_pruning_witness(
-                &Vec::new(),
-                &transactions,
-                &pruning_proof,
-                Vec::new(),
-            )?;
-            let pruning_stark = prover.prove_pruning(pruning_witness)?;
-            let recursive_witness = prover.build_recursive_witness(
-                None,
-                &identity_proofs,
-                &transaction_proofs,
-                &[],
-                &[],
+            let LocalProofArtifacts {
+                bundle: stark_bundle,
+                consensus_proof,
+                module_witnesses,
+                mut proof_artifacts,
+            } = NodeInner::generate_local_block_proofs(
+                &storage,
+                &ledger,
+                &header,
                 &commitments,
-                &state_proof,
-                &pruning_stark,
-                header.height,
-            )?;
-            let recursive_stark = prover.prove_recursive(recursive_witness)?;
-            let stark_bundle = BlockProofBundle::new(
+                &pruning_proof,
+                &[],
+                &transactions,
                 transaction_proofs,
-                state_proof,
-                pruning_stark,
-                recursive_stark,
+                &identity_proofs,
+                &[],
+                None,
+                None,
+                config.max_proof_size_bytes,
+            )?;
+            debug_assert!(
+                consensus_proof.is_none(),
+                "genesis consensus proof should not be generated",
             );
             let recursive_proof =
                 RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)?;
-            let mut proof_artifacts =
-                NodeInner::collect_proof_artifacts(&stark_bundle, config.max_proof_size_bytes)?;
-            proof_artifacts.extend(module_artifacts);
             let signature = sign_message(&keypair, &header.canonical_bytes());
             let consensus_certificate = ConsensusCertificate::genesis();
             let genesis_block = Block::new(
@@ -4234,6 +4239,277 @@ impl NodeInner {
             .map(|proposal| proposal.block)
     }
 
+    #[cfg(feature = "prover-stwo")]
+    fn map_backend_error(err: crate::proof_backend::BackendError) -> ChainError {
+        match err {
+            crate::proof_backend::BackendError::Failure(message) => ChainError::Crypto(message),
+            crate::proof_backend::BackendError::Unsupported(context) => {
+                ChainError::Crypto(format!("STWO backend unsupported: {context}"))
+            }
+            crate::proof_backend::BackendError::Serialization(err) => {
+                ChainError::Crypto(format!("failed to encode STWO payload: {err}"))
+            }
+        }
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    #[allow(clippy::too_many_arguments)]
+    fn generate_local_block_proofs(
+        storage: &Storage,
+        ledger: &Ledger,
+        header: &BlockHeader,
+        commitments: &GlobalStateCommitments,
+        pruning_proof: &PruningProof,
+        accepted_identities: &[AttestedIdentityRequest],
+        transactions: &[SignedTransaction],
+        transaction_proofs: Vec<ChainProof>,
+        identity_proofs: &[ChainProof],
+        uptime_proofs: &[UptimeProof],
+        previous_block: Option<&Block>,
+        consensus_certificate: Option<&ConsensusCertificate>,
+        block_hash: Option<&str>,
+        max_proof_size_bytes: usize,
+    ) -> ChainResult<LocalProofArtifacts> {
+        let prover = WalletProver::new(storage);
+        let backend = StwoBackend::new();
+        let backend_kind = ProofSystemKind::Stwo;
+
+        let state_witness = {
+            let span = proof_operation_span(
+                "build_state_witness",
+                backend_kind,
+                Some(header.height),
+                block_hash,
+            );
+            let _guard = span.enter();
+            prover.build_state_witness(
+                &pruning_proof.previous_state_root,
+                &header.state_root,
+                accepted_identities,
+                transactions,
+            )?
+        };
+        let state_bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, "state"),
+            &state_witness,
+        )
+        .map_err(Self::map_backend_error)?;
+        let (state_pk, _) = backend
+            .keygen_state(&StateCircuitDef::new("state"))
+            .map_err(Self::map_backend_error)?;
+        let state_proof_bytes = {
+            let span = proof_operation_span(
+                "prove_state_transition",
+                backend_kind,
+                Some(header.height),
+                block_hash,
+            );
+            let _guard = span.enter();
+            backend
+                .prove_state(&state_pk, &state_bytes)
+                .map_err(Self::map_backend_error)?
+        };
+        let state_stark = decode_state_proof(&state_proof_bytes).map_err(Self::map_backend_error)?;
+        let state_chain_proof = ChainProof::Stwo(state_stark);
+
+        let previous_transactions = previous_block
+            .map(|block| block.transactions.clone())
+            .unwrap_or_default();
+        let previous_identities = previous_block
+            .map(|block| block.identities.clone())
+            .unwrap_or_default();
+        let pruning_witness = {
+            let span = proof_operation_span(
+                "build_pruning_witness",
+                backend_kind,
+                Some(header.height),
+                block_hash,
+            );
+            let _guard = span.enter();
+            prover.build_pruning_witness(
+                &previous_identities,
+                &previous_transactions,
+                pruning_proof,
+                Vec::new(),
+            )?
+        };
+        let pruning_bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, "pruning"),
+            &pruning_witness,
+        )
+        .map_err(Self::map_backend_error)?;
+        let (pruning_pk, _) = backend
+            .keygen_pruning(&PruningCircuitDef::new("pruning"))
+            .map_err(Self::map_backend_error)?;
+        let pruning_proof_bytes = {
+            let span = proof_operation_span(
+                "prove_pruning",
+                backend_kind,
+                Some(header.height),
+                block_hash,
+            );
+            let _guard = span.enter();
+            backend
+                .prove_pruning(&pruning_pk, &pruning_bytes)
+                .map_err(Self::map_backend_error)?
+        };
+        let pruning_stark =
+            decode_pruning_proof(&pruning_proof_bytes).map_err(Self::map_backend_error)?;
+        let pruning_chain_proof = ChainProof::Stwo(pruning_stark);
+
+        let previous_recursive = previous_block.map(|block| &block.stark.recursive_proof);
+
+        let uptime_chain_proofs: Vec<ChainProof> = uptime_proofs
+            .iter()
+            .map(|proof| {
+                proof.proof.clone().ok_or_else(|| {
+                    ChainError::Crypto("uptime proof missing zk proof payload".into())
+                })
+            })
+            .collect::<ChainResult<_>>()?;
+
+        let mut consensus_chain_proof = None;
+        if let Some(certificate) = consensus_certificate {
+            let block_hash = block_hash.expect("consensus block hash must be present");
+            let consensus_witness = {
+                let span = proof_operation_span(
+                    "build_consensus_witness",
+                    backend_kind,
+                    Some(header.height),
+                    Some(block_hash),
+                );
+                let _guard = span.enter();
+                prover.build_consensus_witness(block_hash, certificate)?
+            };
+            let consensus_bytes = WitnessBytes::encode(
+                &WitnessHeader::new(ProofSystemKind::Stwo, "consensus"),
+                &consensus_witness,
+            )
+            .map_err(Self::map_backend_error)?;
+            let (consensus_proof_bytes, _vk, _circuit) = {
+                let span = proof_operation_span(
+                    "prove_consensus",
+                    backend_kind,
+                    Some(header.height),
+                    Some(block_hash),
+                );
+                let _guard = span.enter();
+                backend
+                    .prove_consensus(&consensus_bytes)
+                    .map_err(Self::map_backend_error)?
+            };
+            let (_, consensus_stark) =
+                decode_consensus_proof(&consensus_proof_bytes).map_err(Self::map_backend_error)?;
+            consensus_chain_proof = Some(ChainProof::Stwo(consensus_stark));
+        }
+
+        let mut consensus_chain_proofs = Vec::new();
+        if let Some(proof) = consensus_chain_proof.as_ref() {
+            consensus_chain_proofs.push(proof.clone());
+        }
+
+        let recursive_witness = {
+            let span = proof_operation_span(
+                "build_recursive_witness",
+                backend_kind,
+                Some(header.height),
+                block_hash,
+            );
+            let _guard = span.enter();
+            prover.build_recursive_witness(
+                previous_recursive,
+                identity_proofs,
+                &transaction_proofs,
+                &uptime_chain_proofs,
+                &consensus_chain_proofs,
+                commitments,
+                &state_chain_proof,
+                &pruning_chain_proof,
+                header.height,
+            )?
+        };
+        let recursive_bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, "recursive"),
+            &recursive_witness,
+        )
+        .map_err(Self::map_backend_error)?;
+        let (recursive_pk, _) = backend
+            .keygen_recursive(&RecursiveCircuitDef::new("recursive"))
+            .map_err(Self::map_backend_error)?;
+        let recursive_proof_bytes = {
+            let span = proof_operation_span(
+                "prove_recursive",
+                backend_kind,
+                Some(header.height),
+                block_hash,
+            );
+            let _guard = span.enter();
+            backend
+                .prove_recursive(&recursive_pk, &recursive_bytes)
+                .map_err(Self::map_backend_error)?
+        };
+        let recursive_stark =
+            decode_recursive_proof(&recursive_proof_bytes).map_err(Self::map_backend_error)?;
+        let recursive_chain_proof = ChainProof::Stwo(recursive_stark);
+
+        let bundle = BlockProofBundle::new(
+            transaction_proofs,
+            state_chain_proof.clone(),
+            pruning_chain_proof.clone(),
+            recursive_chain_proof.clone(),
+        );
+
+        let module_witnesses = ledger.drain_module_witnesses();
+        let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
+        let mut proof_artifacts =
+            Self::collect_proof_artifacts(&bundle, max_proof_size_bytes)?;
+        proof_artifacts.extend(module_artifacts);
+
+        Ok(LocalProofArtifacts {
+            bundle,
+            consensus_proof: consensus_chain_proof,
+            module_witnesses,
+            proof_artifacts,
+        })
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    #[allow(clippy::too_many_arguments)]
+    fn generate_local_block_proofs(
+        storage: &Storage,
+        ledger: &Ledger,
+        header: &BlockHeader,
+        commitments: &GlobalStateCommitments,
+        pruning_proof: &PruningProof,
+        accepted_identities: &[AttestedIdentityRequest],
+        transactions: &[SignedTransaction],
+        transaction_proofs: Vec<ChainProof>,
+        identity_proofs: &[ChainProof],
+        uptime_proofs: &[UptimeProof],
+        previous_block: Option<&Block>,
+        consensus_certificate: Option<&ConsensusCertificate>,
+        block_hash: Option<&str>,
+        max_proof_size_bytes: usize,
+    ) -> ChainResult<LocalProofArtifacts> {
+        let _ = (
+            storage,
+            ledger,
+            header,
+            commitments,
+            pruning_proof,
+            accepted_identities,
+            transactions,
+            transaction_proofs,
+            identity_proofs,
+            uptime_proofs,
+            previous_block,
+            consensus_certificate,
+            block_hash,
+            max_proof_size_bytes,
+        );
+        Err(ChainError::Crypto("STWO prover disabled".into()))
+    }
+
     #[instrument(
         name = "node.proof.collect_artifacts",
         skip(self, bundle),
@@ -4794,33 +5070,36 @@ impl NodeInner {
         let height = header.height;
         let previous_block = self.storage.read_block(parent_height)?;
         let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
-        let prover = WalletProver::new(&self.storage);
-        let backend = prover.system();
-        let state_witness = {
-            let span = proof_operation_span(
-                "build_state_witness",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.build_state_witness(
-                &pruning_proof.previous_state_root,
-                &header.state_root,
-                &accepted_identities,
-                &transactions,
-            )?
-        };
-        let state_proof = {
-            let span = proof_operation_span(
-                "prove_state_transition",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.prove_state_transition(state_witness)?
-        };
+        let participants = round.commit_participants();
+        self.ledger
+            .record_consensus_witness(height, round.round(), participants);
+        let consensus_certificate = round.certificate();
+        let LocalProofArtifacts {
+            bundle: stark_bundle,
+            consensus_proof,
+            module_witnesses,
+            proof_artifacts,
+        } = NodeInner::generate_local_block_proofs(
+            &self.storage,
+            &self.ledger,
+            &header,
+            &commitments,
+            &pruning_proof,
+            &accepted_identities,
+            &transactions,
+            transaction_proofs,
+            &identity_proofs,
+            &uptime_proofs,
+            previous_block.as_ref(),
+            Some(&consensus_certificate),
+            Some(&block_hash),
+            self.config.max_proof_size_bytes,
+        )?;
+        let consensus_proof = consensus_proof.ok_or_else(|| {
+            ChainError::Crypto("local consensus proof missing".into())
+        })?;
+
+        let state_proof = stark_bundle.state_proof.clone();
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let state_result = match &state_proof {
@@ -4842,39 +5121,7 @@ impl NodeInner {
             }
         }
 
-        let previous_transactions = previous_block
-            .as_ref()
-            .map(|block| block.transactions.clone())
-            .unwrap_or_default();
-        let previous_identities = previous_block
-            .as_ref()
-            .map(|block| block.identities.clone())
-            .unwrap_or_default();
-        let pruning_witness = {
-            let span = proof_operation_span(
-                "build_pruning_witness",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.build_pruning_witness(
-                &previous_identities,
-                &previous_transactions,
-                &pruning_proof,
-                Vec::new(),
-            )?
-        };
-        let pruning_stark = {
-            let span = proof_operation_span(
-                "prove_pruning",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.prove_pruning(pruning_witness)?
-        };
+        let pruning_stark = stark_bundle.pruning_proof.clone();
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let pruning_result = match &pruning_stark {
@@ -4896,98 +5143,7 @@ impl NodeInner {
             }
         }
 
-        let previous_recursive_stark = previous_block
-            .as_ref()
-            .map(|block| &block.stark.recursive_proof);
-
-        let participants = round.commit_participants();
-        self.ledger
-            .record_consensus_witness(height, round.round(), participants);
-        let module_witnesses = self.ledger.drain_module_witnesses();
-        let module_artifacts = self.ledger.stage_module_witnesses(&module_witnesses)?;
-        let consensus_certificate = round.certificate();
-        let consensus_witness = {
-            let span = proof_operation_span(
-                "build_consensus_witness",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.build_consensus_witness(&block_hash, &consensus_certificate)?
-        };
-        let consensus_proof = {
-            let span = proof_operation_span(
-                "prove_consensus",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.prove_consensus(consensus_witness)?
-        };
-        if self.config.rollout.feature_gates.recursive_proofs {
-            #[cfg(feature = "backend-rpp-stark")]
-            let consensus_result = match &consensus_proof {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(
-                        ProofVerificationKind::Consensus,
-                        &consensus_proof,
-                    )
-                    .map(|_| ()),
-                _ => self.verifiers.verify_consensus(&consensus_proof),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let consensus_result = self.verifiers.verify_consensus(&consensus_proof);
-            if let Err(err) = consensus_result {
-                error!(
-                    height,
-                    block_hash = %block_hash,
-                    ?err,
-                    "local consensus proof rejected by verifier"
-                );
-                return Err(err);
-            }
-        }
-        let uptime_chain_proofs: Vec<ChainProof> = uptime_proofs
-            .iter()
-            .map(|proof| {
-                proof.proof.clone().ok_or_else(|| {
-                    ChainError::Crypto("uptime proof missing zk proof payload".into())
-                })
-            })
-            .collect::<ChainResult<_>>()?;
-        let consensus_chain_proofs = vec![consensus_proof.clone()];
-        let recursive_witness = {
-            let span = proof_operation_span(
-                "build_recursive_witness",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.build_recursive_witness(
-                previous_recursive_stark,
-                &identity_proofs,
-                &transaction_proofs,
-                &uptime_chain_proofs,
-                &consensus_chain_proofs,
-                &commitments,
-                &state_proof,
-                &pruning_stark,
-                header.height,
-            )?
-        };
-        let recursive_stark = {
-            let span = proof_operation_span(
-                "prove_recursive",
-                backend,
-                Some(height),
-                Some(&block_hash),
-            );
-            let _guard = span.enter();
-            prover.prove_recursive(recursive_witness)?
-        };
+        let recursive_stark = stark_bundle.recursive_proof.clone();
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let recursive_result = match &recursive_stark {
@@ -5012,12 +5168,30 @@ impl NodeInner {
             }
         }
 
-        let stark_bundle = BlockProofBundle::new(
-            transaction_proofs,
-            state_proof,
-            pruning_stark,
-            recursive_stark,
-        );
+        if self.config.rollout.feature_gates.recursive_proofs {
+            #[cfg(feature = "backend-rpp-stark")]
+            let consensus_result = match &consensus_proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::Consensus,
+                        &consensus_proof,
+                    )
+                    .map(|_| ()),
+                _ => self.verifiers.verify_consensus(&consensus_proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let consensus_result = self.verifiers.verify_consensus(&consensus_proof);
+            if let Err(err) = consensus_result {
+                error!(
+                    height,
+                    block_hash = %block_hash,
+                    ?err,
+                    "local consensus proof rejected by verifier"
+                );
+                return Err(err);
+            }
+        }
+
         let recursive_proof = match previous_block.as_ref() {
             Some(block) => RecursiveProof::extend(
                 &block.recursive_proof,
@@ -5030,10 +5204,7 @@ impl NodeInner {
             }
         };
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
-        let state_proof_artifact = stark_bundle.state_proof.clone();
-        let mut proof_artifacts =
-            Self::collect_proof_artifacts(&stark_bundle, self.config.max_proof_size_bytes)?;
-        proof_artifacts.extend(module_artifacts);
+        let state_proof_artifact = state_proof.clone();
         let block = Block::new(
             header,
             accepted_identities,
