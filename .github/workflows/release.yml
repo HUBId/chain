@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'SemVer tag to build (e.g. v1.2.3)'
+        required: false
+
+permissions:
+  contents: write
+  id-token: write
+  actions: read
+
+env:
+  RUSTFLAGS: -D warnings
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Lint, audit, and tests
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.determine_tag.outputs.release_tag }}
+    steps:
+      - name: Determine release tag
+        id: determine_tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version != '' && github.event.inputs.version || github.ref_name }}"
+          if [[ -z "$tag" ]]; then
+            echo "error: RELEASE_TAG is empty. Provide a SemVer tag via workflow dispatch or push a tag." >&2
+            exit 1
+          fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+.*$ ]]; then
+            echo "error: '$tag' is not a valid SemVer tag" >&2
+            exit 1
+          fi
+          echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-checks
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Install test helpers
+        run: |
+          cargo install --locked cargo-audit
+          cargo install --locked git-cliff
+      - name: Cargo audit
+        run: cargo audit --deny warnings
+      - name: Test suite
+        run: ./scripts/test.sh --all
+      - name: Prepare release notes
+        run: ./scripts/prepare_changelog.sh --tag "${{ steps.determine_tag.outputs.release_tag }}" --output dist/release-notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: dist/release-notes.md
+
+  build-linux:
+    name: Build Linux artifacts
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            tool: cargo
+          - target: aarch64-unknown-linux-gnu
+            tool: cross
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+      - name: Install build tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.tool }}" == "cross" ]]; then
+            cargo install --locked cross
+          fi
+          cargo install --locked cargo-cyclonedx
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool "${{ matrix.tool }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: dist/artifacts/${{ matrix.target }}
+
+  build-macos:
+    name: Build macOS artifacts
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    runs-on: macos-latest
+    env:
+      RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+      - name: Install build tooling
+        run: cargo install --locked cargo-cyclonedx
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool cargo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: dist/artifacts/${{ matrix.target }}
+
+  publish:
+    name: Sign and publish release
+    needs:
+      - checks
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: dist/artifacts
+          merge-multiple: true
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.0'
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find dist/artifacts -type f \( -name '*.tar.gz' -o -name '*.json' \) -print | sort)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "error: no artifacts found to checksum" >&2
+            exit 1
+          fi
+          ./scripts/checksums.sh --output dist/SHA256SUMS.txt "${files[@]}"
+          ./scripts/verify_checksums.sh --manifest dist/SHA256SUMS.txt
+      - name: Sign artifacts and checksums
+        shell: bash
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find dist/artifacts -type f \( -name '*.tar.gz' -o -name '*.json' \) -print | sort)
+          for file in "${files[@]}"; do
+            cosign sign-blob --yes --output-signature "${file}.sig" --output-certificate "${file}.pem" "$file"
+            target="$(basename "$(dirname "$file")")"
+            subject="$(basename "$file")"
+            ./scripts/provenance_attest.sh --artifact "$file" --target "$target" --subject "$subject"
+          done
+          cosign sign-blob --yes --output-signature dist/SHA256SUMS.txt.sig --output-certificate dist/SHA256SUMS.txt.pem dist/SHA256SUMS.txt
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body_path: dist/release-notes.md
+          files: |
+            dist/SHA256SUMS.txt
+            dist/SHA256SUMS.txt.sig
+            dist/SHA256SUMS.txt.pem
+            dist/artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
