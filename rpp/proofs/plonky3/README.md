@@ -8,8 +8,8 @@ network access thanks to the vendored Plonky3 shims under `vendor/`.
 
 ## Prerequisites
 
-* **Rust toolchain** – the workspace targets Rust `1.89.0` (as pinned in
-  `rust-toolchain.toml`).  Install it with `rustup toolchain install 1.89.0` if
+* **Rust toolchain** – the workspace targets Rust `1.79.0` (as pinned in
+  `rust-toolchain.toml`).  Install it with `rustup toolchain install 1.79.0` if
   it is not already available.
 * **Memory budget** – the current stub backend comfortably fits within 2 GiB of
   RAM during `cargo test` runs.  Future full Plonky3 circuits are expected to be
