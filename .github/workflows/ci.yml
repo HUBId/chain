@@ -1,0 +1,181 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Cargo fmt
+        run: cargo fmt --all --check
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  audit:
+    name: Dependency audits
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+      - name: Cargo audit
+        run: cargo audit --deny warnings
+      - name: Cargo deny
+        run: cargo deny check
+
+  docs:
+    name: Docs & links
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target/doc
+      - name: Build docs
+        run: cargo doc --workspace --all-features --no-deps
+      - name: Install cargo-deadlinks
+        run: cargo install cargo-deadlinks --locked
+      - name: Check documentation links
+        run: cargo deadlinks --dir target/doc
+
+  test:
+    name: Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            toolchain: stable
+            name: linux-x86_64-stable
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            toolchain: stable
+            name: linux-aarch64-stable
+          - os: macos-13
+            target: x86_64-apple-darwin
+            toolchain: stable
+            name: macos-stable
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            toolchain: nightly
+            name: linux-x86_64-nightly
+            channel: nightly
+    env:
+      RPP_TEST_SEED: 0xC0FFEE
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+      - name: Run tests
+        run: |
+          cargo test --workspace --all-targets --all-features --locked -- --nocapture
+          cargo test --test bin_mode_switch --all-features --locked -- --nocapture
+
+  property-tests:
+    name: Property tests
+    runs-on: ubuntu-22.04
+    env:
+      PROPTEST_CASES: 64
+      PROPTEST_MAX_SHRINK_ITERS: 128
+      PROPTEST_TIMEOUT: 300
+      RPP_TEST_SEED: 0x5EED
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run property tests
+        run: |
+          mkdir -p artifacts
+          set -o pipefail
+          cargo test --workspace --all-features --tests --locked -- --nocapture 2>&1 | tee artifacts/property-tests.log
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: property-test-logs
+          path: artifacts/property-tests.log
+
+  fuzz-smoke:
+    name: Fuzz smoke tests
+    runs-on: ubuntu-22.04
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      RUSTFLAGS: "-C debuginfo=1"
+      CARGO_TARGET_DIR: fuzz-target
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rpp/p2p/fuzz -> fuzz-target
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run smoke fuzzers
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          declare -A seeds=(
+            [handle_meta]=0x5A17F00D
+            [handle_blocks]=0xC0FFEE
+            [handle_votes]=0xC0FFEE5
+            [admission_evaluate_publish]=0xF00D5EED
+          )
+          for target in "${!seeds[@]}"; do
+            log="artifacts/${target}.log"
+            if ! cargo fuzz run "$target" -- -seed="${seeds[$target]}" -max_total_time=60 -timeout=5 -rss_limit_mb=2048 | tee "$log"; then
+              echo "${target}" >> artifacts/failures.txt
+            fi
+          done
+          if [ -f artifacts/failures.txt ]; then
+            exit 1
+          fi
+      - name: Upload fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: artifacts
