@@ -142,8 +142,9 @@ pub mod telemetry;
 
 pub use telemetry::metrics::{
     init_runtime_metrics, ConsensusStage, ProofKind, ProofVerificationBackend,
-    ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, RuntimeMetrics,
-    RuntimeMetricsGuard, WalFlushOutcome, WalletRpcMethod,
+    ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, ProofRpcMethod,
+    RpcMethod, RpcResult, RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome,
+    WalletRpcMethod,
 };
 pub mod vrf_gossip;
 

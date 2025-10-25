@@ -1,11 +1,14 @@
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use axum::body::Body;
@@ -30,6 +33,8 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 use tower::ServiceBuilder;
+use tower::Service;
+use tower::layer::Layer;
 use tower::limit::RateLimitLayer;
 use tracing::{info, warn};
 
@@ -57,7 +62,9 @@ use crate::orchestration::{
 use crate::proof_system::VerifierMetricsSnapshot;
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
-use crate::runtime::RuntimeMode;
+use crate::runtime::{
+    ProofRpcMethod, RpcMethod, RpcResult, RuntimeMetrics, RuntimeMode, WalletRpcMethod,
+};
 use crate::runtime::config::{
     P2pAllowlistEntry, QueueWeightsConfig, SecretsBackendConfig, SecretsConfig,
 };
@@ -176,6 +183,7 @@ pub struct ApiContext {
     request_limit_per_minute: Option<NonZeroU64>,
     auth_token_enabled: bool,
     state_sync_api: Option<Arc<dyn StateSyncApi>>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl ApiContext {
@@ -194,6 +202,14 @@ impl ApiContext {
             .as_ref()
             .map(|handle| Arc::new(handle.clone()) as Arc<dyn StateSyncApi>);
 
+        let metrics = if let Some(handle) = node.as_ref() {
+            handle.runtime_metrics()
+        } else if let Some(wallet) = wallet.as_ref() {
+            wallet.metrics()
+        } else {
+            RuntimeMetrics::noop()
+        };
+
         Self {
             mode,
             node,
@@ -204,6 +220,7 @@ impl ApiContext {
             request_limit_per_minute,
             auth_token_enabled,
             state_sync_api,
+            metrics,
         }
     }
 
@@ -264,6 +281,10 @@ impl ApiContext {
         self.state_sync_api.as_ref().map(Arc::clone)
     }
 
+    pub fn metrics(&self) -> Arc<RuntimeMetrics> {
+        Arc::clone(&self.metrics)
+    }
+
     fn require_state_sync_api(
         &self,
     ) -> Result<Arc<dyn StateSyncApi>, (StatusCode, Json<ErrorResponse>)> {
@@ -278,6 +299,11 @@ impl ApiContext {
 
     pub fn with_state_sync_api(mut self, api: Arc<dyn StateSyncApi>) -> Self {
         self.state_sync_api = Some(api);
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<RuntimeMetrics>) -> Self {
+        self.metrics = metrics;
         self
     }
 
@@ -808,6 +834,143 @@ async fn auth_middleware(
     Ok(next.run(request).await)
 }
 
+fn classify_rpc_method(method: &Method, path: &str) -> RpcMethod {
+    if method == Method::OPTIONS {
+        return RpcMethod::Other;
+    }
+
+    if let Some(wallet) = wallet_rpc_method(method, path) {
+        return RpcMethod::Wallet(wallet);
+    }
+
+    if let Some(proof) = proof_rpc_method(path) {
+        return RpcMethod::Proof(proof);
+    }
+
+    RpcMethod::Other
+}
+
+fn wallet_rpc_method(method: &Method, path: &str) -> Option<WalletRpcMethod> {
+    if !path.starts_with("/wallet/") {
+        return None;
+    }
+
+    if path.starts_with("/wallet/history") {
+        return Some(WalletRpcMethod::GetHistory);
+    }
+
+    if path.starts_with("/wallet/tx/submit")
+        || path.starts_with("/wallet/tx/sign")
+        || path.starts_with("/wallet/uptime/submit")
+    {
+        return Some(WalletRpcMethod::SubmitTransaction);
+    }
+
+    if path.starts_with("/wallet/tx/prove")
+        || path.starts_with("/wallet/tx/build")
+        || path.starts_with("/wallet/send/preview")
+        || path.starts_with("/wallet/uptime/proof")
+    {
+        return Some(WalletRpcMethod::BuildProof);
+    }
+
+    if method == Method::GET
+        && (path.starts_with("/wallet/account")
+            || path.starts_with("/wallet/balance/")
+            || path.starts_with("/wallet/reputation/")
+            || path.starts_with("/wallet/tier/")
+            || path.starts_with("/wallet/receive")
+            || path.starts_with("/wallet/node")
+            || path.starts_with("/wallet/state/root"))
+    {
+        return Some(WalletRpcMethod::GetBalance);
+    }
+
+    Some(WalletRpcMethod::Status)
+}
+
+fn proof_rpc_method(path: &str) -> Option<ProofRpcMethod> {
+    if path.starts_with("/proofs/block/") {
+        return Some(ProofRpcMethod::Block);
+    }
+
+    if path.starts_with("/validator/proofs") {
+        return Some(ProofRpcMethod::Validator);
+    }
+
+    if path.starts_with("/wallet/tx/prove") {
+        return Some(ProofRpcMethod::Wallet);
+    }
+
+    None
+}
+
+#[derive(Clone)]
+struct RpcMetricsLayer {
+    metrics: Arc<RuntimeMetrics>,
+}
+
+impl RpcMetricsLayer {
+    fn new(metrics: Arc<RuntimeMetrics>) -> Self {
+        Self { metrics }
+    }
+}
+
+impl<S> Layer<S> for RpcMetricsLayer {
+    type Service = RpcMetricsService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        RpcMetricsService {
+            inner,
+            metrics: Arc::clone(&self.metrics),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RpcMetricsService<S> {
+    inner: S,
+    metrics: Arc<RuntimeMetrics>,
+}
+
+impl<S> Service<Request<Body>> for RpcMetricsService<S>
+where
+    S: Service<Request<Body>, Response = Response> + Send + 'static,
+    S::Error: Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = S::Error;
+    type Future = Pin<Box<dyn Future<Output = Result<Response, S::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let method = request.method().clone();
+        let path = request.uri().path().to_owned();
+        let start = Instant::now();
+        let metrics = Arc::clone(&self.metrics);
+        let rpc_method = classify_rpc_method(&method, &path);
+        let fut = self.inner.call(request);
+
+        Box::pin(async move {
+            match fut.await {
+                Ok(response) => {
+                    let result = RpcResult::from_status(response.status());
+                    metrics.record_rpc_request(rpc_method, result, start.elapsed());
+                    Ok(response)
+                }
+                Err(err) => {
+                    metrics.record_rpc_request(rpc_method, RpcResult::from_error(), start.elapsed());
+                    Err(err)
+                }
+            }
+        })
+    }
+}
+
 pub async fn serve(
     context: ApiContext,
     addr: SocketAddr,
@@ -816,6 +979,7 @@ pub async fn serve(
 ) -> ChainResult<()> {
     let security = ApiSecurity::new(auth_token, allowed_origin)?;
     let request_limit_per_minute = context.request_limit_per_minute();
+    let metrics = context.metrics();
 
     let mut router = Router::new()
         .route("/health", get(health))
@@ -923,6 +1087,8 @@ pub async fn serve(
                 .layer(RateLimitLayer::new(limit.get(), Duration::from_secs(60))),
         );
     }
+
+    router = router.layer(RpcMetricsLayer::new(metrics));
 
     let router = router.with_state(context);
 
@@ -2191,6 +2357,175 @@ impl StateSyncApi for NodeHandle {
             StateSyncErrorKind::NoActiveSession,
             Some("state sync session unavailable".into()),
         ))
+    }
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+    use axum::http::{Method, Request as HttpRequest};
+    use axum::routing::get;
+    use opentelemetry::Value;
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
+    use opentelemetry_sdk::metrics::{
+        InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
+    };
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn setup_metrics() -> (
+        Arc<RuntimeMetrics>,
+        InMemoryMetricExporter,
+        Arc<SdkMeterProvider>,
+    ) {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = Arc::new(SdkMeterProvider::builder().with_reader(reader).build());
+        let meter = provider.meter("rpc-test");
+        let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
+        (metrics, exporter, provider)
+    }
+
+    fn metric_has_attributes(
+        exported: &[ResourceMetrics],
+        name: &str,
+        method: &str,
+        result: &str,
+    ) -> bool {
+        exported
+            .iter()
+            .flat_map(|resource| resource.scope_metrics())
+            .flat_map(|scope| scope.metrics())
+            .filter(|metric| metric.name() == name)
+            .any(|metric| match metric.data() {
+                AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+                    .data_points()
+                    .any(|point| data_point_matches(point.attributes(), method, result)),
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+                    .data_points()
+                    .any(|point| data_point_matches(point.attributes(), method, result)),
+                _ => false,
+            })
+    }
+
+    fn data_point_matches<'a>(
+        attrs: impl Iterator<Item = &'a opentelemetry::KeyValue>,
+        method: &str,
+        result: &str,
+    ) -> bool {
+        let mut method_match = false;
+        let mut result_match = false;
+
+        for attr in attrs {
+            match attr.key.as_str() {
+                "method" => {
+                    if let Value::String(value) = &attr.value {
+                        method_match = value.as_str() == method;
+                    }
+                }
+                "result" => {
+                    if let Value::String(value) = &attr.value {
+                        result_match = value.as_str() == result;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        method_match && result_match
+    }
+
+    #[tokio::test]
+    async fn wallet_requests_emit_metrics() -> Result<(), MetricError> {
+        let (metrics, exporter, provider) = setup_metrics();
+        let context = ApiContext::new(
+            Arc::new(RwLock::new(RuntimeMode::Wallet)),
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .with_metrics(metrics.clone());
+
+        let app = Router::new()
+            .route("/wallet/history", get(wallet_history))
+            .layer(RpcMetricsLayer::new(metrics))
+            .with_state(context);
+
+        let request = HttpRequest::builder()
+            .uri("/wallet/history")
+            .method(Method::GET)
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.latency",
+            "get_history",
+            "server_error",
+        ));
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.total",
+            "get_history",
+            "server_error",
+        ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn proof_requests_emit_metrics() -> Result<(), MetricError> {
+        let (metrics, exporter, provider) = setup_metrics();
+        let context = ApiContext::new(
+            Arc::new(RwLock::new(RuntimeMode::Node)),
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .with_metrics(metrics.clone());
+
+        let app = Router::new()
+            .route("/proofs/block/:height", get(block_proofs))
+            .layer(RpcMetricsLayer::new(metrics))
+            .with_state(context);
+
+        let request = HttpRequest::builder()
+            .uri("/proofs/block/1")
+            .method(Method::GET)
+            .body(Body::empty())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.latency",
+            "block_proof",
+            "server_error",
+        ));
+        assert!(metric_has_attributes(
+            &exported,
+            "rpp.runtime.rpc.request.total",
+            "block_proof",
+            "server_error",
+        ));
+
+        Ok(())
     }
 }
 
