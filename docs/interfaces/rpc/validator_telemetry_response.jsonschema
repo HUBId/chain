@@ -3,31 +3,110 @@
   "$id": "https://schemas.rpp.dev/rpc/validator_telemetry_response.json",
   "title": "ValidatorTelemetryResponse",
   "type": "object",
-  "required": ["local_peer_id", "peer_count", "peers"],
+  "required": [
+    "rollout",
+    "node",
+    "consensus",
+    "mempool",
+    "timetoke_params",
+    "verifier_metrics",
+    "vrf_threshold"
+  ],
   "properties": {
-    "local_peer_id": {
-      "type": "string",
-      "description": "Libp2p peer identifier of the local node"
+    "rollout": {
+      "type": "object",
+      "description": "Rollout channel, feature gates and telemetry runtime configuration",
+      "required": ["release_channel", "feature_gates", "telemetry"],
+      "properties": {
+        "release_channel": {"type": "string"},
+        "feature_gates": {"type": "object"},
+        "telemetry": {
+          "type": "object",
+          "required": ["enabled", "sample_interval_secs"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "endpoint": {"type": ["string", "null"]},
+            "sample_interval_secs": {"type": "integer", "minimum": 1},
+            "last_observed_height": {"type": ["integer", "null"], "minimum": 0}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
     },
-    "peer_count": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Number of peers observed in the meta telemetry snapshot"
+    "node": {
+      "type": "object",
+      "description": "Latest node status snapshot",
+      "required": ["height", "pending_transactions", "pending_uptime_proofs"],
+      "properties": {
+        "height": {"type": "integer", "minimum": 0},
+        "pending_transactions": {"type": "integer", "minimum": 0},
+        "pending_uptime_proofs": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
     },
-    "peers": {
-      "type": "array",
-      "description": "Meta telemetry data for known peers",
-      "items": {
-        "type": "object",
-        "required": ["peer", "version", "latency_ms", "last_seen"],
-        "properties": {
-          "peer": {"type": "string"},
-          "version": {"type": "string"},
-          "latency_ms": {"type": "integer", "minimum": 0},
-          "last_seen": {"type": "integer", "minimum": 0}
+    "consensus": {
+      "type": "object",
+      "description": "Aggregated consensus telemetry",
+      "required": [
+        "height",
+        "round",
+        "pending_votes",
+        "quorum_reached",
+        "leader_changes",
+        "round_latencies_ms",
+        "witness_events",
+        "slashing_events",
+        "failed_votes"
+      ],
+      "properties": {
+        "height": {"type": "integer", "minimum": 0},
+        "round": {"type": "integer", "minimum": 0},
+        "pending_votes": {"type": "integer", "minimum": 0},
+        "quorum_reached": {"type": "boolean"},
+        "leader_changes": {"type": "integer", "minimum": 0},
+        "round_latencies_ms": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0}
         },
-        "additionalProperties": false
-      }
+        "quorum_latency_ms": {"type": ["integer", "null"], "minimum": 0},
+        "witness_events": {"type": "integer", "minimum": 0},
+        "slashing_events": {"type": "integer", "minimum": 0},
+        "failed_votes": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "mempool": {
+      "type": "object",
+      "description": "Summary of queued items per mempool",
+      "required": ["transactions", "identities", "votes", "uptime_proofs"],
+      "properties": {
+        "transactions": {"type": "integer", "minimum": 0},
+        "identities": {"type": "integer", "minimum": 0},
+        "votes": {"type": "integer", "minimum": 0},
+        "uptime_proofs": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "timetoke_params": {
+      "type": "object",
+      "description": "Configured timetoke accrual parameters",
+      "additionalProperties": true
+    },
+    "verifier_metrics": {
+      "type": "object",
+      "description": "Snapshot of verifier metrics grouped by backend",
+      "additionalProperties": true
+    },
+    "pruning": {
+      "type": ["object", "null"],
+      "description": "Status of an active pruning job, if any",
+      "additionalProperties": true
+    },
+    "vrf_threshold": {
+      "type": "object",
+      "description": "Latest VRF threshold evaluation",
+      "additionalProperties": true
     }
   },
   "additionalProperties": false

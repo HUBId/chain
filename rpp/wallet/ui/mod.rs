@@ -11,7 +11,7 @@ use crate::config::NodeConfig;
 use crate::errors::{ChainError, ChainResult};
 use crate::node::NodeInner;
 use crate::node::{
-    ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, RolloutStatus,
+    ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus, RolloutStatus, ValidatorTelemetryView,
 };
 
 pub use crate::types::{ChainProof, UptimeProof};
@@ -125,17 +125,17 @@ impl WalletNodeRuntime {
     }
 
     /// Fetches the latest telemetry snapshot from the node runtime.
-    pub fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
+    pub fn validator_telemetry(&self) -> ChainResult<ValidatorTelemetryView> {
         if Handle::try_current().is_ok() {
-            task::block_in_place(|| self.handle.telemetry_snapshot())
+            task::block_in_place(|| self.handle.validator_telemetry())
         } else {
-            self.handle.telemetry_snapshot()
+            self.handle.validator_telemetry()
         }
     }
 
     /// Fetches the latest telemetry snapshot without blocking the async runtime.
-    pub async fn telemetry_snapshot_async(&self) -> ChainResult<NodeTelemetrySnapshot> {
-        self.blocking_call(|handle| handle.telemetry_snapshot())
+    pub async fn validator_telemetry_async(&self) -> ChainResult<ValidatorTelemetryView> {
+        self.blocking_call(|handle| handle.validator_telemetry())
             .await
     }
 

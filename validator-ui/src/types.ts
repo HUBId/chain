@@ -85,20 +85,48 @@ export interface ValidatorPeerResponse {
   peers: NetworkPeerTelemetry[];
 }
 
-export interface NodeTelemetrySnapshot {
+export interface TelemetryRuntimeStatus {
+  enabled: boolean;
+  endpoint?: string | null;
+  sample_interval_secs: number;
+  last_observed_height?: number | null;
+}
+
+export interface RolloutTelemetryStatus {
   release_channel: string;
   feature_gates: Record<string, boolean | Record<string, unknown>>;
+  telemetry: TelemetryRuntimeStatus;
+}
+
+export interface ValidatorConsensusTelemetry {
+  height: number;
+  round: number;
+  pending_votes: number;
+  quorum_reached: boolean;
+  leader_changes: number;
+  round_latencies_ms: number[];
+  quorum_latency_ms?: number | null;
+  witness_events: number;
+  slashing_events: number;
+  failed_votes: number;
+}
+
+export interface ValidatorMempoolTelemetry {
+  transactions: number;
+  identities: number;
+  votes: number;
+  uptime_proofs: number;
+}
+
+export interface ValidatorTelemetryResponse {
+  rollout: RolloutTelemetryStatus;
   node: NodeStatus;
-  consensus: ConsensusStatus;
-  mempool: {
-    transactions: unknown[];
-    identities: unknown[];
-    votes: unknown[];
-    uptime_proofs: PendingUptimeSummary[];
-  };
+  consensus: ValidatorConsensusTelemetry;
+  mempool: ValidatorMempoolTelemetry;
   timetoke_params: Record<string, unknown>;
   verifier_metrics: Record<string, unknown>;
   pruning?: Record<string, unknown> | null;
+  vrf_threshold: Record<string, unknown>;
 }
 
 export type PipelineStage =

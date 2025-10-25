@@ -31,7 +31,7 @@ The dashboard consumes the following authenticated RPC endpoints:
 - `GET /validator/status` → [ValidatorStatusResponse](interfaces/rpc/validator_status_response.jsonschema)
 - `GET /validator/proofs` → [ValidatorProofQueueResponse](interfaces/rpc/validator_proof_queue_response.jsonschema)
 - `GET /validator/peers` → [ValidatorPeerResponse](interfaces/rpc/validator_peer_response.jsonschema)
-- `GET /validator/telemetry` → `NodeTelemetrySnapshot`
+- `GET /validator/telemetry` → [ValidatorTelemetryResponse](interfaces/rpc/validator_telemetry_response.jsonschema)
 
 Refer to the JSON schema files under [`docs/interfaces/rpc/`](interfaces/rpc/)
 for payload definitions and sample responses.
