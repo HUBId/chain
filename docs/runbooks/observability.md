@@ -1,112 +1,35 @@
-# Observability Incident Runbook
+# Observability runbook
 
-This runbook captures the common telemetry-driven investigations that operators
-encounter during chain operations. Each scenario links symptoms to the
-telemetry signals emitted by the runtime and prescribes the checks and
-mitigations that restore healthy pipelines.
+Use this runbook to diagnose gaps in telemetry, metrics, and health reporting. Pair it with the
+[startup](startup.md) and [configuration](../configuration.md) guides when remediation requires
+configuration changes.
 
-## Telemetry exporter drops
+| Symptom | Check | Action |
+| --- | --- | --- |
+| OTLP backend shows no traces or metrics | Inspect startup logs for `telemetry disabled` or `telemetry enabled without explicit endpoint` to confirm whether telemetry was activated.【F:rpp/node/src/lib.rs†L442-L481】 | Enable `rollout.telemetry.endpoint` (and optional HTTP mirror) in the active config or pass `--telemetry-endpoint` on the CLI; hybrid/validator templates ship with telemetry enabled for convenience.【F:rpp/runtime/config.rs†L894-L907】【F:config/hybrid.toml†L41-L46】【F:config/validator.toml†L41-L45】【F:rpp/node/src/lib.rs†L143-L208】 |
+| `/observability` dashboards lack pipeline data | Call `/wallet/pipeline/telemetry` or `/p2p/peers` on the RPC service to confirm the orchestrator is publishing snapshots.【F:rpp/rpc/api.rs†L984-L1067】【F:rpp/runtime/orchestration.rs†L611-L615】 | If the summary is empty, ensure the node runtime is running (see startup runbook) and that the pipeline orchestrator logged `pipeline orchestrator started`. Restart after resolving config or network issues.【F:rpp/node/src/lib.rs†L494-L552】 |
+| `pipeline_submissions_total` metrics report many `reason="tier_requirement"` rejections | Review the labelled counter from the metrics backend; the orchestrator records tier and gossip errors when rejecting workflows.【F:rpp/runtime/orchestration.rs†L623-L704】 | Investigate the submitting account’s reputation tier via `/wallet/reputation/:address` or adjust the workflow policy; see [modes](../modes.md) for role-specific submission expectations.【F:rpp/rpc/api.rs†L984-L1059】 |
 
-**Symptoms.** Dashboards and traces stall, and the node logs warnings from the
-`telemetry` target indicating that the OTLP exporter is disabled or dropping
-items.【F:rpp/runtime/telemetry/metrics.rs†L41-L48】
+## Telemetry exporter checklist
 
-**Checks.**
+1. Confirm `rollout.telemetry` is enabled and points to a valid HTTP/OTLP endpoint; validation rejects
+   empty, scheme-less, or unauthenticated URIs.【F:rpp/runtime/config.rs†L1729-L1779】
+2. Verify CLI overrides (`--telemetry-endpoint`, `--telemetry-auth-token`, `--telemetry-sample-interval`)
+   are correct; these flags replace file-based settings when present.【F:rpp/node/src/lib.rs†L143-L208】【F:rpp/node/src/lib.rs†L1045-L1080】
+3. If metrics still fail to export, increase `trace_max_queue_size` or
+   `trace_max_export_batch_size` to reduce drop pressure on the OpenTelemetry batcher before restarting.
+   Validation enforces sane, non-zero limits.【F:rpp/runtime/config.rs†L1729-L1779】
 
-1. Inspect the rollout status snapshot (RPC `/status/rollout`) to confirm that
-   `rollout.telemetry.enabled` and the configured endpoint match expectations;
-   the node tracks the effective telemetry flag and endpoint in its runtime
-   status.【F:rpp/runtime/node.rs†L3932-L3943】
-2. Verify the deployment configuration—`rollout.telemetry.endpoint`,
-   `http_endpoint`, authentication token, and TLS files—in `node.toml` or the
-   runtime profile. Empty or scheme-less URLs are rejected during validation and
-   will prevent the exporter from initialising.【F:config/node.toml†L43-L54】【F:rpp/runtime/config.rs†L1740-L1787】
-3. Audit overrides applied at launch: the CLI flags `--telemetry-endpoint`,
-   `--telemetry-auth-token`, and `--telemetry-sample-interval` replace the file
-   configuration when present, and the `RPP_NODE_OTLP_*` environment variables
-   override both at runtime.【F:rpp/node/src/lib.rs†L163-L207】【F:rpp/node/src/lib.rs†L1567-L1588】
-4. If the exporter initialised but is throttled, check whether the bounded
-   queue is undersized (`trace_max_queue_size`/`trace_max_export_batch_size`) or
-   the timeout/retry knobs are too small for the collector; these values govern
-   the OpenTelemetry batcher and will emit drop warnings when saturation
-   occurs.【F:rpp/runtime/config.rs†L1736-L1775】【F:rpp/runtime/telemetry/exporter.rs†L90-L98】
+## Pipeline dashboards
 
-**Mitigations.**
+* The orchestrator publishes telemetry summaries and dashboard streams that back `/wallet/pipeline/*`
+  endpoints; lack of updates usually indicates the node runtime never started or shut down unexpectedly.
+  Look for `node runtime started` and `pipeline orchestrator started` markers, then inspect shutdown
+  logs for cancellations.【F:rpp/runtime/orchestration.rs†L611-L615】【F:rpp/node/src/lib.rs†L442-L557】
+* Metrics counters such as `pipeline_submissions_total` emit reasons (`tier_requirement`,
+  `gossip_publish`, etc.) when workflows are rejected, making it easier to correlate RPC clients with
+  policy failures.【F:rpp/runtime/orchestration.rs†L623-L704】
 
-- Provide both OTLP HTTP and gRPC endpoints when enabling metrics and tracing;
-  a missing HTTP endpoint forces the runtime into log-only mode and must be
-  corrected before metrics resume flowing.【F:rpp/runtime/telemetry/metrics.rs†L41-L48】
-- Increase `trace_max_queue_size` (and optionally the batch size) to absorb
-  bursts from block production. Retain `warn_on_drop = true` so further
-  saturation is surfaced promptly.【F:rpp/runtime/config.rs†L1736-L1775】【F:rpp/runtime/telemetry/metrics.rs†L41-L48】
-- Use `scripts/smoke_otlp_export.sh --mode <profile>` to validate the corrected
-  configuration against a local collector before redeploying the node.【F:scripts/smoke_otlp_export.sh†L1-L190】
-
-## Stalled block production
-
-**Symptoms.** Consensus dashboards show elongated round durations, elevated
-quorum latency, or repeated leader changes, and `rpp.runtime.consensus.*`
-metrics plateau at a fixed height/round.【F:rpp/runtime/telemetry/metrics.rs†L104-L161】【F:rpp/runtime/node.rs†L4000-L4017】
-
-**Checks.**
-
-1. Confirm whether the runtime is still assembling blocks by watching
-   `rpp.runtime.consensus.round.duration` and
-   `rpp.runtime.consensus.round.quorum_latency`; sudden spikes signal quorum
-   formation issues. Pair the histogram deltas with the per-round attributes to
-   identify the affected height/round tuple.【F:rpp/runtime/telemetry/metrics.rs†L140-L158】【F:rpp/runtime/telemetry/metrics.rs†L288-L319】
-2. Inspect `rpp.runtime.consensus.round.leader_changes` and
-   `rpp.runtime.consensus.failed_votes` for the stalled round to determine
-   whether repeated reproposals or invalid votes are blocking progress. The
-   telemetry snapshot surfaced by `/status/consensus` mirrors these counters for
-   ad-hoc debugging.【F:rpp/runtime/telemetry/metrics.rs†L159-L192】【F:rpp/runtime/node.rs†L3996-L4017】
-3. Compare the current `chain.block_height` histogram samples with the tip
-   reported over RPC; divergences indicate the node has fallen behind peers and
-   is no longer importing remote blocks.【F:rpp/runtime/telemetry/metrics.rs†L193-L200】
-4. Check mempool health via `/status/mempool` to ensure queues are draining;
-   saturation can delay proposal assembly even when consensus signals are still
-   firing.【F:rpp/runtime/node.rs†L2140-L2230】
-
-**Mitigations.**
-
-- Restart the validator in hybrid/validator mode if the consensus worker has
-  crashed; the runtime exposes combined node+wallet telemetry in these profiles
-  so stalled rounds remain observable after restart.【F:rpp/runtime/mod.rs†L8-L56】
-- For quorum instability, widen gossip rate limits or peer counts so votes and
-  proofs propagate faster; adjustments are applied via `p2p.gossip_rate_limit_per_sec`
-  and the peer store configuration.【F:config/node.toml†L25-L35】【F:rpp/runtime/node.rs†L4723-L4785】
-- If the node is simply behind, trigger a resync or snapshot restore to catch up
-  before rejoining consensus.
-
-## WAL slowdowns or backpressure
-
-**Symptoms.** Storage dashboards record rising
-`rpp.runtime.storage.wal_flush.duration` latencies, increasing flush batch sizes,
-or a surge in `wal_flush.total{outcome="retried"|"failed"}` samples. Header flush
-metrics often trail with similar spikes.【F:rpp/runtime/telemetry/metrics.rs†L118-L157】
-
-**Checks.**
-
-1. Break down the WAL counters by `outcome` to determine whether retries or
-   permanent failures dominate; the runtime maps storage-layer results into the
-   OTLP labels `success`, `retried`, and `failed`.【F:rpp/runtime/telemetry/metrics.rs†L720-L749】
-2. Correlate WAL duration and bytes histograms to see whether large batches or
-   slow disks are responsible. Compare with `header_flush.duration/bytes/total`
-   to isolate header writer contention.【F:rpp/runtime/telemetry/metrics.rs†L118-L147】
-3. Inspect proof generation metrics—large proofs can hold the WAL open—by
-   watching `rpp.runtime.proof.generation.duration` and
-   `rpp.runtime.proof.generation.size` for concurrent spikes.【F:rpp/runtime/telemetry/metrics.rs†L362-L389】
-4. Verify that the storage subsystem still reports healthy status via
-   `/status/storage` (if enabled) and that disk quotas were not exceeded at the
-   platform layer.
-
-**Mitigations.**
-
-- Increase I/O headroom or retune the WAL sync cadence; persistent `failed`
-  outcomes require operator intervention before data loss occurs.
-- If retries dominate, raise the collector-side write throughput or reduce
-  block size so flush batches shrink; monitoring proof metrics in parallel helps
-  confirm whether heavy proving workloads are contributing to WAL pressure.【F:rpp/runtime/telemetry/metrics.rs†L362-L389】
-- After mitigation, continue to watch the WAL histograms to ensure the latency
-  and outcome distributions return to their normal baseline.
+If health probes fail, jump to the [startup runbook](startup.md); persistent issues should be logged
+for follow-up in the [operator checklist](../checklists/operator.md).
 
