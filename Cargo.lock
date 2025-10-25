@@ -6063,6 +6063,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rpp-pruning"
+version = "0.0.12"
+dependencies = [
+ "bincode",
+ "serde",
+]
+
+[[package]]
 name = "rpp-stark"
 version = "1.0.0-beta"
 dependencies = [

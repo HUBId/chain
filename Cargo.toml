@@ -12,6 +12,7 @@ members = [
   "rpp/identity-tree",
   "rpp/p2p",
   "rpp/chain",
+  "rpp/pruning",
   "rpp/node",
 ]
 resolver = "2"
