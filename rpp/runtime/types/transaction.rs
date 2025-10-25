@@ -107,3 +107,6 @@ impl TransactionEnvelope {
         Self { tx, hash }
     }
 }
+
+#[cfg(test)]
+mod tests_prop;

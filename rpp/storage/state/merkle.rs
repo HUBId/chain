@@ -23,3 +23,6 @@ pub fn compute_merkle_root(leaves: &mut Vec<[u8; 32]>) -> [u8; 32] {
     }
     leaves[0]
 }
+
+#[cfg(test)]
+mod tests_prop;

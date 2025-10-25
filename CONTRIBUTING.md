@@ -28,6 +28,17 @@ After submitting a PR, we'll run all the tests and verify your code meets our su
 
 Resolve any warnings or errors before making your PR.
 
+Property-based tests in the workspace respect the `PROPTEST_CASES` environment
+variable so CI can run a smaller, deterministic sample. When a failure occurs,
+re-run the suite locally with the provided seed to reproduce it:
+
+```
+PROPTEST_CASES=256 PROPTEST_SEED=<failing-seed> cargo test -p rpp-chain -- tests_prop
+```
+
+Increasing `PROPTEST_CASES` is recommended before landing changes that touch
+those code paths so the new invariants see additional coverage.
+
 ## [How to submit changes]
 
 To create a PR, fork firewood, and use github to create the PR. We typically prioritize reviews in the middle of our the next work day,
