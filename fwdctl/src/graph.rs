@@ -4,6 +4,7 @@
 use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api;
+use firewood_storage::noop_storage_metrics;
 use std::io::stdout;
 
 use crate::DatabasePath;
@@ -18,7 +19,11 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = Db::new(
+        opts.database.dbpath.clone(),
+        cfg.build(),
+        noop_storage_metrics(),
+    )?;
     db.dump(&mut stdout())?;
     Ok(())
 }

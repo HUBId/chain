@@ -5,6 +5,7 @@ use firewood::db::{Db, DbConfig};
 use firewood::iter::MerkleKeyValueIter;
 use firewood::merkle::{Key, Value};
 use firewood::v2::api::{self, Db as _};
+use firewood_storage::noop_storage_metrics;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fs::File;
@@ -142,7 +143,11 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = Db::new(
+        opts.database.dbpath.clone(),
+        cfg.build(),
+        noop_storage_metrics(),
+    )?;
     let latest_hash = db.root_hash()?;
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");

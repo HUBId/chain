@@ -286,4 +286,3 @@ pub enum UpgradeError {
     #[error("Failed decoding public key")]
     PublicKey(#[from] identity::DecodingError),
 }
-

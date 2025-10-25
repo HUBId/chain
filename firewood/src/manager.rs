@@ -24,7 +24,8 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    StorageMetricsHandle, TrieHash, noop_storage_metrics,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -75,6 +76,7 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    metrics: StorageMetricsHandle,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,7 +95,11 @@ pub(crate) enum RevisionManagerError {
 }
 
 impl RevisionManager {
-    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
+    pub fn new(
+        filename: PathBuf,
+        config: ConfigManager,
+        metrics: StorageMetricsHandle,
+    ) -> Result<Self, FileIoError> {
         let fb = FileBacked::new(
             filename,
             config.manager.node_cache_size,
@@ -108,13 +114,14 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let nodestore = Arc::new(NodeStore::open(storage.clone(), metrics.clone())?);
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             historical: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
+            metrics,
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -329,14 +336,16 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let first_manager =
+            RevisionManager::new(db_path.clone(), config.clone(), noop_storage_metrics());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let second_manager =
+            RevisionManager::new(db_path.clone(), config.clone(), noop_storage_metrics());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -356,7 +365,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config);
+        let third_manager = RevisionManager::new(db_path, config, noop_storage_metrics());
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"

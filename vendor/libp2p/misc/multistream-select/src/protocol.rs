@@ -461,4 +461,3 @@ impl fmt::Display for ProtocolError {
         }
     }
 }
-

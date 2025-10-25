@@ -48,10 +48,7 @@ pub mod upgrade;
 mod boxed;
 mod optional;
 
-pub use self::{
-    boxed::Boxed, choice::OrTransport, optional::OptionalTransport,
-    upgrade::Upgrade,
-};
+pub use self::{boxed::Boxed, choice::OrTransport, optional::OptionalTransport, upgrade::Upgrade};
 use crate::{ConnectedPoint, Endpoint};
 
 static NEXT_LISTENER_ID: AtomicUsize = AtomicUsize::new(1);

@@ -8,7 +8,9 @@ use std::sync::Arc;
 use askama::Template;
 use clap::Args;
 use firewood::v2::api;
-use firewood_storage::{CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore};
+use firewood_storage::{
+    CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore, noop_storage_metrics,
+};
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
@@ -68,7 +70,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         progress_bar: Some(progress_bar),
     };
 
-    let nodestore = NodeStore::open(storage)?;
+    let nodestore = NodeStore::open(storage, noop_storage_metrics())?;
     let db_stats = if opts.fix {
         let (nodestore, report) = nodestore.check_and_fix(check_ops);
         if let Err(e) = nodestore {

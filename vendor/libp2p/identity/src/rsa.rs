@@ -317,4 +317,3 @@ impl DerDecodable<'_> for Asn1SubjectPublicKeyInfo {
         })
     }
 }
-

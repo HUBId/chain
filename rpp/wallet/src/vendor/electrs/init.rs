@@ -49,20 +49,20 @@ pub fn initialize(
 
     let tracker_topic = parse_gossip_topic(&config.tracker.notifications.topic)
         .context("parse tracker notification topic")?;
-    let mut daemon_topics = parse_gossip_topics(&config.p2p.gossip_topics)
-        .context("parse daemon gossip topics")?;
+    let mut daemon_topics =
+        parse_gossip_topics(&config.p2p.gossip_topics).context("parse daemon gossip topics")?;
     if !daemon_topics.contains(&tracker_topic) {
         daemon_topics.push(tracker_topic);
     }
 
-    let runtime = if config.features.runtime {
-        Some(
-            runtime_adapters
-                .ok_or_else(|| anyhow!("runtime adapters required when runtime feature is enabled"))?,
-        )
-    } else {
-        None
-    };
+    let runtime =
+        if config.features.runtime {
+            Some(runtime_adapters.ok_or_else(|| {
+                anyhow!("runtime adapters required when runtime feature is enabled")
+            })?)
+        } else {
+            None
+        };
 
     let firewood = match runtime.as_ref() {
         Some(adapters) => FirewoodAdapter::open_with_runtime(firewood_path, adapters.clone())
@@ -128,6 +128,5 @@ fn parse_gossip_topics(values: &[String]) -> Result<Vec<GossipTopic>> {
 }
 
 fn parse_gossip_topic(value: &str) -> Result<GossipTopic> {
-    GossipTopic::from_str(value)
-        .ok_or_else(|| anyhow!("unsupported gossip topic '{value}'"))
+    GossipTopic::from_str(value).ok_or_else(|| anyhow!("unsupported gossip topic '{value}'"))
 }

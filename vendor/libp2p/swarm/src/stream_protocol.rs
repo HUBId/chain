@@ -113,4 +113,3 @@ impl fmt::Display for InvalidProtocol {
 }
 
 impl std::error::Error for InvalidProtocol {}
-

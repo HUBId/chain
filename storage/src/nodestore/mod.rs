@@ -44,14 +44,14 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::firewood_gauge;
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
+use crate::{StorageMetricsHandle, firewood_gauge};
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
-use std::fmt::Debug;
+use std::fmt;
 use std::io::{Error, ErrorKind, Read};
 use std::sync::atomic::AtomicUsize;
 
@@ -102,12 +102,12 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the header cannot be read or validated.
-    pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
+    pub fn open(storage: Arc<S>, metrics: StorageMetricsHandle) -> Result<Self, FileIoError> {
         let mut stream = storage.stream_from(0)?;
         let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
         if let Err(e) = stream.read_exact(&mut header_bytes) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Self::new_empty_committed(storage.clone());
+                return Self::new_empty_committed(storage.clone(), metrics);
             }
             return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
         }
@@ -128,6 +128,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 unwritten_nodes: AtomicUsize::new(0),
             },
             storage,
+            metrics,
         };
 
         if let Some(root_address) = nodestore.header.root_address() {
@@ -145,7 +146,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the storage cannot be accessed.
-    pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, FileIoError> {
+    pub fn new_empty_committed(
+        storage: Arc<S>,
+        metrics: StorageMetricsHandle,
+    ) -> Result<Self, FileIoError> {
         let header = NodeStoreHeader::new();
 
         Ok(Self {
@@ -157,6 +161,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
                 root: None,
                 unwritten_nodes: AtomicUsize::new(0),
             },
+            metrics,
         })
     }
 }
@@ -242,6 +247,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
             header: parent.header,
             kind,
             storage: parent.storage.clone(),
+            metrics: parent.metrics.clone(),
         })
     }
 
@@ -278,7 +284,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     ///
     /// Panics if the header cannot be written.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_empty_proposal(storage: Arc<S>) -> Self {
+    pub fn new_empty_proposal(storage: Arc<S>, metrics: StorageMetricsHandle) -> Self {
         let header = NodeStoreHeader::new();
         let header_bytes = bytemuck::bytes_of(&header);
         storage
@@ -292,6 +298,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                 parent: NodeStoreParent::Committed(None),
             },
             storage,
+            metrics,
         }
     }
 }
@@ -456,7 +463,6 @@ impl Drop for ImmutableProposal {
 /// 4. Convert a mutable proposal to an immutable proposal using [`std::convert::TryInto`], which hashes the nodes and assigns addresses
 /// 5. Convert an immutable proposal to a committed revision using [`std::convert::TryInto`], which writes the nodes to disk.
 
-#[derive(Debug)]
 pub struct NodeStore<T, S> {
     // Metadata for this revision.
     header: NodeStoreHeader,
@@ -464,6 +470,22 @@ pub struct NodeStore<T, S> {
     kind: T,
     /// Persisted storage to read nodes from.
     storage: Arc<S>,
+    metrics: StorageMetricsHandle,
+}
+
+impl<T, S> fmt::Debug for NodeStore<T, S>
+where
+    T: fmt::Debug,
+    S: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NodeStore")
+            .field("header", &self.header)
+            .field("kind", &self.kind)
+            .field("storage", &self.storage)
+            .field("metrics", &"StorageMetricsHandle { .. }")
+            .finish()
+    }
 }
 
 impl<T, S> NodeStore<T, S> {
@@ -498,6 +520,7 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
                 parent: val.kind.into(),
             },
             storage: val.storage,
+            metrics: val.metrics,
         }
     }
 }
@@ -509,6 +532,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
             header,
             kind,
             storage,
+            metrics,
         } = val;
         // Use ManuallyDrop to prevent the Drop impl from running since we're committing
         let kind = std::mem::ManuallyDrop::new(kind);
@@ -522,6 +546,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
                 unwritten_nodes: AtomicUsize::new(kind.unwritten_nodes),
             },
             storage,
+            metrics,
         }
     }
 }
@@ -551,6 +576,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
                 unwritten_nodes: AtomicUsize::new(self.kind.unwritten_nodes),
             },
             storage: self.storage.clone(),
+            metrics: self.metrics.clone(),
         }
     }
 }
@@ -565,6 +591,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             header,
             kind,
             storage,
+            metrics,
         } = val;
 
         let mut nodestore = NodeStore {
@@ -577,6 +604,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
                 unwritten_nodes: 0,
             }),
             storage,
+            metrics,
         };
 
         let Some(root) = kind.root else {
@@ -891,7 +919,8 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::new(vec![]);
-        let base = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let base =
+            NodeStore::new_empty_committed(memstore.into(), crate::noop_storage_metrics()).unwrap();
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
@@ -923,7 +952,8 @@ mod tests {
     #[should_panic(expected = "Node size 16777225 is too large")]
     fn giant_node() {
         let memstore = MemStore::new(vec![]);
-        let mut node_store = NodeStore::new_empty_proposal(memstore.into());
+        let mut node_store =
+            NodeStore::new_empty_proposal(memstore.into(), crate::noop_storage_metrics());
 
         let huge_value = vec![0u8; AreaIndex::MAX_AREA_SIZE as usize];
 

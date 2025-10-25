@@ -815,4 +815,3 @@ impl From<rsa::PublicKey> for PublicKey {
         }
     }
 }
-

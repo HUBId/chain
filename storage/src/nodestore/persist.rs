@@ -33,7 +33,7 @@ use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{firewood_counter, firewood_gauge};
+use crate::{WalFlushOutcome, firewood_gauge};
 use coarsetime::Instant;
 
 #[cfg(feature = "io-uring")]
@@ -62,7 +62,13 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header(&self) -> Result<(), FileIoError> {
         let header_bytes = bytemuck::bytes_of(&self.header);
+        let flush_start = Instant::now();
         self.storage.write(0, header_bytes)?;
+        let duration = flush_start.elapsed();
+        let bytes = header_bytes.len() as u64;
+        self.metrics.increment_header_flushes();
+        self.metrics.record_header_flush_duration(duration.into());
+        self.metrics.record_header_flush_bytes(bytes);
         Ok(())
     }
 
@@ -77,7 +83,13 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         header_bytes.resize(NodeStoreHeader::SIZE as usize, 0);
         debug_assert_eq!(header_bytes.len(), NodeStoreHeader::SIZE as usize);
 
+        let flush_start = Instant::now();
         self.storage.write(0, &header_bytes)?;
+        let duration = flush_start.elapsed();
+        let bytes = header_bytes.len() as u64;
+        self.metrics.increment_header_flushes();
+        self.metrics.record_header_flush_duration(duration.into());
+        self.metrics.record_header_flush_bytes(bytes);
         Ok(())
     }
 
@@ -201,6 +213,17 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
     }
 }
 
+#[derive(Default)]
+struct FlushStats {
+    bytes_written: u64,
+}
+
+impl FlushStats {
+    fn record_bytes(&mut self, bytes: usize) {
+        self.bytes_written = self.bytes_written.saturating_add(bytes as u64);
+    }
+}
+
 impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// Persist all the nodes of a proposal to storage.
     ///
@@ -209,11 +232,31 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+        let mut stats = FlushStats::default();
+        let flush_start = Instant::now();
+
         #[cfg(feature = "io-uring")]
-        if let Some(this) = self.downcast_to_file_backed() {
-            return this.flush_nodes_io_uring();
-        }
-        self.flush_nodes_generic()
+        let result = if let Some(this) = self.downcast_to_file_backed() {
+            this.flush_nodes_io_uring(&mut stats)
+        } else {
+            self.flush_nodes_generic(&mut stats)
+        };
+
+        #[cfg(not(feature = "io-uring"))]
+        let result = self.flush_nodes_generic(&mut stats);
+
+        let duration = flush_start.elapsed();
+        let outcome = if result.is_ok() {
+            WalFlushOutcome::Success
+        } else {
+            WalFlushOutcome::Failed
+        };
+        self.metrics.increment_wal_flushes(outcome);
+        self.metrics
+            .record_wal_flush_duration(outcome, duration.into());
+        self.metrics
+            .record_wal_flush_bytes(outcome, stats.bytes_written);
+        result
     }
 
     #[cfg(feature = "io-uring")]
@@ -240,9 +283,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
-        let flush_start = Instant::now();
-
+    fn flush_nodes_generic(&self, stats: &mut FlushStats) -> Result<NodeStoreHeader, FileIoError> {
         // keep MaybePersistedNodes to add them to cache and persist them
         let mut cached_nodes = Vec::new();
 
@@ -258,6 +299,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
+            stats.record_bytes(serialized.len());
 
             // Decrement gauge immediately after node is written to storage
             firewood_gauge!(
@@ -272,9 +314,6 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         }
 
         self.storage.write_cached_nodes(cached_nodes)?;
-
-        let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
         Ok(header)
     }
@@ -324,7 +363,10 @@ impl NodeStore<Committed, FileBacked> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
-    fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+    fn flush_nodes_io_uring(
+        &mut self,
+        stats: &mut FlushStats,
+    ) -> Result<NodeStoreHeader, FileIoError> {
         use crate::LinearAddress;
         use std::pin::Pin;
 
@@ -376,8 +418,6 @@ impl NodeStore<Committed, FileBacked> {
 
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
 
-        let flush_start = Instant::now();
-
         let mut header = self.header;
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
 
@@ -401,6 +441,7 @@ impl NodeStore<Committed, FileBacked> {
             let (persisted_address, area_size_index) =
                 node_allocator.allocate_node(serialized.as_slice())?;
             *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
+            let node_len = serialized.len();
             let mut serialized = serialized.into_boxed_slice();
 
             loop {
@@ -412,6 +453,7 @@ impl NodeStore<Committed, FileBacked> {
                 {
                     pbe.pinned_buffer = std::pin::Pin::new(std::mem::take(&mut serialized));
                     pbe.node = Some((persisted_address, node.clone()));
+                    stats.record_bytes(node_len);
 
                     let submission_queue_entry = self
                         .storage
@@ -433,13 +475,11 @@ impl NodeStore<Committed, FileBacked> {
                             )
                         })?;
                         trace!("submission queue is full");
-                        firewood_counter!("ring.full", "amount of full ring").increment(1);
                     }
                     break;
                 }
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
-                firewood_counter!("ring.full", "amount of full ring").increment(1);
                 ring.submit_and_wait(1).map_err(|e| {
                     self.storage
                         .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
@@ -498,9 +538,6 @@ impl NodeStore<Committed, FileBacked> {
         self.storage.write_cached_nodes(cached_nodes)?;
         debug_assert!(ring.completion().is_empty());
 
-        let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
-
         Ok(header)
     }
 }
@@ -511,11 +548,14 @@ mod tests {
     use super::*;
     use crate::{
         Child, HashType, ImmutableProposal, LinearAddress, NodeStore, Path, SharedNode,
+        StorageMetrics, StorageMetricsHandle, WalFlushOutcome,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
+        noop_storage_metrics,
     };
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     fn into_committed(
         ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore>,
@@ -528,10 +568,52 @@ mod tests {
         ns
     }
 
+    #[derive(Default)]
+    struct TestMetrics {
+        wal_durations: Mutex<Vec<(WalFlushOutcome, Duration)>>,
+        wal_bytes: Mutex<Vec<(WalFlushOutcome, u64)>>,
+        wal_counts: Mutex<Vec<WalFlushOutcome>>,
+        header_durations: Mutex<Vec<Duration>>,
+        header_bytes: Mutex<Vec<u64>>,
+        header_counts: Mutex<u64>,
+    }
+
+    impl StorageMetrics for TestMetrics {
+        fn record_header_flush_duration(&self, duration: Duration) {
+            self.header_durations.lock().unwrap().push(duration);
+        }
+
+        fn record_header_flush_bytes(&self, bytes: u64) {
+            self.header_bytes.lock().unwrap().push(bytes);
+        }
+
+        fn increment_header_flushes(&self) {
+            *self.header_counts.lock().unwrap() += 1;
+        }
+
+        fn record_wal_flush_duration(&self, outcome: WalFlushOutcome, duration: Duration) {
+            self.wal_durations.lock().unwrap().push((outcome, duration));
+        }
+
+        fn record_wal_flush_bytes(&self, outcome: WalFlushOutcome, bytes: u64) {
+            self.wal_bytes.lock().unwrap().push((outcome, bytes));
+        }
+
+        fn increment_wal_flushes(&self, outcome: WalFlushOutcome) {
+            self.wal_counts.lock().unwrap().push(outcome);
+        }
+    }
+
+    fn test_metrics_handle() -> (Arc<TestMetrics>, StorageMetricsHandle) {
+        let metrics = Arc::new(TestMetrics::default());
+        let handle: StorageMetricsHandle = metrics.clone();
+        (metrics, handle)
+    }
+
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
-        let mem_store = MemStore::new(vec![]).into();
-        let mut store = NodeStore::new_empty_proposal(mem_store);
+        let mem_store: Arc<MemStore> = MemStore::new(vec![]).into();
+        let mut store = NodeStore::new_empty_proposal(mem_store, noop_storage_metrics());
         store.root_mut().replace(root);
         store
     }
@@ -564,11 +646,59 @@ mod tests {
 
     #[test]
     fn test_empty_nodestore() {
-        let mem_store = MemStore::new(vec![]).into();
-        let store = NodeStore::new_empty_proposal(mem_store);
+        let mem_store: Arc<MemStore> = MemStore::new(vec![]).into();
+        let store = NodeStore::new_empty_proposal(mem_store, noop_storage_metrics());
         let mut iter = UnPersistedNodeIterator::new(&store);
 
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn flush_operations_emit_metrics() {
+        let (metrics, handle) = test_metrics_handle();
+        let mem_store: Arc<MemStore> = MemStore::new(vec![]).into();
+        let base = NodeStore::new_empty_committed(mem_store.clone(), handle.clone()).unwrap();
+
+        let mut proposal = NodeStore::new(&base).unwrap();
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::from([0xAB]),
+            value: Box::from([0xCD]),
+        }));
+
+        let immutable: NodeStore<Arc<ImmutableProposal>, _> = proposal.try_into().unwrap();
+        let mut committed = immutable.as_committed(&base);
+
+        committed.flush_nodes().unwrap();
+        committed.flush_header().unwrap();
+        let wal_counts = metrics.wal_counts.lock().unwrap();
+        assert_eq!(wal_counts.as_slice(), &[WalFlushOutcome::Success]);
+        drop(wal_counts);
+
+        let wal_bytes = metrics.wal_bytes.lock().unwrap();
+        assert_eq!(wal_bytes.len(), 1);
+        assert!(wal_bytes[0].1 > 0);
+        drop(wal_bytes);
+
+        let wal_durations = metrics.wal_durations.lock().unwrap();
+        assert_eq!(wal_durations.len(), 1);
+        assert!(wal_durations[0].1 >= Duration::default());
+        drop(wal_durations);
+
+        let header_counts = *metrics.header_counts.lock().unwrap();
+        assert_eq!(header_counts, 1);
+
+        let header_bytes = metrics.header_bytes.lock().unwrap();
+        assert_eq!(header_bytes.len(), 1);
+        assert!(header_bytes[0] > 0);
+        drop(header_bytes);
+
+        let header_durations = metrics.header_durations.lock().unwrap();
+        assert_eq!(header_durations.len(), 1);
+        assert!(header_durations[0] >= Duration::default());
+        drop(header_durations);
+
+        // ensure base state unaffected for subsequent tests
+        base.flush_header().unwrap();
     }
 
     #[test]
@@ -720,7 +850,8 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::new(vec![]);
-        let base_committed = NodeStore::new_empty_committed(mem_store.into()).unwrap();
+        let base_committed =
+            NodeStore::new_empty_committed(mem_store.into(), noop_storage_metrics()).unwrap();
 
         // Create a mutable proposal from the base
         let mut mutable_store = NodeStore::new(&base_committed).unwrap();
@@ -795,14 +926,16 @@ mod tests {
                 .unwrap(),
             );
 
-            let mut ns = NodeStore::new_empty_committed(fb.clone()).unwrap();
+            let mut ns =
+                NodeStore::new_empty_committed(fb.clone(), noop_storage_metrics()).unwrap();
 
             assert!(ns.downcast_to_file_backed().is_some());
         }
 
         {
             let ms = Arc::new(MemStore::new(vec![]));
-            let mut ns = NodeStore::new_empty_committed(ms.clone()).unwrap();
+            let mut ns =
+                NodeStore::new_empty_committed(ms.clone(), noop_storage_metrics()).unwrap();
             assert!(ns.downcast_to_file_backed().is_none());
         }
     }

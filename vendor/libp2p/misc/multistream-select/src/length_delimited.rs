@@ -381,4 +381,3 @@ where
         this.project().inner.poll_write_vectored(cx, bufs)
     }
 }
-

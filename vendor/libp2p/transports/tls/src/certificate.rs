@@ -493,8 +493,8 @@ mod test_vectors;
 mod tests {
     use hex_literal::hex;
 
-    use super::*;
     use super::test_vectors::*;
+    use super::*;
 
     #[test]
     fn sanity_check() {
@@ -515,8 +515,8 @@ mod tests {
 
                 let cert = parse_unverified(cert).unwrap();
                 assert!(cert.verify().is_err()); // Because p2p extension
-                                                 // was not signed with the private key
-                                                 // of the certificate.
+                // was not signed with the private key
+                // of the certificate.
                 assert_eq!(cert.signature_scheme(), Ok($scheme));
             }
         };
@@ -533,8 +533,7 @@ mod tests {
 
     #[test]
     fn rsa_pss_sha384() {
-        let cert =
-            rustls::pki_types::CertificateDer::from(RSA_PSS_SHA384_DER.as_slice().to_vec());
+        let cert = rustls::pki_types::CertificateDer::from(RSA_PSS_SHA384_DER.as_slice().to_vec());
 
         let cert = parse(&cert).unwrap();
 

@@ -368,9 +368,7 @@ pub mod rpp_ledger {
 
     pub mod bitcoin_slices {
 
-        use crate::vendor::electrs::rpp_ledger::bitcoin::{
-            hashes::sha256::Hash, OutPoint, Script,
-        };
+        use crate::vendor::electrs::rpp_ledger::bitcoin::{hashes::sha256::Hash, OutPoint, Script};
 
         pub mod bsl {
             use super::{Hash, OutPoint, Script};
@@ -526,12 +524,12 @@ pub mod types {
 }
 
 pub use self::daemon::Daemon;
-pub use self::status::{Balance, HistoryEntry, ScriptHashStatus, UnspentEntry};
-#[cfg(feature = "backend-rpp-stark")]
-pub use self::status::HistoryEntryWithMetadata;
-pub use self::tracker::Tracker;
-#[cfg(feature = "vendor_electrs")]
-pub use self::signals::{ExitFlag, Signal};
 #[cfg(all(feature = "vendor_electrs", feature = "vendor_electrs_test_support"))]
 pub use self::signals::TestSignal;
+#[cfg(feature = "vendor_electrs")]
+pub use self::signals::{ExitFlag, Signal};
+#[cfg(feature = "backend-rpp-stark")]
+pub use self::status::HistoryEntryWithMetadata;
+pub use self::status::{Balance, HistoryEntry, ScriptHashStatus, UnspentEntry};
+pub use self::tracker::Tracker;
 pub use init::{initialize, ElectrsHandles};

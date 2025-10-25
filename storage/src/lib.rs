@@ -29,6 +29,7 @@ mod hashers;
 pub mod identity_tree;
 mod iter;
 mod linear;
+mod metrics;
 mod node;
 mod nodestore;
 #[cfg(any(test, feature = "test_utils"))]
@@ -45,10 +46,13 @@ pub mod macros;
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use identity_tree::{
-    IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError, IdentityTreeResult,
-    IDENTITY_TREE_DEPTH,
+    IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError,
+    IdentityTreeResult,
 };
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
+pub use metrics::{
+    StorageMetrics, StorageMetricsHandle, WalFlushOutcome, noop as noop_storage_metrics,
+};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
     BranchNode, Child, Children, LeafNode, Node, PathIterItem,

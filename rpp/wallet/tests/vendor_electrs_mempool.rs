@@ -8,8 +8,8 @@ use rpp::runtime::node::{
     MempoolStatus, PendingIdentitySummary, PendingTransactionSummary, PendingUptimeSummary,
     PendingVoteSummary,
 };
-use rpp_wallet::vendor::electrs::metrics::Metrics;
 use rpp_wallet::vendor::electrs::mempool::{Mempool, MempoolSyncUpdate};
+use rpp_wallet::vendor::electrs::metrics::Metrics;
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::{Script, Txid};
 use rpp_wallet::vendor::electrs::types::ScriptHash;
 

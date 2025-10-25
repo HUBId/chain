@@ -245,4 +245,3 @@ impl FromStr for PeerId {
         Ok(peer_id)
     }
 }
-

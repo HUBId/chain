@@ -40,7 +40,6 @@ pub use params::{
 
 use crate::ValidationError;
 
-
 /// The number of seconds delivery messages are stored in the cache.
 const TIME_CACHE_DURATION: u64 = 120;
 

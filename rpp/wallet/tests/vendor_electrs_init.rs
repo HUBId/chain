@@ -45,7 +45,10 @@ fn initialize_with_runtime_and_tracker() -> Result<()> {
 
     let handles = initialize(&config, &firewood_dir, &index_dir, Some(runtime.clone()))?;
 
-    assert!(handles.firewood.runtime().is_some(), "runtime adapters attached");
+    assert!(
+        handles.firewood.runtime().is_some(),
+        "runtime adapters attached"
+    );
     assert!(handles.daemon.is_some(), "daemon instantiated");
     assert!(handles.tracker.is_some(), "tracker instantiated");
 
@@ -76,7 +79,10 @@ fn initialize_without_runtime_skips_optional_handles() -> Result<()> {
 
     let handles = initialize(&config, &firewood_dir, &index_dir, None)?;
 
-    assert!(handles.firewood.runtime().is_none(), "runtime adapters disabled");
+    assert!(
+        handles.firewood.runtime().is_none(),
+        "runtime adapters disabled"
+    );
     assert!(handles.daemon.is_none(), "daemon disabled");
     assert!(handles.tracker.is_none(), "tracker disabled");
 
@@ -102,7 +108,8 @@ fn tracker_requires_runtime() {
         p2p: P2pConfig::default(),
     };
 
-    let error = initialize(&config, &firewood_dir, &index_dir, None).expect_err("tracker needs runtime");
+    let error =
+        initialize(&config, &firewood_dir, &index_dir, None).expect_err("tracker needs runtime");
     assert!(
         error
             .to_string()
@@ -135,8 +142,14 @@ fn config_parses_from_json_and_drives_features() -> Result<()> {
     let runtime = build_runtime_adapters(temp.path());
     let handles = initialize(&config, &firewood_dir, &index_dir, Some(runtime))?;
 
-    assert!(handles.firewood.runtime().is_some(), "runtime enabled in config");
-    assert!(handles.daemon.is_some(), "daemon expected when runtime enabled");
+    assert!(
+        handles.firewood.runtime().is_some(),
+        "runtime enabled in config"
+    );
+    assert!(
+        handles.daemon.is_some(),
+        "daemon expected when runtime enabled"
+    );
     assert!(handles.tracker.is_none(), "tracker disabled in config");
 
     Ok(())
@@ -145,7 +158,11 @@ fn config_parses_from_json_and_drives_features() -> Result<()> {
 fn assert_network(tracker: &Tracker, network: NetworkSelection) {
     let expected = constants::genesis_block(network.into());
     assert_eq!(tracker.chain().height(), 0, "fresh index height");
-    assert_eq!(tracker.chain().tip(), expected.header.block_hash(), "genesis hash");
+    assert_eq!(
+        tracker.chain().tip(),
+        expected.header.block_hash(),
+        "genesis hash"
+    );
 }
 
 fn build_runtime_adapters(base: &Path) -> RuntimeAdapters {

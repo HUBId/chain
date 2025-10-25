@@ -1,17 +1,17 @@
 use std::collections::HashMap;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 
 use rpp_chain::consensus::{
-    BftVote, BftVoteKind, ConsensusRound, ObserverProfile, SignedBftVote, ValidatorCandidate,
-    evaluate_vrf,
+    evaluate_vrf, BftVote, BftVoteKind, ConsensusRound, ObserverProfile, SignedBftVote,
+    ValidatorCandidate,
 };
 use rpp_chain::crypto::{
-    VrfKeypair, address_from_public_key, load_keypair, load_vrf_keypair, sign_message,
-    signature_to_hex,
+    address_from_public_key, load_keypair, load_vrf_keypair, sign_message, signature_to_hex,
+    VrfKeypair,
 };
 use rpp_chain::types::block::Block;
-use rpp_chain::vrf::{PoseidonVrfInput, VrfSubmission, VrfSubmissionPool, derive_tier_seed};
+use rpp_chain::vrf::{derive_tier_seed, PoseidonVrfInput, VrfSubmission, VrfSubmissionPool};
 
 use super::cluster::TestClusterNode;
 

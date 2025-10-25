@@ -761,6 +761,7 @@ mod test {
     use crate::nodestore::primitives::area_size_iter;
     use crate::{
         BranchNode, Child, FreeListParent, LeafNode, NodeStore, Path, area_index, hash_node,
+        noop_storage_metrics,
     };
 
     #[derive(Debug)]
@@ -995,7 +996,8 @@ mod test {
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let test_trie = gen_test_trie(&mut nodestore);
         // let (_, high_watermark, (root_addr, root_hash)) = gen_test_trie(&mut nodestore);
@@ -1019,7 +1021,8 @@ mod test {
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let mut test_trie = gen_test_trie(&mut nodestore);
         let root_addr = test_trie.root_address;
@@ -1088,7 +1091,8 @@ mod test {
         let rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
@@ -1134,7 +1138,8 @@ mod test {
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
         let TestFreelist {
             high_watermark,
             free_ranges,
@@ -1154,7 +1159,8 @@ mod test {
     #[test]
     fn fix_freelist_with_overlap() {
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
         let TestFreelist {
             high_watermark,
             free_ranges: _,
@@ -1192,7 +1198,8 @@ mod test {
         let mut rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let num_areas = 10;
 
@@ -1249,7 +1256,8 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas() {
         let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let expected_leaked_area_indices = vec![
             area_index!(8),
@@ -1300,7 +1308,8 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test() {
         let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         // write two free areas
         let mut high_watermark = NodeStoreHeader::SIZE;

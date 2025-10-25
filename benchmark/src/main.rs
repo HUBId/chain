@@ -25,6 +25,7 @@ use std::path::PathBuf;
 
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
+use firewood_storage::noop_storage_metrics;
 
 use fastrace::collector::Config;
 
@@ -240,7 +241,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new(args.global_opts.dbname.clone(), cfg).expect("db initiation should succeed");
+    let db = Db::new(args.global_opts.dbname.clone(), cfg, noop_storage_metrics())
+        .expect("db initiation should succeed");
 
     match args.test_name {
         TestName::Create => {

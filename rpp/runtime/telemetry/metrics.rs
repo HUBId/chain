@@ -7,6 +7,10 @@ use anyhow::{Context, Result};
 use log::warn;
 use opentelemetry::global;
 use opentelemetry::metrics::noop::NoopMeterProvider;
+use firewood_storage::{
+    StorageMetrics as StorageMetricsFacade,
+    WalFlushOutcome as StorageWalFlushOutcome,
+};
 use opentelemetry::metrics::{Counter, Histogram, Meter};
 use opentelemetry::KeyValue;
 use opentelemetry_otlp::WithExportConfig;
@@ -75,6 +79,10 @@ pub struct RuntimeMetrics {
     wallet_rpc_latency: EnumF64Histogram<WalletRpcMethod>,
     wal_flush_duration: EnumF64Histogram<WalFlushOutcome>,
     wal_flush_bytes: EnumU64Histogram<WalFlushOutcome>,
+    wal_flush_total: EnumCounter<WalFlushOutcome>,
+    header_flush_duration: Histogram<f64>,
+    header_flush_bytes: Histogram<u64>,
+    header_flush_total: Counter<u64>,
     consensus_round_duration: Histogram<f64>,
     consensus_quorum_latency: Histogram<f64>,
     consensus_leader_changes: Counter<u64>,
@@ -118,6 +126,28 @@ impl RuntimeMetrics {
                     .with_unit("By")
                     .build(),
             ),
+            wal_flush_total: EnumCounter::new(
+                meter
+                    .u64_counter("rpp.runtime.storage.wal_flush.total")
+                    .with_description("Count of WAL flush attempts grouped by outcome")
+                    .with_unit("1")
+                    .build(),
+            ),
+            header_flush_duration: meter
+                .f64_histogram("rpp.runtime.storage.header_flush.duration")
+                .with_description("Duration of header flush operations in milliseconds")
+                .with_unit("ms")
+                .build(),
+            header_flush_bytes: meter
+                .u64_histogram("rpp.runtime.storage.header_flush.bytes")
+                .with_description("Size of flushed headers in bytes")
+                .with_unit("By")
+                .build(),
+            header_flush_total: meter
+                .u64_counter("rpp.runtime.storage.header_flush.total")
+                .with_description("Total number of header flush operations")
+                .with_unit("1")
+                .build(),
             consensus_round_duration: meter
                 .f64_histogram("rpp.runtime.consensus.round.duration")
                 .with_description("Duration of consensus rounds in milliseconds")
@@ -197,6 +227,27 @@ impl RuntimeMetrics {
     /// Record the number of bytes flushed to the WAL for the provided outcome.
     pub fn record_wal_flush_bytes(&self, outcome: WalFlushOutcome, bytes: u64) {
         self.wal_flush_bytes.record(outcome, bytes);
+    }
+
+    /// Increment the WAL flush counter for the provided outcome.
+    pub fn increment_wal_flushes(&self, outcome: WalFlushOutcome) {
+        self.wal_flush_total.add(outcome, 1);
+    }
+
+    /// Record the duration of a header flush attempt.
+    pub fn record_header_flush_duration(&self, duration: Duration) {
+        self.header_flush_duration
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &[]);
+    }
+
+    /// Record the size of a flushed header.
+    pub fn record_header_flush_bytes(&self, bytes: u64) {
+        self.header_flush_bytes.record(bytes, &[]);
+    }
+
+    /// Increment the header flush counter.
+    pub fn increment_header_flushes(&self) {
+        self.header_flush_total.add(1, &[]);
     }
 
     /// Record the time it took to generate a proof for the given kind.
@@ -534,6 +585,39 @@ impl MetricLabel for WalletRpcMethod {
     }
 }
 
+impl StorageMetricsFacade for RuntimeMetrics {
+    fn record_header_flush_duration(&self, duration: Duration) {
+        RuntimeMetrics::record_header_flush_duration(self, duration);
+    }
+
+    fn record_header_flush_bytes(&self, bytes: u64) {
+        RuntimeMetrics::record_header_flush_bytes(self, bytes);
+    }
+
+    fn increment_header_flushes(&self) {
+        RuntimeMetrics::increment_header_flushes(self);
+    }
+
+    fn record_wal_flush_duration(
+        &self,
+        outcome: StorageWalFlushOutcome,
+        duration: Duration,
+    ) {
+        let outcome = WalFlushOutcome::from(outcome);
+        RuntimeMetrics::record_wal_flush_duration(self, outcome, duration);
+    }
+
+    fn record_wal_flush_bytes(&self, outcome: StorageWalFlushOutcome, bytes: u64) {
+        let outcome = WalFlushOutcome::from(outcome);
+        RuntimeMetrics::record_wal_flush_bytes(self, outcome, bytes);
+    }
+
+    fn increment_wal_flushes(&self, outcome: StorageWalFlushOutcome) {
+        let outcome = WalFlushOutcome::from(outcome);
+        RuntimeMetrics::increment_wal_flushes(self, outcome);
+    }
+}
+
 /// Outcomes emitted when flushing the write-ahead log.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum WalFlushOutcome {
@@ -543,6 +627,16 @@ pub enum WalFlushOutcome {
     Retried,
     /// Flush failed permanently.
     Failed,
+}
+
+impl From<StorageWalFlushOutcome> for WalFlushOutcome {
+    fn from(value: StorageWalFlushOutcome) -> Self {
+        match value {
+            StorageWalFlushOutcome::Success => WalFlushOutcome::Success,
+            StorageWalFlushOutcome::Retried => WalFlushOutcome::Retried,
+            StorageWalFlushOutcome::Failed => WalFlushOutcome::Failed,
+        }
+    }
 }
 
 impl MetricLabel for WalFlushOutcome {
@@ -758,6 +852,10 @@ mod tests {
         );
         metrics.record_wal_flush_duration(WalFlushOutcome::Success, Duration::from_millis(30));
         metrics.record_wal_flush_bytes(WalFlushOutcome::Success, 512);
+        metrics.increment_wal_flushes(WalFlushOutcome::Success);
+        metrics.record_header_flush_duration(Duration::from_millis(12));
+        metrics.record_header_flush_bytes(256);
+        metrics.increment_header_flushes();
         metrics.record_proof_generation_duration(ProofKind::Stwo, Duration::from_millis(40));
         metrics.record_proof_generation_size(ProofKind::Stwo, 1024);
         metrics.increment_proof_generation(ProofKind::Mock);

@@ -75,7 +75,6 @@ use crate::{
     FailedMessages, PublishError, SubscriptionError, TopicScoreParams, ValidationError,
 };
 
-
 /// IDONTWANT cache capacity.
 const IDONTWANT_CAP: usize = 10_000;
 

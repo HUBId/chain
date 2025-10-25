@@ -5,9 +5,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use rpp::runtime::node::{MempoolStatus, NodeHandle};
 use rpp::runtime::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator};
-use rpp::runtime::sync::{
-    PayloadProvider, ReconstructionPlan, RuntimeRecursiveProofVerifier,
-};
+use rpp::runtime::sync::{PayloadProvider, ReconstructionPlan, RuntimeRecursiveProofVerifier};
 use rpp::runtime::types::{Block, BlockHeader, BlockMetadata};
 use rpp_p2p::GossipTopic;
 use storage_firewood::kv::{FirewoodKv, Hash, KvError};
@@ -32,10 +30,7 @@ impl FirewoodAdapter {
     }
 
     /// Open (or create) a Firewood instance and attach runtime adapters.
-    pub fn open_with_runtime(
-        path: impl AsRef<Path>,
-        runtime: RuntimeAdapters,
-    ) -> Result<Self> {
+    pub fn open_with_runtime(path: impl AsRef<Path>, runtime: RuntimeAdapters) -> Result<Self> {
         let inner = FirewoodKv::open(path).context("open firewood store")?;
         Ok(Self {
             inner,
@@ -131,16 +126,11 @@ impl FirewoodAdapter {
         runtime
             .node()
             .reconstruct_range(start_height, end_height, provider.as_ref())
-            .map_err(|err| anyhow!(
-                "reconstruct blocks {start_height}..={end_height}: {err}"
-            ))
+            .map_err(|err| anyhow!("reconstruct blocks {start_height}..={end_height}: {err}"))
     }
 
     /// Execute a precomputed reconstruction plan using the configured payload provider.
-    pub fn execute_reconstruction_plan(
-        &self,
-        plan: &ReconstructionPlan,
-    ) -> Result<Vec<Block>> {
+    pub fn execute_reconstruction_plan(&self, plan: &ReconstructionPlan) -> Result<Vec<Block>> {
         let runtime = self.require_runtime()?;
         let provider = Arc::clone(runtime.payload_provider());
         runtime
@@ -164,10 +154,7 @@ impl FirewoodAdapter {
     }
 
     /// Subscribe to runtime gossip for the requested topic.
-    pub fn subscribe_gossip(
-        &self,
-        topic: GossipTopic,
-    ) -> Result<broadcast::Receiver<Vec<u8>>> {
+    pub fn subscribe_gossip(&self, topic: GossipTopic) -> Result<broadcast::Receiver<Vec<u8>>> {
         let runtime = self.require_runtime()?;
         Ok(runtime.node().subscribe_witness_gossip(topic))
     }

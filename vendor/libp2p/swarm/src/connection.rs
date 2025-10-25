@@ -779,7 +779,6 @@ impl<T: AsRef<str>> std::hash::Hash for AsStrHashEq<T> {
     }
 }
 
-
 /// The endpoint roles associated with a pending peer-to-peer connection.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum PendingPoint {

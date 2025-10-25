@@ -83,4 +83,3 @@ impl ExternalAddresses {
         self.addresses.insert(0, addr.clone());
     }
 }
-

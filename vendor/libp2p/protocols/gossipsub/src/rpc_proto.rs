@@ -23,4 +23,3 @@ pub(crate) mod proto {
     include!("generated/mod.rs");
     pub use self::gossipsub::pb::{mod_RPC::SubOpts, *};
 }
-
