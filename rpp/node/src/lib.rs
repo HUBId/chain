@@ -1694,8 +1694,19 @@ mod tests {
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{self, SimpleSpanProcessor};
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, OnceLock};
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    use {
+        std::io::{Read, Seek, SeekFrom},
+        std::mem::MaybeUninit,
+        std::os::unix::io::AsRawFd,
+        std::panic,
+        tempfile::tempfile,
+    };
 
     static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -1724,6 +1735,72 @@ mod tests {
                 std::env::set_var("RPP_CONFIG", value);
             } else {
                 std::env::remove_var("RPP_CONFIG");
+            }
+        }
+    }
+
+    fn base_bootstrap_options() -> BootstrapOptions {
+        BootstrapOptions {
+            node_config: None,
+            wallet_config: None,
+            data_dir: None,
+            rpc_listen: None,
+            rpc_auth_token: None,
+            telemetry_endpoint: None,
+            telemetry_auth_token: None,
+            telemetry_sample_interval: None,
+            log_level: None,
+            log_json: false,
+            dry_run: true,
+            write_config: false,
+        }
+    }
+
+    #[cfg(unix)]
+    fn capture_stderr<F, R>(f: F) -> (String, R)
+    where
+        F: FnOnce() -> R,
+    {
+        let mut file = tempfile().expect("tempfile");
+        let file_fd = file.as_raw_fd();
+        let stderr_fd = libc::STDERR_FILENO;
+
+        unsafe {
+            let saved = libc::dup(stderr_fd);
+            assert!(saved >= 0, "failed to duplicate stderr");
+            libc::fflush(libc::stderr);
+            assert!(
+                libc::dup2(file_fd, stderr_fd) >= 0,
+                "failed to redirect stderr"
+            );
+
+            let mut result = MaybeUninit::uninit();
+            let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                result.write(f());
+            }));
+
+            libc::fflush(libc::stderr);
+            assert!(
+                libc::dup2(saved, stderr_fd) >= 0,
+                "failed to restore stderr"
+            );
+            libc::close(saved);
+
+            match outcome {
+                Ok(()) => {
+                    file.seek(SeekFrom::Start(0)).expect("seek stderr capture");
+                    let mut output = String::new();
+                    file.read_to_string(&mut output)
+                        .expect("read captured stderr");
+                    (output, result.assume_init())
+                }
+                Err(err) => {
+                    file.seek(SeekFrom::Start(0)).expect("seek stderr capture");
+                    let mut output = String::new();
+                    file.read_to_string(&mut output)
+                        .expect("read captured stderr");
+                    std::panic::resume_unwind(err);
+                }
             }
         }
     }
@@ -1791,6 +1868,205 @@ mod tests {
 
         assert_eq!(resolved.path, PathBuf::from("config/default.toml"));
         assert_eq!(resolved.source, ConfigSource::Default);
+    }
+
+    #[test]
+    fn load_node_configuration_reports_missing_cli_path() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let temp = tempdir().expect("tempdir");
+        let missing = temp.path().join("hybrid-node.toml");
+        let mut options = base_bootstrap_options();
+        options.node_config = Some(missing.clone());
+
+        let error = load_node_configuration(RuntimeMode::Hybrid, &options)
+            .expect_err("missing node config should error");
+        let config_error = error
+            .downcast::<ConfigurationError>()
+            .expect("configuration error");
+
+        match config_error {
+            ConfigurationError::Missing {
+                role,
+                path,
+                source,
+                suggestion,
+            } => {
+                assert_eq!(role, ConfigRole::Node);
+                assert_eq!(path, missing);
+                assert_eq!(source, ConfigSource::CommandLine);
+                let suggestion = suggestion.expect("suggestion expected");
+                assert!(
+                    suggestion.contains("config/hybrid.toml"),
+                    "unexpected suggestion: {}",
+                    suggestion
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_wallet_configuration_reports_missing_cli_path() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let temp = tempdir().expect("tempdir");
+        let missing = temp.path().join("hybrid-wallet.toml");
+        let mut options = base_bootstrap_options();
+        options.wallet_config = Some(missing.clone());
+
+        let error = load_wallet_configuration(RuntimeMode::Hybrid, &options)
+            .expect_err("missing wallet config should error");
+        let config_error = error
+            .downcast::<ConfigurationError>()
+            .expect("configuration error");
+
+        match config_error {
+            ConfigurationError::Missing {
+                role,
+                path,
+                source,
+                suggestion,
+            } => {
+                assert_eq!(role, ConfigRole::Wallet);
+                assert_eq!(path, missing);
+                assert_eq!(source, ConfigSource::CommandLine);
+                let suggestion = suggestion.expect("suggestion expected");
+                assert!(
+                    suggestion.contains("config/wallet.toml"),
+                    "unexpected suggestion: {}",
+                    suggestion
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_wallet_configuration_skipped_in_node_mode() {
+        let _lock = env_lock().lock().expect("env mutex");
+        let _guard = ConfigEnvGuard::set(None);
+
+        let mut options = base_bootstrap_options();
+        options.wallet_config = Some(PathBuf::from("/tmp/ignored-wallet.toml"));
+
+        let result = load_wallet_configuration(RuntimeMode::Node, &options)
+            .expect("node mode should skip wallet config");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn ensure_listener_conflicts_accepts_matching_configuration() {
+        let mut node_config = NodeConfig::for_mode(RuntimeMode::Hybrid);
+        node_config.rpc_listen = "127.0.0.1:7070".parse().expect("socket addr");
+        node_config.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7600".to_string();
+
+        let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
+        wallet_config.rpc_listen = node_config.rpc_listen;
+
+        let node_bundle = ConfigBundle {
+            value: node_config,
+            metadata: None,
+        };
+        let wallet_bundle = ConfigBundle {
+            value: wallet_config,
+            metadata: None,
+        };
+
+        ensure_listener_conflicts(
+            RuntimeMode::Hybrid,
+            Some(&node_bundle),
+            Some(&wallet_bundle),
+        )
+        .expect("matching listeners should not conflict");
+    }
+
+    #[test]
+    fn ensure_listener_conflicts_detects_rpc_mismatch() {
+        let mut node_config = NodeConfig::for_mode(RuntimeMode::Hybrid);
+        node_config.rpc_listen = "127.0.0.1:7000".parse().expect("socket addr");
+
+        let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
+        wallet_config.rpc_listen = "127.0.0.1:8000".parse().expect("socket addr");
+
+        let node_bundle = ConfigBundle {
+            value: node_config,
+            metadata: Some(ConfigMetadata::new(
+                PathBuf::from("/etc/rpp/node.toml"),
+                ConfigSource::CommandLine,
+            )),
+        };
+        let wallet_bundle = ConfigBundle {
+            value: wallet_config,
+            metadata: Some(ConfigMetadata::new(
+                PathBuf::from("/etc/rpp/wallet.toml"),
+                ConfigSource::CommandLine,
+            )),
+        };
+
+        let error = ensure_listener_conflicts(
+            RuntimeMode::Hybrid,
+            Some(&node_bundle),
+            Some(&wallet_bundle),
+        )
+        .expect_err("mismatched listeners should error");
+        let config_error = error
+            .downcast::<ConfigurationError>()
+            .expect("configuration error");
+
+        match config_error {
+            ConfigurationError::Conflict { message } => {
+                assert!(message.contains("listener mismatch"), "{message}");
+                assert!(message.contains("node configuration"), "{message}");
+                assert!(message.contains("wallet configuration"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_listener_conflicts_detects_port_reuse() {
+        let mut node_config = NodeConfig::for_mode(RuntimeMode::Hybrid);
+        node_config.rpc_listen = "127.0.0.1:7500".parse().expect("socket addr");
+        node_config.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7500".to_string();
+
+        let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
+        wallet_config.rpc_listen = node_config.rpc_listen;
+
+        let node_bundle = ConfigBundle {
+            value: node_config,
+            metadata: Some(ConfigMetadata::new(
+                PathBuf::from("/etc/rpp/node.toml"),
+                ConfigSource::CommandLine,
+            )),
+        };
+        let wallet_bundle = ConfigBundle {
+            value: wallet_config,
+            metadata: Some(ConfigMetadata::new(
+                PathBuf::from("/etc/rpp/wallet.toml"),
+                ConfigSource::CommandLine,
+            )),
+        };
+
+        let error = ensure_listener_conflicts(
+            RuntimeMode::Hybrid,
+            Some(&node_bundle),
+            Some(&wallet_bundle),
+        )
+        .expect_err("port reuse should error");
+        let config_error = error
+            .downcast::<ConfigurationError>()
+            .expect("configuration error");
+
+        match config_error {
+            ConfigurationError::Conflict { message } => {
+                assert!(message.contains("listener conflict"), "{message}");
+                assert!(message.contains("TCP port 7500"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -1874,6 +2150,42 @@ mod tests {
         assert!(
             tracer_flag.load(Ordering::SeqCst),
             "tracer shutdown hook was not invoked"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn init_tracing_dry_run_skips_exporters_and_logs_tags() {
+        let mut config = NodeConfig::for_mode(RuntimeMode::Hybrid);
+        config.rollout.telemetry.enabled = true;
+        config.rollout.telemetry.endpoint = Some("http://127.0.0.1:4317".to_string());
+        config.rollout.telemetry.http_endpoint = Some("http://127.0.0.1:4318".to_string());
+        config.rollout.telemetry.auth_token = Some("test-token".to_string());
+
+        std::env::remove_var("RPP_NODE_OTLP_ENDPOINT");
+        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+
+        let before = global::meter_provider() as *const dyn MeterProvider;
+        let (captured, telemetry) = capture_stderr(|| {
+            init_tracing(
+                &config,
+                None,
+                Some("info".to_string()),
+                false,
+                RuntimeMode::Hybrid,
+                "cli",
+                true,
+            )
+            .expect("init tracing")
+        });
+
+        assert!(telemetry.is_none(), "dry run should not start exporters");
+        let after = global::meter_provider() as *const dyn MeterProvider;
+        assert_eq!(before, after, "dry run should not install metrics provider");
+        assert!(captured.contains("\"rpp.mode\":\"hybrid\""), "{captured}");
+        assert!(
+            captured.contains("\"rpp.config_source\":\"cli\""),
+            "{captured}"
         );
     }
 
