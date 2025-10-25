@@ -1495,6 +1495,7 @@ impl NodeInner {
             },
         };
         let label = event.label().to_string();
+        self.runtime_metrics.record_reputation_penalty(label.clone());
         self.network
             .apply_reputation_event(peer.clone(), event)
             .map_err(NodeError::from)?;
@@ -1571,6 +1572,7 @@ impl NodeInner {
         let metrics = self.metrics.read().clone();
         let peer_count = self.connected_peers.len();
         let verifier_metrics = metrics.verifier_metrics.clone();
+        self.runtime_metrics.record_peer_count(peer_count);
         let heartbeat = Heartbeat {
             peer_count,
             block_height: metrics.block_height,
