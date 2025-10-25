@@ -1,5 +1,12 @@
 #![cfg(feature = "integration")]
 
+//! Integration smoke tests for the rpp-node binary.
+//!
+//! The telemetry assertions are gated behind the `RPP_OBSERVABILITY_ASSERTS`
+//! environment variable so CI jobs can opt in to deeper OTLP validation without
+//! paying the cost on every run.
+
+use std::env;
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
@@ -14,6 +21,7 @@ use tempfile::TempDir;
 
 const INIT_TIMEOUT: Duration = Duration::from_secs(90);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(45);
+const OBSERVABILITY_ENV: &str = "RPP_OBSERVABILITY_ASSERTS";
 
 #[test]
 fn binary_mode_switch_smoke() -> Result<()> {
@@ -26,6 +34,7 @@ fn binary_mode_switch_smoke() -> Result<()> {
             needs_wallet: false,
             telemetry: Some(TelemetryExpectation::Disabled),
             config_source: "cli",
+            pipelines: &["node"],
         },
         ModeSpec {
             name: "wallet",
@@ -33,6 +42,7 @@ fn binary_mode_switch_smoke() -> Result<()> {
             needs_wallet: true,
             telemetry: None,
             config_source: "none",
+            pipelines: &["wallet"],
         },
         ModeSpec {
             name: "hybrid",
@@ -40,6 +50,7 @@ fn binary_mode_switch_smoke() -> Result<()> {
             needs_wallet: true,
             telemetry: Some(TelemetryExpectation::WithEndpoint),
             config_source: "cli",
+            pipelines: &["node", "wallet"],
         },
         ModeSpec {
             name: "validator",
@@ -47,6 +58,7 @@ fn binary_mode_switch_smoke() -> Result<()> {
             needs_wallet: true,
             telemetry: Some(TelemetryExpectation::WithEndpoint),
             config_source: "cli",
+            pipelines: &["node", "wallet"],
         },
     ];
 
@@ -63,6 +75,7 @@ struct ModeSpec {
     needs_wallet: bool,
     telemetry: Option<TelemetryExpectation>,
     config_source: &'static str,
+    pipelines: &'static [&'static str],
 }
 
 #[derive(Clone, Copy)]
@@ -80,6 +93,53 @@ impl TelemetryExpectation {
     }
 }
 
+fn observability_assertions_enabled() -> bool {
+    match env::var(OBSERVABILITY_ENV) {
+        Ok(value) => matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => false,
+    }
+}
+
+fn assert_observability_attributes(log: &str, spec: &ModeSpec) {
+    let expectations = [
+        ("service.name", "rpp"),
+        ("service.component", "rpp-node"),
+        ("service.namespace", "rpp"),
+        ("rpp.mode", spec.name),
+        ("rpp.config_source", spec.config_source),
+    ];
+
+    for (key, value) in expectations {
+        let pattern = format!("{key}=\"{value}\"");
+        assert!(
+            log.contains(&pattern),
+            "telemetry log missing attribute {pattern}: {log}",
+            pattern = pattern,
+            log = log
+        );
+    }
+
+    assert!(
+        log.contains("instance.id=\""),
+        "telemetry log missing instance.id attribute: {log}",
+        log = log
+    );
+}
+
+fn wait_for_pipeline_marker(logs: &mut Receiver<String>, pipeline: &str) -> Result<String> {
+    let pattern = format!("pipeline=\\\"{pipeline}\\\"");
+
+    loop {
+        let line = wait_for_log(logs, &pattern)?;
+        if line.contains("started") {
+            return Ok(line);
+        }
+    }
+}
+
 struct ModeContext {
     #[allow(dead_code)]
     temp_dir: TempDir,
@@ -92,6 +152,8 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
 
     let mut command = Command::new(binary);
     command
+        .arg("start")
+        .arg("--mode")
         .arg(spec.name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -101,15 +163,11 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
         );
 
     if let Some(node_config) = context.node_config.as_ref() {
-        command.arg("--config").arg(node_config);
+        command.arg("--node-config").arg(node_config);
     }
 
     if let Some(wallet_config) = context.wallet_config.as_ref() {
-        let flag = match spec.name {
-            "wallet" => "--config",
-            _ => "--wallet-config",
-        };
-        command.arg(flag).arg(wallet_config);
+        command.arg("--wallet-config").arg(wallet_config);
     }
 
     let mut child = command.spawn().context("failed to spawn rpp-node")?;
@@ -145,6 +203,10 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
         telemetry_log
     );
 
+    if observability_assertions_enabled() {
+        assert_observability_attributes(&telemetry_log, spec);
+    }
+
     if let Some(expectation) = spec.telemetry {
         let _ = wait_for_log(&mut logs, expectation.expected_log())?;
     }
@@ -155,6 +217,10 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
 
     if spec.needs_wallet {
         let _ = wait_for_log(&mut logs, "wallet runtime initialised")?;
+    }
+
+    for pipeline in spec.pipelines {
+        let _ = wait_for_pipeline_marker(&mut logs, pipeline)?;
     }
 
     // Drain remaining logs so the child process cannot block on a full pipe during shutdown.
@@ -189,6 +255,8 @@ fn binary_dry_run_smoke() -> Result<()> {
 
     let mut command = Command::new(&binary);
     command
+        .arg("start")
+        .arg("--mode")
         .arg(spec.name)
         .arg("--dry-run")
         .stdout(Stdio::piped())
@@ -199,7 +267,7 @@ fn binary_dry_run_smoke() -> Result<()> {
         );
 
     if let Some(node_config) = context.node_config.as_ref() {
-        command.arg("--config").arg(node_config);
+        command.arg("--node-config").arg(node_config);
     }
 
     let output = command
@@ -240,7 +308,7 @@ fn binary_dry_run_smoke() -> Result<()> {
         ));
     }
 
-    if combined.contains("pipeline orchestrator started") {
+    if combined.contains("pipeline orchestrator started") || combined.contains("pipeline=\"") {
         return Err(anyhow!(
             "dry run logs indicate pipeline orchestrator was started: {combined}"
         ));
@@ -267,16 +335,22 @@ fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
         .parse()
         .context("invalid wallet rpc listen address")?;
 
-    let node_config = write_node_config_with(temp_dir.path(), Some(TelemetryExpectation::Disabled), |config| {
-        config.rpc_listen = node_addr;
-    })?;
+    let node_config = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::Disabled),
+        |config| {
+            config.rpc_listen = node_addr;
+        },
+    )?;
 
     let wallet_config =
         write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = wallet_addr)?;
 
     let output = Command::new(&binary)
+        .arg("start")
+        .arg("--mode")
         .arg("hybrid")
-        .arg("--config")
+        .arg("--node-config")
         .arg(&node_config)
         .arg("--wallet-config")
         .arg(&wallet_config)
@@ -347,8 +421,10 @@ fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
         write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = wallet_addr)?;
 
     let output = Command::new(&binary)
+        .arg("start")
+        .arg("--mode")
         .arg("validator")
-        .arg("--config")
+        .arg("--node-config")
         .arg(&node_config)
         .arg("--wallet-config")
         .arg(&wallet_config)
@@ -422,8 +498,10 @@ fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
     })?;
 
     let output = Command::new(&binary)
+        .arg("start")
+        .arg("--mode")
         .arg("validator")
-        .arg("--config")
+        .arg("--node-config")
         .arg(&node_config)
         .arg("--wallet-config")
         .arg(&wallet_config)
