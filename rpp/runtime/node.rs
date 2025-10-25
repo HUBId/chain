@@ -33,7 +33,8 @@ use tokio::time;
 use tracing::field::display;
 use tracing::instrument;
 use tracing::Span;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, info_span, warn};
+use tracing::Instrument;
 
 use hex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -61,7 +62,8 @@ use crate::proof_backend::{Blake2sHasher, ProofBytes};
 use crate::proof_system::{ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
-    GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, TimetokeRecord,
+    GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, ProofSystemKind,
+    TimetokeRecord,
 };
 use crate::runtime::node_runtime::{
     node::{
@@ -218,6 +220,46 @@ impl PendingTransactionMetadata {
             ChainProof::RppStark(_) => None,
         }
     }
+}
+
+fn wallet_rpc_flow_span(method: &'static str, wallet: &Address, hash: &str) -> Span {
+    info_span!(
+        "runtime.wallet.rpc",
+        method,
+        wallet = %wallet,
+        tx_hash = %hash
+    )
+}
+
+fn proof_operation_span(
+    operation: &'static str,
+    backend: ProofSystemKind,
+    height: Option<u64>,
+    block_hash: Option<&str>,
+) -> Span {
+    let span = info_span!(
+        "runtime.proof.operation",
+        operation,
+        backend = ?backend,
+        height = tracing::field::Empty,
+        block_hash = tracing::field::Empty
+    );
+    if let Some(height) = height {
+        span.record("height", &height);
+    }
+    if let Some(block_hash) = block_hash {
+        span.record("block_hash", &display(block_hash));
+    }
+    span
+}
+
+fn storage_flush_span(operation: &'static str, height: u64, block_hash: &str) -> Span {
+    info_span!(
+        "runtime.storage.flush",
+        operation,
+        height,
+        block_hash = %block_hash
+    )
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1164,6 +1206,11 @@ impl Node {
                     if let Some(inner) = weak_inner.upgrade() {
                         if let Some(runtime) = inner.p2p_runtime.lock().clone() {
                             let topic_clone = topic.clone();
+                            let span = info_span!(
+                                "runtime.gossip.backpressure",
+                                topic = %topic_clone,
+                                queue_depth
+                            );
                             tokio::spawn(async move {
                                 if let Err(err) = runtime
                                     .report_gossip_backpressure(topic_clone.clone(), queue_depth)
@@ -1177,7 +1224,8 @@ impl Node {
                                         "failed to report gossip backpressure"
                                     );
                                 }
-                            });
+                            }
+                            .instrument(span));
                         }
                     }
                 }));
@@ -1250,7 +1298,76 @@ mod tests {
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
     use tempfile::tempdir;
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::Registry;
     use tracing_test::traced_test;
+
+    #[derive(Clone, Default)]
+    struct RecordingLayer {
+        spans: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingLayer {
+        fn names(&self) -> Vec<String> {
+            self.spans.lock().expect("record spans").clone()
+        }
+    }
+
+    impl<S> Layer<S> for RecordingLayer
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::Id,
+            _ctx: Context<'_, S>,
+        ) {
+            self.spans
+                .lock()
+                .expect("record span name")
+                .push(attrs.metadata().name().to_string());
+        }
+    }
+
+    #[test]
+    fn wallet_flow_span_emits_runtime_span() {
+        let recorder = RecordingLayer::default();
+        let subscriber = Registry::default().with(recorder.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let address: Address = "wallet-span".into();
+            let span = wallet_rpc_flow_span("submit", &address, "hash-span");
+            let _guard = span.enter();
+            info!("within wallet span");
+        });
+        assert!(recorder
+            .names()
+            .iter()
+            .any(|name| name == "runtime.wallet.rpc"));
+    }
+
+    #[test]
+    fn proof_operation_span_emits_runtime_span() {
+        let recorder = RecordingLayer::default();
+        let subscriber = Registry::default().with(recorder.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let span = proof_operation_span(
+                "prove_state",
+                ProofSystemKind::Stwo,
+                Some(42),
+                Some("block-hash"),
+            );
+            let _guard = span.enter();
+            info!("within proof span");
+        });
+        assert!(recorder
+            .names()
+            .iter()
+            .any(|name| name == "runtime.proof.operation"));
+    }
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
@@ -2401,6 +2518,7 @@ impl NodeInner {
 
         let mut publish_shutdown = self.subscribe_shutdown();
         let publisher_handle = handle.clone();
+        let publisher_span = info_span!("runtime.gossip.publish", component = "witness");
         self.spawn_worker(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -2420,12 +2538,14 @@ impl NodeInner {
                     }
                 }
             }
-        }))
+        }
+        .instrument(publisher_span)))
         .await;
 
         let mut event_shutdown = self.subscribe_shutdown();
         let mut events = handle.subscribe();
         let ingest = Arc::clone(self);
+        let event_span = info_span!("runtime.gossip.ingest", component = "network_events");
         self.spawn_worker(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -2476,7 +2596,8 @@ impl NodeInner {
                     },
                 }
             }
-        }))
+        }
+        .instrument(event_span)))
         .await;
 
         if let Some(task) = runtime_task {
@@ -2719,9 +2840,11 @@ impl NodeInner {
     fn spawn_runtime(self: &Arc<Self>) -> JoinHandle<()> {
         let runner = Arc::clone(self);
         let shutdown = runner.subscribe_shutdown();
-        let run_task = tokio::spawn(async move { runner.run(shutdown).await });
+        let run_span = info_span!("runtime.node.run");
+        let run_task = tokio::spawn(async move { runner.run(shutdown).await }.instrument(run_span));
 
         let completion = Arc::clone(self);
+        let completion_span = info_span!("runtime.node.run.join");
         tokio::spawn(async move {
             match run_task.await {
                 Ok(Ok(())) => {}
@@ -2734,7 +2857,8 @@ impl NodeInner {
             }
             completion.drain_worker_tasks().await;
             completion.completion.notify_waiters();
-        })
+        }
+        .instrument(completion_span))
     }
 
     pub async fn start(
@@ -2748,11 +2872,13 @@ impl NodeInner {
             P2pRuntime::new(runtime_config).map_err(|err: P2pError| {
                 ChainError::Config(format!("failed to initialise p2p runtime: {err}"))
             })?;
+        let p2p_span = info_span!("runtime.p2p.run");
         let p2p_task = tokio::spawn(async move {
             if let Err(err) = p2p_inner.run().await {
                 warn!(?err, "p2p runtime exited with error");
             }
-        });
+        }
+        .instrument(p2p_span));
         handle
             .inner
             .initialise_p2p_runtime(p2p_handle, Some(p2p_task))
@@ -3122,7 +3248,20 @@ impl NodeInner {
         engine.execute_plan(plan, provider)
     }
 
+    #[instrument(
+        name = "runtime.wallet.rpc.submit_transaction",
+        skip(self, bundle),
+        fields(tx_hash = tracing::field::Empty, wallet = tracing::field::Empty),
+        err
+    )]
     fn submit_transaction(&self, bundle: TransactionProofBundle) -> ChainResult<String> {
+        let tx_hash = bundle.hash();
+        let wallet = bundle.transaction.payload.from.clone();
+        let current = Span::current();
+        current.record("tx_hash", &display(&tx_hash));
+        current.record("wallet", &display(&wallet));
+        let flow_span = wallet_rpc_flow_span("submit_transaction", &wallet, &tx_hash);
+        let _guard = flow_span.enter();
         bundle.transaction.verify()?;
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
@@ -3174,7 +3313,6 @@ impl NodeInner {
         if mempool.len() >= self.mempool_limit() {
             return Err(ChainError::Transaction("mempool full".into()));
         }
-        let tx_hash = bundle.hash();
         let tx_payload = bundle.transaction.payload.clone();
         if mempool
             .iter()
@@ -4041,13 +4179,15 @@ impl NodeInner {
         }
         let tier = profile.tier;
         let runtime_profile = RuntimeIdentityProfile::from(profile);
+        let refresh_span = info_span!("runtime.identity.refresh", tier = ?tier);
         tokio::spawn(async move {
             if let Err(err) = handle.update_identity(runtime_profile).await {
                 warn!(?err, tier = ?tier, "failed to update libp2p identity profile");
             } else {
                 debug!(tier = ?tier, "updated libp2p identity profile");
             }
-        });
+        }
+        .instrument(refresh_span));
     }
 
     fn drain_votes_for(&self, height: u64, block_hash: &str) -> Vec<SignedBftVote> {
@@ -4655,13 +4795,32 @@ impl NodeInner {
         let previous_block = self.storage.read_block(parent_height)?;
         let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
         let prover = WalletProver::new(&self.storage);
-        let state_witness = prover.build_state_witness(
-            &pruning_proof.previous_state_root,
-            &header.state_root,
-            &accepted_identities,
-            &transactions,
-        )?;
-        let state_proof = prover.prove_state_transition(state_witness)?;
+        let backend = prover.system();
+        let state_witness = {
+            let span = proof_operation_span(
+                "build_state_witness",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.build_state_witness(
+                &pruning_proof.previous_state_root,
+                &header.state_root,
+                &accepted_identities,
+                &transactions,
+            )?
+        };
+        let state_proof = {
+            let span = proof_operation_span(
+                "prove_state_transition",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.prove_state_transition(state_witness)?
+        };
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let state_result = match &state_proof {
@@ -4691,13 +4850,31 @@ impl NodeInner {
             .as_ref()
             .map(|block| block.identities.clone())
             .unwrap_or_default();
-        let pruning_witness = prover.build_pruning_witness(
-            &previous_identities,
-            &previous_transactions,
-            &pruning_proof,
-            Vec::new(),
-        )?;
-        let pruning_stark = prover.prove_pruning(pruning_witness)?;
+        let pruning_witness = {
+            let span = proof_operation_span(
+                "build_pruning_witness",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.build_pruning_witness(
+                &previous_identities,
+                &previous_transactions,
+                &pruning_proof,
+                Vec::new(),
+            )?
+        };
+        let pruning_stark = {
+            let span = proof_operation_span(
+                "prove_pruning",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.prove_pruning(pruning_witness)?
+        };
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let pruning_result = match &pruning_stark {
@@ -4729,9 +4906,26 @@ impl NodeInner {
         let module_witnesses = self.ledger.drain_module_witnesses();
         let module_artifacts = self.ledger.stage_module_witnesses(&module_witnesses)?;
         let consensus_certificate = round.certificate();
-        let consensus_witness =
-            prover.build_consensus_witness(&block_hash, &consensus_certificate)?;
-        let consensus_proof = prover.prove_consensus(consensus_witness)?;
+        let consensus_witness = {
+            let span = proof_operation_span(
+                "build_consensus_witness",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.build_consensus_witness(&block_hash, &consensus_certificate)?
+        };
+        let consensus_proof = {
+            let span = proof_operation_span(
+                "prove_consensus",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.prove_consensus(consensus_witness)?
+        };
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let consensus_result = match &consensus_proof {
@@ -4764,18 +4958,36 @@ impl NodeInner {
             })
             .collect::<ChainResult<_>>()?;
         let consensus_chain_proofs = vec![consensus_proof.clone()];
-        let recursive_witness = prover.build_recursive_witness(
-            previous_recursive_stark,
-            &identity_proofs,
-            &transaction_proofs,
-            &uptime_chain_proofs,
-            &consensus_chain_proofs,
-            &commitments,
-            &state_proof,
-            &pruning_stark,
-            header.height,
-        )?;
-        let recursive_stark = prover.prove_recursive(recursive_witness)?;
+        let recursive_witness = {
+            let span = proof_operation_span(
+                "build_recursive_witness",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.build_recursive_witness(
+                previous_recursive_stark,
+                &identity_proofs,
+                &transaction_proofs,
+                &uptime_chain_proofs,
+                &consensus_chain_proofs,
+                &commitments,
+                &state_proof,
+                &pruning_stark,
+                header.height,
+            )?
+        };
+        let recursive_stark = {
+            let span = proof_operation_span(
+                "prove_recursive",
+                backend,
+                Some(height),
+                Some(&block_hash),
+            );
+            let _guard = span.enter();
+            prover.prove_recursive(recursive_witness)?
+        };
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             let recursive_result = match &recursive_stark {
@@ -4861,8 +5073,18 @@ impl NodeInner {
             .pruning_proof
             .as_ref()
             .map(|proof| hex::encode(proof.root));
-        self.storage.store_block(&block, &metadata)?;
+        {
+            let span = storage_flush_span("store_block", block.header.height, &block.hash);
+            let _guard = span.enter();
+            self.storage.store_block(&block, &metadata)?;
+        }
         if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
+            let span = storage_flush_span(
+                "prune_block_payload",
+                block.header.height - 1,
+                &block.hash,
+            );
+            let _guard = span.enter();
             let _ = self.storage.prune_block_payload(block.header.height - 1)?;
         }
         let mut tip = self.chain_tip.write();

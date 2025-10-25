@@ -3,6 +3,9 @@ use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use blake3::hash;
+use tracing::info_span;
+
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
 use crate::proof_backend::{ProofBytes, TxPublicInputs};
@@ -452,37 +455,45 @@ impl ProofVerifierRegistry {
 
     /// Verify a transaction proof using the appropriate backend.
     pub fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_transaction(proof))
+        self.verify_with_metrics("transaction", proof, |verifier, proof| {
+            verifier.verify_transaction(proof)
+        })
     }
 
     /// Verify an identity proof using the appropriate backend.
     pub fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_identity(proof))
+        self.verify_with_metrics("identity", proof, |verifier, proof| {
+            verifier.verify_identity(proof)
+        })
     }
 
     /// Verify a state transition proof using the appropriate backend.
     pub fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_state(proof))
+        self.verify_with_metrics("state", proof, |verifier, proof| verifier.verify_state(proof))
     }
 
     /// Verify a pruning proof using the appropriate backend.
     pub fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_pruning(proof))
+        self.verify_with_metrics("pruning", proof, |verifier, proof| verifier.verify_pruning(proof))
     }
 
     /// Verify a recursive aggregation proof using the appropriate backend.
     pub fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_recursive(proof))
+        self.verify_with_metrics("recursive", proof, |verifier, proof| {
+            verifier.verify_recursive(proof)
+        })
     }
 
     /// Verify an uptime proof using the appropriate backend.
     pub fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_uptime(proof))
+        self.verify_with_metrics("uptime", proof, |verifier, proof| verifier.verify_uptime(proof))
     }
 
     /// Verify a consensus proof using the appropriate backend.
     pub fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics(proof, |verifier, proof| verifier.verify_consensus(proof))
+        self.verify_with_metrics("consensus", proof, |verifier, proof| {
+            verifier.verify_consensus(proof)
+        })
     }
 
     /// Verify a transaction proof provided as backend artifacts for the STWO system.
@@ -609,12 +620,25 @@ impl ProofVerifierRegistry {
         self.metrics.snapshot()
     }
 
-    fn verify_with_metrics<F, T>(&self, proof: &ChainProof, verify_fn: F) -> ChainResult<T>
+    fn verify_with_metrics<F, T>(
+        &self,
+        operation: &'static str,
+        proof: &ChainProof,
+        verify_fn: F,
+    ) -> ChainResult<T>
     where
         F: FnOnce(&dyn ProofVerifier, &ChainProof) -> ChainResult<T>,
     {
         let verifier = self.proof_verifier(proof)?;
         let system = verifier.system();
+        let fingerprint = proof_fingerprint(proof);
+        let span = info_span!(
+            "runtime.proof.verify",
+            operation,
+            backend = ?system,
+            proof_hash = %fingerprint
+        );
+        let _guard = span.enter();
         let started = Instant::now();
         let result = verify_fn(verifier, proof);
         let success = result.is_ok();
@@ -631,6 +655,89 @@ impl ProofVerifierRegistry {
         let success = result.is_ok();
         self.metrics.record(system, started.elapsed(), success);
         result
+    }
+}
+
+fn proof_fingerprint(proof: &ChainProof) -> String {
+    serde_json::to_vec(proof)
+        .map(|bytes| hash(&bytes).to_hex().to_string())
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::Registry;
+
+    #[derive(Clone, Default)]
+    struct RecordingLayer {
+        spans: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingLayer {
+        fn names(&self) -> Vec<String> {
+            self.spans.lock().expect("record spans").clone()
+        }
+    }
+
+    impl<S> Layer<S> for RecordingLayer
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::Id,
+            _ctx: Context<'_, S>,
+        ) {
+            self.spans
+                .lock()
+                .expect("record span name")
+                .push(attrs.metadata().name().to_string());
+        }
+    }
+
+    fn dummy_state_proof() -> StarkProof {
+        StarkProof {
+            kind: ProofKind::State,
+            commitment: "11".repeat(32),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::State(StateWitness {
+                prev_state_root: "22".repeat(32),
+                new_state_root: "33".repeat(32),
+                identities: Vec::new(),
+                transactions: Vec::new(),
+                accounts_before: Vec::new(),
+                accounts_after: Vec::new(),
+                required_tier: crate::reputation::Tier::Tl0,
+                reputation_weights: crate::reputation::ReputationWeights::default(),
+            }),
+            trace: crate::stwo::circuit::ExecutionTrace { segments: Vec::new() },
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
+        }
+    }
+
+    use crate::stwo::circuit::state::StateWitness;
+    use crate::stwo::proof::{CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof};
+
+    #[test]
+    fn verify_state_emits_runtime_span() {
+        let recorder = RecordingLayer::default();
+        let subscriber = Registry::default().with(recorder.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let registry = ProofVerifierRegistry::new();
+            let proof = ChainProof::Stwo(dummy_state_proof());
+            let _ = registry.verify_state(&proof);
+        });
+        assert!(recorder
+            .names()
+            .iter()
+            .any(|name| name == "runtime.proof.verify"));
     }
 }
 
