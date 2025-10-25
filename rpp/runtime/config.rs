@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use http::Uri;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
@@ -1045,6 +1046,7 @@ impl NodeConfig {
                 ));
             }
         }
+        self.rollout.telemetry.validate()?;
         self.queue_weights.validate()?;
         self.p2p.validate()?;
         self.secrets.validate_with_path(&self.vrf_key_path)?;
@@ -1192,6 +1194,91 @@ mod tests {
     fn node_config_validation_accepts_defaults() {
         let config = NodeConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn telemetry_config_validation_accepts_defaults() {
+        let config = TelemetryConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn telemetry_config_validation_rejects_zero_queue() {
+        let mut config = TelemetryConfig::default();
+        config.trace_max_queue_size = 0;
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail for zero queue size");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("trace_max_queue_size"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn telemetry_config_validation_rejects_invalid_ratio() {
+        let mut config = TelemetryConfig::default();
+        config.trace_sample_ratio = 1.5;
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail for invalid ratio");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("trace_sample_ratio"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn telemetry_config_validation_rejects_invalid_endpoint() {
+        let mut config = TelemetryConfig::default();
+        config.http_endpoint = Some("not a uri".to_string());
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail for invalid endpoint");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("telemetry.http_endpoint"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn telemetry_config_validation_rejects_partial_tls_identity() {
+        let mut config = TelemetryConfig::default();
+        config.grpc_tls = Some(TelemetryTlsConfig {
+            client_certificate: Some(PathBuf::from("/tmp/cert.pem")),
+            ..TelemetryTlsConfig::default()
+        });
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail for partial TLS identity");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("client_certificate"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 
     #[test]
@@ -1628,10 +1715,21 @@ impl Default for FeatureGates {
     }
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelemetryTlsConfig {
+    pub ca_certificate: Option<PathBuf>,
+    pub client_certificate: Option<PathBuf>,
+    pub client_private_key: Option<PathBuf>,
+    pub domain_name: Option<String>,
+    pub insecure_skip_verify: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TelemetryConfig {
     pub enabled: bool,
     pub endpoint: Option<String>,
+    pub http_endpoint: Option<String>,
     pub auth_token: Option<String>,
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
@@ -1641,6 +1739,18 @@ pub struct TelemetryConfig {
     pub sample_interval_secs: u64,
     #[serde(default = "default_redact_logs")]
     pub redact_logs: bool,
+    #[serde(default = "default_trace_max_queue_size")]
+    pub trace_max_queue_size: usize,
+    #[serde(default = "default_trace_max_export_batch_size")]
+    pub trace_max_export_batch_size: usize,
+    #[serde(default = "default_trace_sample_ratio")]
+    pub trace_sample_ratio: f64,
+    #[serde(default = "default_warn_on_drop")]
+    pub warn_on_drop: bool,
+    #[serde(default)]
+    pub grpc_tls: Option<TelemetryTlsConfig>,
+    #[serde(default)]
+    pub http_tls: Option<TelemetryTlsConfig>,
 }
 
 impl Default for TelemetryConfig {
@@ -1648,12 +1758,57 @@ impl Default for TelemetryConfig {
         Self {
             enabled: false,
             endpoint: None,
+            http_endpoint: None,
             auth_token: None,
             timeout_ms: default_timeout_ms(),
             retry_max: default_retry_max(),
             sample_interval_secs: default_sample_interval_secs(),
             redact_logs: default_redact_logs(),
+            trace_max_queue_size: default_trace_max_queue_size(),
+            trace_max_export_batch_size: default_trace_max_export_batch_size(),
+            trace_sample_ratio: default_trace_sample_ratio(),
+            warn_on_drop: default_warn_on_drop(),
+            grpc_tls: None,
+            http_tls: None,
         }
+    }
+}
+
+impl TelemetryConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.trace_max_queue_size == 0 {
+            return Err(ChainError::Config(
+                "telemetry.trace_max_queue_size must be greater than 0".into(),
+            ));
+        }
+        if self.trace_max_export_batch_size == 0 {
+            return Err(ChainError::Config(
+                "telemetry.trace_max_export_batch_size must be greater than 0".into(),
+            ));
+        }
+        if self.trace_max_export_batch_size > self.trace_max_queue_size {
+            return Err(ChainError::Config(
+                "telemetry.trace_max_export_batch_size must be less than or equal to trace_max_queue_size"
+                    .into(),
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.trace_sample_ratio) {
+            return Err(ChainError::Config(
+                "telemetry.trace_sample_ratio must be between 0.0 and 1.0".into(),
+            ));
+        }
+
+        if let Some(endpoint) = self.endpoint.as_ref() {
+            validate_endpoint("telemetry.endpoint", endpoint)?;
+        }
+        if let Some(endpoint) = self.http_endpoint.as_ref() {
+            validate_endpoint("telemetry.http_endpoint", endpoint)?;
+        }
+
+        validate_tls_config("telemetry.grpc_tls", self.grpc_tls.as_ref())?;
+        validate_tls_config("telemetry.http_tls", self.http_tls.as_ref())?;
+
+        Ok(())
     }
 }
 
@@ -1671,6 +1826,99 @@ fn default_sample_interval_secs() -> u64 {
 
 fn default_redact_logs() -> bool {
     true
+}
+
+fn default_trace_max_queue_size() -> usize {
+    2_048
+}
+
+fn default_trace_max_export_batch_size() -> usize {
+    512
+}
+
+fn default_trace_sample_ratio() -> f64 {
+    1.0
+}
+
+fn default_warn_on_drop() -> bool {
+    true
+}
+
+fn validate_endpoint(label: &str, value: &str) -> ChainResult<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ChainError::Config(format!(
+            "{label} must not be empty when configured",
+        )));
+    }
+
+    let uri: Uri = trimmed
+        .parse()
+        .map_err(|_| ChainError::Config(format!("{label} must be a valid URI")))?;
+
+    match uri.scheme_str() {
+        Some("http") | Some("https") => {}
+        Some(other) => {
+            return Err(ChainError::Config(format!(
+                "{label} must use http or https scheme, found {other}"
+            )));
+        }
+        None => {
+            return Err(ChainError::Config(format!(
+                "{label} must include a URI scheme"
+            )));
+        }
+    }
+
+    if uri.host().is_none() {
+        return Err(ChainError::Config(format!(
+            "{label} must include a hostname"
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_tls_config(label: &str, config: Option<&TelemetryTlsConfig>) -> ChainResult<()> {
+    let Some(config) = config else {
+        return Ok(());
+    };
+
+    if let Some(domain) = config.domain_name.as_ref() {
+        if domain.trim().is_empty() {
+            return Err(ChainError::Config(format!(
+                "{label}.domain_name must not be empty"
+            )));
+        }
+    }
+
+    if config.client_certificate.is_some() ^ config.client_private_key.is_some() {
+        return Err(ChainError::Config(format!(
+            "{label} requires both client_certificate and client_private_key when mutual TLS is configured",
+        )));
+    }
+
+    for (field, path) in [
+        ("ca_certificate", config.ca_certificate.as_ref()),
+        ("client_certificate", config.client_certificate.as_ref()),
+        ("client_private_key", config.client_private_key.as_ref()),
+    ] {
+        if let Some(path) = path {
+            if path.as_path().to_string_lossy().trim().is_empty() {
+                return Err(ChainError::Config(format!(
+                    "{label}.{field} must not be empty when provided",
+                )));
+            }
+            if !path.exists() {
+                return Err(ChainError::Config(format!(
+                    "{label}.{field} path {} does not exist",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
