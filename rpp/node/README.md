@@ -71,6 +71,12 @@ The binary exposes a number of flags for common overrides:
 
 You can inspect the full list at any time with `cargo run -p rpp-node -- --help`.
 
+The TOML configuration exposes additional knobs for fine-tuning the telemetry pipeline:
+
+- `rollout.telemetry.http_endpoint` selects the OTLP/HTTP collector for metrics while `endpoint` continues to control the gRPC span exporter.
+- `trace_max_queue_size`, `trace_max_export_batch_size`, and `trace_sample_ratio` size the bounded exporter and sampling strategy; keeping `warn_on_drop = true` surfaces warnings when the queue overflows so operators can react before spans are lost.
+- Nested `grpc_tls` and `http_tls` tables accept TLS material (`ca_certificate`, `client_certificate`, `client_private_key`, `domain_name`) when collectors require mutual authentication.【F:rpp/runtime/config.rs†L1632-L1707】【F:rpp/runtime/telemetry/exporter.rs†L21-L210】
+
 ## Logging & shutdown
 
 On startup the node logs the configured RPC, telemetry, and P2P endpoints so you

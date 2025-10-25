@@ -92,13 +92,15 @@ threaten block production.
 
 ## Telemetry & Metrics
 
-1. **Enable telemetry sampling.** Flip `rollout.telemetry.enabled` and tune the
-   sampling interval to emit snapshots with node, consensus, and mempool
-   metrics.【F:config/node.toml†L35-L37】【F:src/config.rs†L141-L171】
-2. **Stream snapshots to your collector.** Set `rollout.telemetry.endpoint`
-   (empty means log-only) and confirm the async telemetry task is running; the
-   node spawns a background loop that periodically publishes encoded telemetry
-   payloads and tracks the last height observed.【F:src/node.rs†L455-L517】
+1. **Enable telemetry sampling.** Flip `rollout.telemetry.enabled`, tune the
+   sampling interval, and adjust `trace_sample_ratio` if you only need a subset
+   of spans for long-term storage. Increase the queue and batch sizes when the
+   collector runs behind to avoid drops.【F:rpp/runtime/config.rs†L1632-L1707】
+2. **Stream snapshots to your collector.** Set both OTLP endpoints
+   (`endpoint` for gRPC traces and `http_endpoint` for metrics) and, if needed,
+   point `grpc_tls`/`http_tls` at your collector CA to enforce TLS. The runtime
+   spawns bounded exporters that warn when items are dropped so you can expand
+   capacity before losing visibility.【F:rpp/runtime/telemetry/exporter.rs†L21-L210】【F:rpp/runtime/telemetry/metrics.rs†L30-L58】
 3. **Scrape structured logs.** Configure log aggregation to capture the
    `telemetry` target; payloads contain release channel, active feature gates,
    and health snapshots for dashboards, including the live `timetoke_params`

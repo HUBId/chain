@@ -140,6 +140,7 @@ pub mod node_runtime;
 pub mod supervisor;
 pub mod telemetry;
 
+pub use telemetry::TelemetryExporterBuilder;
 pub use telemetry::metrics::{
     init_runtime_metrics, ConsensusStage, ProofKind, ProofVerificationBackend,
     ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, ProofRpcMethod,

@@ -4,15 +4,13 @@ use std::io::Write;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use opentelemetry::global;
 use opentelemetry::KeyValue;
 #[cfg(test)]
 use opentelemetry::Value;
-use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::{self, BatchConfig, Tracer};
 use opentelemetry_sdk::Resource;
@@ -22,7 +20,6 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::task::{JoinError, JoinHandle};
-use tonic::metadata::{MetadataMap, MetadataValue};
 use tracing::field::{Field, Visit};
 use tracing::{error, info, info_span, warn, Event, Subscriber};
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -33,11 +30,14 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 
 use rpp_chain::api::ApiContext;
-use rpp_chain::config::{NodeConfig, WalletConfig};
+use rpp_chain::config::{NodeConfig, TelemetryConfig, WalletConfig};
 use rpp_chain::crypto::load_or_generate_keypair;
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
-use rpp_chain::runtime::{init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, RuntimeMode};
+use rpp_chain::runtime::{
+    init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, RuntimeMode,
+    TelemetryExporterBuilder,
+};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
@@ -338,6 +338,12 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             }
         });
 
+    tracing_config
+        .rollout
+        .telemetry
+        .validate()
+        .map_err(BootstrapError::configuration)?;
+
     let telemetry = init_tracing(
         tracing_config,
         node_metadata.as_ref(),
@@ -441,16 +447,32 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         info!(address = %handle.address(), "node runtime started");
         info!(target = "rpc", listen = %config.rpc_listen, "rpc endpoint configured");
         if config.rollout.telemetry.enabled {
-            if let Some(endpoint) = &config.rollout.telemetry.endpoint {
+            let http_endpoint = config
+                .rollout
+                .telemetry
+                .http_endpoint
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(endpoint) = config
+                .rollout
+                .telemetry
+                .endpoint
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
                 info!(
                     target = "telemetry",
-                    endpoint = %endpoint,
+                    otlp_endpoint = %endpoint,
+                    http_endpoint,
                     sample_interval_secs = config.rollout.telemetry.sample_interval_secs,
-                    "telemetry endpoint configured"
+                    "telemetry endpoints configured"
                 );
             } else {
                 info!(
                     target = "telemetry",
+                    http_endpoint,
                     sample_interval_secs = config.rollout.telemetry.sample_interval_secs,
                     "telemetry enabled without explicit endpoint"
                 );
@@ -1108,8 +1130,10 @@ fn init_tracing(
         None => EnvFilter::new("info"),
     };
 
+    let telemetry_config = resolved_telemetry_config(config)?;
+
     let instance_id = resolve_instance_id(metadata, mode);
-    let redact_logs = config.rollout.telemetry.redact_logs;
+    let redact_logs = telemetry_config.redact_logs;
     let fmt_layer = || structured_log_layer(mode, config_source, &instance_id, redact_logs);
 
     if dry_run {
@@ -1131,6 +1155,9 @@ fn init_tracing(
             config_source = config_source
         );
         let _span_guard = telemetry_span.enter();
+        let metrics_endpoint = TelemetryExporterBuilder::new(&telemetry_config)
+            .http_endpoint()
+            .map(str::to_string);
         info!(
             target = "telemetry",
             service.name = "rpp",
@@ -1140,8 +1167,8 @@ fn init_tracing(
             instance.id = instance_id.as_str(),
             otlp_enabled = false,
             dry_run = true,
-            metrics_enabled = config.rollout.telemetry.enabled,
-            metrics_endpoint = config.rollout.telemetry.endpoint.as_deref(),
+            metrics_enabled = telemetry_config.enabled,
+            metrics_endpoint = metrics_endpoint.as_deref(),
             mode = mode.as_str(),
             config_source = config_source,
             "tracing initialised"
@@ -1151,21 +1178,16 @@ fn init_tracing(
 
     let resource = telemetry_resource(config, metadata, mode, config_source, &instance_id);
     let (runtime_metrics, metrics_guard) =
-        init_runtime_metrics(&config.rollout.telemetry, resource.clone())
+        init_runtime_metrics(&telemetry_config, resource.clone())
             .context("failed to initialise runtime metrics")?;
     let mut guard = OtelGuard::new(metrics_guard);
-    let metrics_endpoint = config
-        .rollout
-        .telemetry
-        .endpoint
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
+    let metrics_endpoint = TelemetryExporterBuilder::new(&telemetry_config)
+        .http_endpoint()
         .map(str::to_string);
     let metrics_endpoint_field = metrics_endpoint.as_deref();
-    let metrics_enabled = config.rollout.telemetry.enabled;
+    let metrics_enabled = telemetry_config.enabled;
 
-    match build_otlp_layer(config, resource)? {
+    match build_otlp_layer(&telemetry_config, resource)? {
         Some(OtlpLayer { layer, endpoint }) => {
             tracing_subscriber::registry()
                 .with(filter.clone())
@@ -1542,38 +1564,61 @@ struct OtlpLayer {
     endpoint: String,
 }
 
-struct OtlpSettings {
-    endpoint: String,
-    auth_header: Option<String>,
-    timeout: Duration,
+fn resolved_telemetry_config(config: &NodeConfig) -> Result<TelemetryConfig> {
+    let mut telemetry = config.rollout.telemetry.clone();
+
+    let endpoint_override = normalize_option(std::env::var("RPP_NODE_OTLP_ENDPOINT").ok());
+    let env_endpoint = normalize_option(std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok());
+
+    if let Some(endpoint) = endpoint_override.clone().or(env_endpoint.clone()) {
+        telemetry.endpoint = Some(endpoint);
+        telemetry.enabled = true;
+    }
+
+    if let Some(http_endpoint) = normalize_option(std::env::var("RPP_NODE_OTLP_HTTP_ENDPOINT").ok())
+    {
+        telemetry.http_endpoint = Some(http_endpoint);
+    }
+
+    if let Some(token) = normalize_option(std::env::var("RPP_NODE_OTLP_AUTH_TOKEN").ok()) {
+        telemetry.auth_token = Some(token);
+    }
+
+    if let Some(timeout) = std::env::var("RPP_NODE_OTLP_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        telemetry.timeout_ms = timeout;
+    }
+
+    telemetry.validate().map_err(|err| anyhow!(err))?;
+
+    Ok(telemetry)
 }
 
-fn build_otlp_layer(config: &NodeConfig, resource: Resource) -> Result<Option<OtlpLayer>> {
-    let Some(settings) = otlp_settings(config)? else {
+fn build_otlp_layer(telemetry: &TelemetryConfig, resource: Resource) -> Result<Option<OtlpLayer>> {
+    let builder = TelemetryExporterBuilder::new(telemetry);
+
+    let Some(exporter) = builder.build_span_exporter()? else {
+        if telemetry.enabled {
+            anyhow::bail!("telemetry endpoint required when OTLP is enabled");
+        }
         return Ok(None);
     };
 
-    let mut exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
-        .with_endpoint(settings.endpoint.clone())
-        .with_timeout(settings.timeout);
-
-    if let Some(header) = settings.auth_header.as_ref() {
-        let mut metadata = MetadataMap::new();
-        let value = MetadataValue::from_str(header)
-            .map_err(|err| anyhow!("invalid telemetry auth token: {err}"))?;
-        metadata.insert("authorization", value);
-        exporter = exporter.with_metadata(metadata);
-    }
-
-    let exporter = exporter.build_span_exporter()?;
-    let batch_config = BatchConfig::default()
-        .with_max_queue_size(2048)
-        .with_max_export_batch_size(512)
-        .with_max_export_timeout(settings.timeout);
+    let batch_config = builder.build_trace_batch_config();
+    let sampler = builder.trace_sampler();
+    let endpoint = builder
+        .grpc_endpoint()
+        .map(str::to_string)
+        .unwrap_or_default();
 
     let provider = trace::TracerProvider::builder()
-        .with_config(trace::Config::default().with_resource(resource))
+        .with_config(
+            trace::Config::default()
+                .with_resource(resource)
+                .with_sampler(sampler),
+        )
         .with_batch_config(batch_config)
         .with_batch_exporter(exporter, Tokio)
         .build();
@@ -1582,10 +1627,7 @@ fn build_otlp_layer(config: &NodeConfig, resource: Resource) -> Result<Option<Ot
     global::set_tracer_provider(provider);
 
     let layer = tracing_opentelemetry::layer().with_tracer(tracer);
-    Ok(Some(OtlpLayer {
-        layer,
-        endpoint: settings.endpoint,
-    }))
+    Ok(Some(OtlpLayer { layer, endpoint }))
 }
 
 fn telemetry_resource(
@@ -1630,47 +1672,6 @@ fn telemetry_resource(
     }
 
     Resource::new(attributes)
-}
-
-fn otlp_settings(config: &NodeConfig) -> Result<Option<OtlpSettings>> {
-    let telemetry = &config.rollout.telemetry;
-
-    let endpoint_override = normalize_option(std::env::var("RPP_NODE_OTLP_ENDPOINT").ok());
-    let env_endpoint = normalize_option(std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok());
-    let endpoint = endpoint_override
-        .clone()
-        .or_else(|| normalize_option(telemetry.endpoint.clone()))
-        .or(env_endpoint.clone());
-
-    let telemetry_enabled =
-        telemetry.enabled || endpoint_override.is_some() || env_endpoint.is_some();
-
-    let Some(endpoint) = endpoint else {
-        if telemetry_enabled {
-            anyhow::bail!("telemetry endpoint required when OTLP is enabled");
-        }
-        return Ok(None);
-    };
-
-    let auth_header = normalize_option(std::env::var("RPP_NODE_OTLP_AUTH_TOKEN").ok())
-        .or_else(|| normalize_option(telemetry.auth_token.clone()))
-        .map(
-            |token| match token.to_ascii_lowercase().starts_with("bearer ") {
-                true => token,
-                false => format!("Bearer {token}"),
-            },
-        );
-
-    let timeout_ms = std::env::var("RPP_NODE_OTLP_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(telemetry.timeout_ms);
-
-    Ok(Some(OtlpSettings {
-        endpoint,
-        auth_header,
-        timeout: Duration::from_millis(timeout_ms),
-    }))
 }
 
 fn normalize_option(value: Option<String>) -> Option<String> {

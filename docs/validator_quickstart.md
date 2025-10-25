@@ -78,7 +78,18 @@ witness_network = false
 [rollout.telemetry]
 enabled = true
 endpoint = "https://telemetry.example.com:4317"
+http_endpoint = "https://telemetry.example.com/v1/metrics"
+trace_max_queue_size = 4096
+trace_max_export_batch_size = 1024
+trace_sample_ratio = 0.5
+warn_on_drop = true
 sample_interval_secs = 15
+
+[rollout.telemetry.grpc_tls]
+ca_certificate = "/etc/rpp/telemetry/collector-ca.pem"
+
+[rollout.telemetry.http_tls]
+ca_certificate = "/etc/rpp/telemetry/collector-ca.pem"
 
 [p2p]
 bootstrap_peers = ["/dns/bootnode.example.com/tcp/7600/p2p/12D3Koo..."]
@@ -101,10 +112,17 @@ Key tips while editing the configuration:
   and `witness_network` disabled until their circuits are deployed, but leave
   the base proof and pruning gates enabled so block production succeeds.
 - **Telemetry (node runtime):** Enabling `rollout.telemetry.enabled` without
-  providing an `endpoint` keeps telemetry in structured logs. Set `endpoint`
-  (or pass `--telemetry-endpoint` to the binary) to push snapshots to your
-  collector. A shorter `sample_interval_secs` increases metric freshness at the
-  cost of more network traffic.【F:config/validator.toml†L45-L59】【F:rpp/node/src/lib.rs†L35-L111】
+  providing an OTLP endpoint keeps telemetry in structured logs. Set both
+  `endpoint` (for gRPC traces) and `http_endpoint` (for OTLP/HTTP metrics) or
+  pass the corresponding CLI flags so exporters connect to your collector.
+  Tune `trace_max_queue_size`/`trace_max_export_batch_size` to match the
+  collector's throughput and adjust `trace_sample_ratio` if you only need a
+  fraction of spans. When `warn_on_drop` is true, the node emits warnings if the
+  queue overflows so you can react before data is lost. TLS credentials go in
+  the nested `grpc_tls` and `http_tls` tables; at minimum set
+  `ca_certificate` to trust your collector's certificates. A shorter
+  `sample_interval_secs` increases metric freshness at the cost of more network
+  traffic.【F:rpp/runtime/config.rs†L1632-L1721】【F:rpp/runtime/telemetry/exporter.rs†L21-L210】
 - **Telemetry (wallet runtime):** Hybrid and validator wallets enable telemetry
   caches and tracker emission by default. When running the wallet runtime in
   isolation, either keep the defaults or point `electrs.cache.telemetry` and

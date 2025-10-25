@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,11 +13,11 @@ use firewood_storage::{
 use http::StatusCode;
 use opentelemetry::metrics::{Counter, Histogram, Meter};
 use opentelemetry::KeyValue;
-use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
 
 use crate::config::TelemetryConfig;
+use super::exporter::TelemetryExporterBuilder;
 
 const METER_NAME: &str = "rpp-runtime";
 const MILLIS_PER_SECOND: f64 = 1_000.0;
@@ -34,32 +33,24 @@ pub fn init_runtime_metrics(
     let mut provider_builder = SdkMeterProvider::builder().with_resource(resource);
 
     if config.enabled {
-        let mut exporter_builder = opentelemetry_otlp::MetricExporter::builder().with_http();
-
-        if let Some(endpoint) = config.endpoint.as_ref().filter(|value| !value.is_empty()) {
-            exporter_builder = exporter_builder.with_endpoint(endpoint.clone());
+        let exporter_builder = TelemetryExporterBuilder::new(config);
+        match exporter_builder.build_metric_exporter()? {
+            Some(exporter) => {
+                let interval = Duration::from_secs(config.sample_interval_secs.max(1));
+                let reader = PeriodicReader::builder(exporter)
+                    .with_interval(interval)
+                    .build();
+                provider_builder = provider_builder.with_reader(reader);
+            }
+            None => {
+                if config.warn_on_drop {
+                    warn!(
+                        target = "telemetry",
+                        "telemetry metrics exporter disabled due to missing OTLP/HTTP endpoint; metrics will only be logged"
+                    );
+                }
+            }
         }
-
-        let timeout = Duration::from_millis(config.timeout_ms.max(1));
-        exporter_builder = exporter_builder.with_timeout(timeout);
-
-        if let Some(token) = config.auth_token.as_ref().filter(|value| !value.is_empty()) {
-            let mut headers = HashMap::new();
-            headers.insert("Authorization".to_string(), format!("Bearer {token}"));
-            exporter_builder = exporter_builder.with_headers(headers);
-        }
-
-        exporter_builder = exporter_builder.with_temporality(Temporality::Cumulative);
-
-        let exporter = exporter_builder
-            .build()
-            .context("failed to build OTLP metrics exporter")?;
-
-        let interval = Duration::from_secs(config.sample_interval_secs.max(1));
-        let reader = PeriodicReader::builder(exporter)
-            .with_interval(interval)
-            .build();
-        provider_builder = provider_builder.with_reader(reader);
     }
 
     let provider = provider_builder.build();
@@ -1008,6 +999,7 @@ mod tests {
     use super::*;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MetricError};
     use std::collections::{HashMap, HashSet};
+    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn registers_runtime_metrics_instruments() -> std::result::Result<(), MetricError> {
@@ -1209,5 +1201,80 @@ mod tests {
         assert!(seen.contains("rpp.runtime.storage.wal_flush.duration"));
 
         Ok(())
+    }
+
+    #[test]
+    fn metrics_missing_endpoint_emits_warning() {
+        struct TestLogger {
+            records: Mutex<Vec<String>>,
+        }
+
+        impl TestLogger {
+            fn new() -> Self {
+                Self {
+                    records: Mutex::new(Vec::new()),
+                }
+            }
+
+            fn clear(&self) {
+                self.records.lock().expect("logger mutex").clear();
+            }
+
+            fn take(&self) -> Vec<String> {
+                self.records
+                    .lock()
+                    .expect("logger mutex")
+                    .drain(..)
+                    .collect()
+            }
+        }
+
+        impl log::Log for TestLogger {
+            fn enabled(&self, metadata: &log::Metadata) -> bool {
+                metadata.level() <= log::Level::Warn
+            }
+
+            fn log(&self, record: &log::Record) {
+                if self.enabled(record.metadata()) {
+                    self.records
+                        .lock()
+                        .expect("logger mutex")
+                        .push(format!("{}", record.args()));
+                }
+            }
+
+            fn flush(&self) {}
+        }
+
+        fn ensure_logger() -> &'static TestLogger {
+            static LOGGER: OnceLock<&'static TestLogger> = OnceLock::new();
+            LOGGER.get_or_init(|| {
+                let logger = Box::leak(Box::new(TestLogger::new()));
+                if log::set_logger(logger).is_ok() {
+                    log::set_max_level(log::LevelFilter::Warn);
+                }
+                logger
+            })
+        }
+
+        let logger = ensure_logger();
+        logger.clear();
+
+        let mut config = TelemetryConfig::default();
+        config.enabled = true;
+        config.warn_on_drop = true;
+
+        let resource = Resource::new(Vec::new());
+        let (_metrics, mut guard) =
+            init_runtime_metrics(&config, resource).expect("init metrics without exporter");
+        guard.flush_and_shutdown();
+
+        let warnings = logger.take();
+        assert!(
+            warnings
+                .iter()
+                .any(|entry| entry.contains("telemetry metrics exporter disabled")),
+            "expected warning about missing OTLP/HTTP endpoint, got {warnings:?}"
+        );
     }
 }
