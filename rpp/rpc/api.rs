@@ -45,15 +45,17 @@ use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, DEFAULT_STATE_SYNC_CHUNK,
-    MempoolStatus, NodeHandle, NodeStatus, NodeTelemetrySnapshot, P2pCensorshipReport,
-    PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
-    UptimeSchedulerStatus, VrfStatus, VrfThresholdStatus,
+    MempoolStatus, NodeHandle, NodeStatus, P2pCensorshipReport, PendingUptimeSummary,
+    PruningJobStatus, RolloutStatus, UptimeSchedulerRun, UptimeSchedulerStatus, VrfStatus,
+    VrfThresholdStatus, ValidatorConsensusTelemetry, ValidatorMempoolTelemetry,
+    ValidatorTelemetryView,
 };
 use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
     PipelineTelemetrySummary,
 };
-use crate::reputation::Tier;
+use crate::proof_system::VerifierMetricsSnapshot;
+use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
 use crate::runtime::RuntimeMode;
 use crate::runtime::config::{
@@ -525,9 +527,15 @@ struct ValidatorVrfResponse {
 
 #[derive(Serialize)]
 struct ValidatorTelemetryResponse {
-    local_peer_id: String,
-    peer_count: usize,
-    peers: Vec<NetworkPeerTelemetry>,
+    rollout: RolloutStatus,
+    node: NodeStatus,
+    consensus: ValidatorConsensusTelemetry,
+    mempool: ValidatorMempoolTelemetry,
+    timetoke_params: TimetokeParams,
+    verifier_metrics: VerifierMetricsSnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pruning: Option<PruningJobStatus>,
+    vrf_threshold: VrfThresholdStatus,
 }
 
 #[derive(Serialize)]
@@ -1259,16 +1267,19 @@ async fn validator_telemetry(
     State(state): State<ApiContext>,
 ) -> Result<Json<ValidatorTelemetryResponse>, (StatusCode, Json<ErrorResponse>)> {
     state.ensure_validator_tier(Tier::Tl0)?;
-    let report = state
+    let snapshot = state
         .require_node()?
-        .meta_telemetry_snapshot()
-        .await
+        .validator_telemetry()
         .map_err(to_http_error)?;
-    let network = NetworkMetaTelemetryReport::from(&report);
     Ok(Json(ValidatorTelemetryResponse {
-        local_peer_id: network.local_peer_id,
-        peer_count: network.peer_count,
-        peers: network.peers,
+        rollout: snapshot.rollout,
+        node: snapshot.node,
+        consensus: snapshot.consensus,
+        mempool: snapshot.mempool,
+        timetoke_params: snapshot.timetoke_params,
+        verifier_metrics: snapshot.verifier_metrics,
+        pruning: snapshot.pruning,
+        vrf_threshold: snapshot.vrf_threshold,
     }))
 }
 

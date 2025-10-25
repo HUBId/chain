@@ -188,10 +188,19 @@ async fn validator_rpc_and_cli_tooling() -> Result<()> {
         .context("decode validator telemetry response")?;
     assert!(
         telemetry_payload
-            .get("peer_count")
+            .get("node")
+            .and_then(|value| value.get("height"))
             .and_then(|value| value.as_u64())
             .is_some(),
-        "telemetry payload missing peer_count"
+        "telemetry payload missing node height"
+    );
+    assert!(
+        telemetry_payload
+            .get("mempool")
+            .and_then(|value| value.get("uptime_proofs"))
+            .and_then(|value| value.as_u64())
+            .is_some(),
+        "telemetry payload missing mempool uptime proofs"
     );
 
     let cli_output = tokio::task::spawn_blocking({
@@ -212,10 +221,11 @@ async fn validator_rpc_and_cli_tooling() -> Result<()> {
         serde_json::from_str(cli_output.trim()).context("decode telemetry CLI JSON")?;
     assert!(
         cli_payload
-            .get("peer_count")
+            .get("consensus")
+            .and_then(|value| value.get("leader_changes"))
             .and_then(|value| value.as_u64())
             .is_some(),
-        "CLI telemetry payload missing peer_count"
+        "CLI telemetry payload missing consensus leader changes"
     );
 
     rpc_task.abort();

@@ -1,12 +1,20 @@
 import { render, screen } from '@testing-library/react';
 import { TelemetryPanel } from '../TelemetryPanel';
-import type { NodeTelemetrySnapshot } from '../../types';
+import type { ValidatorTelemetryResponse } from '../../types';
 
 describe('TelemetryPanel', () => {
   it('renders telemetry highlights', () => {
-    const telemetry: NodeTelemetrySnapshot = {
-      release_channel: 'stable',
-      feature_gates: {},
+    const telemetry: ValidatorTelemetryResponse = {
+      rollout: {
+        release_channel: 'stable',
+        feature_gates: {},
+        telemetry: {
+          enabled: true,
+          endpoint: 'https://example.com/telemetry',
+          sample_interval_secs: 60,
+          last_observed_height: 2048,
+        },
+      },
       node: {
         address: 'rpp1node',
         height: 2048,
@@ -35,35 +43,26 @@ describe('TelemetryPanel', () => {
       },
       consensus: {
         height: 2048,
-        block_hash: '0xabc',
-        proposer: 'rpp1validator',
         round: 4,
-        total_power: '1000',
-        quorum_threshold: '667',
-        pre_vote_power: '900',
-        pre_commit_power: '850',
-        commit_power: '880',
-        quorum_reached: true,
-        observers: 3,
-        epoch: 12,
-        epoch_nonce: '0xabc',
         pending_votes: 0,
-        round_latencies_ms: [],
+        quorum_reached: true,
         leader_changes: 2,
+        round_latencies_ms: [],
         quorum_latency_ms: 100,
         witness_events: 1,
         slashing_events: 0,
         failed_votes: 0,
       },
       mempool: {
-        transactions: [],
-        identities: [],
-        votes: [],
-        uptime_proofs: [],
+        transactions: 0,
+        identities: 0,
+        votes: 0,
+        uptime_proofs: 0,
       },
       timetoke_params: {},
       verifier_metrics: {},
       pruning: null,
+      vrf_threshold: {},
     };
 
     render(<TelemetryPanel telemetry={telemetry} />);

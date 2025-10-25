@@ -368,16 +368,67 @@ pub struct PruningJobStatus {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct NodeTelemetrySnapshot {
-    pub release_channel: ReleaseChannel,
-    pub feature_gates: FeatureGates,
+pub struct ValidatorTelemetryView {
+    pub rollout: RolloutStatus,
     pub node: NodeStatus,
-    pub consensus: ConsensusStatus,
-    pub mempool: MempoolStatus,
+    pub consensus: ValidatorConsensusTelemetry,
+    pub mempool: ValidatorMempoolTelemetry,
     pub timetoke_params: TimetokeParams,
     pub verifier_metrics: VerifierMetricsSnapshot,
     pub pruning: Option<PruningJobStatus>,
     pub vrf_threshold: VrfThresholdStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ValidatorConsensusTelemetry {
+    pub height: u64,
+    pub round: u64,
+    pub pending_votes: usize,
+    pub quorum_reached: bool,
+    pub leader_changes: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub round_latencies_ms: Vec<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quorum_latency_ms: Option<u64>,
+    pub witness_events: u64,
+    pub slashing_events: u64,
+    pub failed_votes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ValidatorMempoolTelemetry {
+    pub transactions: usize,
+    pub identities: usize,
+    pub votes: usize,
+    pub uptime_proofs: usize,
+}
+
+impl From<ConsensusStatus> for ValidatorConsensusTelemetry {
+    fn from(status: ConsensusStatus) -> Self {
+        Self {
+            height: status.height,
+            round: status.round,
+            pending_votes: status.pending_votes,
+            quorum_reached: status.quorum_reached,
+            leader_changes: status.leader_changes,
+            round_latencies_ms: status.round_latencies_ms,
+            quorum_latency_ms: status.quorum_latency_ms,
+            witness_events: status.witness_events,
+            slashing_events: status.slashing_events,
+            failed_votes: status.failed_votes,
+        }
+    }
+}
+
+impl From<&NodeStatus> for ValidatorMempoolTelemetry {
+    fn from(status: &NodeStatus) -> Self {
+        Self {
+            transactions: status.pending_transactions,
+            identities: status.pending_identities,
+            votes: status.pending_votes,
+            uptime_proofs: status.pending_uptime_proofs,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2030,8 +2081,8 @@ impl NodeHandle {
         self.inner.block_proofs(height)
     }
 
-    pub fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
-        self.inner.telemetry_snapshot()
+    pub fn validator_telemetry(&self) -> ChainResult<ValidatorTelemetryView> {
+        self.inner.validator_telemetry()
     }
 
     pub async fn meta_telemetry_snapshot(&self) -> ChainResult<MetaTelemetryReport> {
@@ -2803,14 +2854,15 @@ impl NodeInner {
         let _ = self.shutdown.send(());
     }
 
-    fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
+    fn validator_telemetry(&self) -> ChainResult<ValidatorTelemetryView> {
+        let rollout = self.rollout_status();
         let node = self.node_status()?;
-        let consensus = self.consensus_status()?;
-        let mempool = self.mempool_status()?;
+        let consensus = ValidatorConsensusTelemetry::from(self.consensus_status()?);
+        let mempool = ValidatorMempoolTelemetry::from(&node);
         let verifier_metrics = self.verifiers.metrics_snapshot();
-        Ok(NodeTelemetrySnapshot {
-            release_channel: self.config.rollout.release_channel,
-            feature_gates: self.config.rollout.feature_gates.clone(),
+
+        Ok(ValidatorTelemetryView {
+            rollout,
             node,
             consensus,
             mempool,

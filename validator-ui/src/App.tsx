@@ -6,10 +6,10 @@ import { ProofQueuePanel } from './components/ProofQueuePanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
 import { useApiData } from './hooks/useApiData';
 import type {
-  NodeTelemetrySnapshot,
   ValidatorPeerResponse,
   ValidatorProofQueueResponse,
   ValidatorStatusResponse,
+  ValidatorTelemetryResponse,
 } from './types';
 
 function LoadingCard({ title }: { title: string }) {
@@ -35,7 +35,7 @@ export default function App() {
   const status = useApiData<ValidatorStatusResponse>('/validator/status');
   const proofs = useApiData<ValidatorProofQueueResponse>('/validator/proofs');
   const peers = useApiData<ValidatorPeerResponse>('/validator/peers');
-  const telemetry = useApiData<NodeTelemetrySnapshot>('/validator/telemetry');
+  const telemetry = useApiData<ValidatorTelemetryResponse>('/validator/telemetry');
 
   return (
     <main className="dashboard">

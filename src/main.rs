@@ -573,11 +573,11 @@ async fn validator_daemon(
                     Err(err) => warn!(?err, "failed to generate validator uptime proof"),
                 }
 
-                match node.telemetry_snapshot() {
+                match node.validator_telemetry() {
                     Ok(snapshot) => {
                         info!(
                             height = snapshot.node.height,
-                            pending_txs = snapshot.mempool.transactions.len(),
+                            pending_txs = snapshot.mempool.transactions,
                             "validator telemetry snapshot"
                         );
                     }

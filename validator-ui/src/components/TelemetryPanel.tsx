@@ -1,7 +1,7 @@
-import type { NodeTelemetrySnapshot } from '../types';
+import type { ValidatorTelemetryResponse } from '../types';
 
 interface TelemetryPanelProps {
-  telemetry: NodeTelemetrySnapshot;
+  telemetry: ValidatorTelemetryResponse;
 }
 
 export function TelemetryPanel({ telemetry }: TelemetryPanelProps) {
@@ -11,7 +11,7 @@ export function TelemetryPanel({ telemetry }: TelemetryPanelProps) {
       <div className="stat-grid">
         <div className="stat">
           <span>Release channel</span>
-          <span>{telemetry.release_channel}</span>
+          <span>{telemetry.rollout.release_channel}</span>
         </div>
         <div className="stat">
           <span>Validator height</span>
@@ -23,7 +23,7 @@ export function TelemetryPanel({ telemetry }: TelemetryPanelProps) {
         </div>
         <div className="stat">
           <span>Pending uptime proofs</span>
-          <span>{telemetry.mempool.uptime_proofs.length}</span>
+          <span>{telemetry.mempool.uptime_proofs}</span>
         </div>
       </div>
     </section>

@@ -105,7 +105,7 @@ The endpoints return structured JSON documented under `docs/interfaces/rpc/`:
 | ----- | ------ | ----------- |
 | `/validator/vrf` | `GET` | Returns the backend, identifier, and public key if one is present.【F:rpp/rpc/api.rs†L905-L914】【F:docs/interfaces/rpc/validator_vrf_response.jsonschema†L1-L19】 |
 | `/validator/vrf/rotate` | `POST` | Generates a fresh VRF keypair, stores it via the configured secrets backend, and returns the same payload as the `GET` endpoint.【F:rpp/rpc/api.rs†L916-L926】【F:docs/interfaces/rpc/validator_vrf_rotate_response.jsonschema†L1-L19】 |
-| `/validator/telemetry` | `GET` | Produces a meta telemetry report (local peer ID, peer count, and the observed peers with latency metrics).【F:rpp/rpc/api.rs†L900-L904】【F:docs/interfaces/rpc/validator_telemetry_response.jsonschema†L1-L22】 |
+| `/validator/telemetry` | `GET` | Aggregates rollout, node, consensus, and mempool telemetry for operator dashboards.【F:rpp/rpc/api.rs†L1246-L1271】【F:docs/interfaces/rpc/validator_telemetry_response.jsonschema†L1-L104】 |
 | `/state-sync/head` | `GET` | Returns the latest verified light-client head. The streaming variant at `/state-sync/head/stream` emits the same payload as SSE events.【F:rpp/rpc/api.rs†L79-L117】【F:docs/interfaces/rpc/state_sync_head_response.jsonschema†L1-L38】 |
 | `/state-sync/chunk/:id` | `GET` | Retrieves a specific snapshot chunk for the active state-sync session. Chunk indices must be in-range for the advertised session metadata.【F:rpp/rpc/api.rs†L1139-L1180】【F:docs/interfaces/rpc/state_sync_chunk_response.jsonschema†L1-L35】 |
 
@@ -118,8 +118,8 @@ curl -s http://127.0.0.1:7070/validator/vrf | jq
 # Rotate the VRF key; errors propagate as JSON (403 if tier gating fails)
 curl -sX POST http://127.0.0.1:7070/validator/vrf/rotate | jq
 
-# Inspect gossip telemetry for neighbouring peers
-curl -s http://127.0.0.1:7070/validator/telemetry | jq '.peers[] | {peer, latency_ms}'
+# Inspect validator telemetry highlights
+curl -s http://127.0.0.1:7070/validator/telemetry | jq '{height: .node.height, uptime: .mempool.uptime_proofs}'
 ```
 
 When a request violates the auth policy the server responds with HTTP 403 and a
