@@ -662,6 +662,7 @@ mod tests {
     use super::*;
     use crate::area_index;
     use crate::linear::memory::MemStore;
+    use crate::noop_storage_metrics;
     use rand::seq::IteratorRandom;
     use test_case::test_case;
     use test_utils::{test_write_free_area, test_write_header};
@@ -688,7 +689,8 @@ mod tests {
     fn free_list_iterator() {
         let mut rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_index_type = AreaIndex::try_from(area_index).unwrap();
@@ -743,7 +745,8 @@ mod tests {
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -869,7 +872,8 @@ mod tests {
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore =
+            NodeStore::new_empty_committed(memstore.into(), noop_storage_metrics()).unwrap();
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;

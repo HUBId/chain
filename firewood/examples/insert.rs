@@ -14,6 +14,7 @@ use std::time::Instant;
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
 use firewood::v2::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
+use firewood_storage::noop_storage_metrics;
 use rand::{Rng, distr::Alphanumeric};
 
 #[derive(Parser, Debug)]
@@ -62,7 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new("rev_db", cfg).expect("db initiation should succeed");
+    let db = Db::new("rev_db", cfg, noop_storage_metrics()).expect("db initiation should succeed");
 
     let keys = args.batch_size;
     let start = Instant::now();

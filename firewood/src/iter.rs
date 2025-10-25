@@ -562,14 +562,16 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 mod tests {
     use super::*;
     use crate::merkle::Merkle;
-    use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
+    use firewood_storage::{
+        ImmutableProposal, MemStore, MutableProposal, NodeStore, noop_storage_metrics,
+    };
     use std::sync::Arc;
     use test_case::test_case;
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
         let memstore = Arc::new(memstore);
-        let nodestore = NodeStore::new_empty_proposal(memstore);
+        let nodestore = NodeStore::new_empty_proposal(memstore, noop_storage_metrics());
         Merkle::from(nodestore)
     }
 

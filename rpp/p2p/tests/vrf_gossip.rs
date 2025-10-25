@@ -1,4 +1,6 @@
-use rpp_chain::runtime::vrf_gossip::{gossip_to_submission, submission_to_gossip, verify_submission};
+use rpp_chain::runtime::vrf_gossip::{
+    gossip_to_submission, submission_to_gossip, verify_submission,
+};
 use rpp_chain::vrf::{
     generate_vrf, generate_vrf_keypair, PoseidonVrfInput, Tier, VrfProof, VrfSubmission,
 };

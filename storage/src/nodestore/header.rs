@@ -331,7 +331,8 @@ mod tests {
     #[test]
     fn test_node_store_new() {
         let memstore = MemStore::new(vec![]);
-        let node_store = NodeStore::new_empty_proposal(memstore.into());
+        let node_store =
+            NodeStore::new_empty_proposal(memstore.into(), crate::noop_storage_metrics());
 
         // Check the empty header is written at the start of the ReadableStorage.
         let mut header_stream = node_store.storage.stream_from(0).unwrap();

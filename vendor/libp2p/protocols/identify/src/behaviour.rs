@@ -728,4 +728,3 @@ impl KeyType {
         }
     }
 }
-

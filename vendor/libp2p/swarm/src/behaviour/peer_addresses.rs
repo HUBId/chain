@@ -92,4 +92,3 @@ impl Default for PeerAddresses {
         Self(LruCache::new(100))
     }
 }
-

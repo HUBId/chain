@@ -207,4 +207,3 @@ impl SecretKey {
         self.0
     }
 }
-

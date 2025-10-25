@@ -5,6 +5,7 @@ use clap::Args;
 
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api::{self, Db as _};
+use firewood_storage::noop_storage_metrics;
 
 use crate::DatabasePath;
 
@@ -17,7 +18,11 @@ pub struct Options {
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = Db::new(
+        opts.database.dbpath.clone(),
+        cfg.build(),
+        noop_storage_metrics(),
+    )?;
 
     let hash = db.root_hash()?;
 

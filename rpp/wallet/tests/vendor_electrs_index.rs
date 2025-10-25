@@ -1,26 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use rpp_wallet::vendor::electrs::chain::Chain;
-use rpp_wallet::vendor::electrs::db::{Db, WriteBatch};
-use rpp_wallet::vendor::electrs::index::Index;
-use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::blockdata::block::Header;
-use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, Network, OutPoint, Script, Txid};
-use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp_wallet::vendor::electrs::status::ScriptHashStatus;
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp_wallet::vendor::electrs::tracker::Tracker;
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp_wallet::vendor::electrs::types::{
-    encode_ledger_script, encode_transaction_metadata, LedgerScriptPayload, RppStarkProofAudit,
-    RppStarkReportSummary, ScriptHash, StoredTransactionMetadata, StoredVrfAudit,
-    VrfInputDescriptor, VrfOutputDescriptor,
-};
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp_wallet::vendor::electrs::types::{bsl_txid, StatusDigest};
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp_wallet::vendor::electrs::types::HistoryEntryWithMetadata;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::proofs::rpp::{
     encode_transaction_witness, AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness,
@@ -31,19 +11,41 @@ use rpp::runtime::config::QueueWeightsConfig;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::runtime::node::{MempoolStatus, PendingTransactionSummary};
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp::runtime::types::proofs::RppStarkProof;
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::runtime::types::proofs::ChainProof;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp::runtime::types::proofs::RppStarkProof;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp::runtime::types::SignedTransaction;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::storage::state::utxo::StoredUtxo;
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use rpp::zk::rpp_adapter::{compute_public_digest, Digest32, RppStarkHasher};
+use rpp_wallet::vendor::electrs::chain::Chain;
+use rpp_wallet::vendor::electrs::db::{Db, WriteBatch};
+use rpp_wallet::vendor::electrs::index::Index;
+use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::blockdata::block::Header;
+use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::{
+    BlockHash, Network, OutPoint, Script, Txid,
+};
+use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp_wallet::vendor::electrs::status::ScriptHashStatus;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp_wallet::vendor::electrs::tracker::Tracker;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp_wallet::vendor::electrs::types::HistoryEntryWithMetadata;
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp_wallet::vendor::electrs::types::{bsl_txid, StatusDigest};
+#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
+use rpp_wallet::vendor::electrs::types::{
+    encode_ledger_script, encode_transaction_metadata, LedgerScriptPayload, RppStarkProofAudit,
+    RppStarkReportSummary, ScriptHash, StoredTransactionMetadata, StoredVrfAudit,
+    VrfInputDescriptor, VrfOutputDescriptor,
+};
 #[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
 use uuid::Uuid;
-#[cfg(all(feature = "backend-rpp-stark", feature = "vendor_electrs"))]
-use rpp::runtime::types::SignedTransaction;
 
 fn temp_path(name: &str) -> PathBuf {
     let mut dir = std::env::temp_dir();
@@ -78,10 +80,14 @@ fn wallet_sample_transaction_witness(
     fee: u64,
 ) -> TransactionWitness {
     let recipient_snapshot = TransactionUtxoSnapshot::new(
-        UtxoOutpoint { tx_id, index: utxo_index },
+        UtxoOutpoint {
+            tx_id,
+            index: utxo_index,
+        },
         StoredUtxo::new(recipient.to_string(), amount),
     );
-    let sender_before = AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
+    let sender_before =
+        AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
     let sender_after = AccountBalanceWitness::new("sender".to_string(), u128::from(fee), 2);
     let recipient_before = Some(AccountBalanceWitness::new(recipient.to_string(), 0, 0));
     let recipient_after = AccountBalanceWitness::new(recipient.to_string(), amount, 1);
@@ -181,7 +187,11 @@ fn tracker_exports_rpp_stark_metadata() {
         to: recipient.to_string(),
         amount,
     }));
-    let tx = Transaction::new(vec![OutPoint::new(Txid([0x22; 32]), 0)], vec![script.clone()], Vec::new());
+    let tx = Transaction::new(
+        vec![OutPoint::new(Txid([0x22; 32]), 0)],
+        vec![script.clone()],
+        Vec::new(),
+    );
     let txid = bsl_txid(&tx);
     let mut txid_bytes = [0u8; 32];
     txid_bytes.copy_from_slice(txid.as_bytes());
@@ -221,14 +231,8 @@ fn tracker_exports_rpp_stark_metadata() {
         },
     };
 
-    let runtime_tx = RuntimeTransaction::new(
-        "sender".into(),
-        recipient.into(),
-        amount,
-        fee,
-        42,
-        None,
-    );
+    let runtime_tx =
+        RuntimeTransaction::new("sender".into(), recipient.into(), amount, fee, 42, None);
     let signed = SignedTransaction {
         id: Uuid::nil(),
         payload: runtime_tx,

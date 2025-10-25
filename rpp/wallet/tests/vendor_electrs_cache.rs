@@ -73,9 +73,13 @@ fn cache_warmup_roundtrip_via_firewood() {
     assert_eq!(persisted, 2);
 
     let persist_metrics = cache.telemetry().snapshot();
-    let expected_total = serialize_transaction(&tx_one).len() + serialize_transaction(&tx_two).len();
+    let expected_total =
+        serialize_transaction(&tx_one).len() + serialize_transaction(&tx_two).len();
     assert_eq!(persist_metrics.warmup_persisted, 2);
-    assert_eq!(persist_metrics.warmup_persisted_bytes, expected_total as u64);
+    assert_eq!(
+        persist_metrics.warmup_persisted_bytes,
+        expected_total as u64
+    );
 
     drop(store);
     let store = FirewoodAdapter::open(&dir).expect("reopen firewood");

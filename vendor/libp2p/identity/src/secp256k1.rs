@@ -233,4 +233,3 @@ impl PublicKey {
             .map(PublicKey)
     }
 }
-

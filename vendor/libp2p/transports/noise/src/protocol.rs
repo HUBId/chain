@@ -290,4 +290,3 @@ impl snow::types::Dh for Keypair {
         Ok(())
     }
 }
-

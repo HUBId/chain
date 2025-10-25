@@ -17,7 +17,8 @@ use crate::v2::api::{
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, NodeStore, Parentable, ReadableStorage, StorageMetricsHandle, TrieReader,
+    noop_storage_metrics,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -180,8 +181,12 @@ impl api::Db for Db {
 
 impl Db {
     /// Create a new database instance.
-    pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        let metrics = Arc::new(DbMetrics {
+    pub fn new<P: AsRef<Path>>(
+        db_path: P,
+        cfg: DbConfig,
+        storage_metrics: StorageMetricsHandle,
+    ) -> Result<Self, api::Error> {
+        let db_metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });
         describe_counter!("firewood.proposals", "Number of proposals created");
@@ -190,8 +195,15 @@ impl Db {
             .truncate(cfg.truncate)
             .manager(cfg.manager)
             .build();
-        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        let db = Self { metrics, manager };
+        let manager = RevisionManager::new(
+            db_path.as_ref().to_path_buf(),
+            config_manager,
+            storage_metrics,
+        )?;
+        let db = Self {
+            metrics: db_metrics,
+            manager,
+        };
         Ok(db)
     }
 
@@ -789,7 +801,7 @@ mod test {
             .iter()
             .collect();
         let dbconfig = DbConfig::builder().build();
-        let db = Db::new(dbpath, dbconfig).unwrap();
+        let db = Db::new(dbpath, dbconfig, noop_storage_metrics()).unwrap();
         TestDb { db, tmpdir }
     }
 
@@ -804,7 +816,7 @@ mod test {
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(false).build();
 
-            let db = Db::new(path, dbconfig).unwrap();
+            let db = Db::new(path, dbconfig, noop_storage_metrics()).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
@@ -815,7 +827,7 @@ mod test {
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(true).build();
 
-            let db = Db::new(path, dbconfig).unwrap();
+            let db = Db::new(path, dbconfig, noop_storage_metrics()).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,

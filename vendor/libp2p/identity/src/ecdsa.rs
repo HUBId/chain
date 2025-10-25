@@ -265,4 +265,3 @@ impl hash::Hash for PublicKey {
         self.to_bytes().hash(state);
     }
 }
-

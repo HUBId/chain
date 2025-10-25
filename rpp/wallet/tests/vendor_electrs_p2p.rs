@@ -21,7 +21,11 @@ fn connection_streams_headers_and_blocks() -> Result<()> {
     let chain = Chain::new(Network::Regtest);
 
     let headers = connection.get_new_headers(&chain)?;
-    assert_eq!(headers.len(), 2, "runtime exposes two headers above genesis");
+    assert_eq!(
+        headers.len(),
+        2,
+        "runtime exposes two headers above genesis"
+    );
 
     let mut seen = false;
     let expected_block: SerBlock = context.expected_block_bytes.clone();

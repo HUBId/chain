@@ -31,12 +31,13 @@ use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::blockdata::block::Header;
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, OutPoint, Script, Txid};
 use rpp_wallet::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction;
 use rpp_wallet::vendor::electrs::status::ScriptHashStatus;
-use rpp_wallet::vendor::electrs::types::{
-    bsl_txid, encode_ledger_memo, encode_ledger_script, encode_transaction_metadata, LedgerMemoPayload,
-    LedgerScriptPayload, RppStarkProofAudit, RppStarkReportSummary, ScriptHash, StatusDigest,
-    StoredTransactionMetadata, StoredVrfAudit, VrfInputDescriptor, VrfOutputDescriptor,
-};
 use rpp_wallet::vendor::electrs::types::HistoryEntryWithMetadata;
+use rpp_wallet::vendor::electrs::types::{
+    bsl_txid, encode_ledger_memo, encode_ledger_script, encode_transaction_metadata,
+    LedgerMemoPayload, LedgerScriptPayload, RppStarkProofAudit, RppStarkReportSummary, ScriptHash,
+    StatusDigest, StoredTransactionMetadata, StoredVrfAudit, VrfInputDescriptor,
+    VrfOutputDescriptor,
+};
 
 use rpp::runtime::types::proofs::RppStarkProof;
 
@@ -105,14 +106,18 @@ fn vendor_electrs_tracker_end_to_end() -> Result<()> {
 
     let mut handles = initialize(&config, &firewood_dir, &index_dir, Some(runtime))?;
 
-    let mut tracker = handles
-        .tracker
-        .take()
-        .expect("tracker enabled in scenario");
+    let mut tracker = handles.tracker.take().expect("tracker enabled in scenario");
     let daemon = handles.daemon.take().expect("runtime enabled in scenario");
 
-    assert_eq!(tracker.chain().height(), 0, "fresh tracker starts at genesis");
-    assert!(daemon.tip()?.as_bytes().len() == 32, "daemon exposes tip hash");
+    assert_eq!(
+        tracker.chain().height(),
+        0,
+        "fresh tracker starts at genesis"
+    );
+    assert!(
+        daemon.tip()?.as_bytes().len() == 32,
+        "daemon exposes tip hash"
+    );
 
     let parent = tracker.chain().tip();
     let header = sample_header(parent, 1);
@@ -151,11 +156,7 @@ fn vendor_electrs_tracker_end_to_end() -> Result<()> {
     let audit = entry.proof.as_ref().expect("proof metadata present");
     assert_eq!(audit.envelope, scenario.proof.envelope);
     assert_eq!(
-        audit
-            .report
-            .notes
-            .as_ref()
-            .expect("report carries notes"),
+        audit.report.notes.as_ref().expect("report carries notes"),
         &scenario.proof.report_notes
     );
     let vrf = entry.vrf.as_ref().expect("vrf metadata present");
@@ -178,7 +179,14 @@ fn scenario_path() -> PathBuf {
 
 fn build_transaction_bundle(
     scenario: &WalletTrackerScenario,
-) -> (Script, Transaction, Vec<u8>, StatusDigest, RppStarkProofAudit, StoredVrfAudit) {
+) -> (
+    Script,
+    Transaction,
+    Vec<u8>,
+    StatusDigest,
+    RppStarkProofAudit,
+    StoredVrfAudit,
+) {
     let script_payload = LedgerScriptPayload::Recipient {
         to: scenario.blocks.recipient.clone(),
         amount: scenario.blocks.amount,
@@ -296,7 +304,8 @@ fn wallet_sample_transaction_witness(
         UtxoOutpoint { tx_id, index: 0 },
         StoredUtxo::new(recipient.to_string(), amount),
     );
-    let sender_before = AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
+    let sender_before =
+        AccountBalanceWitness::new("sender".to_string(), amount + u128::from(fee), 1);
     let sender_after = AccountBalanceWitness::new("sender".to_string(), u128::from(fee), 2);
     let recipient_before = Some(AccountBalanceWitness::new(recipient.to_string(), 0, 0));
     let recipient_after = AccountBalanceWitness::new(recipient.to_string(), amount, 1);

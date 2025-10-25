@@ -146,4 +146,3 @@ pub enum FromEnvelopeError {
     #[error("Failed to decode bytes as MultiAddress")]
     InvalidMultiaddr(#[from] multiaddr::Error),
 }
-

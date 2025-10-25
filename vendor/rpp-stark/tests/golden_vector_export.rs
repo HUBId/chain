@@ -8,7 +8,9 @@ use rpp_stark::hash::{hash, Blake2sXof, FiatShamirChallengeRules};
 use rpp_stark::params::{serialize_params, StarkParams};
 use rpp_stark::proof::params::canonical_stark_params;
 use rpp_stark::proof::public_inputs::PublicInputs;
-use rpp_stark::proof::ser::{compute_public_digest, map_public_to_config_kind, serialize_public_inputs};
+use rpp_stark::proof::ser::{
+    compute_public_digest, map_public_to_config_kind, serialize_public_inputs,
+};
 use rpp_stark::proof::transcript::{Transcript, TranscriptHeader};
 use rpp_stark::proof::types::{ProofHandles, PROOF_ALPHA_VECTOR_LEN, PROOF_MIN_OOD_POINTS};
 use rpp_stark::proof::verifier::verify;
@@ -89,7 +91,11 @@ fn generate_artifacts() -> ArtifactSet {
         &verifier_context,
     );
 
-    assert!(report.error.is_none(), "verification must succeed: {:?}", report.error);
+    assert!(
+        report.error.is_none(),
+        "verification must succeed: {:?}",
+        report.error
+    );
     assert!(report.params_ok, "parameter stage must succeed");
     assert!(report.public_ok, "public-input stage must succeed");
     assert!(report.merkle_ok, "merkle stage must succeed");
@@ -123,10 +129,7 @@ fn generate_artifacts() -> ArtifactSet {
     );
 
     let artifacts = ArtifactSet(BTreeMap::new())
-        .insert(
-            "params.bin",
-            encode_binary_artifact(&params_bytes),
-        )
+        .insert("params.bin", encode_binary_artifact(&params_bytes))
         .insert(
             "public_inputs.bin",
             encode_binary_artifact(&public_input_bytes),
@@ -135,11 +138,8 @@ fn generate_artifacts() -> ArtifactSet {
         .insert("public_digest.hex", hex_bytes(&public_digest).into_bytes())
         .insert(
             "proof_report.json",
-            serde_json::to_vec_pretty(&ProofReportExport::from_handles(
-                &report,
-                handles,
-            ))
-            .expect("encode proof report"),
+            serde_json::to_vec_pretty(&ProofReportExport::from_handles(&report, handles))
+                .expect("encode proof report"),
         )
         .insert(
             "roots.json",
@@ -147,11 +147,8 @@ fn generate_artifacts() -> ArtifactSet {
         )
         .insert(
             "challenges.json",
-            serde_json::to_vec_pretty(&ChallengesExport::from_transcript(
-                &params,
-                handles,
-            ))
-            .expect("encode challenges"),
+            serde_json::to_vec_pretty(&ChallengesExport::from_transcript(&params, handles))
+                .expect("encode challenges"),
         )
         .insert(
             "indices.json",
@@ -334,7 +331,10 @@ struct ProofReportExport {
 }
 
 impl ProofReportExport {
-    fn from_handles(report: &rpp_stark::proof::types::VerifyReport, handles: &ProofHandles) -> Self {
+    fn from_handles(
+        report: &rpp_stark::proof::types::VerifyReport,
+        handles: &ProofHandles,
+    ) -> Self {
         Self {
             params_ok: report.params_ok,
             public_ok: report.public_ok,

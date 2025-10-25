@@ -7,6 +7,7 @@ use firewood::{
     merkle::Value,
     v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType, Proposal as _},
 };
+use firewood_storage::noop_storage_metrics;
 use metrics::counter;
 
 use crate::{BorrowedBytes, DatabaseHandle, KeyValuePair};
@@ -99,7 +100,7 @@ impl DatabaseHandle<'_> {
             return Err(invalid_data("database path cannot be empty"));
         }
 
-        Db::new(path, cfg).map(Self::from)
+        Db::new(path, cfg, noop_storage_metrics()).map(Self::from)
     }
 
     /// Returns the current root hash of the database.

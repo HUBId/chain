@@ -53,4 +53,3 @@ pub fn _address_translation(original: &Multiaddr, observed: &Multiaddr) -> Optio
         _ => None,
     })
 }
-

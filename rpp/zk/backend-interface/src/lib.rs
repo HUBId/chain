@@ -469,11 +469,7 @@ pub trait ProofBackend: Send + Sync + 'static {
         Err(BackendError::Unsupported("state keygen"))
     }
 
-    fn prove_state(
-        &self,
-        _pk: &ProvingKey,
-        _witness: &WitnessBytes,
-    ) -> BackendResult<ProofBytes> {
+    fn prove_state(&self, _pk: &ProvingKey, _witness: &WitnessBytes) -> BackendResult<ProofBytes> {
         Err(BackendError::Unsupported("state proving"))
     }
 
@@ -541,11 +537,7 @@ pub trait ProofBackend: Send + Sync + 'static {
         Err(BackendError::Unsupported("uptime keygen"))
     }
 
-    fn prove_uptime(
-        &self,
-        _pk: &ProvingKey,
-        _witness: &WitnessBytes,
-    ) -> BackendResult<ProofBytes> {
+    fn prove_uptime(&self, _pk: &ProvingKey, _witness: &WitnessBytes) -> BackendResult<ProofBytes> {
         Err(BackendError::Unsupported("uptime proving"))
     }
 

@@ -207,4 +207,3 @@ impl TopicSubscriptionFilter for RegexSubscriptionFilter {
         self.0.is_match(topic_hash.as_str())
     }
 }
-

@@ -195,4 +195,3 @@ pub mod codec {
         io::Error::other(err)
     }
 }
-

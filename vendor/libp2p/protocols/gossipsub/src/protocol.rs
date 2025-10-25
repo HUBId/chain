@@ -584,4 +584,3 @@ impl Decoder for GossipsubCodec {
         }))
     }
 }
-

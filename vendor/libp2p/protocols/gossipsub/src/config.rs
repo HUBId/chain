@@ -1178,4 +1178,3 @@ impl std::fmt::Debug for Config {
         builder.finish()
     }
 }
-

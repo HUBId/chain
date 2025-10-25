@@ -227,4 +227,3 @@ impl MessageCache {
         self.msgs.remove(message_id)
     }
 }
-

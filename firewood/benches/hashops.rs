@@ -8,7 +8,7 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::merkle::Merkle;
 use firewood::v2::api::{Db as _, Proposal as _};
-use firewood_storage::{MemStore, NodeStore};
+use firewood_storage::{MemStore, NodeStore, noop_storage_metrics};
 use pprof::ProfilerGuard;
 use rand::{Rng, distr::Alphanumeric};
 use std::fs::File;
@@ -117,8 +117,12 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     let db_path = db_path.join("benchmark_db");
                     let cfg = DbConfig::builder();
 
-                    let db =
-                        firewood::db::Db::new(db_path, cfg.clone().truncate(true).build()).unwrap();
+                    let db = firewood::db::Db::new(
+                        db_path,
+                        cfg.clone().truncate(true).build(),
+                        noop_storage_metrics(),
+                    )
+                    .unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },
