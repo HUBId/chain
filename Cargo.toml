@@ -178,4 +178,7 @@ p3-util = { version = "0.3.0", default-features = false }
 libp2p-identity = { path = "vendor/libp2p/identity" }
 yamux = { path = "rpp/p2p/vendor/yamux/0.13.7" }
 yamux-old = { package = "yamux", path = "rpp/p2p/vendor/yamux/0.12.1" }
+base64ct = { version = "1.6.0", path = "vendor/base64ct/1.6.0" }
+hex-literal = { version = "1.0.0", path = "vendor/hex-literal/1.0.0" }
+p3-mds = { version = "0.3.0", path = "vendor/p3-mds/0.3.0" }
 

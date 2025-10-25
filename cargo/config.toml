@@ -90,6 +90,16 @@ version = "0.4.18"
 path = "../vendor/malachite-float/0.4.18"
 
 [[patch.crates-io]]
+name = "base64ct"
+version = "1.6.0"
+path = "../vendor/base64ct/1.6.0"
+
+[[patch.crates-io]]
+name = "hex-literal"
+version = "1.0.0"
+path = "../vendor/hex-literal/1.0.0"
+
+[[patch.crates-io]]
 name = "stwo-official"
 version = "0.1.1"
 path = "../rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
@@ -128,6 +138,11 @@ path = "../vendor/p3-matrix/0.3.0"
 name = "p3-mersenne-31"
 version = "0.3.0"
 path = "../vendor/p3-mersenne-31/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-mds"
+version = "0.3.0"
+path = "../vendor/p3-mds/0.3.0"
 
 [[patch.crates-io]]
 name = "p3-poseidon"

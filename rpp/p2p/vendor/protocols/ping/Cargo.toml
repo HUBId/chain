@@ -1,7 +1,6 @@
 [package]
 name = "libp2p-ping"
 edition = "2021"
-rust-version = "1.83.0"
 description = "Ping protocol for libp2p"
 version = "0.47.0"
 authors = ["Parity Technologies <admin@parity.io>"]

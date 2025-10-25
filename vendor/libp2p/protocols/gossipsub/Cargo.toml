@@ -1,7 +1,6 @@
 [package]
 name = "libp2p-gossipsub"
 edition = "2021"
-rust-version = "1.83.0"
 description = "Gossipsub protocol for libp2p"
 version = "0.50.0"
 authors = ["Age Manning <Age@AgeManning.com>"]
