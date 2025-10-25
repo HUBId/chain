@@ -1,7 +1,6 @@
 [package]
 name = "libp2p-connection-limits"
 edition = "2021"
-rust-version = "1.83.0"
 description = "Connection limits for libp2p."
 version = "0.6.0"
 license = "MIT"

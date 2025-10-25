@@ -1,7 +1,6 @@
 [package]
 name = "libp2p-allow-block-list"
 edition = "2021"
-rust-version = "1.83.0"
 description = "Allow/block list connection management for libp2p."
 version = "0.6.0"
 license = "MIT"

@@ -1,7 +1,6 @@
 [package]
 name = "multistream-select"
 edition = "2021"
-rust-version = "1.83.0"
 description = "Multistream-select negotiation protocol for libp2p"
 version = "0.13.0"
 authors = ["Parity Technologies <admin@parity.io>"]
