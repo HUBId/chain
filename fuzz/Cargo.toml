@@ -1,0 +1,52 @@
+[package]
+name = "chain-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.rpp-chain]
+path = "../rpp/chain"
+
+[dependencies.rpp-p2p]
+path = "../rpp/p2p"
+
+[dependencies.rpp-consensus]
+path = "../rpp/consensus"
+
+[[bin]]
+name = "transaction_parser"
+path = "fuzz_targets/transaction_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "network_messages"
+path = "fuzz_targets/network_messages.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pruning_proof"
+path = "fuzz_targets/pruning_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_loader"
+path = "fuzz_targets/config_loader.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,24 @@
+name: Fuzz smoke tests
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+
+      - name: Run fuzz smoke targets
+        run: scripts/ci/fuzz-smoke.sh
