@@ -28,26 +28,57 @@ for the node and wallet components.【F:rpp/runtime/mod.rs†L8-L56】
 
 ## Telemetry Configuration Controls
 
-Telemetry is controlled from `[rollout.telemetry]` in `node.toml` and can be
-overridden at launch. The configuration schema enforces valid endpoints, queue
-sizes, sampling ratios, and TLS inputs before the runtime starts exporting to
-OTLP collectors.【F:config/node.toml†L43-L54】【F:rpp/runtime/config.rs†L1736-L1787】 Use
-these entry points to adjust behaviour:
+### Structured logging & resource metadata
 
-- **Configuration file.** Set `enabled`, `endpoint`, `http_endpoint`,
-  `auth_token`, TLS paths, timeouts, retry budgets, and sampling/queue knobs in
-  the config file shipped with the profile.【F:rpp/runtime/config.rs†L1736-L1787】
-- **CLI overrides.** Launch the runtime with `--telemetry-endpoint`,
-  `--telemetry-auth-token`, and `--telemetry-sample-interval` to replace the
-  file values without editing disk state.【F:rpp/node/src/lib.rs†L163-L207】
-- **Environment overrides.** Export `RPP_NODE_OTLP_ENDPOINT`,
-  `RPP_NODE_OTLP_HTTP_ENDPOINT`, `RPP_NODE_OTLP_AUTH_TOKEN`, and
-  `RPP_NODE_OTLP_TIMEOUT_MS` to override both file and CLI values when deploying
-  through orchestration systems.【F:rpp/node/src/lib.rs†L1567-L1588】
+Every runtime boots a structured JSON log layer that injects the runtime mode,
+configuration source, and a stable instance identifier alongside standard log
+fields. The layer also stamps each record with OpenTelemetry service metadata so
+log aggregation can correlate log lines with spans and metrics in the same
+resource graph.【F:rpp/node/src/lib.rs†L1134-L1315】【F:rpp/node/src/lib.rs†L1353-L1392】 The
+OTLP resource itself includes `service.name=rpp`,
+`service.component=rpp-node`, the resolved runtime mode, configuration source,
+instance id, configuration schema version, and rollout telemetry sampling
+flags.【F:rpp/node/src/lib.rs†L1179-L1195】【F:rpp/node/src/lib.rs†L1633-L1664】
 
-The telemetry resource records the active mode, release channel, and sampling
-parameters so downstream collectors can group spans and metrics by deployment
-context.【F:rpp/node/src/lib.rs†L1145-L1189】
+### Runtime modes & telemetry activation
+
+Telemetry enablement follows the selected runtime mode: node, wallet, hybrid,
+and validator profiles drive which subsystems start and which signals they
+emit.【F:rpp/runtime/mod.rs†L8-L56】 At startup the node emits explicit markers for
+each pipeline—`"node runtime started"`, `"pipeline orchestrator started"`, and
+`"wallet runtime initialised"`—and records whether telemetry exporters were
+configured, leaving a paper trail for readiness automation and runbooks.【F:rpp/node/src/lib.rs†L421-L521】【F:rpp/node/src/lib.rs†L523-L538】 The tracing
+initialiser mirrors those attributes inside a `node.telemetry.init` span so
+collectors and dashboards can confirm that OTLP was enabled (and which
+endpoints were used) for the active runtime mode.【F:rpp/node/src/lib.rs†L1134-L1259】
+
+### OTLP exporter configuration
+
+`[rollout.telemetry]` in `node.toml` is the canonical source of truth. It
+validates endpoints, buffer sizing, sampling ratios, TLS bundles, and drop
+warnings before the runtime attempts to start exporters.【F:config/node.toml†L43-L54】【F:rpp/runtime/config.rs†L1736-L1809】 The new exporter builder derives both
+gRPC and HTTP endpoints, normalises Bearer tokens, and reuses TLS assets across
+metrics and traces so operators only need to supply a single credential
+bundle.【F:rpp/runtime/telemetry/exporter.rs†L18-L133】【F:rpp/runtime/telemetry/exporter.rs†L162-L218】 Metrics exporters require the HTTP endpoint; when it is
+missing or telemetry is disabled the runtime keeps the instruments but reports
+the degradation through the `telemetry` log target instead of silently
+dropping data.【F:rpp/runtime/telemetry/metrics.rs†L31-L70】
+
+Tracing uses bounded queues whose sizes, batch policies, and sampling ratios are
+fully configurable; the builder applies the validated queue settings and picks a
+sampler that honours the requested ratio (including explicit on/off
+states).【F:rpp/runtime/telemetry/exporter.rs†L90-L120】 The runtime advertises the
+resolved OTLP and metrics endpoints in both logs and the `node.telemetry.init`
+span so operators can verify that overrides or configuration profiles took
+effect.【F:rpp/node/src/lib.rs†L1134-L1259】
+
+### Startup probes & health endpoints
+
+Expose `/health/live` for liveness and `/health/ready` for readiness in your
+orchestrator; both endpoints are served by the RPC layer and reflect the active
+runtime pipelines (node, wallet, orchestrator). The legacy `/health` endpoint is
+preserved for smoke tests but does not expose failure states, so migrate
+automation to the new probes where possible.【F:rpp/rpc/api.rs†L512-L583】
 
 ## Port & Endpoint Usage
 
@@ -163,59 +194,50 @@ threaten block production.
 
 ## Telemetry & Metrics
 
-1. **Enable telemetry sampling.** Flip `rollout.telemetry.enabled`, tune the
-   sampling interval, and adjust `trace_sample_ratio` if you only need a subset
-   of spans for long-term storage. Increase the queue and batch sizes when the
-   collector runs behind to avoid drops; the config loader validates that queue
-   and batch sizing is coherent.【F:rpp/runtime/config.rs†L1736-L1775】
-2. **Stream snapshots to your collector.** Set both OTLP endpoints
-   (`endpoint` for gRPC traces and `http_endpoint` for metrics) and, if needed,
-   point `grpc_tls`/`http_tls` at your collector CA to enforce TLS. The runtime
-   spawns bounded exporters that warn when items are dropped so you can expand
-   capacity before losing visibility.【F:rpp/runtime/telemetry/exporter.rs†L21-L133】【F:rpp/runtime/telemetry/metrics.rs†L41-L70】
-3. **Scrape structured logs.** Configure log aggregation to capture the
-   `telemetry` target; payloads contain release channel, active feature gates,
-   and health snapshots for dashboards, including the live `timetoke_params`
-   (minimum window, accrual cap, decay cadence) for uptime tuning.【F:rpp/runtime/node.rs†L208-L214】【F:rpp/runtime/node.rs†L1207-L1218】
-4. **Subscribe to timetoke deltas.** The meta gossip channel now publishes
-   `meta_timetoke` payloads alongside snapshot topics so operators can audit the
-   recorded balances and their commitment root in near real time; forward these
-   JSON blobs to monitoring backends that compare the advertised root with local
-   ledger state.【F:rpp/runtime/node.rs†L3548-L3577】【F:rpp/runtime/node_runtime/node.rs†L154-L192】
-5. **Track VRF participation.** The node status snapshot includes `vrf_metrics`
-   with submission counts, accepted validators, rejection totals, and fallback
-   usage so dashboards can alert on declining VRF participation or repeated
-   fallback elections.【F:src/node.rs†L57-L125】【F:src/node.rs†L815-L836】
-6. **Monitor handshake telemetry.** Each libp2p Noise handshake now emits
-   `telemetry.handshake` events with the remote agent string, tier, and ZSI. A
-   matching warning is logged on signature or VRF validation failures so that
-   operators can detect nodes announcing inconsistent VRF payloads or stale
-   metadata during admission.【F:rpp/p2p/src/swarm.rs†L248-L316】
-7. **Forward tracing spans to OTLP.** Enabling `rollout.telemetry.endpoint`
-   (or the `--telemetry-endpoint` CLI override) wires a gRPC OTLP exporter into
-   the tracing subscriber; optional secrets can be supplied via
-   `telemetry_auth_token` or the environment variables
-   `RPP_NODE_OTLP_AUTH_TOKEN`, `RPP_NODE_OTLP_TIMEOUT_MS`, and
-   `RPP_NODE_OTLP_ENDPOINT`. Gossip, consensus, and proof paths now emit spans
-   that ship to the configured collector, and
-   `scripts/smoke_otlp_export.sh --mode validator --binary ./target/release/rpp-node`
-   spins up a local OpenTelemetry Collector to verify that the selected runtime
-   exported the expected signal (defaulting to `node.telemetry.init`). Pass
-   `--mode hybrid` or `--mode wallet` to exercise the other binaries and
-   `--expect` when you need to assert on a different span name.【F:rpp/node/src/lib.rs†L35-L111】【F:rpp/runtime/node.rs†L610-L963】【F:rpp/runtime/node_runtime/node.rs†L836-L1356】【F:scripts/smoke_otlp_export.sh†L1-L190】【F:scripts/otel-collector-config.yaml†L1-L19】
-8. **Maintain wallet telemetry parity.** Hybrid and validator profiles enable
-   Electrs cache and tracker telemetry so wallet consumers inherit the same
-   visibility targets as the node runtime. When the wallet runs standalone,
-   update `electrs.cache.telemetry` and
-   `electrs.tracker.telemetry_endpoint` to keep forwarding the same signals the
-   validator dashboards expect.【F:config/wallet.toml†L9-L31】【F:rpp/runtime/config.rs†L1269-L1313】
-9. **Track pipeline health metrics.** The orchestrator exports
-   `pipeline_stage_latency_ms`, `pipeline_errors_total`,
-   `pipeline_gossip_events_total`, and
-   `pipeline_leader_rotations_total` while exposing an aggregated
-   `/wallet/pipeline/telemetry` snapshot for dashboards. Run
-   `scripts/ci/pipeline_observability.sh` alongside deployments to smoke-test
-   the telemetry feed.【F:rpp/runtime/orchestration.rs†L160-L287】【F:rpp/runtime/orchestration.rs†L747-L940】【F:rpp/rpc/api.rs†L1833-L1876】【F:scripts/ci/pipeline_observability.sh†L1-L9】
+### Metric surfaces
+
+- **Node runtime.** `RuntimeMetrics` exposes consensus, storage, networking,
+  and reputation signals across histograms and counters. Operators should wire
+  `rpp.runtime.consensus.*`, `rpp.runtime.storage.*`,
+  `rpp.runtime.rpc.*`, and `rpp.runtime.reputation.penalties` into dashboards to
+  observe block production, WAL pressure, RPC health, and slashing
+  outcomes.【F:rpp/runtime/telemetry/metrics.rs†L63-L205】【F:rpp/runtime/telemetry/metrics.rs†L214-L319】
+- **Proof systems.** Proof generation and verification telemetry is partitioned
+  by backend so production STWO, experimental Plonky3, and mock flows can be
+  monitored separately. Alert on spikes in `rpp.runtime.proof.*` and
+  `rpp_stark_*` metrics to catch failing provers or verifier regressions before
+  they impact consensus.【F:rpp/runtime/telemetry/metrics.rs†L360-L453】
+- **Pipeline orchestrator.** Wallet pipelines emit latency histograms, error and
+  gossip counters, leader rotation totals, active flow gauges, and per-stage
+  telemetry summaries that can be streamed via the RPC surface for
+  dashboards.【F:rpp/runtime/orchestration.rs†L300-L391】【F:rpp/runtime/orchestration.rs†L393-L460】【F:rpp/runtime/orchestration.rs†L716-L758】
+
+### Allowed labels & cardinality controls
+
+- Runtime metrics rely on enumerated label sets—`ConsensusStage`,
+  `WalletRpcMethod`, `RpcMethod`, `RpcResult`, `WalFlushOutcome`, and proof
+  enums—to bound label cardinality and keep collectors efficient. These enums
+  drive the `MetricLabel` trait helpers that inject exactly one string label per
+  dimension.【F:rpp/runtime/telemetry/metrics.rs†L560-L749】【F:rpp/runtime/telemetry/metrics.rs†L884-L969】
+- Dynamic attributes are deliberately scoped: consensus round metrics only attach
+  `height`, `round`, and (when relevant) a leader string; failed vote counters
+  expose a bounded `reason`, and reputation penalties label events with a single
+  operator-provided tag. Treat these values as safe for cardinality-based
+  alerting but continue to monitor for unexpected strings in the structured log
+  feed.【F:rpp/runtime/telemetry/metrics.rs†L214-L319】【F:rpp/runtime/telemetry/metrics.rs†L320-L359】
+- Pipeline metrics reuse fixed label keys (`stage`, `reason`, `outcome`,
+  `source`) when emitting counters and histograms so dashboards can pivot by
+  stage without unbounded fan-out.【F:rpp/runtime/orchestration.rs†L320-L385】
+
+### Baseline dashboards & runbooks
+
+- The dashboard blueprints under `docs/dashboards/` map each metric to Grafana
+  panels and include coverage for consensus, wallet, storage, and proof
+  telemetry. Use them as the starting point when wiring collectors to your
+  visualisation stack.【F:docs/dashboards/README.md†L1-L52】
+- Pair dashboards with the observability runbook, which documents how to respond
+  to exporter degradation, stalled blocks, and WAL issues using the metrics and
+  spans described above.【F:docs/runbooks/observability.md†L1-L100】
 
 ## Health Probes
 
