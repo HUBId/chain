@@ -1,7 +1,7 @@
 use std::collections::{btree_map::Entry as BTreeEntry, BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::proof_backend::Blake2sHasher;
 use ed25519_dalek::Keypair;
@@ -37,15 +37,15 @@ use crate::rpp::{UtxoOutpoint, UtxoRecord};
 use crate::state::StoredUtxo;
 use crate::storage::ledger::SlashingEvent;
 use crate::storage::Storage;
+use crate::stwo::proof::ProofPayload;
 use crate::stwo::prover::WalletProver;
 use crate::types::{
-    Account, Address, IdentityDeclaration, IdentityGenesis, IdentityProof, SignedTransaction,
-    Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
+    Account, Address, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+    SignedTransaction, Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
+use crate::runtime::{ProofKind, RuntimeMetrics};
 #[cfg(feature = "vendor_electrs")]
-use crate::{
-    runtime::node::PendingTransactionSummary, runtime::types::ChainProof, stwo::proof::ProofPayload,
-};
+use crate::runtime::node::PendingTransactionSummary;
 #[cfg(feature = "vendor_electrs")]
 use log::debug;
 use log::warn;
@@ -446,6 +446,7 @@ pub struct Wallet {
     storage: Storage,
     keypair: Arc<Keypair>,
     address: Address,
+    metrics: Arc<RuntimeMetrics>,
     node_runtime: Arc<AsyncMutex<Option<WalletNodeRuntime>>>,
     node_handle: Arc<RwLock<Option<NodeHandle>>>,
     pipeline_feed: Arc<RwLock<PipelineFeedState>>,
@@ -494,13 +495,14 @@ pub struct ConsensusReceipt {
 }
 
 impl Wallet {
-    pub fn new(storage: Storage, keypair: Keypair) -> Self {
+    pub fn new(storage: Storage, keypair: Keypair, metrics: Arc<RuntimeMetrics>) -> Self {
         let address = address_from_public_key(&keypair.public);
         let (pipeline_feed_tx, _pipeline_feed_rx) = watch::channel(PipelineFeedState::default());
         Self {
             storage,
             keypair: Arc::new(keypair),
             address,
+            metrics,
             node_runtime: Arc::new(AsyncMutex::new(None)),
             node_handle: Arc::new(RwLock::new(None)),
             pipeline_feed: Arc::new(RwLock::new(PipelineFeedState::default())),
@@ -526,10 +528,11 @@ impl Wallet {
     pub fn with_electrs(
         storage: Storage,
         keypair: Keypair,
+        metrics: Arc<RuntimeMetrics>,
         config: ElectrsConfig,
         handles: ElectrsHandles,
     ) -> ChainResult<Self> {
-        let wallet = Self::new(storage, keypair);
+        let wallet = Self::new(storage, keypair, metrics);
         wallet.persist_electrs_config(&config)?;
         wallet.attach_electrs_handles(handles)?;
         Ok(wallet)
@@ -1363,7 +1366,10 @@ impl Wallet {
         let prover = self.stark_prover();
         let witness = prover.build_identity_witness(&genesis)?;
         let commitment_hex = witness.commitment.clone();
+        let start = Instant::now();
         let proof = prover.prove_identity(witness)?;
+        let duration = start.elapsed();
+        self.record_proof_generation(&proof, None, duration);
         let identity_proof = IdentityProof {
             commitment: commitment_hex,
             zk_proof: proof,
@@ -1503,7 +1509,9 @@ impl Wallet {
     pub fn prove_transaction(&self, tx: &SignedTransaction) -> ChainResult<TransactionProofBundle> {
         let prover = self.stark_prover();
         let witness = prover.build_transaction_witness(tx)?;
+        let start = Instant::now();
         let proof = prover.prove_transaction(witness.clone())?;
+        let duration = start.elapsed();
         let proof_payload = match &proof {
             ChainProof::Stwo(stark) => Some(stark.payload.clone()),
             #[cfg(feature = "backend-plonky3")]
@@ -1511,6 +1519,10 @@ impl Wallet {
             #[cfg(feature = "backend-rpp-stark")]
             ChainProof::RppStark(_) => None,
         };
+        let payload_bytes = proof_payload
+            .as_ref()
+            .and_then(Self::proof_payload_size_from_payload);
+        self.record_proof_generation(&proof, payload_bytes, duration);
         Ok(TransactionProofBundle::new(
             tx.clone(),
             proof,
@@ -1549,7 +1561,10 @@ impl Wallet {
         };
         let prover = self.stark_prover();
         let witness = prover.build_uptime_witness(&claim)?;
+        let start = Instant::now();
         let proof = prover.prove_uptime(witness)?;
+        let duration = start.elapsed();
+        self.record_proof_generation(&proof, None, duration);
         Ok(UptimeProof::new(claim, proof))
     }
 
@@ -1717,6 +1732,49 @@ impl Wallet {
             .read_account(&self.address)?
             .ok_or_else(|| ChainError::Config("wallet account not found".into()))?;
         Ok(ReputationAudit::from_account(&account))
+    }
+
+    fn record_proof_generation(
+        &self,
+        proof: &ChainProof,
+        payload_bytes: Option<u64>,
+        duration: Duration,
+    ) {
+        if let Some(kind) = Self::metrics_proof_kind(proof) {
+            self.metrics
+                .record_proof_generation_duration(kind, duration);
+            let size = payload_bytes
+                .or_else(|| Self::proof_payload_size_from_proof(proof));
+            if let Some(bytes) = size {
+                self.metrics.record_proof_generation_size(kind, bytes);
+            }
+        }
+    }
+
+    fn metrics_proof_kind(proof: &ChainProof) -> Option<ProofKind> {
+        match proof {
+            ChainProof::Stwo(_) => Some(ProofKind::Stwo),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => Some(ProofKind::Plonky3),
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(_) => None,
+        }
+    }
+
+    fn proof_payload_size_from_proof(proof: &ChainProof) -> Option<u64> {
+        match proof {
+            ChainProof::Stwo(stark) => Self::proof_payload_size_from_payload(&stark.payload),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(value) => serde_json::to_vec(value).ok().map(|bytes| bytes.len() as u64),
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(proof) => Some(proof.total_len() as u64),
+        }
+    }
+
+    fn proof_payload_size_from_payload(payload: &ProofPayload) -> Option<u64> {
+        bincode::serialize(payload)
+            .map(|bytes| bytes.len() as u64)
+            .ok()
     }
 }
 

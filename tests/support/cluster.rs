@@ -382,21 +382,32 @@ impl TestClusterNode {
         let wallet_key = load_or_generate_keypair(&config.key_path).with_context(|| {
             format!("failed to load node key for wallet on node {}", self.index)
         })?;
+        let wallet_metrics = RuntimeMetrics::noop();
         let wallet = {
             #[cfg(feature = "vendor_electrs")]
             {
                 if let Some((cfg, handles)) = electrs_context {
                     Arc::new(
-                        Wallet::with_electrs(storage.clone(), wallet_key, cfg, handles)
-                            .map_err(|err| anyhow!(err))?,
+                        Wallet::with_electrs(
+                            storage.clone(),
+                            wallet_key,
+                            Arc::clone(&wallet_metrics),
+                            cfg,
+                            handles,
+                        )
+                        .map_err(|err| anyhow!(err))?,
                     )
                 } else {
-                    Arc::new(Wallet::new(storage.clone(), wallet_key))
+                    Arc::new(Wallet::new(
+                        storage.clone(),
+                        wallet_key,
+                        Arc::clone(&wallet_metrics),
+                    ))
                 }
             }
             #[cfg(not(feature = "vendor_electrs"))]
             {
-                Arc::new(Wallet::new(storage.clone(), wallet_key))
+                Arc::new(Wallet::new(storage.clone(), wallet_key, wallet_metrics))
             }
         };
 
@@ -562,21 +573,32 @@ impl TestCluster {
 
             let wallet_key = load_or_generate_keypair(&config.key_path)
                 .with_context(|| format!("failed to load node key for wallet on node {index}"))?;
+            let wallet_metrics = RuntimeMetrics::noop();
             let wallet = {
                 #[cfg(feature = "vendor_electrs")]
                 {
                     if let Some((cfg, handles)) = electrs_context {
                         Arc::new(
-                            Wallet::with_electrs(storage.clone(), wallet_key, cfg, handles)
-                                .map_err(|err| anyhow!(err))?,
+                            Wallet::with_electrs(
+                                storage.clone(),
+                                wallet_key,
+                                Arc::clone(&wallet_metrics),
+                                cfg,
+                                handles,
+                            )
+                            .map_err(|err| anyhow!(err))?,
                         )
                     } else {
-                        Arc::new(Wallet::new(storage.clone(), wallet_key))
+                        Arc::new(Wallet::new(
+                            storage.clone(),
+                            wallet_key,
+                            Arc::clone(&wallet_metrics),
+                        ))
                     }
                 }
                 #[cfg(not(feature = "vendor_electrs"))]
                 {
-                    Arc::new(Wallet::new(storage.clone(), wallet_key))
+                    Arc::new(Wallet::new(storage.clone(), wallet_key, wallet_metrics))
                 }
             };
 

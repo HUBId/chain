@@ -64,6 +64,7 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use tempfile::tempdir;
 
+    use crate::runtime::RuntimeMetrics;
     use crate::proof_system::ProofVerifierRegistry;
     use crate::proofs::stwo::tests::official_integration::{
         populate_wallet_state, recorded_transaction_proof,
@@ -80,7 +81,7 @@ mod tests {
 
         let mut rng = StdRng::from_seed([0x42; 32]);
         let keypair = Keypair::generate(&mut rng);
-        let wallet = Arc::new(Wallet::new(storage, keypair));
+        let wallet = Arc::new(Wallet::new(storage, keypair, RuntimeMetrics::noop()));
         let generator = ProofGenerator::new(wallet);
 
         let proof = generator
@@ -120,7 +121,7 @@ mod tests {
         account.reputation.bind_genesis_identity("genesis-proof");
         storage.persist_account(&account).expect("persist account");
 
-        let wallet = Arc::new(Wallet::new(storage, keypair));
+        let wallet = Arc::new(Wallet::new(storage, keypair, RuntimeMetrics::noop()));
         let generator = ProofGenerator::new(wallet);
 
         let proof = generator

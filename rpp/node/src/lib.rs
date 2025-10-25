@@ -37,7 +37,7 @@ use rpp_chain::config::{NodeConfig, WalletConfig};
 use rpp_chain::crypto::load_or_generate_keypair;
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
-use rpp_chain::runtime::RuntimeMode;
+use rpp_chain::runtime::{RuntimeMetrics, RuntimeMode};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
@@ -489,7 +489,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         };
         let keypair = load_or_generate_keypair(&wallet_config.key_path)
             .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
-        let wallet = Arc::new(Wallet::new(storage, keypair));
+        let wallet = Arc::new(Wallet::new(storage, keypair, RuntimeMetrics::noop()));
         rpc_addr.get_or_insert(wallet_config.rpc_listen);
         wallet_instance = Some(wallet);
     }

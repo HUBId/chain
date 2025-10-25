@@ -30,7 +30,7 @@ use rpp::runtime::types::proofs::{ChainProof, RppStarkProof};
 use rpp::runtime::types::transaction::SignedTransaction;
 use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
 use rpp::runtime::types::TransactionProofBundle;
-use rpp::runtime::RuntimeMode;
+use rpp::runtime::{RuntimeMetrics, RuntimeMode};
 use rpp::storage::state::utxo::StoredUtxo;
 use rpp::wallet::config::{
     CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection as WalletNetworkSelection,
@@ -129,6 +129,7 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
     let wallet = Wallet::with_electrs(
         storage,
         wallet_keypair.clone(),
+        RuntimeMetrics::noop(),
         electrs_config.clone(),
         handles,
     )?;
