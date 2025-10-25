@@ -50,6 +50,13 @@ Validator operators should edit both `config/validator.toml` and
 paths, secrets, and telemetry defaults, while hybrid installs start from
 `config/hybrid.toml` plus `config/wallet.toml`.【F:config/validator.toml†L1-L59】【F:config/wallet.toml†L1-L33】【F:config/hybrid.toml†L1-L59】
 
+Runtime launchers resolve configuration in three tiers: explicit CLI flags
+(`--config`, `--wallet-config`), then the `RPP_CONFIG` environment variable, and
+finally the mode's template (for example `config/validator.toml` or
+`config/hybrid.toml`).【F:rpp/node/src/lib.rs†L993-L1040】【F:rpp/runtime/mod.rs†L42-L58】 This
+mirrors the behaviour of the legacy scripts while giving operators a single
+override point per deployment.
+
 The example below highlights the node-specific fields new operators typically
 customise:
 
@@ -128,6 +135,15 @@ Key tips while editing the configuration:
   isolation, either keep the defaults or point `electrs.cache.telemetry` and
   `electrs.tracker.telemetry_endpoint` at your collector to preserve the same
   visibility level.【F:config/wallet.toml†L9-L31】【F:rpp/runtime/config.rs†L1269-L1313】
+- **Telemetry resource tags:** Validator and hybrid pipelines now emit unified
+  OpenTelemetry resources on startup so collectors can group spans and metrics by
+  runtime. Expect attributes such as `service.name=rpp`,
+  `service.component=rpp-node`, `rpp.mode=<mode>`, rollout release channel, and
+  the resolved configuration source/path when a template or environment override
+  is used.【F:rpp/node/src/lib.rs†L1633-L1674】 Pair these with the
+  [Deployment & Observability Playbook](./deployment_observability.md) and
+  [Observability Runbook](./runbooks/observability.md) to confirm collectors and
+  dashboards see the enriched labels.
 - **Snapshots and proofs:** Place `snapshot_dir` and `proof_cache_dir` on fast,
   persistent storage. Missing snapshots force peers to re-sync from genesis and
   slow down validator recovery after restarts.
@@ -149,16 +165,37 @@ RUST_LOG=info ./target/release/rpp-node validator \
   --telemetry-sample-interval 15
 ```
 
-Hybrid deployments that expose wallet functionality alongside a validator can
-swap the `validator` subcommand for `hybrid` and point at the hybrid profile
-instead:
+When developing locally you can target the dedicated binaries registered in
+`Cargo.toml` and avoid juggling subcommands:
 
 ```sh
+cargo run --release --bin validator -- \
+  --config config/validator.toml \
+  --wallet-config config/wallet.toml \
+  --dry-run
+```
+
+Hybrid deployments that expose wallet functionality alongside a validator can
+swap the `validator` mode for `hybrid` and point at the hybrid profile instead.
+Both the multiplexed binary and the dedicated wrapper are supported:
+
+```sh
+# Production launch
 RUST_LOG=info ./target/release/rpp-node hybrid \
   --config /etc/rpp/hybrid.toml \
   --wallet-config /etc/rpp/wallet.toml \
   --telemetry-endpoint https://telemetry.example.com:4317
+
+# Local smoke-test
+cargo run --release --bin hybrid -- \
+  --config config/hybrid.toml \
+  --wallet-config config/wallet.toml \
+  --dry-run
 ```
+
+Add `--dry-run` to validate configuration, secrets, and port bindings without
+handing control to the long-running runtime. The CLI exits after pipeline
+bootstrap completes, making it safe for CI and change-management gates.【F:rpp/node/src/lib.rs†L232-L314】
 
 The CLI also supports `--log-json`, RPC overrides, and other telemetry
 shortcuts when you need to override defaults at launch time.【F:rpp/node/src/lib.rs†L35-L111】
