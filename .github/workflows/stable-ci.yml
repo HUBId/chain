@@ -1,0 +1,52 @@
+name: Stable CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  stable:
+    name: Stable build and test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        feature: ["", "backend-rpp-stark"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.79.0
+          components: clippy, rustfmt
+
+      - name: Cargo build
+        run: |
+          if [ -n "${{ matrix.feature }}" ]; then
+            cargo build --workspace --features "${{ matrix.feature }}"
+          else
+            cargo build --workspace
+          fi
+
+      - name: Cargo test
+        run: |
+          if [ -n "${{ matrix.feature }}" ]; then
+            cargo test --workspace --features "${{ matrix.feature }}"
+          else
+            cargo test --workspace
+          fi
+
+      - name: Cargo clippy
+        run: |
+          if [ -n "${{ matrix.feature }}" ]; then
+            cargo clippy --workspace --all-targets --features "${{ matrix.feature }}" -- -D warnings
+          else
+            cargo clippy --workspace --all-targets -- -D warnings
+          fi
+
+      - name: Cargo fmt
+        run: cargo fmt --all -- --check
