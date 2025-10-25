@@ -996,7 +996,7 @@ impl<L: MetricLabel> EnumCounter<L> {
 mod tests {
     use super::*;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MetricError};
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     #[test]
     fn registers_runtime_metrics_instruments() -> std::result::Result<(), MetricError> {
@@ -1161,6 +1161,41 @@ mod tests {
             seen.get("rpp.runtime.reputation.penalties"),
             Some(&"1".to_string())
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_metrics_provide_storage_handle() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("runtime-storage-handle-test");
+        let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
+
+        let handle: firewood_storage::StorageMetricsHandle = metrics.clone();
+        handle.increment_header_flushes();
+        handle.record_header_flush_duration(Duration::from_millis(3));
+        handle.record_header_flush_bytes(256);
+        handle.increment_wal_flushes(StorageWalFlushOutcome::Success);
+        handle.record_wal_flush_duration(StorageWalFlushOutcome::Success, Duration::from_millis(7));
+        handle.record_wal_flush_bytes(StorageWalFlushOutcome::Success, 1024);
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut seen = HashSet::new();
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    seen.insert(metric.name.clone());
+                }
+            }
+        }
+
+        assert!(seen.contains("rpp.runtime.storage.header_flush.total"));
+        assert!(seen.contains("rpp.runtime.storage.wal_flush.total"));
+        assert!(seen.contains("rpp.runtime.storage.wal_flush.duration"));
 
         Ok(())
     }

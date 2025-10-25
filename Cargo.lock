@@ -6091,6 +6091,8 @@ dependencies = [
  "firewood",
  "hex",
  "log",
+ "opentelemetry 0.30.0",
+ "opentelemetry_sdk 0.30.0",
  "parking_lot",
  "prover-backend-interface",
  "prover_stwo_backend",
