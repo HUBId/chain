@@ -20,7 +20,6 @@ use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
-use rpp_chain::runtime::telemetry::TelemetryHandle;
 use rpp_chain::runtime::RuntimeMetrics;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::runtime::sync::{
@@ -249,8 +248,7 @@ impl TestCluster {
             let mut runtime_config = NodeRuntimeConfig::from(&config);
             runtime_config.metrics = RuntimeMetrics::noop();
             runtime_config.identity = Some(network_identity.into());
-            let telemetry = TelemetryHandle::spawn(runtime_config.telemetry.clone());
-            let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config, telemetry)
+            let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config)
                 .with_context(|| format!("failed to initialise libp2p runtime for node {index}"))?;
 
             node_handle.attach_p2p(p2p_handle.clone()).await;

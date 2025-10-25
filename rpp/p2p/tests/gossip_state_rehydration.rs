@@ -16,7 +16,6 @@ use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
-use rpp_chain::runtime::telemetry::TelemetryHandle;
 use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::types::{
     Account, ChainProof, ExecutionTrace, ProofKind, ProofPayload, ReputationWeights,
@@ -191,10 +190,8 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     runtime_b.metrics = RuntimeMetrics::noop();
     runtime_b.identity = Some(identity_b.into());
 
-    let telemetry_a = TelemetryHandle::spawn(runtime_a.telemetry.clone());
-    let telemetry_b = TelemetryHandle::spawn(runtime_b.telemetry.clone());
-    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a, telemetry_a)?;
-    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b, telemetry_b)?;
+    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a)?;
+    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b)?;
 
     let task_a = tokio::spawn(async move {
         p2p_a.run().await.expect("run p2p a");
@@ -279,9 +276,7 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     let mut runtime_b_restart = NodeRuntimeConfig::from(&config_b);
     runtime_b_restart.metrics = RuntimeMetrics::noop();
     runtime_b_restart.identity = Some(identity_b_restart.into());
-    let telemetry_restart = TelemetryHandle::spawn(runtime_b_restart.telemetry.clone());
-    let (p2p_b_restart, handle_b_runtime_restart) =
-        P2pNode::new(runtime_b_restart, telemetry_restart)?;
+    let (p2p_b_restart, handle_b_runtime_restart) = P2pNode::new(runtime_b_restart)?;
 
     task_b = tokio::spawn(async move {
         p2p_b_restart.run().await.expect("run restarted p2p node");
