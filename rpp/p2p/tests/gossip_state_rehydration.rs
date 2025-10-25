@@ -175,8 +175,8 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
     config_b.p2p.listen_addr = listen_b.clone();
     config_b.p2p.bootstrap_peers = vec![listen_a.clone()];
 
-    let node_a = Node::new(config_a.clone())?;
-    let node_b = Node::new(config_b.clone())?;
+    let node_a = Node::new(config_a.clone(), RuntimeMetrics::noop())?;
+    let node_b = Node::new(config_b.clone(), RuntimeMetrics::noop())?;
     let handle_a = node_a.handle();
     let handle_b = node_b.handle();
 
@@ -269,7 +269,7 @@ async fn gossip_state_rehydrates_after_restart() -> Result<()> {
 
     config_b.p2p.bootstrap_peers.clear();
 
-    let node_b_restart = Node::new(config_b.clone())?;
+    let node_b_restart = Node::new(config_b.clone(), RuntimeMetrics::noop())?;
     let handle_b_restart = node_b_restart.handle();
     let identity_b_restart = node_b_restart.network_identity_profile()?;
 

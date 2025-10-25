@@ -11,6 +11,7 @@ use rpp_chain::node::Node;
 #[cfg(feature = "prover-stwo")]
 use rpp_chain::proof_system::ProofProver;
 use rpp_chain::proof_system::ProofVerifierRegistry;
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::storage::Storage;
 #[cfg(feature = "prover-stwo")]
 use rpp_chain::stwo::prover::WalletProver;
@@ -99,7 +100,7 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await
     .expect("spawn Node::new blocking task for overflow test")
@@ -171,7 +172,7 @@ async fn mempool_rejects_overflow_and_recovers_after_restart() -> Result<()> {
 
     let restarted = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await
     .expect("spawn Node::new blocking task for restart")

@@ -160,6 +160,7 @@ async fn main() -> Result<()> {
 async fn start_runtime(args: StartArgs) -> Result<()> {
     let resolved = args.resolve()?;
     let runtime_mode = Arc::new(RwLock::new(resolved.mode));
+    let runtime_metrics = RuntimeMetrics::noop();
     let mut node_handle = None;
     let mut node_task: Option<JoinHandle<Result<()>>> = None;
     let mut p2p_handle: Option<P2pHandle> = None;
@@ -177,7 +178,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         let addr = config.rpc_listen;
         rpc_auth_token = config.rpc_auth_token.clone();
         rpc_allowed_origin = config.rpc_allowed_origin.clone();
-        let node = Node::new(config.clone())?;
+        let node = Node::new(config.clone(), Arc::clone(&runtime_metrics))?;
         let network_identity = node
             .network_identity_profile()
             .map_err(|err| anyhow!(err))?;
@@ -260,7 +261,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             let handles = initialize(&cfg, &firewood_dir, &index_dir, runtime_adapters)?;
             electrs_context = Some((cfg, handles));
         }
-        let wallet_metrics = RuntimeMetrics::noop();
+        let wallet_metrics = Arc::clone(&runtime_metrics);
         let wallet = {
             #[cfg(feature = "vendor_electrs")]
             {
@@ -273,14 +274,10 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
                             cfg,
                             handles,
                         )
-                            .map_err(|err| anyhow!(err))?,
+                        .map_err(|err| anyhow!(err))?,
                     )
                 } else {
-                    Arc::new(Wallet::new(
-                        storage,
-                        keypair,
-                        Arc::clone(&wallet_metrics),
-                    ))
+                    Arc::new(Wallet::new(storage, keypair, Arc::clone(&wallet_metrics)))
                 }
             }
             #[cfg(not(feature = "vendor_electrs"))]

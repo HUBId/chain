@@ -19,16 +19,17 @@ use rpp_chain::errors::ChainError;
 use rpp_chain::ledger::Ledger;
 use rpp_chain::node::Node;
 use rpp_chain::proof_backend::Blake2sHasher;
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::stwo::circuit::identity::{IdentityCircuit, IdentityWitness};
-use rpp_chain::stwo::circuit::{StarkCircuit, string_to_field};
+use rpp_chain::stwo::circuit::{string_to_field, StarkCircuit};
 use rpp_chain::stwo::fri::FriProver;
 use rpp_chain::stwo::params::StarkParameters;
 use rpp_chain::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_chain::types::{
-    Account, AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
-    IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
-    ReputationWeights, SignedTransaction, Stake, Tier, Transaction, TransactionProofBundle,
-    TransactionWitness,
+    Account, AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis,
+    IdentityProof, ReputationWeights, SignedTransaction, Stake, Tier, Transaction,
+    TransactionProofBundle, TransactionWitness, IDENTITY_ATTESTATION_GOSSIP_MIN,
+    IDENTITY_ATTESTATION_QUORUM,
 };
 
 #[derive(Clone, Debug)]
@@ -369,7 +370,7 @@ async fn transaction_overflow_scenario(mempool_limit: usize) -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await??;
     let handle = Arc::new(node.handle());
@@ -409,7 +410,7 @@ async fn transaction_duplicate_scenario(mempool_limit: usize) -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await??;
     let handle = Arc::new(node.handle());
@@ -459,7 +460,7 @@ async fn identity_overflow_scenario(mempool_limit: usize) -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await??;
     let handle = Arc::new(node.handle());
@@ -501,7 +502,7 @@ async fn identity_duplicate_scenario(mempool_limit: usize) -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await??;
     let handle = Arc::new(node.handle());
@@ -553,7 +554,7 @@ async fn vote_overflow_scenario(mempool_limit: usize) -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await??;
     let handle = Arc::new(node.handle());
@@ -594,7 +595,7 @@ async fn vote_duplicate_scenario(mempool_limit: usize) -> Result<()> {
     let config = sample_node_config(tempdir.path(), mempool_limit);
     let node = tokio::task::spawn_blocking({
         let config = config.clone();
-        move || Node::new(config)
+        move || Node::new(config, RuntimeMetrics::noop())
     })
     .await??;
     let handle = Arc::new(node.handle());

@@ -13,6 +13,7 @@ use rpp::runtime::node::Node;
 use rpp::runtime::orchestration::PipelineOrchestrator;
 use rpp::runtime::sync::{PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier};
 use rpp::runtime::types::BlockPayload;
+use rpp::runtime::RuntimeMetrics;
 
 use rpp_wallet::config::{
     CacheConfig, ElectrsConfig, FeatureGates, NetworkSelection, P2pConfig, TrackerConfig,
@@ -174,7 +175,7 @@ fn build_runtime_adapters(base: &Path) -> RuntimeAdapters {
     config.snapshot_dir = base.join("node/snapshots");
     config.proof_cache_dir = base.join("node/proofs");
 
-    let node = Node::new(config).expect("node");
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let node_handle = node.handle();
     let storage = node_handle.storage();
 
