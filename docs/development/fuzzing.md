@@ -28,7 +28,7 @@ To reproduce the CI job locally:
 
 ```bash
 rustup toolchain install nightly --profile minimal
-cargo +nightly install cargo-fuzz --locked
+cargo install cargo-fuzz
 scripts/ci/fuzz-smoke.sh
 ```
 
@@ -38,10 +38,10 @@ For exploratory fuzzing you can extend the runtime and adjust seeds. Examples:
 
 ```bash
 cd fuzz
-cargo +nightly fuzz run transaction_parser corpus/transaction_parser \
+cargo fuzz run transaction_parser corpus/transaction_parser \
   -- -dict=dictionaries/transaction_parser.dict -max_total_time=600 -artifact_prefix=artifacts/transaction_parser-
 
-cargo +nightly fuzz run pruning_proof corpus/pruning_proof \
+cargo fuzz run pruning_proof corpus/pruning_proof \
   -- -dict=dictionaries/pruning_proof.dict -max_total_time=900 -seed=0xDEADBEEF
 ```
 

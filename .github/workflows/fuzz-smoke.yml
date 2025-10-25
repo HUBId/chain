@@ -18,7 +18,7 @@ jobs:
         run: rustup toolchain install nightly --profile minimal
 
       - name: Install cargo-fuzz
-        run: cargo +nightly install cargo-fuzz --locked
+        run: cargo install cargo-fuzz
 
       - name: Run fuzz smoke targets
         run: scripts/ci/fuzz-smoke.sh

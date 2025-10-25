@@ -12,7 +12,13 @@ if ! command -v cargo >/dev/null; then
   exit 1
 fi
 
+if ! command -v cargo-fuzz >/dev/null && ! cargo --list 2>/dev/null | grep -q "^    fuzz"; then
+  echo "cargo-fuzz is required to run fuzz smoke tests" >&2
+  exit 1
+fi
+
 pushd "${FUZZ_DIR}" >/dev/null
+export RUSTUP_TOOLCHAIN=nightly
 for target in "${TARGETS[@]}"; do
   echo "==> Running fuzz smoke for ${target}"
   mkdir -p "artifacts/${target}" "corpus/${target}"
@@ -26,6 +32,6 @@ for target in "${TARGETS[@]}"; do
   if [[ -f "${dict_path}" ]]; then
     args+=(-dict="${dict_path}")
   fi
-  cargo +nightly fuzz run "${target}" "corpus/${target}" -- "${args[@]}"
+  cargo fuzz run "${target}" "corpus/${target}" -- "${args[@]}"
 done
 popd >/dev/null
