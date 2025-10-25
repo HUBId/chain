@@ -3,8 +3,41 @@ use serde::{Deserialize, Serialize};
 use crate::errors::{ChainError, ChainResult};
 use crate::proof_backend::TxPublicInputs;
 use crate::rpp::ProofSystemKind;
+
+#[cfg(feature = "prover-stwo")]
 use crate::stwo::circuit::transaction::TransactionWitness;
+#[cfg(feature = "prover-stwo")]
 use crate::stwo::proof::{ProofPayload, StarkProof};
+
+#[cfg(not(feature = "prover-stwo"))]
+mod stwo_disabled {
+    use serde::{Deserialize, Serialize};
+    use serde_json::Value;
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct TransactionWitness {
+        #[serde(default)]
+        pub raw: Value,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct ProofPayload {
+        #[serde(default)]
+        pub raw: Value,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct StarkProof {
+        #[serde(default)]
+        pub raw: Value,
+    }
+}
+
+#[cfg(not(feature = "prover-stwo"))]
+use stwo_disabled::{ProofPayload, StarkProof, TransactionWitness};
 
 use super::transaction::SignedTransaction;
 
@@ -81,6 +114,7 @@ impl ChainProof {
     }
 
     /// Borrow the underlying STWO proof, returning an error if the backend mismatches.
+    #[cfg(feature = "prover-stwo")]
     pub fn expect_stwo(&self) -> ChainResult<&StarkProof> {
         match self {
             ChainProof::Stwo(proof) => Ok(proof),
@@ -99,10 +133,51 @@ impl ChainProof {
         }
     }
 
+    /// Borrow the underlying STWO proof, returning an error if the backend mismatches.
+    #[cfg(not(feature = "prover-stwo"))]
+    pub fn expect_stwo(&self) -> ChainResult<&StarkProof> {
+        match self {
+            ChainProof::Stwo(_) => Err(ChainError::Crypto("STWO prover disabled".into())),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => Err(ChainError::Crypto(
+                "expected STWO proof, received PLONKY3 artifact".into(),
+            )),
+            #[cfg(all(feature = "backend-rpp-stark", not(feature = "backend-plonky3")))]
+            ChainProof::RppStark(_) => Err(ChainError::Crypto(
+                "expected STWO proof, received RPP-STARK artifact".into(),
+            )),
+            #[cfg(all(feature = "backend-plonky3", feature = "backend-rpp-stark"))]
+            ChainProof::RppStark(_) => Err(ChainError::Crypto(
+                "expected STWO proof, received RPP-STARK artifact".into(),
+            )),
+        }
+    }
+
     /// Consume the proof and yield the contained STWO artifact if present.
+    #[cfg(feature = "prover-stwo")]
     pub fn into_stwo(self) -> ChainResult<StarkProof> {
         match self {
             ChainProof::Stwo(proof) => Ok(proof),
+            #[cfg(feature = "backend-plonky3")]
+            ChainProof::Plonky3(_) => Err(ChainError::Crypto(
+                "expected STWO proof, received PLONKY3 artifact".into(),
+            )),
+            #[cfg(all(feature = "backend-rpp-stark", not(feature = "backend-plonky3")))]
+            ChainProof::RppStark(_) => Err(ChainError::Crypto(
+                "expected STWO proof, received RPP-STARK artifact".into(),
+            )),
+            #[cfg(all(feature = "backend-plonky3", feature = "backend-rpp-stark"))]
+            ChainProof::RppStark(_) => Err(ChainError::Crypto(
+                "expected STWO proof, received RPP-STARK artifact".into(),
+            )),
+        }
+    }
+
+    /// Consume the proof and yield the contained STWO artifact if present.
+    #[cfg(not(feature = "prover-stwo"))]
+    pub fn into_stwo(self) -> ChainResult<StarkProof> {
+        match self {
+            ChainProof::Stwo(_) => Err(ChainError::Crypto("STWO prover disabled".into())),
             #[cfg(feature = "backend-plonky3")]
             ChainProof::Plonky3(_) => Err(ChainError::Crypto(
                 "expected STWO proof, received PLONKY3 artifact".into(),
