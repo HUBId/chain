@@ -6,6 +6,7 @@
 //! environment variable so CI jobs can opt in to deeper OTLP validation without
 //! paying the cost on every run.
 
+use std::collections::HashSet;
 use std::env;
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
@@ -113,7 +114,7 @@ fn assert_observability_attributes(log: &str, spec: &ModeSpec) {
     ];
 
     for (key, value) in expectations {
-        let pattern = format!("{key}=\"{value}\"");
+        let pattern = format!("\"{key}\":\"{value}\"");
         assert!(
             log.contains(&pattern),
             "telemetry log missing attribute {pattern}: {log}",
@@ -123,18 +124,18 @@ fn assert_observability_attributes(log: &str, spec: &ModeSpec) {
     }
 
     assert!(
-        log.contains("instance.id=\""),
+        log.contains("\"instance.id\":"),
         "telemetry log missing instance.id attribute: {log}",
         log = log
     );
 }
 
 fn wait_for_pipeline_marker(logs: &mut Receiver<String>, pipeline: &str) -> Result<String> {
-    let pattern = format!("pipeline=\\\"{pipeline}\\\"");
+    let pattern = format!("pipeline=\\\"{pipeline}\\\" started");
 
     loop {
         let line = wait_for_log(logs, &pattern)?;
-        if line.contains("started") {
+        if line.contains(&pattern) {
             return Ok(line);
         }
     }
@@ -147,13 +148,31 @@ struct ModeContext {
     wallet_config: Option<PathBuf>,
 }
 
+#[derive(Default)]
+struct PortAllocator {
+    reserved: HashSet<u16>,
+}
+
+impl PortAllocator {
+    fn next_port(&mut self) -> Result<u16> {
+        loop {
+            let port = pick_free_tcp_port()?;
+            if self.reserved.insert(port) {
+                return Ok(port);
+            }
+        }
+    }
+
+    fn reserve(&mut self, port: u16) {
+        self.reserved.insert(port);
+    }
+}
+
 fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
     let context = ModeContext::prepare(spec)?;
 
     let mut command = Command::new(binary);
     command
-        .arg("start")
-        .arg("--mode")
         .arg(spec.name)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -181,30 +200,44 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
 
     let bootstrap_log = wait_for_log(&mut logs, "bootstrap configuration resolved")?;
     assert!(
-        bootstrap_log.contains(&format!("mode=\"{}\"", spec.name)),
+        bootstrap_log.contains(&format!("\"mode\":\"{}\"", spec.name)),
         "bootstrap log missing mode: {}",
         bootstrap_log
     );
     assert!(
-        bootstrap_log.contains(&format!("config_source=\"{}\"", spec.config_source)),
+        bootstrap_log.contains(&format!(
+            "\"config_source\":\"{}\"",
+            spec.config_source
+        )),
         "bootstrap log missing config source: {}",
         bootstrap_log
     );
+    if observability_assertions_enabled() {
+        assert_observability_attributes(&bootstrap_log, spec);
+    }
 
     let telemetry_log = wait_for_log(&mut logs, "node.telemetry.init")?;
     assert!(
-        telemetry_log.contains(&format!("mode=\"{}\"", spec.name)),
+        telemetry_log.contains(&format!("\"mode\":\"{}\"", spec.name)),
         "telemetry log missing mode: {}",
         telemetry_log
     );
     assert!(
-        telemetry_log.contains(&format!("config_source=\"{}\"", spec.config_source)),
+        telemetry_log.contains(&format!(
+            "\"config_source\":\"{}\"",
+            spec.config_source
+        )),
         "telemetry log missing config source: {}",
         telemetry_log
     );
 
     if observability_assertions_enabled() {
         assert_observability_attributes(&telemetry_log, spec);
+        assert!(
+            telemetry_log.contains("\"target\":\"telemetry\""),
+            "telemetry log missing telemetry target marker: {}",
+            telemetry_log
+        );
     }
 
     if let Some(expectation) = spec.telemetry {
@@ -212,15 +245,34 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
     }
 
     if spec.needs_node {
-        let _ = wait_for_log(&mut logs, "node runtime started")?;
+        let node_log = wait_for_log(&mut logs, "node runtime started")?;
+        if observability_assertions_enabled() {
+            assert_observability_attributes(&node_log, spec);
+        }
     }
 
     if spec.needs_wallet {
-        let _ = wait_for_log(&mut logs, "wallet runtime initialised")?;
+        let wallet_log = wait_for_log(&mut logs, "wallet runtime initialised")?;
+        if observability_assertions_enabled() {
+            assert_observability_attributes(&wallet_log, spec);
+        }
     }
 
     for pipeline in spec.pipelines {
-        let _ = wait_for_pipeline_marker(&mut logs, pipeline)?;
+        let pipeline_log = wait_for_pipeline_marker(&mut logs, pipeline)?;
+        if observability_assertions_enabled() {
+            assert_observability_attributes(&pipeline_log, spec);
+            assert!(
+                pipeline_log.contains("\"target\":\"pipeline\""),
+                "pipeline log missing pipeline target marker: {}",
+                pipeline_log
+            );
+            assert!(
+                pipeline_log.contains(&format!("\"pipeline\":\"{pipeline}\"")),
+                "pipeline log missing pipeline label: {}",
+                pipeline_log
+            );
+        }
     }
 
     // Drain remaining logs so the child process cannot block on a full pipe during shutdown.
@@ -255,8 +307,6 @@ fn binary_dry_run_smoke() -> Result<()> {
 
     let mut command = Command::new(&binary);
     command
-        .arg("start")
-        .arg("--mode")
         .arg(spec.name)
         .arg("--dry-run")
         .stdout(Stdio::piped())
@@ -296,23 +346,105 @@ fn binary_dry_run_smoke() -> Result<()> {
         ));
     }
 
-    if !combined.contains("mode=\"node\"") {
+    if !combined.contains("\"dry_run\":true") {
+        return Err(anyhow!(
+            "dry run logs did not record dry run flag: {combined}"
+        ));
+    }
+
+    if !combined.contains("\"mode\":\"node\"") {
         return Err(anyhow!(
             "dry run logs did not record the runtime mode: {combined}"
         ));
     }
 
-    if !combined.contains("config_source=\"cli\"") {
+    if !combined.contains("\"config_source\":\"cli\"") {
         return Err(anyhow!(
             "dry run logs did not record the config source: {combined}"
         ));
     }
 
-    if combined.contains("pipeline orchestrator started") || combined.contains("pipeline=\"") {
+    if combined.contains("pipeline orchestrator started")
+        || combined.contains("\"msg\":\"pipeline=\\\"")
+    {
         return Err(anyhow!(
             "dry run logs indicate pipeline orchestrator was started: {combined}"
         ));
     }
+
+    Ok(())
+}
+
+#[test]
+fn validator_dry_run_rejects_invalid_configuration() -> Result<()> {
+    let binary = locate_rpp_node_binary().context("failed to locate rpp-node binary")?;
+    let temp_dir = TempDir::new().context("failed to create temporary directory")?;
+
+    let node_port = pick_free_tcp_port()?;
+    let wallet_port = loop {
+        let candidate = pick_free_tcp_port()?;
+        if candidate != node_port {
+            break candidate;
+        }
+    };
+
+    let node_addr: SocketAddr = format!("127.0.0.1:{node_port}")
+        .parse()
+        .context("invalid node rpc listen address")?;
+    let wallet_addr: SocketAddr = format!("127.0.0.1:{wallet_port}")
+        .parse()
+        .context("invalid wallet rpc listen address")?;
+
+    let mut ports = PortAllocator::default();
+    let node_config = write_node_config_with(
+        temp_dir.path(),
+        Some(TelemetryExpectation::WithEndpoint),
+        &mut ports,
+        |config| {
+            config.rpc_listen = node_addr;
+        },
+    )?;
+    ports.reserve(node_addr.port());
+
+    let wallet_config = write_wallet_config_with(
+        temp_dir.path(),
+        &mut ports,
+        |config| {
+            config.rpc_listen = wallet_addr;
+        },
+    )?;
+    ports.reserve(wallet_addr.port());
+
+    let output = Command::new(&binary)
+        .arg("validator")
+        .arg("--node-config")
+        .arg(&node_config)
+        .arg("--wallet-config")
+        .arg(&wallet_config)
+        .arg("--dry-run")
+        .output()
+        .context("failed to run validator dry run")?;
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "validator dry run exited with unexpected status: {:?}",
+        output.status
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("listener mismatch"),
+        "stderr missing mismatch message: {stderr}"
+    );
+    assert!(
+        stderr.contains("node-config.toml::rpc_listen"),
+        "stderr missing node rpc reference: {stderr}"
+    );
+    assert!(
+        stderr.contains("wallet-config.toml::rpc_listen"),
+        "stderr missing wallet rpc reference: {stderr}"
+    );
 
     Ok(())
 }
@@ -335,20 +467,27 @@ fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
         .parse()
         .context("invalid wallet rpc listen address")?;
 
+    let mut ports = PortAllocator::default();
     let node_config = write_node_config_with(
         temp_dir.path(),
         Some(TelemetryExpectation::Disabled),
+        &mut ports,
         |config| {
             config.rpc_listen = node_addr;
         },
     )?;
+    ports.reserve(node_addr.port());
 
-    let wallet_config =
-        write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = wallet_addr)?;
+    let wallet_config = write_wallet_config_with(
+        temp_dir.path(),
+        &mut ports,
+        |config| {
+            config.rpc_listen = wallet_addr;
+        },
+    )?;
+    ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)
-        .arg("start")
-        .arg("--mode")
         .arg("hybrid")
         .arg("--node-config")
         .arg(&node_config)
@@ -409,20 +548,27 @@ fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
         .parse()
         .context("invalid wallet rpc listen address")?;
 
+    let mut ports = PortAllocator::default();
     let node_config = write_node_config_with(
         temp_dir.path(),
         Some(TelemetryExpectation::WithEndpoint),
+        &mut ports,
         |config| {
             config.rpc_listen = node_addr;
         },
     )?;
+    ports.reserve(node_addr.port());
 
-    let wallet_config =
-        write_wallet_config_with(temp_dir.path(), |config| config.rpc_listen = wallet_addr)?;
+    let wallet_config = write_wallet_config_with(
+        temp_dir.path(),
+        &mut ports,
+        |config| {
+            config.rpc_listen = wallet_addr;
+        },
+    )?;
+    ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)
-        .arg("start")
-        .arg("--mode")
         .arg("validator")
         .arg("--node-config")
         .arg(&node_config)
@@ -484,22 +630,31 @@ fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
         .context("invalid node rpc listen address")?;
     let p2p_multiaddr = format!("/ip4/127.0.0.1/tcp/{wallet_port}");
 
+    let mut ports = PortAllocator::default();
     let node_config = write_node_config_with(
         temp_dir.path(),
         Some(TelemetryExpectation::WithEndpoint),
+        &mut ports,
         |config| {
             config.rpc_listen = node_rpc_addr;
             config.p2p.listen_addr = p2p_multiaddr.clone();
         },
     )?;
+    ports.reserve(node_rpc_addr.port());
+    if let Some(port) = extract_port(p2p_multiaddr.clone()) {
+        ports.reserve(port);
+    }
 
-    let wallet_config = write_wallet_config_with(temp_dir.path(), |config| {
-        config.rpc_listen = wallet_addr;
-    })?;
+    let wallet_config = write_wallet_config_with(
+        temp_dir.path(),
+        &mut ports,
+        |config| {
+            config.rpc_listen = wallet_addr;
+        },
+    )?;
+    ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)
-        .arg("start")
-        .arg("--mode")
         .arg("validator")
         .arg("--node-config")
         .arg(&node_config)
@@ -553,15 +708,16 @@ impl ModeContext {
     fn prepare(spec: &ModeSpec) -> Result<Self> {
         let temp_dir = TempDir::new().context("failed to create temporary directory")?;
         let mut node_config = None;
+        let mut ports = PortAllocator::default();
         if spec.needs_node {
-            let path = write_node_config(temp_dir.path(), spec.telemetry)
+            let path = write_node_config(temp_dir.path(), spec.telemetry, &mut ports)
                 .context("failed to write node configuration")?;
             node_config = Some(path);
         }
 
         let mut wallet_config = None;
         if spec.needs_wallet {
-            let path = write_wallet_config(temp_dir.path())
+            let path = write_wallet_config(temp_dir.path(), &mut ports)
                 .context("failed to write wallet configuration")?;
             wallet_config = Some(path);
         }
@@ -574,13 +730,18 @@ impl ModeContext {
     }
 }
 
-fn write_node_config(base: &Path, telemetry: Option<TelemetryExpectation>) -> Result<PathBuf> {
-    write_node_config_with(base, telemetry, |_| {})
+fn write_node_config(
+    base: &Path,
+    telemetry: Option<TelemetryExpectation>,
+    ports: &mut PortAllocator,
+) -> Result<PathBuf> {
+    write_node_config_with(base, telemetry, ports, |_| {})
 }
 
 fn write_node_config_with(
     base: &Path,
     telemetry: Option<TelemetryExpectation>,
+    ports: &mut PortAllocator,
     mut update: impl FnOnce(&mut NodeConfig),
 ) -> Result<PathBuf> {
     let mut config = NodeConfig::default();
@@ -595,8 +756,9 @@ fn write_node_config_with(
     config.consensus_pipeline_path = node_root.join("consensus/pipeline.json");
     config.p2p.peerstore_path = node_root.join("p2p/peerstore.json");
     config.p2p.gossip_path = Some(node_root.join("p2p/gossip.json"));
-    config.p2p.listen_addr = format!("/ip4/127.0.0.1/tcp/{}", pick_free_tcp_port()?).into();
-    config.rpc_listen = format!("127.0.0.1:{}", pick_free_tcp_port()?)
+    config.p2p.listen_addr =
+        format!("/ip4/127.0.0.1/tcp/{}", ports.next_port()?).into();
+    config.rpc_listen = format!("127.0.0.1:{}", ports.next_port()?)
         .parse()
         .context("invalid rpc listen address")?;
 
@@ -615,6 +777,10 @@ fn write_node_config_with(
     }
 
     update(&mut config);
+    ports.reserve(config.rpc_listen.port());
+    if let Some(port) = extract_port(config.p2p.listen_addr.to_string()) {
+        ports.reserve(port);
+    }
 
     config
         .ensure_directories()
@@ -627,23 +793,25 @@ fn write_node_config_with(
     Ok(path)
 }
 
-fn write_wallet_config(base: &Path) -> Result<PathBuf> {
-    write_wallet_config_with(base, |_| {})
+fn write_wallet_config(base: &Path, ports: &mut PortAllocator) -> Result<PathBuf> {
+    write_wallet_config_with(base, ports, |_| {})
 }
 
 fn write_wallet_config_with(
     base: &Path,
+    ports: &mut PortAllocator,
     mut update: impl FnOnce(&mut WalletConfig),
 ) -> Result<PathBuf> {
     let mut config = WalletConfig::default();
     let wallet_root = base.join("wallet");
     config.data_dir = wallet_root.join("data");
     config.key_path = wallet_root.join("keys/wallet.toml");
-    config.rpc_listen = format!("127.0.0.1:{}", pick_free_tcp_port()?)
+    config.rpc_listen = format!("127.0.0.1:{}", ports.next_port()?)
         .parse()
         .context("invalid wallet rpc listen address")?;
 
     update(&mut config);
+    ports.reserve(config.rpc_listen.port());
 
     config
         .ensure_directories()
@@ -654,6 +822,13 @@ fn write_wallet_config_with(
         .save(&path)
         .with_context(|| format!("failed to save wallet config at {}", path.display()))?;
     Ok(path)
+}
+
+fn extract_port(address: String) -> Option<u16> {
+    address
+        .rsplit('/')
+        .next()
+        .and_then(|value| value.parse::<u16>().ok())
 }
 
 fn capture_child_output(child: &mut Child) -> Receiver<String> {
@@ -744,7 +919,12 @@ fn pick_free_tcp_port() -> Result<u16> {
 }
 
 fn locate_rpp_node_binary() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_rpp-node") {
+    locate_binary("rpp-node")
+}
+
+fn locate_binary(name: &str) -> Result<PathBuf> {
+    let env_key = format!("CARGO_BIN_EXE_{name}");
+    if let Ok(path) = std::env::var(&env_key) {
         return Ok(PathBuf::from(path));
     }
 
@@ -756,7 +936,7 @@ fn locate_rpp_node_binary() -> Result<PathBuf> {
         }
     }
 
-    let mut binary_path = current.join("target").join(&profile).join("rpp-node");
+    let mut binary_path = current.join("target").join(&profile).join(name);
     if cfg!(windows) {
         binary_path.set_extension("exe");
     }
@@ -771,19 +951,19 @@ fn locate_rpp_node_binary() -> Result<PathBuf> {
         .arg("--profile")
         .arg(&profile)
         .arg("--bin")
-        .arg("rpp-node")
+        .arg(name)
         .status()
-        .context("failed to build rpp-node binary via cargo")?;
+        .with_context(|| format!("failed to build {name} binary via cargo"))?;
 
     if !status.success() {
-        return Err(anyhow!("cargo failed to build rpp-node binary"));
+        return Err(anyhow!("cargo failed to build {name} binary"));
     }
 
     if binary_path.exists() {
         Ok(binary_path)
     } else {
         Err(anyhow!(
-            "rpp-node binary not found at {} even after building",
+            "{name} binary not found at {} even after building",
             binary_path.display()
         ))
     }
