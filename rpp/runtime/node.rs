@@ -72,12 +72,15 @@ use crate::runtime::node_runtime::{
     },
     NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
-use crate::runtime::{init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard};
 use crate::runtime::sync::{
     state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
     stream_state_sync_chunks as runtime_stream_state_sync_chunks,
 };
 use crate::runtime::vrf_gossip::{submission_to_gossip, verify_submission};
+use crate::runtime::{
+    init_runtime_metrics, ProofVerificationBackend, ProofVerificationKind,
+    ProofVerificationOutcome, ProofVerificationStage, RuntimeMetrics, RuntimeMetricsGuard,
+};
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::{StateTransitionReceipt, Storage};
@@ -561,24 +564,21 @@ impl ConsensusTelemetry {
         let mut state = self.state.lock();
         state.witness_events = state.witness_events.saturating_add(1);
         drop(state);
-        self.metrics
-            .record_consensus_witness_event(topic.into());
+        self.metrics.record_consensus_witness_event(topic.into());
     }
 
     pub fn record_slashing<S: Into<String>>(&self, reason: S) {
         let mut state = self.state.lock();
         state.slashing_events = state.slashing_events.saturating_add(1);
         drop(state);
-        self.metrics
-            .record_consensus_slashing_event(reason.into());
+        self.metrics.record_consensus_slashing_event(reason.into());
     }
 
     pub fn record_failed_vote<S: Into<String>>(&self, reason: S) {
         let mut state = self.state.lock();
         state.failed_votes = state.failed_votes.saturating_add(1);
         drop(state);
-        self.metrics
-            .record_consensus_failed_vote(reason.into());
+        self.metrics.record_consensus_failed_vote(reason.into());
     }
 
     pub fn snapshot(&self) -> ConsensusTelemetrySnapshot {
@@ -966,8 +966,9 @@ impl Node {
             KeyValue::new("service.instance.id", instance_id.clone()),
         ]);
         let (runtime_metrics, runtime_metrics_guard) =
-            init_runtime_metrics(&config.rollout.telemetry, resource)
-                .map_err(|err| ChainError::Config(format!("failed to initialise runtime metrics: {err}")))?;
+            init_runtime_metrics(&config.rollout.telemetry, resource).map_err(|err| {
+                ChainError::Config(format!("failed to initialise runtime metrics: {err}"))
+            })?;
         let address = address_from_public_key(&keypair.public);
         let reputation_params = config.reputation_params();
         let db_path = config.data_dir.join("db");
@@ -2324,9 +2325,7 @@ impl NodeInner {
             .map(|account| account.reputation.score)
             .unwrap_or_default();
         let consensus_snapshot = self.consensus_telemetry.snapshot();
-        self
-            .runtime_metrics
-            .record_block_height(status.height);
+        self.runtime_metrics.record_block_height(status.height);
         Ok(P2pMetrics {
             block_height: status.height,
             block_hash: status.last_hash,
@@ -2531,20 +2530,32 @@ impl NodeInner {
     #[cfg(feature = "backend-rpp-stark")]
     fn verify_rpp_stark_with_metrics(
         &self,
-        proof_kind: &'static str,
+        proof_kind: ProofVerificationKind,
         proof: &ChainProof,
     ) -> ChainResult<RppStarkVerificationReport> {
         let started = Instant::now();
         match self
             .verifiers
-            .verify_rpp_stark_with_report(proof, proof_kind)
+            .verify_rpp_stark_with_report(proof, proof_kind.as_str())
         {
             Ok(report) => {
-                Self::emit_rpp_stark_metrics(proof_kind, proof, &report, started.elapsed());
+                self.emit_rpp_stark_metrics(
+                    ProofVerificationBackend::RppStark,
+                    proof_kind,
+                    proof,
+                    &report,
+                    started.elapsed(),
+                );
                 Ok(report)
             }
             Err(err) => {
-                Self::emit_rpp_stark_failure_metrics(proof_kind, proof, started.elapsed(), &err);
+                self.emit_rpp_stark_failure_metrics(
+                    ProofVerificationBackend::RppStark,
+                    proof_kind,
+                    proof,
+                    started.elapsed(),
+                    &err,
+                );
                 Err(err)
             }
         }
@@ -2552,23 +2563,47 @@ impl NodeInner {
 
     #[cfg(feature = "backend-rpp-stark")]
     fn emit_rpp_stark_metrics(
-        proof_kind: &'static str,
+        &self,
+        backend: ProofVerificationBackend,
+        proof_kind: ProofVerificationKind,
         proof: &ChainProof,
         report: &RppStarkVerificationReport,
         duration: Duration,
     ) {
         let flags = report.flags();
-        Self::record_rpp_stark_duration_metric(duration, proof_kind);
-        Self::record_rpp_stark_bytes_metric(
-            "rpp_stark_proof_total_bytes",
-            report.total_bytes(),
+        let proof_metrics = self.runtime_metrics.proofs();
+        proof_metrics.observe_verification(backend, proof_kind, duration);
+        proof_metrics.observe_verification_total_bytes(backend, proof_kind, report.total_bytes());
+        proof_metrics.observe_verification_stage(
+            backend,
             proof_kind,
+            ProofVerificationStage::Params,
+            ProofVerificationOutcome::from_bool(flags.params()),
         );
-        Self::record_rpp_stark_stage_metric("params", flags.params(), proof_kind);
-        Self::record_rpp_stark_stage_metric("public", flags.public(), proof_kind);
-        Self::record_rpp_stark_stage_metric("merkle", flags.merkle(), proof_kind);
-        Self::record_rpp_stark_stage_metric("fri", flags.fri(), proof_kind);
-        Self::record_rpp_stark_stage_metric("composition", flags.composition(), proof_kind);
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Public,
+            ProofVerificationOutcome::from_bool(flags.public()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Merkle,
+            ProofVerificationOutcome::from_bool(flags.merkle()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Fri,
+            ProofVerificationOutcome::from_bool(flags.fri()),
+        );
+        proof_metrics.observe_verification_stage(
+            backend,
+            proof_kind,
+            ProofVerificationStage::Composition,
+            ProofVerificationOutcome::from_bool(flags.composition()),
+        );
 
         if let Ok(artifact) = proof.expect_rpp_stark() {
             let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
@@ -2577,22 +2612,18 @@ impl NodeInner {
                 u64::try_from(artifact.public_inputs_len()).unwrap_or(u64::MAX);
             let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
 
-            Self::record_rpp_stark_bytes_metric("rpp_stark_params_bytes", params_bytes, proof_kind);
-            Self::record_rpp_stark_bytes_metric(
-                "rpp_stark_public_inputs_bytes",
+            proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
+            proof_metrics.observe_verification_public_inputs_bytes(
+                backend,
+                proof_kind,
                 public_inputs_bytes,
-                proof_kind,
             );
-            Self::record_rpp_stark_bytes_metric(
-                "rpp_stark_payload_bytes",
-                payload_bytes,
-                proof_kind,
-            );
+            proof_metrics.observe_verification_payload_bytes(backend, proof_kind, payload_bytes);
 
             info!(
                 target = "proofs",
                 proof_backend = "rpp-stark",
-                proof_kind,
+                proof_kind = proof_kind.as_str(),
                 valid = report.is_verified(),
                 params_ok = flags.params(),
                 public_ok = flags.public(),
@@ -2611,7 +2642,7 @@ impl NodeInner {
             info!(
                 target = "telemetry",
                 proof_backend = "rpp-stark",
-                proof_kind,
+                proof_kind = proof_kind.as_str(),
                 valid = report.is_verified(),
                 params_ok = flags.params(),
                 public_ok = flags.public(),
@@ -2630,13 +2661,16 @@ impl NodeInner {
 
     #[cfg(feature = "backend-rpp-stark")]
     fn emit_rpp_stark_failure_metrics(
-        proof_kind: &'static str,
+        &self,
+        backend: ProofVerificationBackend,
+        proof_kind: ProofVerificationKind,
         proof: &ChainProof,
         duration: Duration,
         error: &ChainError,
     ) {
         let verify_duration_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
-        Self::record_rpp_stark_duration_metric(duration, proof_kind);
+        let proof_metrics = self.runtime_metrics.proofs();
+        proof_metrics.observe_verification(backend, proof_kind, duration);
         if let Ok(artifact) = proof.expect_rpp_stark() {
             let params_bytes = u64::try_from(artifact.params_len()).unwrap_or(u64::MAX);
             let public_inputs_bytes =
@@ -2644,27 +2678,19 @@ impl NodeInner {
             let payload_bytes = u64::try_from(artifact.proof_len()).unwrap_or(u64::MAX);
             let proof_bytes = u64::try_from(artifact.total_len()).unwrap_or(u64::MAX);
 
-            Self::record_rpp_stark_bytes_metric(
-                "rpp_stark_proof_total_bytes",
-                proof_bytes,
+            proof_metrics.observe_verification_total_bytes(backend, proof_kind, proof_bytes);
+            proof_metrics.observe_verification_params_bytes(backend, proof_kind, params_bytes);
+            proof_metrics.observe_verification_public_inputs_bytes(
+                backend,
                 proof_kind,
-            );
-            Self::record_rpp_stark_bytes_metric("rpp_stark_params_bytes", params_bytes, proof_kind);
-            Self::record_rpp_stark_bytes_metric(
-                "rpp_stark_public_inputs_bytes",
                 public_inputs_bytes,
-                proof_kind,
             );
-            Self::record_rpp_stark_bytes_metric(
-                "rpp_stark_payload_bytes",
-                payload_bytes,
-                proof_kind,
-            );
+            proof_metrics.observe_verification_payload_bytes(backend, proof_kind, payload_bytes);
 
             warn!(
                 target = "proofs",
                 proof_backend = "rpp-stark",
-                proof_kind,
+                proof_kind = proof_kind.as_str(),
                 valid = false,
                 proof_bytes,
                 params_bytes,
@@ -2677,7 +2703,7 @@ impl NodeInner {
             warn!(
                 target = "telemetry",
                 proof_backend = "rpp-stark",
-                proof_kind,
+                proof_kind = proof_kind.as_str(),
                 valid = false,
                 proof_bytes,
                 params_bytes,
@@ -2691,7 +2717,7 @@ impl NodeInner {
             warn!(
                 target = "proofs",
                 proof_backend = "rpp-stark",
-                proof_kind,
+                proof_kind = proof_kind.as_str(),
                 valid = false,
                 verify_duration_ms,
                 error = %error,
@@ -2700,49 +2726,13 @@ impl NodeInner {
             warn!(
                 target = "telemetry",
                 proof_backend = "rpp-stark",
-                proof_kind,
+                proof_kind = proof_kind.as_str(),
                 valid = false,
                 verify_duration_ms,
                 error = %error,
                 "rpp-stark proof verification failed"
             );
         }
-    }
-
-    #[cfg(feature = "backend-rpp-stark")]
-    const RPP_STARK_METRIC_BACKEND: &'static str = "rpp-stark";
-
-    #[cfg(feature = "backend-rpp-stark")]
-    fn record_rpp_stark_duration_metric(duration: Duration, proof_kind: &'static str) {
-        metrics::histogram!(
-            "rpp_stark_verify_duration_seconds",
-            duration.as_secs_f64(),
-            "proof_backend" => Self::RPP_STARK_METRIC_BACKEND,
-            "proof_kind" => proof_kind,
-        );
-    }
-
-    #[cfg(feature = "backend-rpp-stark")]
-    fn record_rpp_stark_bytes_metric(metric: &'static str, bytes: u64, proof_kind: &'static str) {
-        metrics::histogram!(
-            metric,
-            bytes as f64,
-            "proof_backend" => Self::RPP_STARK_METRIC_BACKEND,
-            "proof_kind" => proof_kind,
-        );
-    }
-
-    #[cfg(feature = "backend-rpp-stark")]
-    fn record_rpp_stark_stage_metric(stage: &'static str, ok: bool, proof_kind: &'static str) {
-        let result = if ok { "ok" } else { "fail" };
-        metrics::counter!(
-            "rpp_stark_stage_checks_total",
-            1,
-            "proof_backend" => Self::RPP_STARK_METRIC_BACKEND,
-            "proof_kind" => proof_kind,
-            "stage" => stage,
-            "result" => result,
-        );
     }
 
     fn spawn_runtime(self: &Arc<Self>) -> JoinHandle<()> {
@@ -2770,7 +2760,8 @@ impl NodeInner {
         let node = Node::new(config)?;
         let handle = node.handle();
         let runtime_config = handle.inner.runtime_config()?;
-        let (p2p_inner, p2p_handle) = P2pRuntime::new(runtime_config).map_err(|err: P2pError| {
+        let (p2p_inner, p2p_handle) =
+            P2pRuntime::new(runtime_config).map_err(|err: P2pError| {
                 ChainError::Config(format!("failed to initialise p2p runtime: {err}"))
             })?;
         let p2p_task = tokio::spawn(async move {
@@ -3161,7 +3152,10 @@ impl NodeInner {
                 } else {
                     match &bundle.proof {
                         ChainProof::RppStark(_) => self
-                            .verify_rpp_stark_with_metrics("transaction", &bundle.proof)
+                            .verify_rpp_stark_with_metrics(
+                                ProofVerificationKind::Transaction,
+                                &bundle.proof,
+                            )
                             .map(|_| ()),
                         _ => self.verifiers.verify_transaction(&bundle.proof),
                     }
@@ -3513,8 +3507,7 @@ impl NodeInner {
             "invalid vote gossip detected"
         );
         self.punish_invalid_proof(&vote.vote.voter, vote.vote.height, vote.vote.round);
-        self
-            .consensus_telemetry
+        self.consensus_telemetry
             .record_failed_vote(format!("invalid_gossip:{reason}"));
         self.update_runtime_metrics();
     }
@@ -4318,8 +4311,7 @@ impl NodeInner {
                         ?err,
                         "failed to register local prevote for external proposal"
                     );
-                    self
-                        .consensus_telemetry
+                    self.consensus_telemetry
                         .record_failed_vote("local_prevote".to_string());
                     self.update_runtime_metrics();
                 }
@@ -4334,8 +4326,7 @@ impl NodeInner {
                         ?err,
                         "failed to register local precommit for external proposal"
                     );
-                    self
-                        .consensus_telemetry
+                    self.consensus_telemetry
                         .record_failed_vote("local_precommit".to_string());
                     self.update_runtime_metrics();
                 }
@@ -4358,8 +4349,7 @@ impl NodeInner {
                                 );
                             }
                         }
-                        self
-                            .consensus_telemetry
+                        self.consensus_telemetry
                             .record_failed_vote("external_vote".to_string());
                     }
                 }
@@ -4588,8 +4578,7 @@ impl NodeInner {
                         );
                     }
                 }
-                self
-                    .consensus_telemetry
+                self.consensus_telemetry
                     .record_failed_vote("external_vote".to_string());
                 self.update_runtime_metrics();
             }
@@ -4693,7 +4682,7 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let state_result = match &state_proof {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("state", &state_proof)
+                    .verify_rpp_stark_with_metrics(ProofVerificationKind::State, &state_proof)
                     .map(|_| ()),
                 _ => self.verifiers.verify_state(&state_proof),
             };
@@ -4729,7 +4718,7 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let pruning_result = match &pruning_stark {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("pruning", &pruning_stark)
+                    .verify_rpp_stark_with_metrics(ProofVerificationKind::Pruning, &pruning_stark)
                     .map(|_| ()),
                 _ => self.verifiers.verify_pruning(&pruning_stark),
             };
@@ -4763,7 +4752,10 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let consensus_result = match &consensus_proof {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("consensus", &consensus_proof)
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::Consensus,
+                        &consensus_proof,
+                    )
                     .map(|_| ()),
                 _ => self.verifiers.verify_consensus(&consensus_proof),
             };
@@ -4804,7 +4796,10 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let recursive_result = match &recursive_stark {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("recursive", &recursive_stark)
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::Recursive,
+                        &recursive_stark,
+                    )
                     .map(|_| ()),
                 _ => self.verifiers.verify_recursive(&recursive_stark),
             };
@@ -4980,7 +4975,10 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let state_result = match &block.stark.state_proof {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("state", &block.stark.state_proof)
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::State,
+                        &block.stark.state_proof,
+                    )
                     .map(|_| ()),
                 _ => self.verifiers.verify_state(&block.stark.state_proof),
             };
@@ -5001,7 +4999,10 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let pruning_result = match &block.stark.pruning_proof {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("pruning", &block.stark.pruning_proof)
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::Pruning,
+                        &block.stark.pruning_proof,
+                    )
                     .map(|_| ()),
                 _ => self.verifiers.verify_pruning(&block.stark.pruning_proof),
             };
@@ -5022,7 +5023,10 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             let recursive_result = match &block.stark.recursive_proof {
                 ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics("recursive", &block.stark.recursive_proof)
+                    .verify_rpp_stark_with_metrics(
+                        ProofVerificationKind::Recursive,
+                        &block.stark.recursive_proof,
+                    )
                     .map(|_| ()),
                 _ => self
                     .verifiers
@@ -5048,7 +5052,7 @@ impl NodeInner {
                 #[cfg(feature = "backend-rpp-stark")]
                 let consensus_result = match proof {
                     ChainProof::RppStark(_) => self
-                        .verify_rpp_stark_with_metrics("consensus", proof)
+                        .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, proof)
                         .map(|_| ()),
                     _ => self.verifiers.verify_consensus(proof),
                 };
