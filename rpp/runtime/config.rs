@@ -1437,6 +1437,69 @@ max_round_extensions = 2
         let loaded = NodeConfig::load(&node_path).expect("load node config");
         assert_eq!(loaded.validator_set_size(), 77);
     }
+
+    #[test]
+    fn node_config_for_mode_hybrid_applies_mode_defaults() {
+        let config = NodeConfig::for_mode(RuntimeMode::Hybrid);
+
+        assert!(config.rollout.telemetry.enabled);
+        assert_eq!(config.p2p.heartbeat_interval_ms, 4_000);
+        assert_eq!(config.p2p.gossip_rate_limit_per_sec, 192);
+        assert_eq!(config.malachite.proof.proof_batch_size, 96);
+        assert_eq!(config.malachite.proof.proof_cache_ttl_secs, 720);
+    }
+
+    #[test]
+    fn node_config_for_mode_validator_applies_mode_defaults() {
+        let config = NodeConfig::for_mode(RuntimeMode::Validator);
+
+        assert!(config.rollout.telemetry.enabled);
+        assert_eq!(config.rollout.telemetry.sample_interval_secs, 15);
+        assert_eq!(config.rollout.release_channel, ReleaseChannel::Testnet);
+        assert_eq!(config.p2p.heartbeat_interval_ms, 3_000);
+        assert_eq!(config.p2p.gossip_rate_limit_per_sec, 256);
+        assert_eq!(config.malachite.proof.proof_batch_size, 128);
+        assert_eq!(config.malachite.proof.proof_cache_ttl_secs, 600);
+        assert_eq!(config.malachite.proof.max_recursive_depth, 6);
+    }
+
+    #[test]
+    fn wallet_config_for_mode_validator_inherits_hybrid_defaults() {
+        let config = WalletConfig::for_mode(RuntimeMode::Validator);
+
+        assert!(!config.node.embedded);
+        assert!(
+            !config.node.gossip_endpoints.is_empty(),
+            "validator mode should ensure gossip endpoints are populated"
+        );
+        assert!(
+            config
+                .node
+                .gossip_endpoints
+                .iter()
+                .all(|endpoint| !endpoint.trim().is_empty()),
+            "gossip endpoints must not contain empty entries"
+        );
+    }
+
+    #[test]
+    fn hsm_secrets_backend_reports_unavailable_error() {
+        let backend = SecretsBackendConfig::Hsm(HsmKeystoreConfig::default());
+        let error = backend
+            .build_keystore()
+            .expect_err("HSM backend should not be available by default");
+
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("HSM secrets backend is not available"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
