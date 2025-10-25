@@ -1870,3 +1870,86 @@ fn apply_tracker_metadata(mut entry: HistoryEntry, view: &TrackerHistoryView) ->
     }
     entry
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opentelemetry_sdk::metrics::{
+        InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
+    };
+    use rand::rngs::OsRng;
+    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use tempfile::tempdir;
+
+    fn setup_metrics() -> (
+        Arc<RuntimeMetrics>,
+        InMemoryMetricExporter,
+        Arc<SdkMeterProvider>,
+    ) {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = Arc::new(SdkMeterProvider::builder().with_reader(reader).build());
+        let meter = provider.meter("wallet-metrics-test");
+        let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
+        (metrics, exporter, provider)
+    }
+
+    fn sample_recursive_proof() -> ChainProof {
+        let witness = RecursiveWitness {
+            previous_commitment: Some("aa".repeat(32)),
+            aggregated_commitment: "bb".repeat(32),
+            identity_commitments: vec!["cc".repeat(32)],
+            tx_commitments: vec!["dd".repeat(32)],
+            uptime_commitments: vec!["ee".repeat(32)],
+            consensus_commitments: vec!["ff".repeat(32)],
+            state_commitment: "11".repeat(32),
+            global_state_root: "22".repeat(32),
+            utxo_root: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            timetoke_root: "55".repeat(32),
+            zsi_root: "66".repeat(32),
+            proof_root: "77".repeat(32),
+            pruning_commitment: "88".repeat(32),
+            block_height: 1,
+        };
+        ChainProof::Stwo(StarkProof {
+            kind: ProofKind::Recursive,
+            commitment: "99".repeat(32),
+            public_inputs: vec!["aa".repeat(32)],
+            payload: ProofPayload::Recursive(witness),
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
+        })
+    }
+
+    #[test]
+    fn proof_generation_records_metrics() -> Result<(), MetricError> {
+        let (metrics, exporter, provider) = setup_metrics();
+        let temp = tempdir().expect("temp dir");
+        let storage = Storage::open(temp.path()).expect("open storage");
+        let keypair = Keypair::generate(&mut OsRng);
+        let wallet = Wallet::new(storage, keypair, metrics.clone());
+
+        wallet.record_proof_generation(&sample_recursive_proof(), None, Duration::from_millis(12));
+
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
+
+        let mut names = HashSet::new();
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    names.insert(metric.name.clone());
+                }
+            }
+        }
+
+        assert!(names.contains("rpp.runtime.proof.generation.duration"));
+        assert!(names.contains("rpp.runtime.proof.generation.size"));
+
+        Ok(())
+    }
+}
