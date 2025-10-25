@@ -233,10 +233,20 @@ pub struct TransactionProofBundle {
     pub witness: Option<TransactionWitness>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proof_payload: Option<ProofPayload>,
+    #[cfg(feature = "prover-stwo")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stwo_proof_bytes: Option<Vec<u8>>,
+    #[cfg(not(feature = "prover-stwo"))]
+    #[serde(skip)]
+    #[serde(default)]
+    pub stwo_proof_bytes: (),
+    #[cfg(feature = "prover-stwo")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stwo_public_inputs: Option<TxPublicInputs>,
+    #[cfg(not(feature = "prover-stwo"))]
+    #[serde(skip)]
+    #[serde(default)]
+    pub stwo_public_inputs: (),
 }
 
 impl TransactionProofBundle {
@@ -251,13 +261,39 @@ impl TransactionProofBundle {
             proof,
             witness,
             proof_payload,
+            #[cfg(feature = "prover-stwo")]
             stwo_proof_bytes: None,
+            #[cfg(not(feature = "prover-stwo"))]
+            stwo_proof_bytes: (),
+            #[cfg(feature = "prover-stwo")]
             stwo_public_inputs: None,
+            #[cfg(not(feature = "prover-stwo"))]
+            stwo_public_inputs: (),
         }
     }
 
     pub fn hash(&self) -> String {
         hex::encode(self.transaction.hash())
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    pub fn stwo_proof_bytes(&self) -> Option<&Vec<u8>> {
+        self.stwo_proof_bytes.as_ref()
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    pub fn stwo_proof_bytes(&self) -> Option<&Vec<u8>> {
+        None
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    pub fn stwo_public_inputs(&self) -> Option<&TxPublicInputs> {
+        self.stwo_public_inputs.as_ref()
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    pub fn stwo_public_inputs(&self) -> Option<&TxPublicInputs> {
+        None
     }
 }
 
@@ -289,12 +325,16 @@ impl BlockProofBundle {
 #[cfg(test)]
 mod tests {
     mod stwo {
-        use super::super::ChainProof;
-        use crate::stwo::circuit::ExecutionTrace;
+        use super::super::{ChainProof, SignedTransaction, Transaction, TransactionProofBundle};
+        #[cfg(feature = "prover-stwo")]
+        use crate::proof_backend::TxPublicInputs;
         use crate::stwo::circuit::recursive::RecursiveWitness;
+        use crate::stwo::circuit::ExecutionTrace;
         use crate::stwo::proof::{
             CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
         };
+        #[cfg(feature = "prover-stwo")]
+        use uuid::Uuid;
 
         fn sample_stwo_proof() -> StarkProof {
             let witness = RecursiveWitness {
@@ -337,6 +377,32 @@ mod tests {
             assert_eq!(recovered, original);
         }
 
+        #[cfg(feature = "prover-stwo")]
+        #[test]
+        fn transaction_bundle_serializes_stwo_payload_fields() {
+            let signed = SignedTransaction {
+                id: Uuid::nil(),
+                payload: Transaction::new("sender".into(), "receiver".into(), 42, 1, 0, None),
+                signature: String::new(),
+                public_key: String::new(),
+            };
+            let mut bundle = TransactionProofBundle::new(
+                signed,
+                ChainProof::Stwo(sample_stwo_proof()),
+                None,
+                None,
+            );
+            bundle.stwo_proof_bytes = Some(vec![1, 2, 3, 4]);
+            bundle.stwo_public_inputs = Some(TxPublicInputs {
+                utxo_root: [5; 32],
+                transaction_commitment: [6; 32],
+            });
+            let value = serde_json::to_value(&bundle).expect("serialize bundle");
+            let object = value.as_object().expect("bundle object");
+            assert!(object.contains_key("stwo_proof_bytes"));
+            assert!(object.contains_key("stwo_public_inputs"));
+        }
+
         #[test]
         fn binary_roundtrip_preserves_stwo_proof() {
             let proof = ChainProof::Stwo(sample_stwo_proof());
@@ -346,6 +412,36 @@ mod tests {
             let original = serde_json::to_value(&proof).expect("encode original");
             let recovered = serde_json::to_value(&decoded).expect("encode decoded");
             assert_eq!(recovered, original);
+        }
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    mod stwo_disabled_bundle {
+        use super::super::{ChainProof, SignedTransaction, Transaction, TransactionProofBundle};
+        use uuid::Uuid;
+
+        #[test]
+        fn transaction_bundle_omits_stwo_fields_when_disabled() {
+            let signed = SignedTransaction {
+                id: Uuid::nil(),
+                payload: Transaction::new("sender".into(), "receiver".into(), 1, 1, 0, None),
+                signature: String::new(),
+                public_key: String::new(),
+            };
+            let bundle = TransactionProofBundle::new(
+                signed,
+                ChainProof::Stwo(Default::default()),
+                None,
+                None,
+            );
+            assert!(bundle.stwo_proof_bytes().is_none());
+            assert!(bundle.stwo_public_inputs().is_none());
+            let value = serde_json::to_value(&bundle).expect("serialize bundle");
+            let object = value
+                .as_object()
+                .expect("bundle object when prover disabled");
+            assert!(!object.contains_key("stwo_proof_bytes"));
+            assert!(!object.contains_key("stwo_public_inputs"));
         }
     }
 
