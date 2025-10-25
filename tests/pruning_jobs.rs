@@ -6,6 +6,7 @@ use rpp_chain::errors::{ChainError, ChainResult};
 use rpp_chain::node::{Node, PruningJobStatus};
 use rpp_chain::runtime::sync::{PayloadProvider, ReconstructionEngine, ReconstructionRequest};
 use rpp_chain::runtime::types::BlockPayload;
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_p2p::GossipTopic;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -36,7 +37,7 @@ fn prepare_config() -> (NodeConfig, TempDir) {
 #[test]
 fn pruning_plan_without_pending_blocks() {
     let (config, _temp) = prepare_config();
-    let node = Node::new(config).expect("node");
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let handle = node.handle();
 
     let status = handle.run_pruning_cycle(4).expect("cycle").expect("status");
@@ -74,7 +75,7 @@ impl PayloadProvider for SinglePayload {
 #[test]
 fn rebuild_succeeds_after_prune() {
     let (config, _temp) = prepare_config();
-    let node = Node::new(config).expect("node");
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let handle = node.handle();
     let storage = handle.storage();
 
@@ -110,7 +111,7 @@ fn rebuild_succeeds_after_prune() {
 #[tokio::test]
 async fn gossip_emits_pruning_status() {
     let (config, _temp) = prepare_config();
-    let node = Node::new(config).expect("node");
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let handle = node.handle();
     let mut receiver = node.subscribe_witness_gossip(GossipTopic::Snapshots);
 

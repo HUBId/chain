@@ -12,7 +12,7 @@ use tokio::time;
 
 use rpp_chain::config::NodeConfig;
 use rpp_chain::crypto::{address_from_public_key, generate_keypair, sign_message};
-use rpp_chain::gossip::{NodeGossipProcessor, spawn_node_event_worker};
+use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::node_runtime::node::{MetaTelemetryReport, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{
@@ -174,8 +174,8 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
     config_b.p2p.listen_addr = listen_b.clone();
     config_b.p2p.bootstrap_peers = vec![listen_a.clone()];
 
-    let node_a = Node::new(config_a.clone())?;
-    let node_b = Node::new(config_b.clone())?;
+    let node_a = Node::new(config_a.clone(), RuntimeMetrics::noop())?;
+    let node_b = Node::new(config_b.clone(), RuntimeMetrics::noop())?;
     let handle_a = node_a.handle();
     let handle_b = node_b.handle();
 
@@ -261,18 +261,9 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
 
     let tier_floor = reputation_floor_for_tier(post_gossip_record.tier);
     if let Some(baseline) = baseline_record {
-        assert_eq!(
-            baseline.features.get("malachite_consensus"),
-            Some(&true)
-        );
-        assert_eq!(
-            baseline.features.get("timetoke_rewards"),
-            Some(&true)
-        );
-        assert_eq!(
-            baseline.features.get("witness_network"),
-            Some(&true)
-        );
+        assert_eq!(baseline.features.get("malachite_consensus"), Some(&true));
+        assert_eq!(baseline.features.get("timetoke_rewards"), Some(&true));
+        assert_eq!(baseline.features.get("witness_network"), Some(&true));
         assert!(
             post_gossip_record.reputation > baseline.reputation,
             "broadcaster peer {broadcaster_peer_id} reputation did not increase after gossip: baseline={:.3}, post={:.3}, tier={:?}, floor={:.3}",
@@ -292,9 +283,7 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
     }
 
     assert_eq!(
-        post_gossip_record
-            .features
-            .get("malachite_consensus"),
+        post_gossip_record.features.get("malachite_consensus"),
         Some(&true)
     );
     assert_eq!(
@@ -329,8 +318,8 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
     config_b.p2p.listen_addr = listen_b.clone();
     config_b.p2p.bootstrap_peers = vec![listen_a.clone()];
 
-    let node_a = Node::new(config_a.clone())?;
-    let node_b = Node::new(config_b.clone())?;
+    let node_a = Node::new(config_a.clone(), RuntimeMetrics::noop())?;
+    let node_b = Node::new(config_b.clone(), RuntimeMetrics::noop())?;
     let handle_a = node_a.handle();
     let handle_b = node_b.handle();
 
@@ -390,18 +379,9 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
 
     let tier_floor = reputation_floor_for_tier(penalty_record.tier);
     if let Some(baseline) = baseline_record {
-        assert_eq!(
-            baseline.features.get("malachite_consensus"),
-            Some(&true)
-        );
-        assert_eq!(
-            baseline.features.get("timetoke_rewards"),
-            Some(&true)
-        );
-        assert_eq!(
-            baseline.features.get("witness_network"),
-            Some(&true)
-        );
+        assert_eq!(baseline.features.get("malachite_consensus"), Some(&true));
+        assert_eq!(baseline.features.get("timetoke_rewards"), Some(&true));
+        assert_eq!(baseline.features.get("witness_network"), Some(&true));
         assert!(
             penalty_record.reputation < baseline.reputation || penalty_record.ban_until.is_some(),
             "broadcaster peer {broadcaster_peer_id} reputation did not decrease after invalid gossip: baseline={:.3}, post={:.3}, tier={:?}, floor={:.3}",
@@ -421,19 +401,11 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
     }
 
     assert_eq!(
-        penalty_record
-            .features
-            .get("malachite_consensus"),
+        penalty_record.features.get("malachite_consensus"),
         Some(&true)
     );
-    assert_eq!(
-        penalty_record.features.get("timetoke_rewards"),
-        Some(&true)
-    );
-    assert_eq!(
-        penalty_record.features.get("witness_network"),
-        Some(&true)
-    );
+    assert_eq!(penalty_record.features.get("timetoke_rewards"), Some(&true));
+    assert_eq!(penalty_record.features.get("witness_network"), Some(&true));
 
     handle_a_runtime.shutdown().await?;
     handle_b_runtime.shutdown().await?;
@@ -450,7 +422,7 @@ fn proof_cache_rehydrates_on_restart() -> Result<()> {
     let config = sample_node_config(dir.path());
     let proof_storage_path = config.proof_cache_dir.join("gossip_proofs.json");
 
-    let node = Node::new(config.clone())?;
+    let node = Node::new(config.clone(), RuntimeMetrics::noop())?;
     let handle = node.handle();
     let processor = NodeGossipProcessor::new(handle.clone(), proof_storage_path.clone());
 
@@ -465,7 +437,7 @@ fn proof_cache_rehydrates_on_restart() -> Result<()> {
     drop(handle);
     drop(node);
 
-    let node_restarted = Node::new(config.clone())?;
+    let node_restarted = Node::new(config.clone(), RuntimeMetrics::noop())?;
     let handle_restarted = node_restarted.handle();
     assert!(handle_restarted.mempool_status()?.transactions.is_empty());
 
@@ -497,8 +469,8 @@ async fn meta_telemetry_heartbeat_propagates() -> Result<()> {
     config_b.p2p.listen_addr = listen_b.clone();
     config_b.p2p.bootstrap_peers = vec![listen_a.clone()];
 
-    let node_a = Node::new(config_a.clone())?;
-    let node_b = Node::new(config_b.clone())?;
+    let node_a = Node::new(config_a.clone(), RuntimeMetrics::noop())?;
+    let node_b = Node::new(config_b.clone(), RuntimeMetrics::noop())?;
     let handle_a = node_a.handle();
     let handle_b = node_b.handle();
 

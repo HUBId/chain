@@ -9,31 +9,30 @@ use serde_json;
 
 use crate::vendor::electrs::chain::{Chain, NewHeader};
 use crate::vendor::electrs::firewood_adapter::{FirewoodAdapter, RuntimeAdapters};
-use crate::vendor::electrs::metrics::{default_duration_buckets, Metrics};
 #[cfg(feature = "vendor_electrs_telemetry")]
 use crate::vendor::electrs::metrics::malachite::telemetry::{self, GaugeHandle, HistogramHandle};
+use crate::vendor::electrs::metrics::{default_duration_buckets, Metrics};
+use crate::vendor::electrs::p2p::Connection as P2pConnection;
 use crate::vendor::electrs::rpp_ledger::bitcoin::blockdata::{
     block::Header as LedgerBlockHeader, constants,
 };
 use crate::vendor::electrs::rpp_ledger::bitcoin::{BlockHash, Network, OutPoint, Script, Txid};
 use crate::vendor::electrs::rpp_ledger::bitcoin_slices::bsl::Transaction as LedgerTransaction;
 use crate::vendor::electrs::types::{
-    encode_ledger_memo, encode_ledger_script, encode_transaction_metadata, HashPrefixRow,
-    LedgerMemoPayload, LedgerScriptPayload, RppStarkProofAudit, SerBlock, StoredTransactionMetadata,
-    StoredVrfAudit, TxidRow, VrfInputDescriptor, VrfOutputDescriptor,
-    bsl_txid, serialize_block, serialize_transaction, HASH_PREFIX_ROW_SIZE,
+    bsl_txid, encode_ledger_memo, encode_ledger_script, encode_transaction_metadata,
+    serialize_block, serialize_transaction, HashPrefixRow, LedgerMemoPayload, LedgerScriptPayload,
+    RppStarkProofAudit, SerBlock, StoredTransactionMetadata, StoredVrfAudit, TxidRow,
+    VrfInputDescriptor, VrfOutputDescriptor, HASH_PREFIX_ROW_SIZE,
 };
 #[cfg(feature = "backend-rpp-stark")]
 use malachite::Natural;
+use rpp::proofs::rpp::TransactionWitness;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
     Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, SignedTransaction,
 };
-use rpp::proofs::rpp::TransactionWitness;
 use rpp_p2p::GossipTopic;
-use crate::vendor::electrs::p2p::Connection as P2pConnection;
 use sha2::{Digest, Sha512};
-use tokio::sync::broadcast;
 #[cfg(feature = "backend-rpp-stark")]
 use std::str::FromStr;
 #[cfg(feature = "vendor_electrs_telemetry")]
@@ -42,6 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 #[cfg(feature = "vendor_electrs_telemetry")]
 use std::time::Instant;
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug)]
 pub struct ConvertedBlock {
@@ -383,10 +383,7 @@ impl Daemon {
         }
 
         let runtime_blocks = self.reconstruct_verified_range(start, end)?;
-        Ok(runtime_blocks
-            .iter()
-            .map(Self::convert_block)
-            .collect())
+        Ok(runtime_blocks.iter().map(Self::convert_block).collect())
     }
 
     fn collect_serialized_blocks(
@@ -442,7 +439,9 @@ impl Daemon {
                     continue;
                 }
                 let serialized = serialize_block(&converted.ledger_transactions);
-                serialized_blocks.entry(*expected_hash).or_insert(serialized);
+                serialized_blocks
+                    .entry(*expected_hash)
+                    .or_insert(serialized);
             }
 
             index += 1;
@@ -574,17 +573,14 @@ impl Daemon {
     }
 
     #[cfg(feature = "backend-rpp-stark")]
-    fn collect_rpp_stark_audits(
-        block: &RuntimeBlock,
-    ) -> Vec<Option<RppStarkProofAudit>> {
+    fn collect_rpp_stark_audits(block: &RuntimeBlock) -> Vec<Option<RppStarkProofAudit>> {
         block
             .stark
             .transaction_proofs
             .iter()
             .map(|proof| match proof {
                 ChainProof::RppStark(inner) => {
-                    crate::vendor::electrs::status::build_rpp_stark_audit(inner)
-                        .ok()
+                    crate::vendor::electrs::status::build_rpp_stark_audit(inner).ok()
                 }
                 _ => None,
             })
@@ -788,22 +784,27 @@ pub mod test_helpers {
 
     use rpp::crypto::{address_from_public_key, sign_message};
     use rpp::errors::{ChainError, ChainResult};
-    use rpp::proofs::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact, TransactionWitness};
+    use rpp::proofs::rpp::{
+        ConsensusWitness, ModuleWitnessBundle, ProofArtifact, TransactionWitness,
+    };
     use rpp::reputation::{ReputationWeights, Tier};
     use rpp::runtime::config::NodeConfig;
     use rpp::runtime::node::Node;
     use rpp::runtime::orchestration::PipelineOrchestrator;
-    use rpp::runtime::sync::{PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier};
-    use rpp::runtime::types::{
-        Account, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockPayload, ChainProof,
-        ConsensusCertificate, PruningProof, RecursiveProof, ReputationUpdate, SignedBftVote,
-        SignedTransaction, Stake, StateWitness, TimetokeUpdate, Transaction, TransactionProofBundle,
-        UptimeProof, VoteRecord,
+    use rpp::runtime::sync::{
+        PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
     };
     use rpp::runtime::types::block::BlockProofBundle;
     use rpp::runtime::types::transaction::Signature as TxSignature;
     use rpp::runtime::types::BftVoteKind;
+    use rpp::runtime::types::{
+        Account, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockPayload,
+        ChainProof, ConsensusCertificate, PruningProof, RecursiveProof, ReputationUpdate,
+        SignedBftVote, SignedTransaction, Stake, StateWitness, TimetokeUpdate, Transaction,
+        TransactionProofBundle, UptimeProof, VoteRecord,
+    };
     use rpp::runtime::vrf::{evaluate_vrf, vrf_public_key_to_hex};
+    use rpp::runtime::RuntimeMetrics;
     use rpp::storage::Storage;
     use rpp::stwo::circuit::recursive::RecursiveWitness;
     use rpp::stwo::proof::{
@@ -833,7 +834,7 @@ pub mod test_helpers {
         let firewood_dir = temp_dir.path().join("firewood");
         let mut config = node_config(temp_dir.path());
         config.rollout.feature_gates.reconstruction = true;
-        let node = Node::new(config).expect("node");
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
         let node_handle = node.handle();
         let storage = node_handle.storage();
 
@@ -883,9 +884,7 @@ pub mod test_helpers {
 
         let block_one_converted = Daemon::convert_block(&block_one);
         let block_one_hash = block_one_converted.ledger_header.block_hash();
-        let block_two_hash = Daemon::convert_block(&block_two)
-            .ledger_header
-            .block_hash();
+        let block_two_hash = Daemon::convert_block(&block_two).ledger_header.block_hash();
         let transaction = block_one_converted
             .ledger_transactions
             .first()
@@ -896,12 +895,10 @@ pub mod test_helpers {
         let expected_transaction_bytes = serialize_transaction(transaction).into_boxed_slice();
         indexing_firewood.commit().expect("commit index");
 
-        let firewood =
-            FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters.clone())
-                .expect("connection firewood");
-        let daemon_firewood =
-            FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters)
-                .expect("daemon firewood");
+        let firewood = FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters.clone())
+            .expect("connection firewood");
+        let daemon_firewood = FirewoodAdapter::open_with_runtime(&firewood_dir, runtime_adapters)
+            .expect("daemon firewood");
         let daemon = Daemon::new(daemon_firewood).expect("daemon");
 
         TestContext {
@@ -970,10 +967,7 @@ pub mod test_helpers {
     fn inject_transaction(block: &mut Block) {
         let bundle = sample_transaction_bundle(&block.header.proposer, 0);
         block.transactions.push(bundle.transaction.clone());
-        block
-            .stark
-            .transaction_proofs
-            .push(bundle.proof.clone());
+        block.stark.transaction_proofs.push(bundle.proof.clone());
         let witness = match &bundle.proof {
             ChainProof::Stwo(proof) => match &proof.payload {
                 ProofPayload::Transaction(witness) => witness.clone(),
@@ -1009,7 +1003,9 @@ pub mod test_helpers {
             commitment: String::new(),
             public_inputs: Vec::new(),
             payload: proof_payload.clone(),
-            trace: ExecutionTrace { segments: Vec::new() },
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         };
@@ -1033,9 +1029,7 @@ pub mod test_helpers {
         account
             .ensure_wallet_binding(&hex::encode(keypair.public.to_bytes()))
             .expect("bind wallet");
-        storage
-            .persist_account(&account)
-            .expect("persist account");
+        storage.persist_account(&account).expect("persist account");
     }
 
     fn make_block(height: u64, previous: Option<&Block>) -> (Block, Keypair) {
@@ -1127,7 +1121,11 @@ pub mod test_helpers {
         let state_stark = dummy_state_proof();
         let pruning_stark = dummy_pruning_proof();
         let mut module_witnesses = ModuleWitnessBundle::default();
-        module_witnesses.record_consensus(ConsensusWitness::new(height, height, vec![address.clone()]));
+        module_witnesses.record_consensus(ConsensusWitness::new(
+            height,
+            height,
+            vec![address.clone()],
+        ));
         let proof_artifacts = module_witnesses
             .expected_artifacts()
             .expect("artifacts")
@@ -1196,7 +1194,9 @@ pub mod test_helpers {
                 required_tier: Tier::Tl0,
                 reputation_weights: ReputationWeights::default(),
             }),
-            trace: ExecutionTrace { segments: Vec::new() },
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         }
@@ -1213,7 +1213,9 @@ pub mod test_helpers {
                 original_transactions: Vec::new(),
                 removed_transactions: Vec::new(),
             }),
-            trace: ExecutionTrace { segments: Vec::new() },
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         }
@@ -1225,8 +1227,7 @@ pub mod test_helpers {
         header: &BlockHeader,
         pruning: &PruningProof,
     ) -> StarkProof {
-        let previous_commitment =
-            previous_commitment.or_else(|| Some(RecursiveProof::anchor()));
+        let previous_commitment = previous_commitment.or_else(|| Some(RecursiveProof::anchor()));
         StarkProof {
             kind: ProofKind::Recursive,
             commitment: aggregated_commitment.clone(),
@@ -1260,7 +1261,9 @@ pub mod test_helpers {
                 block_height: header.height,
                 block_timestamp: header.timestamp,
             }),
-            trace: ExecutionTrace { segments: Vec::new() },
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         }
@@ -1290,8 +1293,8 @@ pub mod test_helpers {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_helpers::setup;
+    use super::*;
 
     #[test]
     fn for_blocks_rejects_invalid_payload() {

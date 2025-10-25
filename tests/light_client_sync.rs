@@ -5,6 +5,7 @@ use rpp_chain::config::NodeConfig;
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::{ReconstructionEngine, RuntimeRecursiveProofVerifier};
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_p2p::{
     GossipTopic, LightClientSync, NetworkLightClientUpdate, NetworkStateSyncChunk,
     NetworkStateSyncPlan, PipelineError, SnapshotStore,
@@ -237,7 +238,7 @@ struct StateSyncFixture {
 impl StateSyncFixture {
     fn new() -> Self {
         let (config, temp_dir) = prepare_config();
-        let node = Node::new(config).expect("node");
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
         let handle = node.handle();
         let storage = handle.storage();
         let pruned = storage

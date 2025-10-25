@@ -42,6 +42,7 @@ use rpp_chain::runtime::sync::{
 use rpp_chain::runtime::types::proofs::TransactionProofBundle;
 use rpp_chain::runtime::types::transaction::{SignedTransaction, Transaction};
 use rpp_chain::runtime::RuntimeMetrics;
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::types::Address;
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
@@ -310,7 +311,7 @@ impl TestClusterNode {
         let config = self.config.clone();
         let node = tokio::task::spawn_blocking({
             let config = config.clone();
-            move || Node::new(config)
+            move || Node::new(config, RuntimeMetrics::noop())
         })
         .await
         .context("node runtime restart task panicked")?
@@ -507,7 +508,7 @@ impl TestCluster {
             let mut config = config;
             let node = tokio::task::spawn_blocking({
                 let config = config.clone();
-                move || Node::new(config)
+                move || Node::new(config, RuntimeMetrics::noop())
             })
             .await
             .context("node runtime initialisation task panicked")?

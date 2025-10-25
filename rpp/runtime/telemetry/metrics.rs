@@ -539,11 +539,16 @@ impl RuntimeMetricsGuard {
             provider: Some(provider),
         }
     }
-}
 
-impl Drop for RuntimeMetricsGuard {
-    fn drop(&mut self) {
+    /// Flush any pending metric data and shutdown the provider, restoring the noop provider.
+    pub fn flush_and_shutdown(&mut self) {
         if let Some(provider) = self.provider.take() {
+            if let Err(err) = provider.force_flush() {
+                warn!(
+                    target: "telemetry",
+                    "failed to flush OTLP metrics provider: {err}"
+                );
+            }
             if let Err(err) = provider.shutdown() {
                 warn!(
                     target: "telemetry",
@@ -552,6 +557,12 @@ impl Drop for RuntimeMetricsGuard {
             }
             global::set_meter_provider(NoopMeterProvider::new());
         }
+    }
+}
+
+impl Drop for RuntimeMetricsGuard {
+    fn drop(&mut self) {
+        self.flush_and_shutdown();
     }
 }
 

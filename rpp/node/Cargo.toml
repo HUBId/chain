@@ -7,7 +7,7 @@ description = "Executable entrypoint for running an RPP node"
 repository = "https://github.com/ava-labs/firewood"
 
 [features]
-default = ["prover-stwo"]
+default = ["prover-mock"]
 prover-stwo = ["rpp-chain/prover-stwo"]
 prover-stwo-simd = [
     "prover-stwo",

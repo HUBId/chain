@@ -25,8 +25,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
 use malachite::Natural;
-use opentelemetry::KeyValue;
-use opentelemetry_sdk::Resource;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{broadcast, mpsc, watch, Mutex, Notify};
@@ -78,8 +76,8 @@ use crate::runtime::sync::{
 };
 use crate::runtime::vrf_gossip::{submission_to_gossip, verify_submission};
 use crate::runtime::{
-    init_runtime_metrics, ProofVerificationBackend, ProofVerificationKind,
-    ProofVerificationOutcome, ProofVerificationStage, RuntimeMetrics, RuntimeMetricsGuard,
+    ProofVerificationBackend, ProofVerificationKind, ProofVerificationOutcome,
+    ProofVerificationStage, RuntimeMetrics,
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
@@ -689,7 +687,6 @@ impl WitnessChannels {
 
 pub struct Node {
     inner: Arc<NodeInner>,
-    runtime_metrics_guard: RuntimeMetricsGuard,
 }
 
 pub(crate) struct NodeInner {
@@ -951,7 +948,7 @@ struct ActiveAuditFile {
 }
 
 impl Node {
-    pub fn new(config: NodeConfig) -> ChainResult<Self> {
+    pub fn new(config: NodeConfig, runtime_metrics: Arc<RuntimeMetrics>) -> ChainResult<Self> {
         config.validate()?;
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
@@ -960,15 +957,6 @@ impl Node {
             NodeIdentity::load_or_generate(&config.p2p_key_path)
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
         );
-        let instance_id = p2p_identity.peer_id().to_base58();
-        let resource = Resource::new(vec![
-            KeyValue::new("service.name", "rpp-node"),
-            KeyValue::new("service.instance.id", instance_id.clone()),
-        ]);
-        let (runtime_metrics, runtime_metrics_guard) =
-            init_runtime_metrics(&config.rollout.telemetry, resource).map_err(|err| {
-                ChainError::Config(format!("failed to initialise runtime metrics: {err}"))
-            })?;
         let address = address_from_public_key(&keypair.public);
         let reputation_params = config.reputation_params();
         let db_path = config.data_dir.join("db");
@@ -1196,10 +1184,7 @@ impl Node {
         }
         debug!(peer_id = %inner.p2p_identity.peer_id(), "libp2p identity initialised");
         inner.bootstrap()?;
-        Ok(Self {
-            inner,
-            runtime_metrics_guard,
-        })
+        Ok(Self { inner })
     }
 
     pub fn handle(&self) -> NodeHandle {
@@ -1221,15 +1206,11 @@ impl Node {
     }
 
     pub async fn start(self) -> ChainResult<()> {
-        let Node {
-            inner,
-            runtime_metrics_guard,
-        } = self;
+        let inner = self.inner;
         let join = inner.spawn_runtime();
         let result = join
             .await
             .map_err(|err| ChainError::Config(format!("node runtime join error: {err}")));
-        drop(runtime_metrics_guard);
         result
     }
 
@@ -1411,7 +1392,7 @@ mod tests {
     #[test]
     fn node_accepts_valid_identity_attestation() {
         let (_tmp, config) = temp_config();
-        let node = Node::new(config).expect("node");
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
         let height = node.inner.chain_tip.read().height + 1;
         let request = attested_request(&node.inner.ledger, height);
         node.inner
@@ -1422,7 +1403,7 @@ mod tests {
     #[test]
     fn node_rejects_attestation_below_quorum() {
         let (_tmp, config) = temp_config();
-        let node = Node::new(config).expect("node");
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
         let height = node.inner.chain_tip.read().height + 1;
         let mut request = attested_request(&node.inner.ledger, height);
         request
@@ -1443,7 +1424,7 @@ mod tests {
     #[test]
     fn node_rejects_attestation_with_insufficient_gossip() {
         let (_tmp, config) = temp_config();
-        let node = Node::new(config).expect("node");
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
         let height = node.inner.chain_tip.read().height + 1;
         let mut request = attested_request(&node.inner.ledger, height);
         request
@@ -1491,8 +1472,8 @@ mod tests {
         config_a.genesis.accounts = genesis_accounts.clone();
         config_b.genesis.accounts = genesis_accounts;
 
-        let node_a = Node::new(config_a).expect("node a");
-        let node_b = Node::new(config_b).expect("node b");
+        let node_a = Node::new(config_a, RuntimeMetrics::noop()).expect("node a");
+        let node_b = Node::new(config_b, RuntimeMetrics::noop()).expect("node b");
 
         let height = node_a.inner.chain_tip.read().height + 1;
         let request = attested_request(&node_a.inner.ledger, height);
@@ -1692,8 +1673,8 @@ mod tests {
         config_a.genesis.accounts = genesis_accounts.clone();
         config_b.genesis.accounts = genesis_accounts;
 
-        let node_a = Node::new(config_a).expect("node a");
-        let node_b = Node::new(config_b).expect("node b");
+        let node_a = Node::new(config_a, RuntimeMetrics::noop()).expect("node a");
+        let node_b = Node::new(config_b, RuntimeMetrics::noop()).expect("node b");
 
         let height = node_a.inner.chain_tip.read().height + 1;
         let request = attested_request(&node_a.inner.ledger, height);
@@ -2756,8 +2737,11 @@ impl NodeInner {
         })
     }
 
-    pub async fn start(config: NodeConfig) -> ChainResult<(NodeHandle, JoinHandle<()>)> {
-        let node = Node::new(config)?;
+    pub async fn start(
+        config: NodeConfig,
+        runtime_metrics: Arc<RuntimeMetrics>,
+    ) -> ChainResult<(NodeHandle, JoinHandle<()>)> {
+        let node = Node::new(config, Arc::clone(&runtime_metrics))?;
         let handle = node.handle();
         let runtime_config = handle.inner.runtime_config()?;
         let (p2p_inner, p2p_handle) =
@@ -5489,7 +5473,7 @@ mod tests {
     fn mempool_status_exposes_witness_metadata_with_and_without_cache() {
         let tempdir = tempdir().expect("tempdir");
         let config = sample_node_config(tempdir.path());
-        let node = Node::new(config).expect("node init");
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node init");
         let handle = node.handle();
         let recipient = handle.address().to_string();
 

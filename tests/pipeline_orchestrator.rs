@@ -69,7 +69,7 @@ impl OrchestratorFixture {
         let tempdir = tempdir().expect("temp dir");
         let node_config = sample_node_config(tempdir.path());
 
-        let node = match Node::new(node_config.clone()) {
+        let node = match Node::new(node_config.clone(), RuntimeMetrics::noop()) {
             Ok(node) => node,
             Err(err) => {
                 eprintln!("skipping orchestrator fixture setup: {err}");
@@ -291,19 +291,41 @@ async fn pipeline_telemetry_summary_reports_latency_and_alerts() {
     let hash = "cafedeadbeef".to_string();
 
     orchestrator
-        .seed_flow_for_testing(hash.clone(), origin, 2, 512, now - Duration::from_millis(300))
+        .seed_flow_for_testing(
+            hash.clone(),
+            origin,
+            2,
+            512,
+            now - Duration::from_millis(300),
+        )
         .await;
     orchestrator
-        .record_stage_for_testing(&hash, PipelineStage::GossipReceived, now - Duration::from_millis(250))
+        .record_stage_for_testing(
+            &hash,
+            PipelineStage::GossipReceived,
+            now - Duration::from_millis(250),
+        )
         .await;
     orchestrator
-        .record_stage_for_testing(&hash, PipelineStage::MempoolAccepted, now - Duration::from_millis(150))
+        .record_stage_for_testing(
+            &hash,
+            PipelineStage::MempoolAccepted,
+            now - Duration::from_millis(150),
+        )
         .await;
     orchestrator
-        .record_stage_for_testing(&hash, PipelineStage::LeaderElected, now - Duration::from_millis(75))
+        .record_stage_for_testing(
+            &hash,
+            PipelineStage::LeaderElected,
+            now - Duration::from_millis(75),
+        )
         .await;
     orchestrator
-        .record_stage_for_testing(&hash, PipelineStage::BftFinalised, now - Duration::from_millis(25))
+        .record_stage_for_testing(
+            &hash,
+            PipelineStage::BftFinalised,
+            now - Duration::from_millis(25),
+        )
         .await;
 
     orchestrator.record_gossip_success_for_testing();
@@ -329,17 +351,12 @@ async fn pipeline_telemetry_summary_reports_latency_and_alerts() {
     assert_eq!(summary.gossip.failure_total, 1);
     assert_eq!(summary.gossip.failure_reasons.get("decode"), Some(&1));
 
-    let ingest_errors = summary
-        .errors
-        .get("ingest")
-        .expect("ingest errors present");
+    let ingest_errors = summary.errors.get("ingest").expect("ingest errors present");
     assert_eq!(ingest_errors.get("submit_failed"), Some(&1));
 
     assert!(summary.leader_observations >= 1);
 
-    fixture
-        .wallet
-        .shutdown_pipeline(orchestrator.as_ref());
+    fixture.wallet.shutdown_pipeline(orchestrator.as_ref());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -407,7 +424,8 @@ async fn submit_transaction_returns_config_error_when_gossip_publish_fails() {
     let setup = tokio::task::spawn_blocking(|| -> Result<_, String> {
         let base_dir = tempdir().expect("temp dir");
         let node_config = sample_node_config(base_dir.path());
-        let node = Node::new(node_config.clone()).map_err(|err| err.to_string())?;
+        let node = Node::new(node_config.clone(), RuntimeMetrics::noop())
+            .map_err(|err| err.to_string())?;
         let handle = node.handle();
         let identity = node
             .network_identity_profile()
@@ -486,7 +504,8 @@ async fn gossip_loop_records_stage_for_matching_payload() {
     let setup = tokio::task::spawn_blocking(|| -> Result<_, String> {
         let base_dir = tempdir().expect("temp dir");
         let node_config = sample_node_config(base_dir.path());
-        let node = Node::new(node_config.clone()).map_err(|err| err.to_string())?;
+        let node = Node::new(node_config.clone(), RuntimeMetrics::noop())
+            .map_err(|err| err.to_string())?;
         let handle = node.handle();
         let identity = node
             .network_identity_profile()

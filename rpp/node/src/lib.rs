@@ -37,7 +37,7 @@ use rpp_chain::config::{NodeConfig, WalletConfig};
 use rpp_chain::crypto::load_or_generate_keypair;
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
-use rpp_chain::runtime::{RuntimeMetrics, RuntimeMode};
+use rpp_chain::runtime::{init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, RuntimeMode};
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
@@ -338,7 +338,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             }
         });
 
-    let _telemetry_guard = init_tracing(
+    let telemetry = init_tracing(
         tracing_config,
         node_metadata.as_ref(),
         options.log_level.clone(),
@@ -349,6 +349,12 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     )
     .with_context(|| "failed to initialise logging")
     .map_err(BootstrapError::startup)?;
+
+    let runtime_metrics = telemetry
+        .as_ref()
+        .map(|handles| Arc::clone(&handles.runtime_metrics))
+        .unwrap_or_else(RuntimeMetrics::noop);
+    let _telemetry_guard = telemetry.map(|handles| handles.guard);
 
     info!(
         target = "bootstrap",
@@ -418,7 +424,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
 
     if let Some(bundle) = node_bundle.take() {
         let config = bundle.value;
-        let preview_node = Node::new(config.clone())
+        let preview_node = Node::new(config.clone(), Arc::clone(&runtime_metrics))
             .context("failed to build node with the provided configuration")
             .map_err(BootstrapError::startup)?;
         info!(
@@ -427,7 +433,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         );
         drop(preview_node);
 
-        let (handle, runtime) = NodeHandle::start(config.clone())
+        let (handle, runtime) = NodeHandle::start(config.clone(), Arc::clone(&runtime_metrics))
             .await
             .context("failed to start node runtime")
             .map_err(BootstrapError::startup)?;
@@ -489,7 +495,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         };
         let keypair = load_or_generate_keypair(&wallet_config.key_path)
             .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
-        let wallet = Arc::new(Wallet::new(storage, keypair, RuntimeMetrics::noop()));
+        let wallet = Arc::new(Wallet::new(storage, keypair, Arc::clone(&runtime_metrics)));
         rpc_addr.get_or_insert(wallet_config.rpc_listen);
         wallet_instance = Some(wallet);
     }
@@ -1089,7 +1095,7 @@ fn init_tracing(
     mode: RuntimeMode,
     config_source: &str,
     dry_run: bool,
-) -> Result<Option<OtelGuard>> {
+) -> Result<Option<TelemetryHandles>> {
     let level = log_level.or_else(|| std::env::var("RUST_LOG").ok());
     let filter = match level {
         Some(level) => match EnvFilter::try_new(level) {
@@ -1134,6 +1140,8 @@ fn init_tracing(
             instance.id = instance_id.as_str(),
             otlp_enabled = false,
             dry_run = true,
+            metrics_enabled = config.rollout.telemetry.enabled,
+            metrics_endpoint = config.rollout.telemetry.endpoint.as_deref(),
             mode = mode.as_str(),
             config_source = config_source,
             "tracing initialised"
@@ -1141,17 +1149,35 @@ fn init_tracing(
         return Ok(None);
     }
 
-    match build_otlp_layer(config, metadata, mode, config_source, &instance_id)? {
-        Some(OtlpLayer {
-            layer,
-            guard,
-            endpoint,
-        }) => {
+    let resource = telemetry_resource(config, metadata, mode, config_source, &instance_id);
+    let (runtime_metrics, metrics_guard) =
+        init_runtime_metrics(&config.rollout.telemetry, resource.clone())
+            .context("failed to initialise runtime metrics")?;
+    let mut guard = OtelGuard::new(metrics_guard);
+    let metrics_endpoint = config
+        .rollout
+        .telemetry
+        .endpoint
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let metrics_endpoint_field = metrics_endpoint.as_deref();
+    let metrics_enabled = config.rollout.telemetry.enabled;
+
+    match build_otlp_layer(config, resource)? {
+        Some(OtlpLayer { layer, endpoint }) => {
             tracing_subscriber::registry()
                 .with(filter.clone())
                 .with(fmt_layer())
                 .with(layer)
                 .try_init()?;
+
+            guard = guard.with_tracer_shutdown(|| {
+                if let Err(err) = global::shutdown_tracer_provider() {
+                    eprintln!("failed to shutdown otlp tracer provider: {err}");
+                }
+            });
 
             let telemetry_span = info_span!(
                 "node.telemetry.init",
@@ -1162,6 +1188,8 @@ fn init_tracing(
                 instance.id = instance_id.as_str(),
                 otlp_enabled = true,
                 otlp_endpoint = endpoint.as_str(),
+                metrics_enabled = metrics_enabled,
+                metrics_endpoint = metrics_endpoint_field,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source
@@ -1176,12 +1204,17 @@ fn init_tracing(
                 instance.id = instance_id.as_str(),
                 otlp_enabled = true,
                 otlp_endpoint = endpoint,
+                metrics_enabled = metrics_enabled,
+                metrics_endpoint = metrics_endpoint_field,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source,
                 "tracing initialised"
             );
-            Ok(Some(guard))
+            Ok(Some(TelemetryHandles {
+                guard,
+                runtime_metrics,
+            }))
         }
         None => {
             tracing_subscriber::registry()
@@ -1197,6 +1230,8 @@ fn init_tracing(
                 rpp.config_source = config_source,
                 instance.id = instance_id.as_str(),
                 otlp_enabled = false,
+                metrics_enabled = metrics_enabled,
+                metrics_endpoint = metrics_endpoint_field,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source
@@ -1210,12 +1245,17 @@ fn init_tracing(
                 rpp.config_source = config_source,
                 instance.id = instance_id.as_str(),
                 otlp_enabled = false,
+                metrics_enabled = metrics_enabled,
+                metrics_endpoint = metrics_endpoint_field,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source,
                 "tracing initialised"
             );
-            Ok(None)
+            Ok(Some(TelemetryHandles {
+                guard,
+                runtime_metrics,
+            }))
         }
     }
 }
@@ -1462,19 +1502,43 @@ fn hash_sensitive_value(value: &JsonValue) -> Option<String> {
     Some(hash)
 }
 
-struct OtelGuard;
+struct TelemetryHandles {
+    guard: OtelGuard,
+    runtime_metrics: Arc<RuntimeMetrics>,
+}
+
+struct OtelGuard {
+    metrics_guard: Option<RuntimeMetricsGuard>,
+    tracer_shutdown: Option<Box<dyn FnOnce() + Send + Sync + 'static>>,
+}
+
+impl OtelGuard {
+    fn new(metrics_guard: RuntimeMetricsGuard) -> Self {
+        Self {
+            metrics_guard: Some(metrics_guard),
+            tracer_shutdown: None,
+        }
+    }
+
+    fn with_tracer_shutdown(mut self, shutdown: impl FnOnce() + Send + Sync + 'static) -> Self {
+        self.tracer_shutdown = Some(Box::new(shutdown));
+        self
+    }
+}
 
 impl Drop for OtelGuard {
     fn drop(&mut self) {
-        if let Err(err) = global::shutdown_tracer_provider() {
-            eprintln!("failed to shutdown otlp tracer provider: {err}");
+        if let Some(mut metrics_guard) = self.metrics_guard.take() {
+            metrics_guard.flush_and_shutdown();
+        }
+        if let Some(shutdown) = self.tracer_shutdown.take() {
+            shutdown();
         }
     }
 }
 
 struct OtlpLayer {
     layer: OpenTelemetryLayer<tracing_subscriber::Registry, Tracer>,
-    guard: OtelGuard,
     endpoint: String,
 }
 
@@ -1484,13 +1548,7 @@ struct OtlpSettings {
     timeout: Duration,
 }
 
-fn build_otlp_layer(
-    config: &NodeConfig,
-    metadata: Option<&ConfigMetadata>,
-    mode: RuntimeMode,
-    config_source: &str,
-    instance_id: &str,
-) -> Result<Option<OtlpLayer>> {
+fn build_otlp_layer(config: &NodeConfig, resource: Resource) -> Result<Option<OtlpLayer>> {
     let Some(settings) = otlp_settings(config)? else {
         return Ok(None);
     };
@@ -1514,8 +1572,6 @@ fn build_otlp_layer(
         .with_max_export_batch_size(512)
         .with_max_export_timeout(settings.timeout);
 
-    let resource = telemetry_resource(config, metadata, mode, config_source, instance_id);
-
     let provider = trace::TracerProvider::builder()
         .with_config(trace::Config::default().with_resource(resource))
         .with_batch_config(batch_config)
@@ -1528,7 +1584,6 @@ fn build_otlp_layer(
     let layer = tracing_opentelemetry::layer().with_tracer(tracer);
     Ok(Some(OtlpLayer {
         layer,
-        guard: OtelGuard,
         endpoint: settings.endpoint,
     }))
 }
@@ -1632,8 +1687,14 @@ fn normalize_option(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use opentelemetry::metrics::MeterProvider;
+    use opentelemetry::trace::Tracer as _;
+    use opentelemetry_sdk::export::trace::InMemorySpanExporter;
+    use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
+    use opentelemetry_sdk::trace::{self, SimpleSpanProcessor};
     use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -1789,5 +1850,78 @@ mod tests {
                 .and_then(|value| value_to_string(value)),
             Some(config.config_version.clone())
         );
+    }
+
+    #[test]
+    fn otel_guard_shuts_down_providers() {
+        let provider = SdkMeterProvider::builder().build();
+        let before = global::meter_provider() as *const dyn MeterProvider;
+        global::set_meter_provider(provider.clone());
+        let during = global::meter_provider() as *const dyn MeterProvider;
+        assert_ne!(before, during, "meter provider was not installed");
+        let metrics_guard = RuntimeMetricsGuard::new(provider);
+        let tracer_flag = Arc::new(AtomicBool::new(false));
+        {
+            let guard = OtelGuard::new(metrics_guard).with_tracer_shutdown({
+                let tracer_flag = Arc::clone(&tracer_flag);
+                move || tracer_flag.store(true, Ordering::SeqCst)
+            });
+            drop(guard);
+        }
+        let after = global::meter_provider() as *const dyn MeterProvider;
+        assert_ne!(during, after, "meter provider was not reset to noop");
+        assert!(
+            tracer_flag.load(Ordering::SeqCst),
+            "tracer shutdown hook was not invoked"
+        );
+    }
+
+    #[test]
+    fn tracing_and_metrics_share_resource_attributes() {
+        let config = NodeConfig::default();
+        let resource = telemetry_resource(
+            &config,
+            None,
+            RuntimeMode::Node,
+            "default",
+            "shared-instance",
+        );
+
+        let metric_exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(metric_exporter.clone()).build();
+        let meter_provider = SdkMeterProvider::builder()
+            .with_resource(resource.clone())
+            .with_reader(reader)
+            .build();
+        let meter = meter_provider.meter("test-meter");
+        let counter = meter
+            .u64_counter("test.counter")
+            .with_description("test counter")
+            .with_unit("1")
+            .build();
+        counter.add(1, &[]);
+        meter_provider.force_flush().expect("flush metrics");
+        let exported = metric_exporter
+            .get_finished_metrics()
+            .expect("collect metrics");
+        assert!(!exported.is_empty(), "expected exported metrics");
+        for data in exported {
+            assert_eq!(data.resource, resource, "metric resource mismatch");
+        }
+
+        let span_exporter = InMemorySpanExporter::new();
+        let processor = SimpleSpanProcessor::new(Box::new(span_exporter.clone()));
+        let tracer_provider = trace::TracerProvider::builder()
+            .with_config(trace::Config::default().with_resource(resource.clone()))
+            .with_span_processor(processor)
+            .build();
+        let tracer = tracer_provider.tracer("test-tracer", None);
+        tracer.in_span("test-span", |_span| {});
+        tracer_provider.force_flush().expect("flush spans");
+        let spans = span_exporter.get_finished_spans();
+        assert!(!spans.is_empty(), "expected exported spans");
+        for span in spans {
+            assert_eq!(span.resource, resource, "span resource mismatch");
+        }
     }
 }

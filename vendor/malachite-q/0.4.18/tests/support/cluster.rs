@@ -20,11 +20,11 @@ use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::node_runtime::node::{NodeEvent, NodeRuntimeConfig};
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
-use rpp_chain::runtime::RuntimeMetrics;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
 };
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::{
@@ -236,7 +236,7 @@ impl TestCluster {
                 .collect();
             let node = tokio::task::spawn_blocking({
                 let config = config.clone();
-                move || Node::new(config)
+                move || Node::new(config, RuntimeMetrics::noop())
             })
             .await
             .context("node runtime initialisation task panicked")?
@@ -315,7 +315,7 @@ impl TestCluster {
                                 cfg,
                                 handles,
                             )
-                                .map_err(|err| anyhow!(err))?,
+                            .map_err(|err| anyhow!(err))?,
                         )
                     } else {
                         Arc::new(Wallet::new(
@@ -327,11 +327,7 @@ impl TestCluster {
                 }
                 #[cfg(not(feature = "vendor_electrs"))]
                 {
-                    Arc::new(Wallet::new(
-                        storage.clone(),
-                        wallet_key,
-                        wallet_metrics,
-                    ))
+                    Arc::new(Wallet::new(storage.clone(), wallet_key, wallet_metrics))
                 }
             };
 

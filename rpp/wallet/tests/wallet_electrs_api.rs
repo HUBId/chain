@@ -30,6 +30,7 @@ use rpp::runtime::types::proofs::{ChainProof, RppStarkProof};
 use rpp::runtime::types::transaction::SignedTransaction;
 use rpp::runtime::types::transaction::Transaction as RuntimeTransaction;
 use rpp::runtime::types::TransactionProofBundle;
+use rpp::runtime::RuntimeMetrics;
 use rpp::runtime::{RuntimeMetrics, RuntimeMode};
 use rpp::storage::state::utxo::StoredUtxo;
 use rpp::wallet::config::{
@@ -569,7 +570,7 @@ fn build_runtime_adapters(base: &Path) -> (RuntimeAdapters, NodeConfig) {
     };
 
     let config_clone = config.clone();
-    let node = Node::new(config).expect("node");
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let node_handle = node.handle();
     let storage = node_handle.storage();
     let (orchestrator, _shutdown) = PipelineOrchestrator::new(node_handle.clone(), None);
