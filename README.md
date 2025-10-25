@@ -156,6 +156,11 @@ We currently have very few logging statements, but this is useful for print-styl
 ## Release
 
 See the [release documentation](./RELEASE.md) for detailed information on how to release Firewood.
+The [secure release runbook](./RELEASES.md) summarises the CI/CD gates, artefact
+signing requirements, and rollback playbooks introduced with the hardened
+pipelines. Security-sensitive fixes should follow the guidance in
+[SECURITY.md](./SECURITY.md) to coordinate advisories and verify published
+artifacts.
 
 ## CLI
 
