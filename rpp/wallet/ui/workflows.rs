@@ -8,6 +8,7 @@ use crate::reputation::{
 };
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
 use crate::state::utxo::{locking_script_hash, StoredUtxo, UtxoState};
+use crate::runtime::RuntimeMetrics;
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 use serde::{Deserialize, Serialize};
 
@@ -540,7 +541,7 @@ mod tests {
         storage
             .persist_utxo_snapshot(&snapshot)
             .expect("persist utxo snapshot");
-        let wallet = Wallet::new(storage.clone(), keypair);
+        let wallet = Wallet::new(storage.clone(), keypair, RuntimeMetrics::noop());
         (wallet, address, storage, tempdir, snapshot)
     }
 
@@ -559,7 +560,7 @@ mod tests {
         };
         account.reputation.zsi.validate("proof");
         storage.persist_account(&account).expect("persist account");
-        let wallet = Wallet::new(storage.clone(), keypair);
+        let wallet = Wallet::new(storage.clone(), keypair, RuntimeMetrics::noop());
         (wallet, address, storage, tempdir)
     }
 

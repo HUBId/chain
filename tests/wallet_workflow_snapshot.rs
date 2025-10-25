@@ -3,6 +3,7 @@ use rand::rngs::OsRng;
 use rpp_chain::crypto::address_from_public_key;
 use rpp_chain::errors::ChainError;
 use rpp_chain::rpp::{UtxoOutpoint, UtxoRecord};
+use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::state::utxo::{StoredUtxo, UtxoState, locking_script_hash};
 use rpp_chain::storage::Storage;
 use rpp_chain::types::{Account, Stake};
@@ -41,7 +42,7 @@ fn transaction_workflow_matches_snapshot_commitment() {
         .persist_utxo_snapshot(&snapshot)
         .expect("persist snapshot");
 
-    let wallet = Wallet::new(storage.clone(), keypair);
+    let wallet = Wallet::new(storage.clone(), keypair, RuntimeMetrics::noop());
     let workflows = WalletWorkflows::new(&wallet);
 
     let amount = 25_000u128;

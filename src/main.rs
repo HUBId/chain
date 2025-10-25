@@ -27,7 +27,7 @@ use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2p
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
 };
-use rpp_chain::runtime::{RuntimeMode, RuntimeProfile};
+use rpp_chain::runtime::{RuntimeMetrics, RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::types::BlockPayload;
@@ -260,21 +260,32 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             let handles = initialize(&cfg, &firewood_dir, &index_dir, runtime_adapters)?;
             electrs_context = Some((cfg, handles));
         }
+        let wallet_metrics = RuntimeMetrics::noop();
         let wallet = {
             #[cfg(feature = "vendor_electrs")]
             {
                 if let Some((cfg, handles)) = electrs_context {
                     Arc::new(
-                        Wallet::with_electrs(storage, keypair, cfg, handles)
+                        Wallet::with_electrs(
+                            storage,
+                            keypair,
+                            Arc::clone(&wallet_metrics),
+                            cfg,
+                            handles,
+                        )
                             .map_err(|err| anyhow!(err))?,
                     )
                 } else {
-                    Arc::new(Wallet::new(storage, keypair))
+                    Arc::new(Wallet::new(
+                        storage,
+                        keypair,
+                        Arc::clone(&wallet_metrics),
+                    ))
                 }
             }
             #[cfg(not(feature = "vendor_electrs"))]
             {
-                Arc::new(Wallet::new(storage, keypair))
+                Arc::new(Wallet::new(storage, keypair, wallet_metrics))
             }
         };
         wallet_instance = Some(wallet);
