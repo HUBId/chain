@@ -77,6 +77,15 @@ pub struct RuntimeMetrics {
     proof_generation_duration: EnumF64Histogram<ProofKind>,
     proof_generation_size: EnumU64Histogram<ProofKind>,
     proof_generation_total: EnumCounter<ProofKind>,
+    consensus_round_duration: Histogram<f64>,
+    consensus_quorum_latency: Histogram<f64>,
+    consensus_leader_changes: Counter<u64>,
+    consensus_witness_events: Counter<u64>,
+    consensus_slashing_events: Counter<u64>,
+    consensus_failed_votes: Counter<u64>,
+    chain_block_height: Histogram<u64>,
+    network_peer_counts: Histogram<u64>,
+    reputation_penalties: Counter<u64>,
 }
 
 impl RuntimeMetrics {
@@ -145,6 +154,53 @@ impl RuntimeMetrics {
             proof_generation_duration,
             proof_generation_size,
             proof_generation_total,
+            consensus_round_duration: meter
+                .f64_histogram("rpp.runtime.consensus.round.duration")
+                .with_description("Duration of consensus rounds in milliseconds")
+                .with_unit("ms")
+                .build(),
+            consensus_quorum_latency: meter
+                .f64_histogram("rpp.runtime.consensus.round.quorum_latency")
+                .with_description(
+                    "Latency between round start and quorum formation in milliseconds",
+                )
+                .with_unit("ms")
+                .build(),
+            consensus_leader_changes: meter
+                .u64_counter("rpp.runtime.consensus.round.leader_changes")
+                .with_description("Total leader changes observed by the runtime")
+                .with_unit("1")
+                .build(),
+            consensus_witness_events: meter
+                .u64_counter("rpp.runtime.consensus.witness.events")
+                .with_description("Total witness gossip events emitted by the runtime")
+                .with_unit("1")
+                .build(),
+            consensus_slashing_events: meter
+                .u64_counter("rpp.runtime.consensus.slashing.events")
+                .with_description("Total slashing events applied by the runtime")
+                .with_unit("1")
+                .build(),
+            consensus_failed_votes: meter
+                .u64_counter("rpp.runtime.consensus.failed_votes")
+                .with_description("Total failed consensus vote registrations")
+                .with_unit("1")
+                .build(),
+            chain_block_height: meter
+                .u64_histogram("rpp.runtime.chain.block_height")
+                .with_description("Observed blockchain heights on the local node")
+                .with_unit("1")
+                .build(),
+            network_peer_counts: meter
+                .u64_histogram("rpp.runtime.network.peer_count")
+                .with_description("Number of connected peers observed by the runtime")
+                .with_unit("1")
+                .build(),
+            reputation_penalties: meter
+                .u64_counter("rpp.runtime.reputation.penalties")
+                .with_description("Total reputation penalties applied by the runtime")
+                .with_unit("1")
+                .build(),
         }
     }
 
@@ -190,6 +246,80 @@ impl RuntimeMetrics {
     /// Increment the proof generation counter without emitting duration/size data.
     pub fn increment_proof_generation(&self, kind: ProofKind) {
         self.proof_generation_total.add(kind, 1);
+    }
+
+    /// Record the duration of an entire consensus round.
+    pub fn record_consensus_round_duration(&self, height: u64, round: u64, duration: Duration) {
+        let attributes = [
+            KeyValue::new("height", height as i64),
+            KeyValue::new("round", round as i64),
+        ];
+        self.consensus_round_duration
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record the latency between round start and quorum formation.
+    pub fn record_consensus_quorum_latency(&self, height: u64, round: u64, latency: Duration) {
+        let attributes = [
+            KeyValue::new("height", height as i64),
+            KeyValue::new("round", round as i64),
+        ];
+        self.consensus_quorum_latency
+            .record(latency.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record a leader change for the provided round.
+    pub fn record_consensus_leader_change<S: Into<String>>(
+        &self,
+        height: u64,
+        round: u64,
+        leader: S,
+    ) {
+        let leader = leader.into();
+        let attributes = [
+            KeyValue::new("height", height as i64),
+            KeyValue::new("round", round as i64),
+            KeyValue::new("leader", leader),
+        ];
+        self.consensus_leader_changes.add(1, &attributes);
+    }
+
+    /// Record a consensus witness gossip event for the provided topic label.
+    pub fn record_consensus_witness_event<S: Into<String>>(&self, topic: S) {
+        let topic = topic.into();
+        let attributes = [KeyValue::new("topic", topic)];
+        self.consensus_witness_events.add(1, &attributes);
+    }
+
+    /// Record a slashing event along with its reason label.
+    pub fn record_consensus_slashing_event<S: Into<String>>(&self, reason: S) {
+        let reason = reason.into();
+        let attributes = [KeyValue::new("reason", reason)];
+        self.consensus_slashing_events.add(1, &attributes);
+    }
+
+    /// Record a failed vote event with an optional reason label.
+    pub fn record_consensus_failed_vote<S: Into<String>>(&self, reason: S) {
+        let reason = reason.into();
+        let attributes = [KeyValue::new("reason", reason)];
+        self.consensus_failed_votes.add(1, &attributes);
+    }
+
+    /// Record the latest observed block height.
+    pub fn record_block_height(&self, height: u64) {
+        self.chain_block_height.record(height, &[]);
+    }
+
+    /// Record the latest observed peer count on the networking layer.
+    pub fn record_peer_count(&self, peers: usize) {
+        self.network_peer_counts.record(peers as u64, &[]);
+    }
+
+    /// Record a reputation penalty emitted by the networking layer.
+    pub fn record_reputation_penalty<S: Into<String>>(&self, label: S) {
+        let label = label.into();
+        let attributes = [KeyValue::new("label", label)];
+        self.reputation_penalties.add(1, &attributes);
     }
 }
 
@@ -415,6 +545,15 @@ mod tests {
         metrics.record_proof_generation_duration(ProofKind::Stwo, Duration::from_millis(40));
         metrics.record_proof_generation_size(ProofKind::Stwo, 1024);
         metrics.increment_proof_generation(ProofKind::Mock);
+        metrics.record_consensus_round_duration(1, 2, Duration::from_millis(50));
+        metrics.record_consensus_quorum_latency(1, 2, Duration::from_millis(15));
+        metrics.record_consensus_leader_change(1, 2, "leader");
+        metrics.record_consensus_witness_event("blocks");
+        metrics.record_consensus_slashing_event("invalid_vote");
+        metrics.record_consensus_failed_vote("timeout");
+        metrics.record_block_height(42);
+        metrics.record_peer_count(8);
+        metrics.record_reputation_penalty("invalid_proof");
 
         provider.force_flush().expect("force flush metrics");
         let exported = exporter.get_finished_metrics()?;
@@ -454,6 +593,42 @@ mod tests {
         );
         assert_eq!(
             seen.get("rpp.runtime.proof.generation.count"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.consensus.round.duration"),
+            Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.consensus.round.quorum_latency"),
+            Some(&"ms".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.consensus.round.leader_changes"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.consensus.witness.events"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.consensus.slashing.events"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.consensus.failed_votes"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.chain.block_height"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.network.peer_count"),
+            Some(&"1".to_string())
+        );
+        assert_eq!(
+            seen.get("rpp.runtime.reputation.penalties"),
             Some(&"1".to_string())
         );
 

@@ -43,7 +43,6 @@ use serde_json;
 
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
-    TelemetryConfig,
 };
 use crate::consensus::{
     aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
@@ -434,32 +433,57 @@ struct ConsensusTelemetryState {
     failed_votes: u64,
 }
 
-#[derive(Default)]
 pub struct ConsensusTelemetry {
     state: ParkingMutex<ConsensusTelemetryState>,
+    metrics: Arc<RuntimeMetrics>,
 }
 
 impl ConsensusTelemetry {
+    pub fn new(metrics: Arc<RuntimeMetrics>) -> Self {
+        Self {
+            state: ParkingMutex::new(ConsensusTelemetryState::default()),
+            metrics,
+        }
+    }
+
     pub fn record_round_start(&self, height: u64, round: u64, leader: &Address) {
         let mut state = self.state.lock();
-        if let Some(previous) = &state.last_leader {
-            if previous != leader {
-                state.leader_changes = state.leader_changes.saturating_add(1);
-            }
+        let leader_changed = state
+            .last_leader
+            .as_ref()
+            .map(|previous| previous != leader)
+            .unwrap_or(true);
+        if leader_changed {
+            state.leader_changes = state.leader_changes.saturating_add(1);
         }
         state.last_leader = Some(leader.clone());
         state.last_round_started = Some(Instant::now());
         state.last_round_height = Some(height);
         state.last_round_number = Some(round);
         state.quorum_latency_ms = None;
+        drop(state);
+
+        if leader_changed {
+            self.metrics
+                .record_consensus_leader_change(height, round, leader.clone());
+        }
     }
 
     pub fn record_quorum(&self, height: u64, round: u64) {
         let mut state = self.state.lock();
         if state.last_round_height == Some(height) && state.last_round_number == Some(round) {
-            state.quorum_latency_ms = state
+            let latency_ms = state
                 .last_round_started
                 .map(|started| started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+            state.quorum_latency_ms = latency_ms;
+            drop(state);
+            if let Some(latency_ms) = latency_ms {
+                self.metrics.record_consensus_quorum_latency(
+                    height,
+                    round,
+                    Duration::from_millis(latency_ms),
+                );
+            }
         }
     }
 
@@ -472,23 +496,39 @@ impl ConsensusTelemetry {
                     state.round_latencies_ms.pop_front();
                 }
                 state.round_latencies_ms.push_back(duration_ms);
+                drop(state);
+                self.metrics.record_consensus_round_duration(
+                    height,
+                    round,
+                    Duration::from_millis(duration_ms),
+                );
+                return;
             }
         }
     }
 
-    pub fn record_witness_event(&self) {
+    pub fn record_witness_event<S: Into<String>>(&self, topic: S) {
         let mut state = self.state.lock();
         state.witness_events = state.witness_events.saturating_add(1);
+        drop(state);
+        self.metrics
+            .record_consensus_witness_event(topic.into());
     }
 
-    pub fn record_slashing(&self) {
+    pub fn record_slashing<S: Into<String>>(&self, reason: S) {
         let mut state = self.state.lock();
         state.slashing_events = state.slashing_events.saturating_add(1);
+        drop(state);
+        self.metrics
+            .record_consensus_slashing_event(reason.into());
     }
 
-    pub fn record_failed_vote(&self) {
+    pub fn record_failed_vote<S: Into<String>>(&self, reason: S) {
         let mut state = self.state.lock();
         state.failed_votes = state.failed_votes.saturating_add(1);
+        drop(state);
+        self.metrics
+            .record_consensus_failed_vote(reason.into());
     }
 
     pub fn snapshot(&self) -> ConsensusTelemetrySnapshot {
@@ -624,7 +664,6 @@ pub(crate) struct NodeInner {
     proposal_inbox: RwLock<HashMap<(u64, Address), VerifiedProposal>>,
     consensus_rounds: RwLock<HashMap<u64, u64>>,
     evidence_pool: RwLock<EvidencePool>,
-    telemetry_last_height: RwLock<Option<u64>>,
     pruning_status: RwLock<Option<PruningJobStatus>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
     vrf_threshold: RwLock<VrfThresholdStatus>,
@@ -1037,7 +1076,7 @@ impl Node {
             ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
         let mempool_limit = config.mempool_limit;
         let queue_weights = config.queue_weights.clone();
-        let consensus_telemetry = Arc::new(ConsensusTelemetry::default());
+        let consensus_telemetry = Arc::new(ConsensusTelemetry::new(runtime_metrics.clone()));
         let audit_exporter = AuditExporter::new(&config.data_dir.join("audits"))?;
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
@@ -1064,7 +1103,6 @@ impl Node {
             proposal_inbox: RwLock::new(HashMap::new()),
             consensus_rounds: RwLock::new(HashMap::new()),
             evidence_pool: RwLock::new(EvidencePool::default()),
-            telemetry_last_height: RwLock::new(None),
             pruning_status: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
             vrf_threshold: RwLock::new(VrfThresholdStatus::default()),
@@ -2115,7 +2153,8 @@ impl NodeInner {
     )]
     fn emit_witness_json<T: Serialize>(&self, topic: GossipTopic, payload: &T) {
         if matches!(topic, GossipTopic::Blocks | GossipTopic::Votes) {
-            self.consensus_telemetry.record_witness_event();
+            self.consensus_telemetry
+                .record_witness_event(format!("{topic:?}"));
             self.update_runtime_metrics();
         }
         match serde_json::to_vec(payload) {
@@ -2235,6 +2274,9 @@ impl NodeInner {
             .map(|account| account.reputation.score)
             .unwrap_or_default();
         let consensus_snapshot = self.consensus_telemetry.snapshot();
+        self
+            .runtime_metrics
+            .record_block_height(status.height);
         Ok(P2pMetrics {
             block_height: status.height,
             block_hash: status.last_hash,
@@ -2713,15 +2755,6 @@ impl NodeInner {
             telemetry_enabled = self.config.rollout.telemetry.enabled,
             "starting node"
         );
-        if self.config.rollout.telemetry.enabled {
-            let config = self.config.rollout.telemetry.clone();
-            let worker = self.clone();
-            let telemetry_shutdown = self.shutdown.subscribe();
-            self.spawn_worker(tokio::spawn(async move {
-                worker.telemetry_loop(config, telemetry_shutdown).await;
-            }))
-            .await;
-        }
         let mut ticker = time::interval(self.block_interval);
         loop {
             tokio::select! {
@@ -2744,33 +2777,6 @@ impl NodeInner {
             }
         }
         Ok(())
-    }
-
-    async fn telemetry_loop(
-        self: Arc<Self>,
-        config: TelemetryConfig,
-        mut shutdown: broadcast::Receiver<()>,
-    ) {
-        let interval = Duration::from_secs(config.sample_interval_secs.max(1));
-        let mut ticker = time::interval(interval);
-        let client = reqwest::Client::new();
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    if let Err(err) = self.emit_telemetry(&client, &config).await {
-                        warn!(?err, "failed to emit telemetry snapshot");
-                    }
-                }
-                result = shutdown.recv() => {
-                    if let Err(err) = result {
-                        if !matches!(err, broadcast::error::RecvError::Lagged(_)) {
-                            debug!(?err, "telemetry shutdown channel closed");
-                        }
-                    }
-                    break;
-                }
-            }
-        }
     }
 
     async fn spawn_worker(&self, handle: JoinHandle<()>) {
@@ -2797,20 +2803,7 @@ impl NodeInner {
         let _ = self.shutdown.send(());
     }
 
-    async fn emit_telemetry(
-        &self,
-        client: &reqwest::Client,
-        config: &TelemetryConfig,
-    ) -> ChainResult<()> {
-        let snapshot = self.build_telemetry_snapshot()?;
-        send_telemetry_with_tracking(client, config, &snapshot, &self.telemetry_last_height).await
-    }
-
     fn telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
-        self.build_telemetry_snapshot()
-    }
-
-    fn build_telemetry_snapshot(&self) -> ChainResult<NodeTelemetrySnapshot> {
         let node = self.node_status()?;
         let consensus = self.consensus_status()?;
         let mempool = self.mempool_status()?;
@@ -3470,7 +3463,9 @@ impl NodeInner {
             "invalid vote gossip detected"
         );
         self.punish_invalid_proof(&vote.vote.voter, vote.vote.height, vote.vote.round);
-        self.consensus_telemetry.record_failed_vote();
+        self
+            .consensus_telemetry
+            .record_failed_vote(format!("invalid_gossip:{reason}"));
         self.update_runtime_metrics();
     }
 
@@ -3769,7 +3764,7 @@ impl NodeInner {
                 enabled: self.config.rollout.telemetry.enabled,
                 endpoint: self.config.rollout.telemetry.endpoint.clone(),
                 sample_interval_secs: self.config.rollout.telemetry.sample_interval_secs,
-                last_observed_height: *self.telemetry_last_height.read(),
+                last_observed_height: None,
             },
         }
     }
@@ -3975,7 +3970,8 @@ impl NodeInner {
             .ledger
             .slash_validator(address, reason, Some(&self.keypair))?;
         self.audit_exporter.export_slashing(&event)?;
-        self.consensus_telemetry.record_slashing();
+        self.consensus_telemetry
+            .record_slashing(format!("{:?}", event.reason));
         self.update_runtime_metrics();
         self.maybe_refresh_local_identity(address);
         Ok(())
@@ -4272,7 +4268,9 @@ impl NodeInner {
                         ?err,
                         "failed to register local prevote for external proposal"
                     );
-                    self.consensus_telemetry.record_failed_vote();
+                    self
+                        .consensus_telemetry
+                        .record_failed_vote("local_prevote".to_string());
                     self.update_runtime_metrics();
                 }
                 let local_precommit = self.build_local_vote(
@@ -4286,7 +4284,9 @@ impl NodeInner {
                         ?err,
                         "failed to register local precommit for external proposal"
                     );
-                    self.consensus_telemetry.record_failed_vote();
+                    self
+                        .consensus_telemetry
+                        .record_failed_vote("local_precommit".to_string());
                     self.update_runtime_metrics();
                 }
                 let external_votes = self.drain_votes_for(height, &block_hash);
@@ -4308,7 +4308,9 @@ impl NodeInner {
                                 );
                             }
                         }
-                        self.consensus_telemetry.record_failed_vote();
+                        self
+                            .consensus_telemetry
+                            .record_failed_vote("external_vote".to_string());
                     }
                 }
                 if round.commit_reached() {
@@ -4536,7 +4538,9 @@ impl NodeInner {
                         );
                     }
                 }
-                self.consensus_telemetry.record_failed_vote();
+                self
+                    .consensus_telemetry
+                    .record_failed_vote("external_vote".to_string());
                 self.update_runtime_metrics();
             }
         }
@@ -5291,323 +5295,58 @@ fn tier_to_level(tier: &Tier) -> TierLevel {
     }
 }
 
-pub(super) async fn send_telemetry_with_tracking(
-    client: &reqwest::Client,
-    config: &TelemetryConfig,
-    snapshot: &NodeTelemetrySnapshot,
-    telemetry_last_height: &RwLock<Option<u64>>,
-) -> ChainResult<()> {
-    dispatch_telemetry_snapshot(client, config.endpoint.as_deref(), snapshot).await?;
-    *telemetry_last_height.write() = Some(snapshot.node.height);
-    Ok(())
-}
-
-pub(super) async fn dispatch_telemetry_snapshot(
-    client: &reqwest::Client,
-    endpoint: Option<&str>,
-    snapshot: &NodeTelemetrySnapshot,
-) -> ChainResult<()> {
-    let encoded = serde_json::to_string(snapshot)
-        .map_err(|err| ChainError::Config(format!("unable to encode telemetry snapshot: {err}")))?;
-
-    match endpoint {
-        Some(endpoint) if !endpoint.is_empty() => {
-            info!(target = "telemetry", ?endpoint, payload = %encoded, "telemetry snapshot dispatching");
-            let response = match client.post(endpoint).json(snapshot).send().await {
-                Ok(response) => response,
-                Err(err) => {
-                    warn!(
-                        target = "telemetry",
-                        ?endpoint,
-                        error = %err,
-                        "telemetry snapshot dispatch failed"
-                    );
-                    return Err(ChainError::Config(format!(
-                        "unable to dispatch telemetry snapshot: {err}"
-                    )));
-                }
-            };
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = match response.text().await {
-                    Ok(body) => body,
-                    Err(err) => {
-                        warn!(
-                            target = "telemetry",
-                            ?endpoint,
-                            %status,
-                            error = %err,
-                            "failed to read telemetry endpoint response"
-                        );
-                        String::new()
-                    }
-                };
-                warn!(
-                    target = "telemetry",
-                    ?endpoint,
-                    %status,
-                    body = %body,
-                    "telemetry snapshot dispatch failed"
-                );
-                return Err(ChainError::Config(format!(
-                    "telemetry endpoint responded with status {status}"
-                )));
-            }
-
-            info!(
-                target = "telemetry",
-                ?endpoint,
-                payload = %encoded,
-                "telemetry snapshot dispatched"
-            );
-        }
-        _ => {
-            info!(target = "telemetry", payload = %encoded, "telemetry snapshot");
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
-mod telemetry_tests {
-    #[cfg(feature = "backend-rpp-stark")]
-    use super::NodeInner;
-    use super::{
-        dispatch_telemetry_snapshot, send_telemetry_with_tracking, ConsensusStatus, FeatureGates,
-        MempoolStatus, NodeStatus, NodeTelemetrySnapshot, ReleaseChannel, TelemetryConfig,
-        TimetokeParams, VerifierMetricsSnapshot,
+mod telemetry_metrics_tests {
+    use super::{ConsensusTelemetry, RuntimeMetrics};
+    use crate::types::Address;
+    use opentelemetry_sdk::metrics::{
+        InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
     };
-    #[cfg(feature = "backend-rpp-stark")]
-    use crate::errors::ChainError;
-    #[cfg(feature = "backend-rpp-stark")]
-    use crate::types::{ChainProof, RppStarkProof};
-    use crate::vrf::VrfSelectionMetrics;
-    use axum::http::StatusCode;
-    use axum::{routing::post, Router};
-    use parking_lot::RwLock;
-    use reqwest::Client;
-    use std::net::SocketAddr;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::collections::HashSet;
     use std::sync::Arc;
-    #[cfg(feature = "backend-rpp-stark")]
-    use std::time::Duration;
-    use tokio::sync::oneshot;
-    use tracing_test::traced_test;
+    use std::time::{Duration, Instant};
 
-    #[tokio::test]
-    async fn telemetry_dispatch_posts_and_updates_height() {
-        let (addr, counter, shutdown) = spawn_test_server(StatusCode::OK).await;
-        let endpoint = format!("http://{addr}/");
-        let config = TelemetryConfig {
-            enabled: true,
-            endpoint: Some(endpoint),
-            auth_token: None,
-            timeout_ms: 5_000,
-            retry_max: 3,
-            sample_interval_secs: 1,
-            redact_logs: true,
-        };
-        let client = Client::new();
-        let snapshot = sample_snapshot(42);
-        assert!(snapshot.verifier_metrics.per_backend.contains_key("stwo"));
-        let last_height = RwLock::new(None);
-
-        send_telemetry_with_tracking(&client, &config, &snapshot, &last_height)
-            .await
-            .expect("dispatch succeeds");
-
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert_eq!(*last_height.read(), Some(42));
-        let _ = shutdown.send(());
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn telemetry_dispatch_logs_on_failure_and_preserves_height() {
-        let (addr, counter, shutdown) = spawn_test_server(StatusCode::INTERNAL_SERVER_ERROR).await;
-        let endpoint = format!("http://{addr}/");
-        let config = TelemetryConfig {
-            enabled: true,
-            endpoint: Some(endpoint),
-            auth_token: None,
-            timeout_ms: 5_000,
-            retry_max: 3,
-            sample_interval_secs: 1,
-            redact_logs: true,
-        };
-        let client = Client::new();
-        let snapshot = sample_snapshot(24);
-        let last_height = RwLock::new(None);
-
-        let result = send_telemetry_with_tracking(&client, &config, &snapshot, &last_height).await;
-
-        assert!(result.is_err());
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert_eq!(*last_height.read(), None);
-        assert!(logs_contain("telemetry snapshot dispatch failed"));
-        let _ = shutdown.send(());
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn telemetry_dispatch_falls_back_to_logging_without_endpoint() {
-        let config = TelemetryConfig {
-            enabled: true,
-            endpoint: None,
-            auth_token: None,
-            timeout_ms: 5_000,
-            retry_max: 3,
-            sample_interval_secs: 1,
-            redact_logs: true,
-        };
-        let client = Client::new();
-        let snapshot = sample_snapshot(7);
-        assert!(snapshot.verifier_metrics.per_backend.contains_key("stwo"));
-        let last_height = RwLock::new(None);
-
-        send_telemetry_with_tracking(&client, &config, &snapshot, &last_height)
-            .await
-            .expect("dispatch succeeds");
-
-        assert_eq!(*last_height.read(), Some(7));
-        assert!(logs_contain("telemetry snapshot"));
-    }
-
-    #[cfg(feature = "backend-rpp-stark")]
     #[test]
-    #[traced_test]
-    fn rpp_stark_failure_emits_telemetry_metrics() {
-        let proof = ChainProof::RppStark(RppStarkProof::new(
-            vec![1, 2],
-            vec![3, 4, 5],
-            vec![6, 7, 8, 9],
-        ));
-        let error = ChainError::Crypto("verification failed".into());
+    fn consensus_telemetry_records_metrics() -> std::result::Result<(), MetricError> {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("telemetry-test");
+        let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
+        let telemetry = ConsensusTelemetry::new(metrics.clone());
 
-        NodeInner::emit_rpp_stark_failure_metrics(
-            "transaction",
-            &proof,
-            Duration::from_millis(37),
-            &error,
-        );
-
-        assert!(logs_contain("proof_backend=\"rpp-stark\""));
-        assert!(logs_contain("proof_kind=\"transaction\""));
-        assert!(logs_contain("valid=false"));
-        assert!(logs_contain("proof_bytes=9"));
-        assert!(logs_contain("params_bytes=2"));
-        assert!(logs_contain("public_inputs_bytes=3"));
-        assert!(logs_contain("payload_bytes=4"));
-        assert!(logs_contain("verify_duration_ms=37"));
-        assert!(logs_contain(
-            "error=\"cryptography error: verification failed\""
-        ));
-    }
-
-    #[tokio::test]
-    async fn telemetry_dispatch_invokes_endpoint_directly() {
-        let (addr, counter, shutdown) = spawn_test_server(StatusCode::OK).await;
-        let endpoint = format!("http://{addr}/");
-        let client = Client::new();
-        let snapshot = sample_snapshot(99);
-        assert!(snapshot.verifier_metrics.per_backend.contains_key("stwo"));
-
-        dispatch_telemetry_snapshot(&client, Some(&endpoint), &snapshot)
-            .await
-            .expect("dispatch succeeds");
-
-        assert_eq!(counter.load(Ordering::SeqCst), 1);
-        let _ = shutdown.send(());
-    }
-
-    fn sample_snapshot(height: u64) -> NodeTelemetrySnapshot {
-        NodeTelemetrySnapshot {
-            release_channel: ReleaseChannel::Development,
-            feature_gates: FeatureGates::default(),
-            node: NodeStatus {
-                address: "addr".into(),
-                height,
-                last_hash: "hash".into(),
-                epoch: 0,
-                epoch_nonce: "nonce".into(),
-                pending_transactions: 0,
-                pending_identities: 0,
-                pending_votes: 0,
-                pending_uptime_proofs: 0,
-                vrf_metrics: VrfSelectionMetrics::default(),
-                tip: None,
-            },
-            consensus: ConsensusStatus {
-                height,
-                block_hash: None,
-                proposer: None,
-                round: 0,
-                total_power: "0".into(),
-                quorum_threshold: "0".into(),
-                pre_vote_power: "0".into(),
-                pre_commit_power: "0".into(),
-                commit_power: "0".into(),
-                quorum_reached: false,
-                observers: 0,
-                epoch: 0,
-                epoch_nonce: "nonce".into(),
-                pending_votes: 0,
-                round_latencies_ms: Vec::new(),
-                leader_changes: 0,
-                quorum_latency_ms: None,
-                witness_events: 0,
-                slashing_events: 0,
-                failed_votes: 0,
-            },
-            mempool: MempoolStatus {
-                transactions: Vec::new(),
-                identities: Vec::new(),
-                votes: Vec::new(),
-                uptime_proofs: Vec::new(),
-                queue_weights: QueueWeightsConfig::default(),
-            },
-            timetoke_params: TimetokeParams::default(),
-            verifier_metrics: VerifierMetricsSnapshot::default(),
-            pruning: None,
-            vrf_threshold: VrfThresholdStatus::default(),
+        let leader: Address = "leader".into();
+        telemetry.record_round_start(10, 2, &leader);
+        {
+            let mut state = telemetry.state.lock();
+            state.last_round_started = Some(Instant::now() - Duration::from_millis(25));
         }
-    }
+        telemetry.record_quorum(10, 2);
+        telemetry.record_round_end(10, 2);
+        telemetry.record_witness_event("blocks");
+        telemetry.record_slashing("invalid_vote");
+        telemetry.record_failed_vote("timeout");
 
-    async fn spawn_test_server(
-        status: StatusCode,
-    ) -> (SocketAddr, Arc<AtomicUsize>, oneshot::Sender<()>) {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter_clone = counter.clone();
+        provider.force_flush()?;
+        let exported = exporter.get_finished_metrics()?;
 
-        let app = Router::new().route(
-            "/",
-            post(move |_body: axum::body::Bytes| {
-                let counter = counter_clone.clone();
-                async move {
-                    counter.fetch_add(1, Ordering::SeqCst);
-                    (status, ())
+        let mut seen = HashSet::new();
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    seen.insert(metric.name.clone());
                 }
-            }),
-        );
+            }
+        }
 
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test listener");
-        let addr = listener.local_addr().expect("listener addr");
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        assert!(seen.contains("rpp.runtime.consensus.round.duration"));
+        assert!(seen.contains("rpp.runtime.consensus.round.quorum_latency"));
+        assert!(seen.contains("rpp.runtime.consensus.round.leader_changes"));
+        assert!(seen.contains("rpp.runtime.consensus.witness.events"));
+        assert!(seen.contains("rpp.runtime.consensus.slashing.events"));
+        assert!(seen.contains("rpp.runtime.consensus.failed_votes"));
 
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-                .expect("serve test telemetry");
-        });
-
-        (addr, counter, shutdown_tx)
+        Ok(())
     }
 }
 
