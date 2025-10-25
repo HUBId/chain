@@ -560,6 +560,10 @@ impl Wallet {
         &self.address
     }
 
+    pub fn metrics(&self) -> Arc<RuntimeMetrics> {
+        Arc::clone(&self.metrics)
+    }
+
     pub fn firewood_state_root(&self) -> ChainResult<String> {
         Ok(hex::encode(self.storage.state_root()?))
     }
