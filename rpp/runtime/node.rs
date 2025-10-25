@@ -3277,8 +3277,8 @@ impl NodeInner {
             #[cfg(feature = "backend-rpp-stark")]
             {
                 let verification = if let (Some(bytes), Some(inputs)) = (
-                    bundle.stwo_proof_bytes.as_ref(),
-                    bundle.stwo_public_inputs.as_ref(),
+                    bundle.stwo_proof_bytes(),
+                    bundle.stwo_public_inputs(),
                 ) {
                     let proof_bytes = ProofBytes(bytes.clone());
                     self.verifiers.verify_stwo_proof_bytes(&proof_bytes, inputs)
@@ -3304,8 +3304,8 @@ impl NodeInner {
             #[cfg(not(feature = "backend-rpp-stark"))]
             {
                 let verification = if let (Some(bytes), Some(inputs)) = (
-                    bundle.stwo_proof_bytes.as_ref(),
-                    bundle.stwo_public_inputs.as_ref(),
+                    bundle.stwo_proof_bytes(),
+                    bundle.stwo_public_inputs(),
                 ) {
                     let proof_bytes = ProofBytes(bytes.clone());
                     self.verifiers.verify_stwo_proof_bytes(&proof_bytes, inputs)
@@ -4592,6 +4592,28 @@ impl NodeInner {
                     verification_key: None,
                 }))
             }
+            #[cfg(feature = "backend-rpp-stark")]
+            ChainProof::RppStark(stark) => {
+                let digest = compute_public_digest(stark.public_inputs()).into_bytes();
+                let encoded = serde_json::to_vec(stark).map_err(|err| {
+                    ChainError::Config(format!(
+                        "failed to encode {:?} proof artifact: {err}",
+                        module
+                    ))
+                })?;
+                if encoded.len() > max_bytes {
+                    return Err(ChainError::Config(format!(
+                        "proof artifact for {:?} exceeds max_proof_size_bytes ({max_bytes})",
+                        module
+                    )));
+                }
+                Ok(Some(ProofArtifact {
+                    module,
+                    commitment: digest,
+                    proof: encoded,
+                    verification_key: None,
+                }))
+            }
             #[cfg(feature = "backend-plonky3")]
             ChainProof::Plonky3(_) => Ok(None),
         }
@@ -5799,8 +5821,8 @@ mod tests {
     use crate::crypto::{address_from_public_key, generate_keypair, sign_message};
     use crate::types::{
         Account, ChainProof, ExecutionTrace, ProofKind, ProofPayload, ReputationWeights,
-        SignedTransaction, Stake, StarkProof, Tier, Transaction, TransactionProofBundle,
-        TransactionWitness,
+        RppStarkProof, SignedTransaction, Stake, StarkProof, Tier, Transaction,
+        TransactionProofBundle, TransactionWitness,
     };
 
     fn sample_node_config(base: &Path) -> NodeConfig {
@@ -5866,6 +5888,42 @@ mod tests {
             Some(witness),
             Some(payload),
         )
+    }
+
+    #[test]
+    #[cfg(feature = "prover-stwo")]
+    fn proof_artifact_serializes_stwo_commitment() {
+        let mut bundle = sample_transaction_bundle("receiver", 0);
+        if let ChainProof::Stwo(ref mut stark) = bundle.proof {
+            stark.commitment = "ab".repeat(32);
+        }
+        let artifact = NodeInner::proof_artifact(ProofModule::Utxo, &bundle.proof, 16_384)
+            .expect("artifact generation")
+            .expect("artifact emitted");
+        assert_eq!(artifact.commitment, [0xAB; 32]);
+        let decoded: ChainProof = serde_json::from_slice(&artifact.proof).expect("decode");
+        assert!(matches!(decoded, ChainProof::Stwo(_)));
+    }
+
+    #[test]
+    #[cfg(feature = "backend-rpp-stark")]
+    fn proof_artifact_serializes_rpp_stark_commitment() {
+        let proof = ChainProof::RppStark(RppStarkProof::new(
+            vec![0xAA, 0xBB],
+            vec![0xCC, 0xDD, 0xEE],
+            vec![0x01, 0x02],
+        ));
+        let expected_commitment = match &proof {
+            ChainProof::RppStark(stark) => compute_public_digest(stark.public_inputs()).into_bytes(),
+            _ => unreachable!(),
+        };
+        let artifact = NodeInner::proof_artifact(ProofModule::Utxo, &proof, 16_384)
+            .expect("artifact generation")
+            .expect("artifact emitted");
+        assert_eq!(artifact.commitment, expected_commitment);
+        let decoded: RppStarkProof = serde_json::from_slice(&artifact.proof).expect("decode rpp");
+        assert_eq!(decoded.public_inputs(), &[0xCC, 0xDD, 0xEE]);
+        assert_eq!(decoded.proof(), &[0x01, 0x02]);
     }
 
     #[test]

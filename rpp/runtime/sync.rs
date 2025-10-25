@@ -165,7 +165,7 @@ impl RuntimeTransactionProofVerifier {
     }
 
     fn verify_proof_artifact(&self, bundle: &TransactionProofBundle) -> Result<(), PipelineError> {
-        match (&bundle.stwo_proof_bytes, &bundle.stwo_public_inputs) {
+        match (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs()) {
             (Some(bytes), Some(inputs)) => {
                 let proof_bytes = ProofBytes(bytes.clone());
                 self.registry
