@@ -11,6 +11,13 @@
 //! [`node::Node`] and [`node::NodeHandle`] to operate it, and the supporting modules for consensus,
 //! networking, proofs, and state synchronization.
 
+#[cfg(all(
+    not(nightly),
+    any(feature = "prover-stwo", feature = "prover-stwo-simd")
+))]
+compile_error!(
+    "the `prover-stwo` and `prover-stwo-simd` features require a nightly compiler or `RUSTC_BOOTSTRAP`"
+);
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 #[path = "../../rpc/api.rs"]

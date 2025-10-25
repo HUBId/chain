@@ -5936,6 +5936,7 @@ dependencies = [
  "rpp-p2p",
  "rpp-stark",
  "rpp-wallet",
+ "rustc_version",
  "semver",
  "serde",
  "serde_json",
