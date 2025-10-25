@@ -23,6 +23,15 @@
 //! `prover-stwo` (scalar) or `prover-stwo-simd` (SIMD) on their dependency
 //! declarations. No additional glue code or environment tweaks are necessary.
 
+#[cfg(all(
+    not(nightly),
+    any(feature = "prover-stwo", feature = "prover-stwo-simd")
+))]
+compile_error!(
+    "STWO Prover requires Rust nightly (portable_simd / array_chunks etc.). \
+Build without these features or use Nightly."
+);
+
 #[cfg(all(feature = "prover-stwo", feature = "prover-mock"))]
 compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive");
 

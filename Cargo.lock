@@ -5337,6 +5337,7 @@ dependencies = [
  "prover-backend-interface",
  "rand 0.8.5",
  "rpp-identity-tree",
+ "rustc_version",
  "schnorrkel",
  "serde",
  "serde_json",
