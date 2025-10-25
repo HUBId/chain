@@ -7,7 +7,78 @@ for provisioning steps, the [Validator Troubleshooting](./validator_troubleshoot
 runbook for incident response, and the
 [RPC CLI Operator Guide](./rpc_cli_operator_guide.md) for authentication,
 throttling, and recovery procedures that apply to operator-driven RPC
-workflows.
+workflows. The new telemetry stack ships with dedicated
+[incident runbooks](./runbooks/observability.md) and
+[dashboard blueprints](./dashboards/README.md); reference them when wiring the
+collector and during on-call response.
+
+## Runtime Modes & Telemetry Matrix
+
+The runtime ships four execution profiles that dictate which subsystems and
+telemetry surfaces are enabled. Each profile can be selected via the `--mode`
+CLI flag or a runtime profile file and maps to default configuration templates
+for the node and wallet components.【F:rpp/runtime/mod.rs†L8-L56】
+
+| Mode        | Includes | Default configs | Telemetry footprint |
+|-------------|----------|-----------------|---------------------|
+| `node`      | Node only | `config/node.toml` | Exposes node RPC, consensus, storage, and proof metrics; wallet signals remain disabled.【F:rpp/runtime/mod.rs†L33-L54】【F:rpp/runtime/telemetry/metrics.rs†L94-L205】 |
+| `wallet`    | Wallet only | `config/wallet.toml` | Emits wallet RPC latency/throughput metrics and pipeline counters without node consensus data.【F:rpp/runtime/mod.rs†L20-L54】【F:rpp/runtime/telemetry/metrics.rs†L115-L139】【F:rpp/runtime/orchestration.rs†L359-L706】 |
+| `hybrid`    | Node + wallet | `config/hybrid.toml`/`config/wallet.toml` | Aggregates both node and wallet telemetry, suitable for light validators or staging rigs.【F:rpp/runtime/mod.rs†L19-L54】【F:rpp/runtime/node.rs†L3932-L4017】 |
+| `validator` | Node + wallet + orchestrator | `config/validator.toml`/`config/wallet.toml` | Enables full validator visibility (consensus, proof generation, wallet pipeline) and should back production dashboards.【F:rpp/runtime/mod.rs†L13-L54】【F:rpp/runtime/telemetry/metrics.rs†L94-L205】【F:rpp/runtime/orchestration.rs†L359-L940】 |
+
+## Telemetry Configuration Controls
+
+Telemetry is controlled from `[rollout.telemetry]` in `node.toml` and can be
+overridden at launch. The configuration schema enforces valid endpoints, queue
+sizes, sampling ratios, and TLS inputs before the runtime starts exporting to
+OTLP collectors.【F:config/node.toml†L43-L54】【F:rpp/runtime/config.rs†L1736-L1787】 Use
+these entry points to adjust behaviour:
+
+- **Configuration file.** Set `enabled`, `endpoint`, `http_endpoint`,
+  `auth_token`, TLS paths, timeouts, retry budgets, and sampling/queue knobs in
+  the config file shipped with the profile.【F:rpp/runtime/config.rs†L1736-L1787】
+- **CLI overrides.** Launch the runtime with `--telemetry-endpoint`,
+  `--telemetry-auth-token`, and `--telemetry-sample-interval` to replace the
+  file values without editing disk state.【F:rpp/node/src/lib.rs†L163-L207】
+- **Environment overrides.** Export `RPP_NODE_OTLP_ENDPOINT`,
+  `RPP_NODE_OTLP_HTTP_ENDPOINT`, `RPP_NODE_OTLP_AUTH_TOKEN`, and
+  `RPP_NODE_OTLP_TIMEOUT_MS` to override both file and CLI values when deploying
+  through orchestration systems.【F:rpp/node/src/lib.rs†L1567-L1588】
+
+The telemetry resource records the active mode, release channel, and sampling
+parameters so downstream collectors can group spans and metrics by deployment
+context.【F:rpp/node/src/lib.rs†L1145-L1189】
+
+## Port & Endpoint Usage
+
+Validate connectivity before promoting builds:
+
+- **Node RPC.** Defaults to `127.0.0.1:7070`; expose this port through your
+  ingress when external operators require access.【F:config/node.toml†L3-L23】
+- **P2P gossip.** Listens on `/ip4/0.0.0.0/tcp/7600` and must be reachable by
+  other validators; security groups should allow inbound TCP 7600.【F:config/node.toml†L25-L35】
+- **Wallet RPC.** Standalone wallets bind `127.0.0.1:9090`; hybrid/validator
+  profiles inherit the same default unless overridden in `wallet.toml`.【F:config/wallet.toml†L1-L18】
+- **Telemetry OTLP.** Configure HTTPS endpoints for both metrics (`http_endpoint`)
+  and traces (`endpoint`); missing URLs leave the exporter in log-only mode and
+  surface warnings on startup.【F:rpp/runtime/telemetry/metrics.rs†L41-L48】
+
+## Buffer & Backpressure Tuning
+
+The OTLP exporters use bounded queues; overflows emit `telemetry` warnings when
+`warn_on_drop` is enabled. Tune these parameters to match collector capacity and
+network conditions:
+
+- `trace_max_queue_size` and `trace_max_export_batch_size` govern the tracing
+  batcher. Ensure the batch size never exceeds the queue size; validation
+  enforces this constraint.【F:rpp/runtime/config.rs†L1736-L1765】
+- `trace_sample_ratio` determines how many spans reach the exporter and is
+  clamped between 0.0 and 1.0.【F:rpp/runtime/config.rs†L1761-L1775】
+- `timeout_ms` and `retry_max` affect the OTLP client's resilience during
+  collector outages; increase them when the pipeline traverses slow networks or
+  distant collectors.【F:rpp/runtime/config.rs†L1738-L1746】【F:rpp/runtime/telemetry/exporter.rs†L68-L117】
+- Keep `warn_on_drop = true` so queue pressure is surfaced via logs; the runtime
+  emits warnings whenever metrics export is disabled or drops begin.【F:rpp/runtime/config.rs†L1748-L1775】【F:rpp/runtime/telemetry/metrics.rs†L41-L48】
 
 ## Release Channels & Feature Gating
 
@@ -95,12 +166,13 @@ threaten block production.
 1. **Enable telemetry sampling.** Flip `rollout.telemetry.enabled`, tune the
    sampling interval, and adjust `trace_sample_ratio` if you only need a subset
    of spans for long-term storage. Increase the queue and batch sizes when the
-   collector runs behind to avoid drops.【F:rpp/runtime/config.rs†L1632-L1707】
+   collector runs behind to avoid drops; the config loader validates that queue
+   and batch sizing is coherent.【F:rpp/runtime/config.rs†L1736-L1775】
 2. **Stream snapshots to your collector.** Set both OTLP endpoints
    (`endpoint` for gRPC traces and `http_endpoint` for metrics) and, if needed,
    point `grpc_tls`/`http_tls` at your collector CA to enforce TLS. The runtime
    spawns bounded exporters that warn when items are dropped so you can expand
-   capacity before losing visibility.【F:rpp/runtime/telemetry/exporter.rs†L21-L210】【F:rpp/runtime/telemetry/metrics.rs†L30-L58】
+   capacity before losing visibility.【F:rpp/runtime/telemetry/exporter.rs†L21-L133】【F:rpp/runtime/telemetry/metrics.rs†L41-L70】
 3. **Scrape structured logs.** Configure log aggregation to capture the
    `telemetry` target; payloads contain release channel, active feature gates,
    and health snapshots for dashboards, including the live `timetoke_params`
