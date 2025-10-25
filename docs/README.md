@@ -12,3 +12,10 @@ configuration specifics, checklists, and runbooks as needed:
 For additional topics, explore the existing documentation tree (e.g. `docs/telemetry.md` and
 `docs/validator_quickstart.md`).
 
+Security-focused references:
+
+- [Threat model](THREAT_MODEL.md)
+- [Key management](KEY_MANAGEMENT.md)
+- [API security](API_SECURITY.md)
+- [Governance](GOVERNANCE.md)
+

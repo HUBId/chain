@@ -46,3 +46,14 @@ are available and validated.
 
 For more information about the release process and rollback/hotfix playbooks,
 refer to [`RELEASES.md`](RELEASES.md).
+
+## Related security guidance
+
+- [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) details the system assets,
+  trust boundaries, and defensive controls operators rely on in production.
+- [`docs/KEY_MANAGEMENT.md`](docs/KEY_MANAGEMENT.md) documents VRF key lifecycle
+  management and secrets backend expectations.
+- [`docs/API_SECURITY.md`](docs/API_SECURITY.md) captures RPC hardening
+  practices, rate limits, and telemetry authentication hooks.
+- [`docs/GOVERNANCE.md`](docs/GOVERNANCE.md) summarises change control, release
+  approvals, and incident-response policies.

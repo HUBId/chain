@@ -162,6 +162,17 @@ pipelines. Security-sensitive fixes should follow the guidance in
 [SECURITY.md](./SECURITY.md) to coordinate advisories and verify published
 artifacts.
 
+## Security, risk, and governance
+
+- [Threat model](docs/THREAT_MODEL.md) — assets, trust zones, and residual risks
+  tied to the current runtime implementation.
+- [Key management](docs/KEY_MANAGEMENT.md) — VRF key lifecycle operations and
+  secrets backend expectations for validators.
+- [API security](docs/API_SECURITY.md) — RPC authentication, CORS, rate limiting,
+  and telemetry hardening guidance.
+- [Governance](docs/GOVERNANCE.md) — change-control, release, and incident
+  response policies aligned with the signed artifact pipeline.
+
 ## CLI
 
 Firewood comes with a CLI tool called `fwdctl` that enables one to create and interact with a local instance of a Firewood database. For more information, see the [fwdctl README](fwdctl/README.md).
