@@ -607,6 +607,16 @@ impl ProofVerifierRegistry {
         })
     }
 
+    #[cfg(feature = "backend-rpp-stark")]
+    pub fn verify_rpp_stark_block_bundle(
+        &self,
+        bundle: &BlockProofBundle,
+    ) -> ChainResult<()> {
+        self.record_backend(ProofSystemKind::RppStark, || {
+            self.rpp_stark.verify_block_bundle(bundle)
+        })
+    }
+
     fn ensure_bundle_system(
         &self,
         bundle: &BlockProofBundle,

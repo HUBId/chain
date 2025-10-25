@@ -1024,6 +1024,8 @@ impl Node {
         let storage = Storage::open(&db_path)?;
         let mut accounts = storage.load_accounts()?;
         let mut tip_metadata = storage.tip()?;
+        let verifier_registry =
+            ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
         if tip_metadata.is_none() {
             let genesis_accounts = if config.genesis.accounts.is_empty() {
                 vec![GenesisAccount {
@@ -1101,6 +1103,11 @@ impl Node {
                 consensus_proof.is_none(),
                 "genesis consensus proof should not be generated",
             );
+            #[cfg(feature = "backend-rpp-stark")]
+            if let Err(err) = verifier_registry.verify_rpp_stark_block_bundle(&stark_bundle) {
+                error!(?err, "genesis block bundle rejected by RPP-STARK verifier");
+                return Err(err);
+            }
             let recursive_proof =
                 RecursiveProof::genesis(&header, &pruning_proof, &stark_bundle.recursive_proof)?;
             let signature = sign_message(&keypair, &header.canonical_bytes());
@@ -1158,8 +1165,6 @@ impl Node {
 
         let (shutdown, _shutdown_rx) = broadcast::channel(1);
         let (pipeline_events, _) = broadcast::channel(256);
-        let verifier_registry =
-            ProofVerifierRegistry::with_max_proof_size_bytes(config.max_proof_size_bytes)?;
         let mempool_limit = config.mempool_limit;
         let queue_weights = config.queue_weights.clone();
         let consensus_telemetry = Arc::new(ConsensusTelemetry::new(runtime_metrics.clone()));
@@ -5099,97 +5104,100 @@ impl NodeInner {
             ChainError::Crypto("local consensus proof missing".into())
         })?;
 
+        #[cfg(feature = "backend-rpp-stark")]
+        if let Err(err) = self
+            .verifiers
+            .verify_rpp_stark_block_bundle(&stark_bundle)
+        {
+            error!(
+                height,
+                block_hash = %block_hash,
+                ?err,
+                "local block bundle rejected by RPP-STARK verifier"
+            );
+            return Err(err);
+        }
+
         let state_proof = stark_bundle.state_proof.clone();
-        if self.config.rollout.feature_gates.recursive_proofs {
-            #[cfg(feature = "backend-rpp-stark")]
-            let state_result = match &state_proof {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(ProofVerificationKind::State, &state_proof)
-                    .map(|_| ()),
-                _ => self.verifiers.verify_state(&state_proof),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let state_result = self.verifiers.verify_state(&state_proof);
-            if let Err(err) = state_result {
-                error!(
-                    height,
-                    block_hash = %block_hash,
-                    ?err,
-                    "local state proof rejected by verifier"
-                );
-                return Err(err);
-            }
+        #[cfg(feature = "backend-rpp-stark")]
+        let state_result = match &state_proof {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(ProofVerificationKind::State, &state_proof)
+                .map(|_| ()),
+            _ => self.verifiers.verify_state(&state_proof),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let state_result = self.verifiers.verify_state(&state_proof);
+        if let Err(err) = state_result {
+            error!(
+                height,
+                block_hash = %block_hash,
+                ?err,
+                "local state proof rejected by verifier"
+            );
+            return Err(err);
         }
 
         let pruning_stark = stark_bundle.pruning_proof.clone();
-        if self.config.rollout.feature_gates.recursive_proofs {
-            #[cfg(feature = "backend-rpp-stark")]
-            let pruning_result = match &pruning_stark {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(ProofVerificationKind::Pruning, &pruning_stark)
-                    .map(|_| ()),
-                _ => self.verifiers.verify_pruning(&pruning_stark),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let pruning_result = self.verifiers.verify_pruning(&pruning_stark);
-            if let Err(err) = pruning_result {
-                error!(
-                    height,
-                    block_hash = %block_hash,
-                    ?err,
-                    "local pruning proof rejected by verifier"
-                );
-                return Err(err);
-            }
+        #[cfg(feature = "backend-rpp-stark")]
+        let pruning_result = match &pruning_stark {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(ProofVerificationKind::Pruning, &pruning_stark)
+                .map(|_| ()),
+            _ => self.verifiers.verify_pruning(&pruning_stark),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let pruning_result = self.verifiers.verify_pruning(&pruning_stark);
+        if let Err(err) = pruning_result {
+            error!(
+                height,
+                block_hash = %block_hash,
+                ?err,
+                "local pruning proof rejected by verifier"
+            );
+            return Err(err);
         }
 
         let recursive_stark = stark_bundle.recursive_proof.clone();
-        if self.config.rollout.feature_gates.recursive_proofs {
-            #[cfg(feature = "backend-rpp-stark")]
-            let recursive_result = match &recursive_stark {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(
-                        ProofVerificationKind::Recursive,
-                        &recursive_stark,
-                    )
-                    .map(|_| ()),
-                _ => self.verifiers.verify_recursive(&recursive_stark),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let recursive_result = self.verifiers.verify_recursive(&recursive_stark);
-            if let Err(err) = recursive_result {
-                error!(
-                    height,
-                    block_hash = %block_hash,
-                    ?err,
-                    "local recursive proof rejected by verifier"
-                );
-                return Err(err);
-            }
+        #[cfg(feature = "backend-rpp-stark")]
+        let recursive_result = match &recursive_stark {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::Recursive,
+                    &recursive_stark,
+                )
+                .map(|_| ()),
+            _ => self.verifiers.verify_recursive(&recursive_stark),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let recursive_result = self.verifiers.verify_recursive(&recursive_stark);
+        if let Err(err) = recursive_result {
+            error!(
+                height,
+                block_hash = %block_hash,
+                ?err,
+                "local recursive proof rejected by verifier"
+            );
+            return Err(err);
         }
 
-        if self.config.rollout.feature_gates.recursive_proofs {
-            #[cfg(feature = "backend-rpp-stark")]
-            let consensus_result = match &consensus_proof {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(
-                        ProofVerificationKind::Consensus,
-                        &consensus_proof,
-                    )
-                    .map(|_| ()),
-                _ => self.verifiers.verify_consensus(&consensus_proof),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let consensus_result = self.verifiers.verify_consensus(&consensus_proof);
-            if let Err(err) = consensus_result {
-                error!(
-                    height,
-                    block_hash = %block_hash,
-                    ?err,
-                    "local consensus proof rejected by verifier"
-                );
-                return Err(err);
-            }
+        #[cfg(feature = "backend-rpp-stark")]
+        let consensus_result = match &consensus_proof {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, &consensus_proof)
+                .map(|_| ()),
+            _ => self.verifiers.verify_consensus(&consensus_proof),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let consensus_result = self.verifiers.verify_consensus(&consensus_proof);
+        if let Err(err) = consensus_result {
+            error!(
+                height,
+                block_hash = %block_hash,
+                ?err,
+                "local consensus proof rejected by verifier"
+            );
+            return Err(err);
         }
 
         let recursive_proof = match previous_block.as_ref() {
@@ -5348,105 +5356,103 @@ impl NodeInner {
         block.verify_without_stark(previous_block.as_ref(), &proposer_key)?;
 
         let round_number = round.round();
-        if self.config.rollout.feature_gates.recursive_proofs {
-            #[cfg(feature = "backend-rpp-stark")]
-            let state_result = match &block.stark.state_proof {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(
-                        ProofVerificationKind::State,
-                        &block.stark.state_proof,
-                    )
-                    .map(|_| ()),
-                _ => self.verifiers.verify_state(&block.stark.state_proof),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let state_result = self.verifiers.verify_state(&block.stark.state_proof);
-            if let Err(err) = state_result {
-                warn!(
-                    height,
-                    round = round_number,
-                    proposer = %block.header.proposer,
-                    ?err,
-                    proof_kind = "state",
-                    "external block proof verification failed"
-                );
-                self.punish_invalid_proof(&block.header.proposer, height, round_number);
-                return Err(err);
-            }
-            #[cfg(feature = "backend-rpp-stark")]
-            let pruning_result = match &block.stark.pruning_proof {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(
-                        ProofVerificationKind::Pruning,
-                        &block.stark.pruning_proof,
-                    )
-                    .map(|_| ()),
-                _ => self.verifiers.verify_pruning(&block.stark.pruning_proof),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let pruning_result = self.verifiers.verify_pruning(&block.stark.pruning_proof);
-            if let Err(err) = pruning_result {
-                warn!(
-                    height,
-                    round = round_number,
-                    proposer = %block.header.proposer,
-                    ?err,
-                    proof_kind = "pruning",
-                    "external block proof verification failed"
-                );
-                self.punish_invalid_proof(&block.header.proposer, height, round_number);
-                return Err(err);
-            }
-            #[cfg(feature = "backend-rpp-stark")]
-            let recursive_result = match &block.stark.recursive_proof {
-                ChainProof::RppStark(_) => self
-                    .verify_rpp_stark_with_metrics(
-                        ProofVerificationKind::Recursive,
-                        &block.stark.recursive_proof,
-                    )
-                    .map(|_| ()),
-                _ => self
-                    .verifiers
-                    .verify_recursive(&block.stark.recursive_proof),
-            };
-            #[cfg(not(feature = "backend-rpp-stark"))]
-            let recursive_result = self
+        #[cfg(feature = "backend-rpp-stark")]
+        let state_result = match &block.stark.state_proof {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::State,
+                    &block.stark.state_proof,
+                )
+                .map(|_| ()),
+            _ => self.verifiers.verify_state(&block.stark.state_proof),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let state_result = self.verifiers.verify_state(&block.stark.state_proof);
+        if let Err(err) = state_result {
+            warn!(
+                height,
+                round = round_number,
+                proposer = %block.header.proposer,
+                ?err,
+                proof_kind = "state",
+                "external block proof verification failed"
+            );
+            self.punish_invalid_proof(&block.header.proposer, height, round_number);
+            return Err(err);
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        let pruning_result = match &block.stark.pruning_proof {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::Pruning,
+                    &block.stark.pruning_proof,
+                )
+                .map(|_| ()),
+            _ => self.verifiers.verify_pruning(&block.stark.pruning_proof),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let pruning_result = self.verifiers.verify_pruning(&block.stark.pruning_proof);
+        if let Err(err) = pruning_result {
+            warn!(
+                height,
+                round = round_number,
+                proposer = %block.header.proposer,
+                ?err,
+                proof_kind = "pruning",
+                "external block proof verification failed"
+            );
+            self.punish_invalid_proof(&block.header.proposer, height, round_number);
+            return Err(err);
+        }
+        #[cfg(feature = "backend-rpp-stark")]
+        let recursive_result = match &block.stark.recursive_proof {
+            ChainProof::RppStark(_) => self
+                .verify_rpp_stark_with_metrics(
+                    ProofVerificationKind::Recursive,
+                    &block.stark.recursive_proof,
+                )
+                .map(|_| ()),
+            _ => self
                 .verifiers
-                .verify_recursive(&block.stark.recursive_proof);
-            if let Err(err) = recursive_result {
+                .verify_recursive(&block.stark.recursive_proof),
+        };
+        #[cfg(not(feature = "backend-rpp-stark"))]
+        let recursive_result = self
+            .verifiers
+            .verify_recursive(&block.stark.recursive_proof);
+        if let Err(err) = recursive_result {
+            warn!(
+                height,
+                round = round_number,
+                proposer = %block.header.proposer,
+                ?err,
+                proof_kind = "recursive",
+                "external block proof verification failed"
+            );
+            self.punish_invalid_proof(&block.header.proposer, height, round_number);
+            return Err(err);
+        }
+        if let Some(proof) = &block.consensus_proof {
+            #[cfg(feature = "backend-rpp-stark")]
+            let consensus_result = match proof {
+                ChainProof::RppStark(_) => self
+                    .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, proof)
+                    .map(|_| ()),
+                _ => self.verifiers.verify_consensus(proof),
+            };
+            #[cfg(not(feature = "backend-rpp-stark"))]
+            let consensus_result = self.verifiers.verify_consensus(proof);
+            if let Err(err) = consensus_result {
                 warn!(
                     height,
                     round = round_number,
                     proposer = %block.header.proposer,
                     ?err,
-                    proof_kind = "recursive",
+                    proof_kind = "consensus",
                     "external block proof verification failed"
                 );
                 self.punish_invalid_proof(&block.header.proposer, height, round_number);
                 return Err(err);
-            }
-            if let Some(proof) = &block.consensus_proof {
-                #[cfg(feature = "backend-rpp-stark")]
-                let consensus_result = match proof {
-                    ChainProof::RppStark(_) => self
-                        .verify_rpp_stark_with_metrics(ProofVerificationKind::Consensus, proof)
-                        .map(|_| ()),
-                    _ => self.verifiers.verify_consensus(proof),
-                };
-                #[cfg(not(feature = "backend-rpp-stark"))]
-                let consensus_result = self.verifiers.verify_consensus(proof);
-                if let Err(err) = consensus_result {
-                    warn!(
-                        height,
-                        round = round_number,
-                        proposer = %block.header.proposer,
-                        ?err,
-                        proof_kind = "consensus",
-                        "external block proof verification failed"
-                    );
-                    self.punish_invalid_proof(&block.header.proposer, height, round_number);
-                    return Err(err);
-                }
             }
         }
 
