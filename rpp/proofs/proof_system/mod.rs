@@ -17,7 +17,11 @@ use crate::types::{
 
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::verifier::Plonky3Verifier;
+#[cfg(feature = "prover-stwo")]
 use crate::stwo::aggregation::StateCommitmentSnapshot;
+#[cfg(not(feature = "prover-stwo"))]
+use crate::stwo::aggregation::StateCommitmentSnapshot as DisabledStateCommitmentSnapshot;
+#[cfg(feature = "prover-stwo")]
 use crate::stwo::verifier::NodeVerifier;
 
 #[cfg(feature = "backend-rpp-stark")]
@@ -26,6 +30,186 @@ use crate::zk::rpp_verifier::{
 };
 use parking_lot::Mutex;
 use serde::Serialize;
+
+#[cfg(not(feature = "prover-stwo"))]
+type StateCommitmentSnapshot = DisabledStateCommitmentSnapshot;
+
+const STWO_DISABLED_ERROR: &str = "STWO prover disabled";
+
+#[derive(Clone)]
+struct StwoVerifierDispatch {
+    #[cfg(feature = "prover-stwo")]
+    inner: NodeVerifier,
+}
+
+impl StwoVerifierDispatch {
+    fn new() -> Self {
+        #[cfg(feature = "prover-stwo")]
+        {
+            return Self {
+                inner: NodeVerifier::new(),
+            };
+        }
+
+        #[cfg(not(feature = "prover-stwo"))]
+        {
+            Self {}
+        }
+    }
+
+    fn verifier(&self) -> ChainResult<&dyn ProofVerifier> {
+        #[cfg(feature = "prover-stwo")]
+        {
+            Ok(&self.inner)
+        }
+
+        #[cfg(not(feature = "prover-stwo"))]
+        {
+            Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        }
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    fn verify_bundle(
+        &self,
+        identity_proofs: &[ChainProof],
+        transaction_proofs: &[ChainProof],
+        uptime_proofs: &[ChainProof],
+        consensus_proofs: &[ChainProof],
+        state_proof: &ChainProof,
+        pruning_proof: &ChainProof,
+        recursive_proof: &ChainProof,
+        state_commitments: &StateCommitmentSnapshot,
+        expected_previous_commitment: Option<&str>,
+    ) -> ChainResult<()> {
+        self.inner
+            .verify_bundle(
+                identity_proofs,
+                transaction_proofs,
+                uptime_proofs,
+                consensus_proofs,
+                state_proof,
+                pruning_proof,
+                recursive_proof,
+                state_commitments,
+                expected_previous_commitment,
+            )
+            .map(|_| ())
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    #[allow(clippy::too_many_arguments)]
+    fn verify_bundle(
+        &self,
+        identity_proofs: &[ChainProof],
+        transaction_proofs: &[ChainProof],
+        uptime_proofs: &[ChainProof],
+        consensus_proofs: &[ChainProof],
+        state_proof: &ChainProof,
+        pruning_proof: &ChainProof,
+        recursive_proof: &ChainProof,
+        state_commitments: &StateCommitmentSnapshot,
+        expected_previous_commitment: Option<&str>,
+    ) -> ChainResult<()> {
+        let _ = (
+            identity_proofs,
+            transaction_proofs,
+            uptime_proofs,
+            consensus_proofs,
+            state_proof,
+            pruning_proof,
+            recursive_proof,
+            state_commitments,
+            expected_previous_commitment,
+        );
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    fn verify_decoded_transaction(
+        &self,
+        proof: &prover_stwo_backend::backend::DecodedTxProof,
+    ) -> ChainResult<()> {
+        self.inner.verify_transaction_proof(proof)
+    }
+}
+
+#[cfg(feature = "prover-stwo")]
+impl ProofVerifier for StwoVerifierDispatch {
+    fn system(&self) -> ProofSystemKind {
+        ProofSystemKind::Stwo
+    }
+
+    fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_transaction(proof)
+    }
+
+    fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_identity(proof)
+    }
+
+    fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_state(proof)
+    }
+
+    fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_pruning(proof)
+    }
+
+    fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_recursive(proof)
+    }
+
+    fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_uptime(proof)
+    }
+
+    fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
+        self.inner.verify_consensus(proof)
+    }
+}
+
+#[cfg(not(feature = "prover-stwo"))]
+impl ProofVerifier for StwoVerifierDispatch {
+    fn system(&self) -> ProofSystemKind {
+        ProofSystemKind::Stwo
+    }
+
+    fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+
+    fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
+        let _ = proof;
+        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+    }
+}
 
 /// High-level abstraction for wallet-side proof generation that any backend must satisfy.
 pub trait ProofProver {
@@ -246,7 +430,7 @@ fn proof_system_label(system: ProofSystemKind) -> &'static str {
 #[derive(Clone)]
 pub struct ProofVerifierRegistry {
     metrics: VerifierMetrics,
-    stwo: NodeVerifier,
+    stwo: StwoVerifierDispatch,
     #[cfg(feature = "backend-plonky3")]
     plonky3: Plonky3Verifier,
     #[cfg(feature = "backend-rpp-stark")]
@@ -260,7 +444,7 @@ impl Default for ProofVerifierRegistry {
     fn default() -> Self {
         Self {
             metrics: VerifierMetrics::default(),
-            stwo: NodeVerifier::new(),
+            stwo: StwoVerifierDispatch::new(),
             #[cfg(feature = "backend-plonky3")]
             plonky3: Plonky3Verifier::default(),
             #[cfg(feature = "backend-rpp-stark")]
@@ -374,7 +558,7 @@ impl ProofVerifierRegistry {
 
         Ok(Self {
             metrics: VerifierMetrics::default(),
-            stwo: NodeVerifier::new(),
+            stwo: StwoVerifierDispatch::new(),
             #[cfg(feature = "backend-plonky3")]
             plonky3: Plonky3Verifier::default(),
             #[cfg(feature = "backend-rpp-stark")]
@@ -390,7 +574,7 @@ impl ProofVerifierRegistry {
 
     fn system_verifier(&self, system: ProofSystemKind) -> ChainResult<&dyn ProofVerifier> {
         match system {
-            ProofSystemKind::Stwo => Ok(&self.stwo),
+            ProofSystemKind::Stwo => self.stwo.verifier(),
             #[cfg(feature = "backend-plonky3")]
             ProofSystemKind::Plonky3 => Ok(&self.plonky3),
             #[cfg(feature = "backend-rpp-stark")]
@@ -505,9 +689,7 @@ impl ProofVerifierRegistry {
         #[cfg(not(feature = "prover-stwo"))]
         {
             let _ = (proof_bytes, public_inputs);
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof byte verification".into(),
-            ))
+            Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
         }
 
         #[cfg(feature = "prover-stwo")]
@@ -551,7 +733,7 @@ impl ProofVerifierRegistry {
         }
 
         self.record_backend(ProofSystemKind::Stwo, || {
-            self.stwo.verify_transaction_proof(&decoded)
+            self.stwo.verify_decoded_transaction(&decoded)
         })
     }
 
@@ -569,7 +751,8 @@ impl ProofVerifierRegistry {
         match bundle.state_proof.system() {
             ProofSystemKind::Stwo => {
                 self.ensure_bundle_system(bundle, ProofSystemKind::Stwo)?;
-                self.record_backend(ProofSystemKind::Stwo, || {
+                #[cfg(feature = "prover-stwo")]
+                let result = self.record_backend(ProofSystemKind::Stwo, || {
                     self.stwo.verify_bundle(
                         identity_proofs,
                         &bundle.transaction_proofs,
@@ -581,7 +764,23 @@ impl ProofVerifierRegistry {
                         state_commitments,
                         expected_previous_commitment,
                     )
-                })
+                });
+                #[cfg(not(feature = "prover-stwo"))]
+                let result = {
+                    let _ = (
+                        identity_proofs,
+                        &bundle.transaction_proofs,
+                        uptime_proofs,
+                        consensus_proofs,
+                        &bundle.state_proof,
+                        &bundle.pruning_proof,
+                        &bundle.recursive_proof,
+                        state_commitments,
+                        expected_previous_commitment,
+                    );
+                    Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+                };
+                result
             }
             #[cfg(feature = "backend-plonky3")]
             ProofSystemKind::Plonky3 => {
@@ -664,7 +863,7 @@ fn proof_fingerprint(proof: &ChainProof) -> String {
         .unwrap_or_else(|_| "unknown".to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "prover-stwo"))]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
