@@ -17,7 +17,8 @@ use serde_json;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use tokio::time;
 use tracing::field::display;
-use tracing::{Span, debug, info, warn};
+use tracing::{Span, debug, info, info_span, warn};
+use tracing::Instrument;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::node::{DEFAULT_STATE_SYNC_CHUNK, NodeHandle, PipelineObservation};
@@ -198,6 +199,73 @@ impl FlowMetrics {
             stages,
             commit_height: self.commit_height,
         }
+    }
+}
+
+fn pipeline_task_span(task: &'static str) -> Span {
+    info_span!("runtime.pipeline.task", task)
+}
+
+fn pipeline_wallet_span(method: &'static str, wallet: &Address, hash: &str) -> Span {
+    info_span!(
+        "runtime.wallet.rpc",
+        method,
+        wallet = %wallet,
+        tx_hash = %hash
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+    use tracing_subscriber::registry::LookupSpan;
+    use tracing_subscriber::Registry;
+
+    #[derive(Clone, Default)]
+    struct RecordingLayer {
+        spans: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl RecordingLayer {
+        fn names(&self) -> Vec<String> {
+            self.spans.lock().expect("record spans").clone()
+        }
+    }
+
+    impl<S> Layer<S> for RecordingLayer
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::Id,
+            _ctx: Context<'_, S>,
+        ) {
+            self.spans
+                .lock()
+                .expect("record span name")
+                .push(attrs.metadata().name().to_string());
+        }
+    }
+
+    #[test]
+    fn pipeline_wallet_span_emits_runtime_span() {
+        let recorder = RecordingLayer::default();
+        let subscriber = Registry::default().with(recorder.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let wallet: Address = "pipeline-wallet".into();
+            let span = pipeline_wallet_span("submit", &wallet, "hash");
+            let _guard = span.enter();
+            info!("pipeline wallet span");
+        });
+        assert!(recorder
+            .names()
+            .iter()
+            .any(|name| name == "runtime.wallet.rpc"));
     }
 }
 
@@ -487,6 +555,7 @@ impl PipelineOrchestrator {
         let metrics = self.metrics.clone();
         let ingest_shutdown = shutdown_rx.clone();
         let submissions_rx = self.submissions_rx.clone();
+        let ingest_span = pipeline_task_span("ingest");
         tokio::spawn(async move {
             let receiver = submissions_rx
                 .lock()
@@ -494,12 +563,14 @@ impl PipelineOrchestrator {
                 .take()
                 .expect("pipeline orchestrator already running");
             PipelineOrchestrator::ingest_loop(node, metrics, receiver, ingest_shutdown).await;
-        });
+        }
+        .instrument(ingest_span));
 
         let observe_node = self.node.clone();
         let observe_metrics = self.metrics.clone();
         let observe_shutdown = shutdown_rx.clone();
         let observe_errors = self.errors.clone();
+        let observe_span = pipeline_task_span("observe");
         tokio::spawn(async move {
             PipelineOrchestrator::observe_loop(
                 observe_node,
@@ -508,19 +579,23 @@ impl PipelineOrchestrator {
                 observe_errors,
             )
             .await;
-        });
+        }
+        .instrument(observe_span));
 
         if let Some(handle) = self.p2p.clone() {
             let gossip_metrics = self.metrics.clone();
             let gossip_shutdown = shutdown_rx.clone();
+            let gossip_span = pipeline_task_span("gossip");
             tokio::spawn(async move {
                 let events = handle.subscribe();
                 PipelineOrchestrator::gossip_loop(gossip_metrics, events, gossip_shutdown).await;
-            });
+            }
+            .instrument(gossip_span));
         }
 
         let pruning_node = self.node.clone();
         let pruning_shutdown = shutdown_rx;
+        let pruning_span = pipeline_task_span("pruning");
         tokio::spawn(async move {
             PipelineOrchestrator::pruning_loop(
                 pruning_node,
@@ -529,7 +604,8 @@ impl PipelineOrchestrator {
                 pruning_shutdown,
             )
             .await;
-        });
+        }
+        .instrument(pruning_span));
     }
 
     /// Returns the latest P2P meta telemetry snapshot as observed by the node runtime.
@@ -576,6 +652,8 @@ impl PipelineOrchestrator {
         let bundle = workflow.bundle.clone();
         let hash = bundle.hash();
         Span::current().record("hash", &display(&hash));
+        let wallet_span = pipeline_wallet_span("submit_transaction", &sender, &hash);
+        let _wallet_guard = wallet_span.enter();
         let expected_balance = workflow
             .sender_post_utxos
             .iter()

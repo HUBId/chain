@@ -21,7 +21,7 @@ use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time;
-use tracing::{debug, info, info_span, instrument, warn};
+use tracing::{debug, info, info_span, instrument, warn, Span};
 
 use crate::config::{FeatureGates, NodeConfig, P2pConfig, TelemetryConfig};
 use crate::consensus::{ConsensusCertificate, EvidenceRecord, SignedBftVote};
@@ -470,6 +470,24 @@ enum MetaIngestResult {
 }
 
 impl GossipPipelines {
+    #[inline]
+    fn consensus_flow_span(
+        operation: &'static str,
+        height: u64,
+        round: u64,
+        block_hash: &str,
+        peer: &PeerId,
+    ) -> Span {
+        info_span!(
+            "runtime.consensus.flow",
+            operation,
+            height,
+            round,
+            block_hash,
+            peer = %peer
+        )
+    }
+
     fn initialise(
         config: &NodeRuntimeConfig,
         commands: mpsc::Sender<NodeCommand>,
@@ -532,17 +550,31 @@ impl GossipPipelines {
         self.consensus.lock().remove_voter(peer);
     }
 
+    #[instrument(
+        name = "runtime.consensus.proposal",
+        skip(self, payload),
+        fields(block_hash, peer = %peer)
+    )]
     fn ingest_proposal(
         &self,
         peer: PeerId,
         block_hash: &str,
         payload: Vec<u8>,
     ) -> Result<(), PipelineError> {
+        let span = Span::current();
+        span.record("block_hash", &block_hash);
+        let flow_span = Self::consensus_flow_span("proposal", 0, 0, block_hash, &peer);
+        let _guard = flow_span.enter();
         self.consensus
             .lock()
             .ingest_proposal(block_hash.as_bytes().to_vec(), peer, payload)
     }
 
+    #[instrument(
+        name = "runtime.consensus.vote",
+        skip(self, payload),
+        fields(block_hash, round, peer = %peer, digest = tracing::field::Empty)
+    )]
     fn ingest_vote(
         &self,
         peer: PeerId,
@@ -551,6 +583,12 @@ impl GossipPipelines {
         payload: Vec<u8>,
         digest: Hash,
     ) -> Result<VoteOutcome, PipelineError> {
+        let span = Span::current();
+        span.record("block_hash", &block_hash);
+        span.record("round", &round);
+        span.record("digest", &tracing::field::display(digest.to_hex()));
+        let flow_span = Self::consensus_flow_span("vote", 0, round, block_hash, &peer);
+        let _guard = flow_span.enter();
         let result = self
             .consensus
             .lock()
