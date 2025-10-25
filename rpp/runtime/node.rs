@@ -72,7 +72,6 @@ use crate::runtime::node_runtime::{
     },
     NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pRuntime, NodeMetrics as P2pMetrics,
 };
-use crate::runtime::telemetry::TelemetryHandle;
 use crate::runtime::{init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard};
 use crate::runtime::sync::{
     state_sync_chunk_by_index as runtime_state_sync_chunk_by_index,
@@ -2771,8 +2770,7 @@ impl NodeInner {
         let node = Node::new(config)?;
         let handle = node.handle();
         let runtime_config = handle.inner.runtime_config()?;
-        let telemetry = TelemetryHandle::spawn(runtime_config.telemetry.clone());
-        let (p2p_inner, p2p_handle) = P2pRuntime::new(runtime_config, telemetry).map_err(|err: P2pError| {
+        let (p2p_inner, p2p_handle) = P2pRuntime::new(runtime_config).map_err(|err: P2pError| {
                 ChainError::Config(format!("failed to initialise p2p runtime: {err}"))
             })?;
         let p2p_task = tokio::spawn(async move {

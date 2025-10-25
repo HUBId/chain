@@ -17,7 +17,6 @@ use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::{PipelineError, PipelineOrchestrator, PipelineStage};
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeEvent, NodeInner as P2pNode};
-use rpp_chain::runtime::telemetry::TelemetryHandle;
 use rpp_chain::runtime::{RuntimeMetrics, RuntimeMode};
 use rpp_chain::wallet::Wallet;
 use rpp_chain::wallet::WalletWorkflows;
@@ -436,9 +435,8 @@ async fn submit_transaction_returns_config_error_when_gossip_publish_fails() {
     let local = LocalSet::new();
     local
         .run_until(async move {
-            let telemetry = TelemetryHandle::spawn(runtime_config.telemetry.clone());
             let (p2p_runtime, p2p_handle) =
-                P2pNode::new(runtime_config, telemetry).expect("p2p runtime initialised");
+                P2pNode::new(runtime_config).expect("p2p runtime initialised");
             let p2p_task = task::spawn_local(async move {
                 p2p_runtime.run().await.expect("run p2p runtime");
             });
@@ -519,14 +517,10 @@ async fn gossip_loop_records_stage_for_matching_payload() {
     let local = LocalSet::new();
     local
         .run_until(async move {
-            let telemetry_receiver =
-                TelemetryHandle::spawn(receiver_config.telemetry.clone());
             let (receiver_runtime, receiver_handle) =
-                P2pNode::new(receiver_config, telemetry_receiver).expect("receiver runtime");
-            let telemetry_publisher =
-                TelemetryHandle::spawn(publisher_config.telemetry.clone());
+                P2pNode::new(receiver_config).expect("receiver runtime");
             let (publisher_runtime, publisher_handle) =
-                P2pNode::new(publisher_config, telemetry_publisher).expect("publisher runtime");
+                P2pNode::new(publisher_config).expect("publisher runtime");
 
             let mut receiver_events = receiver_handle.subscribe();
             let receiver_task = task::spawn_local(async move {

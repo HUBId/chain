@@ -18,7 +18,6 @@ use rpp_chain::runtime::node_runtime::node::{MetaTelemetryReport, NodeRuntimeCon
 use rpp_chain::runtime::node_runtime::{
     NodeEvent, NodeHandle as P2pHandle, NodeInner as P2pNode, PeerTelemetry,
 };
-use rpp_chain::runtime::telemetry::TelemetryHandle;
 use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::types::{
     Account, ChainProof, ExecutionTrace, ProofKind, ProofPayload, ReputationWeights,
@@ -190,10 +189,8 @@ async fn proof_gossip_propagates_between_nodes() -> Result<()> {
     runtime_b.metrics = RuntimeMetrics::noop();
     runtime_b.identity = Some(identity_b.into());
 
-    let telemetry_a = TelemetryHandle::spawn(runtime_a.telemetry.clone());
-    let telemetry_b = TelemetryHandle::spawn(runtime_b.telemetry.clone());
-    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a, telemetry_a)?;
-    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b, telemetry_b)?;
+    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a)?;
+    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b)?;
 
     let task_a = tokio::spawn(async move {
         p2p_a.run().await.expect("run p2p a");
@@ -347,10 +344,8 @@ async fn invalid_proof_gossip_penalizes_sender() -> Result<()> {
     runtime_b.metrics = RuntimeMetrics::noop();
     runtime_b.identity = Some(identity_b.into());
 
-    let telemetry_a = TelemetryHandle::spawn(runtime_a.telemetry.clone());
-    let telemetry_b = TelemetryHandle::spawn(runtime_b.telemetry.clone());
-    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a, telemetry_a)?;
-    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b, telemetry_b)?;
+    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a)?;
+    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b)?;
 
     let task_a = tokio::spawn(async move {
         p2p_a.run().await.expect("run p2p a");
@@ -517,10 +512,8 @@ async fn meta_telemetry_heartbeat_propagates() -> Result<()> {
     runtime_b.metrics = RuntimeMetrics::noop();
     runtime_b.identity = Some(identity_b.into());
 
-    let telemetry_a = TelemetryHandle::spawn(runtime_a.telemetry.clone());
-    let telemetry_b = TelemetryHandle::spawn(runtime_b.telemetry.clone());
-    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a, telemetry_a)?;
-    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b, telemetry_b)?;
+    let (p2p_a, handle_a_runtime) = P2pNode::new(runtime_a)?;
+    let (p2p_b, handle_b_runtime) = P2pNode::new(runtime_b)?;
 
     let task_a = tokio::spawn(async move {
         p2p_a.run().await.expect("run p2p a");

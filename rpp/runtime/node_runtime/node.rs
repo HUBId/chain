@@ -29,7 +29,7 @@ use crate::node::NetworkIdentityProfile;
 use crate::proof_backend::Blake2sHasher;
 use crate::proof_system::{ProofVerifierRegistry, VerifierMetricsSnapshot};
 use crate::rpp::{GlobalStateCommitments, TimetokeRecord};
-use crate::runtime::telemetry::{RuntimeMetrics, TelemetryHandle, TelemetrySnapshot};
+use crate::runtime::telemetry::RuntimeMetrics;
 use crate::runtime::vrf_gossip::{gossip_to_submission, verify_submission, GossipVrfSubmission};
 use crate::state::merkle::compute_merkle_root;
 use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
@@ -82,7 +82,7 @@ enum NodeCommand {
     },
 }
 
-/// In-memory metrics that are periodically forwarded to the telemetry worker.
+/// In-memory metrics that are periodically forwarded to the runtime metrics pipeline.
 #[derive(Clone, Debug, Default)]
 pub struct NodeMetrics {
     pub block_height: u64,
@@ -868,7 +868,6 @@ pub struct NodeInner {
     events: broadcast::Sender<NodeEvent>,
     metrics: Arc<RwLock<NodeMetrics>>,
     runtime_metrics: Arc<RuntimeMetrics>,
-    telemetry: TelemetryHandle,
     connected_peers: HashSet<PeerId>,
     known_versions: HashMap<PeerId, String>,
     peer_features: HashMap<PeerId, FeatureGates>,
@@ -883,10 +882,7 @@ pub struct NodeInner {
 
 impl NodeInner {
     /// Builds a new [`NodeInner`] alongside its corresponding [`NodeHandle`].
-    pub fn new(
-        config: NodeRuntimeConfig,
-        telemetry: TelemetryHandle,
-    ) -> Result<(Self, NodeHandle), NodeError> {
+    pub fn new(config: NodeRuntimeConfig) -> Result<(Self, NodeHandle), NodeError> {
         let network_config = NetworkConfig::from_config(&config.p2p)?;
         let resources = NetworkResources::initialise(
             &config.identity_path,
@@ -923,7 +919,6 @@ impl NodeInner {
             events: event_tx,
             metrics,
             runtime_metrics: config.metrics,
-            telemetry,
             connected_peers: HashSet::new(),
             known_versions: HashMap::new(),
             meta_telemetry: MetaTelemetry::new(),
@@ -960,7 +955,6 @@ impl NodeInner {
                 }
             }
         }
-        let _ = self.telemetry.shutdown().await;
         Ok(())
     }
 
@@ -1606,27 +1600,6 @@ impl NodeInner {
                 }
             }
         }
-
-        let snapshot = TelemetrySnapshot {
-            block_height: metrics.block_height,
-            block_hash: metrics.block_hash,
-            transaction_count: metrics.transaction_count,
-            peer_count,
-            node_id: self.identity.peer_id().to_base58(),
-            reputation_score: metrics.reputation_score,
-            timestamp: SystemTime::now(),
-            verifier_metrics,
-            network_metrics: Some(self.network.metrics_snapshot()),
-            consensus_round_latencies_ms: metrics.round_latencies_ms,
-            consensus_leader_changes: metrics.leader_changes,
-            consensus_quorum_latency_ms: metrics.quorum_latency_ms,
-            consensus_witness_events: metrics.witness_events,
-            consensus_slashing_events: metrics.slashing_events,
-            consensus_failed_votes: metrics.failed_votes,
-        };
-        if let Err(err) = self.telemetry.send(snapshot).await {
-            warn!(target: "telemetry", "failed to enqueue telemetry snapshot: {err}");
-        }
     }
 
     fn build_meta_report(&self, peer_count: usize) -> MetaTelemetryReport {
@@ -1864,12 +1837,8 @@ mod tests {
                     vec![addr_one.clone()],
                 );
 
-                let telemetry_one = TelemetryHandle::spawn(config_one.telemetry.clone());
-                let telemetry_two = TelemetryHandle::spawn(config_two.telemetry.clone());
-                let (node_one, handle_one) =
-                    NodeInner::new(config_one, telemetry_one).expect("node1");
-                let (node_two, handle_two) =
-                    NodeInner::new(config_two, telemetry_two).expect("node2");
+                let (node_one, handle_one) = NodeInner::new(config_one).expect("node1");
+                let (node_two, handle_two) = NodeInner::new(config_two).expect("node2");
                 let mut events_two = handle_two.subscribe();
 
                 let task_one = task::spawn_local(async move {
@@ -1920,9 +1889,7 @@ mod tests {
                 let identity_path = dir.path().join("node.key");
                 let config = test_config(identity_path, listen, Vec::new());
                 let proof_path = config.proof_storage_path.clone();
-                let telemetry = TelemetryHandle::spawn(config.telemetry.clone());
-                let (mut node, _handle) =
-                    NodeInner::new(config, telemetry).expect("node runtime");
+                let (mut node, _handle) = NodeInner::new(config).expect("node runtime");
 
                 let payload = json!({
                     "transaction": {
@@ -1991,12 +1958,8 @@ mod tests {
                     vec![addr_one.clone()],
                 );
 
-                let telemetry_one = TelemetryHandle::spawn(config_one.telemetry.clone());
-                let telemetry_two = TelemetryHandle::spawn(config_two.telemetry.clone());
-                let (node_one, handle_one) =
-                    NodeInner::new(config_one, telemetry_one).expect("node1");
-                let (node_two, handle_two) =
-                    NodeInner::new(config_two, telemetry_two).expect("node2");
+                let (node_one, handle_one) = NodeInner::new(config_one).expect("node1");
+                let (node_two, handle_two) = NodeInner::new(config_two).expect("node2");
                 let mut events_two = handle_two.subscribe();
 
                 let task_one = task::spawn_local(async move {
@@ -2029,16 +1992,25 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn heartbeat_emits_events_and_telemetry() {
+    async fn heartbeat_emits_events_and_metrics() {
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+        };
+        use std::collections::HashSet;
+
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        let meter = provider.meter("heartbeat-test");
+        let runtime_metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
         let local = LocalSet::new();
         local
             .run_until(async {
                 let dir = tempdir().expect("tempdir");
                 let (addr, _) = random_listen_addr();
-                let config = test_config(dir.path().join("node.key"), addr, Vec::new());
-                let telemetry = TelemetryHandle::spawn(config.telemetry.clone());
-                let (node, handle) =
-                    NodeInner::new(config, telemetry).expect("node");
+                let mut config = test_config(dir.path().join("node.key"), addr, Vec::new());
+                config.metrics = runtime_metrics.clone();
+                let (node, handle) = NodeInner::new(config).expect("node");
                 let mut events = handle.subscribe();
 
                 handle.update_metrics(NodeMetrics {
@@ -2085,6 +2057,18 @@ mod tests {
                 let _ = task.await;
             })
             .await;
+
+        provider.force_flush().expect("force flush metrics");
+        let exported = exporter.get_finished_metrics().expect("export metrics");
+        let mut seen = HashSet::new();
+        for resource in exported {
+            for scope in resource.scope_metrics {
+                for metric in scope.metrics {
+                    seen.insert(metric.name);
+                }
+            }
+        }
+        assert!(seen.contains("rpp.runtime.network.peer_count"));
     }
 
     async fn wait_for_peer_connected(events: &mut broadcast::Receiver<NodeEvent>) {
