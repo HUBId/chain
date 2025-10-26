@@ -52,6 +52,74 @@ export interface PruningEnvelopeMetadata {
   binding_digest: string;
 }
 
+export interface GlobalStateCommitments {
+  global_state_root: string;
+  utxo_root: string;
+  reputation_root: string;
+  timetoke_root: string;
+  zsi_root: string;
+  proof_root: string;
+}
+
+export interface SnapshotSummary {
+  height: number;
+  block_hash: string;
+  commitments: GlobalStateCommitments;
+  chain_commitment: string;
+}
+
+export interface PayloadExpectations {
+  transaction_proofs: number;
+  transaction_witnesses: number;
+  timetoke_witnesses: number;
+  reputation_witnesses: number;
+  zsi_witnesses: number;
+  consensus_witnesses: number;
+}
+
+export interface ReconstructionRequest {
+  height: number;
+  block_hash: string;
+  tx_root: string;
+  state_root: string;
+  utxo_root: string;
+  reputation_root: string;
+  timetoke_root: string;
+  zsi_root: string;
+  proof_root: string;
+  pruning: PruningEnvelopeMetadata;
+  previous_commitment?: string | null;
+  payload_expectations: PayloadExpectations;
+}
+
+export interface StateSyncChunk {
+  start_height: number;
+  end_height: number;
+  requests: ReconstructionRequest[];
+  proofs?: string[];
+}
+
+export interface LightClientUpdate {
+  height: number;
+  block_hash: string;
+  state_root: string;
+  proof_commitment: string;
+  previous_commitment?: string | null;
+  recursive_proof: ChainProof;
+}
+
+export interface StateSyncPlan {
+  snapshot: SnapshotSummary;
+  tip: BlockMetadata;
+  chunks: StateSyncChunk[];
+  light_client_updates: LightClientUpdate[];
+}
+
+export type ChainProof =
+  | { stwo: Record<string, unknown> }
+  | { plonky3: Record<string, unknown> }
+  | { 'rpp-stark': Record<string, unknown> };
+
 export interface BlockMetadata {
   height: number;
   hash: string;
@@ -64,6 +132,14 @@ export interface BlockMetadata {
   recursive_previous_commitment?: string | null;
   recursive_system: string;
   recursive_anchor: string;
+}
+
+export interface PruningJobStatus {
+  plan: StateSyncPlan;
+  missing_heights: number[];
+  persisted_path?: string | null;
+  stored_proofs: number[];
+  last_updated: number;
 }
 
 export interface NodeStatus {
@@ -155,7 +231,7 @@ export interface ValidatorTelemetryResponse {
   mempool: ValidatorMempoolTelemetry;
   timetoke_params: Record<string, unknown>;
   verifier_metrics: Record<string, unknown>;
-  pruning?: Record<string, unknown> | null;
+  pruning?: PruningJobStatus | null;
   vrf_threshold: Record<string, unknown>;
 }
 
