@@ -12,7 +12,7 @@
       "schema_version": 1,
       "parameter_version": 1,
       "block_height": 4095,
-      "state_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      "state_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     },
     "segments": [
       {
@@ -21,15 +21,15 @@
         "segment_index": 0,
         "start_height": 4095,
         "end_height": 4095,
-        "segment_commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "segment_commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       }
     ],
     "commitment": {
       "schema_version": 1,
       "parameter_version": 1,
-      "aggregate_commitment": "1111111111111111111111111111111111111111111111111111111111111111"
+      "aggregate_commitment": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
     },
-    "binding_digest": "2222222222222222222222222222222222222222222222222222222222222222"
+    "binding_digest": "222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
   },
   "recursion_anchor": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 }

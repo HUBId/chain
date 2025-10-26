@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::topics::GossipTopic;
+use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 use rpp_runtime::types::PruningEnvelopeMetadata;
 
 #[derive(Debug, Error)]
@@ -1162,13 +1163,8 @@ pub struct NetworkReconstructionRequest {
     pub timetoke_root: String,
     pub zsi_root: String,
     pub proof_root: String,
-    pub pruning_commitment: String,
-    pub aggregated_commitment: String,
+    pub pruning: PruningEnvelopeMetadata,
     pub previous_commitment: Option<String>,
-    #[serde(default)]
-    pub pruning_schema_version: u16,
-    #[serde(default)]
-    pub pruning_parameter_version: u16,
     #[serde(default)]
     pub payload_expectations: NetworkPayloadExpectations,
 }
@@ -1410,7 +1406,9 @@ impl LightClientSync {
             .iter()
             .zip(expected.aggregated_commitments.iter())
         {
-            let commitment = decode_hex_digest(&request.aggregated_commitment)?;
+            let commitment = decode_tagged_commitment_hex(
+                request.pruning.commitment.aggregate_commitment.as_str(),
+            )?;
             if &commitment != expected_commitment {
                 return Err(PipelineError::SnapshotVerification(format!(
                     "aggregated commitment mismatch at height {}",
@@ -1426,7 +1424,7 @@ impl LightClientSync {
         }
         let mut proofs = Vec::with_capacity(chunk.proofs.len());
         for proof in &chunk.proofs {
-            proofs.push(decode_base64_digest(proof)?);
+            proofs.push(decode_tagged_commitment_base64(proof)?);
         }
         let mut leaves = proofs;
         let root = compute_merkle_root(&mut leaves);
@@ -1575,7 +1573,9 @@ impl TryFrom<NetworkStateSyncPlan> for ActivePlan {
             }
             let mut aggregated = Vec::with_capacity(chunk.requests.len());
             for request in &chunk.requests {
-                aggregated.push(decode_hex_digest(&request.aggregated_commitment)?);
+                aggregated.push(decode_tagged_commitment_hex(
+                    request.pruning.commitment.aggregate_commitment.as_str(),
+                )?);
             }
             let mut leaves = aggregated.clone();
             let expected_root = compute_merkle_root(&mut leaves);
@@ -1656,18 +1656,38 @@ fn decode_hex_digest(value: &str) -> Result<[u8; 32], PipelineError> {
     Ok(digest)
 }
 
-fn decode_base64_digest(value: &str) -> Result<[u8; 32], PipelineError> {
-    let bytes = general_purpose::STANDARD
-        .decode(value.as_bytes())
-        .map_err(|err| PipelineError::Validation(format!("invalid base64 digest: {err}")))?;
-    if bytes.len() != 32 {
+fn ensure_commitment_tag(label: &str, bytes: &[u8]) -> Result<(), PipelineError> {
+    if bytes.len() != DOMAIN_TAG_LENGTH + DIGEST_LENGTH {
         return Err(PipelineError::SnapshotVerification(format!(
-            "expected 32-byte digest, received {} bytes",
+            "expected {}-byte {label}, received {} bytes",
+            DOMAIN_TAG_LENGTH + DIGEST_LENGTH,
             bytes.len()
         )));
     }
-    let mut digest = [0u8; 32];
-    digest.copy_from_slice(&bytes);
+    if bytes[..DOMAIN_TAG_LENGTH] != COMMITMENT_TAG.as_bytes() {
+        return Err(PipelineError::SnapshotVerification(format!(
+            "{label} carries unexpected domain tag"
+        )));
+    }
+    Ok(())
+}
+
+fn decode_tagged_commitment_hex(value: &str) -> Result<[u8; DIGEST_LENGTH], PipelineError> {
+    let bytes = hex::decode(value)
+        .map_err(|err| PipelineError::Validation(format!("invalid tagged digest: {err}")))?;
+    ensure_commitment_tag("hex pruning commitment", &bytes)?;
+    let mut digest = [0u8; DIGEST_LENGTH];
+    digest.copy_from_slice(&bytes[DOMAIN_TAG_LENGTH..]);
+    Ok(digest)
+}
+
+fn decode_tagged_commitment_base64(value: &str) -> Result<[u8; DIGEST_LENGTH], PipelineError> {
+    let bytes = general_purpose::STANDARD
+        .decode(value.as_bytes())
+        .map_err(|err| PipelineError::Validation(format!("invalid pruning commitment: {err}")))?;
+    ensure_commitment_tag("base64 pruning commitment", &bytes)?;
+    let mut digest = [0u8; DIGEST_LENGTH];
+    digest.copy_from_slice(&bytes[DOMAIN_TAG_LENGTH..]);
     Ok(digest)
 }
 

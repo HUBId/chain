@@ -20,10 +20,11 @@ use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
 use crate::types::StoredBlock;
 use crate::types::{
-    Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem, RecursiveProof, SignedTransaction,
-    TransactionProofBundle,
+    Block, BlockMetadata, BlockPayload, ChainProof, PruningEnvelopeMetadata, ProofSystem,
+    RecursiveProof, SignedTransaction, TransactionProofBundle,
 };
 use blake3::Hash;
+use rpp_pruning::{COMMITMENT_TAG, DOMAIN_TAG_LENGTH, DIGEST_LENGTH};
 use rpp_p2p::{
     LightClientHead, LightClientSync, NetworkBlockMetadata, NetworkGlobalStateCommitments,
     NetworkLightClientUpdate, NetworkPayloadExpectations, NetworkReconstructionRequest,
@@ -358,11 +359,8 @@ pub struct ReconstructionRequest {
     pub timetoke_root: String,
     pub zsi_root: String,
     pub proof_root: String,
-    pub pruning_commitment: String,
-    pub aggregated_commitment: String,
+    pub pruning: PruningEnvelopeMetadata,
     pub previous_commitment: Option<String>,
-    pub pruning_schema_version: u16,
-    pub pruning_parameter_version: u16,
     pub payload_expectations: PayloadExpectations,
 }
 
@@ -380,11 +378,8 @@ impl ReconstructionRequest {
             timetoke_root: header.timetoke_root.clone(),
             zsi_root: header.zsi_root.clone(),
             proof_root: header.proof_root.clone(),
-            pruning_commitment: pruning.binding_digest.as_str().to_string(),
-            aggregated_commitment: record.aggregated_commitment()?,
+            pruning,
             previous_commitment: record.previous_recursive_commitment()?,
-            pruning_schema_version: pruning.schema_version,
-            pruning_parameter_version: pruning.parameter_version,
             payload_expectations: PayloadExpectations::from_record(record),
         })
     }
@@ -864,7 +859,10 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
         previous_state_root: metadata.previous_state_root.clone(),
         new_state_root: metadata.new_state_root.clone(),
         proof_hash: metadata.proof_hash.clone(),
-        pruning: metadata.pruning.clone(),
+        pruning: metadata
+            .pruning
+            .as_ref()
+            .map(encode_pruning_envelope),
         recursion_anchor: metadata.recursive_anchor.clone(),
     }
 }
@@ -880,6 +878,10 @@ fn encode_payload_expectations(expectations: &PayloadExpectations) -> NetworkPay
     }
 }
 
+fn encode_pruning_envelope(pruning: &PruningEnvelopeMetadata) -> PruningEnvelopeMetadata {
+    pruning.clone()
+}
+
 fn encode_reconstruction_request(request: &ReconstructionRequest) -> NetworkReconstructionRequest {
     NetworkReconstructionRequest {
         height: request.height,
@@ -891,11 +893,8 @@ fn encode_reconstruction_request(request: &ReconstructionRequest) -> NetworkReco
         timetoke_root: request.timetoke_root.clone(),
         zsi_root: request.zsi_root.clone(),
         proof_root: request.proof_root.clone(),
-        pruning_commitment: request.pruning_commitment.clone(),
-        aggregated_commitment: request.aggregated_commitment.clone(),
+        pruning: encode_pruning_envelope(&request.pruning),
         previous_commitment: request.previous_commitment.clone(),
-        pruning_schema_version: request.pruning_schema_version,
-        pruning_parameter_version: request.pruning_parameter_version,
         payload_expectations: encode_payload_expectations(&request.payload_expectations),
     }
 }
@@ -907,9 +906,16 @@ fn encode_chunk(chunk: &StateSyncChunk) -> ChainResult<NetworkStateSyncChunk> {
         .map(encode_reconstruction_request)
         .collect();
     let mut proofs = Vec::with_capacity(chunk.requests.len());
+    let commitment_tag = COMMITMENT_TAG.as_bytes();
     for request in &chunk.requests {
-        proofs.push(aggregated_commitment_base64(
-            &request.aggregated_commitment,
+        proofs.push(tagged_digest_hex_to_base64(
+            "pruning aggregate commitment",
+            &commitment_tag,
+            request
+                .pruning
+                .commitment
+                .aggregate_commitment
+                .as_str(),
         )?);
     }
     Ok(NetworkStateSyncChunk {
@@ -920,9 +926,50 @@ fn encode_chunk(chunk: &StateSyncChunk) -> ChainResult<NetworkStateSyncChunk> {
     })
 }
 
-fn aggregated_commitment_base64(value: &str) -> ChainResult<String> {
-    let digest = decode_digest(value)?;
-    Ok(general_purpose::STANDARD.encode(digest))
+fn tagged_digest_hex_to_base64(
+    label: &str,
+    expected_tag: &[u8; DOMAIN_TAG_LENGTH],
+    value: &str,
+) -> ChainResult<String> {
+    let bytes = hex::decode(value).map_err(|err| {
+        ChainError::Config(format!("invalid {label} encoding: {err}"))
+    })?;
+    if bytes.len() != DOMAIN_TAG_LENGTH + DIGEST_LENGTH {
+        return Err(ChainError::Config(format!(
+            "{label} must encode exactly {} bytes",
+            DOMAIN_TAG_LENGTH + DIGEST_LENGTH
+        )));
+    }
+    if bytes[..DOMAIN_TAG_LENGTH] != expected_tag[..] {
+        return Err(ChainError::Config(format!(
+            "{label} has unexpected domain tag",
+        )));
+    }
+    Ok(general_purpose::STANDARD.encode(bytes))
+}
+
+fn tagged_digest_base64_to_digest(
+    label: &str,
+    expected_tag: &[u8; DOMAIN_TAG_LENGTH],
+    value: &str,
+) -> ChainResult<[u8; DIGEST_LENGTH]> {
+    let bytes = general_purpose::STANDARD
+        .decode(value.as_bytes())
+        .map_err(|err| ChainError::Config(format!("invalid {label} encoding: {err}")))?;
+    if bytes.len() != DOMAIN_TAG_LENGTH + DIGEST_LENGTH {
+        return Err(ChainError::Config(format!(
+            "{label} proof must contain {} bytes",
+            DOMAIN_TAG_LENGTH + DIGEST_LENGTH
+        )));
+    }
+    if bytes[..DOMAIN_TAG_LENGTH] != expected_tag[..] {
+        return Err(ChainError::Config(format!(
+            "{label} proof has unexpected domain tag",
+        )));
+    }
+    let mut digest = [0u8; DIGEST_LENGTH];
+    digest.copy_from_slice(&bytes[DOMAIN_TAG_LENGTH..]);
+    Ok(digest)
 }
 
 fn recursive_commitment(proof: &ChainProof) -> ChainResult<String> {
@@ -1305,6 +1352,19 @@ mod tests {
         assert_eq!(plan.chunks[1].requests.len(), 1);
         assert_eq!(plan.light_client_updates.len(), 3);
         assert_eq!(plan.light_client_updates[2].height, 2);
+
+        let network_chunks = plan.chunk_messages().expect("encode chunk messages");
+        let commitment_tag = COMMITMENT_TAG.as_bytes();
+        for chunk in network_chunks {
+            for proof in &chunk.proofs {
+                let _digest = tagged_digest_base64_to_digest(
+                    "chunk aggregate commitment",
+                    &commitment_tag,
+                    proof,
+                )
+                .expect("decode tagged digest");
+            }
+        }
 
         let light_client_feed = engine.light_client_feed(1).expect("feed from height 1");
         assert_eq!(light_client_feed.len(), 2);

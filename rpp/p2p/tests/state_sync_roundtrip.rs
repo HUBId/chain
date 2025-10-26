@@ -4,9 +4,60 @@ use rpp_p2p::{
     NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
     NetworkStateSyncChunk, NetworkStateSyncPlan,
 };
+use rpp_pruning::{
+    DomainTag, COMMITMENT_TAG, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+};
+use rpp_runtime::types::PruningEnvelopeMetadata;
+use serde_json::json;
+
+fn tagged_bytes(tag: DomainTag, byte: u8) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(DIGEST_LENGTH + tag.as_bytes().len());
+    bytes.extend_from_slice(&tag.as_bytes());
+    bytes.extend(std::iter::repeat(byte).take(DIGEST_LENGTH));
+    bytes
+}
+
+fn tagged_hex(tag: DomainTag, byte: u8) -> String {
+    hex::encode(tagged_bytes(tag, byte))
+}
+
+fn tagged_base64(tag: DomainTag, byte: u8) -> String {
+    general_purpose::STANDARD.encode(tagged_bytes(tag, byte))
+}
+
+fn sample_pruning_metadata() -> PruningEnvelopeMetadata {
+    serde_json::from_value(json!({
+        "schema_version": 1,
+        "parameter_version": 0,
+        "snapshot": {
+            "schema_version": 1,
+            "parameter_version": 0,
+            "block_height": 0,
+            "state_commitment": tagged_hex(SNAPSHOT_STATE_TAG, 0x01),
+        },
+        "segments": [
+            {
+                "schema_version": 1,
+                "parameter_version": 0,
+                "segment_index": 0,
+                "start_height": 0,
+                "end_height": 1,
+                "segment_commitment": tagged_hex(PROOF_SEGMENT_TAG, 0x02),
+            }
+        ],
+        "commitment": {
+            "schema_version": 1,
+            "parameter_version": 0,
+            "aggregate_commitment": tagged_hex(COMMITMENT_TAG, 0x03),
+        },
+        "binding_digest": tagged_hex(ENVELOPE_TAG, 0x04),
+    }))
+    .expect("valid pruning metadata")
+}
 
 #[test]
 fn state_sync_plan_roundtrip() {
+    let pruning = sample_pruning_metadata();
     let plan = NetworkStateSyncPlan {
         snapshot: NetworkSnapshotSummary {
             height: 0,
@@ -28,7 +79,7 @@ fn state_sync_plan_roundtrip() {
             previous_state_root: "66".repeat(32),
             new_state_root: "77".repeat(32),
             proof_hash: "88".repeat(32),
-            pruning: None,
+            pruning: Some(pruning.clone()),
             recursion_anchor: "anchor".into(),
         },
         chunks: vec![NetworkStateSyncChunk {
@@ -44,14 +95,11 @@ fn state_sync_plan_roundtrip() {
                 timetoke_root: "timetoke".into(),
                 zsi_root: "zsi".into(),
                 proof_root: "proof".into(),
-                pruning_commitment: "pruning".into(),
-                aggregated_commitment: "aa".repeat(32),
-                pruning_schema_version: 1,
-                pruning_parameter_version: 0,
+                pruning: pruning.clone(),
                 previous_commitment: None,
                 payload_expectations: NetworkPayloadExpectations::default(),
             }],
-            proofs: Vec::new(),
+            proofs: vec![tagged_base64(COMMITMENT_TAG, 0x03)],
         }],
         light_client_updates: vec![NetworkLightClientUpdate {
             height: 1,
@@ -72,8 +120,8 @@ fn state_sync_plan_roundtrip() {
 
 #[test]
 fn state_sync_chunk_roundtrip() {
-    let proof_one = general_purpose::STANDARD.encode([1u8; 32]);
-    let proof_two = general_purpose::STANDARD.encode([2u8; 32]);
+    let proof_one = tagged_base64(COMMITMENT_TAG, 0x05);
+    let proof_two = tagged_base64(COMMITMENT_TAG, 0x06);
     let chunk = NetworkStateSyncChunk {
         start_height: 10,
         end_height: 12,
@@ -87,10 +135,7 @@ fn state_sync_chunk_roundtrip() {
             timetoke_root: "time".into(),
             zsi_root: "zsi".into(),
             proof_root: "proof".into(),
-            pruning_commitment: "pruning".into(),
-            aggregated_commitment: "cc".repeat(32),
-            pruning_schema_version: 1,
-            pruning_parameter_version: 0,
+            pruning: sample_pruning_metadata(),
             previous_commitment: None,
             payload_expectations: NetworkPayloadExpectations::default(),
         }],
