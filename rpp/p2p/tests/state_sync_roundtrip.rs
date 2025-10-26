@@ -1,14 +1,14 @@
 use base64::{engine::general_purpose, Engine as _};
 use rpp_p2p::{
     NetworkBlockMetadata, NetworkGlobalStateCommitments, NetworkLightClientUpdate,
-    NetworkPayloadExpectations, NetworkReconstructionRequest, NetworkSnapshotSummary,
-    NetworkStateSyncChunk, NetworkStateSyncPlan,
+    NetworkPayloadExpectations, NetworkPruningCommitment, NetworkPruningEnvelope,
+    NetworkPruningEnvelopeHeader, NetworkPruningSegment, NetworkPruningSnapshot,
+    NetworkReconstructionRequest, NetworkSnapshotSummary, NetworkStateSyncChunk,
+    NetworkStateSyncPlan, NetworkTaggedDigestHex,
 };
 use rpp_pruning::{
     DomainTag, COMMITMENT_TAG, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
-use rpp_runtime::types::PruningEnvelopeMetadata;
-use serde_json::json;
 
 fn tagged_bytes(tag: DomainTag, byte: u8) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(DIGEST_LENGTH + tag.as_bytes().len());
@@ -25,39 +25,42 @@ fn tagged_base64(tag: DomainTag, byte: u8) -> String {
     general_purpose::STANDARD.encode(tagged_bytes(tag, byte))
 }
 
-fn sample_pruning_metadata() -> PruningEnvelopeMetadata {
-    serde_json::from_value(json!({
-        "schema_version": 1,
-        "parameter_version": 0,
-        "snapshot": {
-            "schema_version": 1,
-            "parameter_version": 0,
-            "block_height": 0,
-            "state_commitment": tagged_hex(SNAPSHOT_STATE_TAG, 0x01),
+fn tagged_hex_digest(tag: DomainTag, byte: u8) -> NetworkTaggedDigestHex {
+    NetworkTaggedDigestHex::from(tagged_hex(tag, byte))
+}
+
+fn sample_pruning_envelope() -> NetworkPruningEnvelope {
+    NetworkPruningEnvelope {
+        header: NetworkPruningEnvelopeHeader {
+            schema_version: 1,
+            parameter_version: 0,
         },
-        "segments": [
-            {
-                "schema_version": 1,
-                "parameter_version": 0,
-                "segment_index": 0,
-                "start_height": 0,
-                "end_height": 1,
-                "segment_commitment": tagged_hex(PROOF_SEGMENT_TAG, 0x02),
-            }
-        ],
-        "commitment": {
-            "schema_version": 1,
-            "parameter_version": 0,
-            "aggregate_commitment": tagged_hex(COMMITMENT_TAG, 0x03),
+        snapshot: NetworkPruningSnapshot {
+            schema_version: 1,
+            parameter_version: 0,
+            block_height: 0,
+            state_commitment: tagged_hex_digest(SNAPSHOT_STATE_TAG, 0x01),
         },
-        "binding_digest": tagged_hex(ENVELOPE_TAG, 0x04),
-    }))
-    .expect("valid pruning metadata")
+        segments: vec![NetworkPruningSegment {
+            schema_version: 1,
+            parameter_version: 0,
+            segment_index: 0,
+            start_height: 0,
+            end_height: 1,
+            segment_commitment: tagged_hex_digest(PROOF_SEGMENT_TAG, 0x02),
+        }],
+        commitment: NetworkPruningCommitment {
+            schema_version: 1,
+            parameter_version: 0,
+            aggregate_commitment: tagged_hex_digest(COMMITMENT_TAG, 0x03),
+        },
+        binding_digest: tagged_hex_digest(ENVELOPE_TAG, 0x04),
+    }
 }
 
 #[test]
 fn state_sync_plan_roundtrip() {
-    let pruning = sample_pruning_metadata();
+    let pruning = sample_pruning_envelope();
     let plan = NetworkStateSyncPlan {
         snapshot: NetworkSnapshotSummary {
             height: 0,
@@ -135,7 +138,7 @@ fn state_sync_chunk_roundtrip() {
             timetoke_root: "time".into(),
             zsi_root: "zsi".into(),
             proof_root: "proof".into(),
-            pruning: sample_pruning_metadata(),
+            pruning: sample_pruning_envelope(),
             previous_commitment: None,
             payload_expectations: NetworkPayloadExpectations::default(),
         }],

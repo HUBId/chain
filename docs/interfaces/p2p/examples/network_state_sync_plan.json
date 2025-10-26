@@ -20,13 +20,15 @@
     "new_state_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "proof_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "pruning": {
-      "schema_version": 1,
-      "parameter_version": 1,
+      "header": {
+        "schema_version": 1,
+        "parameter_version": 1
+      },
       "snapshot": {
         "schema_version": 1,
         "parameter_version": 1,
         "block_height": 4099,
-        "state_commitment": "121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212121212"
+        "state_commitment": "7270703a7072756e653a7374617465003030303030303030303030303030303030303030303030303030303030303030"
       },
       "segments": [
         {
@@ -35,16 +37,16 @@
           "segment_index": 0,
           "start_height": 4099,
           "end_height": 4099,
-          "segment_commitment": "030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303"
-      }
-    ],
-    "commitment": {
-      "schema_version": 1,
-      "parameter_version": 1,
-      "aggregate_commitment": "040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404"
+          "segment_commitment": "7270703a7072756e653a70726f6f66003131313131313131313131313131313131313131313131313131313131313131"
+        }
+      ],
+      "commitment": {
+        "schema_version": 1,
+        "parameter_version": 1,
+        "aggregate_commitment": "7270703a7072756e653a636f6d6d69743232323232323232323232323232323232323232323232323232323232323232"
+      },
+      "binding_digest": "7270703a7072756e653a656e766c70003333333333333333333333333333333333333333333333333333333333333333"
     },
-    "binding_digest": "050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505050505"
-  },
     "recursion_anchor": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   },
   "chunks": [
@@ -61,34 +63,36 @@
           "reputation_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "timetoke_root": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
           "zsi_root": "0101010101010101010101010101010101010101010101010101010101010101",
-        "proof_root": "0202020202020202020202020202020202020202020202020202020202020202",
-        "pruning": {
-          "schema_version": 1,
-          "parameter_version": 0,
-          "snapshot": {
-            "schema_version": 1,
-            "parameter_version": 0,
-            "block_height": 4095,
-            "state_commitment": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          },
-          "segments": [
-            {
+          "proof_root": "0202020202020202020202020202020202020202020202020202020202020202",
+          "pruning": {
+            "header": {
+              "schema_version": 1,
+              "parameter_version": 0
+            },
+            "snapshot": {
               "schema_version": 1,
               "parameter_version": 0,
-              "segment_index": 0,
-              "start_height": 4080,
-              "end_height": 4095,
-              "segment_commitment": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            }
-          ],
-          "commitment": {
-            "schema_version": 1,
-            "parameter_version": 0,
-            "aggregate_commitment": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              "block_height": 4095,
+              "state_commitment": "7270703a7072756e653a7374617465002020202020202020202020202020202020202020202020202020202020202020"
+            },
+            "segments": [
+              {
+                "schema_version": 1,
+                "parameter_version": 0,
+                "segment_index": 0,
+                "start_height": 4080,
+                "end_height": 4095,
+                "segment_commitment": "7270703a7072756e653a70726f6f66002121212121212121212121212121212121212121212121212121212121212121"
+              }
+            ],
+            "commitment": {
+              "schema_version": 1,
+              "parameter_version": 0,
+              "aggregate_commitment": "7270703a7072756e653a636f6d6d69742222222222222222222222222222222222222222222222222222222222222222"
+            },
+            "binding_digest": "7270703a7072756e653a656e766c70002323232323232323232323232323232323232323232323232323232323232323"
           },
-          "binding_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
-        },
-        "previous_commitment": null,
+          "previous_commitment": null,
           "payload_expectations": {
             "transaction_proofs": 8,
             "transaction_witnesses": 16,

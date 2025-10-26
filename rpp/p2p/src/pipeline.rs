@@ -18,7 +18,6 @@ use tokio::sync::watch;
 
 use crate::topics::GossipTopic;
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
-use rpp_runtime::types::PruningEnvelopeMetadata;
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -1129,6 +1128,69 @@ pub struct NetworkSnapshotSummary {
     pub chain_commitment: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct NetworkTaggedDigestHex(pub String);
+
+impl NetworkTaggedDigestHex {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for NetworkTaggedDigestHex {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for NetworkTaggedDigestHex {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkPruningEnvelopeHeader {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkPruningSnapshot {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub block_height: u64,
+    pub state_commitment: NetworkTaggedDigestHex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkPruningSegment {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub segment_index: u32,
+    pub start_height: u64,
+    pub end_height: u64,
+    pub segment_commitment: NetworkTaggedDigestHex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkPruningCommitment {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub aggregate_commitment: NetworkTaggedDigestHex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NetworkPruningEnvelope {
+    pub header: NetworkPruningEnvelopeHeader,
+    pub snapshot: NetworkPruningSnapshot,
+    #[serde(default)]
+    pub segments: Vec<NetworkPruningSegment>,
+    pub commitment: NetworkPruningCommitment,
+    pub binding_digest: NetworkTaggedDigestHex,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkBlockMetadata {
     pub height: u64,
@@ -1138,7 +1200,7 @@ pub struct NetworkBlockMetadata {
     pub new_state_root: String,
     pub proof_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pruning: Option<PruningEnvelopeMetadata>,
+    pub pruning: Option<NetworkPruningEnvelope>,
     pub recursion_anchor: String,
 }
 
@@ -1163,7 +1225,7 @@ pub struct NetworkReconstructionRequest {
     pub timetoke_root: String,
     pub zsi_root: String,
     pub proof_root: String,
-    pub pruning: PruningEnvelopeMetadata,
+    pub pruning: NetworkPruningEnvelope,
     pub previous_commitment: Option<String>,
     #[serde(default)]
     pub payload_expectations: NetworkPayloadExpectations,

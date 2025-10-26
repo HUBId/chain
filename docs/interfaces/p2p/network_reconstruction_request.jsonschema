@@ -26,7 +26,7 @@
     "zsi_root": {"type": "string"},
     "proof_root": {"type": "string"},
     "pruning": {
-      "$ref": "network_block_metadata.jsonschema#/$defs/PruningEnvelopeMetadata"
+      "$ref": "network_block_metadata.jsonschema#/$defs/NetworkPruningEnvelope"
     },
     "previous_commitment": {"type": ["string", "null"]},
     "payload_expectations": {
