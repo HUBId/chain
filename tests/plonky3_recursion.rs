@@ -16,6 +16,28 @@ use rpp_chain::types::{
     BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
 };
 
+fn canonical_pruning_header() -> BlockHeader {
+    BlockHeader::new(
+        0,
+        "00".repeat(32),
+        "11".repeat(32),
+        "22".repeat(32),
+        "33".repeat(32),
+        "44".repeat(32),
+        "55".repeat(32),
+        "66".repeat(32),
+        "77".repeat(32),
+        "0".to_string(),
+        "88".repeat(32),
+        "99".repeat(32),
+        "aa".repeat(32),
+        "bb".repeat(64),
+        format!("0x{}", "cc".repeat(20)),
+        "TL1".to_string(),
+        0,
+    )
+}
+
 fn sample_transaction() -> SignedTransaction {
     let mut rng = StdRng::from_seed([13u8; 32]);
     let keypair = Keypair::generate(&mut rng);
@@ -40,25 +62,9 @@ fn plonky3_recursive_flow_roundtrip() {
         .unwrap();
     let state_proof = prover.prove_state_transition(state_witness).unwrap();
 
-    let header = BlockHeader::new(
-        0,
-        "00".repeat(32),
-        "00".repeat(32),
-        "prev".into(),
-        "00".repeat(32),
-        "00".repeat(32),
-        "00".repeat(32),
-        "00".repeat(32),
-        "00".repeat(32),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        String::new(),
-        0,
-    );
-    let pruning = PruningProof::from_previous(None, &header);
+    let header = canonical_pruning_header();
+    let pruning = PruningProof::canonical_from_block(None, &header)
+        .expect("construct canonical pruning proof");
     let pruning_witness = prover
         .build_pruning_witness(&[], &[], &pruning, Vec::new())
         .unwrap();
