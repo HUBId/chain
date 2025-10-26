@@ -6733,6 +6733,8 @@ dependencies = [
  "bincode",
  "blake3",
  "parking_lot",
+ "proptest",
+ "rpp-pruning",
  "serde",
  "serde_json",
  "tempfile",

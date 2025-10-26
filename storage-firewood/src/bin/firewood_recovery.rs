@@ -71,11 +71,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     state.put(b"beta".to_vec(), b"2".to_vec());
 
     let (expected_root, proof) = state.commit_block(1)?;
-    let pruning_verified = FirewoodPruner::verify_pruned_state(proof.commitment_root, &proof);
+    let pruning_verified = FirewoodPruner::verify_pruned_state(expected_root, &proof);
     println!(
         "✅ Recorded block root {} with commitment {} (proof verified: {pruning_verified})",
         to_hex(&expected_root),
-        to_hex(&proof.commitment_root)
+        to_hex(proof.commitment().aggregate_commitment().digest())
     );
 
     let wal_path = data_dir.join("firewood.wal");
@@ -127,7 +127,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         pruning_proof_verified: pruning_verified,
         restored_root: to_hex(&restored_root),
         expected_state_root: to_hex(&expected_root),
-        commitment_root: to_hex(&proof.commitment_root),
+        commitment_root: to_hex(proof.commitment().aggregate_commitment().digest()),
         restored_matches_expected,
     };
 

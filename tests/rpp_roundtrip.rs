@@ -71,16 +71,19 @@ fn rpp_pruning_roundtrip() {
             state.put(key, value);
         }
         let (state_root, proof) = state.commit_block(block_id).expect("commit block");
-        assert_eq!(proof.root, state_root, "proof records committed state root");
-        proofs.push((proof.commitment_root, proof));
+        assert!(
+            FirewoodPruner::verify_pruned_state(state_root, &proof),
+            "proof validates the committed state root"
+        );
+        proofs.push((state_root, proof));
     }
 
     drop(state);
 
-    for (commitment_root, proof) in &proofs {
+    for (root, proof) in &proofs {
         assert!(
-            FirewoodPruner::verify_pruned_state(*commitment_root, proof),
-            "pruning proof should validate against recorded commitment root"
+            FirewoodPruner::verify_pruned_state(*root, proof),
+            "pruning proof should validate against the recorded state root"
         );
     }
 
