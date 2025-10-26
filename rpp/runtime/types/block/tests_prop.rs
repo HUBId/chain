@@ -201,6 +201,17 @@ proptest! {
 
 proptest! {
     #![proptest_config(proptest_config())]
+    fn pruning_proof_metadata_roundtrip((proof, _) in arb_pruning_fixture()) {
+        let metadata = proof.envelope_metadata();
+        let reconstructed = PruningProof::from_metadata(metadata.clone())
+            .expect("metadata should rebuild pruning proof");
+        assert_eq!(reconstructed, proof);
+        assert_eq!(metadata.binding_digest.as_str(), proof.binding_digest_hex());
+    }
+}
+
+proptest! {
+    #![proptest_config(proptest_config())]
     fn parse_natural_accepts_decimals(value in arb_decimal_string()) {
         let parsed = parse_natural(&value).expect("decimal strings must parse");
         assert_eq!(parsed.to_string(), value);
