@@ -42,11 +42,23 @@
       "previous_state_root": "0xprev",
       "new_state_root": "0xnew",
       "proof_hash": "0xproof",
-      "pruning_root": null,
-      "pruning_commitment": "0xprune",
-      "pruning_aggregate_commitment": "0xagg",
-      "pruning_schema_version": 1,
-      "pruning_parameter_version": 0,
+      "pruning": {
+        "schema_version": 1,
+        "parameter_version": 1,
+        "snapshot": {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "block_height": 1023,
+          "state_commitment": "0xsnapshot"
+        },
+        "segments": [],
+        "commitment": {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "aggregate_commitment": "0xagg"
+        },
+        "binding_digest": "0xprune"
+      },
       "recursive_commitment": "0xrecursive",
       "recursive_previous_commitment": null,
       "recursive_system": "rpp",

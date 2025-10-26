@@ -10,10 +10,6 @@
     "previous_state_root",
     "new_state_root",
     "proof_hash",
-    "pruning_commitment",
-    "pruning_aggregate_commitment",
-    "pruning_schema_version",
-    "pruning_parameter_version",
     "recursion_anchor"
   ],
   "properties": {
@@ -23,11 +19,89 @@
     "previous_state_root": {"type": "string"},
     "new_state_root": {"type": "string"},
     "proof_hash": {"type": "string"},
-    "pruning_commitment": {"type": "string"},
-    "pruning_aggregate_commitment": {"type": "string"},
-    "pruning_schema_version": {"type": "integer", "minimum": 0},
-    "pruning_parameter_version": {"type": "integer", "minimum": 0},
+    "pruning": {
+      "default": null,
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/PruningEnvelopeMetadata"}
+      ]
+    },
     "recursion_anchor": {"type": "string"}
+  },
+  "$defs": {
+    "PruningSnapshotMetadata": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "block_height",
+        "state_commitment"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "block_height": {"type": "integer", "minimum": 0},
+        "state_commitment": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "PruningSegmentMetadata": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "segment_index",
+        "start_height",
+        "end_height",
+        "segment_commitment"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "segment_index": {"type": "integer", "minimum": 0},
+        "start_height": {"type": "integer", "minimum": 0},
+        "end_height": {"type": "integer", "minimum": 0},
+        "segment_commitment": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "PruningCommitmentMetadata": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "aggregate_commitment"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "aggregate_commitment": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "PruningEnvelopeMetadata": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "snapshot",
+        "segments",
+        "commitment",
+        "binding_digest"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "snapshot": {"$ref": "#/$defs/PruningSnapshotMetadata"},
+        "segments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/PruningSegmentMetadata"}
+        },
+        "commitment": {"$ref": "#/$defs/PruningCommitmentMetadata"},
+        "binding_digest": {"type": "string"}
+      },
+      "additionalProperties": false
+    }
   },
   "additionalProperties": false
 }

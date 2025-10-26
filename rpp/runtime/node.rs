@@ -5262,11 +5262,7 @@ impl NodeInner {
         metadata.new_state_root = encoded_new_root;
         if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
             let pruning = PruningProof::from_envelope(firewood_proof.clone());
-            metadata.pruning_root = pruning.pruned_transaction_root_hex();
-            metadata.pruning_commitment = pruning.binding_digest_hex();
-            metadata.pruning_aggregate_commitment = pruning.aggregate_commitment_hex();
-            metadata.pruning_schema_version = pruning.schema_version();
-            metadata.pruning_parameter_version = pruning.parameter_version();
+            metadata.pruning = Some(pruning.envelope_metadata());
         }
         {
             let span = storage_flush_span("store_block", block.header.height, &block.hash);
@@ -5605,11 +5601,7 @@ impl NodeInner {
         metadata.new_state_root = encoded_new_root;
         if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
             let pruning = PruningProof::from_envelope(firewood_proof.clone());
-            metadata.pruning_root = pruning.pruned_transaction_root_hex();
-            metadata.pruning_commitment = pruning.binding_digest_hex();
-            metadata.pruning_aggregate_commitment = pruning.aggregate_commitment_hex();
-            metadata.pruning_schema_version = pruning.schema_version();
-            metadata.pruning_parameter_version = pruning.parameter_version();
+            metadata.pruning = Some(pruning.envelope_metadata());
         }
         self.storage.store_block(&block, &metadata)?;
         if self.config.rollout.feature_gates.pruning && block.header.height > 0 {

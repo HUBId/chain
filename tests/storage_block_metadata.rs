@@ -199,17 +199,7 @@ fn storage_persists_extended_block_metadata() {
     assert_eq!(persisted.proof_hash, genesis.header.proof_root);
     assert_eq!(persisted.previous_state_root, metadata.previous_state_root);
     assert_eq!(persisted.new_state_root, metadata.new_state_root);
-    assert_eq!(persisted.pruning_root, metadata.pruning_root);
-    assert_eq!(persisted.pruning_commitment, metadata.pruning_commitment);
-    assert_eq!(
-        persisted.pruning_aggregate_commitment,
-        metadata.pruning_aggregate_commitment
-    );
-    assert_eq!(persisted.pruning_schema_version, metadata.pruning_schema_version);
-    assert_eq!(
-        persisted.pruning_parameter_version,
-        metadata.pruning_parameter_version
-    );
+    assert_eq!(persisted.pruning, metadata.pruning);
 }
 
 #[test]

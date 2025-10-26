@@ -19,10 +19,32 @@
     "previous_state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "new_state_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "proof_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "pruning_commitment": "0303030303030303030303030303030303030303030303030303030303030303",
-    "pruning_aggregate_commitment": "0404040404040404040404040404040404040404040404040404040404040404",
-    "pruning_schema_version": 1,
-    "pruning_parameter_version": 0,
+    "pruning": {
+      "schema_version": 1,
+      "parameter_version": 1,
+      "snapshot": {
+        "schema_version": 1,
+        "parameter_version": 1,
+        "block_height": 4099,
+        "state_commitment": "1212121212121212121212121212121212121212121212121212121212121212"
+      },
+      "segments": [
+        {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "segment_index": 0,
+          "start_height": 4099,
+          "end_height": 4099,
+          "segment_commitment": "0303030303030303030303030303030303030303030303030303030303030303"
+        }
+      ],
+      "commitment": {
+        "schema_version": 1,
+        "parameter_version": 1,
+        "aggregate_commitment": "0404040404040404040404040404040404040404040404040404040404040404"
+      },
+      "binding_digest": "0505050505050505050505050505050505050505050505050505050505050505"
+    },
     "recursion_anchor": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   },
   "chunks": [

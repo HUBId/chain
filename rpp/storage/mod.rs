@@ -506,10 +506,7 @@ impl Storage {
         let needs_backfill = metadata.proof_hash.is_empty()
             || metadata.previous_state_root.is_empty()
             || metadata.new_state_root.is_empty()
-            || metadata.pruning_commitment.is_empty()
-            || metadata.pruning_aggregate_commitment.is_empty()
-            || metadata.pruning_schema_version == 0
-            || metadata.pruning_parameter_version == 0
+            || metadata.pruning_metadata().is_none()
             || metadata.hash.is_empty()
             || metadata.timestamp == 0;
         if !needs_backfill {
@@ -527,21 +524,8 @@ impl Storage {
             if metadata.new_state_root.is_empty() {
                 metadata.new_state_root = block.header.state_root.clone();
             }
-            if metadata.pruning_commitment.is_empty() {
-                metadata.pruning_commitment = block.pruning_proof.binding_digest_hex();
-            }
-            if metadata.pruning_root.is_none() {
-                metadata.pruning_root = block.pruning_proof.pruned_transaction_root_hex();
-            }
-            if metadata.pruning_aggregate_commitment.is_empty() {
-                metadata.pruning_aggregate_commitment =
-                    block.pruning_proof.aggregate_commitment_hex();
-            }
-            if metadata.pruning_schema_version == 0 {
-                metadata.pruning_schema_version = block.pruning_proof.schema_version();
-            }
-            if metadata.pruning_parameter_version == 0 {
-                metadata.pruning_parameter_version = block.pruning_proof.parameter_version();
+            if metadata.pruning.is_none() {
+                metadata.pruning = Some(block.pruning_proof.envelope_metadata());
             }
             if metadata.hash.is_empty() {
                 metadata.hash = block.hash.clone();
@@ -801,7 +785,6 @@ mod tests {
         metadata.previous_state_root = "aa".repeat(32);
         metadata.new_state_root = "bb".repeat(32);
         metadata.proof_hash = "dd".repeat(32);
-        metadata.pruning_root = Some("cc".repeat(32));
         storage
             .store_block(&genesis, &metadata)
             .expect("store genesis");
@@ -814,17 +797,7 @@ mod tests {
         assert_eq!(tip.previous_state_root, metadata.previous_state_root);
         assert_eq!(tip.new_state_root, metadata.new_state_root);
         assert_eq!(tip.proof_hash, metadata.proof_hash);
-        assert_eq!(tip.pruning_root, metadata.pruning_root);
-        assert_eq!(tip.pruning_commitment, metadata.pruning_commitment);
-        assert_eq!(
-            tip.pruning_aggregate_commitment,
-            metadata.pruning_aggregate_commitment
-        );
-        assert_eq!(tip.pruning_schema_version, metadata.pruning_schema_version);
-        assert_eq!(
-            tip.pruning_parameter_version,
-            metadata.pruning_parameter_version
-        );
+        assert_eq!(tip.pruning, metadata.pruning);
         assert_eq!(tip.recursive_commitment, metadata.recursive_commitment);
         assert_eq!(tip.recursive_anchor, metadata.recursive_anchor);
     }
@@ -853,17 +826,18 @@ mod tests {
         );
         assert_eq!(tip.new_state_root, genesis.header.state_root);
         assert_eq!(tip.proof_hash, genesis.header.proof_root);
+        let pruning = tip.pruning_metadata().expect("pruning metadata");
         assert_eq!(
-            tip.pruning_commitment,
+            pruning.binding_digest.as_str(),
             genesis.pruning_proof.binding_digest_hex()
         );
         assert_eq!(
-            tip.pruning_aggregate_commitment,
+            pruning.commitment.aggregate_commitment.as_str(),
             genesis.pruning_proof.aggregate_commitment_hex()
         );
-        assert_eq!(tip.pruning_schema_version, genesis.pruning_proof.schema_version());
+        assert_eq!(pruning.schema_version, genesis.pruning_proof.schema_version());
         assert_eq!(
-            tip.pruning_parameter_version,
+            pruning.parameter_version,
             genesis.pruning_proof.parameter_version()
         );
         assert_eq!(tip.recursive_commitment, genesis.recursive_proof.commitment);
@@ -893,17 +867,18 @@ mod tests {
             genesis.pruning_proof.snapshot_state_root_hex()
         );
         assert_eq!(loaded.new_state_root, genesis.header.state_root);
+        let pruning = loaded.pruning_metadata().expect("pruning metadata");
         assert_eq!(
-            loaded.pruning_commitment,
+            pruning.binding_digest.as_str(),
             genesis.pruning_proof.binding_digest_hex()
         );
         assert_eq!(
-            loaded.pruning_aggregate_commitment,
+            pruning.commitment.aggregate_commitment.as_str(),
             genesis.pruning_proof.aggregate_commitment_hex()
         );
-        assert_eq!(loaded.pruning_schema_version, genesis.pruning_proof.schema_version());
+        assert_eq!(pruning.schema_version, genesis.pruning_proof.schema_version());
         assert_eq!(
-            loaded.pruning_parameter_version,
+            pruning.parameter_version,
             genesis.pruning_proof.parameter_version()
         );
     }
