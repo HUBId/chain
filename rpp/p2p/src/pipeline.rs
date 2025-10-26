@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio::sync::watch;
 
 use crate::topics::GossipTopic;
+use rpp_runtime::types::PruningEnvelopeMetadata;
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
@@ -1135,14 +1136,8 @@ pub struct NetworkBlockMetadata {
     pub previous_state_root: String,
     pub new_state_root: String,
     pub proof_hash: String,
-    #[serde(default)]
-    pub pruning_commitment: String,
-    #[serde(default)]
-    pub pruning_aggregate_commitment: String,
-    #[serde(default)]
-    pub pruning_schema_version: u16,
-    #[serde(default)]
-    pub pruning_parameter_version: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning: Option<PruningEnvelopeMetadata>,
     pub recursion_anchor: String,
 }
 
@@ -1985,10 +1980,7 @@ mod tests {
                 previous_state_root: hex::encode([0x11; 32]),
                 new_state_root: hex::encode([0x22; 32]),
                 proof_hash: hex::encode([0x33; 32]),
-                pruning_commitment: "pruning".into(),
-                pruning_aggregate_commitment: hex::encode([0x44; 32]),
-                pruning_schema_version: 1,
-                pruning_parameter_version: 0,
+                pruning: None,
                 recursion_anchor: "anchor".into(),
             },
             chunks: vec![NetworkStateSyncChunk {

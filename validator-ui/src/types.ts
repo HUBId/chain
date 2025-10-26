@@ -21,6 +21,37 @@ export interface ConsensusStatus {
   failed_votes: number;
 }
 
+export interface PruningSnapshotMetadata {
+  schema_version: number;
+  parameter_version: number;
+  block_height: number;
+  state_commitment: string;
+}
+
+export interface PruningSegmentMetadata {
+  schema_version: number;
+  parameter_version: number;
+  segment_index: number;
+  start_height: number;
+  end_height: number;
+  segment_commitment: string;
+}
+
+export interface PruningCommitmentMetadata {
+  schema_version: number;
+  parameter_version: number;
+  aggregate_commitment: string;
+}
+
+export interface PruningEnvelopeMetadata {
+  schema_version: number;
+  parameter_version: number;
+  snapshot: PruningSnapshotMetadata;
+  segments: PruningSegmentMetadata[];
+  commitment: PruningCommitmentMetadata;
+  binding_digest: string;
+}
+
 export interface BlockMetadata {
   height: number;
   hash: string;
@@ -28,11 +59,7 @@ export interface BlockMetadata {
   previous_state_root: string;
   new_state_root: string;
   proof_hash: string;
-  pruning_root?: string | null;
-  pruning_commitment: string;
-  pruning_aggregate_commitment: string;
-  pruning_schema_version: number;
-  pruning_parameter_version: number;
+  pruning?: PruningEnvelopeMetadata | null;
   recursive_commitment: string;
   recursive_previous_commitment?: string | null;
   recursive_system: string;

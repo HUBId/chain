@@ -863,10 +863,7 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
         previous_state_root: metadata.previous_state_root.clone(),
         new_state_root: metadata.new_state_root.clone(),
         proof_hash: metadata.proof_hash.clone(),
-        pruning_commitment: metadata.pruning_commitment.clone(),
-        pruning_aggregate_commitment: metadata.pruning_aggregate_commitment.clone(),
-        pruning_schema_version: metadata.pruning_schema_version,
-        pruning_parameter_version: metadata.pruning_parameter_version,
+        pruning: metadata.pruning.clone(),
         recursion_anchor: metadata.recursive_anchor.clone(),
     }
 }

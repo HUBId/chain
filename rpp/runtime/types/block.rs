@@ -2498,6 +2498,7 @@ fn recursive_anchor_default() -> String {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(from = "BlockMetadataSerde", into = "BlockMetadataSerde")]
 pub struct BlockMetadata {
     pub height: u64,
     pub hash: String,
@@ -2507,20 +2508,178 @@ pub struct BlockMetadata {
     #[serde(default)]
     pub proof_hash: String,
     #[serde(default)]
-    pub pruning_root: Option<String>,
-    pub pruning_commitment: String,
-    #[serde(default)]
-    pub pruning_aggregate_commitment: String,
-    #[serde(default)]
-    pub pruning_schema_version: u16,
-    #[serde(default)]
-    pub pruning_parameter_version: u16,
+    pub pruning: Option<PruningEnvelopeMetadata>,
     pub recursive_commitment: String,
     #[serde(default)]
     pub recursive_previous_commitment: Option<String>,
     pub recursive_system: ProofSystem,
     #[serde(default = "recursive_anchor_default")]
     pub recursive_anchor: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct BlockMetadataSerde {
+    pub height: u64,
+    pub hash: String,
+    pub timestamp: u64,
+    pub previous_state_root: String,
+    pub new_state_root: String,
+    #[serde(default)]
+    pub proof_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning: Option<PruningEnvelopeMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_commitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_aggregate_commitment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_schema_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_parameter_version: Option<u16>,
+    pub recursive_commitment: String,
+    #[serde(default)]
+    pub recursive_previous_commitment: Option<String>,
+    pub recursive_system: ProofSystem,
+    #[serde(default = "recursive_anchor_default")]
+    pub recursive_anchor: String,
+}
+
+impl From<BlockMetadataSerde> for BlockMetadata {
+    fn from(value: BlockMetadataSerde) -> Self {
+        let BlockMetadataSerde {
+            height,
+            hash,
+            timestamp,
+            previous_state_root,
+            new_state_root,
+            proof_hash,
+            pruning,
+            pruning_root,
+            pruning_commitment,
+            pruning_aggregate_commitment,
+            pruning_schema_version,
+            pruning_parameter_version,
+            recursive_commitment,
+            recursive_previous_commitment,
+            recursive_system,
+            recursive_anchor,
+        } = value;
+
+        let pruning = pruning.or_else(|| {
+            legacy_pruning_envelope(
+                height,
+                &previous_state_root,
+                pruning_root,
+                pruning_commitment,
+                pruning_aggregate_commitment,
+                pruning_schema_version,
+                pruning_parameter_version,
+            )
+        });
+
+        Self {
+            height,
+            hash,
+            timestamp,
+            previous_state_root,
+            new_state_root,
+            proof_hash,
+            pruning,
+            recursive_commitment,
+            recursive_previous_commitment,
+            recursive_system,
+            recursive_anchor,
+        }
+    }
+}
+
+impl From<BlockMetadata> for BlockMetadataSerde {
+    fn from(value: BlockMetadata) -> Self {
+        Self {
+            height: value.height,
+            hash: value.hash,
+            timestamp: value.timestamp,
+            previous_state_root: value.previous_state_root,
+            new_state_root: value.new_state_root,
+            proof_hash: value.proof_hash,
+            pruning: value.pruning,
+            pruning_root: None,
+            pruning_commitment: None,
+            pruning_aggregate_commitment: None,
+            pruning_schema_version: None,
+            pruning_parameter_version: None,
+            recursive_commitment: value.recursive_commitment,
+            recursive_previous_commitment: value.recursive_previous_commitment,
+            recursive_system: value.recursive_system,
+            recursive_anchor: value.recursive_anchor,
+        }
+    }
+}
+
+fn legacy_pruning_envelope(
+    height: u64,
+    previous_state_root: &str,
+    pruning_root: Option<String>,
+    pruning_commitment: Option<String>,
+    pruning_aggregate_commitment: Option<String>,
+    pruning_schema_version: Option<u16>,
+    pruning_parameter_version: Option<u16>,
+) -> Option<PruningEnvelopeMetadata> {
+    let binding_digest = pruning_commitment.and_then(non_empty_string)?;
+    let aggregate_commitment = pruning_aggregate_commitment.and_then(non_empty_string)?;
+    let schema_version = pruning_schema_version?;
+    let parameter_version = pruning_parameter_version?;
+    if schema_version == 0 || parameter_version == 0 {
+        return None;
+    }
+    if previous_state_root.is_empty() {
+        return None;
+    }
+
+    let snapshot_height = height.saturating_sub(1);
+    let snapshot = PruningSnapshotMetadata {
+        schema_version,
+        parameter_version,
+        block_height: snapshot_height,
+        state_commitment: TaggedDigestHex(previous_state_root.to_owned()),
+    };
+
+    let mut segments = Vec::new();
+    if let Some(segment_commitment) = pruning_root.and_then(non_empty_string) {
+        segments.push(PruningSegmentMetadata {
+            schema_version,
+            parameter_version,
+            segment_index: 0,
+            start_height: snapshot_height,
+            end_height: snapshot_height,
+            segment_commitment: TaggedDigestHex(segment_commitment),
+        });
+    }
+
+    let commitment = PruningCommitmentMetadata {
+        schema_version,
+        parameter_version,
+        aggregate_commitment: TaggedDigestHex(aggregate_commitment),
+    };
+
+    Some(PruningEnvelopeMetadata {
+        schema_version,
+        parameter_version,
+        snapshot,
+        segments,
+        commitment,
+        binding_digest: TaggedDigestHex(binding_digest),
+    })
+}
+
+fn non_empty_string(value: String) -> Option<String> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
 }
 
 impl BlockMetadata {
@@ -2532,16 +2691,41 @@ impl BlockMetadata {
             previous_state_root: block.pruning_proof.snapshot_state_root_hex(),
             new_state_root: block.header.state_root.clone(),
             proof_hash: block.header.proof_root.clone(),
-            pruning_root: block.pruning_proof.pruned_transaction_root_hex(),
-            pruning_commitment: block.pruning_proof.binding_digest_hex(),
-            pruning_aggregate_commitment: block.pruning_proof.aggregate_commitment_hex(),
-            pruning_schema_version: block.pruning_proof.schema_version(),
-            pruning_parameter_version: block.pruning_proof.parameter_version(),
+            pruning: Some(block.pruning_proof.envelope_metadata()),
             recursive_commitment: block.recursive_proof.commitment.clone(),
             recursive_previous_commitment: block.recursive_proof.previous_commitment.clone(),
             recursive_system: block.recursive_proof.system.clone(),
             recursive_anchor: RecursiveProof::anchor(),
         }
+    }
+
+    pub fn pruning_metadata(&self) -> Option<&PruningEnvelopeMetadata> {
+        self.pruning.as_ref()
+    }
+
+    pub fn pruning_binding_digest_hex(&self) -> Option<&str> {
+        self.pruning_metadata()
+            .map(|pruning| pruning.binding_digest.as_str())
+    }
+
+    pub fn pruning_aggregate_commitment_hex(&self) -> Option<&str> {
+        self.pruning_metadata()
+            .map(|pruning| pruning.commitment.aggregate_commitment.as_str())
+    }
+
+    pub fn pruning_segment_commitment_hex(&self) -> Option<&str> {
+        self.pruning_metadata()
+            .and_then(|pruning| pruning.segments.get(0))
+            .map(|segment| segment.segment_commitment.as_str())
+    }
+
+    pub fn pruning_schema_version(&self) -> Option<u16> {
+        self.pruning_metadata().map(|pruning| pruning.schema_version)
+    }
+
+    pub fn pruning_parameter_version(&self) -> Option<u16> {
+        self.pruning_metadata()
+            .map(|pruning| pruning.parameter_version)
     }
 }
 

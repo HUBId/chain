@@ -28,10 +28,7 @@ fn state_sync_plan_roundtrip() {
             previous_state_root: "66".repeat(32),
             new_state_root: "77".repeat(32),
             proof_hash: "88".repeat(32),
-            pruning_commitment: "pruning".into(),
-            pruning_aggregate_commitment: "aa".repeat(32),
-            pruning_schema_version: 1,
-            pruning_parameter_version: 0,
+            pruning: None,
             recursion_anchor: "anchor".into(),
         },
         chunks: vec![NetworkStateSyncChunk {

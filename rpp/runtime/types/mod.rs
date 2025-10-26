@@ -10,7 +10,8 @@ pub use account::{Account, IdentityBinding, Stake, WalletBindingChange};
 pub use block::BlockPayload;
 pub(crate) use block::StoredBlock;
 pub use block::{
-    Block, BlockHeader, BlockMetadata, ProofSystem, PruningProof, RecursiveProof, ReputationUpdate,
+    Block, BlockHeader, BlockMetadata, ProofSystem, PruningCommitmentMetadata, PruningEnvelopeMetadata,
+    PruningProof, PruningSegmentMetadata, PruningSnapshotMetadata, RecursiveProof, ReputationUpdate,
     TimetokeUpdate,
 };
 pub use identity::{
