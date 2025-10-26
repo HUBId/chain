@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 
 use crate::consensus::ConsensusCertificate;
-use crate::errors::ChainResult;
+use crate::errors::{ChainError, ChainResult};
 use crate::proof_system::ProofProver;
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
@@ -159,11 +159,25 @@ impl ProofProver for Plonky3Prover {
 
     fn build_pruning_witness(
         &self,
+        expected_previous_state_root: Option<&str>,
         previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
         removed: Vec<String>,
     ) -> ChainResult<Self::PruningWitness> {
+        let snapshot_state_root = pruning.snapshot_state_root_hex();
+        if let Some(expected) = expected_previous_state_root {
+            if expected != snapshot_state_root {
+                return Err(ChainError::Crypto(format!(
+                    "pruning envelope snapshot root mismatch: expected {expected}, envelope {snapshot_state_root}",
+                )));
+            }
+        }
+        if pruning.pruned_transaction_root_hex().is_none() {
+            return Err(ChainError::Crypto(
+                "pruning envelope missing transaction segment".into(),
+            ));
+        }
         Ok(PruningWitness::new(
             previous_identities,
             previous_txs,

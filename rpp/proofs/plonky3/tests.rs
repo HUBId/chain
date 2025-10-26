@@ -275,7 +275,7 @@ fn recursive_roundtrip_spans_state_and_transactions() {
     let pruning = PruningProof::canonical_from_block(None, &header)
         .expect("construct canonical pruning proof");
     let pruning_witness = prover
-        .build_pruning_witness(&[], &[], &pruning, Vec::new())
+        .build_pruning_witness(None, &[], &[], &pruning, Vec::new())
         .unwrap();
     let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
 

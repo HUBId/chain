@@ -401,7 +401,8 @@ mod tests {
             timestamp: 42,
             proposer: "validator-1".into(),
         };
-        let pruning = PruningProof::from_previous(None, &header);
+        let pruning = PruningProof::canonical_from_block(None, &header)
+            .expect("construct canonical pruning proof");
         let converted_header = BlockHeader {
             height: header.height,
             previous_hash: header.previous_hash.clone(),

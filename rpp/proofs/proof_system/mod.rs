@@ -248,6 +248,7 @@ pub trait ProofProver {
     /// Construct the pruning witness linking prior and current state roots.
     fn build_pruning_witness(
         &self,
+        expected_previous_state_root: Option<&str>,
         previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
         pruning: &PruningProof,
