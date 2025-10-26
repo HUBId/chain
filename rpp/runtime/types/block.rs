@@ -12,7 +12,7 @@ use ed25519_dalek::{PublicKey, Signature};
 use malachite::Natural;
 use serde::{Deserialize, Serialize};
 
-use crate::consensus::{BftVoteKind, ConsensusCertificate, SignedBftVote, verify_vrf};
+use crate::consensus::{verify_vrf, BftVoteKind, ConsensusCertificate, SignedBftVote};
 use crate::crypto::{
     signature_from_hex, signature_to_hex, verify_signature, vrf_public_key_from_hex,
 };
@@ -30,18 +30,17 @@ use crate::vrf::VrfProof;
 use serde_json;
 
 use super::{
-    Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
     identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
+    Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
 };
 
 use rpp_pruning::{
-    BlockHeight, Commitment, Envelope as PruningEnvelope, ParameterVersion, ProofSegment,
-    SchemaVersion, SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG,
-    PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+    BlockHeight, Commitment, DomainTag, Envelope as PruningEnvelope, ParameterVersion,
+    ProofSegment, SchemaVersion, SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG,
+    DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
 
-const ZERO_DIGEST_HEX: &str =
-    "0000000000000000000000000000000000000000000000000000000000000000";
+const ZERO_DIGEST_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const PRUNING_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1);
 const PRUNING_PARAMETER_VERSION: ParameterVersion = ParameterVersion::new(0);
 const PRUNING_SEGMENT_INDEX: SegmentIndex = SegmentIndex::new(0);
@@ -173,11 +172,146 @@ impl Default for ProofSystem {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct TaggedDigestHex(String);
+
+impl TaggedDigestHex {
+    pub fn from_tagged_digest(digest: &TaggedDigest) -> Self {
+        Self(hex::encode(digest.prefixed_bytes()))
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn to_tagged_digest(
+        &self,
+        label: &str,
+        expected_tag: DomainTag,
+    ) -> ChainResult<TaggedDigest> {
+        Self::parse(expected_tag, label, &self.0)
+    }
+
+    pub fn parse(expected_tag: DomainTag, label: &str, value: &str) -> ChainResult<TaggedDigest> {
+        parse_tagged_digest_hex(expected_tag, label, value)
+    }
+}
+
+impl From<TaggedDigestHex> for String {
+    fn from(value: TaggedDigestHex) -> Self {
+        value.into_inner()
+    }
+}
+
+impl From<&TaggedDigest> for TaggedDigestHex {
+    fn from(digest: &TaggedDigest) -> Self {
+        Self::from_tagged_digest(digest)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningSnapshotMetadata {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub block_height: u64,
+    pub state_commitment: TaggedDigestHex,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningSegmentMetadata {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub segment_index: u32,
+    pub start_height: u64,
+    pub end_height: u64,
+    pub segment_commitment: TaggedDigestHex,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningCommitmentMetadata {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub aggregate_commitment: TaggedDigestHex,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PruningEnvelopeMetadata {
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub snapshot: PruningSnapshotMetadata,
+    pub segments: Vec<PruningSegmentMetadata>,
+    pub commitment: PruningCommitmentMetadata,
+    pub binding_digest: TaggedDigestHex,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PruningProof(PruningEnvelope);
 
 impl PruningProof {
     pub fn from_envelope(envelope: PruningEnvelope) -> Self {
         Self(envelope)
+    }
+
+    pub fn from_metadata(metadata: PruningEnvelopeMetadata) -> ChainResult<Self> {
+        let snapshot_meta = metadata.snapshot;
+        let state_commitment = snapshot_meta
+            .state_commitment
+            .to_tagged_digest("snapshot state commitment", SNAPSHOT_STATE_TAG)?;
+        let snapshot = Snapshot::new(
+            SchemaVersion::new(snapshot_meta.schema_version),
+            ParameterVersion::new(snapshot_meta.parameter_version),
+            BlockHeight::new(snapshot_meta.block_height),
+            state_commitment,
+        )
+        .map_err(|err| ChainError::Crypto(format!("invalid pruning snapshot: {err}")))?;
+
+        let mut segments = Vec::with_capacity(metadata.segments.len());
+        for segment_meta in metadata.segments {
+            let segment_commitment = segment_meta
+                .segment_commitment
+                .to_tagged_digest("pruning segment commitment", PROOF_SEGMENT_TAG)?;
+            let segment = ProofSegment::new(
+                SchemaVersion::new(segment_meta.schema_version),
+                ParameterVersion::new(segment_meta.parameter_version),
+                SegmentIndex::new(segment_meta.segment_index),
+                BlockHeight::new(segment_meta.start_height),
+                BlockHeight::new(segment_meta.end_height),
+                segment_commitment,
+            )
+            .map_err(|err| ChainError::Crypto(format!("invalid pruning segment: {err}")))?;
+            segments.push(segment);
+        }
+
+        let commitment_meta = metadata.commitment;
+        let aggregate_commitment = commitment_meta
+            .aggregate_commitment
+            .to_tagged_digest("pruning aggregate commitment", COMMITMENT_TAG)?;
+        let commitment = Commitment::new(
+            SchemaVersion::new(commitment_meta.schema_version),
+            ParameterVersion::new(commitment_meta.parameter_version),
+            aggregate_commitment,
+        )
+        .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
+
+        let binding = metadata
+            .binding_digest
+            .to_tagged_digest("pruning binding digest", ENVELOPE_TAG)?;
+
+        let envelope = PruningEnvelope::new(
+            SchemaVersion::new(metadata.schema_version),
+            ParameterVersion::new(metadata.parameter_version),
+            snapshot,
+            segments,
+            commitment,
+            binding,
+        )
+        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?;
+
+        Ok(Self(envelope))
     }
 
     pub fn into_envelope(self) -> PruningEnvelope {
@@ -192,18 +326,58 @@ impl PruningProof {
         &self.0
     }
 
+    pub fn envelope_metadata(&self) -> PruningEnvelopeMetadata {
+        let envelope = self.as_envelope();
+        PruningEnvelopeMetadata {
+            schema_version: u16::from(envelope.schema_version()),
+            parameter_version: u16::from(envelope.parameter_version()),
+            snapshot: self.snapshot_metadata(),
+            segments: self.segment_metadata(),
+            commitment: self.commitment_metadata(),
+            binding_digest: TaggedDigestHex::from(&envelope.binding_digest()),
+        }
+    }
+
+    pub fn snapshot_metadata(&self) -> PruningSnapshotMetadata {
+        let snapshot = self.0.snapshot();
+        PruningSnapshotMetadata {
+            schema_version: u16::from(snapshot.schema_version()),
+            parameter_version: u16::from(snapshot.parameter_version()),
+            block_height: snapshot.block_height().as_u64(),
+            state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
+        }
+    }
+
+    pub fn segment_metadata(&self) -> Vec<PruningSegmentMetadata> {
+        self.0
+            .segments()
+            .iter()
+            .map(|segment| PruningSegmentMetadata {
+                schema_version: u16::from(segment.schema_version()),
+                parameter_version: u16::from(segment.parameter_version()),
+                segment_index: u32::from(segment.segment_index()),
+                start_height: segment.start_height().as_u64(),
+                end_height: segment.end_height().as_u64(),
+                segment_commitment: TaggedDigestHex::from(&segment.segment_commitment()),
+            })
+            .collect()
+    }
+
+    pub fn commitment_metadata(&self) -> PruningCommitmentMetadata {
+        let commitment = self.0.commitment();
+        PruningCommitmentMetadata {
+            schema_version: u16::from(commitment.schema_version()),
+            parameter_version: u16::from(commitment.parameter_version()),
+            aggregate_commitment: TaggedDigestHex::from(&commitment.aggregate_commitment()),
+        }
+    }
+
     pub fn genesis(state_root: &str) -> Self {
         Self::canonical_genesis(state_root).expect("genesis pruning envelope must be valid")
     }
 
     pub fn canonical_genesis(state_root: &str) -> ChainResult<Self> {
-        Self::canonical_from_parts(
-            0,
-            ZERO_DIGEST_HEX,
-            state_root,
-            ZERO_DIGEST_HEX,
-            state_root,
-        )
+        Self::canonical_from_parts(0, ZERO_DIGEST_HEX, state_root, ZERO_DIGEST_HEX, state_root)
     }
 
     pub fn from_previous(previous: Option<&Block>, current_header: &BlockHeader) -> Self {
@@ -340,7 +514,8 @@ impl PruningProof {
             }
         }
 
-        let previous_hash_bytes = decode_hex_digest("previous block hash", &current_header.previous_hash)?;
+        let previous_hash_bytes =
+            decode_hex_digest("previous block hash", &current_header.previous_hash)?;
         let aggregate = compute_pruning_aggregate(
             snapshot_height,
             &previous_hash_bytes,
@@ -362,8 +537,10 @@ impl PruningProof {
             ));
         }
 
-        let resulting_state_root = decode_hex_digest("resulting state root", &current_header.state_root)?;
-        let expected_binding = compute_pruning_binding(&commitment.aggregate_commitment(), &resulting_state_root);
+        let resulting_state_root =
+            decode_hex_digest("resulting state root", &current_header.state_root)?;
+        let expected_binding =
+            compute_pruning_binding(&commitment.aggregate_commitment(), &resulting_state_root);
         if envelope.binding_digest() != expected_binding {
             return Err(ChainError::Crypto(
                 "pruning proof binding digest mismatch".into(),
@@ -374,11 +551,11 @@ impl PruningProof {
     }
 
     pub fn binding_digest_hex(&self) -> String {
-        hex::encode(self.0.binding_digest().digest())
+        TaggedDigestHex::from(&self.0.binding_digest()).into_inner()
     }
 
     pub fn aggregate_commitment_hex(&self) -> String {
-        hex::encode(self.0.commitment().aggregate_commitment().digest())
+        TaggedDigestHex::from(&self.0.commitment().aggregate_commitment()).into_inner()
     }
 
     pub fn schema_version(&self) -> u16 {
@@ -394,14 +571,14 @@ impl PruningProof {
     }
 
     pub fn snapshot_state_root_hex(&self) -> String {
-        hex::encode(self.0.snapshot().state_commitment().digest())
+        TaggedDigestHex::from(&self.0.snapshot().state_commitment()).into_inner()
     }
 
     pub fn pruned_transaction_root_hex(&self) -> Option<String> {
         self.0
             .segments()
             .get(0)
-            .map(|segment| hex::encode(segment.segment_commitment().digest()))
+            .map(|segment| TaggedDigestHex::from(&segment.segment_commitment()).into_inner())
     }
 
     fn build(
@@ -412,7 +589,11 @@ impl PruningProof {
         resulting_state_root: &str,
     ) -> ChainResult<Self> {
         let block_height = BlockHeight::new(pruned_height);
-        let state_digest = decode_tagged_digest(SNAPSHOT_STATE_TAG, "previous state root", previous_state_root)?;
+        let state_digest = decode_tagged_digest(
+            SNAPSHOT_STATE_TAG,
+            "previous state root",
+            previous_state_root,
+        )?;
         let snapshot = Snapshot::new(
             PRUNING_SCHEMA_VERSION,
             PRUNING_PARAMETER_VERSION,
@@ -421,7 +602,8 @@ impl PruningProof {
         )
         .map_err(|err| ChainError::Crypto(format!("invalid pruning snapshot: {err}")))?;
 
-        let segment_digest = decode_tagged_digest(PROOF_SEGMENT_TAG, "pruned transaction root", pruned_tx_root)?;
+        let segment_digest =
+            decode_tagged_digest(PROOF_SEGMENT_TAG, "pruned transaction root", pruned_tx_root)?;
         let segment = ProofSegment::new(
             PRUNING_SCHEMA_VERSION,
             PRUNING_PARAMETER_VERSION,
@@ -439,12 +621,9 @@ impl PruningProof {
             snapshot.state_commitment().digest(),
             segment.segment_commitment().digest(),
         );
-        let commitment = Commitment::new(
-            PRUNING_SCHEMA_VERSION,
-            PRUNING_PARAMETER_VERSION,
-            aggregate,
-        )
-        .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
+        let commitment =
+            Commitment::new(PRUNING_SCHEMA_VERSION, PRUNING_PARAMETER_VERSION, aggregate)
+                .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
 
         let resulting_state = decode_hex_digest("resulting state root", resulting_state_root)?;
         let binding = compute_pruning_binding(&commitment.aggregate_commitment(), &resulting_state);
@@ -471,6 +650,37 @@ fn decode_hex_digest(label: &str, value: &str) -> ChainResult<[u8; 32]> {
         .try_into()
         .map_err(|_| ChainError::Crypto(format!("{label} must encode exactly 32 bytes")))?;
     Ok(array)
+}
+
+fn parse_tagged_digest_hex(
+    expected_tag: DomainTag,
+    label: &str,
+    value: &str,
+) -> ChainResult<TaggedDigest> {
+    let bytes = hex::decode(value)
+        .map_err(|err| ChainError::Crypto(format!("{label} is not valid hex encoding: {err}")))?;
+    let expected_length = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
+    if bytes.len() != expected_length {
+        return Err(ChainError::Crypto(format!(
+            "{label} must encode exactly {expected_length} bytes"
+        )));
+    }
+    let (tag_bytes, digest_bytes) = bytes.split_at(DOMAIN_TAG_LENGTH);
+    let tag_bytes: [u8; DOMAIN_TAG_LENGTH] = tag_bytes.try_into().map_err(|_| {
+        ChainError::Crypto(format!(
+            "{label} must encode exactly {expected_length} bytes"
+        ))
+    })?;
+    let digest_bytes: [u8; DIGEST_LENGTH] = digest_bytes.try_into().map_err(|_| {
+        ChainError::Crypto(format!(
+            "{label} must encode exactly {expected_length} bytes"
+        ))
+    })?;
+    let digest = TaggedDigest::new(DomainTag::new(tag_bytes), digest_bytes);
+    digest
+        .ensure_tag(expected_tag)
+        .map_err(|err| ChainError::Crypto(format!("{label} has invalid domain tag: {err}")))?;
+    Ok(digest)
 }
 
 fn decode_tagged_digest(
@@ -1577,17 +1787,16 @@ impl StoredBlock {
 mod tests {
     use super::*;
     use crate::consensus::{
-        BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord, evaluate_vrf,
+        evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
     use crate::errors::ChainError;
-    use crate::ledger::{DEFAULT_EPOCH_LENGTH, Ledger};
+    use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::{ReputationWeights, Tier};
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
-        ExecutionTrace, StarkCircuit,
         consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower},
         identity::{IdentityCircuit, IdentityWitness},
         pruning::PruningWitness,
@@ -1595,6 +1804,7 @@ mod tests {
         state::StateWitness,
         string_to_field,
         uptime::UptimeWitness,
+        ExecutionTrace, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
     use crate::stwo::params::StarkParameters;
@@ -1602,8 +1812,8 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::{
-        AttestedIdentityRequest, ChainProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
-        IDENTITY_ATTESTATION_QUORUM, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        AttestedIdentityRequest, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
+        IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
     use rand::rngs::OsRng;
@@ -2142,21 +2352,17 @@ mod tests {
 
         let mut missing_witness_block = block.clone();
         missing_witness_block.module_witnesses = ModuleWitnessBundle::default();
-        assert!(
-            missing_witness_block
-                .verify_consensus(Some(&prev_block), &registry)
-                .is_err()
-        );
+        assert!(missing_witness_block
+            .verify_consensus(Some(&prev_block), &registry)
+            .is_err());
 
         let mut mismatched_witness_block = block.clone();
         let mut mismatched_bundle = ModuleWitnessBundle::default();
         mismatched_bundle.record_consensus(ConsensusWitness::new(1, 1, vec!["cafebabe".repeat(4)]));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
-        assert!(
-            mismatched_witness_block
-                .verify_consensus(Some(&prev_block), &registry)
-                .is_err()
-        );
+        assert!(mismatched_witness_block
+            .verify_consensus(Some(&prev_block), &registry)
+            .is_err());
     }
 
     #[test]
