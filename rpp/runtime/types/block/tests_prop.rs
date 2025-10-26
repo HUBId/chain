@@ -85,13 +85,12 @@ fn fabricate_pruning_proof(
         binding,
     )
     .expect("envelope");
-    PruningProof::from_envelope(envelope)
+    envelope
 }
 
 fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningProof {
-    let envelope = proof.as_envelope();
-    let snapshot = envelope.snapshot().clone();
-    let segments: Vec<ProofSegment> = envelope.segments().to_vec();
+    let snapshot = proof.snapshot().clone();
+    let segments: Vec<ProofSegment> = proof.segments().to_vec();
     let mut mutated_hash = decode_hex_digest(&header.previous_hash);
     mutated_hash[0] ^= 0xFF;
     let aggregate = super::compute_pruning_aggregate(
@@ -101,8 +100,8 @@ fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningPr
         segments[0].segment_commitment().digest(),
     );
     let commitment = Commitment::new(
-        envelope.schema_version(),
-        envelope.parameter_version(),
+        proof.schema_version(),
+        proof.parameter_version(),
         aggregate,
     )
     .expect("tampered commitment");
@@ -111,15 +110,15 @@ fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningPr
         &decode_hex_digest(&header.state_root),
     );
     let tampered = PruningEnvelope::new(
-        envelope.schema_version(),
-        envelope.parameter_version(),
+        proof.schema_version(),
+        proof.parameter_version(),
         snapshot,
         segments,
         commitment,
         binding,
     )
     .expect("tampered envelope");
-    PruningProof::from_envelope(tampered)
+    tampered
 }
 
 prop_compose! {
@@ -203,7 +202,7 @@ proptest! {
     #![proptest_config(proptest_config())]
     fn pruning_proof_metadata_roundtrip((proof, _) in arb_pruning_fixture()) {
         let metadata = proof.envelope_metadata();
-        let reconstructed = PruningProof::from_metadata(metadata.clone())
+        let reconstructed = pruning_from_metadata(metadata.clone())
             .expect("metadata should rebuild pruning proof");
         assert_eq!(reconstructed, proof);
         assert_eq!(metadata.binding_digest.as_str(), proof.binding_digest_hex());

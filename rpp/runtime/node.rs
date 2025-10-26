@@ -101,10 +101,10 @@ use prover_stwo_backend::backend::{
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, RecursiveProof,
-    ReputationUpdate,
+    ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, PruningProofExt,
+    RecursiveProof, ReputationUpdate,
     SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, canonical_pruning_from_block,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -1078,7 +1078,7 @@ impl Node {
                 Tier::Tl5.to_string(),
                 0,
             );
-            let pruning_proof = PruningProof::canonical_from_block(None, &header)
+            let pruning_proof = canonical_pruning_from_block(None, &header)
                 .expect("pruning envelope must be valid");
             let transactions: Vec<SignedTransaction> = Vec::new();
             let transaction_proofs: Vec<ChainProof> = Vec::new();
@@ -5094,7 +5094,7 @@ impl NodeInner {
 
         let height = header.height;
         let previous_block = self.storage.read_block(parent_height)?;
-        let pruning_proof = PruningProof::canonical_from_block(previous_block.as_ref(), &header)?;
+        let pruning_proof = canonical_pruning_from_block(previous_block.as_ref(), &header)?;
         let participants = round.commit_participants();
         self.ledger
             .record_consensus_witness(height, round.round(), participants);
@@ -5273,7 +5273,7 @@ impl NodeInner {
         metadata.new_state_root = encoded_new_root;
         let final_pruning_envelope = receipt.pruning_proof.clone();
         if let Some(firewood_proof) = final_pruning_envelope.clone() {
-            let pruning = PruningProof::from_envelope(firewood_proof);
+            let pruning = firewood_proof;
             block.pruning_proof = pruning.clone();
             metadata.pruning = Some(pruning.envelope_metadata());
         } else {
@@ -5620,7 +5620,7 @@ impl NodeInner {
         metadata.new_state_root = encoded_new_root;
         let final_pruning_envelope = receipt.pruning_proof.clone();
         if let Some(firewood_proof) = final_pruning_envelope.clone() {
-            let pruning = PruningProof::from_envelope(firewood_proof);
+            let pruning = firewood_proof;
             block.pruning_proof = pruning.clone();
             metadata.pruning = Some(pruning.envelope_metadata());
         } else {

@@ -11,7 +11,9 @@ use storage_firewood::pruning::{FirewoodPruner, PruningProof as FirewoodPruningP
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
-use crate::types::{Account, Block, BlockMetadata, PruningProof, StoredBlock};
+use crate::types::{
+    Account, Block, BlockMetadata, PruningProof, PruningProofExt, StoredBlock, canonical_pruning_from_block,
+};
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 
@@ -600,7 +602,7 @@ mod tests {
     };
     use crate::types::{
         Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
-        RecursiveProof,
+        RecursiveProof, canonical_pruning_from_block,
     };
     use ed25519_dalek::Signature;
     use hex;
@@ -715,7 +717,7 @@ mod tests {
             Tier::Tl3.to_string(),
             height,
         );
-        let pruning_proof = PruningProof::canonical_from_block(previous, &header)
+        let pruning_proof = canonical_pruning_from_block(previous, &header)
             .expect("construct canonical pruning proof");
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =

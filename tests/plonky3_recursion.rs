@@ -14,6 +14,7 @@ use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::rpp::GlobalStateCommitments;
 use rpp_chain::types::{
     BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
+    canonical_pruning_from_block,
 };
 
 fn canonical_pruning_header() -> BlockHeader {
@@ -63,7 +64,7 @@ fn plonky3_recursive_flow_roundtrip() {
     let state_proof = prover.prove_state_transition(state_witness).unwrap();
 
     let header = canonical_pruning_header();
-    let pruning = PruningProof::canonical_from_block(None, &header)
+    let pruning = canonical_pruning_from_block(None, &header)
         .expect("construct canonical pruning proof");
     let pruning_witness = prover
         .build_pruning_witness(None, &[], &[], &pruning, Vec::new())
