@@ -121,6 +121,7 @@ use rpp_p2p::{
     NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, SnapshotChunk, SnapshotChunkStream,
     SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
+use rpp_pruning::{SNAPSHOT_STATE_TAG, TaggedDigest};
 use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
 const BASE_BLOCK_REWARD: u64 = 5;
@@ -5249,6 +5250,9 @@ impl NodeInner {
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
         let receipt = self.persist_accounts(height)?;
         let encoded_new_root = hex::encode(receipt.new_root);
+        let previous_root_hex = hex::encode(
+            TaggedDigest::new(SNAPSHOT_STATE_TAG, receipt.previous_root).prefixed_bytes(),
+        );
         if encoded_new_root != block.header.state_root {
             return Err(ChainError::Config(
                 "firewood state root does not match block header".into(),
@@ -5261,7 +5265,7 @@ impl NodeInner {
             &receipt.new_root,
         )?;
         let mut metadata = BlockMetadata::from(&block);
-        metadata.previous_state_root = hex::encode(receipt.previous_root);
+        metadata.previous_state_root = previous_root_hex.clone();
         metadata.new_state_root = encoded_new_root;
         if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
             let pruning = PruningProof::from_envelope(firewood_proof.clone());
@@ -5299,7 +5303,6 @@ impl NodeInner {
 
         let block_hash = block.hash.clone();
         let event_round = block.consensus.round;
-        let previous_root_hex = hex::encode(receipt.previous_root);
         let pruning_proof = receipt.pruning_proof.clone();
         self.publish_pipeline_event(PipelineObservation::BftFinalised {
             height,
@@ -5591,6 +5594,9 @@ impl NodeInner {
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
         let receipt = self.persist_accounts(height)?;
         let encoded_new_root = hex::encode(receipt.new_root);
+        let previous_root_hex = hex::encode(
+            TaggedDigest::new(SNAPSHOT_STATE_TAG, receipt.previous_root).prefixed_bytes(),
+        );
         if encoded_new_root != block.header.state_root {
             return Err(ChainError::Config(
                 "firewood state root does not match block header".into(),
@@ -5605,7 +5611,7 @@ impl NodeInner {
         )?;
 
         let mut metadata = BlockMetadata::from(&block);
-        metadata.previous_state_root = hex::encode(receipt.previous_root);
+        metadata.previous_state_root = previous_root_hex.clone();
         metadata.new_state_root = encoded_new_root;
         if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
             let pruning = PruningProof::from_envelope(firewood_proof.clone());
@@ -5659,7 +5665,6 @@ impl NodeInner {
                 );
             }
         }
-        let previous_root_hex = hex::encode(receipt.previous_root);
         let pruning_proof = receipt.pruning_proof.clone();
         self.publish_pipeline_event(PipelineObservation::FirewoodCommitment {
             height,
