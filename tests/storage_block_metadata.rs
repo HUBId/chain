@@ -199,7 +199,46 @@ fn storage_persists_extended_block_metadata() {
     assert_eq!(persisted.proof_hash, genesis.header.proof_root);
     assert_eq!(persisted.previous_state_root, metadata.previous_state_root);
     assert_eq!(persisted.new_state_root, metadata.new_state_root);
-    assert_eq!(persisted.pruning, metadata.pruning);
+    let persisted_pruning = persisted
+        .pruning_metadata()
+        .expect("persisted pruning metadata");
+    let expected_pruning = metadata
+        .pruning_metadata()
+        .expect("expected pruning metadata");
+    assert_eq!(
+        persisted_pruning
+            .snapshot
+            .state_commitment
+            .as_str(),
+        expected_pruning
+            .snapshot
+            .state_commitment
+            .as_str()
+    );
+    assert_eq!(
+        persisted_pruning
+            .segments
+            .get(0)
+            .map(|segment| segment.segment_commitment.as_str()),
+        expected_pruning
+            .segments
+            .get(0)
+            .map(|segment| segment.segment_commitment.as_str()),
+    );
+    assert_eq!(
+        persisted_pruning.binding_digest.as_str(),
+        expected_pruning.binding_digest.as_str()
+    );
+    assert_eq!(
+        persisted_pruning
+            .commitment
+            .aggregate_commitment
+            .as_str(),
+        expected_pruning
+            .commitment
+            .aggregate_commitment
+            .as_str()
+    );
 }
 
 #[test]

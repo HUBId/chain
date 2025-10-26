@@ -297,6 +297,8 @@ impl Storage {
         let record = StoredBlock::from_block(block);
         let data = bincode::serialize(&record)?;
         kv.put(key, data);
+        let mut metadata = metadata.clone();
+        Self::hydrate_metadata_from_block(block, &mut metadata);
         kv.put(
             metadata_key(TIP_HEIGHT_KEY),
             block.header.height.to_be_bytes().to_vec(),
@@ -306,7 +308,7 @@ impl Storage {
             metadata_key(TIP_TIMESTAMP_KEY),
             block.header.timestamp.to_be_bytes().to_vec(),
         );
-        let encoded_metadata = bincode::serialize(metadata)?;
+        let encoded_metadata = bincode::serialize(&metadata)?;
         kv.put(metadata_key(TIP_METADATA_KEY), encoded_metadata.clone());
         kv.put(
             metadata_key(&block_metadata_suffix(block.header.height)),
@@ -349,6 +351,7 @@ impl Storage {
             metadata.height = block.header.height;
             metadata.hash = block.hash.clone();
             metadata.timestamp = block.header.timestamp;
+            Self::hydrate_metadata_from_block(&block, &mut metadata);
             Ok(Some(metadata))
         } else {
             Ok(None)
@@ -490,6 +493,7 @@ impl Storage {
         metadata.height = height;
         metadata.hash = hash;
         metadata.timestamp = timestamp;
+        Self::hydrate_metadata_from_block(&block, &mut metadata);
         if metadata.proof_hash.is_empty() {
             metadata.proof_hash = block.header.proof_root;
         }
@@ -503,38 +507,35 @@ impl Storage {
         height: u64,
         metadata: &mut BlockMetadata,
     ) -> ChainResult<()> {
-        let needs_backfill = metadata.proof_hash.is_empty()
-            || metadata.previous_state_root.is_empty()
-            || metadata.new_state_root.is_empty()
-            || metadata.pruning_metadata().is_none()
-            || metadata.hash.is_empty()
-            || metadata.timestamp == 0;
-        if !needs_backfill {
-            return Ok(());
-        }
-
         if let Some(record) = self.read_block_record(height)? {
             let block = record.into_block();
-            if metadata.proof_hash.is_empty() {
-                metadata.proof_hash = block.header.proof_root.clone();
-            }
-            if metadata.previous_state_root.is_empty() {
-                metadata.previous_state_root = block.pruning_proof.snapshot_state_root_hex();
-            }
-            if metadata.new_state_root.is_empty() {
-                metadata.new_state_root = block.header.state_root.clone();
-            }
-            if metadata.pruning.is_none() {
-                metadata.pruning = Some(block.pruning_proof.envelope_metadata());
-            }
-            if metadata.hash.is_empty() {
-                metadata.hash = block.hash.clone();
-            }
-            if metadata.timestamp == 0 {
-                metadata.timestamp = block.header.timestamp;
-            }
+            Self::hydrate_metadata_from_block(&block, metadata);
         }
         Ok(())
+    }
+
+    fn hydrate_metadata_from_block(block: &Block, metadata: &mut BlockMetadata) {
+        if metadata.height == 0 {
+            metadata.height = block.header.height;
+        }
+        if metadata.hash.is_empty() {
+            metadata.hash = block.hash.clone();
+        }
+        if metadata.timestamp == 0 {
+            metadata.timestamp = block.header.timestamp;
+        }
+        if metadata.proof_hash.is_empty() {
+            metadata.proof_hash = block.header.proof_root.clone();
+        }
+        if metadata.previous_state_root.is_empty() {
+            metadata.previous_state_root = block.pruning_proof.snapshot_state_root_hex();
+        }
+        if metadata.new_state_root.is_empty() {
+            metadata.new_state_root = block.header.state_root.clone();
+        }
+        if metadata.pruning.is_none() {
+            metadata.pruning = Some(block.pruning_proof.envelope_metadata());
+        }
     }
 }
 
