@@ -1,6 +1,6 @@
 //! Prover-side integration for STWO/STARK proofs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::IntErrorKind;
 
 use crate::consensus::ConsensusCertificate;
@@ -186,25 +186,48 @@ impl<'a> WalletProver<'a> {
         pruning: &PruningProof,
         removed: Vec<String>,
     ) -> ChainResult<PruningWitness> {
-        let mut leaves = Vec::with_capacity(previous_identities.len() + previous_txs.len());
-        let mut original_transactions =
-            Vec::with_capacity(previous_identities.len() + previous_txs.len());
+        let capacity = previous_identities.len() + previous_txs.len();
+        let mut original_hashes = Vec::with_capacity(capacity);
+        let mut original_transactions = Vec::with_capacity(capacity);
         for request in previous_identities {
             let hash = request.declaration.hash()?;
-            leaves.push(hash);
+            original_hashes.push(hash);
             original_transactions.push(hex::encode(hash));
         }
         for tx in previous_txs {
             let hash = tx.hash();
-            leaves.push(hash);
+            original_hashes.push(hash);
             original_transactions.push(hex::encode(hash));
         }
-        let previous_tx_root = hex::encode(compute_merkle_root(&mut leaves));
-        let pruned_tx_root = pruning
-            .pruned_transaction_root_hex()
-            .ok_or_else(|| {
-                ChainError::Crypto("pruning proof missing transaction segment".into())
-            })?;
+
+        let mut previous_leaves = original_hashes.clone();
+        let previous_tx_root = hex::encode(compute_merkle_root(&mut previous_leaves));
+
+        let removed_set: HashSet<&str> = removed.iter().map(|value| value.as_str()).collect();
+        if removed.len() != removed_set.len() {
+            return Err(ChainError::Crypto(
+                "pruning witness contains duplicate removed transactions".into(),
+            ));
+        }
+
+        let original_set: HashSet<&str> =
+            original_transactions.iter().map(|value| value.as_str()).collect();
+        if let Some(missing) = removed
+            .iter()
+            .find(|value| !original_set.contains(value.as_str()))
+        {
+            return Err(ChainError::Crypto(format!(
+                "pruning witness references unknown transaction: {missing}",
+            )));
+        }
+
+        let mut remaining_hashes = Vec::with_capacity(original_hashes.len().saturating_sub(removed.len()));
+        for (hash, encoded) in original_hashes.iter().zip(original_transactions.iter()) {
+            if !removed_set.contains(encoded.as_str()) {
+                remaining_hashes.push(*hash);
+            }
+        }
+        let pruned_tx_root = hex::encode(compute_merkle_root(&mut remaining_hashes));
         Ok(PruningWitness {
             previous_tx_root,
             pruned_tx_root,

@@ -193,35 +193,60 @@ impl PruningProof {
     }
 
     pub fn genesis(state_root: &str) -> Self {
-        Self::build(
+        Self::canonical_genesis(state_root).expect("genesis pruning envelope must be valid")
+    }
+
+    pub fn canonical_genesis(state_root: &str) -> ChainResult<Self> {
+        Self::canonical_from_parts(
             0,
             ZERO_DIGEST_HEX,
             state_root,
             ZERO_DIGEST_HEX,
             state_root,
         )
-        .expect("genesis pruning envelope must be valid")
     }
 
     pub fn from_previous(previous: Option<&Block>, current_header: &BlockHeader) -> Self {
+        Self::canonical_from_block(previous, current_header)
+            .expect("pruning envelope must be valid")
+    }
+
+    pub fn canonical_from_block(
+        previous: Option<&Block>,
+        current_header: &BlockHeader,
+    ) -> ChainResult<Self> {
         match previous {
-            Some(block) => Self::build(
+            Some(block) => Self::canonical_from_parts(
                 block.header.height,
                 &block.hash,
                 &block.header.state_root,
                 &block.header.tx_root,
                 &current_header.state_root,
-            )
-            .expect("pruning envelope must be valid"),
-            None => Self::build(
+            ),
+            None => Self::canonical_from_parts(
                 current_header.height.saturating_sub(1),
                 &current_header.previous_hash,
                 &current_header.state_root,
                 ZERO_DIGEST_HEX,
                 &current_header.state_root,
-            )
-            .expect("pruning envelope must be valid"),
+            ),
         }
+    }
+
+    pub fn canonical_from_parts(
+        pruned_height: u64,
+        previous_block_hash: &str,
+        previous_state_root: &str,
+        pruned_tx_root: &str,
+        resulting_state_root: &str,
+    ) -> ChainResult<Self> {
+        Self::build(
+            pruned_height,
+            previous_block_hash,
+            previous_state_root,
+            pruned_tx_root,
+            resulting_state_root,
+        )
     }
 
     pub fn verify(
