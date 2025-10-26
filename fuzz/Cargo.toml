@@ -26,6 +26,9 @@ path = "../rpp/p2p"
 [dependencies.rpp-consensus]
 path = "../rpp/consensus"
 
+[patch.crates-io]
+libp2p-identity = { path = "../vendor/libp2p/identity" }
+
 [[bin]]
 name = "transaction_parser"
 path = "fuzz_targets/transaction_parser.rs"
