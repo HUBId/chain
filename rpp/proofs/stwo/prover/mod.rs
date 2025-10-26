@@ -200,9 +200,14 @@ impl<'a> WalletProver<'a> {
             original_transactions.push(hex::encode(hash));
         }
         let previous_tx_root = hex::encode(compute_merkle_root(&mut leaves));
+        let pruned_tx_root = pruning
+            .pruned_transaction_root_hex()
+            .ok_or_else(|| {
+                ChainError::Crypto("pruning proof missing transaction segment".into())
+            })?;
         Ok(PruningWitness {
             previous_tx_root,
-            pruned_tx_root: pruning.pruned_tx_root.clone(),
+            pruned_tx_root,
             original_transactions,
             removed_transactions: removed,
         })

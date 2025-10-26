@@ -1056,7 +1056,7 @@ mod tests {
                 timetoke_root: header.timetoke_root.clone(),
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.witness_commitment.clone(),
+                pruning_commitment: pruning.binding_digest_hex(),
                 block_height: header.height,
             }),
             trace: ExecutionTrace {

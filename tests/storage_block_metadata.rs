@@ -84,7 +84,7 @@ fn dummy_recursive_proof(
             timetoke_root: header.timetoke_root.clone(),
             zsi_root: header.zsi_root.clone(),
             proof_root: header.proof_root.clone(),
-            pruning_commitment: pruning.witness_commitment.clone(),
+            pruning_commitment: pruning.binding_digest_hex(),
             block_height: header.height,
         }),
         trace: ExecutionTrace {
@@ -129,11 +129,7 @@ fn make_block(height: u64, previous: Option<&Block>) -> Block {
         hex::encode([height as u8 + 12; 32]),
         hex::encode([height as u8 + 13; 32]),
     );
-    let pruning_proof = PruningProof {
-        witness_commitment: "77".repeat(32),
-        proof: ChainProof::Stwo(dummy_pruning_proof()),
-        previous_state_root: "88".repeat(32),
-    };
+    let pruning_proof = PruningProof::from_previous(previous, &header);
     let recursive_proof = RecursiveProof::from_parts(
         ProofSystem::Stwo,
         "99".repeat(32),
