@@ -101,7 +101,8 @@ use prover_stwo_backend::backend::{
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningProof, RecursiveProof, ReputationUpdate,
+    ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, RecursiveProof,
+    ReputationUpdate,
     SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
     IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
@@ -125,10 +126,11 @@ use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
 pub const DEFAULT_STATE_SYNC_CHUNK: usize = 16;
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ChainTip {
     height: u64,
     last_hash: [u8; 32],
+    pruning: Option<PruningEnvelopeMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1189,6 +1191,7 @@ impl Node {
             chain_tip: RwLock::new(ChainTip {
                 height: 0,
                 last_hash: [0u8; 32],
+                pruning: None,
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
             proposal_inbox: RwLock::new(HashMap::new()),
@@ -1909,7 +1912,7 @@ mod tests {
         };
 
         let tip_before = node_b.inner.storage.tip().expect("tip before");
-        let chain_tip_before = *node_b.inner.chain_tip.read();
+        let chain_tip_before = node_b.inner.chain_tip.read().clone();
         let epoch_before = node_b.inner.ledger.current_epoch();
 
         let result = node_b.inner.finalize_block(FinalizationContext::External(
@@ -1946,7 +1949,7 @@ mod tests {
             }
         }
 
-        let chain_tip_after = *node_b.inner.chain_tip.read();
+        let chain_tip_after = node_b.inner.chain_tip.read().clone();
         assert_eq!(chain_tip_after.height, chain_tip_before.height);
         assert_eq!(chain_tip_after.last_hash, chain_tip_before.last_hash);
 
@@ -3823,7 +3826,7 @@ impl NodeInner {
     }
 
     fn node_status(&self) -> ChainResult<NodeStatus> {
-        let tip = *self.chain_tip.read();
+        let tip = self.chain_tip.read().clone();
         let epoch_info: EpochInfo = self.ledger.epoch_info();
         let metadata = self.storage.tip()?;
         Ok(NodeStatus {
@@ -3934,7 +3937,7 @@ impl NodeInner {
     }
 
     fn consensus_status(&self) -> ChainResult<ConsensusStatus> {
-        let tip = *self.chain_tip.read();
+        let tip = self.chain_tip.read().clone();
         let block = self.storage.read_block(tip.height)?;
         let epoch_info = self.ledger.epoch_info();
         let pending_votes = self.vote_mempool.read().len();
@@ -4654,7 +4657,7 @@ impl NodeInner {
                 uptime_pending.push(record);
             }
         }
-        let tip_snapshot = *self.chain_tip.read();
+        let tip_snapshot = self.chain_tip.read().clone();
         let height = tip_snapshot.height + 1;
         span.record("height", &height);
         self.prune_consensus_rounds_below(height);
@@ -5264,6 +5267,10 @@ impl NodeInner {
             let pruning = PruningProof::from_envelope(firewood_proof.clone());
             metadata.pruning = Some(pruning.envelope_metadata());
         }
+        let pruning_metadata = metadata
+            .pruning
+            .clone()
+            .or_else(|| Some(block.pruning_proof.envelope_metadata()));
         {
             let span = storage_flush_span("store_block", block.header.height, &block.hash);
             let _guard = span.enter();
@@ -5281,6 +5288,7 @@ impl NodeInner {
         let mut tip = self.chain_tip.write();
         tip.height = block.header.height;
         tip.last_hash = block.block_hash();
+        tip.pruning = pruning_metadata;
         info!(height = tip.height, "sealed block");
         self.evidence_pool
             .write()
@@ -5603,6 +5611,10 @@ impl NodeInner {
             let pruning = PruningProof::from_envelope(firewood_proof.clone());
             metadata.pruning = Some(pruning.envelope_metadata());
         }
+        let pruning_metadata = metadata
+            .pruning
+            .clone()
+            .or_else(|| Some(block.pruning_proof.envelope_metadata()));
         self.storage.store_block(&block, &metadata)?;
         if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
             let _ = self.storage.prune_block_payload(block.header.height - 1)?;
@@ -5611,6 +5623,7 @@ impl NodeInner {
         let mut tip = self.chain_tip.write();
         tip.height = block.header.height;
         tip.last_hash = block.block_hash();
+        tip.pruning = pruning_metadata;
         info!(
             height = tip.height,
             proposer = %block.header.proposer,
@@ -5682,6 +5695,7 @@ impl NodeInner {
             let mut tip = self.chain_tip.write();
             tip.height = block.header.height;
             tip.last_hash = block.block_hash();
+            tip.pruning = metadata.pruning.clone();
             if self.config.rollout.feature_gates.pruning {
                 for height in 0..block.header.height {
                     let _ = self.storage.prune_block_payload(height)?;
@@ -5691,6 +5705,7 @@ impl NodeInner {
             let mut tip = self.chain_tip.write();
             tip.height = 0;
             tip.last_hash = [0u8; 32];
+            tip.pruning = None;
         }
         Ok(())
     }
