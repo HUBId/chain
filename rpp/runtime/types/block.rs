@@ -2629,23 +2629,70 @@ impl From<BlockMetadataSerde> for BlockMetadata {
 
 impl From<BlockMetadata> for BlockMetadataSerde {
     fn from(value: BlockMetadata) -> Self {
+        let BlockMetadata {
+            height,
+            hash,
+            timestamp,
+            previous_state_root,
+            new_state_root,
+            proof_hash,
+            pruning,
+            recursive_commitment,
+            recursive_previous_commitment,
+            recursive_system,
+            recursive_anchor,
+        } = value;
+
+        let (
+            pruning_root,
+            pruning_commitment,
+            pruning_aggregate_commitment,
+            pruning_schema_version,
+            pruning_parameter_version,
+        ) = pruning
+            .as_ref()
+            .map(|metadata| {
+                let pruning_root = metadata
+                    .segments
+                    .get(0)
+                    .map(|segment| segment.segment_commitment.as_str().to_owned());
+                let pruning_commitment = Some(metadata.binding_digest.as_str().to_owned());
+                let pruning_aggregate_commitment = Some(
+                    metadata
+                        .commitment
+                        .aggregate_commitment
+                        .as_str()
+                        .to_owned(),
+                );
+                let pruning_schema_version = Some(metadata.schema_version);
+                let pruning_parameter_version = Some(metadata.parameter_version);
+                (
+                    pruning_root,
+                    pruning_commitment,
+                    pruning_aggregate_commitment,
+                    pruning_schema_version,
+                    pruning_parameter_version,
+                )
+            })
+            .unwrap_or((None, None, None, None, None));
+
         Self {
-            height: value.height,
-            hash: value.hash,
-            timestamp: value.timestamp,
-            previous_state_root: value.previous_state_root,
-            new_state_root: value.new_state_root,
-            proof_hash: value.proof_hash,
-            pruning: value.pruning,
-            pruning_root: None,
-            pruning_commitment: None,
-            pruning_aggregate_commitment: None,
-            pruning_schema_version: None,
-            pruning_parameter_version: None,
-            recursive_commitment: value.recursive_commitment,
-            recursive_previous_commitment: value.recursive_previous_commitment,
-            recursive_system: value.recursive_system,
-            recursive_anchor: value.recursive_anchor,
+            height,
+            hash,
+            timestamp,
+            previous_state_root,
+            new_state_root,
+            proof_hash,
+            pruning,
+            pruning_root,
+            pruning_commitment,
+            pruning_aggregate_commitment,
+            pruning_schema_version,
+            pruning_parameter_version,
+            recursive_commitment,
+            recursive_previous_commitment,
+            recursive_system,
+            recursive_anchor,
         }
     }
 }
@@ -2716,14 +2763,21 @@ fn non_empty_string(value: String) -> Option<String> {
 
 impl BlockMetadata {
     pub fn from_block(block: &Block) -> Self {
+        let pruning = block.pruning_proof.envelope_metadata();
+        let previous_state_root = pruning
+            .snapshot
+            .state_commitment
+            .as_str()
+            .to_owned();
+
         Self {
             height: block.header.height,
             hash: block.hash.clone(),
             timestamp: block.header.timestamp,
-            previous_state_root: block.pruning_proof.snapshot_state_root_hex(),
+            previous_state_root,
             new_state_root: block.header.state_root.clone(),
             proof_hash: block.header.proof_root.clone(),
-            pruning: Some(block.pruning_proof.envelope_metadata()),
+            pruning: Some(pruning),
             recursive_commitment: block.recursive_proof.commitment.clone(),
             recursive_previous_commitment: block.recursive_proof.previous_commitment.clone(),
             recursive_system: block.recursive_proof.system.clone(),

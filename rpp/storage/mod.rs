@@ -527,14 +527,16 @@ impl Storage {
         if metadata.proof_hash.is_empty() {
             metadata.proof_hash = block.header.proof_root.clone();
         }
+        let pruning = block.pruning_proof.envelope_metadata();
         if metadata.previous_state_root.is_empty() {
-            metadata.previous_state_root = block.pruning_proof.snapshot_state_root_hex();
+            metadata.previous_state_root =
+                pruning.snapshot.state_commitment.as_str().to_owned();
         }
         if metadata.new_state_root.is_empty() {
             metadata.new_state_root = block.header.state_root.clone();
         }
         if metadata.pruning.is_none() {
-            metadata.pruning = Some(block.pruning_proof.envelope_metadata());
+            metadata.pruning = Some(pruning);
         }
     }
 }
