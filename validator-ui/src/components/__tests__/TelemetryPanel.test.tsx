@@ -1,6 +1,10 @@
 import { render, screen } from '@testing-library/react';
 import { TelemetryPanel } from '../TelemetryPanel';
-import type { ValidatorTelemetryResponse } from '../../types';
+import type { TaggedDigestHex, ValidatorTelemetryResponse } from '../../types';
+
+function digest(value: string): TaggedDigestHex {
+  return value as TaggedDigestHex;
+}
 
 describe('TelemetryPanel', () => {
   it('renders telemetry highlights', () => {
@@ -34,21 +38,37 @@ describe('TelemetryPanel', () => {
           new_state_root: '0xnew',
           proof_hash: '0xproof',
           pruning: {
+            envelope: {
+              schema_version: 1,
+              parameter_version: 1,
+              snapshot: {
+                schema_version: 1,
+                parameter_version: 1,
+                block_height: 2047,
+                state_commitment: digest('0'.repeat(96)),
+              },
+              segments: [
+                {
+                  schema_version: 1,
+                  parameter_version: 1,
+                  segment_index: 0,
+                  start_height: 2000,
+                  end_height: 2047,
+                  segment_commitment: digest('1'.repeat(96)),
+                },
+              ],
+              commitment: {
+                schema_version: 1,
+                parameter_version: 1,
+                aggregate_commitment: digest('2'.repeat(96)),
+              },
+              binding_digest: digest('3'.repeat(96)),
+            },
+            root: digest('4'.repeat(96)),
+            commitment: digest('5'.repeat(96)),
+            aggregate_commitment: digest('6'.repeat(96)),
             schema_version: 1,
             parameter_version: 1,
-            snapshot: {
-              schema_version: 1,
-              parameter_version: 1,
-              block_height: 2047,
-              state_commitment: '0xsnapshot',
-            },
-            segments: [],
-            commitment: {
-              schema_version: 1,
-              parameter_version: 1,
-              aggregate_commitment: '0xagg',
-            },
-            binding_digest: '0xprune',
           },
           recursive_commitment: '0xrecursive',
           recursive_previous_commitment: null,

@@ -21,11 +21,13 @@ export interface ConsensusStatus {
   failed_votes: number;
 }
 
+export type TaggedDigestHex = string & { readonly __taggedDigestHex: unique symbol };
+
 export interface PruningSnapshotMetadata {
   schema_version: number;
   parameter_version: number;
   block_height: number;
-  state_commitment: string;
+  state_commitment: TaggedDigestHex;
 }
 
 export interface PruningSegmentMetadata {
@@ -34,13 +36,13 @@ export interface PruningSegmentMetadata {
   segment_index: number;
   start_height: number;
   end_height: number;
-  segment_commitment: string;
+  segment_commitment: TaggedDigestHex;
 }
 
 export interface PruningCommitmentMetadata {
   schema_version: number;
   parameter_version: number;
-  aggregate_commitment: string;
+  aggregate_commitment: TaggedDigestHex;
 }
 
 export interface PruningEnvelopeMetadata {
@@ -49,7 +51,16 @@ export interface PruningEnvelopeMetadata {
   snapshot: PruningSnapshotMetadata;
   segments: PruningSegmentMetadata[];
   commitment: PruningCommitmentMetadata;
-  binding_digest: string;
+  binding_digest: TaggedDigestHex;
+}
+
+export interface PruningMetadata {
+  envelope: PruningEnvelopeMetadata;
+  root?: TaggedDigestHex | null;
+  commitment?: TaggedDigestHex | null;
+  aggregate_commitment?: TaggedDigestHex | null;
+  schema_version?: number | null;
+  parameter_version?: number | null;
 }
 
 export interface GlobalStateCommitments {
@@ -127,7 +138,7 @@ export interface BlockMetadata {
   previous_state_root: string;
   new_state_root: string;
   proof_hash: string;
-  pruning?: PruningEnvelopeMetadata | null;
+  pruning?: PruningMetadata | null;
   recursive_commitment: string;
   recursive_previous_commitment?: string | null;
   recursive_system: string;
