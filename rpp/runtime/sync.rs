@@ -21,7 +21,8 @@ use crate::stwo::proof::ProofPayload;
 use crate::types::StoredBlock;
 use crate::types::{
     Block, BlockMetadata, BlockPayload, ChainProof, PruningEnvelopeMetadata, ProofSystem,
-    RecursiveProof, SignedTransaction, TransactionProofBundle,
+    PruningProofExt, RecursiveProof, SignedTransaction, TransactionProofBundle,
+    canonical_pruning_from_block,
 };
 use blake3::Hash;
 use rpp_pruning::{COMMITMENT_TAG, DOMAIN_TAG_LENGTH, DIGEST_LENGTH};
@@ -1186,7 +1187,7 @@ mod tests {
             public_key: hex::encode(keypair.public.to_bytes()),
             signature: hex::encode(precommit_sig.to_bytes()),
         };
-        let pruning_proof = PruningProof::canonical_from_block(previous, &header)
+        let pruning_proof = canonical_pruning_from_block(previous, &header)
             .expect("construct canonical pruning proof");
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =

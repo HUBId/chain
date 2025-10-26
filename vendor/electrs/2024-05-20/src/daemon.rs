@@ -30,6 +30,7 @@ use rpp::proofs::rpp::TransactionWitness;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
     Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, SignedTransaction,
+    canonical_pruning_from_block,
 };
 use rpp_p2p::GossipTopic;
 use sha2::{Digest, Sha512};
@@ -1096,7 +1097,7 @@ pub mod test_helpers {
             public_key: hex::encode(keypair.public.to_bytes()),
             signature: hex::encode(precommit_sig.to_bytes()),
         };
-        let pruning_proof = PruningProof::canonical_from_block(previous, &header)
+        let pruning_proof = canonical_pruning_from_block(previous, &header)
             .expect("construct canonical pruning proof");
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =

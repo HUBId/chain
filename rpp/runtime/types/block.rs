@@ -34,11 +34,12 @@ use super::{
     identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
     Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
 };
+use self::pruning_ext::PruningProofExt;
 
 use rpp_pruning::{
-    BlockHeight, Commitment, DomainTag, Envelope as PruningEnvelope, ParameterVersion,
-    ProofSegment, SchemaVersion, SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG,
-    DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+    BlockHeight, Commitment, DomainTag, ParameterVersion, ProofSegment, SchemaVersion,
+    SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH,
+    ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
 
 const ZERO_DIGEST_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -249,15 +250,281 @@ pub struct PruningEnvelopeMetadata {
     pub binding_digest: TaggedDigestHex,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PruningProof(PruningEnvelope);
+mod pruning_ext {
+    use super::{
+        compute_pruning_aggregate, compute_pruning_binding, decode_hex_digest,
+        decode_tagged_digest, derive_version_digest, encode_tagged_digest_hex, Block, BlockHeader,
+        ChainError, ChainResult, PruningCommitmentMetadata, PruningEnvelopeMetadata,
+        PruningSegmentMetadata, PruningSnapshotMetadata, TaggedDigestHex, ZERO_DIGEST_HEX,
+        PRUNING_PARAMETER_VERSION, PRUNING_SCHEMA_VERSION, PRUNING_SEGMENT_INDEX,
+    };
+    use crate::PruningProof;
+    use rpp_pruning::{
+        BlockHeight, Commitment, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex,
+        Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+    };
+    use storage_firewood::pruning::FirewoodPruner;
 
-impl PruningProof {
-    pub fn from_envelope(envelope: PruningEnvelope) -> Self {
-        Self(envelope)
+    pub trait PruningProofExt {
+        fn envelope_metadata(&self) -> PruningEnvelopeMetadata;
+        fn binding_digest(&self) -> TaggedDigest;
+        fn aggregate_commitment(&self) -> TaggedDigest;
+        fn snapshot_metadata(&self) -> PruningSnapshotMetadata;
+        fn segment_metadata(&self) -> Vec<PruningSegmentMetadata>;
+        fn commitment_metadata(&self) -> PruningCommitmentMetadata;
+        fn binding_digest_hex(&self) -> String;
+        fn aggregate_commitment_hex(&self) -> String;
+        fn schema_version(&self) -> u16;
+        fn parameter_version(&self) -> u16;
+        fn snapshot_height(&self) -> u64;
+        fn snapshot_state_root_hex(&self) -> String;
+        fn pruned_transaction_root_hex(&self) -> Option<String>;
+        fn verify(&self, previous: Option<&Block>, header: &BlockHeader) -> ChainResult<()>;
     }
 
-    pub fn from_metadata(metadata: PruningEnvelopeMetadata) -> ChainResult<Self> {
+    impl PruningProofExt for PruningProof {
+        fn envelope_metadata(&self) -> PruningEnvelopeMetadata {
+            let snapshot = rpp_pruning::Envelope::snapshot(self);
+            let snapshot_metadata = PruningSnapshotMetadata {
+                schema_version: u16::from(snapshot.schema_version()),
+                parameter_version: u16::from(snapshot.parameter_version()),
+                block_height: snapshot.block_height().as_u64(),
+                state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
+            };
+            let segment_metadata = rpp_pruning::Envelope::segments(self)
+                .iter()
+                .map(|segment| PruningSegmentMetadata {
+                    schema_version: u16::from(segment.schema_version()),
+                    parameter_version: u16::from(segment.parameter_version()),
+                    segment_index: u32::from(segment.segment_index()),
+                    start_height: segment.start_height().as_u64(),
+                    end_height: segment.end_height().as_u64(),
+                    segment_commitment: TaggedDigestHex::from(&segment.segment_commitment()),
+                })
+                .collect();
+            let commitment = rpp_pruning::Envelope::commitment(self);
+            let commitment_metadata = PruningCommitmentMetadata {
+                schema_version: u16::from(commitment.schema_version()),
+                parameter_version: u16::from(commitment.parameter_version()),
+                aggregate_commitment: TaggedDigestHex::from(&commitment.aggregate_commitment()),
+            };
+            PruningEnvelopeMetadata {
+                schema_version: u16::from(rpp_pruning::Envelope::schema_version(self)),
+                parameter_version: u16::from(rpp_pruning::Envelope::parameter_version(self)),
+                snapshot: snapshot_metadata,
+                segments: segment_metadata,
+                commitment: commitment_metadata,
+                binding_digest: TaggedDigestHex::from(&rpp_pruning::Envelope::binding_digest(self)),
+            }
+        }
+
+        fn binding_digest(&self) -> TaggedDigest {
+            rpp_pruning::Envelope::binding_digest(self)
+        }
+
+        fn aggregate_commitment(&self) -> TaggedDigest {
+            rpp_pruning::Envelope::commitment(self).aggregate_commitment()
+        }
+
+        fn snapshot_metadata(&self) -> PruningSnapshotMetadata {
+            let snapshot = rpp_pruning::Envelope::snapshot(self);
+            PruningSnapshotMetadata {
+                schema_version: u16::from(snapshot.schema_version()),
+                parameter_version: u16::from(snapshot.parameter_version()),
+                block_height: snapshot.block_height().as_u64(),
+                state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
+            }
+        }
+
+        fn segment_metadata(&self) -> Vec<PruningSegmentMetadata> {
+            rpp_pruning::Envelope::segments(self)
+                .iter()
+                .map(|segment| PruningSegmentMetadata {
+                    schema_version: u16::from(segment.schema_version()),
+                    parameter_version: u16::from(segment.parameter_version()),
+                    segment_index: u32::from(segment.segment_index()),
+                    start_height: segment.start_height().as_u64(),
+                    end_height: segment.end_height().as_u64(),
+                    segment_commitment: TaggedDigestHex::from(&segment.segment_commitment()),
+                })
+                .collect()
+        }
+
+        fn commitment_metadata(&self) -> PruningCommitmentMetadata {
+            let commitment = rpp_pruning::Envelope::commitment(self);
+            PruningCommitmentMetadata {
+                schema_version: u16::from(commitment.schema_version()),
+                parameter_version: u16::from(commitment.parameter_version()),
+                aggregate_commitment: TaggedDigestHex::from(&commitment.aggregate_commitment()),
+            }
+        }
+
+        fn binding_digest_hex(&self) -> String {
+            encode_tagged_digest_hex(&rpp_pruning::Envelope::binding_digest(self))
+        }
+
+        fn aggregate_commitment_hex(&self) -> String {
+            encode_tagged_digest_hex(&rpp_pruning::Envelope::commitment(self).aggregate_commitment())
+        }
+
+        fn schema_version(&self) -> u16 {
+            u16::from(rpp_pruning::Envelope::schema_version(self))
+        }
+
+        fn parameter_version(&self) -> u16 {
+            u16::from(rpp_pruning::Envelope::parameter_version(self))
+        }
+
+        fn snapshot_height(&self) -> u64 {
+            rpp_pruning::Envelope::snapshot(self)
+                .block_height()
+                .as_u64()
+        }
+
+        fn snapshot_state_root_hex(&self) -> String {
+            TaggedDigestHex::from(&rpp_pruning::Envelope::snapshot(self).state_commitment()).into_inner()
+        }
+
+        fn pruned_transaction_root_hex(&self) -> Option<String> {
+            rpp_pruning::Envelope::segments(self)
+                .get(0)
+                .map(|segment| TaggedDigestHex::from(&segment.segment_commitment()).into_inner())
+        }
+
+        fn verify(&self, previous: Option<&Block>, header: &BlockHeader) -> ChainResult<()> {
+            if rpp_pruning::Envelope::schema_version(self) != PRUNING_SCHEMA_VERSION {
+                return Err(ChainError::Crypto(
+                    "pruning proof schema version mismatch".into(),
+                ));
+            }
+            if rpp_pruning::Envelope::parameter_version(self) != PRUNING_PARAMETER_VERSION {
+                return Err(ChainError::Crypto(
+                    "pruning proof parameter version mismatch".into(),
+                ));
+            }
+
+            let snapshot = rpp_pruning::Envelope::snapshot(self);
+            if snapshot.schema_version() != PRUNING_SCHEMA_VERSION
+                || snapshot.parameter_version() != PRUNING_PARAMETER_VERSION
+            {
+                return Err(ChainError::Crypto(
+                    "pruning proof snapshot version mismatch".into(),
+                ));
+            }
+
+            let snapshot_height = snapshot.block_height().as_u64();
+            let expected_snapshot_height = previous
+                .map(|block| block.header.height)
+                .unwrap_or_else(|| header.height.saturating_sub(1));
+            if snapshot_height != expected_snapshot_height {
+                return Err(ChainError::Crypto("pruning proof height mismatch".into()));
+            }
+
+            let snapshot_state_digest = *snapshot.state_commitment().digest();
+
+            if let Some(prev_block) = previous {
+                if hex::encode(snapshot_state_digest) != prev_block.header.state_root {
+                    return Err(ChainError::Crypto(
+                        "pruning proof previous state root mismatch".into(),
+                    ));
+                }
+            } else if header.height == 0 && snapshot_height != 0 {
+                return Err(ChainError::Crypto(
+                    "genesis pruning proof references non-zero height".into(),
+                ));
+            }
+
+            let segments = rpp_pruning::Envelope::segments(self);
+            if segments.len() != 1 {
+                return Err(ChainError::Crypto(
+                    "pruning proof must carry exactly one proof segment".into(),
+                ));
+            }
+
+            let segment = &segments[0];
+            if segment.schema_version() != PRUNING_SCHEMA_VERSION
+                || segment.parameter_version() != PRUNING_PARAMETER_VERSION
+            {
+                return Err(ChainError::Crypto(
+                    "pruning proof segment version mismatch".into(),
+                ));
+            }
+            if segment.segment_index() != PRUNING_SEGMENT_INDEX {
+                return Err(ChainError::Crypto(
+                    "pruning proof segment index mismatch".into(),
+                ));
+            }
+            if segment.start_height().as_u64() != snapshot_height
+                || segment.end_height().as_u64() != snapshot_height
+            {
+                return Err(ChainError::Crypto(
+                    "pruning proof segment height range mismatch".into(),
+                ));
+            }
+
+            let segment_commitment = *segment.segment_commitment().digest();
+
+            if let Some(prev_block) = previous {
+                if hex::encode(segment_commitment) != prev_block.header.tx_root {
+                    return Err(ChainError::Crypto(
+                        "pruning proof transaction commitment mismatch".into(),
+                    ));
+                }
+            }
+
+            let previous_hash = decode_hex_digest("previous block hash", &header.previous_hash)?;
+            let aggregate = compute_pruning_aggregate(
+                snapshot_height,
+                &previous_hash,
+                &snapshot_state_digest,
+                &segment_commitment,
+            );
+
+            let commitment = rpp_pruning::Envelope::commitment(self);
+            if commitment.schema_version() != PRUNING_SCHEMA_VERSION
+                || commitment.parameter_version() != PRUNING_PARAMETER_VERSION
+            {
+                return Err(ChainError::Crypto(
+                    "pruning proof commitment version mismatch".into(),
+                ));
+            }
+            if commitment.aggregate_commitment() != aggregate {
+                return Err(ChainError::Crypto(
+                    "pruning proof aggregate commitment mismatch".into(),
+                ));
+            }
+
+            let resulting_state_root = decode_hex_digest("resulting state root", &header.state_root)?;
+            let expected_binding = compute_pruning_binding(&aggregate, &resulting_state_root);
+            if rpp_pruning::Envelope::binding_digest(self) != expected_binding {
+                return Err(ChainError::Crypto(
+                    "pruning proof binding digest mismatch".into(),
+                ));
+            }
+
+            if let Some(_) = previous {
+                let schema_digest = derive_version_digest(u16::from(rpp_pruning::Envelope::schema_version(self)));
+                let parameter_digest =
+                    derive_version_digest(u16::from(rpp_pruning::Envelope::parameter_version(self)));
+                let firewood_envelope: &storage_firewood::pruning::PruningProof = self;
+
+                if !FirewoodPruner::verify_pruned_state_with_digests(
+                    schema_digest,
+                    parameter_digest,
+                    snapshot_state_digest,
+                    firewood_envelope,
+                ) {
+                    return Err(ChainError::Crypto(
+                        "pruning proof inconsistent with pruning state digests".into(),
+                    ));
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    pub fn pruning_from_metadata(metadata: PruningEnvelopeMetadata) -> ChainResult<PruningProof> {
         let snapshot_meta = metadata.snapshot;
         let state_commitment = snapshot_meta
             .state_commitment
@@ -302,7 +569,7 @@ impl PruningProof {
             .binding_digest
             .to_tagged_digest("pruning binding digest", ENVELOPE_TAG)?;
 
-        let envelope = PruningEnvelope::new(
+        let envelope = PruningProof::new(
             SchemaVersion::new(metadata.schema_version),
             ParameterVersion::new(metadata.parameter_version),
             snapshot,
@@ -312,101 +579,45 @@ impl PruningProof {
         )
         .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?;
 
-        Ok(Self(envelope))
+        Ok(envelope)
     }
 
-    pub fn into_envelope(self) -> PruningEnvelope {
-        self.0
+    pub fn pruning_genesis(state_root: &str) -> PruningProof {
+        canonical_pruning_genesis(state_root)
+            .expect("genesis pruning envelope must be valid")
     }
 
-    pub fn to_envelope(&self) -> PruningEnvelope {
-        self.0.clone()
+    pub fn canonical_pruning_genesis(state_root: &str) -> ChainResult<PruningProof> {
+        canonical_pruning_from_parts(
+            0,
+            ZERO_DIGEST_HEX,
+            state_root,
+            ZERO_DIGEST_HEX,
+            state_root,
+        )
     }
 
-    pub fn as_envelope(&self) -> &PruningEnvelope {
-        &self.0
-    }
-
-    pub fn envelope_metadata(&self) -> PruningEnvelopeMetadata {
-        let envelope = self.as_envelope();
-        PruningEnvelopeMetadata {
-            schema_version: u16::from(envelope.schema_version()),
-            parameter_version: u16::from(envelope.parameter_version()),
-            snapshot: self.snapshot_metadata(),
-            segments: self.segment_metadata(),
-            commitment: self.commitment_metadata(),
-            binding_digest: TaggedDigestHex::from(&envelope.binding_digest()),
-        }
-    }
-
-    pub fn binding_digest(&self) -> TaggedDigest {
-        self.0.binding_digest()
-    }
-
-    pub fn aggregate_commitment(&self) -> TaggedDigest {
-        self.0.commitment().aggregate_commitment()
-    }
-
-    pub fn snapshot_metadata(&self) -> PruningSnapshotMetadata {
-        let snapshot = self.0.snapshot();
-        PruningSnapshotMetadata {
-            schema_version: u16::from(snapshot.schema_version()),
-            parameter_version: u16::from(snapshot.parameter_version()),
-            block_height: snapshot.block_height().as_u64(),
-            state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
-        }
-    }
-
-    pub fn segment_metadata(&self) -> Vec<PruningSegmentMetadata> {
-        self.0
-            .segments()
-            .iter()
-            .map(|segment| PruningSegmentMetadata {
-                schema_version: u16::from(segment.schema_version()),
-                parameter_version: u16::from(segment.parameter_version()),
-                segment_index: u32::from(segment.segment_index()),
-                start_height: segment.start_height().as_u64(),
-                end_height: segment.end_height().as_u64(),
-                segment_commitment: TaggedDigestHex::from(&segment.segment_commitment()),
-            })
-            .collect()
-    }
-
-    pub fn commitment_metadata(&self) -> PruningCommitmentMetadata {
-        let commitment = self.0.commitment();
-        PruningCommitmentMetadata {
-            schema_version: u16::from(commitment.schema_version()),
-            parameter_version: u16::from(commitment.parameter_version()),
-            aggregate_commitment: TaggedDigestHex::from(&commitment.aggregate_commitment()),
-        }
-    }
-
-    pub fn genesis(state_root: &str) -> Self {
-        Self::canonical_genesis(state_root).expect("genesis pruning envelope must be valid")
-    }
-
-    pub fn canonical_genesis(state_root: &str) -> ChainResult<Self> {
-        Self::canonical_from_parts(0, ZERO_DIGEST_HEX, state_root, ZERO_DIGEST_HEX, state_root)
-    }
-
-    pub fn from_previous(previous: Option<&Block>, current_header: &BlockHeader) -> Self {
-        Self::canonical_from_block(previous, current_header)
+    pub fn pruning_from_previous(
+        previous: Option<&Block>,
+        current_header: &BlockHeader,
+    ) -> PruningProof {
+        canonical_pruning_from_block(previous, current_header)
             .expect("pruning envelope must be valid")
     }
 
-    pub fn canonical_from_block(
+    pub fn canonical_pruning_from_block(
         previous: Option<&Block>,
         current_header: &BlockHeader,
-    ) -> ChainResult<Self> {
+    ) -> ChainResult<PruningProof> {
         match previous {
-            Some(block) => Self::canonical_from_parts(
+            Some(block) => canonical_pruning_from_parts(
                 block.header.height,
                 &block.hash,
                 &block.header.state_root,
                 &block.header.tx_root,
                 &current_header.state_root,
             ),
-            None => Self::canonical_from_parts(
+            None => canonical_pruning_from_parts(
                 current_header.height.saturating_sub(1),
                 &current_header.previous_hash,
                 &current_header.state_root,
@@ -416,14 +627,14 @@ impl PruningProof {
         }
     }
 
-    pub fn canonical_from_parts(
+    pub fn canonical_pruning_from_parts(
         pruned_height: u64,
         previous_block_hash: &str,
         previous_state_root: &str,
         pruned_tx_root: &str,
         resulting_state_root: &str,
-    ) -> ChainResult<Self> {
-        Self::build(
+    ) -> ChainResult<PruningProof> {
+        build_pruning_envelope(
             pruned_height,
             previous_block_hash,
             previous_state_root,
@@ -432,44 +643,13 @@ impl PruningProof {
         )
     }
 
-    pub fn binding_digest_hex(&self) -> String {
-        encode_tagged_digest_hex(&self.binding_digest())
-    }
-
-    pub fn aggregate_commitment_hex(&self) -> String {
-        encode_tagged_digest_hex(&self.aggregate_commitment())
-    }
-
-    pub fn schema_version(&self) -> u16 {
-        u16::from(self.0.schema_version())
-    }
-
-    pub fn parameter_version(&self) -> u16 {
-        u16::from(self.0.parameter_version())
-    }
-
-    pub fn snapshot_height(&self) -> u64 {
-        self.0.snapshot().block_height().as_u64()
-    }
-
-    pub fn snapshot_state_root_hex(&self) -> String {
-        TaggedDigestHex::from(&self.0.snapshot().state_commitment()).into_inner()
-    }
-
-    pub fn pruned_transaction_root_hex(&self) -> Option<String> {
-        self.0
-            .segments()
-            .get(0)
-            .map(|segment| TaggedDigestHex::from(&segment.segment_commitment()).into_inner())
-    }
-
-    fn build(
+    fn build_pruning_envelope(
         pruned_height: u64,
         previous_block_hash: &str,
         previous_state_root: &str,
         pruned_tx_root: &str,
         resulting_state_root: &str,
-    ) -> ChainResult<Self> {
+    ) -> ChainResult<PruningProof> {
         let block_height = BlockHeight::new(pruned_height);
         let state_digest = decode_tagged_digest(
             SNAPSHOT_STATE_TAG,
@@ -497,7 +677,7 @@ impl PruningProof {
         .map_err(|err| ChainError::Crypto(format!("invalid pruning segment: {err}")))?;
 
         let previous_hash = decode_hex_digest("previous block hash", previous_block_hash)?;
-        let aggregate = compute_pruning_aggregate(
+        let aggregate = super::compute_pruning_aggregate(
             pruned_height,
             &previous_hash,
             snapshot.state_commitment().digest(),
@@ -508,9 +688,12 @@ impl PruningProof {
                 .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
 
         let resulting_state = decode_hex_digest("resulting state root", resulting_state_root)?;
-        let binding = compute_pruning_binding(&commitment.aggregate_commitment(), &resulting_state);
+        let binding = super::compute_pruning_binding(
+            &commitment.aggregate_commitment(),
+            &resulting_state,
+        );
 
-        let envelope = PruningEnvelope::new(
+        PruningProof::new(
             PRUNING_SCHEMA_VERSION,
             PRUNING_PARAMETER_VERSION,
             snapshot,
@@ -518,11 +701,14 @@ impl PruningProof {
             commitment,
             binding,
         )
-        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?;
-
-        Ok(Self(envelope))
+        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))
     }
 }
+
+pub use pruning_ext::{
+    canonical_pruning_from_block, canonical_pruning_from_parts, canonical_pruning_genesis,
+    pruning_from_metadata, pruning_from_previous, pruning_genesis, PruningProofExt,
+};
 
 fn decode_hex_digest(label: &str, value: &str) -> ChainResult<[u8; 32]> {
     let bytes = hex::decode(value)
@@ -1160,136 +1346,7 @@ impl Block {
     }
 
     fn verify_pruning(&self, previous: Option<&Block>) -> ChainResult<()> {
-        let envelope = self.pruning_proof.as_envelope();
-
-        if envelope.schema_version() != PRUNING_SCHEMA_VERSION {
-            return Err(ChainError::Crypto(
-                "pruning proof schema version mismatch".into(),
-            ));
-        }
-        if envelope.parameter_version() != PRUNING_PARAMETER_VERSION {
-            return Err(ChainError::Crypto(
-                "pruning proof parameter version mismatch".into(),
-            ));
-        }
-
-        let snapshot = envelope.snapshot();
-        if snapshot.schema_version() != PRUNING_SCHEMA_VERSION
-            || snapshot.parameter_version() != PRUNING_PARAMETER_VERSION
-        {
-            return Err(ChainError::Crypto(
-                "pruning proof snapshot version mismatch".into(),
-            ));
-        }
-
-        let snapshot_height = snapshot.block_height().as_u64();
-        let expected_snapshot_height = previous
-            .map(|block| block.header.height)
-            .unwrap_or_else(|| self.header.height.saturating_sub(1));
-        if snapshot_height != expected_snapshot_height {
-            return Err(ChainError::Crypto("pruning proof height mismatch".into()));
-        }
-
-        let snapshot_state_digest = *snapshot.state_commitment().digest();
-
-        if let Some(prev_block) = previous {
-            if hex::encode(snapshot_state_digest) != prev_block.header.state_root {
-                return Err(ChainError::Crypto(
-                    "pruning proof previous state root mismatch".into(),
-                ));
-            }
-        } else if self.header.height == 0 && snapshot_height != 0 {
-            return Err(ChainError::Crypto(
-                "genesis pruning proof references non-zero height".into(),
-            ));
-        }
-
-        let segments = envelope.segments();
-        if segments.len() != 1 {
-            return Err(ChainError::Crypto(
-                "pruning proof must carry exactly one proof segment".into(),
-            ));
-        }
-
-        let segment = &segments[0];
-        if segment.schema_version() != PRUNING_SCHEMA_VERSION
-            || segment.parameter_version() != PRUNING_PARAMETER_VERSION
-        {
-            return Err(ChainError::Crypto(
-                "pruning proof segment version mismatch".into(),
-            ));
-        }
-        if segment.segment_index() != PRUNING_SEGMENT_INDEX {
-            return Err(ChainError::Crypto(
-                "pruning proof segment index mismatch".into(),
-            ));
-        }
-        if segment.start_height().as_u64() != snapshot_height
-            || segment.end_height().as_u64() != snapshot_height
-        {
-            return Err(ChainError::Crypto(
-                "pruning proof segment height range mismatch".into(),
-            ));
-        }
-
-        let segment_commitment = *segment.segment_commitment().digest();
-
-        if let Some(prev_block) = previous {
-            if hex::encode(segment_commitment) != prev_block.header.tx_root {
-                return Err(ChainError::Crypto(
-                    "pruning proof transaction commitment mismatch".into(),
-                ));
-            }
-        }
-
-        let previous_hash = decode_hex_digest("previous block hash", &self.header.previous_hash)?;
-        let aggregate = compute_pruning_aggregate(
-            snapshot_height,
-            &previous_hash,
-            &snapshot_state_digest,
-            &segment_commitment,
-        );
-
-        let commitment = envelope.commitment();
-        if commitment.schema_version() != PRUNING_SCHEMA_VERSION
-            || commitment.parameter_version() != PRUNING_PARAMETER_VERSION
-        {
-            return Err(ChainError::Crypto(
-                "pruning proof commitment version mismatch".into(),
-            ));
-        }
-        if commitment.aggregate_commitment() != aggregate {
-            return Err(ChainError::Crypto(
-                "pruning proof aggregate commitment mismatch".into(),
-            ));
-        }
-
-        let resulting_state_root = decode_hex_digest("resulting state root", &self.header.state_root)?;
-        let expected_binding = compute_pruning_binding(&aggregate, &resulting_state_root);
-        if envelope.binding_digest() != expected_binding {
-            return Err(ChainError::Crypto(
-                "pruning proof binding digest mismatch".into(),
-            ));
-        }
-
-        if let Some(_) = previous {
-            let schema_digest = derive_version_digest(u16::from(envelope.schema_version()));
-            let parameter_digest = derive_version_digest(u16::from(envelope.parameter_version()));
-            let firewood_envelope: &storage_firewood::pruning::PruningProof = envelope;
-
-            if !FirewoodPruner::verify_pruned_state_with_digests(
-                schema_digest,
-                parameter_digest,
-                snapshot_state_digest,
-                firewood_envelope,
-            ) {
-                return Err(ChainError::Crypto(
-                    "pruning proof inconsistent with pruning state digests".into(),
-                ));
-            }
-        }
-
-        Ok(())
+        self.pruning_proof.verify(previous, &self.header)
     }
 
     fn verify_full_payload(
@@ -2002,7 +2059,7 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let pruning_proof = PruningProof::canonical_from_block(None, &header)
+        let pruning_proof = canonical_pruning_from_block(None, &header)
             .expect("construct canonical pruning proof");
         let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
@@ -2235,7 +2292,7 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let prev_pruning = PruningProof::canonical_from_block(None, &prev_header)
+        let prev_pruning = canonical_pruning_from_block(None, &prev_header)
             .expect("construct canonical pruning proof");
         let prev_recursive_chain = dummy_recursive_chain_proof(&prev_header, &prev_pruning, None);
         let prev_recursive =
@@ -2334,7 +2391,7 @@ mod tests {
             }],
         };
 
-        let pruning_proof = PruningProof::canonical_from_block(Some(&prev_block), &header)
+        let pruning_proof = canonical_pruning_from_block(Some(&prev_block), &header)
             .expect("construct canonical pruning proof");
         let recursive_chain = dummy_recursive_chain_proof(
             &header,
@@ -2464,7 +2521,7 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let pruning_proof = PruningProof::canonical_from_block(None, &header)
+        let pruning_proof = canonical_pruning_from_block(None, &header)
             .expect("construct canonical pruning proof");
         let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)

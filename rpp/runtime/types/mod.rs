@@ -5,14 +5,20 @@ mod proofs;
 mod transaction;
 mod uptime;
 
+pub type PruningProof = rpp_pruning::Envelope;
+
 pub use crate::identity_tree::IdentityCommitmentProof;
 pub use account::{Account, IdentityBinding, Stake, WalletBindingChange};
 pub use block::BlockPayload;
 pub(crate) use block::StoredBlock;
 pub use block::{
     Block, BlockHeader, BlockMetadata, ProofSystem, PruningCommitmentMetadata, PruningEnvelopeMetadata,
-    PruningProof, PruningSegmentMetadata, PruningSnapshotMetadata, RecursiveProof, ReputationUpdate,
+    PruningProofExt, PruningSegmentMetadata, PruningSnapshotMetadata, RecursiveProof, ReputationUpdate,
     TimetokeUpdate,
+};
+pub use block::{
+    canonical_pruning_from_block, canonical_pruning_from_parts, canonical_pruning_genesis,
+    pruning_from_metadata, pruning_from_previous, pruning_genesis,
 };
 pub use identity::{
     AttestedIdentityRequest, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
