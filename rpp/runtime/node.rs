@@ -1078,7 +1078,8 @@ impl Node {
                 Tier::Tl5.to_string(),
                 0,
             );
-            let pruning_proof = PruningProof::from_previous(None, &header);
+            let pruning_proof = PruningProof::canonical_from_block(None, &header)
+                .expect("pruning envelope must be valid");
             let transactions: Vec<SignedTransaction> = Vec::new();
             let transaction_proofs: Vec<ChainProof> = Vec::new();
             let identity_proofs: Vec<ChainProof> = Vec::new();
@@ -4317,6 +4318,8 @@ impl NodeInner {
         let previous_identities = previous_block
             .map(|block| block.identities.clone())
             .unwrap_or_default();
+        let expected_previous_state_root = previous_block
+            .map(|block| block.header.state_root.clone());
         let pruning_witness = {
             let span = proof_operation_span(
                 "build_pruning_witness",
@@ -4326,6 +4329,7 @@ impl NodeInner {
             );
             let _guard = span.enter();
             prover.build_pruning_witness(
+                expected_previous_state_root.as_deref(),
                 &previous_identities,
                 &previous_transactions,
                 pruning_proof,
@@ -5090,7 +5094,7 @@ impl NodeInner {
 
         let height = header.height;
         let previous_block = self.storage.read_block(parent_height)?;
-        let pruning_proof = PruningProof::from_previous(previous_block.as_ref(), &header);
+        let pruning_proof = PruningProof::canonical_from_block(previous_block.as_ref(), &header)?;
         let participants = round.commit_participants();
         self.ledger
             .record_consensus_witness(height, round.round(), participants);
@@ -5229,7 +5233,7 @@ impl NodeInner {
         };
         let signature = sign_message(&self.keypair, &header.canonical_bytes());
         let state_proof_artifact = state_proof.clone();
-        let block = Block::new(
+        let mut block = Block::new(
             header,
             accepted_identities,
             transactions,
@@ -5267,14 +5271,15 @@ impl NodeInner {
         let mut metadata = BlockMetadata::from(&block);
         metadata.previous_state_root = previous_root_hex.clone();
         metadata.new_state_root = encoded_new_root;
-        if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
-            let pruning = PruningProof::from_envelope(firewood_proof.clone());
+        let final_pruning_envelope = receipt.pruning_proof.clone();
+        if let Some(firewood_proof) = final_pruning_envelope.clone() {
+            let pruning = PruningProof::from_envelope(firewood_proof);
+            block.pruning_proof = pruning.clone();
             metadata.pruning = Some(pruning.envelope_metadata());
+        } else {
+            metadata.pruning = Some(block.pruning_proof.envelope_metadata());
         }
-        let pruning_metadata = metadata
-            .pruning
-            .clone()
-            .or_else(|| Some(block.pruning_proof.envelope_metadata()));
+        let pruning_metadata = metadata.pruning.clone();
         {
             let span = storage_flush_span("store_block", block.header.height, &block.hash);
             let _guard = span.enter();
@@ -5303,7 +5308,7 @@ impl NodeInner {
 
         let block_hash = block.hash.clone();
         let event_round = block.consensus.round;
-        let pruning_proof = receipt.pruning_proof.clone();
+        let pruning_proof = final_pruning_envelope;
         self.publish_pipeline_event(PipelineObservation::BftFinalised {
             height,
             round: event_round,
@@ -5613,14 +5618,15 @@ impl NodeInner {
         let mut metadata = BlockMetadata::from(&block);
         metadata.previous_state_root = previous_root_hex.clone();
         metadata.new_state_root = encoded_new_root;
-        if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
-            let pruning = PruningProof::from_envelope(firewood_proof.clone());
+        let final_pruning_envelope = receipt.pruning_proof.clone();
+        if let Some(firewood_proof) = final_pruning_envelope.clone() {
+            let pruning = PruningProof::from_envelope(firewood_proof);
+            block.pruning_proof = pruning.clone();
             metadata.pruning = Some(pruning.envelope_metadata());
+        } else {
+            metadata.pruning = Some(block.pruning_proof.envelope_metadata());
         }
-        let pruning_metadata = metadata
-            .pruning
-            .clone()
-            .or_else(|| Some(block.pruning_proof.envelope_metadata()));
+        let pruning_metadata = metadata.pruning.clone();
         self.storage.store_block(&block, &metadata)?;
         if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
             let _ = self.storage.prune_block_payload(block.header.height - 1)?;
@@ -5665,7 +5671,7 @@ impl NodeInner {
                 );
             }
         }
-        let pruning_proof = receipt.pruning_proof.clone();
+        let pruning_proof = final_pruning_envelope;
         self.publish_pipeline_event(PipelineObservation::FirewoodCommitment {
             height,
             round: event_round,

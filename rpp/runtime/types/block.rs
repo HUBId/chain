@@ -2002,7 +2002,8 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let pruning_proof = PruningProof::from_previous(None, &header);
+        let pruning_proof = PruningProof::canonical_from_block(None, &header)
+            .expect("construct canonical pruning proof");
         let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
             .expect("recursive genesis");
@@ -2234,7 +2235,8 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let prev_pruning = PruningProof::from_previous(None, &prev_header);
+        let prev_pruning = PruningProof::canonical_from_block(None, &prev_header)
+            .expect("construct canonical pruning proof");
         let prev_recursive_chain = dummy_recursive_chain_proof(&prev_header, &prev_pruning, None);
         let prev_recursive =
             RecursiveProof::genesis(&prev_header, &prev_pruning, &prev_recursive_chain)
@@ -2332,7 +2334,8 @@ mod tests {
             }],
         };
 
-        let pruning_proof = PruningProof::from_previous(Some(&prev_block), &header);
+        let pruning_proof = PruningProof::canonical_from_block(Some(&prev_block), &header)
+            .expect("construct canonical pruning proof");
         let recursive_chain = dummy_recursive_chain_proof(
             &header,
             &pruning_proof,
@@ -2461,7 +2464,8 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let pruning_proof = PruningProof::from_previous(None, &header);
+        let pruning_proof = PruningProof::canonical_from_block(None, &header)
+            .expect("construct canonical pruning proof");
         let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
             .expect("recursive genesis");

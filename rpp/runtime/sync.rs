@@ -1186,7 +1186,8 @@ mod tests {
             public_key: hex::encode(keypair.public.to_bytes()),
             signature: hex::encode(precommit_sig.to_bytes()),
         };
-        let pruning_proof = PruningProof::from_previous(previous, &header);
+        let pruning_proof = PruningProof::canonical_from_block(previous, &header)
+            .expect("construct canonical pruning proof");
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =
             previous.map(|block| block.recursive_proof.commitment.clone());
