@@ -5,5 +5,9 @@
   "previous_state_root": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "new_state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "proof_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "pruning_commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "pruning_aggregate_commitment": "1111111111111111111111111111111111111111111111111111111111111111",
+  "pruning_schema_version": 1,
+  "pruning_parameter_version": 0,
   "recursion_anchor": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 }

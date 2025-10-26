@@ -11,7 +11,9 @@ use crate::plonky3::verifier::Plonky3Verifier;
 use crate::plonky3::{crypto, proof::Plonky3Proof};
 use crate::proof_system::{ProofProver, ProofVerifier};
 use crate::rpp::GlobalStateCommitments;
-use crate::types::{BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction};
+use crate::types::{
+    BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
+};
 
 fn sample_transaction() -> SignedTransaction {
     let mut rng = StdRng::from_seed([7u8; 32]);
@@ -247,7 +249,25 @@ fn recursive_roundtrip_spans_state_and_transactions() {
         .unwrap();
     let state_proof = prover.prove_state_transition(state_witness).unwrap();
 
-    let pruning = PruningProof::genesis("prev");
+    let header = BlockHeader::new(
+        0,
+        "00".repeat(32),
+        "00".repeat(32),
+        "prev".into(),
+        "00".repeat(32),
+        "00".repeat(32),
+        "00".repeat(32),
+        "00".repeat(32),
+        "00".repeat(32),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        0,
+    );
+    let pruning = PruningProof::from_previous(None, &header);
     let pruning_witness = prover
         .build_pruning_witness(&[], &[], &pruning, Vec::new())
         .unwrap();

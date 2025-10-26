@@ -507,6 +507,9 @@ impl Storage {
             || metadata.previous_state_root.is_empty()
             || metadata.new_state_root.is_empty()
             || metadata.pruning_commitment.is_empty()
+            || metadata.pruning_aggregate_commitment.is_empty()
+            || metadata.pruning_schema_version == 0
+            || metadata.pruning_parameter_version == 0
             || metadata.hash.is_empty()
             || metadata.timestamp == 0;
         if !needs_backfill {
@@ -526,6 +529,19 @@ impl Storage {
             }
             if metadata.pruning_commitment.is_empty() {
                 metadata.pruning_commitment = block.pruning_proof.binding_digest_hex();
+            }
+            if metadata.pruning_root.is_none() {
+                metadata.pruning_root = block.pruning_proof.pruned_transaction_root_hex();
+            }
+            if metadata.pruning_aggregate_commitment.is_empty() {
+                metadata.pruning_aggregate_commitment =
+                    block.pruning_proof.aggregate_commitment_hex();
+            }
+            if metadata.pruning_schema_version == 0 {
+                metadata.pruning_schema_version = block.pruning_proof.schema_version();
+            }
+            if metadata.pruning_parameter_version == 0 {
+                metadata.pruning_parameter_version = block.pruning_proof.parameter_version();
             }
             if metadata.hash.is_empty() {
                 metadata.hash = block.hash.clone();
@@ -799,6 +815,16 @@ mod tests {
         assert_eq!(tip.new_state_root, metadata.new_state_root);
         assert_eq!(tip.proof_hash, metadata.proof_hash);
         assert_eq!(tip.pruning_root, metadata.pruning_root);
+        assert_eq!(tip.pruning_commitment, metadata.pruning_commitment);
+        assert_eq!(
+            tip.pruning_aggregate_commitment,
+            metadata.pruning_aggregate_commitment
+        );
+        assert_eq!(tip.pruning_schema_version, metadata.pruning_schema_version);
+        assert_eq!(
+            tip.pruning_parameter_version,
+            metadata.pruning_parameter_version
+        );
         assert_eq!(tip.recursive_commitment, metadata.recursive_commitment);
         assert_eq!(tip.recursive_anchor, metadata.recursive_anchor);
     }
@@ -831,6 +857,15 @@ mod tests {
             tip.pruning_commitment,
             genesis.pruning_proof.binding_digest_hex()
         );
+        assert_eq!(
+            tip.pruning_aggregate_commitment,
+            genesis.pruning_proof.aggregate_commitment_hex()
+        );
+        assert_eq!(tip.pruning_schema_version, genesis.pruning_proof.schema_version());
+        assert_eq!(
+            tip.pruning_parameter_version,
+            genesis.pruning_proof.parameter_version()
+        );
         assert_eq!(tip.recursive_commitment, genesis.recursive_proof.commitment);
     }
 
@@ -858,5 +893,18 @@ mod tests {
             genesis.pruning_proof.snapshot_state_root_hex()
         );
         assert_eq!(loaded.new_state_root, genesis.header.state_root);
+        assert_eq!(
+            loaded.pruning_commitment,
+            genesis.pruning_proof.binding_digest_hex()
+        );
+        assert_eq!(
+            loaded.pruning_aggregate_commitment,
+            genesis.pruning_proof.aggregate_commitment_hex()
+        );
+        assert_eq!(loaded.pruning_schema_version, genesis.pruning_proof.schema_version());
+        assert_eq!(
+            loaded.pruning_parameter_version,
+            genesis.pruning_proof.parameter_version()
+        );
     }
 }

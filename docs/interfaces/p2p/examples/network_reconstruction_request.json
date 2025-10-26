@@ -10,6 +10,8 @@
   "proof_root": "0202020202020202020202020202020202020202020202020202020202020202",
   "pruning_commitment": "0303030303030303030303030303030303030303030303030303030303030303",
   "aggregated_commitment": "0404040404040404040404040404040404040404040404040404040404040404",
+  "pruning_schema_version": 1,
+  "pruning_parameter_version": 0,
   "previous_commitment": null,
   "payload_expectations": {
     "transaction_proofs": 8,
