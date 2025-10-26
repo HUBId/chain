@@ -1075,7 +1075,7 @@ impl Node {
                 Tier::Tl5.to_string(),
                 0,
             );
-            let pruning_proof = PruningProof::genesis(&state_root_hex);
+            let pruning_proof = PruningProof::from_previous(None, &header);
             let transactions: Vec<SignedTransaction> = Vec::new();
             let transaction_proofs: Vec<ChainProof> = Vec::new();
             let identity_proofs: Vec<ChainProof> = Vec::new();
@@ -5260,10 +5260,14 @@ impl NodeInner {
         let mut metadata = BlockMetadata::from(&block);
         metadata.previous_state_root = hex::encode(receipt.previous_root);
         metadata.new_state_root = encoded_new_root;
-        metadata.pruning_root = receipt
-            .pruning_proof
-            .as_ref()
-            .map(|proof| hex::encode(proof.root));
+        if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
+            let pruning = PruningProof::from_envelope(firewood_proof.clone());
+            metadata.pruning_root = pruning.pruned_transaction_root_hex();
+            metadata.pruning_commitment = pruning.binding_digest_hex();
+            metadata.pruning_aggregate_commitment = pruning.aggregate_commitment_hex();
+            metadata.pruning_schema_version = pruning.schema_version();
+            metadata.pruning_parameter_version = pruning.parameter_version();
+        }
         {
             let span = storage_flush_span("store_block", block.header.height, &block.hash);
             let _guard = span.enter();
@@ -5599,10 +5603,14 @@ impl NodeInner {
         let mut metadata = BlockMetadata::from(&block);
         metadata.previous_state_root = hex::encode(receipt.previous_root);
         metadata.new_state_root = encoded_new_root;
-        metadata.pruning_root = receipt
-            .pruning_proof
-            .as_ref()
-            .map(|proof| hex::encode(proof.root));
+        if let Some(firewood_proof) = receipt.pruning_proof.as_ref() {
+            let pruning = PruningProof::from_envelope(firewood_proof.clone());
+            metadata.pruning_root = pruning.pruned_transaction_root_hex();
+            metadata.pruning_commitment = pruning.binding_digest_hex();
+            metadata.pruning_aggregate_commitment = pruning.aggregate_commitment_hex();
+            metadata.pruning_schema_version = pruning.schema_version();
+            metadata.pruning_parameter_version = pruning.parameter_version();
+        }
         self.storage.store_block(&block, &metadata)?;
         if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
             let _ = self.storage.prune_block_payload(block.header.height - 1)?;

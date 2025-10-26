@@ -14,7 +14,9 @@
     "zsi_root",
     "proof_root",
     "pruning_commitment",
-    "aggregated_commitment"
+    "aggregated_commitment",
+    "pruning_schema_version",
+    "pruning_parameter_version"
   ],
   "properties": {
     "height": {"type": "integer", "minimum": 0},
@@ -28,6 +30,8 @@
     "proof_root": {"type": "string"},
     "pruning_commitment": {"type": "string"},
     "aggregated_commitment": {"type": "string"},
+    "pruning_schema_version": {"type": "integer", "minimum": 0},
+    "pruning_parameter_version": {"type": "integer", "minimum": 0},
     "previous_commitment": {"type": ["string", "null"]},
     "payload_expectations": {
       "$ref": "network_payload_expectations.jsonschema"

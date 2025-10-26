@@ -13,7 +13,7 @@ use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::rpp::GlobalStateCommitments;
 use rpp_chain::types::{
-    BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
+    BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
 };
 
 fn sample_transaction() -> SignedTransaction {
@@ -40,7 +40,25 @@ fn plonky3_recursive_flow_roundtrip() {
         .unwrap();
     let state_proof = prover.prove_state_transition(state_witness).unwrap();
 
-    let pruning = PruningProof::genesis("prev");
+    let header = BlockHeader::new(
+        0,
+        "00".repeat(32),
+        "00".repeat(32),
+        "prev".into(),
+        "00".repeat(32),
+        "00".repeat(32),
+        "00".repeat(32),
+        "00".repeat(32),
+        "00".repeat(32),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        0,
+    );
+    let pruning = PruningProof::from_previous(None, &header);
     let pruning_witness = prover
         .build_pruning_witness(&[], &[], &pruning, Vec::new())
         .unwrap();

@@ -361,6 +361,8 @@ pub struct ReconstructionRequest {
     pub pruning_commitment: String,
     pub aggregated_commitment: String,
     pub previous_commitment: Option<String>,
+    pub pruning_schema_version: u16,
+    pub pruning_parameter_version: u16,
     pub payload_expectations: PayloadExpectations,
 }
 
@@ -380,6 +382,8 @@ impl ReconstructionRequest {
             pruning_commitment: record.pruning_commitment().to_string(),
             aggregated_commitment: record.aggregated_commitment()?,
             previous_commitment: record.previous_recursive_commitment()?,
+            pruning_schema_version: record.pruning_schema_version(),
+            pruning_parameter_version: record.pruning_parameter_version(),
             payload_expectations: PayloadExpectations::from_record(record),
         })
     }
@@ -859,6 +863,10 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
         previous_state_root: metadata.previous_state_root.clone(),
         new_state_root: metadata.new_state_root.clone(),
         proof_hash: metadata.proof_hash.clone(),
+        pruning_commitment: metadata.pruning_commitment.clone(),
+        pruning_aggregate_commitment: metadata.pruning_aggregate_commitment.clone(),
+        pruning_schema_version: metadata.pruning_schema_version,
+        pruning_parameter_version: metadata.pruning_parameter_version,
         recursion_anchor: metadata.recursive_anchor.clone(),
     }
 }
@@ -888,6 +896,8 @@ fn encode_reconstruction_request(request: &ReconstructionRequest) -> NetworkReco
         pruning_commitment: request.pruning_commitment.clone(),
         aggregated_commitment: request.aggregated_commitment.clone(),
         previous_commitment: request.previous_commitment.clone(),
+        pruning_schema_version: request.pruning_schema_version,
+        pruning_parameter_version: request.pruning_parameter_version,
         payload_expectations: encode_payload_expectations(&request.payload_expectations),
     }
 }

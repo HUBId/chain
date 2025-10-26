@@ -30,6 +30,9 @@ export interface BlockMetadata {
   proof_hash: string;
   pruning_root?: string | null;
   pruning_commitment: string;
+  pruning_aggregate_commitment: string;
+  pruning_schema_version: number;
+  pruning_parameter_version: number;
   recursive_commitment: string;
   recursive_previous_commitment?: string | null;
   recursive_system: string;

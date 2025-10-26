@@ -1135,6 +1135,14 @@ pub struct NetworkBlockMetadata {
     pub previous_state_root: String,
     pub new_state_root: String,
     pub proof_hash: String,
+    #[serde(default)]
+    pub pruning_commitment: String,
+    #[serde(default)]
+    pub pruning_aggregate_commitment: String,
+    #[serde(default)]
+    pub pruning_schema_version: u16,
+    #[serde(default)]
+    pub pruning_parameter_version: u16,
     pub recursion_anchor: String,
 }
 
@@ -1162,6 +1170,10 @@ pub struct NetworkReconstructionRequest {
     pub pruning_commitment: String,
     pub aggregated_commitment: String,
     pub previous_commitment: Option<String>,
+    #[serde(default)]
+    pub pruning_schema_version: u16,
+    #[serde(default)]
+    pub pruning_parameter_version: u16,
     #[serde(default)]
     pub payload_expectations: NetworkPayloadExpectations,
 }
@@ -1973,6 +1985,10 @@ mod tests {
                 previous_state_root: hex::encode([0x11; 32]),
                 new_state_root: hex::encode([0x22; 32]),
                 proof_hash: hex::encode([0x33; 32]),
+                pruning_commitment: "pruning".into(),
+                pruning_aggregate_commitment: hex::encode([0x44; 32]),
+                pruning_schema_version: 1,
+                pruning_parameter_version: 0,
                 recursion_anchor: "anchor".into(),
             },
             chunks: vec![NetworkStateSyncChunk {
@@ -1992,6 +2008,8 @@ mod tests {
                         pruning_commitment: "pruning".into(),
                         aggregated_commitment: hex::encode(aggregated_one),
                         previous_commitment: None,
+                        pruning_schema_version: 1,
+                        pruning_parameter_version: 0,
                         payload_expectations: NetworkPayloadExpectations::default(),
                     },
                     NetworkReconstructionRequest {
@@ -2007,6 +2025,8 @@ mod tests {
                         pruning_commitment: "pruning".into(),
                         aggregated_commitment: hex::encode(aggregated_two),
                         previous_commitment: None,
+                        pruning_schema_version: 1,
+                        pruning_parameter_version: 0,
                         payload_expectations: NetworkPayloadExpectations::default(),
                     },
                 ],

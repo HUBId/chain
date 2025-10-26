@@ -290,7 +290,7 @@ mod tests {
                 timetoke_root: header.timetoke_root.clone(),
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.witness_commitment.clone(),
+                pruning_commitment: pruning.binding_digest_hex(),
                 block_height: header.height,
             }),
             trace: ExecutionTrace {
@@ -401,7 +401,7 @@ mod tests {
             timestamp: 42,
             proposer: "validator-1".into(),
         };
-        let pruning = PruningProof::genesis(&header.state_root);
+        let pruning = PruningProof::from_previous(None, &header);
         let converted_header = BlockHeader {
             height: header.height,
             previous_hash: header.previous_hash.clone(),

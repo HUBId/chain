@@ -356,6 +356,14 @@ impl PruningProof {
         hex::encode(self.0.commitment().aggregate_commitment().digest())
     }
 
+    pub fn schema_version(&self) -> u16 {
+        u16::from(self.0.schema_version())
+    }
+
+    pub fn parameter_version(&self) -> u16 {
+        u16::from(self.0.parameter_version())
+    }
+
     pub fn snapshot_height(&self) -> u64 {
         self.0.snapshot().block_height().as_u64()
     }
@@ -734,7 +742,7 @@ impl RecursiveProof {
             }
         }
 
-        if witness.pruning_commitment != pruning.witness_commitment {
+        if witness.pruning_commitment != pruning.binding_digest_hex() {
             return Err(ChainError::Crypto(
                 "recursive witness pruning commitment mismatch".into(),
             ));
@@ -1441,6 +1449,14 @@ impl BlockEnvelope {
     pub fn pruning_aggregate_commitment(&self) -> String {
         self.pruning_proof.aggregate_commitment_hex()
     }
+
+    pub fn pruning_schema_version(&self) -> u16 {
+        self.pruning_proof.schema_version()
+    }
+
+    pub fn pruning_parameter_version(&self) -> u16 {
+        self.pruning_proof.parameter_version()
+    }
 }
 
 impl StoredBlock {
@@ -1513,6 +1529,14 @@ impl StoredBlock {
 
     pub fn pruning_aggregate_commitment(&self) -> String {
         self.envelope.pruning_proof.aggregate_commitment_hex()
+    }
+
+    pub fn pruning_schema_version(&self) -> u16 {
+        self.envelope.pruning_proof.schema_version()
+    }
+
+    pub fn pruning_parameter_version(&self) -> u16 {
+        self.envelope.pruning_proof.parameter_version()
     }
 
     pub fn aggregated_commitment(&self) -> ChainResult<String> {
@@ -1711,7 +1735,7 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let pruning_proof = PruningProof::genesis(&state_root);
+        let pruning_proof = PruningProof::from_previous(None, &header);
         let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
             .expect("recursive genesis");
@@ -1766,7 +1790,7 @@ mod tests {
                 timetoke_root: header.timetoke_root.clone(),
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.witness_commitment.clone(),
+                pruning_commitment: pruning.binding_digest_hex(),
                 block_height: header.height,
             }),
             trace: ExecutionTrace {
@@ -1943,7 +1967,7 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let prev_pruning = PruningProof::genesis(&state_root);
+        let prev_pruning = PruningProof::from_previous(None, &prev_header);
         let prev_recursive_chain = dummy_recursive_chain_proof(&prev_header, &prev_pruning, None);
         let prev_recursive =
             RecursiveProof::genesis(&prev_header, &prev_pruning, &prev_recursive_chain)
@@ -2174,7 +2198,7 @@ mod tests {
             Tier::Tl5.to_string(),
             0,
         );
-        let pruning_proof = PruningProof::genesis(&state_root);
+        let pruning_proof = PruningProof::from_previous(None, &header);
         let recursive_chain = dummy_recursive_chain_proof(&header, &pruning_proof, None);
         let recursive_proof = RecursiveProof::genesis(&header, &pruning_proof, &recursive_chain)
             .expect("recursive genesis");
@@ -2254,6 +2278,12 @@ pub struct BlockMetadata {
     #[serde(default)]
     pub pruning_root: Option<String>,
     pub pruning_commitment: String,
+    #[serde(default)]
+    pub pruning_aggregate_commitment: String,
+    #[serde(default)]
+    pub pruning_schema_version: u16,
+    #[serde(default)]
+    pub pruning_parameter_version: u16,
     pub recursive_commitment: String,
     #[serde(default)]
     pub recursive_previous_commitment: Option<String>,
@@ -2271,8 +2301,11 @@ impl BlockMetadata {
             previous_state_root: block.pruning_proof.snapshot_state_root_hex(),
             new_state_root: block.header.state_root.clone(),
             proof_hash: block.header.proof_root.clone(),
-            pruning_root: None,
+            pruning_root: block.pruning_proof.pruned_transaction_root_hex(),
             pruning_commitment: block.pruning_proof.binding_digest_hex(),
+            pruning_aggregate_commitment: block.pruning_proof.aggregate_commitment_hex(),
+            pruning_schema_version: block.pruning_proof.schema_version(),
+            pruning_parameter_version: block.pruning_proof.parameter_version(),
             recursive_commitment: block.recursive_proof.commitment.clone(),
             recursive_previous_commitment: block.recursive_proof.previous_commitment.clone(),
             recursive_system: block.recursive_proof.system.clone(),
