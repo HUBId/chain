@@ -1,0 +1,213 @@
+{
+  "rollout": {
+    "release_channel": "stable",
+    "feature_gates": {
+      "reconstruction": true
+    },
+    "telemetry": {
+      "enabled": true,
+      "endpoint": "https://telemetry.example.com",
+      "sample_interval_secs": 60,
+      "last_observed_height": 4096
+    }
+  },
+  "node": {
+    "address": "rpp1validatorxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "height": 4100,
+    "last_hash": "0xfeedface",
+    "epoch": 12,
+    "epoch_nonce": "0x1234",
+    "pending_transactions": 4,
+    "pending_identities": 1,
+    "pending_votes": 0,
+    "pending_uptime_proofs": 0,
+    "vrf_metrics": {
+      "proofs_submitted": 16
+    },
+    "tip": {
+      "height": 4100,
+      "hash": "0xaaaa",
+      "timestamp": 1700004200,
+      "previous_state_root": "0xbbbb",
+      "new_state_root": "0xcccc",
+      "proof_hash": "0xdddd",
+      "pruning": {
+        "schema_version": 1,
+        "parameter_version": 1,
+        "snapshot": {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "block_height": 4099,
+          "state_commitment": "0xeeee"
+        },
+        "segments": [
+          {
+            "schema_version": 1,
+            "parameter_version": 1,
+            "segment_index": 0,
+            "start_height": 4098,
+            "end_height": 4099,
+            "segment_commitment": "0xffff"
+          }
+        ],
+        "commitment": {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "aggregate_commitment": "0x1111"
+        },
+        "binding_digest": "0x2222"
+      },
+      "recursive_commitment": "0x3333",
+      "recursive_previous_commitment": null,
+      "recursive_system": "stwo",
+      "recursive_anchor": "0x4444"
+    }
+  },
+  "consensus": {
+    "height": 4100,
+    "round": 3,
+    "pending_votes": 0,
+    "quorum_reached": true,
+    "leader_changes": 2,
+    "round_latencies_ms": [120, 150],
+    "quorum_latency_ms": 98,
+    "witness_events": 1,
+    "slashing_events": 0,
+    "failed_votes": 0
+  },
+  "mempool": {
+    "transactions": 12,
+    "identities": 2,
+    "votes": 0,
+    "uptime_proofs": 1
+  },
+  "timetoke_params": {
+    "epoch_length": 7200
+  },
+  "verifier_metrics": {
+    "stwo": {
+      "queued_jobs": 3
+    }
+  },
+  "pruning": {
+    "plan": {
+      "snapshot": {
+        "height": 4096,
+        "block_hash": "0xaaaa",
+        "commitments": {
+          "global_state_root": "0x01",
+          "utxo_root": "0x02",
+          "reputation_root": "0x03",
+          "timetoke_root": "0x04",
+          "zsi_root": "0x05",
+          "proof_root": "0x06"
+        },
+        "chain_commitment": "0x07"
+      },
+      "tip": {
+        "height": 4100,
+        "hash": "0xaaaa",
+        "timestamp": 1700004200,
+        "previous_state_root": "0xbbbb",
+        "new_state_root": "0xcccc",
+        "proof_hash": "0xdddd",
+        "pruning": {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "snapshot": {
+            "schema_version": 1,
+            "parameter_version": 1,
+            "block_height": 4099,
+            "state_commitment": "0xeeee"
+          },
+          "segments": [],
+          "commitment": {
+            "schema_version": 1,
+            "parameter_version": 1,
+            "aggregate_commitment": "0x1111"
+          },
+          "binding_digest": "0x2222"
+        },
+        "recursive_commitment": "0x3333",
+        "recursive_previous_commitment": null,
+        "recursive_system": "stwo",
+        "recursive_anchor": "0x4444"
+      },
+      "chunks": [
+        {
+          "start_height": 4090,
+          "end_height": 4100,
+          "requests": [
+            {
+              "height": 4098,
+              "block_hash": "0x9999",
+              "tx_root": "0xaaaa",
+              "state_root": "0xbbbb",
+              "utxo_root": "0xcccc",
+              "reputation_root": "0xdddd",
+              "timetoke_root": "0xeeee",
+              "zsi_root": "0xffff",
+              "proof_root": "0x1111",
+              "pruning": {
+                "schema_version": 1,
+                "parameter_version": 1,
+                "snapshot": {
+                  "schema_version": 1,
+                  "parameter_version": 1,
+                  "block_height": 4097,
+                  "state_commitment": "0xaaaa"
+                },
+                "segments": [
+                  {
+                    "schema_version": 1,
+                    "parameter_version": 1,
+                    "segment_index": 0,
+                    "start_height": 4096,
+                    "end_height": 4097,
+                    "segment_commitment": "0xbbbb"
+                  }
+                ],
+                "commitment": {
+                  "schema_version": 1,
+                  "parameter_version": 1,
+                  "aggregate_commitment": "0xcccc"
+                },
+                "binding_digest": "0xdddd"
+              },
+              "previous_commitment": "0xeeee",
+              "payload_expectations": {
+                "transaction_proofs": 4,
+                "transaction_witnesses": 8,
+                "timetoke_witnesses": 2,
+                "reputation_witnesses": 2,
+                "zsi_witnesses": 1,
+                "consensus_witnesses": 1
+              }
+            }
+          ]
+        }
+      ],
+      "light_client_updates": [
+        {
+          "height": 4098,
+          "block_hash": "0x9999",
+          "state_root": "0xbbbb",
+          "proof_commitment": "0xcccc",
+          "previous_commitment": "0xaaaa",
+          "recursive_proof": {
+            "stwo": {
+              "placeholder": true
+            }
+          }
+        }
+      ]
+    },
+    "missing_heights": [4096, 4097, 4098],
+    "persisted_path": "/var/lib/rpp/pruning/plan.json",
+    "stored_proofs": [4096, 4097],
+    "last_updated": 1700004300
+  },
+  "vrf_threshold": {
+    "current": "0x0f"
+  }
+}
