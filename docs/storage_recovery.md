@@ -35,12 +35,12 @@ network with verified state commitments.
 
 ## 3. Verify Pruning Checkpoints
 
-1. **Collect recent pruning proofs.** The node persists a window of Merkle
-   commitments for each block ID; restoring from snapshot should preserve the
-   latest proofs generated during `commit_block`.
-2. **Verify checkpoints before pruning historical state.** Feed the commitment
-   root and proof into `FirewoodPruner::verify_pruned_state` to ensure the
-   compacted snapshot matches the recorded Merkle frontier.【F:storage-firewood/src/pruning.rs†L71-L133】
+1. **Collect recent pruning proofs.** The node persists canonical pruning
+   envelopes for each block ID; restoring from snapshot should preserve the
+   latest envelopes generated during `commit_block`.
+2. **Verify checkpoints before pruning historical state.** Feed the state root
+   and pruning envelope into `FirewoodPruner::verify_pruned_state` to ensure the
+   compacted snapshot matches the recorded Merkle frontier.【F:storage-firewood/src/pruning.rs†L302-L317】
 3. **Resume automated pruning.** Once proofs verify, resume normal operations so
    the pruner can evict cold state while keeping the commitment trail intact for
    recursive proof systems.

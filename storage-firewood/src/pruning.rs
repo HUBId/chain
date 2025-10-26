@@ -1,153 +1,320 @@
 use std::collections::VecDeque;
 
 use crate::kv::Hash;
-use serde::{Deserialize, Serialize};
+use rpp_pruning::{
+    BlockHeight, Commitment, Envelope, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex,
+    Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+};
 
-const LEAF_PREFIX: &[u8] = b"fw-pruning-leaf";
-const NODE_PREFIX: &[u8] = b"fw-pruning-node";
+const SNAPSHOT_PREFIX: &[u8] = b"fw-pruning-snapshot";
+const SEGMENT_PREFIX: &[u8] = b"fw-pruning-segment";
+const COMMITMENT_PREFIX: &[u8] = b"fw-pruning-commit";
+const ENVELOPE_PREFIX: &[u8] = b"fw-pruning-envelope";
 
-#[derive(Debug, Clone)]
-struct Snapshot {
-    commitment: Hash,
+#[derive(Clone, Debug)]
+struct SnapshotRecord {
+    block_height: BlockHeight,
+    state_commitment: TaggedDigest,
 }
 
-impl Snapshot {
-    fn new(block_id: u64, root: Hash) -> Self {
-        let commitment = leaf_commitment(block_id, &root);
-        Snapshot { commitment }
-    }
+fn schema_version_from_digest(digest: &Hash) -> SchemaVersion {
+    SchemaVersion::new(u16::from_be_bytes([digest[0], digest[1]]))
 }
 
-fn leaf_commitment(block_id: u64, root: &Hash) -> Hash {
+fn parameter_version_from_digest(digest: &Hash) -> ParameterVersion {
+    ParameterVersion::new(u16::from_be_bytes([digest[0], digest[1]]))
+}
+
+fn compute_state_commitment(
+    schema_digest: &Hash,
+    parameter_digest: &Hash,
+    block_height: BlockHeight,
+    root: &Hash,
+) -> TaggedDigest {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(LEAF_PREFIX);
-    hasher.update(&block_id.to_be_bytes());
+    hasher.update(SNAPSHOT_PREFIX);
+    hasher.update(schema_digest);
+    hasher.update(parameter_digest);
+    hasher.update(&block_height.as_u64().to_be_bytes());
     hasher.update(root);
-    hasher.finalize().into()
+    TaggedDigest::new(SNAPSHOT_STATE_TAG, hasher.finalize().into())
 }
 
-fn hash_pair(left: &Hash, right: &Hash) -> Hash {
+fn compute_segment_commitment(
+    schema_digest: &Hash,
+    parameter_digest: &Hash,
+    segment_index: SegmentIndex,
+    start_height: BlockHeight,
+    end_height: BlockHeight,
+    state_commitment: TaggedDigest,
+) -> TaggedDigest {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(NODE_PREFIX);
-    hasher.update(left);
-    hasher.update(right);
-    hasher.finalize().into()
+    hasher.update(SEGMENT_PREFIX);
+    hasher.update(schema_digest);
+    hasher.update(parameter_digest);
+    hasher.update(&segment_index.as_u32().to_be_bytes());
+    hasher.update(&start_height.as_u64().to_be_bytes());
+    hasher.update(&end_height.as_u64().to_be_bytes());
+    hasher.update(&state_commitment.prefixed_bytes());
+    TaggedDigest::new(PROOF_SEGMENT_TAG, hasher.finalize().into())
 }
 
-fn merkle_root_and_path(leaves: &[Hash], index: usize) -> (Hash, Vec<Hash>) {
-    if leaves.is_empty() {
-        return ([0u8; 32], Vec::new());
+fn compute_aggregate_commitment(
+    schema_digest: &Hash,
+    parameter_digest: &Hash,
+    snapshot: &Snapshot,
+    segments: &[ProofSegment],
+) -> TaggedDigest {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(COMMITMENT_PREFIX);
+    hasher.update(schema_digest);
+    hasher.update(parameter_digest);
+    hasher.update(&snapshot.block_height().as_u64().to_be_bytes());
+    hasher.update(&snapshot.state_commitment().prefixed_bytes());
+    for segment in segments {
+        hasher.update(&segment.segment_index().as_u32().to_be_bytes());
+        hasher.update(&segment.start_height().as_u64().to_be_bytes());
+        hasher.update(&segment.end_height().as_u64().to_be_bytes());
+        hasher.update(&segment.segment_commitment().prefixed_bytes());
+    }
+    TaggedDigest::new(COMMITMENT_TAG, hasher.finalize().into())
+}
+
+fn compute_binding_digest(
+    schema_digest: &Hash,
+    parameter_digest: &Hash,
+    snapshot: &Snapshot,
+    segments: &[ProofSegment],
+    commitment: &Commitment,
+) -> TaggedDigest {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ENVELOPE_PREFIX);
+    hasher.update(schema_digest);
+    hasher.update(parameter_digest);
+    hasher.update(&snapshot.block_height().as_u64().to_be_bytes());
+    hasher.update(&snapshot.state_commitment().prefixed_bytes());
+    for segment in segments {
+        hasher.update(&segment.segment_index().as_u32().to_be_bytes());
+        hasher.update(&segment.start_height().as_u64().to_be_bytes());
+        hasher.update(&segment.end_height().as_u64().to_be_bytes());
+        hasher.update(&segment.segment_commitment().prefixed_bytes());
+    }
+    hasher.update(&commitment.aggregate_commitment().prefixed_bytes());
+    TaggedDigest::new(ENVELOPE_TAG, hasher.finalize().into())
+}
+
+fn verify_with_digests(
+    schema_digest: &Hash,
+    parameter_digest: &Hash,
+    root: Hash,
+    proof: &PruningProof,
+) -> bool {
+    let schema_version = schema_version_from_digest(schema_digest);
+    let parameter_version = parameter_version_from_digest(parameter_digest);
+
+    if proof.schema_version() != schema_version || proof.parameter_version() != parameter_version {
+        return false;
     }
 
-    let mut layer = leaves.to_vec();
-    let mut path = Vec::new();
-    let mut position = index;
-
-    while layer.len() > 1 {
-        let pair_index = if position % 2 == 0 {
-            position + 1
-        } else {
-            position.saturating_sub(1)
-        };
-
-        let sibling = if pair_index < layer.len() {
-            layer[pair_index]
-        } else {
-            layer[position]
-        };
-        path.push(sibling);
-
-        let mut next_layer = Vec::with_capacity((layer.len() + 1) / 2);
-        for chunk in layer.chunks(2) {
-            let left = chunk[0];
-            let right = if chunk.len() > 1 { chunk[1] } else { chunk[0] };
-            next_layer.push(hash_pair(&left, &right));
-        }
-
-        position /= 2;
-        layer = next_layer;
+    let snapshot = proof.snapshot();
+    if snapshot.schema_version() != schema_version
+        || snapshot.parameter_version() != parameter_version
+    {
+        return false;
     }
 
-    (layer[0], path)
+    let block_height = snapshot.block_height();
+    let expected_state_commitment =
+        compute_state_commitment(schema_digest, parameter_digest, block_height, &root);
+    if snapshot.state_commitment() != expected_state_commitment {
+        return false;
+    }
+
+    let segments = proof.segments();
+    if segments.len() != 1 {
+        return false;
+    }
+
+    let segment = &segments[0];
+    if segment.schema_version() != schema_version
+        || segment.parameter_version() != parameter_version
+    {
+        return false;
+    }
+
+    if segment.start_height() != block_height || segment.end_height() != block_height {
+        return false;
+    }
+
+    let expected_segment_commitment = compute_segment_commitment(
+        schema_digest,
+        parameter_digest,
+        segment.segment_index(),
+        segment.start_height(),
+        segment.end_height(),
+        expected_state_commitment,
+    );
+    if segment.segment_commitment() != expected_segment_commitment {
+        return false;
+    }
+
+    let expected_commitment_digest =
+        compute_aggregate_commitment(schema_digest, parameter_digest, snapshot, segments);
+    let Ok(expected_commitment) = Commitment::new(
+        schema_version,
+        parameter_version,
+        expected_commitment_digest,
+    ) else {
+        return false;
+    };
+
+    if proof.commitment() != &expected_commitment {
+        return false;
+    }
+
+    let expected_binding = compute_binding_digest(
+        schema_digest,
+        parameter_digest,
+        snapshot,
+        segments,
+        proof.commitment(),
+    );
+
+    proof.binding_digest() == expected_binding
 }
 
-/// Proof artifact returned after pruning a block. The proof records the
-/// resulting root and a Merkle proof that can be used to validate the compacted
-/// state within recursive systems.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PruningProof {
-    pub block_id: u64,
-    pub root: Hash,
-    pub commitment_root: Hash,
-    pub leaf_index: u32,
-    pub merkle_path: Vec<Hash>,
-}
+pub type PruningProof = Envelope;
 
-/// Lightweight pruning manager that tracks block snapshots and evicts cold
-/// state after recursive proofs have sealed prior roots.
+/// Lightweight pruning manager that tracks block snapshots and constructs canonical envelopes.
 #[derive(Debug)]
 pub struct FirewoodPruner {
-    snapshots: VecDeque<Snapshot>,
+    snapshots: VecDeque<SnapshotRecord>,
     retain: usize,
+    schema_digest: Hash,
+    parameter_digest: Hash,
+    schema_version: SchemaVersion,
+    parameter_version: ParameterVersion,
 }
 
 impl FirewoodPruner {
+    pub const DEFAULT_SCHEMA_DIGEST: Hash = [0x11; 32];
+    pub const DEFAULT_PARAMETER_DIGEST: Hash = [0x22; 32];
+
     pub fn new(retain: usize) -> Self {
+        Self::with_digests(
+            retain,
+            Self::DEFAULT_SCHEMA_DIGEST,
+            Self::DEFAULT_PARAMETER_DIGEST,
+        )
+    }
+
+    pub fn with_digests(retain: usize, schema_digest: Hash, parameter_digest: Hash) -> Self {
+        let schema_version = schema_version_from_digest(&schema_digest);
+        let parameter_version = parameter_version_from_digest(&parameter_digest);
         FirewoodPruner {
             snapshots: VecDeque::new(),
             retain: retain.max(1),
+            schema_digest,
+            parameter_digest,
+            schema_version,
+            parameter_version,
         }
     }
 
-    pub fn prune_block(&mut self, block_id: u64, root: Hash) -> (Hash, PruningProof) {
-        let snapshot = Snapshot::new(block_id, root);
-        self.snapshots.push_back(snapshot);
+    pub fn prune_block(&mut self, block_id: u64, root: Hash) -> PruningProof {
+        let block_height = BlockHeight::new(block_id);
+        let state_commitment = compute_state_commitment(
+            &self.schema_digest,
+            &self.parameter_digest,
+            block_height,
+            &root,
+        );
+        let record = SnapshotRecord {
+            block_height,
+            state_commitment,
+        };
+        self.snapshots.push_back(record.clone());
         while self.snapshots.len() > self.retain {
             self.snapshots.pop_front();
         }
 
-        let leaves: Vec<Hash> = self
-            .snapshots
-            .iter()
-            .map(|snapshot| snapshot.commitment)
-            .collect();
+        let snapshot = Snapshot::new(
+            self.schema_version,
+            self.parameter_version,
+            record.block_height,
+            record.state_commitment,
+        )
+        .expect("state commitment must carry the snapshot tag");
 
-        let index = leaves
-            .len()
-            .checked_sub(1)
-            .expect("at least one snapshot retained");
+        let segments = vec![ProofSegment::new(
+            self.schema_version,
+            self.parameter_version,
+            SegmentIndex::new(0),
+            record.block_height,
+            record.block_height,
+            compute_segment_commitment(
+                &self.schema_digest,
+                &self.parameter_digest,
+                SegmentIndex::new(0),
+                record.block_height,
+                record.block_height,
+                record.state_commitment,
+            ),
+        )
+        .expect("segment commitment must carry the proof tag")];
 
-        let (commitment_root, merkle_path) = merkle_root_and_path(&leaves, index);
+        let commitment_digest = compute_aggregate_commitment(
+            &self.schema_digest,
+            &self.parameter_digest,
+            &snapshot,
+            &segments,
+        );
+        let commitment = Commitment::new(
+            self.schema_version,
+            self.parameter_version,
+            commitment_digest,
+        )
+        .expect("aggregate commitment must carry the commitment tag");
 
-        let proof = PruningProof {
-            block_id,
-            root,
-            commitment_root,
-            leaf_index: index as u32,
-            merkle_path,
-        };
+        let binding_digest = compute_binding_digest(
+            &self.schema_digest,
+            &self.parameter_digest,
+            &snapshot,
+            &segments,
+            &commitment,
+        );
 
-        (commitment_root, proof)
+        Envelope::new(
+            self.schema_version,
+            self.parameter_version,
+            snapshot,
+            segments,
+            commitment,
+            binding_digest,
+        )
+        .expect("binding digest must carry the envelope tag")
+    }
+
+    pub fn verify_with_config(&self, root: Hash, proof: &PruningProof) -> bool {
+        verify_with_digests(&self.schema_digest, &self.parameter_digest, root, proof)
     }
 
     pub fn verify_pruned_state(root: Hash, proof: &PruningProof) -> bool {
-        if root != proof.commitment_root {
-            return false;
-        }
+        Self::verify_pruned_state_with_digests(
+            Self::DEFAULT_SCHEMA_DIGEST,
+            Self::DEFAULT_PARAMETER_DIGEST,
+            root,
+            proof,
+        )
+    }
 
-        let mut computed = leaf_commitment(proof.block_id, &proof.root);
-        let mut position = proof.leaf_index as usize;
-
-        for sibling in &proof.merkle_path {
-            if position % 2 == 0 {
-                computed = hash_pair(&computed, sibling);
-            } else {
-                computed = hash_pair(sibling, &computed);
-            }
-            position /= 2;
-        }
-
-        position == 0 && computed == proof.commitment_root
+    pub fn verify_pruned_state_with_digests(
+        schema_digest: Hash,
+        parameter_digest: Hash,
+        root: Hash,
+        proof: &PruningProof,
+    ) -> bool {
+        verify_with_digests(&schema_digest, &parameter_digest, root, proof)
     }
 }
 

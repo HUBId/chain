@@ -58,7 +58,7 @@ impl FirewoodState {
         let mut kv = self.kv.lock();
         let root = kv.commit()?;
         let mut pruner = self.pruner.lock();
-        let (_, proof) = pruner.prune_block(block_id, root);
+        let proof = pruner.prune_block(block_id, root);
         Ok((root, proof))
     }
 

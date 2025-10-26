@@ -217,7 +217,7 @@ impl Storage {
         if updates.is_empty() {
             let pruning_proof = block_height.and_then(|height| {
                 let mut pruner = self.pruner.lock();
-                let (_, proof) = pruner.prune_block(height, previous_root);
+                let proof = pruner.prune_block(height, previous_root);
                 Some(proof)
             });
             return Ok(StateTransitionReceipt {
@@ -240,8 +240,7 @@ impl Storage {
         drop(kv);
         let pruning_proof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
-            let (_, proof) = pruner.prune_block(height, new_root);
-            proof
+            pruner.prune_block(height, new_root)
         });
         Ok(StateTransitionReceipt {
             previous_root,
@@ -283,8 +282,7 @@ impl Storage {
         drop(kv);
         let pruning_proof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
-            let (_, proof) = pruner.prune_block(height, new_root);
-            proof
+            pruner.prune_block(height, new_root)
         });
         Ok(StateTransitionReceipt {
             previous_root,
