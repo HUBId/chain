@@ -284,21 +284,11 @@
     },
     "PruningProof": {
       "type": "object",
-      "required": [
-        "pruned_height",
-        "previous_block_hash",
-        "previous_state_root",
-        "pruned_tx_root",
-        "resulting_state_root",
-        "witness_commitment"
-      ],
+      "required": ["envelope"],
       "properties": {
-        "pruned_height": {"type": "integer", "minimum": 0},
-        "previous_block_hash": {"type": "string"},
-        "previous_state_root": {"type": "string"},
-        "pruned_tx_root": {"type": "string"},
-        "resulting_state_root": {"type": "string"},
-        "witness_commitment": {"type": "string"}
+        "envelope": {
+          "$ref": "network_block_metadata.jsonschema#/$defs/NetworkPruningEnvelope"
+        }
       },
       "additionalProperties": false
     },

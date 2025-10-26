@@ -23,13 +23,26 @@
       "default": null,
       "oneOf": [
         {"type": "null"},
-        {"$ref": "#/$defs/PruningEnvelopeMetadata"}
+        {"$ref": "#/$defs/NetworkPruningEnvelope"}
       ]
     },
     "recursion_anchor": {"type": "string"}
   },
   "$defs": {
-    "PruningSnapshotMetadata": {
+    "TaggedDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{96}$"
+    },
+    "NetworkPruningEnvelopeHeader": {
+      "type": "object",
+      "required": ["schema_version", "parameter_version"],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "NetworkPruningSnapshot": {
       "type": "object",
       "required": [
         "schema_version",
@@ -41,11 +54,11 @@
         "schema_version": {"type": "integer", "minimum": 0},
         "parameter_version": {"type": "integer", "minimum": 0},
         "block_height": {"type": "integer", "minimum": 0},
-        "state_commitment": {"type": "string"}
+        "state_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
-    "PruningSegmentMetadata": {
+    "NetworkPruningSegment": {
       "type": "object",
       "required": [
         "schema_version",
@@ -61,11 +74,11 @@
         "segment_index": {"type": "integer", "minimum": 0},
         "start_height": {"type": "integer", "minimum": 0},
         "end_height": {"type": "integer", "minimum": 0},
-        "segment_commitment": {"type": "string"}
+        "segment_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
-    "PruningCommitmentMetadata": {
+    "NetworkPruningCommitment": {
       "type": "object",
       "required": [
         "schema_version",
@@ -75,30 +88,29 @@
       "properties": {
         "schema_version": {"type": "integer", "minimum": 0},
         "parameter_version": {"type": "integer", "minimum": 0},
-        "aggregate_commitment": {"type": "string"}
+        "aggregate_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
-    "PruningEnvelopeMetadata": {
+    "NetworkPruningEnvelope": {
       "type": "object",
       "required": [
-        "schema_version",
-        "parameter_version",
+        "header",
         "snapshot",
         "segments",
         "commitment",
         "binding_digest"
       ],
       "properties": {
-        "schema_version": {"type": "integer", "minimum": 0},
-        "parameter_version": {"type": "integer", "minimum": 0},
-        "snapshot": {"$ref": "#/$defs/PruningSnapshotMetadata"},
+        "header": {"$ref": "#/$defs/NetworkPruningEnvelopeHeader"},
+        "snapshot": {"$ref": "#/$defs/NetworkPruningSnapshot"},
         "segments": {
           "type": "array",
-          "items": {"$ref": "#/$defs/PruningSegmentMetadata"}
+          "items": {"$ref": "#/$defs/NetworkPruningSegment"},
+          "default": []
         },
-        "commitment": {"$ref": "#/$defs/PruningCommitmentMetadata"},
-        "binding_digest": {"type": "string"}
+        "commitment": {"$ref": "#/$defs/NetworkPruningCommitment"},
+        "binding_digest": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     }

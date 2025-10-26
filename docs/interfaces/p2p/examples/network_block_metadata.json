@@ -6,13 +6,15 @@
   "new_state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "proof_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "pruning": {
-    "schema_version": 1,
-    "parameter_version": 1,
+    "header": {
+      "schema_version": 1,
+      "parameter_version": 1
+    },
     "snapshot": {
       "schema_version": 1,
       "parameter_version": 1,
       "block_height": 4095,
-      "state_commitment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      "state_commitment": "7270703a7072756e653a7374617465001010101010101010101010101010101010101010101010101010101010101010"
     },
     "segments": [
       {
@@ -21,15 +23,15 @@
         "segment_index": 0,
         "start_height": 4095,
         "end_height": 4095,
-        "segment_commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        "segment_commitment": "7270703a7072756e653a70726f6f66001111111111111111111111111111111111111111111111111111111111111111"
       }
     ],
     "commitment": {
       "schema_version": 1,
       "parameter_version": 1,
-      "aggregate_commitment": "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+      "aggregate_commitment": "7270703a7072756e653a636f6d6d69741212121212121212121212121212121212121212121212121212121212121212"
     },
-    "binding_digest": "222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+    "binding_digest": "7270703a7072756e653a656e766c70001313131313131313131313131313131313131313131313131313131313131313"
   },
   "recursion_anchor": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 }

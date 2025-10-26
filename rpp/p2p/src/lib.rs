@@ -32,10 +32,12 @@ pub use pipeline::{
     GossipPayloadError, GossipVoteValidator, JsonProofValidator, LightClientHead, LightClientSync,
     MetaTelemetry, NetworkBlockMetadata, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
     NetworkMetaTelemetryReport, NetworkPayloadExpectations, NetworkPeerTelemetry,
-    NetworkReconstructionRequest, NetworkSnapshotSummary, NetworkStateSyncChunk,
-    NetworkStateSyncPlan, PersistentProofStorage, PipelineError, ProofMempool, ProofRecord,
-    ProofStorage, RuntimeProofValidator, SnapshotChunk, SnapshotChunkStream, SnapshotStore,
-    TelemetryEvent, TransactionProofVerifier, VoteOutcome,
+    NetworkPruningCommitment, NetworkPruningEnvelope, NetworkPruningEnvelopeHeader,
+    NetworkPruningSegment, NetworkPruningSnapshot, NetworkReconstructionRequest,
+    NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
+    PersistentProofStorage, PipelineError, ProofMempool, ProofRecord, ProofStorage,
+    RuntimeProofValidator, SnapshotChunk, SnapshotChunkStream, SnapshotStore, TelemetryEvent,
+    TransactionProofVerifier, VoteOutcome,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
 pub use rpp_p2p_macros::NetworkBehaviour;
