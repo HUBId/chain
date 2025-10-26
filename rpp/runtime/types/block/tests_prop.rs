@@ -2,6 +2,12 @@ use super::*;
 use crate::errors::ChainError;
 use proptest::prelude::*;
 use proptest::string::string_regex;
+use rpp_pruning::{
+    BlockHeight, Commitment, Envelope as PruningEnvelope, ParameterVersion, ProofSegment,
+    SchemaVersion, SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG,
+    PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+};
+use std::convert::TryInto;
 
 fn proptest_config() -> ProptestConfig {
     let cases = std::env::var("PROPTEST_CASES")
@@ -24,6 +30,96 @@ prop_compose! {
     fn arb_decimal_string()(value in 0u128..1_000_000_000_000u128) -> String {
         value.to_string()
     }
+}
+
+const TEST_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1);
+const TEST_PARAMETER_VERSION: ParameterVersion = ParameterVersion::new(0);
+const TEST_SEGMENT_INDEX: SegmentIndex = SegmentIndex::new(0);
+
+fn decode_hex_digest(value: &str) -> [u8; 32] {
+    let bytes = hex::decode(value).expect("hex decode");
+    bytes.as_slice().try_into().expect("32-byte digest")
+}
+
+fn fabricate_pruning_proof(
+    height: u64,
+    previous_hash: &str,
+    previous_state: &str,
+    pruned_tx: &str,
+    resulting: &str,
+) -> PruningProof {
+    let snapshot = Snapshot::new(
+        TEST_SCHEMA_VERSION,
+        TEST_PARAMETER_VERSION,
+        BlockHeight::new(height),
+        TaggedDigest::new(SNAPSHOT_STATE_TAG, decode_hex_digest(previous_state)),
+    )
+    .expect("snapshot");
+    let segment = ProofSegment::new(
+        TEST_SCHEMA_VERSION,
+        TEST_PARAMETER_VERSION,
+        TEST_SEGMENT_INDEX,
+        BlockHeight::new(height),
+        BlockHeight::new(height),
+        TaggedDigest::new(PROOF_SEGMENT_TAG, decode_hex_digest(pruned_tx)),
+    )
+    .expect("segment");
+    let aggregate = super::compute_pruning_aggregate(
+        height,
+        &decode_hex_digest(previous_hash),
+        snapshot.state_commitment().digest(),
+        segment.segment_commitment().digest(),
+    );
+    let commitment = Commitment::new(TEST_SCHEMA_VERSION, TEST_PARAMETER_VERSION, aggregate)
+        .expect("commitment");
+    let binding = super::compute_pruning_binding(
+        &commitment.aggregate_commitment(),
+        &decode_hex_digest(resulting),
+    );
+    let envelope = PruningEnvelope::new(
+        TEST_SCHEMA_VERSION,
+        TEST_PARAMETER_VERSION,
+        snapshot,
+        vec![segment],
+        commitment,
+        binding,
+    )
+    .expect("envelope");
+    PruningProof::from_envelope(envelope)
+}
+
+fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningProof {
+    let envelope = proof.as_envelope();
+    let snapshot = envelope.snapshot().clone();
+    let segments: Vec<ProofSegment> = envelope.segments().to_vec();
+    let mut mutated_hash = decode_hex_digest(&header.previous_hash);
+    mutated_hash[0] ^= 0xFF;
+    let aggregate = super::compute_pruning_aggregate(
+        snapshot.block_height().as_u64(),
+        &mutated_hash,
+        snapshot.state_commitment().digest(),
+        segments[0].segment_commitment().digest(),
+    );
+    let commitment = Commitment::new(
+        envelope.schema_version(),
+        envelope.parameter_version(),
+        aggregate,
+    )
+    .expect("tampered commitment");
+    let binding = super::compute_pruning_binding(
+        &commitment.aggregate_commitment(),
+        &decode_hex_digest(&header.state_root),
+    );
+    let tampered = PruningEnvelope::new(
+        envelope.schema_version(),
+        envelope.parameter_version(),
+        snapshot,
+        segments,
+        commitment,
+        binding,
+    )
+    .expect("tampered envelope");
+    PruningProof::from_envelope(tampered)
 }
 
 prop_compose! {
@@ -49,12 +145,12 @@ prop_compose! {
                              timestamp in any::<u64>())
         -> (PruningProof, BlockHeader)
     {
-        let proof = PruningProof::new(
+        let proof = fabricate_pruning_proof(
             height,
-            prev_hash.clone(),
-            prev_state.clone(),
-            pruned_tx.clone(),
-            resulting.clone(),
+            &prev_hash,
+            &prev_state,
+            &pruned_tx,
+            &resulting,
         );
         let header = BlockHeader {
             height: height + 1,
@@ -92,11 +188,11 @@ proptest! {
 
 proptest! {
     #![proptest_config(proptest_config())]
-    fn pruning_proof_detects_previous_hash_mismatch((mut proof, header) in arb_pruning_fixture()) {
-        proof.previous_block_hash.push('0');
-        match proof.verify(None, &header) {
+    fn pruning_proof_detects_previous_hash_mismatch((proof, header) in arb_pruning_fixture()) {
+        let tampered = tamper_previous_hash(&proof, &header);
+        match tampered.verify(None, &header) {
             Err(ChainError::Crypto(message)) => {
-                assert!(message.contains("previous hash"));
+                assert!(message.contains("commitment"));
             }
             other => panic!("unexpected verification result: {other:?}"),
         }

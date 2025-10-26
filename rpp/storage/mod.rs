@@ -519,13 +519,13 @@ impl Storage {
                 metadata.proof_hash = block.header.proof_root.clone();
             }
             if metadata.previous_state_root.is_empty() {
-                metadata.previous_state_root = block.pruning_proof.previous_state_root.clone();
+                metadata.previous_state_root = block.pruning_proof.snapshot_state_root_hex();
             }
             if metadata.new_state_root.is_empty() {
                 metadata.new_state_root = block.header.state_root.clone();
             }
             if metadata.pruning_commitment.is_empty() {
-                metadata.pruning_commitment = block.pruning_proof.witness_commitment.clone();
+                metadata.pruning_commitment = block.pruning_proof.binding_digest_hex();
             }
             if metadata.hash.is_empty() {
                 metadata.hash = block.hash.clone();
@@ -670,7 +670,7 @@ mod tests {
                 timetoke_root: header.timetoke_root.clone(),
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.witness_commitment.clone(),
+                pruning_commitment: pruning.binding_digest_hex(),
                 block_height: header.height,
             }),
             trace: ExecutionTrace {
@@ -823,13 +823,13 @@ mod tests {
         assert_eq!(tip.timestamp, genesis.header.timestamp);
         assert_eq!(
             tip.previous_state_root,
-            genesis.pruning_proof.previous_state_root
+            genesis.pruning_proof.snapshot_state_root_hex()
         );
         assert_eq!(tip.new_state_root, genesis.header.state_root);
         assert_eq!(tip.proof_hash, genesis.header.proof_root);
         assert_eq!(
             tip.pruning_commitment,
-            genesis.pruning_proof.witness_commitment
+            genesis.pruning_proof.binding_digest_hex()
         );
         assert_eq!(tip.recursive_commitment, genesis.recursive_proof.commitment);
     }
@@ -855,7 +855,7 @@ mod tests {
         assert_eq!(loaded.proof_hash, genesis.header.proof_root);
         assert_eq!(
             loaded.previous_state_root,
-            genesis.pruning_proof.previous_state_root
+            genesis.pruning_proof.snapshot_state_root_hex()
         );
         assert_eq!(loaded.new_state_root, genesis.header.state_root);
     }

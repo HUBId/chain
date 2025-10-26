@@ -1738,18 +1738,7 @@ mod tests {
             .expect("read record")
             .expect("stored block");
         let stored_pruning = &stored_record.envelope.pruning_proof;
-        assert_eq!(
-            stored_pruning.pruned_height,
-            block.pruning_proof.pruned_height
-        );
-        assert_eq!(
-            stored_pruning.previous_block_hash,
-            block.pruning_proof.previous_block_hash
-        );
-        assert_eq!(
-            stored_pruning.resulting_state_root,
-            block.pruning_proof.resulting_state_root
-        );
+        assert_eq!(stored_pruning, &block.pruning_proof);
         let stored_consensus = &stored_record.envelope.consensus;
         assert_eq!(stored_consensus.round, block.consensus.round);
         assert_eq!(stored_consensus.total_power, block.consensus.total_power);
@@ -4279,6 +4268,7 @@ impl NodeInner {
         let backend = StwoBackend::new();
         let backend_kind = ProofSystemKind::Stwo;
 
+        let previous_state_root_hex = pruning_proof.snapshot_state_root_hex();
         let state_witness = {
             let span = proof_operation_span(
                 "build_state_witness",
@@ -4288,7 +4278,7 @@ impl NodeInner {
             );
             let _guard = span.enter();
             prover.build_state_witness(
-                &pruning_proof.previous_state_root,
+                &previous_state_root_hex,
                 &header.state_root,
                 accepted_identities,
                 transactions,
