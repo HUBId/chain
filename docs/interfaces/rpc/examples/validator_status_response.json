@@ -43,21 +43,37 @@
       "new_state_root": "0xnew",
       "proof_hash": "0xproof",
       "pruning": {
+        "envelope": {
+          "schema_version": 1,
+          "parameter_version": 1,
+          "snapshot": {
+            "schema_version": 1,
+            "parameter_version": 1,
+            "block_height": 1023,
+            "state_commitment": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          },
+          "segments": [
+            {
+              "schema_version": 1,
+              "parameter_version": 1,
+              "segment_index": 0,
+              "start_height": 1000,
+              "end_height": 1023,
+              "segment_commitment": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }
+          ],
+          "commitment": {
+            "schema_version": 1,
+            "parameter_version": 1,
+            "aggregate_commitment": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+          },
+          "binding_digest": "001122334455667700112233445566770011223344556677001122334455667700112233445566770011223344556677"
+        },
+        "root": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "commitment": "112233445566778811223344556677881122334455667788112233445566778811223344556677881122334455667788",
+        "aggregate_commitment": "99aabbccddeeff0099aabbccddeeff0099aabbccddeeff0099aabbccddeeff0099aabbccddeeff0099aabbccddeeff",
         "schema_version": 1,
-        "parameter_version": 1,
-        "snapshot": {
-          "schema_version": 1,
-          "parameter_version": 1,
-          "block_height": 1023,
-          "state_commitment": "0xsnapshot"
-        },
-        "segments": [],
-        "commitment": {
-          "schema_version": 1,
-          "parameter_version": 1,
-          "aggregate_commitment": "0xagg"
-        },
-        "binding_digest": "0xprune"
+        "parameter_version": 1
       },
       "recursive_commitment": "0xrecursive",
       "recursive_previous_commitment": null,

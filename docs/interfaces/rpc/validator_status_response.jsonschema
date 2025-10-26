@@ -106,7 +106,7 @@
                   "default": null,
                   "oneOf": [
                     {"type": "null"},
-                    {"$ref": "#/$defs/PruningEnvelopeMetadata"}
+                    {"$ref": "#/$defs/PruningMetadata"}
                   ]
                 },
                 "recursive_commitment": {"type": "string"},
@@ -123,6 +123,10 @@
     }
   },
   "$defs": {
+    "TaggedDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{96}$"
+    },
     "PruningSnapshotMetadata": {
       "type": "object",
       "required": [
@@ -135,7 +139,7 @@
         "schema_version": {"type": "integer", "minimum": 0},
         "parameter_version": {"type": "integer", "minimum": 0},
         "block_height": {"type": "integer", "minimum": 0},
-        "state_commitment": {"type": "string"}
+        "state_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
@@ -155,7 +159,7 @@
         "segment_index": {"type": "integer", "minimum": 0},
         "start_height": {"type": "integer", "minimum": 0},
         "end_height": {"type": "integer", "minimum": 0},
-        "segment_commitment": {"type": "string"}
+        "segment_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
@@ -169,7 +173,7 @@
       "properties": {
         "schema_version": {"type": "integer", "minimum": 0},
         "parameter_version": {"type": "integer", "minimum": 0},
-        "aggregate_commitment": {"type": "string"}
+        "aggregate_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
@@ -192,7 +196,20 @@
           "items": {"$ref": "#/$defs/PruningSegmentMetadata"}
         },
         "commitment": {"$ref": "#/$defs/PruningCommitmentMetadata"},
-        "binding_digest": {"type": "string"}
+        "binding_digest": {"$ref": "#/$defs/TaggedDigestHex"}
+      },
+      "additionalProperties": false
+    },
+    "PruningMetadata": {
+      "type": "object",
+      "required": ["envelope"],
+      "properties": {
+        "envelope": {"$ref": "#/$defs/PruningEnvelopeMetadata"},
+        "root": {"$ref": "#/$defs/TaggedDigestHex"},
+        "commitment": {"$ref": "#/$defs/TaggedDigestHex"},
+        "aggregate_commitment": {"$ref": "#/$defs/TaggedDigestHex"},
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0}
       },
       "additionalProperties": false
     }
