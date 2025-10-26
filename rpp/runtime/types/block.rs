@@ -1758,20 +1758,8 @@ impl StoredBlock {
         &self.envelope.hash
     }
 
-    pub fn pruning_commitment(&self) -> String {
-        self.envelope.pruning_proof.binding_digest_hex()
-    }
-
-    pub fn pruning_aggregate_commitment(&self) -> String {
-        self.envelope.pruning_proof.aggregate_commitment_hex()
-    }
-
-    pub fn pruning_schema_version(&self) -> u16 {
-        self.envelope.pruning_proof.schema_version()
-    }
-
-    pub fn pruning_parameter_version(&self) -> u16 {
-        self.envelope.pruning_proof.parameter_version()
+    pub fn pruning_metadata(&self) -> PruningEnvelopeMetadata {
+        self.envelope.pruning_proof.envelope_metadata()
     }
 
     pub fn aggregated_commitment(&self) -> ChainResult<String> {

@@ -369,6 +369,7 @@ pub struct ReconstructionRequest {
 impl ReconstructionRequest {
     fn from_record(record: &StoredBlock) -> ChainResult<Self> {
         let header = &record.envelope.header;
+        let pruning = record.pruning_metadata();
         Ok(Self {
             height: header.height,
             block_hash: record.hash().to_string(),
@@ -379,11 +380,11 @@ impl ReconstructionRequest {
             timetoke_root: header.timetoke_root.clone(),
             zsi_root: header.zsi_root.clone(),
             proof_root: header.proof_root.clone(),
-            pruning_commitment: record.pruning_commitment().to_string(),
+            pruning_commitment: pruning.binding_digest.as_str().to_string(),
             aggregated_commitment: record.aggregated_commitment()?,
             previous_commitment: record.previous_recursive_commitment()?,
-            pruning_schema_version: record.pruning_schema_version(),
-            pruning_parameter_version: record.pruning_parameter_version(),
+            pruning_schema_version: pruning.schema_version,
+            pruning_parameter_version: pruning.parameter_version,
             payload_expectations: PayloadExpectations::from_record(record),
         })
     }
