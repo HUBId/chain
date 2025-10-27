@@ -6,13 +6,14 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use storage_firewood::api::StateUpdate;
 use storage_firewood::kv::FirewoodKv;
-use storage_firewood::pruning::{FirewoodPruner, PruningProof as FirewoodPruningProof};
+use storage_firewood::pruning::FirewoodPruner;
 
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
 use crate::types::{
-    Account, Block, BlockMetadata, PruningProof, PruningProofExt, StoredBlock, canonical_pruning_from_block,
+    Account, Block, BlockMetadata, MaybePruningProof, PruningProof, PruningProofExt, StoredBlock,
+    canonical_pruning_from_block,
 };
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
@@ -35,7 +36,7 @@ const SCHEMA_ACCOUNTS: &str = "accounts";
 pub struct StateTransitionReceipt {
     pub previous_root: [u8; 32],
     pub new_root: [u8; 32],
-    pub pruning_proof: Option<FirewoodPruningProof>,
+    pub pruning_proof: MaybePruningProof,
 }
 
 pub struct Storage {

@@ -101,7 +101,8 @@ use prover_stwo_backend::backend::{
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, PruningProofExt,
+    ChainProof, IdentityDeclaration, MaybePruningProof, PruningEnvelopeMetadata, PruningProof,
+    PruningProofExt,
     RecursiveProof, ReputationUpdate,
     SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
     IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, canonical_pruning_from_block,
@@ -122,7 +123,6 @@ use rpp_p2p::{
     SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use rpp_pruning::{SNAPSHOT_STATE_TAG, TaggedDigest};
-use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
@@ -509,7 +509,7 @@ pub enum PipelineObservation {
         block_hash: String,
         previous_root: String,
         new_root: String,
-        pruning_proof: Option<FirewoodPruningProof>,
+        pruning_proof: MaybePruningProof,
     },
 }
 
@@ -5093,8 +5093,12 @@ impl NodeInner {
         }
 
         let height = header.height;
+        let receipt = self.persist_accounts(height)?;
+        let pruning_proof = receipt
+            .pruning_proof
+            .clone()
+            .ok_or_else(|| ChainError::Config("firewood pruning envelope missing".into()))?;
         let previous_block = self.storage.read_block(parent_height)?;
-        let pruning_proof = canonical_pruning_from_block(previous_block.as_ref(), &header)?;
         let participants = round.commit_participants();
         self.ledger
             .record_consensus_witness(height, round.round(), participants);
@@ -5252,7 +5256,6 @@ impl NodeInner {
         );
         block.verify(previous_block.as_ref(), &self.keypair.public)?;
         self.ledger.sync_epoch_for_height(height.saturating_add(1));
-        let receipt = self.persist_accounts(height)?;
         let encoded_new_root = hex::encode(receipt.new_root);
         let previous_root_hex = hex::encode(
             TaggedDigest::new(SNAPSHOT_STATE_TAG, receipt.previous_root).prefixed_bytes(),
