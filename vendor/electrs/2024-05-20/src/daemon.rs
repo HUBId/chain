@@ -29,8 +29,8 @@ use malachite::Natural;
 use rpp::proofs::rpp::TransactionWitness;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
-    Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, SignedTransaction,
-    canonical_pruning_from_block,
+    Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, PruningProofExt,
+    SignedTransaction, pruning_from_previous,
 };
 use rpp_p2p::GossipTopic;
 use sha2::{Digest, Sha512};
@@ -1097,8 +1097,7 @@ pub mod test_helpers {
             public_key: hex::encode(keypair.public.to_bytes()),
             signature: hex::encode(precommit_sig.to_bytes()),
         };
-        let pruning_proof = canonical_pruning_from_block(previous, &header)
-            .expect("construct canonical pruning proof");
+        let pruning_proof = pruning_from_previous(previous, &header);
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =
             previous.map(|block| block.recursive_proof.commitment.clone());

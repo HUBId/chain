@@ -13,7 +13,7 @@ use rpp_chain::stwo::proof::{
 use rpp_chain::types::{
     AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof,
     ProofSystem, PruningProof, PruningProofExt, RecursiveProof, SignedTransaction,
-    canonical_pruning_from_block,
+    pruning_from_previous,
 };
 use storage_firewood::kv::FirewoodKv;
 use tempfile::tempdir;
@@ -130,8 +130,7 @@ fn make_block(height: u64, previous: Option<&Block>) -> Block {
         hex::encode([height as u8 + 12; 32]),
         hex::encode([height as u8 + 13; 32]),
     );
-    let pruning_proof = canonical_pruning_from_block(previous, &header)
-        .expect("construct canonical pruning proof");
+    let pruning_proof = pruning_from_previous(previous, &header);
     let recursive_proof = RecursiveProof::from_parts(
         ProofSystem::Stwo,
         "99".repeat(32),
