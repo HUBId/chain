@@ -242,17 +242,113 @@ pub mod circuit {
     pub mod pruning {
         use serde::{Deserialize, Serialize};
 
+        pub type PrefixedDigest = [u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+
         #[derive(Clone, Debug, Serialize, Deserialize)]
         pub struct PruningWitness {
             pub previous_tx_root: String,
             pub pruned_tx_root: String,
             pub original_transactions: Vec<String>,
             pub removed_transactions: Vec<String>,
+            #[serde(default, with = "serde_prefixed_digest_hex")]
+            pub pruning_binding_digest: PrefixedDigest,
+            #[serde(default, with = "serde_prefixed_digest_vec_hex")]
+            pub pruning_segment_commitments: Vec<PrefixedDigest>,
+            pub pruning_fold: String,
         }
 
         #[derive(Clone, Debug, Default)]
         pub struct PruningCircuit {
             pub witness: PruningWitness,
+        }
+
+        mod serde_prefixed_digest_hex {
+            use super::PrefixedDigest;
+            use hex;
+            use serde::{Deserialize, Deserializer, Serializer};
+
+            pub fn serialize<S>(value: &PrefixedDigest, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(&hex::encode(value))
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<PrefixedDigest, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let encoded = String::deserialize(deserializer)?;
+                let bytes = hex::decode(&encoded).map_err(D::Error::custom)?;
+                let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
+                if bytes.len() != expected {
+                    return Err(D::Error::custom(format!(
+                        "invalid prefixed digest length: expected {expected} bytes, found {}",
+                        bytes.len()
+                    )));
+                }
+                let mut digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+                digest.copy_from_slice(&bytes);
+                Ok(digest)
+            }
+        }
+
+        mod serde_prefixed_digest_vec_hex {
+            use super::PrefixedDigest;
+            use hex;
+            use serde::de::{SeqAccess, Visitor};
+            use serde::ser::SerializeSeq;
+            use serde::{Deserialize, Deserializer, Serializer};
+            use std::fmt;
+
+            pub fn serialize<S>(values: &Vec<PrefixedDigest>, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                let mut seq = serializer.serialize_seq(Some(values.len()))?;
+                for value in values {
+                    seq.serialize_element(&hex::encode(value))?;
+                }
+                seq.end()
+            }
+
+            pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<PrefixedDigest>, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                struct PrefixedDigestVecVisitor;
+
+                impl<'de> Visitor<'de> for PrefixedDigestVecVisitor {
+                    type Value = Vec<PrefixedDigest>;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                        formatter.write_str("a sequence of hex-encoded prefixed digests")
+                    }
+
+                    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                    where
+                        A: SeqAccess<'de>,
+                    {
+                        let mut values = Vec::new();
+                        while let Some(encoded) = seq.next_element::<String>()? {
+                            let bytes = hex::decode(&encoded).map_err(A::Error::custom)?;
+                            let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
+                            if bytes.len() != expected {
+                                return Err(A::Error::custom(format!(
+                                    "invalid prefixed digest length: expected {expected} bytes, found {}",
+                                    bytes.len()
+                                )));
+                            }
+                            let mut digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+                            digest.copy_from_slice(&bytes);
+                            values.push(digest);
+                        }
+                        Ok(values)
+                    }
+                }
+
+                deserializer.deserialize_seq(PrefixedDigestVecVisitor)
+            }
         }
     }
 

@@ -808,9 +808,11 @@ pub mod test_helpers {
     use rpp::runtime::RuntimeMetrics;
     use rpp::storage::Storage;
     use rpp::stwo::circuit::recursive::RecursiveWitness;
+    use rpp::stwo::params::{FieldElement, StarkParameters};
     use rpp::stwo::proof::{
         CommitmentSchemeProofData, ExecutionTrace, FriProof, ProofKind, ProofPayload, StarkProof,
     };
+    use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
     use rpp::types::BftVote;
     use rpp::vrf::generate_vrf_keypair;
     use sha2::{Digest, Sha256};
@@ -1204,6 +1206,19 @@ pub mod test_helpers {
     }
 
     fn dummy_pruning_proof() -> StarkProof {
+        let parameters = StarkParameters::blueprint_default();
+        let hasher = parameters.poseidon_hasher();
+        let zero = FieldElement::zero(parameters.modulus());
+        let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+        let pruning_segment_commitments = Vec::new();
+        let pruning_fold = hasher
+            .hash(&[
+                zero.clone(),
+                parameters.element_from_bytes(&pruning_binding_digest),
+                zero.clone(),
+            ])
+            .to_hex();
+
         StarkProof {
             kind: ProofKind::Pruning,
             commitment: "44".repeat(32),
@@ -1213,6 +1228,9 @@ pub mod test_helpers {
                 pruned_tx_root: "66".repeat(32),
                 original_transactions: Vec::new(),
                 removed_transactions: Vec::new(),
+                pruning_binding_digest,
+                pruning_segment_commitments,
+                pruning_fold,
             }),
             trace: ExecutionTrace {
                 segments: Vec::new(),

@@ -23,6 +23,7 @@ use prover_stwo_backend::official::circuit::pruning::PruningWitness;
 use prover_stwo_backend::official::circuit::recursive::{PrefixedDigest, RecursiveWitness};
 use prover_stwo_backend::official::circuit::state::StateWitness;
 use prover_stwo_backend::official::circuit::uptime::UptimeWitness;
+use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
 use prover_stwo_backend::official::proof::StarkProof;
 use prover_stwo_backend::types::{Account, Stake, UptimeProof};
 use prover_stwo_backend::utils::fri::compress_proof as compress_lightweight_fri;
@@ -196,11 +197,33 @@ fn sample_pruning_witness() -> PruningWitness {
     let previous_tx_root = merkle_root_from_hex(&original);
     let pruned_tx_root = merkle_root_from_hex(&original[1..].to_vec());
 
+    let parameters = StarkParameters::blueprint_default();
+    let hasher = parameters.poseidon_hasher();
+    let zero = FieldElement::zero(parameters.modulus());
+    let pruning_binding_digest =
+        TaggedDigest::new(ENVELOPE_TAG, [0x11u8; DIGEST_LENGTH]).prefixed_bytes();
+    let pruning_segment_commitments = vec![
+        TaggedDigest::new(PROOF_SEGMENT_TAG, [0x22u8; DIGEST_LENGTH]).prefixed_bytes(),
+        TaggedDigest::new(PROOF_SEGMENT_TAG, [0x33u8; DIGEST_LENGTH]).prefixed_bytes(),
+    ];
+    let mut accumulator = hasher.hash(&[
+        zero.clone(),
+        parameters.element_from_bytes(&pruning_binding_digest),
+        zero.clone(),
+    ]);
+    for digest in &pruning_segment_commitments {
+        let element = parameters.element_from_bytes(digest);
+        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+    }
+
     PruningWitness {
         previous_tx_root,
         pruned_tx_root,
         original_transactions: original,
         removed_transactions: removed,
+        pruning_binding_digest,
+        pruning_segment_commitments,
+        pruning_fold: accumulator.to_hex(),
     }
 }
 

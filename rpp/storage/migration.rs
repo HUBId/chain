@@ -7,11 +7,13 @@ use crate::consensus::{ConsensusCertificate, SignedBftVote};
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
 use crate::storage::{STORAGE_SCHEMA_VERSION, Storage};
+use crate::stwo::params::{FieldElement, StarkParameters};
 use crate::types::{
     AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle, IdentityDeclaration,
     ProofSystem, PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate, SignedTransaction,
     StoredBlock, TimetokeUpdate, UptimeProof, pruning_from_previous,
 };
+use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Outcome of executing storage migrations.
 #[derive(Clone, Debug, Default)]
@@ -329,12 +331,29 @@ mod tests {
                 required_tier: Tier::default(),
                 reputation_weights: ReputationWeights::default(),
             }),
-            ProofKind::Pruning => ProofPayload::Pruning(PruningWitness {
-                previous_tx_root: "00".repeat(32),
-                pruned_tx_root: "33".repeat(32),
-                original_transactions: vec!["44".repeat(32), "55".repeat(32)],
-                removed_transactions: vec!["55".repeat(32)],
-            }),
+            ProofKind::Pruning => {
+                let parameters = StarkParameters::blueprint_default();
+                let hasher = parameters.poseidon_hasher();
+                let zero = FieldElement::zero(parameters.modulus());
+                let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+                let pruning_segment_commitments = Vec::new();
+                let pruning_fold = hasher
+                    .hash(&[
+                        zero.clone(),
+                        parameters.element_from_bytes(&pruning_binding_digest),
+                        zero.clone(),
+                    ])
+                    .to_hex();
+                ProofPayload::Pruning(PruningWitness {
+                    previous_tx_root: "00".repeat(32),
+                    pruned_tx_root: "33".repeat(32),
+                    original_transactions: vec!["44".repeat(32), "55".repeat(32)],
+                    removed_transactions: vec!["55".repeat(32)],
+                    pruning_binding_digest,
+                    pruning_segment_commitments,
+                    pruning_fold,
+                })
+            }
             ProofKind::Recursive => ProofPayload::Recursive(RecursiveWitness {
                 previous_commitment: Some(RecursiveProof::anchor()),
                 aggregated_commitment: "77".repeat(32),

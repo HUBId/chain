@@ -1033,6 +1033,7 @@ mod tests {
     use crate::stwo::circuit::{
         pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness,
     };
+    use crate::stwo::params::{FieldElement, StarkParameters};
     use crate::stwo::proof::{
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
@@ -1096,6 +1097,19 @@ mod tests {
     }
 
     fn dummy_pruning_proof() -> StarkProof {
+        let parameters = StarkParameters::blueprint_default();
+        let hasher = parameters.poseidon_hasher();
+        let zero = FieldElement::zero(parameters.modulus());
+        let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+        let pruning_segment_commitments = Vec::new();
+        let pruning_fold = hasher
+            .hash(&[
+                zero.clone(),
+                parameters.element_from_bytes(&pruning_binding_digest),
+                zero.clone(),
+            ])
+            .to_hex();
+
         StarkProof {
             kind: ProofKind::Pruning,
             commitment: "44".repeat(32),
@@ -1105,6 +1119,9 @@ mod tests {
                 pruned_tx_root: "66".repeat(32),
                 original_transactions: Vec::new(),
                 removed_transactions: Vec::new(),
+                pruning_binding_digest,
+                pruning_segment_commitments,
+                pruning_fold,
             }),
             trace: ExecutionTrace {
                 segments: Vec::new(),
