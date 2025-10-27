@@ -221,7 +221,7 @@ impl Storage {
             let pruning_proof: MaybePruningProof = block_height.and_then(|height| {
                 let mut pruner = self.pruner.lock();
                 let proof = pruner.prune_block(height, previous_root);
-                Some(proof)
+                Some(Arc::new(proof))
             });
             return Ok(StateTransitionReceipt {
                 previous_root,
@@ -243,7 +243,7 @@ impl Storage {
         drop(kv);
         let pruning_proof: MaybePruningProof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
-            pruner.prune_block(height, new_root)
+            Arc::new(pruner.prune_block(height, new_root))
         });
         Ok(StateTransitionReceipt {
             previous_root,
@@ -285,7 +285,7 @@ impl Storage {
         drop(kv);
         let pruning_proof: MaybePruningProof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
-            pruner.prune_block(height, new_root)
+            Arc::new(pruner.prune_block(height, new_root))
         });
         Ok(StateTransitionReceipt {
             previous_root,
@@ -606,12 +606,59 @@ mod tests {
         Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
         RecursiveProof, pruning_from_previous,
     };
+    use std::sync::Arc;
+    use storage_firewood::api::StateUpdate;
     use ed25519_dalek::Signature;
     use hex;
     use tempfile::tempdir;
     use rpp_pruning::{
         TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
     };
+
+    #[test]
+    fn pruning_proofs_are_arc_wrapped() {
+        let temp_dir = tempdir().expect("tempdir");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+
+        let empty_receipt = storage
+            .apply_state_updates(Some(1), Vec::new())
+            .expect("apply empty updates");
+        let empty_clone = empty_receipt.clone();
+        let empty_proof = empty_receipt
+            .pruning_proof
+            .expect("empty updates pruning proof");
+        let empty_proof_clone = empty_clone
+            .pruning_proof
+            .expect("empty updates pruning proof clone");
+        assert!(Arc::ptr_eq(&empty_proof, &empty_proof_clone));
+
+        let update = StateUpdate {
+            schema: SCHEMA_ACCOUNTS.to_string(),
+            key: b"arc-wrapper".to_vec(),
+            value: Some(vec![0u8]),
+        };
+        let receipt = storage
+            .apply_state_updates(Some(2), vec![update])
+            .expect("apply state updates");
+        let receipt_clone = receipt.clone();
+        let proof = receipt.pruning_proof.expect("state updates pruning proof");
+        let proof_clone = receipt_clone
+            .pruning_proof
+            .expect("state updates pruning proof clone");
+        assert!(Arc::ptr_eq(&proof, &proof_clone));
+
+        let snapshot_receipt = storage
+            .apply_account_snapshot(Some(3), &[])
+            .expect("apply account snapshot");
+        let snapshot_clone = snapshot_receipt.clone();
+        let snapshot_proof = snapshot_receipt
+            .pruning_proof
+            .expect("account snapshot pruning proof");
+        let snapshot_proof_clone = snapshot_clone
+            .pruning_proof
+            .expect("account snapshot pruning proof clone");
+        assert!(Arc::ptr_eq(&snapshot_proof, &snapshot_proof_clone));
+    }
 
     fn dummy_state_proof() -> StarkProof {
         StarkProof {
