@@ -295,6 +295,7 @@ fn sample_recursive_witness(
         &state_proof.commitment,
         state_commitments,
         &pruning_binding_digest,
+        &pruning_segment_commitments,
         block_height,
     );
 
