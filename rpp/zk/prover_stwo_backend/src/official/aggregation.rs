@@ -63,7 +63,7 @@ fn compute_recursive_commitment(
     consensus_commitments: &[String],
     state_commitment: &str,
     state_roots: &StateCommitmentSnapshot,
-    pruning_binding_digest: &PrefixedDigest,
+    pruning_binding_element: &FieldElement,
     block_height: u64,
 ) -> FieldElement {
     let hasher = parameters.poseidon_hasher();
@@ -77,7 +77,7 @@ fn compute_recursive_commitment(
     all_commitments.extend_from_slice(consensus_commitments);
     let activity_digest = fold_commitments(&hasher, parameters, &all_commitments);
 
-    let pruning_element = parameters.element_from_bytes(pruning_binding_digest);
+    let pruning_element = pruning_binding_element.clone();
     let state_digest = hasher.hash(&[
         string_to_field(parameters, state_commitment),
         string_to_field(parameters, &state_roots.global_state_root),
@@ -125,6 +125,7 @@ impl RecursiveAggregator {
         pruning_binding_digest: &PrefixedDigest,
         block_height: u64,
     ) -> FieldElement {
+        let pruning_binding_element = self.parameters.element_from_bytes(pruning_binding_digest);
         compute_recursive_commitment(
             &self.parameters,
             previous_commitment,
@@ -134,7 +135,34 @@ impl RecursiveAggregator {
             consensus_commitments,
             state_commitment,
             state_roots,
-            pruning_binding_digest,
+            &pruning_binding_element,
+            block_height,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn aggregate_commitment_with_binding_element(
+        &self,
+        previous_commitment: Option<&str>,
+        identity_commitments: &[String],
+        tx_commitments: &[String],
+        uptime_commitments: &[String],
+        consensus_commitments: &[String],
+        state_commitment: &str,
+        state_roots: &StateCommitmentSnapshot,
+        pruning_binding_element: &FieldElement,
+        block_height: u64,
+    ) -> FieldElement {
+        compute_recursive_commitment(
+            &self.parameters,
+            previous_commitment,
+            identity_commitments,
+            tx_commitments,
+            uptime_commitments,
+            consensus_commitments,
+            state_commitment,
+            state_roots,
+            pruning_binding_element,
             block_height,
         )
     }

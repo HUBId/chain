@@ -1,5 +1,7 @@
 #![cfg(all(feature = "prover-stwo", nightly))]
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use blake2::digest::{consts::U32, generic_array::GenericArray};
 use blake2::Blake2s256;
@@ -52,6 +54,7 @@ fn prove_and_verify_ok() -> Result<()> {
         &[],
         &fixture.uptime_proofs,
         &[],
+        fixture.pruning_envelope.as_ref(),
         &fixture.state_commitments,
         None,
     )?;
@@ -92,6 +95,7 @@ struct ProverFixture {
     uptime_bytes: ProofBytes,
     recursive_bytes: ProofBytes,
     bundle: BlockProofBundle,
+    pruning_envelope: Arc<Envelope>,
     uptime_proofs: Vec<ChainProof>,
     state_commitments: ChainStateCommitmentSnapshot,
 }
@@ -115,6 +119,7 @@ impl ProverFixture {
         let (pruning_pk, _) = backend.keygen_pruning(&PruningCircuitDef::new("pruning"))?;
         let pruning_proof_bytes = backend.prove_pruning(&pruning_pk, &pruning_bytes)?;
         let pruning_stark = decode_pruning_proof(&pruning_proof_bytes)?;
+        let pruning_envelope = sample_pruning_envelope();
 
         let uptime_witness = sample_uptime_witness();
         let uptime_header =
@@ -129,6 +134,7 @@ impl ProverFixture {
             &state_commitments,
             &state_stark,
             &pruning_stark,
+            &pruning_envelope,
             &[uptime_stark.commitment.clone()],
             7,
         );
@@ -153,6 +159,7 @@ impl ProverFixture {
             uptime_bytes: uptime_proof_bytes,
             recursive_bytes: recursive_proof_bytes,
             bundle,
+            pruning_envelope: Arc::new(pruning_envelope),
             uptime_proofs: vec![uptime_chain_proof],
             state_commitments: to_chain_snapshot(&state_commitments),
         })
@@ -214,7 +221,7 @@ fn sample_uptime_witness() -> UptimeWitness {
     }
 }
 
-fn sample_pruning_envelope_artifacts() -> (PrefixedDigest, Vec<PrefixedDigest>) {
+fn sample_pruning_envelope() -> Envelope {
     let schema = SchemaVersion::new(1);
     let params = ParameterVersion::new(1);
     let snapshot = Snapshot::new(
@@ -248,14 +255,7 @@ fn sample_pruning_envelope_artifacts() -> (PrefixedDigest, Vec<PrefixedDigest>) 
         TaggedDigest::new(ENVELOPE_TAG, [0x94; DIGEST_LENGTH]).expect("binding"),
     )
     .expect("envelope");
-
-    let binding = envelope.binding_digest().prefixed_bytes();
-    let segments = envelope
-        .segments()
-        .iter()
-        .map(|segment| segment.segment_commitment().prefixed_bytes())
-        .collect();
-    (binding, segments)
+    envelope
 }
 
 fn sample_state_commitments() -> OfficialStateCommitmentSnapshot {
@@ -274,10 +274,16 @@ fn sample_recursive_witness(
     state_commitments: &OfficialStateCommitmentSnapshot,
     state_proof: &StarkProof,
     pruning_proof: &StarkProof,
+    pruning_envelope: &Envelope,
     uptime_commitments: &[String],
     block_height: u64,
 ) -> RecursiveWitness {
-    let (pruning_binding_digest, pruning_segment_commitments) = sample_pruning_envelope_artifacts();
+    let pruning_binding_digest = pruning_envelope.binding_digest().prefixed_bytes();
+    let pruning_segment_commitments: Vec<PrefixedDigest> = pruning_envelope
+        .segments()
+        .iter()
+        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .collect();
     let aggregator = OfficialRecursiveAggregator::with_blueprint();
     let aggregated = aggregator.aggregate_commitment(
         None,

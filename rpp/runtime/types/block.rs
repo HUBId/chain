@@ -1303,6 +1303,7 @@ impl Block {
                 &identity_proofs,
                 &uptime_proofs,
                 &consensus_proofs,
+                self.pruning_proof.as_ref(),
                 &state_commitments,
                 expected_previous_commitment,
             )?;

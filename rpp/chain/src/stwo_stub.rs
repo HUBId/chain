@@ -724,6 +724,7 @@ pub mod verifier {
     use crate::rpp::ProofSystemKind;
     use crate::stwo::aggregation::StateCommitmentSnapshot;
     use crate::types::ChainProof;
+    use rpp_pruning::Envelope;
 
     use super::params::StarkParameters;
     use super::proof::StarkProof;
@@ -760,6 +761,7 @@ pub mod verifier {
             _consensus_proofs: &[ChainProof],
             _state_proof: &ChainProof,
             _pruning_proof: &ChainProof,
+            _pruning_envelope: &Envelope,
             _recursive_proof: &ChainProof,
             _state_commitments: &StateCommitmentSnapshot,
             _expected_previous_commitment: Option<&str>,

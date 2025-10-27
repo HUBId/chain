@@ -22,6 +22,7 @@ use crate::stwo_official::core::pcs::CommitmentSchemeVerifier;
 use crate::stwo_official::core::proof::StarkProof as OfficialStarkProof;
 use crate::stwo_official::core::vcs::blake2_merkle::{Blake2sMerkleChannel, Blake2sMerkleHasher};
 use crate::stwo_official::core::verifier::{verify as stwo_verify, VerificationError};
+use rpp_pruning::Envelope;
 
 fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     let bytes = hex::decode(value).unwrap_or_else(|_| value.as_bytes().to_vec());
@@ -178,7 +179,10 @@ impl NodeVerifier {
         state_commitments: &StateCommitmentSnapshot,
     ) -> FieldElement {
         let aggregator = RecursiveAggregator::new(self.parameters.clone());
-        aggregator.aggregate_commitment(
+        let pruning_binding_element = self
+            .parameters
+            .element_from_bytes(&witness.pruning_binding_digest);
+        aggregator.aggregate_commitment_with_binding_element(
             witness.previous_commitment.as_deref(),
             &witness.identity_commitments,
             &witness.tx_commitments,
@@ -186,7 +190,7 @@ impl NodeVerifier {
             &witness.consensus_commitments,
             &witness.state_commitment,
             state_commitments,
-            &witness.pruning_binding_digest,
+            &pruning_binding_element,
             witness.block_height,
         )
     }
@@ -376,6 +380,7 @@ impl NodeVerifier {
         consensus_proofs: &[ChainProof],
         state_proof: &ChainProof,
         pruning_proof: &ChainProof,
+        pruning_envelope: &Envelope,
         recursive_proof: &ChainProof,
         state_commitments: &StateCommitmentSnapshot,
         expected_previous_commitment: Option<&str>,
@@ -489,6 +494,51 @@ impl NodeVerifier {
             return Err(ChainError::Crypto(
                 "recursive witness pruning commitment mismatch".into(),
             ));
+        }
+
+        let expected_binding = pruning_envelope.binding_digest().prefixed_bytes();
+        if witness.pruning_binding_digest != expected_binding {
+            tracing::error!(
+                expected = %hex::encode(expected_binding),
+                actual = %hex::encode(witness.pruning_binding_digest),
+                "recursive witness pruning binding digest mismatch",
+            );
+            return Err(ChainError::Crypto(
+                "recursive witness pruning binding digest mismatch".into(),
+            ));
+        }
+
+        let expected_segments: Vec<_> = pruning_envelope
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
+        if witness.pruning_segment_commitments.len() != expected_segments.len() {
+            tracing::error!(
+                expected = expected_segments.len(),
+                actual = witness.pruning_segment_commitments.len(),
+                "recursive witness pruning segment commitment count mismatch",
+            );
+            return Err(ChainError::Crypto(
+                "recursive witness pruning segment commitment count mismatch".into(),
+            ));
+        }
+        for (index, (expected, actual)) in expected_segments
+            .iter()
+            .zip(witness.pruning_segment_commitments.iter())
+            .enumerate()
+        {
+            if actual != expected {
+                tracing::error!(
+                    index,
+                    expected = %hex::encode(expected),
+                    actual = %hex::encode(actual),
+                    "recursive witness pruning segment commitment mismatch",
+                );
+                return Err(ChainError::Crypto(
+                    "recursive witness pruning segment commitment mismatch".into(),
+                ));
+            }
         }
 
         if witness.global_state_root != state_commitments.global_state_root {
