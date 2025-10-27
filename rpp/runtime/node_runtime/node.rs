@@ -33,9 +33,8 @@ use crate::runtime::telemetry::RuntimeMetrics;
 use crate::runtime::vrf_gossip::{gossip_to_submission, verify_submission, GossipVrfSubmission};
 use crate::state::merkle::compute_merkle_root;
 use crate::sync::{RuntimeRecursiveProofVerifier, RuntimeTransactionProofVerifier};
-use crate::types::{Address, Block};
+use crate::types::{Address, Block, MaybePruningProof};
 use crate::vrf::VrfSubmission;
-use storage_firewood::pruning::PruningProof as FirewoodPruningProof;
 
 use super::network::{NetworkConfig, NetworkResources, NetworkSetupError};
 
@@ -414,7 +413,7 @@ pub enum NodeEvent {
         block_hash: String,
         previous_root: String,
         new_root: String,
-        pruning_proof: Option<FirewoodPruningProof>,
+        pruning_proof: MaybePruningProof,
     },
 }
 
