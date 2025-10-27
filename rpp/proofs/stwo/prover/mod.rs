@@ -269,6 +269,7 @@ impl<'a> WalletProver<'a> {
         state_commitments: &GlobalStateCommitments,
         state_proof: &ChainProof,
         pruning_proof: &ChainProof,
+        pruning_envelope: &Envelope,
         block_height: u64,
     ) -> ChainResult<RecursiveWitness> {
         let previous_recursive_owned = previous_recursive
@@ -302,6 +303,7 @@ impl<'a> WalletProver<'a> {
             &consensus_owned,
             &state_owned,
             &pruning_owned,
+            pruning_envelope,
             &state_roots,
             block_height,
         )
@@ -443,6 +445,7 @@ impl<'a> ProofProver for WalletProver<'a> {
         consensus_proofs: &[ChainProof],
         state_commitments: &GlobalStateCommitments,
         state_proof: &ChainProof,
+        pruning_envelope: &Envelope,
         pruning_proof: &ChainProof,
         block_height: u64,
     ) -> ChainResult<Self::RecursiveWitness> {
@@ -455,6 +458,7 @@ impl<'a> ProofProver for WalletProver<'a> {
             state_commitments,
             state_proof,
             pruning_proof,
+            pruning_envelope,
             block_height,
         )
     }

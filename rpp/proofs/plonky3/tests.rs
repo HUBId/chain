@@ -150,6 +150,7 @@ fn recursive_aggregator_rejects_tampered_inputs() {
             .into_value()
             .unwrap(),
     );
+    let pruning_envelope = pruning_from_previous(None, &canonical_pruning_header());
 
     let mut tampered = transaction_proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
@@ -167,6 +168,7 @@ fn recursive_aggregator_rejects_tampered_inputs() {
             &[],
             &GlobalStateCommitments::default(),
             &state_proof,
+            pruning_envelope.as_ref(),
             &pruning_proof,
             1,
         )
@@ -182,6 +184,7 @@ fn recursive_aggregator_rejects_tampered_inputs() {
             &[],
             &GlobalStateCommitments::default(),
             &state_proof,
+            pruning_envelope.as_ref(),
             &pruning_proof,
             1,
         )
@@ -211,6 +214,7 @@ fn recursive_bundle_verification_detects_tampering() {
             .into_value()
             .unwrap(),
     );
+    let pruning_envelope = pruning_from_previous(None, &canonical_pruning_header());
     let recursive_witness = prover
         .build_recursive_witness(
             None,
@@ -220,6 +224,7 @@ fn recursive_bundle_verification_detects_tampering() {
             &[],
             &GlobalStateCommitments::default(),
             &state_proof,
+            pruning_envelope.as_ref(),
             &pruning_proof,
             42,
         )
@@ -288,6 +293,7 @@ fn recursive_roundtrip_spans_state_and_transactions() {
             &[],
             &GlobalStateCommitments::default(),
             &state_proof,
+            pruning.as_ref(),
             &pruning_proof,
             7,
         )
