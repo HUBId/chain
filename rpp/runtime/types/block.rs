@@ -297,6 +297,16 @@ impl TaggedDigestHex {
         Self::parse(expected_tag, label, &self.0)
     }
 
+    pub fn to_prefixed_digest(
+        &self,
+        label: &str,
+        expected_tag: DomainTag,
+    ) -> ChainResult<PrefixedDigest> {
+        Ok(self
+            .to_tagged_digest(label, expected_tag)?
+            .prefixed_bytes())
+    }
+
     pub fn parse(expected_tag: DomainTag, label: &str, value: &str) -> ChainResult<TaggedDigest> {
         parse_tagged_digest_hex(expected_tag, label, value)
     }
@@ -2414,15 +2424,21 @@ mod tests {
                 let parameters = StarkParameters::blueprint_default();
                 let hasher = parameters.poseidon_hasher();
                 let zero = FieldElement::zero(parameters.modulus());
-                let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-                let pruning_segment_commitments = Vec::new();
-                let pruning_fold = hasher
-                    .hash(&[
-                        zero.clone(),
-                        parameters.element_from_bytes(&pruning_binding_digest),
-                        zero.clone(),
-                    ])
-                    .to_hex();
+                let pruning_binding_digest =
+                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
+                let pruning_segment_commitments = vec![
+                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+                ];
+                let pruning_fold = {
+                    let mut accumulator = zero.clone();
+                    let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
+                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    for digest in &pruning_segment_commitments {
+                        let element = parameters.element_from_bytes(digest);
+                        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+                    }
+                    accumulator.to_hex()
+                };
                 ProofPayload::Pruning(PruningWitness {
                     previous_tx_root: "33".repeat(32),
                     pruned_tx_root: "44".repeat(32),
@@ -2487,15 +2503,21 @@ mod tests {
                 let parameters = StarkParameters::blueprint_default();
                 let hasher = parameters.poseidon_hasher();
                 let zero = FieldElement::zero(parameters.modulus());
-                let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-                let pruning_segment_commitments = Vec::new();
-                let pruning_fold = hasher
-                    .hash(&[
-                        zero.clone(),
-                        parameters.element_from_bytes(&pruning_binding_digest),
-                        zero.clone(),
-                    ])
-                    .to_hex();
+                let pruning_binding_digest =
+                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
+                let pruning_segment_commitments = vec![
+                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+                ];
+                let pruning_fold = {
+                    let mut accumulator = zero.clone();
+                    let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
+                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    for digest in &pruning_segment_commitments {
+                        let element = parameters.element_from_bytes(digest);
+                        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+                    }
+                    accumulator.to_hex()
+                };
                 ProofPayload::Pruning(PruningWitness {
                     previous_tx_root: "cc".repeat(32),
                     pruned_tx_root: "dd".repeat(32),
@@ -2941,20 +2963,20 @@ impl From<BlockMetadataSerde> for BlockMetadata {
         if pruning_binding_digest == EMPTY_PREFIXED_DIGEST && pruning_segment_commitments.is_empty()
         {
             if let Some(metadata) = &pruning {
-                if let Ok(digest) = metadata
+                if let Ok(bytes) = metadata
                     .binding_digest
-                    .to_tagged_digest("pruning metadata binding digest", ENVELOPE_TAG)
+                    .to_prefixed_digest("pruning metadata binding digest", ENVELOPE_TAG)
                 {
-                    pruning_binding_digest = digest.prefixed_bytes();
+                    pruning_binding_digest = bytes;
                 }
 
                 let mut segments = Vec::new();
                 for (index, segment) in metadata.segments.iter().enumerate() {
-                    if let Ok(digest) = segment.segment_commitment.to_tagged_digest(
+                    if let Ok(bytes) = segment.segment_commitment.to_prefixed_digest(
                         &format!("pruning metadata segment commitment #{index}"),
                         PROOF_SEGMENT_TAG,
                     ) {
-                        segments.push(digest.prefixed_bytes());
+                        segments.push(bytes);
                     }
                 }
                 pruning_segment_commitments = segments;

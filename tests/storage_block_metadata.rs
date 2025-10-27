@@ -8,7 +8,9 @@ use rpp_chain::stwo::circuit::{
     pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness, ExecutionTrace,
 };
 use rpp_chain::stwo::params::{FieldElement, StarkParameters};
-use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+use rpp_pruning::{
+    TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
+};
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
@@ -47,15 +49,21 @@ fn dummy_pruning_proof() -> StarkProof {
     let parameters = StarkParameters::blueprint_default();
     let hasher = parameters.poseidon_hasher();
     let zero = FieldElement::zero(parameters.modulus());
-    let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-    let pruning_segment_commitments = Vec::new();
-    let pruning_fold = hasher
-        .hash(&[
-            zero.clone(),
-            parameters.element_from_bytes(&pruning_binding_digest),
-            zero.clone(),
-        ])
-        .to_hex();
+    let pruning_binding_digest =
+        TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
+    let pruning_segment_commitments = vec![
+        TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+    ];
+    let pruning_fold = {
+        let mut accumulator = zero.clone();
+        let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
+        accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+        for digest in &pruning_segment_commitments {
+            let element = parameters.element_from_bytes(digest);
+            accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+        }
+        accumulator.to_hex()
+    };
 
     StarkProof {
         kind: ProofKind::Pruning,
