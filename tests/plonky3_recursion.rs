@@ -79,6 +79,7 @@ fn plonky3_recursive_flow_roundtrip() {
             &[],
             &GlobalStateCommitments::default(),
             &state_proof,
+            pruning.as_ref(),
             &pruning_proof,
             9,
         )

@@ -4427,6 +4427,7 @@ impl NodeInner {
                 &consensus_chain_proofs,
                 commitments,
                 &state_chain_proof,
+                pruning_proof.as_ref(),
                 &pruning_chain_proof,
                 header.height,
             )?

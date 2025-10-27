@@ -266,6 +266,7 @@ pub trait ProofProver {
         consensus_proofs: &[ChainProof],
         state_commitments: &GlobalStateCommitments,
         state_proof: &ChainProof,
+        pruning_envelope: &Envelope,
         pruning_proof: &ChainProof,
         block_height: u64,
     ) -> ChainResult<Self::RecursiveWitness>;
