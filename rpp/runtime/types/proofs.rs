@@ -335,8 +335,10 @@ mod tests {
         };
         #[cfg(feature = "prover-stwo")]
         use uuid::Uuid;
+        use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
         fn sample_stwo_proof() -> StarkProof {
+            let pruning_binding_digest = [0x12u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
             let witness = RecursiveWitness {
                 previous_commitment: Some("aa".repeat(32)),
                 aggregated_commitment: "bb".repeat(32),
@@ -352,6 +354,8 @@ mod tests {
                 zsi_root: "66".repeat(32),
                 proof_root: "77".repeat(32),
                 pruning_commitment: "88".repeat(32),
+                pruning_binding_digest,
+                pruning_segment_commitments: vec![[0x34u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]],
                 block_height: 1,
             };
             StarkProof {

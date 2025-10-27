@@ -186,7 +186,7 @@ impl NodeVerifier {
             &witness.consensus_commitments,
             &witness.state_commitment,
             state_commitments,
-            &witness.pruning_commitment,
+            &witness.pruning_binding_digest,
             witness.block_height,
         )
     }
