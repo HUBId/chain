@@ -241,6 +241,20 @@ fn storage_persists_extended_block_metadata() {
     assert_eq!(persisted.proof_hash, genesis.header.proof_root);
     assert_eq!(
         persisted.pruning_binding_digest,
+        genesis
+            .pruning_proof
+            .binding_digest()
+            .prefixed_bytes()
+    );
+    let expected_segments: Vec<_> = genesis
+        .pruning_proof
+        .segments()
+        .iter()
+        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .collect();
+    assert_eq!(persisted.pruning_segment_commitments, expected_segments);
+    assert_eq!(
+        persisted.pruning_binding_digest,
         metadata.pruning_binding_digest
     );
     assert_eq!(
@@ -275,6 +289,20 @@ fn storage_persists_extended_block_metadata() {
             .get(0)
             .map(|segment| segment.segment_commitment.as_str()),
     );
+    let expected_segment_hex: Vec<_> = genesis
+        .pruning_proof
+        .segments()
+        .iter()
+        .map(|segment| hex::encode(segment.segment_commitment().prefixed_bytes()))
+        .collect();
+    assert_eq!(persisted_pruning.segments.len(), expected_segment_hex.len());
+    for (segment, expected_hex) in persisted_pruning
+        .segments
+        .iter()
+        .zip(expected_segment_hex.iter())
+    {
+        assert_eq!(segment.segment_commitment.as_str(), expected_hex);
+    }
     assert_eq!(
         persisted_pruning.binding_digest.as_str(),
         expected_pruning.binding_digest.as_str()
@@ -288,6 +316,22 @@ fn storage_persists_extended_block_metadata() {
             .commitment
             .aggregate_commitment
             .as_str()
+    );
+    let expected_binding =
+        hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
+    assert_eq!(persisted_pruning.binding_digest.as_str(), expected_binding);
+    let expected_commitment = hex::encode(
+        genesis
+            .pruning_proof
+            .aggregate_commitment()
+            .prefixed_bytes()
+    );
+    assert_eq!(
+        persisted_pruning
+            .commitment
+            .aggregate_commitment
+            .as_str(),
+        expected_commitment
     );
 }
 

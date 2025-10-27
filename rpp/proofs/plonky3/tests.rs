@@ -6,6 +6,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
+use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::prover::Plonky3Prover;
 use crate::plonky3::verifier::Plonky3Verifier;
 use crate::plonky3::{crypto, proof::Plonky3Proof};
@@ -15,6 +16,7 @@ use crate::types::{
     BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
     pruning_from_previous,
 };
+use rpp_pruning::Envelope;
 
 fn canonical_pruning_header() -> BlockHeader {
     BlockHeader::new(
@@ -45,6 +47,49 @@ fn sample_transaction() -> SignedTransaction {
     let tx = Transaction::new(from.clone(), from.clone(), 42, 1, 0, None);
     let signature = keypair.sign(&tx.canonical_bytes());
     SignedTransaction::new(tx, signature, &keypair.public)
+}
+
+fn sample_pruning_artifacts(prover: &Plonky3Prover) -> (PruningProof, ChainProof) {
+    let header = canonical_pruning_header();
+    let pruning_envelope = pruning_from_previous(None, &header);
+    let witness = prover
+        .build_pruning_witness(None, &[], &[], pruning_envelope.as_ref(), Vec::new())
+        .unwrap();
+    let proof = prover.prove_pruning(witness).unwrap();
+    (pruning_envelope, proof)
+}
+
+fn extract_pruning_witness(proof: &ChainProof) -> PruningWitness {
+    match proof {
+        ChainProof::Plonky3(value) => {
+            let parsed = Plonky3Proof::from_value(value).expect("parse pruning proof");
+            let witness_value = parsed
+                .public_inputs
+                .get("witness")
+                .cloned()
+                .expect("pruning witness payload");
+            serde_json::from_value(witness_value).expect("decode pruning witness")
+        }
+        ChainProof::Stwo(_) => panic!("expected Plonky3 pruning proof"),
+    }
+}
+
+fn assert_pruning_matches_envelope(witness: &PruningWitness, envelope: &Envelope) {
+    assert_eq!(witness.snapshot, envelope.snapshot().clone());
+    assert_eq!(witness.segments, envelope.segments().to_vec());
+    assert_eq!(
+        witness.commitment.schema_version(),
+        envelope.commitment().schema_version()
+    );
+    assert_eq!(
+        witness.commitment.parameter_version(),
+        envelope.commitment().parameter_version()
+    );
+    assert_eq!(
+        witness.commitment.aggregate_commitment(),
+        envelope.commitment().aggregate_commitment()
+    );
+    assert_eq!(witness.binding_digest, envelope.binding_digest());
 }
 
 #[test]
@@ -143,14 +188,9 @@ fn recursive_aggregator_rejects_tampered_inputs() {
             .into_value()
             .unwrap(),
     );
-    let pruning_inputs = json!({"witness": {"removed": []}});
-    let pruning_proof = ChainProof::Plonky3(
-        Plonky3Proof::new("pruning", pruning_inputs)
-            .unwrap()
-            .into_value()
-            .unwrap(),
-    );
-    let pruning_envelope = pruning_from_previous(None, &canonical_pruning_header());
+    let (pruning_envelope, pruning_proof) = sample_pruning_artifacts(&prover);
+    let pruning_witness = extract_pruning_witness(&pruning_proof);
+    assert_pruning_matches_envelope(&pruning_witness, pruning_envelope.as_ref());
 
     let mut tampered = transaction_proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
@@ -207,14 +247,9 @@ fn recursive_bundle_verification_detects_tampering() {
             .into_value()
             .unwrap(),
     );
-    let pruning_inputs = json!({"witness": {"pruned": []}});
-    let pruning_proof = ChainProof::Plonky3(
-        Plonky3Proof::new("pruning", pruning_inputs)
-            .unwrap()
-            .into_value()
-            .unwrap(),
-    );
-    let pruning_envelope = pruning_from_previous(None, &canonical_pruning_header());
+    let (pruning_envelope, pruning_proof) = sample_pruning_artifacts(&prover);
+    let pruning_witness = extract_pruning_witness(&pruning_proof);
+    assert_pruning_matches_envelope(&pruning_witness, pruning_envelope.as_ref());
     let recursive_witness = prover
         .build_recursive_witness(
             None,
@@ -283,6 +318,8 @@ fn recursive_roundtrip_spans_state_and_transactions() {
         .build_pruning_witness(None, &[], &[], pruning.as_ref(), Vec::new())
         .unwrap();
     let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
+    let pruning_witness = extract_pruning_witness(&pruning_proof);
+    assert_pruning_matches_envelope(&pruning_witness, pruning.as_ref());
 
     let recursive_witness = prover
         .build_recursive_witness(
