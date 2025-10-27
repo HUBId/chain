@@ -7,9 +7,14 @@ use crate::types::ChainProof;
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};
 use super::circuit::{
-    consensus::ConsensusCircuit, identity::IdentityCircuit, pruning::PruningCircuit,
-    recursive::RecursiveCircuit, state::StateCircuit, transaction::TransactionCircuit,
-    uptime::UptimeCircuit, CircuitError, ExecutionTrace, StarkCircuit,
+    consensus::ConsensusCircuit,
+    identity::IdentityCircuit,
+    pruning::PruningCircuit,
+    recursive::{PrefixedDigest, RecursiveCircuit},
+    state::StateCircuit,
+    transaction::TransactionCircuit,
+    uptime::UptimeCircuit,
+    CircuitError, ExecutionTrace, StarkCircuit,
 };
 use super::conversions::field_to_secure;
 use super::official_adapter::{BlueprintComponent, Component};
@@ -65,6 +70,16 @@ fn ensure_matching_fri(
         return Err(ChainError::Crypto("fri proof mismatch".into()));
     }
     Ok(())
+}
+
+fn expected_pruning_digests(envelope: &Envelope) -> (PrefixedDigest, Vec<PrefixedDigest>) {
+    let binding = envelope.binding_digest().prefixed_bytes();
+    let segments = envelope
+        .segments()
+        .iter()
+        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .collect();
+    (binding, segments)
 }
 
 /// Lightweight verifier that recomputes commitments by replaying circuits.
@@ -488,7 +503,7 @@ impl NodeVerifier {
                 "recursive witness state commitment mismatch".into(),
             ));
         }
-        let expected_binding = pruning_envelope.binding_digest().prefixed_bytes();
+        let (expected_binding, expected_segments) = expected_pruning_digests(pruning_envelope);
         if witness.pruning_binding_digest != expected_binding {
             tracing::error!(
                 expected = %hex::encode(expected_binding),
@@ -500,11 +515,6 @@ impl NodeVerifier {
             ));
         }
 
-        let expected_segments: Vec<_> = pruning_envelope
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
         if witness.pruning_segment_commitments.len() != expected_segments.len() {
             tracing::error!(
                 expected = expected_segments.len(),
