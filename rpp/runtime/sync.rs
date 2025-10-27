@@ -24,7 +24,9 @@ use crate::types::{
     PruningProofExt, RecursiveProof, SignedTransaction, TransactionProofBundle, pruning_from_previous,
 };
 use blake3::Hash;
-use rpp_pruning::{COMMITMENT_TAG, DOMAIN_TAG_LENGTH, DIGEST_LENGTH};
+use rpp_pruning::{
+    COMMITMENT_TAG, DOMAIN_TAG_LENGTH, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, TaggedDigest,
+};
 use rpp_p2p::{
     LightClientHead, LightClientSync, NetworkBlockMetadata, NetworkGlobalStateCommitments,
     NetworkLightClientUpdate, NetworkPayloadExpectations, NetworkReconstructionRequest,
@@ -1100,15 +1102,21 @@ mod tests {
         let parameters = StarkParameters::blueprint_default();
         let hasher = parameters.poseidon_hasher();
         let zero = FieldElement::zero(parameters.modulus());
-        let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-        let pruning_segment_commitments = Vec::new();
-        let pruning_fold = hasher
-            .hash(&[
-                zero.clone(),
-                parameters.element_from_bytes(&pruning_binding_digest),
-                zero.clone(),
-            ])
-            .to_hex();
+        let pruning_binding_digest =
+            TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
+        let pruning_segment_commitments = vec![
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+        ];
+        let pruning_fold = {
+            let mut accumulator = zero.clone();
+            let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
+            accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+            for digest in &pruning_segment_commitments {
+                let element = parameters.element_from_bytes(digest);
+                accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+            }
+            accumulator.to_hex()
+        };
 
         StarkProof {
             kind: ProofKind::Pruning,

@@ -8,6 +8,8 @@ use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
 use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_pruning::{Envelope, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
+const EMPTY_PREFIXED_DIGEST: PrefixedDigest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+
 /// Snapshot of the ledger commitments that must anchor the recursive witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateCommitmentSnapshot {
@@ -106,6 +108,29 @@ fn envelope_prefixed_commitments(envelope: &Envelope) -> (PrefixedDigest, Vec<Pr
         .collect();
 
     (binding, segments)
+}
+
+fn extract_pruning_commitments(
+    pruning_proof: &StarkProof,
+    pruning_envelope: &Envelope,
+) -> ChainResult<(PrefixedDigest, Vec<PrefixedDigest>)> {
+    let (witness_binding, witness_segments) = match &pruning_proof.payload {
+        ProofPayload::Pruning(witness) => (
+            witness.pruning_binding_digest.clone(),
+            witness.pruning_segment_commitments.clone(),
+        ),
+        _ => {
+            return Err(ChainError::Crypto(
+                "pruning proof missing pruning witness payload".into(),
+            ))
+        }
+    };
+
+    if witness_binding != EMPTY_PREFIXED_DIGEST || !witness_segments.is_empty() {
+        Ok((witness_binding, witness_segments))
+    } else {
+        Ok(envelope_prefixed_commitments(pruning_envelope))
+    }
 }
 
 fn compute_recursive_commitment(
@@ -228,7 +253,7 @@ impl RecursiveAggregator {
         ensure_kind(pruning_proof, ProofKind::Pruning)?;
 
         let (pruning_binding_digest, pruning_segment_commitments) =
-            envelope_prefixed_commitments(pruning_envelope);
+            extract_pruning_commitments(pruning_proof, pruning_envelope)?;
         validate_pruning_commitments(
             pruning_envelope,
             &pruning_binding_digest,
@@ -493,11 +518,14 @@ mod tests {
         )
     }
 
-    fn dummy_pruning_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
+    fn dummy_pruning_proof(
+        parameters: &StarkParameters,
+        commitment: String,
+        pruning_binding_digest: PrefixedDigest,
+        pruning_segment_commitments: Vec<PrefixedDigest>,
+    ) -> StarkProof {
         let original = "22".repeat(32);
         let hasher = parameters.poseidon_hasher();
-        let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-        let pruning_segment_commitments = Vec::new();
         let pruning_fold = fold_pruning_digests(
             &hasher,
             parameters,
@@ -731,7 +759,12 @@ mod tests {
             .map(|commitment| dummy_consensus_proof(&params, commitment))
             .collect();
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
-        let pruning_proof = dummy_pruning_proof(&params, pruning_proof_commitment.clone());
+        let pruning_proof = dummy_pruning_proof(
+            &params,
+            pruning_proof_commitment.clone(),
+            pruning_binding_digest.clone(),
+            pruning_segment_commitments.clone(),
+        );
 
         let witness = aggregator
             .build_witness(
@@ -853,7 +886,12 @@ mod tests {
         );
 
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
-        let pruning_proof = dummy_pruning_proof(&params, pruning_proof_commitment.clone());
+        let pruning_proof = dummy_pruning_proof(
+            &params,
+            pruning_proof_commitment.clone(),
+            pruning_binding_digest.clone(),
+            pruning_segment_commitments.clone(),
+        );
         let identity_proof = dummy_identity_proof(&params, identity_commitment.clone());
 
         let witness = aggregator

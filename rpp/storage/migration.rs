@@ -337,15 +337,21 @@ mod tests {
                 let parameters = StarkParameters::blueprint_default();
                 let hasher = parameters.poseidon_hasher();
                 let zero = FieldElement::zero(parameters.modulus());
-                let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-                let pruning_segment_commitments = Vec::new();
-                let pruning_fold = hasher
-                    .hash(&[
-                        zero.clone(),
-                        parameters.element_from_bytes(&pruning_binding_digest),
-                        zero.clone(),
-                    ])
-                    .to_hex();
+                let pruning_binding_digest =
+                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
+                let pruning_segment_commitments = vec![
+                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+                ];
+                let pruning_fold = {
+                    let mut accumulator = zero.clone();
+                    let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
+                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    for digest in &pruning_segment_commitments {
+                        let element = parameters.element_from_bytes(digest);
+                        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+                    }
+                    accumulator.to_hex()
+                };
                 ProofPayload::Pruning(PruningWitness {
                     previous_tx_root: "00".repeat(32),
                     pruned_tx_root: "33".repeat(32),
