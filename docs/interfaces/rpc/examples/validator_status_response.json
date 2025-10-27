@@ -50,24 +50,24 @@
             "schema_version": 1,
             "parameter_version": 1,
             "block_height": 1023,
-            "state_commitment": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            "state_commitment": "7270703a7072756e653a7374617465001111111111111111111111111111111111111111111111111111111111111111"
           },
           "segments": [
             {
               "schema_version": 1,
               "parameter_version": 1,
               "segment_index": 0,
-              "start_height": 1000,
+              "start_height": 1023,
               "end_height": 1023,
-              "segment_commitment": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+              "segment_commitment": "7270703a7072756e653a70726f6f6600dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
             }
           ],
           "commitment": {
             "schema_version": 1,
             "parameter_version": 1,
-            "aggregate_commitment": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+            "aggregate_commitment": "7270703a7072756e653a636f6d6d6974aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
-          "binding_digest": "001122334455667700112233445566770011223344556677001122334455667700112233445566770011223344556677"
+          "binding_digest": "7270703a7072756e653a656e766c70004444444444444444444444444444444444444444444444444444444444444444"
         },
         "root": "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
         "commitment": "112233445566778811223344556677881122334455667788112233445566778811223344556677881122334455667788",

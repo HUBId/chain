@@ -20,10 +20,8 @@
     "new_state_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "proof_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "pruning": {
-      "header": {
-        "schema_version": 1,
-        "parameter_version": 1
-      },
+      "schema_version": 1,
+      "parameter_version": 1,
       "snapshot": {
         "schema_version": 1,
         "parameter_version": 1,
@@ -65,10 +63,8 @@
           "zsi_root": "0101010101010101010101010101010101010101010101010101010101010101",
           "proof_root": "0202020202020202020202020202020202020202020202020202020202020202",
           "pruning": {
-            "header": {
-              "schema_version": 1,
-              "parameter_version": 0
-            },
+            "schema_version": 1,
+            "parameter_version": 0,
             "snapshot": {
               "schema_version": 1,
               "parameter_version": 0,
@@ -80,7 +76,7 @@
                 "schema_version": 1,
                 "parameter_version": 0,
                 "segment_index": 0,
-                "start_height": 4080,
+                "start_height": 4095,
                 "end_height": 4095,
                 "segment_commitment": "7270703a7072756e653a70726f6f66002121212121212121212121212121212121212121212121212121212121212121"
               }

@@ -2,9 +2,8 @@ use base64::{engine::general_purpose, Engine as _};
 use rpp_p2p::{
     NetworkBlockMetadata, NetworkGlobalStateCommitments, NetworkLightClientUpdate,
     NetworkPayloadExpectations, NetworkPruningCommitment, NetworkPruningEnvelope,
-    NetworkPruningEnvelopeHeader, NetworkPruningSegment, NetworkPruningSnapshot,
-    NetworkReconstructionRequest, NetworkSnapshotSummary, NetworkStateSyncChunk,
-    NetworkStateSyncPlan, NetworkTaggedDigestHex,
+    NetworkPruningSegment, NetworkPruningSnapshot, NetworkReconstructionRequest,
+    NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
 };
 use rpp_pruning::{
     DomainTag, COMMITMENT_TAG, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
@@ -31,10 +30,8 @@ fn tagged_hex_digest(tag: DomainTag, byte: u8) -> NetworkTaggedDigestHex {
 
 fn sample_pruning_envelope() -> NetworkPruningEnvelope {
     NetworkPruningEnvelope {
-        header: NetworkPruningEnvelopeHeader {
-            schema_version: 1,
-            parameter_version: 0,
-        },
+        schema_version: 1,
+        parameter_version: 0,
         snapshot: NetworkPruningSnapshot {
             schema_version: 1,
             parameter_version: 0,
@@ -46,7 +43,7 @@ fn sample_pruning_envelope() -> NetworkPruningEnvelope {
             parameter_version: 0,
             segment_index: 0,
             start_height: 0,
-            end_height: 1,
+            end_height: 0,
             segment_commitment: tagged_hex_digest(PROOF_SEGMENT_TAG, 0x02),
         }],
         commitment: NetworkPruningCommitment {

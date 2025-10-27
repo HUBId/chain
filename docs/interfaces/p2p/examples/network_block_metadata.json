@@ -6,10 +6,8 @@
   "new_state_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "proof_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
   "pruning": {
-    "header": {
-      "schema_version": 1,
-      "parameter_version": 1
-    },
+    "schema_version": 1,
+    "parameter_version": 1,
     "snapshot": {
       "schema_version": 1,
       "parameter_version": 1,

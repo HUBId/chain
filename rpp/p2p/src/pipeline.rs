@@ -1151,12 +1151,6 @@ impl From<&str> for NetworkTaggedDigestHex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NetworkPruningEnvelopeHeader {
-    pub schema_version: u16,
-    pub parameter_version: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPruningSnapshot {
     pub schema_version: u16,
     pub parameter_version: u16,
@@ -1183,7 +1177,8 @@ pub struct NetworkPruningCommitment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPruningEnvelope {
-    pub header: NetworkPruningEnvelopeHeader,
+    pub schema_version: u16,
+    pub parameter_version: u16,
     pub snapshot: NetworkPruningSnapshot,
     #[serde(default)]
     pub segments: Vec<NetworkPruningSegment>,
@@ -2054,10 +2049,8 @@ mod tests {
         };
 
         let pruning_envelope = NetworkPruningEnvelope {
-            header: NetworkPruningEnvelopeHeader {
-                schema_version: 1,
-                parameter_version: 0,
-            },
+            schema_version: 1,
+            parameter_version: 0,
             snapshot: NetworkPruningSnapshot {
                 schema_version: 1,
                 parameter_version: 0,
@@ -2069,7 +2062,7 @@ mod tests {
                 parameter_version: 0,
                 segment_index: 0,
                 start_height: 0,
-                end_height: 1,
+                end_height: 0,
                 segment_commitment: prefixed_hex(PROOF_SEGMENT_TAG, 0x20),
             }],
             commitment: NetworkPruningCommitment {

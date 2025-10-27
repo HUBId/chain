@@ -52,7 +52,7 @@ describe('TelemetryPanel', () => {
                   schema_version: 1,
                   parameter_version: 1,
                   segment_index: 0,
-                  start_height: 2000,
+                  start_height: 2047,
                   end_height: 2047,
                   segment_commitment: digest('1'.repeat(96)),
                 },
