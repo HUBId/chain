@@ -1,3 +1,4 @@
+use crate::official::circuit::recursive::PrefixedDigest;
 use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
 
 /// Snapshot of ledger commitments anchoring the recursive aggregation witness.
@@ -62,7 +63,7 @@ fn compute_recursive_commitment(
     consensus_commitments: &[String],
     state_commitment: &str,
     state_roots: &StateCommitmentSnapshot,
-    pruning_commitment: &str,
+    pruning_binding_digest: &PrefixedDigest,
     block_height: u64,
 ) -> FieldElement {
     let hasher = parameters.poseidon_hasher();
@@ -76,7 +77,7 @@ fn compute_recursive_commitment(
     all_commitments.extend_from_slice(consensus_commitments);
     let activity_digest = fold_commitments(&hasher, parameters, &all_commitments);
 
-    let pruning_element = string_to_field(parameters, pruning_commitment);
+    let pruning_element = parameters.element_from_bytes(pruning_binding_digest);
     let state_digest = hasher.hash(&[
         string_to_field(parameters, state_commitment),
         string_to_field(parameters, &state_roots.global_state_root),
@@ -108,7 +109,8 @@ impl RecursiveAggregator {
         Self::new(StarkParameters::blueprint_default())
     }
 
-    /// Compute the recursive aggregation commitment without constructing a witness.
+    /// Compute the recursive aggregation commitment without constructing a witness,
+    /// consuming a typed pruning binding digest rather than a hex-encoded string.
     #[allow(clippy::too_many_arguments)]
     pub fn aggregate_commitment(
         &self,
@@ -119,7 +121,8 @@ impl RecursiveAggregator {
         consensus_commitments: &[String],
         state_commitment: &str,
         state_roots: &StateCommitmentSnapshot,
-        pruning_commitment: &str,
+        /// Prefixed digest binding the pruning segment commitment tree.
+        pruning_binding_digest: &PrefixedDigest,
         block_height: u64,
     ) -> FieldElement {
         compute_recursive_commitment(
@@ -131,7 +134,7 @@ impl RecursiveAggregator {
             consensus_commitments,
             state_commitment,
             state_roots,
-            pruning_commitment,
+            pruning_binding_digest,
             block_height,
         )
     }
