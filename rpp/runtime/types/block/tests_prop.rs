@@ -172,53 +172,41 @@ prop_compose! {
             leader_timetoke,
         };
         let previous_block_hash = previous_header.hash();
-
-        let snapshot = Snapshot::new(
-            TEST_SCHEMA_VERSION,
-            TEST_PARAMETER_VERSION,
-            BlockHeight::new(height),
-            TaggedDigest::new(SNAPSHOT_STATE_TAG, prev_state_bytes),
-        ).expect("snapshot");
-
-        let segment = ProofSegment::new(
-            TEST_SCHEMA_VERSION,
-            TEST_PARAMETER_VERSION,
-            TEST_SEGMENT_INDEX,
-            BlockHeight::new(height),
-            BlockHeight::new(height),
-            TaggedDigest::new(PROOF_SEGMENT_TAG, segment_bytes),
-        ).expect("segment");
-
-        let aggregate = super::compute_pruning_aggregate(
+        let previous_block_hash_hex = encode_hex_digest(&previous_block_hash);
+        let resulting_state_root_hex = encode_hex_digest(&resulting_state_bytes);
+        let proof = super::canonical_pruning_from_parts(
             height,
-            &previous_block_hash,
-            snapshot.state_commitment().digest(),
-            segment.segment_commitment().digest(),
-        );
-        let commitment = Commitment::new(TEST_SCHEMA_VERSION, TEST_PARAMETER_VERSION, aggregate)
-            .expect("commitment");
-        let binding = super::compute_pruning_binding(
-            &commitment.aggregate_commitment(),
-            &resulting_state_bytes,
-        );
+            &previous_block_hash_hex,
+            &previous_header.state_root,
+            &previous_header.tx_root,
+            &resulting_state_root_hex,
+        )
+        .expect("canonical pruning envelope");
 
-        let envelope = rpp_pruning::Envelope::new(
-            TEST_SCHEMA_VERSION,
-            TEST_PARAMETER_VERSION,
-            snapshot,
-            vec![segment],
-            commitment,
-            binding,
-        ).expect("envelope");
-        let proof = Arc::new(envelope);
+        let metadata = proof.envelope_metadata();
+        let expected_schema_digest = super::derive_version_digest(u16::from(TEST_SCHEMA_VERSION));
+        let expected_parameter_digest =
+            super::derive_version_digest(u16::from(TEST_PARAMETER_VERSION));
+        assert_eq!(metadata.schema_version, u16::from(TEST_SCHEMA_VERSION));
+        assert_eq!(metadata.parameter_version, u16::from(TEST_PARAMETER_VERSION));
+        assert_eq!(
+            metadata.schema_version_digest.as_str(),
+            hex::encode(expected_schema_digest)
+        );
+        assert_eq!(
+            metadata.parameter_version_digest.as_str(),
+            hex::encode(expected_parameter_digest)
+        );
+        let expected_binding = hex::encode(proof.binding_digest().prefixed_bytes());
+        assert_eq!(metadata.binding_digest.as_str(), expected_binding);
 
         let previous = fabricate_previous_block(previous_header.clone(), &proof);
 
         let header = BlockHeader {
             height: height + 1,
-            previous_hash: encode_hex_digest(&previous_block_hash),
+            previous_hash: previous_block_hash_hex.clone(),
             tx_root: previous_header.tx_root.clone(),
-            state_root: encode_hex_digest(&resulting_state_bytes),
+            state_root: resulting_state_root_hex.clone(),
             utxo_root,
             reputation_root,
             timetoke_root,
@@ -281,6 +269,14 @@ proptest! {
         assert_eq!(reconstructed, fixture.proof);
         let expected_binding = hex::encode(fixture.proof.binding_digest().prefixed_bytes());
         assert_eq!(metadata.binding_digest.as_str(), expected_binding);
+        let expected_schema_digest = hex::encode(super::derive_version_digest(metadata.schema_version));
+        let expected_parameter_digest =
+            hex::encode(super::derive_version_digest(metadata.parameter_version));
+        assert_eq!(metadata.schema_version_digest.as_str(), expected_schema_digest);
+        assert_eq!(
+            metadata.parameter_version_digest.as_str(),
+            expected_parameter_digest
+        );
     }
 }
 

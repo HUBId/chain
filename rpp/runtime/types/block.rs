@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::convert::TryInto;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use blake3::Hasher as Blake3Hasher;
@@ -31,11 +31,11 @@ use serde_json;
 
 use storage_firewood::pruning::FirewoodPruner;
 
+use self::pruning_ext::PruningProofExt;
 use super::{
     identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
     Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
 };
-use self::pruning_ext::PruningProofExt;
 
 use rpp_pruning::{
     BlockHeight, Commitment, DomainTag, ParameterVersion, ProofSegment, SchemaVersion,
@@ -146,6 +146,42 @@ mod serde_prefixed_digest_vec_hex {
         }
 
         deserializer.deserialize_seq(PrefixedDigestVecVisitor)
+    }
+}
+
+mod serde_version_digest_hex {
+    use super::DIGEST_LENGTH;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &[u8; DIGEST_LENGTH], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if value.iter().all(|byte| *byte == 0) {
+            serializer.serialize_str("")
+        } else {
+            serializer.serialize_str(&hex::encode(value))
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; DIGEST_LENGTH], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        if encoded.is_empty() {
+            return Ok([0u8; DIGEST_LENGTH]);
+        }
+        let bytes = hex::decode(&encoded).map_err(serde::de::Error::custom)?;
+        if bytes.len() != DIGEST_LENGTH {
+            return Err(serde::de::Error::custom(format!(
+                "expected {DIGEST_LENGTH} bytes, found {}",
+                bytes.len()
+            )));
+        }
+        let mut digest = [0u8; DIGEST_LENGTH];
+        digest.copy_from_slice(&bytes);
+        Ok(digest)
     }
 }
 
@@ -302,9 +338,7 @@ impl TaggedDigestHex {
         label: &str,
         expected_tag: DomainTag,
     ) -> ChainResult<PrefixedDigest> {
-        Ok(self
-            .to_tagged_digest(label, expected_tag)?
-            .prefixed_bytes())
+        Ok(self.to_tagged_digest(label, expected_tag)?.prefixed_bytes())
     }
 
     pub fn parse(expected_tag: DomainTag, label: &str, value: &str) -> ChainResult<TaggedDigest> {
@@ -314,6 +348,46 @@ impl TaggedDigestHex {
 
 impl From<TaggedDigestHex> for String {
     fn from(value: TaggedDigestHex) -> Self {
+        value.into_inner()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct VersionDigestHex(String);
+
+impl VersionDigestHex {
+    pub fn from_digest(digest: &[u8; DIGEST_LENGTH]) -> Self {
+        Self(hex::encode(digest))
+    }
+
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn to_digest(&self, label: &str) -> ChainResult<[u8; DIGEST_LENGTH]> {
+        decode_hex_digest(label, &self.0)
+    }
+}
+
+impl From<[u8; DIGEST_LENGTH]> for VersionDigestHex {
+    fn from(digest: [u8; DIGEST_LENGTH]) -> Self {
+        Self::from_digest(&digest)
+    }
+}
+
+impl From<&[u8; DIGEST_LENGTH]> for VersionDigestHex {
+    fn from(digest: &[u8; DIGEST_LENGTH]) -> Self {
+        Self::from_digest(digest)
+    }
+}
+
+impl From<VersionDigestHex> for String {
+    fn from(value: VersionDigestHex) -> Self {
         value.into_inner()
     }
 }
@@ -353,6 +427,8 @@ pub struct PruningCommitmentMetadata {
 pub struct PruningEnvelopeMetadata {
     pub schema_version: u16,
     pub parameter_version: u16,
+    pub schema_version_digest: VersionDigestHex,
+    pub parameter_version_digest: VersionDigestHex,
     pub snapshot: PruningSnapshotMetadata,
     pub segments: Vec<PruningSegmentMetadata>,
     pub commitment: PruningCommitmentMetadata,
@@ -364,15 +440,16 @@ mod pruning_ext {
         compute_pruning_aggregate, compute_pruning_binding, decode_hex_digest,
         decode_tagged_digest, derive_version_digest, encode_tagged_digest_hex, Block, BlockHeader,
         ChainError, ChainResult, PruningCommitmentMetadata, PruningEnvelopeMetadata,
-        PruningSegmentMetadata, PruningSnapshotMetadata, TaggedDigestHex, ZERO_DIGEST_HEX,
-        PRUNING_PARAMETER_VERSION, PRUNING_SCHEMA_VERSION, PRUNING_SEGMENT_INDEX,
+        PruningSegmentMetadata, PruningSnapshotMetadata, TaggedDigestHex,
+        PRUNING_PARAMETER_VERSION, PRUNING_SCHEMA_VERSION, PRUNING_SEGMENT_INDEX, ZERO_DIGEST_HEX,
     };
     use crate::PruningProof;
-    use std::sync::Arc;
     use rpp_pruning::{
         BlockHeight, Commitment, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex,
-        Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+        Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
+        SNAPSHOT_STATE_TAG,
     };
+    use std::sync::Arc;
     use storage_firewood::pruning::FirewoodPruner;
 
     #[derive(Clone, Debug)]
@@ -390,10 +467,7 @@ mod pruning_ext {
             Ok(Self { envelope })
         }
 
-        pub fn genesis(
-            envelope: PruningProof,
-            current_header: &BlockHeader,
-        ) -> ChainResult<Self> {
+        pub fn genesis(envelope: PruningProof, current_header: &BlockHeader) -> ChainResult<Self> {
             Self::new(envelope, current_header, None)
         }
 
@@ -569,7 +643,8 @@ mod pruning_ext {
 
             if let Some(_) = previous {
                 let schema_digest = derive_version_digest(u16::from(envelope.schema_version()));
-                let parameter_digest = derive_version_digest(u16::from(envelope.parameter_version()));
+                let parameter_digest =
+                    derive_version_digest(u16::from(envelope.parameter_version()));
 
                 if !FirewoodPruner::verify_pruned_state_with_digests(
                     schema_digest,
@@ -641,7 +716,8 @@ mod pruning_ext {
                 block_height: snapshot.block_height().as_u64(),
                 state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
             };
-            let segment_metadata = self.segments()
+            let segment_metadata = self
+                .segments()
                 .iter()
                 .map(|segment| PruningSegmentMetadata {
                     schema_version: u16::from(segment.schema_version()),
@@ -661,6 +737,12 @@ mod pruning_ext {
             PruningEnvelopeMetadata {
                 schema_version: u16::from(self.schema_version()),
                 parameter_version: u16::from(self.parameter_version()),
+                schema_version_digest: VersionDigestHex::from(derive_version_digest(u16::from(
+                    self.schema_version(),
+                ))),
+                parameter_version_digest: VersionDigestHex::from(derive_version_digest(u16::from(
+                    self.parameter_version(),
+                ))),
                 snapshot: snapshot_metadata,
                 segments: segment_metadata,
                 commitment: commitment_metadata,
@@ -746,7 +828,34 @@ mod pruning_ext {
     }
 
     pub fn pruning_from_metadata(metadata: PruningEnvelopeMetadata) -> ChainResult<PruningProof> {
-        let snapshot_meta = metadata.snapshot;
+        let PruningEnvelopeMetadata {
+            schema_version,
+            parameter_version,
+            schema_version_digest,
+            parameter_version_digest,
+            snapshot: snapshot_meta,
+            segments: segment_metas,
+            commitment: commitment_meta,
+            binding_digest,
+        } = metadata;
+
+        let schema_digest = schema_version_digest.to_digest("pruning schema version digest")?;
+        let expected_schema_digest = derive_version_digest(schema_version);
+        if schema_digest != expected_schema_digest {
+            return Err(ChainError::Crypto(
+                "pruning schema version digest mismatch".into(),
+            ));
+        }
+
+        let parameter_digest =
+            parameter_version_digest.to_digest("pruning parameter version digest")?;
+        let expected_parameter_digest = derive_version_digest(parameter_version);
+        if parameter_digest != expected_parameter_digest {
+            return Err(ChainError::Crypto(
+                "pruning parameter version digest mismatch".into(),
+            ));
+        }
+
         let state_commitment = snapshot_meta
             .state_commitment
             .to_tagged_digest("snapshot state commitment", SNAPSHOT_STATE_TAG)?;
@@ -758,8 +867,8 @@ mod pruning_ext {
         )
         .map_err(|err| ChainError::Crypto(format!("invalid pruning snapshot: {err}")))?;
 
-        let mut segments = Vec::with_capacity(metadata.segments.len());
-        for segment_meta in metadata.segments {
+        let mut segments = Vec::with_capacity(segment_metas.len());
+        for segment_meta in segment_metas {
             let segment_commitment = segment_meta
                 .segment_commitment
                 .to_tagged_digest("pruning segment commitment", PROOF_SEGMENT_TAG)?;
@@ -775,7 +884,6 @@ mod pruning_ext {
             segments.push(segment);
         }
 
-        let commitment_meta = metadata.commitment;
         let aggregate_commitment = commitment_meta
             .aggregate_commitment
             .to_tagged_digest("pruning aggregate commitment", COMMITMENT_TAG)?;
@@ -786,13 +894,11 @@ mod pruning_ext {
         )
         .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
 
-        let binding = metadata
-            .binding_digest
-            .to_tagged_digest("pruning binding digest", ENVELOPE_TAG)?;
+        let binding = binding_digest.to_tagged_digest("pruning binding digest", ENVELOPE_TAG)?;
 
         let envelope = rpp_pruning::Envelope::new(
-            SchemaVersion::new(metadata.schema_version),
-            ParameterVersion::new(metadata.parameter_version),
+            SchemaVersion::new(schema_version),
+            ParameterVersion::new(parameter_version),
             snapshot,
             segments,
             commitment,
@@ -804,18 +910,11 @@ mod pruning_ext {
     }
 
     pub fn pruning_genesis(state_root: &str) -> PruningProof {
-        canonical_pruning_genesis(state_root)
-            .expect("genesis pruning envelope must be valid")
+        canonical_pruning_genesis(state_root).expect("genesis pruning envelope must be valid")
     }
 
     pub fn canonical_pruning_genesis(state_root: &str) -> ChainResult<PruningProof> {
-        canonical_pruning_from_parts(
-            0,
-            ZERO_DIGEST_HEX,
-            state_root,
-            ZERO_DIGEST_HEX,
-            state_root,
-        )
+        canonical_pruning_from_parts(0, ZERO_DIGEST_HEX, state_root, ZERO_DIGEST_HEX, state_root)
     }
 
     pub fn pruning_from_previous(
@@ -909,20 +1008,20 @@ mod pruning_ext {
                 .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
 
         let resulting_state = decode_hex_digest("resulting state root", resulting_state_root)?;
-        let binding = super::compute_pruning_binding(
-            &commitment.aggregate_commitment(),
-            &resulting_state,
-        );
+        let binding =
+            super::compute_pruning_binding(&commitment.aggregate_commitment(), &resulting_state);
 
-        Ok(Arc::new(rpp_pruning::Envelope::new(
-            PRUNING_SCHEMA_VERSION,
-            PRUNING_PARAMETER_VERSION,
-            snapshot,
-            vec![segment],
-            commitment,
-            binding,
-        )
-        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?))
+        Ok(Arc::new(
+            rpp_pruning::Envelope::new(
+                PRUNING_SCHEMA_VERSION,
+                PRUNING_PARAMETER_VERSION,
+                snapshot,
+                vec![segment],
+                commitment,
+                binding,
+            )
+            .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?,
+        ))
     }
 }
 
@@ -1679,15 +1778,8 @@ impl Block {
         Ok(())
     }
 
-    fn verify_pruning(
-        &self,
-        previous: Option<&Block>,
-    ) -> ChainResult<ValidatedPruningEnvelope> {
-        ValidatedPruningEnvelope::new(
-            self.pruning_proof.clone(),
-            &self.header,
-            previous,
-        )
+    fn verify_pruning(&self, previous: Option<&Block>) -> ChainResult<ValidatedPruningEnvelope> {
+        ValidatedPruningEnvelope::new(self.pruning_proof.clone(), &self.header, previous)
     }
 
     fn verify_full_payload(
@@ -2542,13 +2634,14 @@ mod tests {
                 let zero = FieldElement::zero(parameters.modulus());
                 let pruning_binding_digest =
                     TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-                let pruning_segment_commitments = vec![
-                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-                ];
+                let pruning_segment_commitments =
+                    vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH])
+                        .prefixed_bytes()];
                 let pruning_fold = {
                     let mut accumulator = zero.clone();
                     let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
-                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    accumulator =
+                        hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
                     for digest in &pruning_segment_commitments {
                         let element = parameters.element_from_bytes(digest);
                         accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
@@ -2579,8 +2672,8 @@ mod tests {
                 timetoke_root: "ff".repeat(32),
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
-                pruning_binding_digest:
-                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes(),
+                pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH])
+                    .prefixed_bytes(),
                 pruning_segment_commitments: vec![
                     TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
                     TaggedDigest::new(PROOF_SEGMENT_TAG, [0x66; DIGEST_LENGTH]).prefixed_bytes(),
@@ -2621,13 +2714,14 @@ mod tests {
                 let zero = FieldElement::zero(parameters.modulus());
                 let pruning_binding_digest =
                     TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-                let pruning_segment_commitments = vec![
-                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-                ];
+                let pruning_segment_commitments =
+                    vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH])
+                        .prefixed_bytes()];
                 let pruning_fold = {
                     let mut accumulator = zero.clone();
                     let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
-                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    accumulator =
+                        hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
                     for digest in &pruning_segment_commitments {
                         let element = parameters.element_from_bytes(digest);
                         accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
@@ -2998,6 +3092,10 @@ pub struct BlockMetadata {
     pub pruning_binding_digest: PrefixedDigest,
     #[serde(default, with = "serde_prefixed_digest_vec_hex")]
     pub pruning_segment_commitments: Vec<PrefixedDigest>,
+    #[serde(default, with = "serde_version_digest_hex")]
+    pub pruning_schema_digest: [u8; DIGEST_LENGTH],
+    #[serde(default, with = "serde_version_digest_hex")]
+    pub pruning_parameter_digest: [u8; DIGEST_LENGTH],
     pub recursive_commitment: String,
     #[serde(default)]
     pub recursive_previous_commitment: Option<String>,
@@ -3027,6 +3125,10 @@ struct BlockMetadataSerde {
     pub pruning_schema_version: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pruning_parameter_version: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_schema_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_parameter_digest: Option<String>,
     #[serde(default, with = "serde_prefixed_digest_hex")]
     pub pruning_binding_digest: PrefixedDigest,
     #[serde(default, with = "serde_prefixed_digest_vec_hex")]
@@ -3054,6 +3156,8 @@ impl From<BlockMetadataSerde> for BlockMetadata {
             pruning_aggregate_commitment,
             pruning_schema_version,
             pruning_parameter_version,
+            pruning_schema_digest,
+            pruning_parameter_digest,
             pruning_binding_digest,
             pruning_segment_commitments,
             recursive_commitment,
@@ -3099,6 +3203,34 @@ impl From<BlockMetadataSerde> for BlockMetadata {
             }
         }
 
+        let pruning_schema_digest = pruning_schema_digest
+            .and_then(|encoded| hex::decode(encoded).ok())
+            .and_then(|bytes| bytes.try_into().ok())
+            .or_else(|| {
+                pruning.as_ref().and_then(|metadata| {
+                    metadata
+                        .schema_version_digest
+                        .to_digest("pruning schema version digest")
+                        .ok()
+                })
+            })
+            .or_else(|| pruning_schema_version.map(|version| derive_version_digest(version)))
+            .unwrap_or([0u8; DIGEST_LENGTH]);
+
+        let pruning_parameter_digest = pruning_parameter_digest
+            .and_then(|encoded| hex::decode(encoded).ok())
+            .and_then(|bytes| bytes.try_into().ok())
+            .or_else(|| {
+                pruning.as_ref().and_then(|metadata| {
+                    metadata
+                        .parameter_version_digest
+                        .to_digest("pruning parameter version digest")
+                        .ok()
+                })
+            })
+            .or_else(|| pruning_parameter_version.map(|version| derive_version_digest(version)))
+            .unwrap_or([0u8; DIGEST_LENGTH]);
+
         Self {
             height,
             hash,
@@ -3109,6 +3241,8 @@ impl From<BlockMetadataSerde> for BlockMetadata {
             pruning,
             pruning_binding_digest,
             pruning_segment_commitments,
+            pruning_schema_digest,
+            pruning_parameter_digest,
             recursive_commitment,
             recursive_previous_commitment,
             recursive_system,
@@ -3129,6 +3263,8 @@ impl From<BlockMetadata> for BlockMetadataSerde {
             pruning,
             pruning_binding_digest,
             pruning_segment_commitments,
+            pruning_schema_digest,
+            pruning_parameter_digest,
             recursive_commitment,
             recursive_previous_commitment,
             recursive_system,
@@ -3149,13 +3285,8 @@ impl From<BlockMetadata> for BlockMetadataSerde {
                     .get(0)
                     .map(|segment| segment.segment_commitment.as_str().to_owned());
                 let pruning_commitment = Some(metadata.binding_digest.as_str().to_owned());
-                let pruning_aggregate_commitment = Some(
-                    metadata
-                        .commitment
-                        .aggregate_commitment
-                        .as_str()
-                        .to_owned(),
-                );
+                let pruning_aggregate_commitment =
+                    Some(metadata.commitment.aggregate_commitment.as_str().to_owned());
                 let pruning_schema_version = Some(metadata.schema_version);
                 let pruning_parameter_version = Some(metadata.parameter_version);
                 (
@@ -3181,6 +3312,10 @@ impl From<BlockMetadata> for BlockMetadataSerde {
             pruning_aggregate_commitment,
             pruning_schema_version,
             pruning_parameter_version,
+            pruning_schema_digest: (!pruning_schema_digest.iter().all(|byte| *byte == 0))
+                .then(|| hex::encode(pruning_schema_digest)),
+            pruning_parameter_digest: (!pruning_parameter_digest.iter().all(|byte| *byte == 0))
+                .then(|| hex::encode(pruning_parameter_digest)),
             pruning_binding_digest,
             pruning_segment_commitments,
             recursive_commitment,
@@ -3237,9 +3372,14 @@ fn legacy_pruning_envelope(
         aggregate_commitment: TaggedDigestHex(aggregate_commitment),
     };
 
+    let schema_digest = VersionDigestHex::from(derive_version_digest(schema_version));
+    let parameter_digest = VersionDigestHex::from(derive_version_digest(parameter_version));
+
     Some(PruningEnvelopeMetadata {
         schema_version,
         parameter_version,
+        schema_version_digest: schema_digest,
+        parameter_version_digest: parameter_digest,
         snapshot,
         segments,
         commitment,
@@ -3265,11 +3405,9 @@ impl BlockMetadata {
             .iter()
             .map(|segment| segment.segment_commitment().prefixed_bytes())
             .collect();
-        let previous_state_root = pruning
-            .snapshot
-            .state_commitment
-            .as_str()
-            .to_owned();
+        let previous_state_root = pruning.snapshot.state_commitment.as_str().to_owned();
+        let pruning_schema_digest = derive_version_digest(pruning.schema_version);
+        let pruning_parameter_digest = derive_version_digest(pruning.parameter_version);
 
         Self {
             height: block.header.height,
@@ -3281,6 +3419,8 @@ impl BlockMetadata {
             pruning: Some(pruning),
             pruning_binding_digest,
             pruning_segment_commitments,
+            pruning_schema_digest,
+            pruning_parameter_digest,
             recursive_commitment: block.recursive_proof.commitment.clone(),
             recursive_previous_commitment: block.recursive_proof.previous_commitment.clone(),
             recursive_system: block.recursive_proof.system.clone(),
@@ -3309,7 +3449,8 @@ impl BlockMetadata {
     }
 
     pub fn pruning_schema_version(&self) -> Option<u16> {
-        self.pruning_metadata().map(|pruning| pruning.schema_version)
+        self.pruning_metadata()
+            .map(|pruning| pruning.schema_version)
     }
 
     pub fn pruning_parameter_version(&self) -> Option<u16> {

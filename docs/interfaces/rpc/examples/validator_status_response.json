@@ -14,7 +14,10 @@
     "epoch": 12,
     "epoch_nonce": "0x01",
     "pending_votes": 2,
-    "round_latencies_ms": [120, 110],
+    "round_latencies_ms": [
+      120,
+      110
+    ],
     "leader_changes": 1,
     "quorum_latency_ms": 98,
     "witness_events": 5,
@@ -46,6 +49,8 @@
         "envelope": {
           "schema_version": 1,
           "parameter_version": 1,
+          "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
+          "parameter_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
           "snapshot": {
             "schema_version": 1,
             "parameter_version": 1,

@@ -22,6 +22,8 @@
     "pruning": {
       "schema_version": 1,
       "parameter_version": 1,
+      "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
+      "parameter_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
       "snapshot": {
         "schema_version": 1,
         "parameter_version": 1,
@@ -65,6 +67,8 @@
           "pruning": {
             "schema_version": 1,
             "parameter_version": 0,
+            "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
+            "parameter_version_digest": "0000000000000000000000000000000000000000000000000000000000000000",
             "snapshot": {
               "schema_version": 1,
               "parameter_version": 0,

@@ -177,11 +177,17 @@
       },
       "additionalProperties": false
     },
+    "VersionDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
     "PruningEnvelopeMetadata": {
       "type": "object",
       "required": [
         "schema_version",
         "parameter_version",
+        "schema_version_digest",
+        "parameter_version_digest",
         "snapshot",
         "segments",
         "commitment",
@@ -190,6 +196,8 @@
       "properties": {
         "schema_version": {"type": "integer", "minimum": 0},
         "parameter_version": {"type": "integer", "minimum": 0},
+        "schema_version_digest": {"$ref": "#/$defs/VersionDigestHex"},
+        "parameter_version_digest": {"$ref": "#/$defs/VersionDigestHex"},
         "snapshot": {"$ref": "#/$defs/PruningSnapshotMetadata"},
         "segments": {
           "type": "array",

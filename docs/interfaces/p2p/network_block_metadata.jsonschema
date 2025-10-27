@@ -38,9 +38,27 @@
       "items": {"$ref": "#/$defs/TaggedDigestHex"},
       "default": []
     },
+    "pruning_schema_digest": {
+      "default": null,
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/VersionDigestHex"}
+      ]
+    },
+    "pruning_parameter_digest": {
+      "default": null,
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/VersionDigestHex"}
+      ]
+    },
     "recursion_anchor": {"type": "string"}
   },
   "$defs": {
+    "VersionDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
     "TaggedDigestHex": {
       "type": "string",
       "pattern": "^[0-9a-fA-F]{96}$"
@@ -100,6 +118,8 @@
       "required": [
         "schema_version",
         "parameter_version",
+        "schema_version_digest",
+        "parameter_version_digest",
         "snapshot",
         "segments",
         "commitment",
@@ -108,6 +128,8 @@
       "properties": {
         "schema_version": {"type": "integer", "minimum": 0},
         "parameter_version": {"type": "integer", "minimum": 0},
+        "schema_version_digest": {"$ref": "#/$defs/VersionDigestHex"},
+        "parameter_version_digest": {"$ref": "#/$defs/VersionDigestHex"},
         "snapshot": {"$ref": "#/$defs/NetworkPruningSnapshot"},
         "segments": {
           "type": "array",

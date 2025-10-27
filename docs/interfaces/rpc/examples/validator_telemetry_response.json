@@ -34,6 +34,8 @@
       "pruning": {
         "schema_version": 1,
         "parameter_version": 1,
+        "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
+        "parameter_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
         "snapshot": {
           "schema_version": 1,
           "parameter_version": 1,
@@ -69,7 +71,10 @@
     "pending_votes": 0,
     "quorum_reached": true,
     "leader_changes": 2,
-    "round_latencies_ms": [120, 150],
+    "round_latencies_ms": [
+      120,
+      150
+    ],
     "quorum_latency_ms": 98,
     "witness_events": 1,
     "slashing_events": 0,
@@ -114,6 +119,8 @@
         "pruning": {
           "schema_version": 1,
           "parameter_version": 1,
+          "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
+          "parameter_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
           "snapshot": {
             "schema_version": 1,
             "parameter_version": 1,
@@ -181,7 +188,9 @@
                   "parameter_version": 1,
                   "aggregate_commitment": "7270703a7072756e653a636f6d6d6974cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                 },
-                "binding_digest": "7270703a7072756e653a656e766c70004444444444444444444444444444444444444444444444444444444444444444"
+                "binding_digest": "7270703a7072756e653a656e766c70004444444444444444444444444444444444444444444444444444444444444444",
+                "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
+                "parameter_version_digest": "0001000000000000000000000000000000000000000000000000000000000000"
               },
               "previous_commitment": "0xeeee",
               "payload_expectations": {
@@ -211,9 +220,16 @@
         }
       ]
     },
-    "missing_heights": [4096, 4097, 4098],
+    "missing_heights": [
+      4096,
+      4097,
+      4098
+    ],
     "persisted_path": "/var/lib/rpp/pruning/plan.json",
-    "stored_proofs": [4096, 4097],
+    "stored_proofs": [
+      4096,
+      4097
+    ],
     "last_updated": 1700004300
   },
   "vrf_threshold": {

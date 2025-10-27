@@ -8,16 +8,16 @@ use rpp_chain::stwo::circuit::{
     pruning::PruningWitness, recursive::RecursiveWitness, state::StateWitness, ExecutionTrace,
 };
 use rpp_chain::stwo::params::{FieldElement, StarkParameters};
-use rpp_pruning::{
-    TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
-};
 use rpp_chain::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
 };
 use rpp_chain::types::{
-    AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof,
-    ProofSystem, PruningProof, PruningProofExt, RecursiveProof, SignedTransaction,
-    pruning_from_previous,
+    pruning_from_previous, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata,
+    BlockProofBundle, ChainProof, ProofSystem, PruningProof, PruningProofExt, RecursiveProof,
+    SignedTransaction,
+};
+use rpp_pruning::{
+    TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
 };
 use storage_firewood::kv::FirewoodKv;
 use tempfile::tempdir;
@@ -51,9 +51,8 @@ fn dummy_pruning_proof() -> StarkProof {
     let zero = FieldElement::zero(parameters.modulus());
     let pruning_binding_digest =
         TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-    let pruning_segment_commitments = vec![
-        TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-    ];
+    let pruning_segment_commitments =
+        vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes()];
     let pruning_fold = {
         let mut accumulator = zero.clone();
         let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
@@ -241,10 +240,7 @@ fn storage_persists_extended_block_metadata() {
     assert_eq!(persisted.proof_hash, genesis.header.proof_root);
     assert_eq!(
         persisted.pruning_binding_digest,
-        genesis
-            .pruning_proof
-            .binding_digest()
-            .prefixed_bytes()
+        genesis.pruning_proof.binding_digest().prefixed_bytes()
     );
     let expected_segments: Vec<_> = genesis
         .pruning_proof
@@ -261,6 +257,14 @@ fn storage_persists_extended_block_metadata() {
         persisted.pruning_segment_commitments,
         metadata.pruning_segment_commitments
     );
+    assert_eq!(
+        persisted.pruning_schema_digest,
+        metadata.pruning_schema_digest
+    );
+    assert_eq!(
+        persisted.pruning_parameter_digest,
+        metadata.pruning_parameter_digest
+    );
     assert_eq!(persisted.previous_state_root, metadata.previous_state_root);
     assert_eq!(persisted.new_state_root, metadata.new_state_root);
     let persisted_pruning = persisted
@@ -270,14 +274,8 @@ fn storage_persists_extended_block_metadata() {
         .pruning_metadata()
         .expect("expected pruning metadata");
     assert_eq!(
-        persisted_pruning
-            .snapshot
-            .state_commitment
-            .as_str(),
-        expected_pruning
-            .snapshot
-            .state_commitment
-            .as_str()
+        persisted_pruning.snapshot.state_commitment.as_str(),
+        expected_pruning.snapshot.state_commitment.as_str()
     );
     assert_eq!(
         persisted_pruning
@@ -308,29 +306,27 @@ fn storage_persists_extended_block_metadata() {
         expected_pruning.binding_digest.as_str()
     );
     assert_eq!(
-        persisted_pruning
-            .commitment
-            .aggregate_commitment
-            .as_str(),
-        expected_pruning
-            .commitment
-            .aggregate_commitment
-            .as_str()
+        persisted_pruning.commitment.aggregate_commitment.as_str(),
+        expected_pruning.commitment.aggregate_commitment.as_str()
     );
-    let expected_binding =
-        hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
+    assert_eq!(
+        hex::encode(persisted.pruning_schema_digest),
+        expected_pruning.schema_version_digest.as_str()
+    );
+    assert_eq!(
+        hex::encode(persisted.pruning_parameter_digest),
+        expected_pruning.parameter_version_digest.as_str()
+    );
+    let expected_binding = hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
     assert_eq!(persisted_pruning.binding_digest.as_str(), expected_binding);
     let expected_commitment = hex::encode(
         genesis
             .pruning_proof
             .aggregate_commitment()
-            .prefixed_bytes()
+            .prefixed_bytes(),
     );
     assert_eq!(
-        persisted_pruning
-            .commitment
-            .aggregate_commitment
-            .as_str(),
+        persisted_pruning.commitment.aggregate_commitment.as_str(),
         expected_commitment
     );
 }
