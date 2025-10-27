@@ -490,12 +490,6 @@ impl NodeVerifier {
                 "recursive witness state commitment mismatch".into(),
             ));
         }
-        if witness.pruning_commitment != pruning_stark.commitment {
-            return Err(ChainError::Crypto(
-                "recursive witness pruning commitment mismatch".into(),
-            ));
-        }
-
         let expected_binding = pruning_envelope.binding_digest().prefixed_bytes();
         if witness.pruning_binding_digest != expected_binding {
             tracing::error!(

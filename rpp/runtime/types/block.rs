@@ -781,6 +781,22 @@ fn parse_tagged_digest_with_legacy(
     }
 }
 
+fn parse_prefixed_digest_bytes(
+    expected_tag: DomainTag,
+    label: &str,
+    bytes: &[u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+) -> ChainResult<TaggedDigest> {
+    let mut tag_bytes = [0u8; DOMAIN_TAG_LENGTH];
+    tag_bytes.copy_from_slice(&bytes[..DOMAIN_TAG_LENGTH]);
+    let mut digest_bytes = [0u8; DIGEST_LENGTH];
+    digest_bytes.copy_from_slice(&bytes[DOMAIN_TAG_LENGTH..]);
+    let digest = TaggedDigest::new(DomainTag::new(tag_bytes), digest_bytes);
+    digest
+        .ensure_tag(expected_tag)
+        .map_err(|err| ChainError::Crypto(format!("{label} has invalid domain tag: {err}")))?;
+    Ok(digest)
+}
+
 pub(super) fn compute_pruning_aggregate(
     pruned_height: u64,
     previous_hash: &[u8; 32],
@@ -1067,15 +1083,61 @@ impl RecursiveProof {
             }
         }
 
-        let witness_pruning_commitment = parse_tagged_digest_with_legacy(
+        let witness_binding_digest = parse_prefixed_digest_bytes(
             ENVELOPE_TAG,
-            "recursive witness pruning commitment",
-            &witness.pruning_commitment,
+            "recursive witness pruning binding digest",
+            &witness.pruning_binding_digest,
         )?;
 
-        if witness_pruning_commitment != pruning.binding_digest() {
+        let metadata = pruning.envelope_metadata();
+        let metadata_binding_digest = metadata
+            .binding_digest
+            .to_tagged_digest("pruning metadata binding digest", ENVELOPE_TAG)?;
+
+        if witness_binding_digest != metadata_binding_digest {
             return Err(ChainError::Crypto(
-                "recursive witness pruning commitment mismatch".into(),
+                "recursive witness pruning binding digest mismatch".into(),
+            ));
+        }
+
+        let metadata_segments: Vec<TaggedDigest> = metadata
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(index, segment)| {
+                segment.segment_commitment.to_tagged_digest(
+                    &format!("pruning metadata segment commitment #{index}"),
+                    PROOF_SEGMENT_TAG,
+                )
+            })
+            .collect::<ChainResult<Vec<_>>>()?;
+
+        let witness_segments: Vec<TaggedDigest> = witness
+            .pruning_segment_commitments
+            .iter()
+            .enumerate()
+            .map(|(index, digest)| {
+                parse_prefixed_digest_bytes(
+                    PROOF_SEGMENT_TAG,
+                    &format!("recursive witness pruning segment commitment #{index}"),
+                    digest,
+                )
+            })
+            .collect::<ChainResult<Vec<_>>>()?;
+
+        if witness_segments.len() != metadata_segments.len() {
+            return Err(ChainError::Crypto(
+                "recursive witness pruning segment commitment count mismatch".into(),
+            ));
+        }
+
+        if !witness_segments
+            .iter()
+            .zip(metadata_segments.iter())
+            .all(|(lhs, rhs)| lhs == rhs)
+        {
+            return Err(ChainError::Crypto(
+                "recursive witness pruning segment commitment mismatch".into(),
             ));
         }
 
@@ -2114,7 +2176,6 @@ mod tests {
                 timetoke_root: header.timetoke_root.clone(),
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.binding_digest_hex(),
                 pruning_binding_digest: pruning.binding_digest().prefixed_bytes(),
                 pruning_segment_commitments: pruning
                     .segments()
@@ -2215,7 +2276,6 @@ mod tests {
                 timetoke_root: "ff".repeat(32),
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
-                pruning_commitment: "bb".repeat(32),
                 pruning_binding_digest: [0x44; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
                 pruning_segment_commitments: vec![
                     [0x55; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],

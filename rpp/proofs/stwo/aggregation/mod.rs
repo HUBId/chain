@@ -228,7 +228,6 @@ impl RecursiveAggregator {
             uptime_commitments,
             consensus_commitments,
             state_commitment: state_proof.commitment.clone(),
-            pruning_commitment: pruning_proof.commitment.clone(),
             pruning_binding_digest,
             pruning_segment_commitments,
             global_state_root: state_roots.global_state_root.clone(),
@@ -551,7 +550,6 @@ mod tests {
         consensus_commitments: Option<Vec<String>>,
         state_commitment: String,
         state_roots: StateCommitmentSnapshot,
-        pruning_commitment: String,
         pruning_binding_digest: CircuitPrefixedDigest,
         pruning_segment_commitments: Vec<CircuitPrefixedDigest>,
         block_height: u64,
@@ -575,7 +573,6 @@ mod tests {
             timetoke_root: state_roots.timetoke_root,
             zsi_root: state_roots.zsi_root,
             proof_root: state_roots.proof_root,
-            pruning_commitment,
             pruning_binding_digest,
             pruning_segment_commitments,
             block_height,
@@ -626,7 +623,7 @@ mod tests {
         let state_commitment = hasher
             .hash(&[params.element_from_u64(99), zero.clone(), zero.clone()])
             .to_hex();
-        let pruning_commitment = hasher
+        let pruning_proof_commitment = hasher
             .hash(&[params.element_from_u64(77), zero.clone(), zero.clone()])
             .to_hex();
         let state_roots = sample_state_roots(2);
@@ -647,9 +644,6 @@ mod tests {
             .to_hex()];
         let previous_state_commitment = hasher
             .hash(&[params.element_from_u64(6), zero.clone(), zero.clone()])
-            .to_hex();
-        let previous_pruning_commitment = hasher
-            .hash(&[params.element_from_u64(7), zero.clone(), zero.clone()])
             .to_hex();
         let previous_state_roots = sample_state_roots(1);
         let previous_envelope = sample_pruning_envelope();
@@ -681,7 +675,6 @@ mod tests {
             Some(Vec::new()),
             previous_state_commitment.clone(),
             previous_state_roots.clone(),
-            previous_pruning_commitment.clone(),
             previous_binding,
             previous_segments.clone(),
             1,
@@ -708,7 +701,7 @@ mod tests {
             .map(|commitment| dummy_consensus_proof(&params, commitment))
             .collect();
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
-        let pruning_proof = dummy_pruning_proof(&params, pruning_commitment.clone());
+        let pruning_proof = dummy_pruning_proof(&params, pruning_proof_commitment.clone());
 
         let witness = aggregator
             .build_witness(
@@ -746,7 +739,6 @@ mod tests {
         assert_eq!(witness.uptime_commitments, uptime_commitments);
         assert_eq!(witness.consensus_commitments, consensus_commitments);
         assert_eq!(witness.state_commitment, state_commitment);
-        assert_eq!(witness.pruning_commitment, pruning_commitment);
         assert_eq!(witness.global_state_root, state_roots.global_state_root);
         assert_eq!(witness.utxo_root, state_roots.utxo_root);
         assert_eq!(witness.reputation_root, state_roots.reputation_root);
@@ -770,7 +762,7 @@ mod tests {
         let state_commitment = hasher
             .hash(&[params.element_from_u64(15), zero.clone(), zero.clone()])
             .to_hex();
-        let pruning_commitment = hasher
+        let pruning_proof_commitment = hasher
             .hash(&[params.element_from_u64(16), zero.clone(), zero.clone()])
             .to_hex();
         let identity_commitment = hasher
@@ -819,14 +811,13 @@ mod tests {
             Some(Vec::new()),
             state_commitment.clone(),
             previous_roots.clone(),
-            pruning_commitment.clone(),
             previous_binding,
             previous_segments.clone(),
             1,
         );
 
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
-        let pruning_proof = dummy_pruning_proof(&params, pruning_commitment.clone());
+        let pruning_proof = dummy_pruning_proof(&params, pruning_proof_commitment.clone());
         let identity_proof = dummy_identity_proof(&params, identity_commitment.clone());
 
         let witness = aggregator
@@ -865,7 +856,6 @@ mod tests {
         );
         assert_eq!(witness.aggregated_commitment, expected.to_hex());
         assert_eq!(witness.state_commitment, state_commitment);
-        assert_eq!(witness.pruning_commitment, pruning_commitment);
         assert_eq!(witness.global_state_root, state_roots.global_state_root);
         assert_eq!(witness.utxo_root, state_roots.utxo_root);
         assert_eq!(witness.reputation_root, state_roots.reputation_root);

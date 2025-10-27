@@ -276,7 +276,6 @@ pub mod circuit {
             pub timetoke_root: String,
             pub zsi_root: String,
             pub proof_root: String,
-            pub pruning_commitment: String,
             #[serde(default, with = "serde::prefixed_digest")]
             pub pruning_binding_digest: PrefixedDigest,
             #[serde(default, with = "serde::prefixed_digest_vec")]

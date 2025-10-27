@@ -91,7 +91,6 @@ fn dummy_recursive_proof(
             timetoke_root: header.timetoke_root.clone(),
             zsi_root: header.zsi_root.clone(),
             proof_root: header.proof_root.clone(),
-            pruning_commitment: pruning.binding_digest_hex(),
             pruning_binding_digest,
             pruning_segment_commitments,
             block_height: header.height,

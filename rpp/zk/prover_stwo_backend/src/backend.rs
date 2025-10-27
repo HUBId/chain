@@ -1205,11 +1205,6 @@ mod tests {
         let tx_commitments = vec![parameters.element_from_u64(22).to_hex()];
         let uptime_commitments = vec![parameters.element_from_u64(33).to_hex()];
         let consensus_commitments = vec![parameters.element_from_u64(44).to_hex()];
-        let pruning_commitment_bytes =
-            TaggedDigest::new(COMMITMENT_TAG, [0x55u8; DIGEST_LENGTH]).prefixed_bytes();
-        let pruning_commitment = parameters
-            .element_from_bytes(&pruning_commitment_bytes)
-            .to_hex();
         let state_commitment = parameters.element_from_u64(66).to_hex();
         let global_state_root = parameters.element_from_u64(77).to_hex();
         let utxo_root = parameters.element_from_u64(88).to_hex();
@@ -1239,7 +1234,6 @@ mod tests {
             timetoke_root,
             zsi_root,
             proof_root,
-            pruning_commitment,
             pruning_binding_digest,
             pruning_segment_commitments,
             block_height,
