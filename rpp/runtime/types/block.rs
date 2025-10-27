@@ -405,6 +405,38 @@ mod pruning_ext {
             Self::new(envelope, current_header, Some(previous))
         }
 
+        pub fn proof(&self) -> &PruningProof {
+            &self.envelope
+        }
+
+        pub fn envelope(&self) -> &rpp_pruning::Envelope {
+            self.envelope.as_ref()
+        }
+
+        pub fn binding_digest(&self) -> TaggedDigest {
+            self.envelope.binding_digest()
+        }
+
+        pub fn binding_prefixed_bytes(&self) -> PrefixedDigest {
+            self.envelope.binding_digest().prefixed_bytes()
+        }
+
+        pub fn segment_commitment_prefixed(&self) -> Vec<PrefixedDigest> {
+            self.envelope
+                .segments()
+                .iter()
+                .map(|segment| segment.segment_commitment().prefixed_bytes())
+                .collect()
+        }
+
+        pub fn aggregate_commitment(&self) -> TaggedDigest {
+            self.envelope.commitment().aggregate_commitment()
+        }
+
+        pub fn aggregate_commitment_prefixed(&self) -> PrefixedDigest {
+            self.aggregate_commitment().prefixed_bytes()
+        }
+
         fn validate(
             envelope: &PruningProof,
             current_header: &BlockHeader,
@@ -1163,7 +1195,7 @@ impl RecursiveProof {
     pub fn verify(
         &self,
         header: &BlockHeader,
-        pruning: &PruningProof,
+        pruning: &ValidatedPruningEnvelope,
         previous: Option<&RecursiveProof>,
     ) -> ChainResult<()> {
         self.ensure_system_matches()?;
@@ -1235,8 +1267,8 @@ impl RecursiveProof {
         Ok(())
     }
 
-    fn verify_pruning_bytes(&self, pruning: &PruningProof) -> ChainResult<()> {
-        let canonical_binding = pruning.binding_digest().prefixed_bytes();
+    fn verify_pruning_bytes(&self, pruning: &ValidatedPruningEnvelope) -> ChainResult<()> {
+        let canonical_binding = pruning.binding_prefixed_bytes();
         if self.pruning_binding_digest != EMPTY_PREFIXED_DIGEST
             && self.pruning_binding_digest != canonical_binding
         {
@@ -1245,11 +1277,7 @@ impl RecursiveProof {
             ));
         }
 
-        let canonical_segments: Vec<PrefixedDigest> = pruning
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
+        let canonical_segments = pruning.segment_commitment_prefixed();
 
         if !self.pruning_segment_commitments.is_empty() {
             if self.pruning_segment_commitments.len() != canonical_segments.len() {
@@ -1277,7 +1305,7 @@ impl RecursiveProof {
     fn verify_stwo(
         &self,
         header: &BlockHeader,
-        pruning: &PruningProof,
+        pruning: &ValidatedPruningEnvelope,
         previous: Option<&RecursiveProof>,
     ) -> ChainResult<()> {
         #[cfg(not(test))]
@@ -1336,10 +1364,7 @@ impl RecursiveProof {
             &witness.pruning_binding_digest,
         )?;
 
-        let metadata = pruning.envelope_metadata();
-        let metadata_binding_digest = metadata
-            .binding_digest
-            .to_tagged_digest("pruning metadata binding digest", ENVELOPE_TAG)?;
+        let metadata_binding_digest = pruning.binding_digest();
 
         if witness_binding_digest != metadata_binding_digest {
             return Err(ChainError::Crypto(
@@ -1347,14 +1372,15 @@ impl RecursiveProof {
             ));
         }
 
-        let metadata_segments: Vec<TaggedDigest> = metadata
-            .segments
-            .iter()
+        let metadata_segments: Vec<TaggedDigest> = pruning
+            .segment_commitment_prefixed()
+            .into_iter()
             .enumerate()
-            .map(|(index, segment)| {
-                segment.segment_commitment.to_tagged_digest(
-                    &format!("pruning metadata segment commitment #{index}"),
+            .map(|(index, digest)| {
+                parse_prefixed_digest_bytes(
                     PROOF_SEGMENT_TAG,
+                    &format!("validated pruning segment commitment #{index}"),
+                    &digest,
                 )
             })
             .collect::<ChainResult<Vec<_>>>()?;
@@ -1428,7 +1454,7 @@ impl RecursiveProof {
     fn verify_stwo(
         &self,
         _header: &BlockHeader,
-        _pruning: &PruningProof,
+        _pruning: &ValidatedPruningEnvelope,
         _previous: Option<&RecursiveProof>,
     ) -> ChainResult<()> {
         Err(ChainError::Crypto(
@@ -1563,7 +1589,7 @@ impl Block {
 
         self.verify_header_commitments()?;
 
-        self.verify_pruning(previous)?;
+        let pruning_envelope = self.verify_pruning(previous)?;
 
         if let Some(prev_block) = previous {
             if self.header.height != prev_block.header.height + 1 {
@@ -1577,7 +1603,7 @@ impl Block {
         }
         let previous_proof = previous.map(|block| &block.recursive_proof);
         self.recursive_proof
-            .verify(&self.header, &self.pruning_proof, previous_proof)?;
+            .verify(&self.header, &pruning_envelope, previous_proof)?;
 
         if mode == VerifyMode::Full {
             let expected_previous_commitment =
@@ -1612,7 +1638,7 @@ impl Block {
                 &identity_proofs,
                 &uptime_proofs,
                 &consensus_proofs,
-                self.pruning_proof.as_ref(),
+                pruning_envelope.envelope(),
                 &state_commitments,
                 expected_previous_commitment,
             )?;
@@ -1654,8 +1680,15 @@ impl Block {
         Ok(())
     }
 
-    fn verify_pruning(&self, previous: Option<&Block>) -> ChainResult<()> {
-        self.pruning_proof.verify(previous, &self.header)
+    fn verify_pruning(
+        &self,
+        previous: Option<&Block>,
+    ) -> ChainResult<ValidatedPruningEnvelope> {
+        ValidatedPruningEnvelope::new(
+            self.pruning_proof.clone(),
+            &self.header,
+            previous,
+        )
     }
 
     fn verify_full_payload(
