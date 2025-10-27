@@ -2447,10 +2447,11 @@ mod tests {
                 timetoke_root: "ff".repeat(32),
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
-                pruning_binding_digest: [0x44; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+                pruning_binding_digest:
+                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes(),
                 pruning_segment_commitments: vec![
-                    [0x55; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
-                    [0x66; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x66; DIGEST_LENGTH]).prefixed_bytes(),
                 ],
                 block_height: 0,
             }),

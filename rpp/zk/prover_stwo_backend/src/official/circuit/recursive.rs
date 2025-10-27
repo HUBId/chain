@@ -410,3 +410,94 @@ mod serde {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex;
+    use rpp_pruning::{
+        TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
+    };
+    use serde_json;
+
+    #[test]
+    fn fold_pruning_digests_matches_poseidon_chain() {
+        let params = StarkParameters::blueprint_default();
+        let hasher = params.poseidon_hasher();
+        let zero = FieldElement::zero(params.modulus());
+        let binding = TaggedDigest::new(ENVELOPE_TAG, [0x21; DIGEST_LENGTH]).prefixed_bytes();
+        let segments = vec![
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x22; DIGEST_LENGTH]).prefixed_bytes(),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x23; DIGEST_LENGTH]).prefixed_bytes(),
+        ];
+        let binding_element = params.element_from_bytes(&binding);
+        let mut expected = hasher.hash(&[zero.clone(), binding_element.clone(), zero.clone()]);
+        for digest in &segments {
+            let element = params.element_from_bytes(digest);
+            expected = hasher.hash(&[expected.clone(), element, zero.clone()]);
+        }
+
+        let actual = RecursiveCircuit::fold_pruning_digests(&hasher, &params, &binding, &segments)
+            .expect("fold pruning digests");
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn recursive_witness_prefixed_digests_roundtrip() {
+        let witness = RecursiveWitness {
+            previous_commitment: Some("aa".repeat(32)),
+            aggregated_commitment: "bb".repeat(32),
+            identity_commitments: vec!["cc".repeat(32)],
+            tx_commitments: vec!["dd".repeat(32)],
+            uptime_commitments: vec!["ee".repeat(32)],
+            consensus_commitments: vec!["ff".repeat(32)],
+            state_commitment: "11".repeat(32),
+            global_state_root: "22".repeat(32),
+            utxo_root: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            timetoke_root: "55".repeat(32),
+            zsi_root: "66".repeat(32),
+            proof_root: "77".repeat(32),
+            pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x34; DIGEST_LENGTH])
+                .prefixed_bytes(),
+            pruning_segment_commitments: vec![
+                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x45; DIGEST_LENGTH]).prefixed_bytes(),
+                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x46; DIGEST_LENGTH]).prefixed_bytes(),
+            ],
+            block_height: 1,
+        };
+
+        let json = serde_json::to_string(&witness).expect("serialize witness");
+        let decoded: RecursiveWitness =
+            serde_json::from_str(&json).expect("deserialize recursive witness");
+
+        assert_eq!(
+            decoded.pruning_binding_digest,
+            witness.pruning_binding_digest
+        );
+        assert_eq!(
+            decoded.pruning_segment_commitments,
+            witness.pruning_segment_commitments
+        );
+
+        let encoded = serde_json::to_value(&witness).expect("witness to value");
+        let binding = encoded
+            .get("pruning_binding_digest")
+            .and_then(|value| value.as_str())
+            .expect("binding digest string");
+        assert_eq!(binding, hex::encode(witness.pruning_binding_digest));
+        assert_eq!(binding.len(), (DOMAIN_TAG_LENGTH + DIGEST_LENGTH) * 2);
+
+        let segments = encoded
+            .get("pruning_segment_commitments")
+            .and_then(|value| value.as_array())
+            .expect("segment commitments array");
+        assert_eq!(segments.len(), witness.pruning_segment_commitments.len());
+        for (expected, value) in witness.pruning_segment_commitments.iter().zip(segments) {
+            let encoded = value.as_str().expect("segment commitment string");
+            assert_eq!(encoded, hex::encode(expected));
+            assert_eq!(encoded.len(), (DOMAIN_TAG_LENGTH + DIGEST_LENGTH) * 2);
+        }
+    }
+}

@@ -1880,7 +1880,7 @@ mod tests {
     use rand::rngs::OsRng;
     use std::{collections::HashSet, sync::Arc, time::Duration};
     use tempfile::tempdir;
-    use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+    use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
 
     fn setup_metrics() -> (
         Arc<RuntimeMetrics>,
@@ -1910,8 +1910,11 @@ mod tests {
             timetoke_root: "55".repeat(32),
             zsi_root: "66".repeat(32),
             proof_root: "77".repeat(32),
-            pruning_binding_digest: [0x12; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
-            pruning_segment_commitments: vec![[0x34; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]],
+            pruning_binding_digest:
+                TaggedDigest::new(ENVELOPE_TAG, [0x12; DIGEST_LENGTH]).prefixed_bytes(),
+            pruning_segment_commitments: vec![
+                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x34; DIGEST_LENGTH]).prefixed_bytes(),
+            ],
             block_height: 1,
         };
         ChainProof::Stwo(StarkProof {
