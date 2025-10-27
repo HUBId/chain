@@ -26,6 +26,18 @@
         {"$ref": "#/$defs/NetworkPruningEnvelope"}
       ]
     },
+    "pruning_binding_digest": {
+      "default": null,
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/TaggedDigestHex"}
+      ]
+    },
+    "pruning_segment_commitments": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/TaggedDigestHex"},
+      "default": []
+    },
     "recursion_anchor": {"type": "string"}
   },
   "$defs": {
