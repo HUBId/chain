@@ -3,11 +3,11 @@ use crate::errors::ChainError;
 use proptest::prelude::*;
 use proptest::string::string_regex;
 use rpp_pruning::{
-    BlockHeight, Commitment, Envelope as PruningEnvelope, ParameterVersion, ProofSegment,
-    SchemaVersion, SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG,
-    PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+    BlockHeight, Commitment, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex, Snapshot,
+    TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
 use std::convert::TryInto;
+use std::sync::Arc;
 
 fn proptest_config() -> ProptestConfig {
     let cases = std::env::var("PROPTEST_CASES")
@@ -48,44 +48,14 @@ fn fabricate_pruning_proof(
     pruned_tx: &str,
     resulting: &str,
 ) -> PruningProof {
-    let snapshot = Snapshot::new(
-        TEST_SCHEMA_VERSION,
-        TEST_PARAMETER_VERSION,
-        BlockHeight::new(height),
-        TaggedDigest::new(SNAPSHOT_STATE_TAG, decode_hex_digest(previous_state)),
-    )
-    .expect("snapshot");
-    let segment = ProofSegment::new(
-        TEST_SCHEMA_VERSION,
-        TEST_PARAMETER_VERSION,
-        TEST_SEGMENT_INDEX,
-        BlockHeight::new(height),
-        BlockHeight::new(height),
-        TaggedDigest::new(PROOF_SEGMENT_TAG, decode_hex_digest(pruned_tx)),
-    )
-    .expect("segment");
-    let aggregate = super::compute_pruning_aggregate(
+    super::canonical_pruning_from_parts(
         height,
-        &decode_hex_digest(previous_hash),
-        snapshot.state_commitment().digest(),
-        segment.segment_commitment().digest(),
-    );
-    let commitment = Commitment::new(TEST_SCHEMA_VERSION, TEST_PARAMETER_VERSION, aggregate)
-        .expect("commitment");
-    let binding = super::compute_pruning_binding(
-        &commitment.aggregate_commitment(),
-        &decode_hex_digest(resulting),
-    );
-    let envelope = PruningEnvelope::new(
-        TEST_SCHEMA_VERSION,
-        TEST_PARAMETER_VERSION,
-        snapshot,
-        vec![segment],
-        commitment,
-        binding,
+        previous_hash,
+        previous_state,
+        pruned_tx,
+        resulting,
     )
-    .expect("envelope");
-    envelope
+    .expect("envelope")
 }
 
 fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningProof {
@@ -109,16 +79,17 @@ fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningPr
         &commitment.aggregate_commitment(),
         &decode_hex_digest(&header.state_root),
     );
-    let tampered = PruningEnvelope::new(
-        proof.schema_version(),
-        proof.parameter_version(),
-        snapshot,
-        segments,
-        commitment,
-        binding,
+    Arc::new(
+        rpp_pruning::Envelope::new(
+            proof.schema_version(),
+            proof.parameter_version(),
+            snapshot,
+            segments,
+            commitment,
+            binding,
+        )
+        .expect("tampered envelope"),
     )
-    .expect("tampered envelope");
-    tampered
 }
 
 prop_compose! {
