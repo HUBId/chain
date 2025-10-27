@@ -5,10 +5,13 @@ use crate::official::air::{
 };
 use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
 
+use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
 /// Witness connecting previous proof commitments with the latest aggregation.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+
+#[derive(Clone, Debug, ::serde::Serialize, ::serde::Deserialize)]
 pub struct RecursiveWitness {
     pub previous_commitment: Option<String>,
     pub aggregated_commitment: String,
@@ -23,9 +26,14 @@ pub struct RecursiveWitness {
     pub timetoke_root: String,
     pub zsi_root: String,
     pub proof_root: String,
-    pub pruning_commitment: String,
+    #[serde(default, with = "serde::prefixed_digest")]
+    pub pruning_binding_digest: PrefixedDigest,
+    #[serde(default, with = "serde::prefixed_digest_vec")]
+    pub pruning_segment_commitments: Vec<PrefixedDigest>,
     pub block_height: u64,
 }
+
+pub type PrefixedDigest = [u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
 
 #[derive(Debug)]
 pub struct RecursiveCircuit {
@@ -64,7 +72,7 @@ impl RecursiveCircuit {
             Some(value) => Self::decode_field(params, value)?,
             None => FieldElement::zero(params.modulus()),
         };
-        let pruning_element = Self::decode_field(params, &self.witness.pruning_commitment)?;
+        let pruning_element = params.element_from_bytes(&self.witness.pruning_binding_digest);
         let mut commitments = self.witness.identity_commitments.clone();
         commitments.extend(self.witness.tx_commitments.clone());
         commitments.extend(self.witness.uptime_commitments.clone());
@@ -144,7 +152,18 @@ impl StarkCircuit for RecursiveCircuit {
             Some(value) => Self::decode_field(parameters, value)?,
             None => FieldElement::zero(parameters.modulus()),
         };
-        let pruning_element = Self::decode_field(parameters, &self.witness.pruning_commitment)?;
+        let pruning_element = parameters.element_from_bytes(&self.witness.pruning_binding_digest);
+        let pruning_commitment_rows: Vec<Vec<FieldElement>> = self
+            .witness
+            .pruning_segment_commitments
+            .iter()
+            .map(|digest| vec![parameters.element_from_bytes(digest)])
+            .collect();
+        let pruning_segment = TraceSegment::new(
+            "pruning_commitments",
+            vec!["commitment".to_string()],
+            pruning_commitment_rows,
+        )?;
         let state_digest = hasher.hash(&[
             Self::decode_field(parameters, &self.witness.state_commitment)?,
             Self::decode_field(parameters, &self.witness.global_state_root)?,
@@ -183,7 +202,13 @@ impl StarkCircuit for RecursiveCircuit {
             ]],
         )?;
 
-        ExecutionTrace::from_segments(vec![fold_segment, summary_segment])
+        let mut segments = Vec::new();
+        if !pruning_segment.rows.is_empty() {
+            segments.push(pruning_segment);
+        }
+        segments.push(fold_segment);
+        segments.push(summary_segment);
+        ExecutionTrace::from_segments(segments)
     }
 
     fn define_air(
@@ -239,5 +264,94 @@ impl StarkCircuit for RecursiveCircuit {
         }
 
         Ok(AirDefinition::new(constraints))
+    }
+}
+
+mod serde {
+    use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+    use ::serde::de::{SeqAccess, Visitor};
+    use ::serde::ser::SerializeSeq;
+    use ::serde::{Deserialize, Deserializer, Serializer};
+    use std::fmt;
+
+    const EXPECTED_LENGTH: usize = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
+
+    fn decode_prefixed_digest(bytes: &[u8]) -> Result<PrefixedDigest, String> {
+        if bytes.len() != EXPECTED_LENGTH {
+            return Err(format!(
+                "invalid digest length: expected {} bytes, found {}",
+                EXPECTED_LENGTH,
+                bytes.len()
+            ));
+        }
+        let mut digest = [0u8; EXPECTED_LENGTH];
+        digest.copy_from_slice(bytes);
+        Ok(digest)
+    }
+
+    pub mod prefixed_digest {
+        use super::*;
+
+        pub fn serialize<S>(value: &PrefixedDigest, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(&hex::encode(value))
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<PrefixedDigest, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let encoded = String::deserialize(deserializer)?;
+            let bytes = hex::decode(&encoded).map_err(|err| D::Error::custom(err.to_string()))?;
+            decode_prefixed_digest(&bytes).map_err(D::Error::custom)
+        }
+    }
+
+    pub mod prefixed_digest_vec {
+        use super::*;
+
+        pub fn serialize<S>(values: &Vec<PrefixedDigest>, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut seq = serializer.serialize_seq(Some(values.len()))?;
+            for value in values {
+                seq.serialize_element(&hex::encode(value))?;
+            }
+            seq.end()
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<PrefixedDigest>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            struct PrefixedDigestVecVisitor;
+
+            impl<'de> Visitor<'de> for PrefixedDigestVecVisitor {
+                type Value = Vec<PrefixedDigest>;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                    formatter.write_str("a sequence of hex-encoded prefixed digests")
+                }
+
+                fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+                where
+                    A: SeqAccess<'de>,
+                {
+                    let mut values = Vec::new();
+                    while let Some(encoded) = seq.next_element::<String>()? {
+                        let bytes = hex::decode(&encoded)
+                            .map_err(|err| A::Error::custom(err.to_string()))?;
+                        let digest = decode_prefixed_digest(&bytes).map_err(A::Error::custom)?;
+                        values.push(digest);
+                    }
+                    Ok(values)
+                }
+            }
+
+            deserializer.deserialize_seq(PrefixedDigestVecVisitor)
+        }
     }
 }
