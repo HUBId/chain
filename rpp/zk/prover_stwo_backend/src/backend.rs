@@ -727,7 +727,7 @@ mod tests {
     use crate::official::circuit::consensus::{ConsensusWitness, VotePower};
     use crate::official::circuit::identity::IdentityWitness;
     use crate::official::circuit::pruning::PruningWitness;
-    use crate::official::circuit::recursive::RecursiveWitness;
+    use crate::official::circuit::recursive::{PrefixedDigest, RecursiveWitness};
     use crate::official::circuit::state::StateWitness;
     use crate::official::circuit::string_to_field;
     use crate::official::circuit::transaction::TransactionWitness;
@@ -1189,6 +1189,15 @@ mod tests {
         }
     }
 
+    fn sample_pruning_digests() -> (PrefixedDigest, Vec<PrefixedDigest>) {
+        let binding = TaggedDigest::new(ENVELOPE_TAG, [0x44u8; DIGEST_LENGTH]).prefixed_bytes();
+        let segments = vec![
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x56u8; DIGEST_LENGTH]).prefixed_bytes(),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x57u8; DIGEST_LENGTH]).prefixed_bytes(),
+        ];
+        (binding, segments)
+    }
+
     fn sample_pruning_witness() -> PruningWitness {
         let original = vec![hex::encode([0x55u8; 32]), hex::encode([0x66u8; 32])];
         let removed = vec![original[0].clone()];
@@ -1197,10 +1206,7 @@ mod tests {
 
         let parameters = StarkParameters::blueprint_default();
         let hasher = parameters.poseidon_hasher();
-        let pruning_binding_digest =
-            TaggedDigest::new(ENVELOPE_TAG, [0x44u8; DIGEST_LENGTH]).prefixed_bytes();
-        let pruning_segment_commitments =
-            vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x57u8; DIGEST_LENGTH]).prefixed_bytes()];
+        let (pruning_binding_digest, pruning_segment_commitments) = sample_pruning_digests();
         let accumulator = pruning_fold_from_canonical_bytes(
             &hasher,
             &parameters,
@@ -1233,12 +1239,7 @@ mod tests {
         let zsi_root = parameters.element_from_u64(122).to_hex();
         let proof_root = parameters.element_from_u64(133).to_hex();
         let block_height = 9;
-        let pruning_binding_digest =
-            TaggedDigest::new(ENVELOPE_TAG, [0x44u8; DIGEST_LENGTH]).prefixed_bytes();
-        let pruning_segment_commitments = vec![
-            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x56u8; DIGEST_LENGTH]).prefixed_bytes(),
-            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x57u8; DIGEST_LENGTH]).prefixed_bytes(),
-        ];
+        let (pruning_binding_digest, pruning_segment_commitments) = sample_pruning_digests();
 
         let mut witness = RecursiveWitness {
             previous_commitment: None,
@@ -1262,6 +1263,30 @@ mod tests {
         let aggregated = recursive_aggregate(&parameters, &witness);
         witness.aggregated_commitment = aggregated.to_hex();
         witness
+    }
+
+    #[test]
+    fn recursive_aggregate_depends_on_pruning_digests() {
+        let parameters = StarkParameters::blueprint_default();
+        let mut witness = sample_recursive_witness();
+        let original = recursive_aggregate(&parameters, &witness);
+
+        witness.pruning_binding_digest =
+            TaggedDigest::new(ENVELOPE_TAG, [0x99; DIGEST_LENGTH]).prefixed_bytes();
+        let mutated_binding = recursive_aggregate(&parameters, &witness);
+        assert_ne!(
+            original, mutated_binding,
+            "binding digest must affect aggregate"
+        );
+
+        let mut witness = sample_recursive_witness();
+        witness.pruning_segment_commitments[0] =
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x77; DIGEST_LENGTH]).prefixed_bytes();
+        let mutated_segment = recursive_aggregate(&parameters, &witness);
+        assert_ne!(
+            original, mutated_segment,
+            "segment commitments must affect aggregate"
+        );
     }
 
     fn sample_uptime_witness() -> UptimeWitness {

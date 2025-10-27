@@ -396,4 +396,90 @@ mod tests {
             matches!(result, Err(BackendError::Failure(message)) if message.contains("unsupported proof format version"))
         );
     }
+
+    #[test]
+    fn pruning_witness_roundtrips_prefixed_digests() {
+        use crate::official::circuit::pruning::PruningWitness;
+        use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
+
+        let witness = PruningWitness {
+            previous_tx_root: "aa".repeat(32),
+            pruned_tx_root: "bb".repeat(32),
+            original_transactions: vec!["cc".repeat(32)],
+            removed_transactions: vec!["cc".repeat(32)],
+            pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x11; DIGEST_LENGTH])
+                .prefixed_bytes(),
+            pruning_segment_commitments: vec![TaggedDigest::new(
+                PROOF_SEGMENT_TAG,
+                [0x22; DIGEST_LENGTH],
+            )
+            .prefixed_bytes()],
+            pruning_fold: "dd".repeat(32),
+        };
+
+        let bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, "pruning"),
+            &witness,
+        )
+        .expect("encode pruning witness");
+        let (_, decoded) = bytes
+            .decode::<PruningWitness>()
+            .expect("decode pruning witness");
+
+        assert_eq!(
+            decoded.pruning_binding_digest,
+            witness.pruning_binding_digest
+        );
+        assert_eq!(
+            decoded.pruning_segment_commitments,
+            witness.pruning_segment_commitments
+        );
+    }
+
+    #[test]
+    fn recursive_witness_roundtrips_prefixed_digests() {
+        use crate::official::circuit::recursive::RecursiveWitness;
+        use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
+
+        let witness = RecursiveWitness {
+            previous_commitment: Some("11".repeat(32)),
+            aggregated_commitment: "22".repeat(32),
+            identity_commitments: vec!["33".repeat(32)],
+            tx_commitments: vec!["44".repeat(32)],
+            uptime_commitments: vec!["55".repeat(32)],
+            consensus_commitments: vec!["66".repeat(32)],
+            state_commitment: "77".repeat(32),
+            global_state_root: "88".repeat(32),
+            utxo_root: "99".repeat(32),
+            reputation_root: "aa".repeat(32),
+            timetoke_root: "bb".repeat(32),
+            zsi_root: "cc".repeat(32),
+            proof_root: "dd".repeat(32),
+            pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x33; DIGEST_LENGTH])
+                .prefixed_bytes(),
+            pruning_segment_commitments: vec![
+                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes(),
+                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
+            ],
+            block_height: 42,
+        };
+
+        let bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, "recursive"),
+            &witness,
+        )
+        .expect("encode recursive witness");
+        let (_, decoded) = bytes
+            .decode::<RecursiveWitness>()
+            .expect("decode recursive witness");
+
+        assert_eq!(
+            decoded.pruning_binding_digest,
+            witness.pruning_binding_digest
+        );
+        assert_eq!(
+            decoded.pruning_segment_commitments,
+            witness.pruning_segment_commitments
+        );
+    }
 }
