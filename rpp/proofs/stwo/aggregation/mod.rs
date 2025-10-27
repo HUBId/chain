@@ -82,6 +82,17 @@ fn fold_commitments(
     accumulator
 }
 
+fn envelope_prefixed_commitments(envelope: &Envelope) -> (PrefixedDigest, Vec<PrefixedDigest>) {
+    let binding = envelope.binding_digest().prefixed_bytes();
+    let segments = envelope
+        .segments()
+        .iter()
+        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .collect();
+
+    (binding, segments)
+}
+
 fn compute_recursive_commitment(
     parameters: &StarkParameters,
     previous_commitment: Option<&str>,
@@ -195,12 +206,8 @@ impl RecursiveAggregator {
         ensure_kind(state_proof, ProofKind::State)?;
         ensure_kind(pruning_proof, ProofKind::Pruning)?;
 
-        let pruning_binding_digest = pruning_envelope.binding_digest().prefixed_bytes();
-        let pruning_segment_commitments: Vec<PrefixedDigest> = pruning_envelope
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
+        let (pruning_binding_digest, pruning_segment_commitments) =
+            envelope_prefixed_commitments(pruning_envelope);
         validate_pruning_commitments(
             pruning_envelope,
             &pruning_binding_digest,
@@ -273,24 +280,14 @@ fn validate_pruning_commitments(
     binding_digest: &PrefixedDigest,
     segment_commitments: &[PrefixedDigest],
 ) -> ChainResult<()> {
-    let expected_binding = envelope.binding_digest().prefixed_bytes();
+    let (expected_binding, expected_segments) = envelope_prefixed_commitments(envelope);
     if binding_digest != &expected_binding {
         return Err(ChainError::Crypto(
             "pruning binding digest mismatch with envelope".into(),
         ));
     }
 
-    let expected_segments: Vec<PrefixedDigest> = envelope
-        .segments()
-        .iter()
-        .map(|segment| segment.segment_commitment().prefixed_bytes())
-        .collect();
-    if segment_commitments.len() != expected_segments.len()
-        || !segment_commitments
-            .iter()
-            .zip(expected_segments.iter())
-            .all(|(lhs, rhs)| lhs == rhs)
-    {
+    if segment_commitments != expected_segments.as_slice() {
         return Err(ChainError::Crypto(
             "pruning segment commitments mismatch with envelope".into(),
         ));
@@ -629,12 +626,8 @@ mod tests {
         let state_roots = sample_state_roots(2);
 
         let pruning_envelope = sample_pruning_envelope();
-        let pruning_binding_digest = pruning_envelope.binding_digest().prefixed_bytes();
-        let pruning_segment_commitments: Vec<_> = pruning_envelope
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
+        let (pruning_binding_digest, pruning_segment_commitments) =
+            envelope_prefixed_commitments(&pruning_envelope);
 
         let previous_identity_commitments = vec![hasher
             .hash(&[params.element_from_u64(8), zero.clone(), zero.clone()])
@@ -647,12 +640,8 @@ mod tests {
             .to_hex();
         let previous_state_roots = sample_state_roots(1);
         let previous_envelope = sample_pruning_envelope();
-        let previous_binding = previous_envelope.binding_digest().prefixed_bytes();
-        let previous_segments: Vec<_> = previous_envelope
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
+        let (previous_binding, previous_segments) =
+            envelope_prefixed_commitments(&previous_envelope);
         let previous_field = aggregator.aggregate_commitment(
             None,
             &previous_identity_commitments,
