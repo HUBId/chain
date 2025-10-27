@@ -176,7 +176,8 @@ proptest! {
         let reconstructed = pruning_from_metadata(metadata.clone())
             .expect("metadata should rebuild pruning proof");
         assert_eq!(reconstructed, proof);
-        assert_eq!(metadata.binding_digest.as_str(), proof.binding_digest_hex());
+        let expected_binding = hex::encode(proof.binding_digest().prefixed_bytes());
+        assert_eq!(metadata.binding_digest.as_str(), expected_binding);
     }
 }
 

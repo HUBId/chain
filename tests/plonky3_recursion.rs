@@ -6,6 +6,7 @@ use rand::SeedableRng;
 use serde_json::Value;
 
 use rpp_chain::crypto::address_from_public_key;
+use rpp_chain::plonky3::circuit::pruning::PruningWitness;
 use rpp_chain::plonky3::crypto;
 use rpp_chain::plonky3::proof::Plonky3Proof;
 use rpp_chain::plonky3::prover::Plonky3Prover;
@@ -69,6 +70,34 @@ fn plonky3_recursive_flow_roundtrip() {
         .build_pruning_witness(None, &[], &[], pruning.as_ref(), Vec::new())
         .unwrap();
     let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
+
+    if let ChainProof::Plonky3(value) = &pruning_proof {
+        let parsed = Plonky3Proof::from_value(value).unwrap();
+        let witness_value = parsed
+            .public_inputs
+            .get("witness")
+            .cloned()
+            .expect("pruning witness payload");
+        let recorded: PruningWitness = serde_json::from_value(witness_value).unwrap();
+        assert_eq!(recorded.snapshot, pruning.snapshot().clone());
+        assert_eq!(recorded.segments, pruning.segments().to_vec());
+        assert_eq!(
+            recorded.commitment.schema_version(),
+            pruning.commitment().schema_version()
+        );
+        assert_eq!(
+            recorded.commitment.parameter_version(),
+            pruning.commitment().parameter_version()
+        );
+        assert_eq!(
+            recorded.commitment.aggregate_commitment(),
+            pruning.commitment().aggregate_commitment()
+        );
+        assert_eq!(recorded.binding_digest, pruning.binding_digest());
+        assert!(recorded.removed_transactions.is_empty());
+    } else {
+        panic!("expected pruning proof to use Plonky3 backend");
+    }
 
     let recursive_witness = prover
         .build_recursive_witness(

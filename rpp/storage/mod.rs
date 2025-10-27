@@ -867,12 +867,31 @@ mod tests {
         assert_eq!(tip.proof_hash, genesis.header.proof_root);
         let pruning = tip.pruning_metadata().expect("pruning metadata");
         assert_eq!(
-            pruning.binding_digest.as_str(),
-            genesis.pruning_proof.binding_digest_hex()
+            tip.pruning_binding_digest,
+            genesis
+                .pruning_proof
+                .binding_digest()
+                .prefixed_bytes()
+        );
+        let expected_segments: Vec<_> = genesis
+            .pruning_proof
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
+        assert_eq!(tip.pruning_segment_commitments, expected_segments);
+        let expected_binding =
+            hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
+        assert_eq!(pruning.binding_digest.as_str(), expected_binding);
+        let expected_commitment = hex::encode(
+            genesis
+                .pruning_proof
+                .aggregate_commitment()
+                .prefixed_bytes()
         );
         assert_eq!(
             pruning.commitment.aggregate_commitment.as_str(),
-            genesis.pruning_proof.aggregate_commitment_hex()
+            expected_commitment
         );
         assert_eq!(pruning.schema_version, genesis.pruning_proof.schema_version());
         assert_eq!(
@@ -906,14 +925,33 @@ mod tests {
             genesis.pruning_proof.snapshot_state_root_hex()
         );
         assert_eq!(loaded.new_state_root, genesis.header.state_root);
-        let pruning = loaded.pruning_metadata().expect("pruning metadata");
         assert_eq!(
-            pruning.binding_digest.as_str(),
-            genesis.pruning_proof.binding_digest_hex()
+            loaded.pruning_binding_digest,
+            genesis
+                .pruning_proof
+                .binding_digest()
+                .prefixed_bytes()
+        );
+        let expected_segments: Vec<_> = genesis
+            .pruning_proof
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
+        assert_eq!(loaded.pruning_segment_commitments, expected_segments);
+        let pruning = loaded.pruning_metadata().expect("pruning metadata");
+        let expected_binding =
+            hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
+        assert_eq!(pruning.binding_digest.as_str(), expected_binding);
+        let expected_commitment = hex::encode(
+            genesis
+                .pruning_proof
+                .aggregate_commitment()
+                .prefixed_bytes()
         );
         assert_eq!(
             pruning.commitment.aggregate_commitment.as_str(),
-            genesis.pruning_proof.aggregate_commitment_hex()
+            expected_commitment
         );
         assert_eq!(pruning.schema_version, genesis.pruning_proof.schema_version());
         assert_eq!(
