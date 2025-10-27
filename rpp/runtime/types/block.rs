@@ -150,6 +150,90 @@ mod serde_prefixed_digest_vec_hex {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct CanonicalPruningEnvelope {
+    pub schema_version: SchemaVersion,
+    pub parameter_version: ParameterVersion,
+    pub snapshot: Snapshot,
+    #[serde(default)]
+    pub segments: Vec<ProofSegment>,
+    pub commitment: Commitment,
+    pub binding_digest: TaggedDigest,
+}
+
+impl From<&rpp_pruning::Envelope> for CanonicalPruningEnvelope {
+    fn from(envelope: &rpp_pruning::Envelope) -> Self {
+        Self {
+            schema_version: envelope.schema_version(),
+            parameter_version: envelope.parameter_version(),
+            snapshot: envelope.snapshot().clone(),
+            segments: envelope.segments().to_vec(),
+            commitment: envelope.commitment().clone(),
+            binding_digest: envelope.binding_digest(),
+        }
+    }
+}
+
+impl CanonicalPruningEnvelope {
+    pub fn into_envelope(self) -> ChainResult<rpp_pruning::Envelope> {
+        rpp_pruning::Envelope::new(
+            self.schema_version,
+            self.parameter_version,
+            self.snapshot,
+            self.segments,
+            self.commitment,
+            self.binding_digest,
+        )
+        .map_err(|err| ChainError::Crypto(format!("invalid stored pruning envelope: {err}")))
+    }
+}
+
+pub(crate) mod serde_pruning_proof {
+    use super::{
+        pruning_from_metadata, pruning_ext::PruningProofExt, CanonicalPruningEnvelope,
+        PruningEnvelopeMetadata, PruningProof,
+    };
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(proof: &PruningProof, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            let metadata = proof.envelope_metadata();
+            metadata.serialize(serializer)
+        } else {
+            CanonicalPruningEnvelope::from(proof.as_ref()).serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PruningProof, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let metadata = PruningEnvelopeMetadata::deserialize(deserializer)?;
+            pruning_from_metadata(metadata).map_err(serde::de::Error::custom)
+        } else {
+            #[derive(Deserialize)]
+            #[serde(untagged)]
+            enum CanonicalOrLegacy {
+                Canonical(CanonicalPruningEnvelope),
+                Legacy(rpp_pruning::Envelope),
+            }
+
+            let envelope = match CanonicalOrLegacy::deserialize(deserializer)? {
+                CanonicalOrLegacy::Canonical(canonical) => {
+                    canonical.into_envelope().map_err(serde::de::Error::custom)?
+                }
+                CanonicalOrLegacy::Legacy(legacy) => legacy,
+            };
+            Ok(Arc::new(envelope))
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockHeader {
     pub height: u64,
     pub previous_hash: String,
@@ -1489,6 +1573,7 @@ pub struct Block {
     pub bft_votes: Vec<SignedBftVote>,
     pub module_witnesses: ModuleWitnessBundle,
     pub proof_artifacts: Vec<ProofArtifact>,
+    #[serde(with = "serde_pruning_proof")]
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
     pub stark: BlockProofBundle,
@@ -2071,6 +2156,7 @@ pub(crate) struct BlockEnvelope {
     pub header: BlockHeader,
     pub module_witnesses: ModuleWitnessBundle,
     pub proof_artifacts: Vec<ProofArtifact>,
+    #[serde(with = "serde_pruning_proof")]
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
     pub stark: BlockProofBundle,

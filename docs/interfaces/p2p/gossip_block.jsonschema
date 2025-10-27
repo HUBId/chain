@@ -284,11 +284,25 @@
     },
     "PruningProof": {
       "type": "object",
-      "required": ["envelope"],
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "snapshot",
+        "segments",
+        "commitment",
+        "binding_digest"
+      ],
       "properties": {
-        "envelope": {
-          "$ref": "network_block_metadata.jsonschema#/$defs/NetworkPruningEnvelope"
-        }
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "snapshot": {"$ref": "#/$defs/PruningSnapshot"},
+        "segments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/PruningSegment"},
+          "default": []
+        },
+        "commitment": {"$ref": "#/$defs/PruningCommitment"},
+        "binding_digest": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false
     },
@@ -327,6 +341,60 @@
     "ChainProof": {
       "type": "object",
       "description": "Backend-specific proof artifact"
+    },
+    "TaggedDigestHex": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{96}$"
+    },
+    "PruningSnapshot": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "block_height",
+        "state_commitment"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "block_height": {"type": "integer", "minimum": 0},
+        "state_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
+      },
+      "additionalProperties": false
+    },
+    "PruningSegment": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "segment_index",
+        "start_height",
+        "end_height",
+        "segment_commitment"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "segment_index": {"type": "integer", "minimum": 0},
+        "start_height": {"type": "integer", "minimum": 0},
+        "end_height": {"type": "integer", "minimum": 0},
+        "segment_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
+      },
+      "additionalProperties": false
+    },
+    "PruningCommitment": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "parameter_version",
+        "aggregate_commitment"
+      ],
+      "properties": {
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
+        "aggregate_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
+      },
+      "additionalProperties": false
     },
     "ConsensusCertificate": {
       "type": "object",

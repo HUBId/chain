@@ -12,6 +12,7 @@ pub use crate::identity_tree::IdentityCommitmentProof;
 pub use account::{Account, IdentityBinding, Stake, WalletBindingChange};
 pub use block::BlockPayload;
 pub(crate) use block::StoredBlock;
+pub(crate) use block::{CanonicalPruningEnvelope, serde_pruning_proof};
 pub use block::{
     Block, BlockHeader, BlockMetadata, ProofSystem, PruningCommitmentMetadata, PruningEnvelopeMetadata,
     PruningProofExt, PruningSegmentMetadata, PruningSnapshotMetadata, RecursiveProof, ReputationUpdate,

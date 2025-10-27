@@ -106,6 +106,7 @@ use crate::types::{
     SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
     IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, pruning_from_previous,
 };
+use crate::types::serde_pruning_proof;
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
@@ -388,6 +389,7 @@ pub struct BftMembership {
 pub struct BlockProofArtifactsView {
     pub hash: String,
     pub height: u64,
+    #[serde(with = "serde_pruning_proof")]
     pub pruning_proof: PruningProof,
     pub recursive_proof: RecursiveProof,
     pub stark: BlockProofBundle,

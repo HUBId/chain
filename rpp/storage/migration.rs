@@ -6,13 +6,14 @@ use storage_firewood::kv::FirewoodKv;
 use crate::consensus::{ConsensusCertificate, SignedBftVote};
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
-use crate::storage::{STORAGE_SCHEMA_VERSION, Storage};
+use crate::storage::{PRUNING_PROOF_PREFIX, STORAGE_SCHEMA_VERSION, Storage};
 use crate::stwo::params::{FieldElement, StarkParameters};
 use crate::types::{
-    AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle, IdentityDeclaration,
-    ProofSystem, PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate, SignedTransaction,
-    StoredBlock, TimetokeUpdate, UptimeProof, pruning_from_previous,
+    AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle, CanonicalPruningEnvelope,
+    IdentityDeclaration, ProofSystem, PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate,
+    SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof, pruning_from_previous,
 };
+use crate::types::serde_pruning_proof;
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Outcome of executing storage migrations.
@@ -58,6 +59,9 @@ pub fn migrate_storage(path: &Path, dry_run: bool) -> ChainResult<MigrationRepor
     report.upgraded_blocks += converted;
     report.already_current_blocks += already_current;
 
+    let updated_proofs = migrate_pruning_proofs(&mut kv, dry_run)?;
+    report.upgraded_blocks += updated_proofs;
+
     if !dry_run {
         Storage::write_schema_version_raw(&mut kv, STORAGE_SCHEMA_VERSION)?;
     }
@@ -73,31 +77,48 @@ fn migrate_block_records(kv: &mut FirewoodKv, dry_run: bool) -> ChainResult<(usi
     let mut mutated = false;
 
     for (key, value) in entries {
-        if bincode::deserialize::<StoredBlock>(&value).is_ok() {
-            already_current += 1;
+        if let Ok(stored) = bincode::deserialize::<StoredBlock>(&value) {
+            let reencoded = bincode::serialize(&stored)?;
+            if reencoded == value {
+                already_current += 1;
+            } else {
+                if !dry_run {
+                    kv.put(key.clone(), reencoded);
+                    mutated = true;
+                }
+                converted += 1;
+            }
             continue;
         }
 
         if let Ok(block) = bincode::deserialize::<Block>(&value) {
+            let stored = StoredBlock::from_block(&block);
+            let bytes = bincode::serialize(&stored)?;
             if !dry_run {
-                let stored = StoredBlock::from_block(&block);
-                let bytes = bincode::serialize(&stored)?;
-                kv.put(key.clone(), bytes);
+                kv.put(key.clone(), bytes.clone());
                 mutated = true;
             }
-            converted += 1;
+            if bytes != value {
+                converted += 1;
+            } else {
+                already_current += 1;
+            }
             continue;
         }
 
         let legacy: LegacyBlockV0 = bincode::deserialize(&value)?;
         let block = legacy.into_block()?;
+        let stored = StoredBlock::from_block(&block);
+        let bytes = bincode::serialize(&stored)?;
         if !dry_run {
-            let stored = StoredBlock::from_block(&block);
-            let bytes = bincode::serialize(&stored)?;
-            kv.put(key.clone(), bytes);
+            kv.put(key.clone(), bytes.clone());
             mutated = true;
         }
-        converted += 1;
+        if bytes != value {
+            converted += 1;
+        } else {
+            already_current += 1;
+        }
     }
 
     if mutated {
@@ -105,6 +126,46 @@ fn migrate_block_records(kv: &mut FirewoodKv, dry_run: bool) -> ChainResult<(usi
     }
 
     Ok((converted, already_current))
+}
+
+fn migrate_pruning_proofs(kv: &mut FirewoodKv, dry_run: bool) -> ChainResult<usize> {
+    let entries: Vec<(Vec<u8>, Vec<u8>)> = kv.scan_prefix(&[b'm']).collect();
+    let mut updated = 0usize;
+    let mut mutated = false;
+
+    for (key, value) in entries {
+        if key.len() <= 1 || !key[1..].starts_with(PRUNING_PROOF_PREFIX) {
+            continue;
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum StoredEnvelope {
+            Canonical(CanonicalPruningEnvelope),
+            Legacy(rpp_pruning::Envelope),
+        }
+
+        let stored: StoredEnvelope = rpp_pruning::canonical_bincode_options().deserialize(&value)?;
+        let canonical = match stored {
+            StoredEnvelope::Canonical(envelope) => envelope,
+            StoredEnvelope::Legacy(legacy) => CanonicalPruningEnvelope::from(&legacy),
+        };
+        let encoded = rpp_pruning::canonical_bincode_options().serialize(&canonical)?;
+        if encoded == value {
+            continue;
+        }
+        if !dry_run {
+            kv.put(key.clone(), encoded);
+            mutated = true;
+        }
+        updated += 1;
+    }
+
+    if mutated {
+        kv.commit()?;
+    }
+
+    Ok(updated)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -144,6 +205,7 @@ struct LegacyBlockV0 {
     pub bft_votes: Vec<SignedBftVote>,
     pub module_witnesses: ModuleWitnessBundle,
     pub proof_artifacts: Vec<ProofArtifact>,
+    #[serde(with = "serde_pruning_proof")]
     pub pruning_proof: PruningProof,
     pub recursive_proof: LegacyRecursiveProof,
     pub stark: BlockProofBundle,

@@ -12,10 +12,11 @@ use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
 use crate::types::{
-    Account, Block, BlockMetadata, PruningProof, PruningProofExt, StoredBlock, pruning_from_previous,
+    Account, Block, BlockMetadata, CanonicalPruningEnvelope, PruningProof, PruningProofExt,
+    StoredBlock, pruning_from_previous,
 };
 
-pub const STORAGE_SCHEMA_VERSION: u32 = 1;
+pub const STORAGE_SCHEMA_VERSION: u32 = 2;
 
 const PREFIX_BLOCK: u8 = b'b';
 const PREFIX_ACCOUNT: u8 = b'a';
@@ -25,7 +26,7 @@ const TIP_HASH_KEY: &[u8] = b"tip_hash";
 const TIP_TIMESTAMP_KEY: &[u8] = b"tip_timestamp";
 const TIP_METADATA_KEY: &[u8] = b"tip_metadata";
 const BLOCK_METADATA_PREFIX: &[u8] = b"block_metadata/";
-const PRUNING_PROOF_PREFIX: &[u8] = b"pruning_proofs/";
+pub(crate) const PRUNING_PROOF_PREFIX: &[u8] = b"pruning_proofs/";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 const WALLET_UTXO_SNAPSHOT_KEY: &[u8] = b"wallet_utxo_snapshot";
 
@@ -163,7 +164,8 @@ impl Storage {
 
     pub fn persist_pruning_proof(&self, height: u64, proof: &PruningProof) -> ChainResult<()> {
         let mut kv = self.kv.lock();
-        let data = rpp_pruning::canonical_bincode_options().serialize(proof)?;
+        let canonical = CanonicalPruningEnvelope::from(proof.as_ref());
+        let data = rpp_pruning::canonical_bincode_options().serialize(&canonical)?;
         kv.put(metadata_key(&pruning_proof_suffix(height)), data);
         kv.commit()?;
         Ok(())
@@ -173,7 +175,22 @@ impl Storage {
         let kv = self.kv.lock();
         let key = metadata_key(&pruning_proof_suffix(height));
         Ok(match kv.get(&key) {
-            Some(bytes) => Some(rpp_pruning::canonical_bincode_options().deserialize(&bytes)?),
+            Some(bytes) => {
+                #[derive(serde::Deserialize)]
+                #[serde(untagged)]
+                enum StoredEnvelope {
+                    Canonical(CanonicalPruningEnvelope),
+                    Legacy(rpp_pruning::Envelope),
+                }
+
+                let stored: StoredEnvelope =
+                    rpp_pruning::canonical_bincode_options().deserialize(&bytes)?;
+                let envelope = match stored {
+                    StoredEnvelope::Canonical(canonical) => canonical.into_envelope()?,
+                    StoredEnvelope::Legacy(legacy) => legacy,
+                };
+                Some(Arc::new(envelope))
+            }
             None => None,
         })
     }
