@@ -2111,7 +2111,7 @@ mod tests {
         ExecutionTrace, StarkCircuit,
     };
     use crate::stwo::fri::FriProver;
-    use crate::stwo::params::StarkParameters;
+    use crate::stwo::params::{FieldElement, StarkParameters};
     use crate::stwo::proof::{
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
@@ -2121,6 +2121,7 @@ mod tests {
     };
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signature, Signer};
     use rand::rngs::OsRng;
+    use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
     fn seeded_keypair(seed: u8) -> Keypair {
         let secret = SecretKey::from_bytes(&[seed; 32]).expect("secret");
@@ -2409,12 +2410,29 @@ mod tests {
                 required_tier: Tier::Tl0,
                 reputation_weights: ReputationWeights::default(),
             }),
-            ProofKind::Pruning => ProofPayload::Pruning(PruningWitness {
-                previous_tx_root: "33".repeat(32),
-                pruned_tx_root: "44".repeat(32),
-                original_transactions: vec!["55".repeat(32)],
-                removed_transactions: vec!["55".repeat(32)],
-            }),
+            ProofKind::Pruning => {
+                let parameters = StarkParameters::blueprint_default();
+                let hasher = parameters.poseidon_hasher();
+                let zero = FieldElement::zero(parameters.modulus());
+                let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+                let pruning_segment_commitments = Vec::new();
+                let pruning_fold = hasher
+                    .hash(&[
+                        zero.clone(),
+                        parameters.element_from_bytes(&pruning_binding_digest),
+                        zero.clone(),
+                    ])
+                    .to_hex();
+                ProofPayload::Pruning(PruningWitness {
+                    previous_tx_root: "33".repeat(32),
+                    pruned_tx_root: "44".repeat(32),
+                    original_transactions: vec!["55".repeat(32)],
+                    removed_transactions: vec!["55".repeat(32)],
+                    pruning_binding_digest,
+                    pruning_segment_commitments,
+                    pruning_fold,
+                })
+            }
             ProofKind::Recursive => ProofPayload::Recursive(RecursiveWitness {
                 previous_commitment: Some(RecursiveProof::anchor()),
                 aggregated_commitment: "77".repeat(32),
@@ -2465,11 +2483,26 @@ mod tests {
             }),
             ProofKind::Transaction | ProofKind::Identity => {
                 // These variants are not used in the conversion tests.
+                let parameters = StarkParameters::blueprint_default();
+                let hasher = parameters.poseidon_hasher();
+                let zero = FieldElement::zero(parameters.modulus());
+                let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+                let pruning_segment_commitments = Vec::new();
+                let pruning_fold = hasher
+                    .hash(&[
+                        zero.clone(),
+                        parameters.element_from_bytes(&pruning_binding_digest),
+                        zero.clone(),
+                    ])
+                    .to_hex();
                 ProofPayload::Pruning(PruningWitness {
                     previous_tx_root: "cc".repeat(32),
                     pruned_tx_root: "dd".repeat(32),
                     original_transactions: Vec::new(),
                     removed_transactions: Vec::new(),
+                    pruning_binding_digest,
+                    pruning_segment_commitments,
+                    pruning_fold,
                 })
             }
         };

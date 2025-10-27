@@ -511,11 +511,25 @@ mod tests {
 
     fn dummy_pruning_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
         let original = "22".repeat(32);
+        let hasher = parameters.poseidon_hasher();
+        let zero = FieldElement::zero(parameters.modulus());
+        let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+        let pruning_segment_commitments = Vec::new();
+        let pruning_fold = hasher
+            .hash(&[
+                zero.clone(),
+                parameters.element_from_bytes(&pruning_binding_digest),
+                zero.clone(),
+            ])
+            .to_hex();
         let witness = PruningWitness {
             previous_tx_root: "33".repeat(32),
             pruned_tx_root: "44".repeat(32),
             original_transactions: vec![original.clone()],
             removed_transactions: vec![original],
+            pruning_binding_digest,
+            pruning_segment_commitments,
+            pruning_fold,
         };
         make_proof(
             parameters,

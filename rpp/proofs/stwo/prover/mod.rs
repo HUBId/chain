@@ -238,7 +238,8 @@ impl<'a> WalletProver<'a> {
             )));
         }
 
-        let mut remaining_hashes = Vec::with_capacity(original_hashes.len().saturating_sub(removed.len()));
+        let mut remaining_hashes =
+            Vec::with_capacity(original_hashes.len().saturating_sub(removed.len()));
         for (hash, encoded) in original_hashes.iter().zip(original_transactions.iter()) {
             if !removed_set.contains(encoded.as_str()) {
                 remaining_hashes.push(*hash);
@@ -250,11 +251,37 @@ impl<'a> WalletProver<'a> {
                 "pruning witness pruned root mismatch: envelope {pruned_tx_root}, computed {computed_pruned_root}",
             )));
         }
+        let pruning_binding_digest = pruning.binding_digest().prefixed_bytes();
+        let pruning_segment_commitments: Vec<_> = pruning
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
+        let hasher = self.parameters.poseidon_hasher();
+        let zero = FieldElement::zero(self.parameters.modulus());
+        let mut pruning_accumulator = hasher.hash(&[
+            zero.clone(),
+            self.parameters
+                .element_from_bytes(&pruning_binding_digest),
+            zero.clone(),
+        ]);
+        for digest in &pruning_segment_commitments {
+            let element = self.parameters.element_from_bytes(digest);
+            pruning_accumulator = hasher.hash(&[
+                pruning_accumulator.clone(),
+                element,
+                zero.clone(),
+            ]);
+        }
+        let pruning_fold = pruning_accumulator.to_hex();
         Ok(PruningWitness {
             previous_tx_root,
             pruned_tx_root,
             original_transactions,
             removed_transactions: removed,
+            pruning_binding_digest,
+            pruning_segment_commitments,
+            pruning_fold,
         })
     }
 
