@@ -164,17 +164,17 @@ impl Storage {
 
     pub fn persist_pruning_proof(&self, height: u64, proof: &PruningProof) -> ChainResult<()> {
         let mut kv = self.kv.lock();
-        let data = bincode::serialize(proof)?;
+        let data = rpp_pruning::canonical_bincode_options().serialize(proof)?;
         kv.put(metadata_key(&pruning_proof_suffix(height)), data);
         kv.commit()?;
         Ok(())
     }
 
-    pub fn load_pruning_proof(&self, height: u64) -> ChainResult<Option<PruningProof>> {
+    pub fn load_pruning_proof(&self, height: u64) -> ChainResult<MaybePruningProof> {
         let kv = self.kv.lock();
         let key = metadata_key(&pruning_proof_suffix(height));
         Ok(match kv.get(&key) {
-            Some(bytes) => Some(bincode::deserialize(&bytes)?),
+            Some(bytes) => Some(rpp_pruning::canonical_bincode_options().deserialize(&bytes)?),
             None => None,
         })
     }
@@ -218,7 +218,7 @@ impl Storage {
     ) -> ChainResult<StateTransitionReceipt> {
         let previous_root = self.state_root()?;
         if updates.is_empty() {
-            let pruning_proof = block_height.and_then(|height| {
+            let pruning_proof: MaybePruningProof = block_height.and_then(|height| {
                 let mut pruner = self.pruner.lock();
                 let proof = pruner.prune_block(height, previous_root);
                 Some(proof)
@@ -241,7 +241,7 @@ impl Storage {
         }
         let new_root = kv.commit()?;
         drop(kv);
-        let pruning_proof = block_height.map(|height| {
+        let pruning_proof: MaybePruningProof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
             pruner.prune_block(height, new_root)
         });
@@ -283,7 +283,7 @@ impl Storage {
         }
         let new_root = kv.commit()?;
         drop(kv);
-        let pruning_proof = block_height.map(|height| {
+        let pruning_proof: MaybePruningProof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
             pruner.prune_block(height, new_root)
         });
