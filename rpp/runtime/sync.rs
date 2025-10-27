@@ -31,8 +31,8 @@ use rpp_p2p::{
     LightClientHead, LightClientSync, NetworkBlockMetadata, NetworkGlobalStateCommitments,
     NetworkLightClientUpdate, NetworkPayloadExpectations, NetworkReconstructionRequest,
     NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
-    PipelineError, RecursiveProofVerifier, SnapshotChunk, SnapshotChunkStream, SnapshotStore,
-    TransactionProofVerifier,
+    NetworkVersionDigestHex, PipelineError, RecursiveProofVerifier, SnapshotChunk, SnapshotChunkStream,
+    SnapshotStore, TransactionProofVerifier,
 };
 
 pub fn stream_state_sync_chunks(
@@ -880,6 +880,17 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
         .iter()
         .map(|digest| NetworkTaggedDigestHex::from(hex::encode(digest)))
         .collect();
+    let pruning_schema_digest = (!metadata.pruning_schema_digest.iter().all(|byte| *byte == 0))
+        .then(|| {
+            NetworkVersionDigestHex::from(hex::encode(metadata.pruning_schema_digest))
+        });
+    let pruning_parameter_digest = (!metadata
+        .pruning_parameter_digest
+        .iter()
+        .all(|byte| *byte == 0))
+    .then(|| {
+        NetworkVersionDigestHex::from(hex::encode(metadata.pruning_parameter_digest))
+    });
     NetworkBlockMetadata {
         height: metadata.height,
         hash: metadata.hash.clone(),
@@ -893,6 +904,8 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
             .map(encode_pruning_envelope),
         pruning_binding_digest,
         pruning_segment_commitments,
+        pruning_schema_digest,
+        pruning_parameter_digest,
         recursion_anchor: metadata.recursive_anchor.clone(),
     }
 }
@@ -908,8 +921,47 @@ fn encode_payload_expectations(expectations: &PayloadExpectations) -> NetworkPay
     }
 }
 
-fn encode_pruning_envelope(pruning: &PruningEnvelopeMetadata) -> PruningEnvelopeMetadata {
-    pruning.clone()
+fn encode_pruning_envelope(pruning: &PruningEnvelopeMetadata) -> NetworkPruningEnvelope {
+    NetworkPruningEnvelope {
+        schema_version: pruning.schema_version,
+        parameter_version: pruning.parameter_version,
+        schema_version_digest: NetworkVersionDigestHex::from(
+            pruning.schema_version_digest.as_str(),
+        ),
+        parameter_version_digest: NetworkVersionDigestHex::from(
+            pruning.parameter_version_digest.as_str(),
+        ),
+        snapshot: NetworkPruningSnapshot {
+            schema_version: pruning.snapshot.schema_version,
+            parameter_version: pruning.snapshot.parameter_version,
+            block_height: pruning.snapshot.block_height,
+            state_commitment: NetworkTaggedDigestHex::from(
+                pruning.snapshot.state_commitment.as_str(),
+            ),
+        },
+        segments: pruning
+            .segments
+            .iter()
+            .map(|segment| NetworkPruningSegment {
+                schema_version: segment.schema_version,
+                parameter_version: segment.parameter_version,
+                segment_index: segment.segment_index,
+                start_height: segment.start_height,
+                end_height: segment.end_height,
+                segment_commitment: NetworkTaggedDigestHex::from(
+                    segment.segment_commitment.as_str(),
+                ),
+            })
+            .collect(),
+        commitment: NetworkPruningCommitment {
+            schema_version: pruning.commitment.schema_version,
+            parameter_version: pruning.commitment.parameter_version,
+            aggregate_commitment: NetworkTaggedDigestHex::from(
+                pruning.commitment.aggregate_commitment.as_str(),
+            ),
+        },
+        binding_digest: NetworkTaggedDigestHex::from(pruning.binding_digest.as_str()),
+    }
 }
 
 fn encode_reconstruction_request(request: &ReconstructionRequest) -> NetworkReconstructionRequest {

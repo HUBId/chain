@@ -1151,6 +1151,28 @@ impl From<&str> for NetworkTaggedDigestHex {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct NetworkVersionDigestHex(pub String);
+
+impl NetworkVersionDigestHex {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for NetworkVersionDigestHex {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for NetworkVersionDigestHex {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPruningSnapshot {
     pub schema_version: u16,
     pub parameter_version: u16,
@@ -1179,6 +1201,8 @@ pub struct NetworkPruningCommitment {
 pub struct NetworkPruningEnvelope {
     pub schema_version: u16,
     pub parameter_version: u16,
+    pub schema_version_digest: NetworkVersionDigestHex,
+    pub parameter_version_digest: NetworkVersionDigestHex,
     pub snapshot: NetworkPruningSnapshot,
     #[serde(default)]
     pub segments: Vec<NetworkPruningSegment>,
@@ -1200,6 +1224,10 @@ pub struct NetworkBlockMetadata {
     pub pruning_binding_digest: Option<NetworkTaggedDigestHex>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pruning_segment_commitments: Vec<NetworkTaggedDigestHex>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_schema_digest: Option<NetworkVersionDigestHex>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_parameter_digest: Option<NetworkVersionDigestHex>,
     pub recursion_anchor: String,
 }
 
@@ -2047,10 +2075,17 @@ mod tests {
             bytes.extend(std::iter::repeat(byte).take(DIGEST_LENGTH));
             NetworkTaggedDigestHex::from(hex::encode(bytes))
         };
+        let version_digest = |version: u16| {
+            let mut bytes = [0u8; DIGEST_LENGTH];
+            bytes[..2].copy_from_slice(&version.to_be_bytes());
+            NetworkVersionDigestHex::from(hex::encode(bytes))
+        };
 
         let pruning_envelope = NetworkPruningEnvelope {
             schema_version: 1,
             parameter_version: 0,
+            schema_version_digest: version_digest(1),
+            parameter_version_digest: version_digest(0),
             snapshot: NetworkPruningSnapshot {
                 schema_version: 1,
                 parameter_version: 0,
@@ -2097,6 +2132,8 @@ mod tests {
                 pruning: Some(pruning_envelope.clone()),
                 pruning_binding_digest: Some(prefixed_hex(ENVELOPE_TAG, 0x40)),
                 pruning_segment_commitments: vec![prefixed_hex(PROOF_SEGMENT_TAG, 0x20)],
+                pruning_schema_digest: Some(version_digest(1)),
+                pruning_parameter_digest: Some(version_digest(0)),
                 recursion_anchor: "anchor".into(),
             },
             chunks: vec![NetworkStateSyncChunk {

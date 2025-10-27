@@ -4,6 +4,7 @@ use rpp_p2p::{
     NetworkPayloadExpectations, NetworkPruningCommitment, NetworkPruningEnvelope,
     NetworkPruningSegment, NetworkPruningSnapshot, NetworkReconstructionRequest,
     NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
+    NetworkVersionDigestHex,
 };
 use rpp_pruning::{
     DomainTag, COMMITMENT_TAG, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
@@ -28,10 +29,18 @@ fn tagged_hex_digest(tag: DomainTag, byte: u8) -> NetworkTaggedDigestHex {
     NetworkTaggedDigestHex::from(tagged_hex(tag, byte))
 }
 
+fn version_digest(version: u16) -> NetworkVersionDigestHex {
+    let mut bytes = [0u8; DIGEST_LENGTH];
+    bytes[..2].copy_from_slice(&version.to_be_bytes());
+    NetworkVersionDigestHex::from(hex::encode(bytes))
+}
+
 fn sample_pruning_envelope() -> NetworkPruningEnvelope {
     NetworkPruningEnvelope {
         schema_version: 1,
         parameter_version: 0,
+        schema_version_digest: version_digest(1),
+        parameter_version_digest: version_digest(0),
         snapshot: NetworkPruningSnapshot {
             schema_version: 1,
             parameter_version: 0,
@@ -80,6 +89,10 @@ fn state_sync_plan_roundtrip() {
             new_state_root: "77".repeat(32),
             proof_hash: "88".repeat(32),
             pruning: Some(pruning.clone()),
+            pruning_binding_digest: None,
+            pruning_segment_commitments: Vec::new(),
+            pruning_schema_digest: Some(version_digest(1)),
+            pruning_parameter_digest: Some(version_digest(0)),
             recursion_anchor: "anchor".into(),
         },
         chunks: vec![NetworkStateSyncChunk {
