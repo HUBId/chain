@@ -8,8 +8,6 @@ mod transaction;
 mod uptime;
 
 pub type PruningProof = Arc<rpp_pruning::Envelope>;
-pub type MaybePruningProof = Option<PruningProof>;
-
 pub use crate::identity_tree::IdentityCommitmentProof;
 pub use account::{Account, IdentityBinding, Stake, WalletBindingChange};
 pub use block::BlockPayload;

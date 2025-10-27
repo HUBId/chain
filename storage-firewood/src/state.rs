@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     kv::{FirewoodKv, Hash, KvError},
-    pruning::{FirewoodPruner, PruningProof},
+    pruning::FirewoodPruner,
     tree::{FirewoodTree, MerkleProof},
 };
 
@@ -54,11 +54,14 @@ impl FirewoodState {
         tree.delete(key);
     }
 
-    pub fn commit_block(&self, block_id: u64) -> Result<(StateRoot, PruningProof), StateError> {
+    pub fn commit_block(
+        &self,
+        block_id: u64,
+    ) -> Result<(StateRoot, Arc<rpp_pruning::Envelope>), StateError> {
         let mut kv = self.kv.lock();
         let root = kv.commit()?;
         let mut pruner = self.pruner.lock();
-        let proof = pruner.prune_block(block_id, root);
+        let proof = Arc::new(pruner.prune_block(block_id, root));
         Ok((root, proof))
     }
 
