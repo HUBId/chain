@@ -741,7 +741,10 @@ mod tests {
         UptimePublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
     };
     use rand::{rngs::StdRng, RngCore, SeedableRng};
-    use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+    use rpp_pruning::{
+        TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG,
+        PROOF_SEGMENT_TAG,
+    };
 
     const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
     const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
@@ -902,6 +905,16 @@ mod tests {
         let proving_key = proving_key(SupportedCircuit::Recursive);
         let witness = sample_recursive_witness();
         let witness_bytes = encode_recursive_witness(&witness);
+        let decoded_witness =
+            decode_recursive_witness(&witness_bytes).expect("recursive witness decodes");
+        assert_eq!(
+            decoded_witness.pruning_binding_digest,
+            witness.pruning_binding_digest
+        );
+        assert_eq!(
+            decoded_witness.pruning_segment_commitments,
+            witness.pruning_segment_commitments
+        );
 
         let proof_bytes = backend
             .prove_recursive(&proving_key, &witness_bytes)
@@ -910,7 +923,15 @@ mod tests {
 
         match &proof.payload {
             ProofPayload::Recursive(decoded) => {
-                assert_eq!(decoded.aggregated_commitment, witness.aggregated_commitment)
+                assert_eq!(decoded.aggregated_commitment, witness.aggregated_commitment);
+                assert_eq!(
+                    decoded.pruning_binding_digest,
+                    witness.pruning_binding_digest
+                );
+                assert_eq!(
+                    decoded.pruning_segment_commitments,
+                    witness.pruning_segment_commitments
+                );
             }
             other => panic!("unexpected payload variant: {other:?}"),
         }
@@ -1184,7 +1205,11 @@ mod tests {
         let tx_commitments = vec![parameters.element_from_u64(22).to_hex()];
         let uptime_commitments = vec![parameters.element_from_u64(33).to_hex()];
         let consensus_commitments = vec![parameters.element_from_u64(44).to_hex()];
-        let pruning_commitment = parameters.element_from_u64(55).to_hex();
+        let pruning_commitment_bytes =
+            TaggedDigest::new(COMMITMENT_TAG, [0x55u8; DIGEST_LENGTH]).prefixed_bytes();
+        let pruning_commitment = parameters
+            .element_from_bytes(&pruning_commitment_bytes)
+            .to_hex();
         let state_commitment = parameters.element_from_u64(66).to_hex();
         let global_state_root = parameters.element_from_u64(77).to_hex();
         let utxo_root = parameters.element_from_u64(88).to_hex();
@@ -1193,10 +1218,11 @@ mod tests {
         let zsi_root = parameters.element_from_u64(122).to_hex();
         let proof_root = parameters.element_from_u64(133).to_hex();
         let block_height = 9;
-        let pruning_binding_digest = [0x44u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+        let pruning_binding_digest =
+            TaggedDigest::new(ENVELOPE_TAG, [0x44u8; DIGEST_LENGTH]).prefixed_bytes();
         let pruning_segment_commitments = vec![
-            [0x55u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
-            [0x66u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x56u8; DIGEST_LENGTH]).prefixed_bytes(),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x57u8; DIGEST_LENGTH]).prefixed_bytes(),
         ];
 
         let mut witness = RecursiveWitness {
