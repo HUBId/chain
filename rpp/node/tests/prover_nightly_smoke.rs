@@ -311,7 +311,6 @@ fn sample_recursive_witness(
         timetoke_root: state_commitments.timetoke_root.clone(),
         zsi_root: state_commitments.zsi_root.clone(),
         proof_root: state_commitments.proof_root.clone(),
-        pruning_commitment: pruning_proof.commitment.clone(),
         pruning_binding_digest,
         pruning_segment_commitments,
         block_height,

@@ -297,7 +297,6 @@ mod tests {
                 timetoke_root: header.timetoke_root.clone(),
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
-                pruning_commitment: pruning.binding_digest_hex(),
                 pruning_binding_digest,
                 pruning_segment_commitments,
                 block_height: header.height,
@@ -342,7 +341,6 @@ mod tests {
                 timetoke_root: "ff".repeat(32),
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
-                pruning_commitment: "bb".repeat(32),
                 pruning_binding_digest: [0x44; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
                 pruning_segment_commitments: vec![
                     [0x55; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],

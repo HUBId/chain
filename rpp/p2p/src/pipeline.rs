@@ -1879,6 +1879,7 @@ pub struct NetworkFeatureAnnouncement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rpp_pruning::{ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG};
     use std::time::Duration;
 
     #[derive(Debug, Default)]
@@ -2041,6 +2042,40 @@ mod tests {
         let mut snapshot_leaves = vec![chunk_root];
         let snapshot_root = compute_merkle_root(&mut snapshot_leaves);
 
+        let prefixed_hex = |tag: rpp_pruning::DomainTag, byte: u8| {
+            let mut bytes = Vec::with_capacity(DOMAIN_TAG_LENGTH + DIGEST_LENGTH);
+            bytes.extend_from_slice(&tag.as_bytes());
+            bytes.extend(std::iter::repeat(byte).take(DIGEST_LENGTH));
+            NetworkTaggedDigestHex::from(hex::encode(bytes))
+        };
+
+        let pruning_envelope = NetworkPruningEnvelope {
+            header: NetworkPruningEnvelopeHeader {
+                schema_version: 1,
+                parameter_version: 0,
+            },
+            snapshot: NetworkPruningSnapshot {
+                schema_version: 1,
+                parameter_version: 0,
+                block_height: 0,
+                state_commitment: prefixed_hex(SNAPSHOT_STATE_TAG, 0x10),
+            },
+            segments: vec![NetworkPruningSegment {
+                schema_version: 1,
+                parameter_version: 0,
+                segment_index: 0,
+                start_height: 0,
+                end_height: 1,
+                segment_commitment: prefixed_hex(PROOF_SEGMENT_TAG, 0x20),
+            }],
+            commitment: NetworkPruningCommitment {
+                schema_version: 1,
+                parameter_version: 0,
+                aggregate_commitment: prefixed_hex(COMMITMENT_TAG, 0x30),
+            },
+            binding_digest: prefixed_hex(ENVELOPE_TAG, 0x40),
+        };
+
         let plan = NetworkStateSyncPlan {
             snapshot: NetworkSnapshotSummary {
                 height: 0,
@@ -2062,7 +2097,7 @@ mod tests {
                 previous_state_root: hex::encode([0x11; 32]),
                 new_state_root: hex::encode([0x22; 32]),
                 proof_hash: hex::encode([0x33; 32]),
-                pruning: None,
+                pruning: Some(pruning_envelope.clone()),
                 recursion_anchor: "anchor".into(),
             },
             chunks: vec![NetworkStateSyncChunk {
@@ -2079,11 +2114,8 @@ mod tests {
                         timetoke_root: "timetoke".into(),
                         zsi_root: "zsi".into(),
                         proof_root: "proof".into(),
-                        pruning_commitment: "pruning".into(),
-                        aggregated_commitment: hex::encode(aggregated_one),
+                        pruning: pruning_envelope.clone(),
                         previous_commitment: None,
-                        pruning_schema_version: 1,
-                        pruning_parameter_version: 0,
                         payload_expectations: NetworkPayloadExpectations::default(),
                     },
                     NetworkReconstructionRequest {
@@ -2096,11 +2128,8 @@ mod tests {
                         timetoke_root: "timetoke".into(),
                         zsi_root: "zsi".into(),
                         proof_root: "proof".into(),
-                        pruning_commitment: "pruning".into(),
-                        aggregated_commitment: hex::encode(aggregated_two),
+                        pruning: pruning_envelope.clone(),
                         previous_commitment: None,
-                        pruning_schema_version: 1,
-                        pruning_parameter_version: 0,
                         payload_expectations: NetworkPayloadExpectations::default(),
                     },
                 ],
