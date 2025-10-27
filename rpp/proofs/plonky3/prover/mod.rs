@@ -12,9 +12,9 @@ use crate::errors::{ChainError, ChainResult};
 use crate::proof_system::ProofProver;
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
-    AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, PruningProofExt,
-    SignedTransaction, UptimeClaim,
+    AttestedIdentityRequest, ChainProof, IdentityGenesis, SignedTransaction, UptimeClaim,
 };
+use rpp_pruning::Envelope;
 
 use super::aggregation::RecursiveAggregator;
 use super::circuit::consensus::{ConsensusWitness, VotePower};
@@ -162,10 +162,10 @@ impl ProofProver for Plonky3Prover {
         expected_previous_state_root: Option<&str>,
         previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
-        pruning: &PruningProof,
+        pruning: &Envelope,
         removed: Vec<String>,
     ) -> ChainResult<Self::PruningWitness> {
-        let snapshot_state_root = pruning.snapshot_state_root_hex();
+        let snapshot_state_root = hex::encode(pruning.snapshot().state_commitment().digest());
         if let Some(expected) = expected_previous_state_root {
             if expected != snapshot_state_root {
                 return Err(ChainError::Crypto(format!(
@@ -173,7 +173,7 @@ impl ProofProver for Plonky3Prover {
                 )));
             }
         }
-        if pruning.pruned_transaction_root_hex().is_none() {
+        if pruning.segments().is_empty() {
             return Err(ChainError::Crypto(
                 "pruning envelope missing transaction segment".into(),
             ));
