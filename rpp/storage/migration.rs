@@ -10,7 +10,7 @@ use crate::storage::{STORAGE_SCHEMA_VERSION, Storage};
 use crate::types::{
     AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle, IdentityDeclaration,
     ProofSystem, PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate, SignedTransaction,
-    StoredBlock, TimetokeUpdate, UptimeProof, canonical_pruning_from_block,
+    StoredBlock, TimetokeUpdate, UptimeProof, pruning_from_previous,
 };
 
 /// Outcome of executing storage migrations.
@@ -401,8 +401,7 @@ mod tests {
             timestamp: 42,
             proposer: "validator-1".into(),
         };
-        let pruning = canonical_pruning_from_block(None, &header)
-            .expect("construct canonical pruning proof");
+        let pruning = pruning_from_previous(None, &header);
         let converted_header = BlockHeader {
             height: header.height,
             previous_hash: header.previous_hash.clone(),

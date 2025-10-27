@@ -13,7 +13,7 @@ use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
 use crate::types::{
     Account, Block, BlockMetadata, MaybePruningProof, PruningProof, PruningProofExt, StoredBlock,
-    canonical_pruning_from_block,
+    pruning_from_previous,
 };
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
@@ -603,7 +603,7 @@ mod tests {
     };
     use crate::types::{
         Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
-        RecursiveProof, canonical_pruning_from_block,
+        RecursiveProof, pruning_from_previous,
     };
     use ed25519_dalek::Signature;
     use hex;
@@ -718,8 +718,7 @@ mod tests {
             Tier::Tl3.to_string(),
             height,
         );
-        let pruning_proof = canonical_pruning_from_block(previous, &header)
-            .expect("construct canonical pruning proof");
+        let pruning_proof = pruning_from_previous(previous, &header);
         let aggregated_commitment = hex::encode([height as u8 + 8; 32]);
         let previous_recursive_commitment =
             previous.map(|block| block.recursive_proof.commitment.clone());

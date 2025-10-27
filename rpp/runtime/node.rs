@@ -105,7 +105,7 @@ use crate::types::{
     PruningProofExt,
     RecursiveProof, ReputationUpdate,
     SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, canonical_pruning_from_block,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, pruning_from_previous,
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
@@ -1078,8 +1078,7 @@ impl Node {
                 Tier::Tl5.to_string(),
                 0,
             );
-            let pruning_proof = canonical_pruning_from_block(None, &header)
-                .expect("pruning envelope must be valid");
+            let pruning_proof = pruning_from_previous(None, &header);
             let transactions: Vec<SignedTransaction> = Vec::new();
             let transaction_proofs: Vec<ChainProof> = Vec::new();
             let identity_proofs: Vec<ChainProof> = Vec::new();

@@ -13,7 +13,7 @@ use crate::proof_system::{ProofProver, ProofVerifier};
 use crate::rpp::GlobalStateCommitments;
 use crate::types::{
     BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
-    canonical_pruning_from_block,
+    pruning_from_previous,
 };
 
 fn canonical_pruning_header() -> BlockHeader {
@@ -273,8 +273,7 @@ fn recursive_roundtrip_spans_state_and_transactions() {
     let state_proof = prover.prove_state_transition(state_witness).unwrap();
 
     let header = canonical_pruning_header();
-    let pruning = canonical_pruning_from_block(None, &header)
-        .expect("construct canonical pruning proof");
+    let pruning = pruning_from_previous(None, &header);
     let pruning_witness = prover
         .build_pruning_witness(None, &[], &[], &pruning, Vec::new())
         .unwrap();
