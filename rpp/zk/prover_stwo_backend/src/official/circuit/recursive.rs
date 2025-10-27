@@ -190,23 +190,36 @@ impl StarkCircuit for RecursiveCircuit {
             Some(value) => Self::decode_field(parameters, value)?,
             None => FieldElement::zero(parameters.modulus()),
         };
-        let pruning_fold = Self::fold_pruning_digests(
-            &hasher,
-            parameters,
-            &self.witness.pruning_binding_digest,
-            &self.witness.pruning_segment_commitments,
-        )?;
-        let mut pruning_commitment_rows = Vec::new();
+        let mut pruning_rows = Vec::new();
+        let mut pruning_accumulator = zero.clone();
         let binding_element =
             Self::prefixed_digest_to_field(parameters, &self.witness.pruning_binding_digest)?;
-        pruning_commitment_rows.push(vec![binding_element]);
+        let mut next = hasher.hash(&[
+            pruning_accumulator.clone(),
+            binding_element.clone(),
+            zero.clone(),
+        ]);
+        pruning_rows.push(vec![
+            pruning_accumulator.clone(),
+            binding_element,
+            next.clone(),
+        ]);
+        pruning_accumulator = next;
         for digest in &self.witness.pruning_segment_commitments {
-            pruning_commitment_rows.push(vec![Self::prefixed_digest_to_field(parameters, digest)?]);
+            let element = Self::prefixed_digest_to_field(parameters, digest)?;
+            next = hasher.hash(&[pruning_accumulator.clone(), element.clone(), zero.clone()]);
+            pruning_rows.push(vec![pruning_accumulator.clone(), element, next.clone()]);
+            pruning_accumulator = next;
         }
+        let pruning_fold = pruning_accumulator.clone();
         let pruning_segment = TraceSegment::new(
-            "pruning_commitments",
-            vec!["commitment".to_string()],
-            pruning_commitment_rows,
+            "pruning_fold",
+            vec![
+                "accumulator_in".to_string(),
+                "commitment".to_string(),
+                "accumulator_out".to_string(),
+            ],
+            pruning_rows,
         )?;
         let state_digest = hasher.hash(&[
             Self::decode_field(parameters, &self.witness.state_commitment)?,
@@ -231,7 +244,7 @@ impl StarkCircuit for RecursiveCircuit {
             vec![
                 "previous".to_string(),
                 "state_digest".to_string(),
-                "pruning_fold".to_string(),
+                "pruning_accumulator".to_string(),
                 "activity_digest".to_string(),
                 "aggregate_computed".to_string(),
                 "aggregate_witness".to_string(),
@@ -247,9 +260,7 @@ impl StarkCircuit for RecursiveCircuit {
         )?;
 
         let mut segments = Vec::new();
-        if !pruning_segment.rows.is_empty() {
-            segments.push(pruning_segment);
-        }
+        segments.push(pruning_segment);
         segments.push(fold_segment);
         segments.push(summary_segment);
         ExecutionTrace::from_segments(segments)
@@ -313,9 +324,9 @@ impl StarkCircuit for RecursiveCircuit {
 
 mod serde {
     use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
-    use ::serde::de::{SeqAccess, Visitor};
-    use ::serde::ser::SerializeSeq;
-    use ::serde::{Deserialize, Deserializer, Serializer};
+    use serde::de::{SeqAccess, Visitor};
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
     use std::fmt;
 
     const EXPECTED_LENGTH: usize = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
