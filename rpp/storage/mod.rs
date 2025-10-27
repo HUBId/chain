@@ -12,8 +12,7 @@ use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
 use crate::types::{
-    Account, Block, BlockMetadata, MaybePruningProof, PruningProof, PruningProofExt, StoredBlock,
-    pruning_from_previous,
+    Account, Block, BlockMetadata, PruningProof, PruningProofExt, StoredBlock, pruning_from_previous,
 };
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
@@ -36,7 +35,7 @@ const SCHEMA_ACCOUNTS: &str = "accounts";
 pub struct StateTransitionReceipt {
     pub previous_root: [u8; 32],
     pub new_root: [u8; 32],
-    pub pruning_proof: MaybePruningProof,
+    pub pruning_proof: Option<PruningProof>,
 }
 
 pub struct Storage {
@@ -170,7 +169,7 @@ impl Storage {
         Ok(())
     }
 
-    pub fn load_pruning_proof(&self, height: u64) -> ChainResult<MaybePruningProof> {
+    pub fn load_pruning_proof(&self, height: u64) -> ChainResult<Option<PruningProof>> {
         let kv = self.kv.lock();
         let key = metadata_key(&pruning_proof_suffix(height));
         Ok(match kv.get(&key) {
@@ -218,10 +217,10 @@ impl Storage {
     ) -> ChainResult<StateTransitionReceipt> {
         let previous_root = self.state_root()?;
         if updates.is_empty() {
-            let pruning_proof: MaybePruningProof = block_height.and_then(|height| {
+            let pruning_proof = block_height.map(|height| {
                 let mut pruner = self.pruner.lock();
                 let proof = pruner.prune_block(height, previous_root);
-                Some(Arc::new(proof))
+                Arc::new(proof)
             });
             return Ok(StateTransitionReceipt {
                 previous_root,
@@ -241,7 +240,7 @@ impl Storage {
         }
         let new_root = kv.commit()?;
         drop(kv);
-        let pruning_proof: MaybePruningProof = block_height.map(|height| {
+        let pruning_proof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
             Arc::new(pruner.prune_block(height, new_root))
         });
@@ -283,7 +282,7 @@ impl Storage {
         }
         let new_root = kv.commit()?;
         drop(kv);
-        let pruning_proof: MaybePruningProof = block_height.map(|height| {
+        let pruning_proof = block_height.map(|height| {
             let mut pruner = self.pruner.lock();
             Arc::new(pruner.prune_block(height, new_root))
         });

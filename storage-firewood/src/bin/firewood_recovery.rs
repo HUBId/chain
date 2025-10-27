@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     state.put(b"beta".to_vec(), b"2".to_vec());
 
     let (expected_root, proof) = state.commit_block(1)?;
-    let pruning_verified = FirewoodPruner::verify_pruned_state(expected_root, &proof);
+    let pruning_verified = FirewoodPruner::verify_pruned_state(expected_root, proof.as_ref());
     println!(
         "✅ Recorded block root {} with commitment {} (proof verified: {pruning_verified})",
         to_hex(&expected_root),

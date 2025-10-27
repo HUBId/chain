@@ -101,8 +101,7 @@ use prover_stwo_backend::backend::{
 use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, MaybePruningProof, PruningEnvelopeMetadata, PruningProof,
-    PruningProofExt,
+    ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, PruningProofExt,
     RecursiveProof, ReputationUpdate,
     SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
     IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, pruning_from_previous,
@@ -509,7 +508,7 @@ pub enum PipelineObservation {
         block_hash: String,
         previous_root: String,
         new_root: String,
-        pruning_proof: MaybePruningProof,
+        pruning_proof: Option<PruningProof>,
     },
 }
 

@@ -570,13 +570,12 @@ mod pruning_ext {
             if let Some(_) = previous {
                 let schema_digest = derive_version_digest(u16::from(envelope.schema_version()));
                 let parameter_digest = derive_version_digest(u16::from(envelope.parameter_version()));
-                let firewood_envelope: &storage_firewood::pruning::PruningProof = envelope;
 
                 if !FirewoodPruner::verify_pruned_state_with_digests(
                     schema_digest,
                     parameter_digest,
                     snapshot_state_digest,
-                    firewood_envelope,
+                    envelope.as_ref(),
                 ) {
                     return Err(ChainError::Crypto(
                         "pruning proof inconsistent with pruning state digests".into(),

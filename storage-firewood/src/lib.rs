@@ -94,6 +94,6 @@ mod tests {
         state.put(b"account".to_vec(), vec![1, 2, 3]);
         let (root, proof) = state.commit_block(1).expect("commit block");
         assert_eq!(root.len(), 32);
-        assert!(FirewoodPruner::verify_pruned_state(root, &proof));
+        assert!(FirewoodPruner::verify_pruned_state(root, proof.as_ref()));
     }
 }
