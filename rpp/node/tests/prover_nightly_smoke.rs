@@ -279,11 +279,12 @@ fn sample_recursive_witness(
     block_height: u64,
 ) -> RecursiveWitness {
     let pruning_binding_digest = pruning_envelope.binding_digest().prefixed_bytes();
-    let pruning_segment_commitments: Vec<PrefixedDigest> = pruning_envelope
+    let expected_segments: Vec<PrefixedDigest> = pruning_envelope
         .segments()
         .iter()
         .map(|segment| segment.segment_commitment().prefixed_bytes())
         .collect();
+    let pruning_segment_commitments = expected_segments.clone();
     let aggregator = OfficialRecursiveAggregator::with_blueprint();
     let aggregated = aggregator.aggregate_commitment(
         None,
@@ -296,6 +297,12 @@ fn sample_recursive_witness(
         &pruning_binding_digest,
         block_height,
     );
+
+    assert_eq!(
+        pruning_binding_digest,
+        pruning_envelope.binding_digest().prefixed_bytes()
+    );
+    assert_eq!(pruning_segment_commitments, expected_segments);
 
     RecursiveWitness {
         previous_commitment: None,

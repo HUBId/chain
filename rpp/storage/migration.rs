@@ -195,10 +195,18 @@ impl LegacyBlockV0 {
         };
 
         let previous_commitment = Some(recursive_proof.previous_chain_commitment.clone());
+        let pruning_binding_digest = pruning_proof.binding_digest().prefixed_bytes();
+        let pruning_segment_commitments = pruning_proof
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
         let recursive = RecursiveProof::from_parts(
             recursive_proof.system,
             recursive_proof.chain_commitment,
             previous_commitment,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             stark.recursive_proof.clone(),
         )?;
 
