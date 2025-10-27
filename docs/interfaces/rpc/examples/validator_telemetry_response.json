@@ -38,24 +38,24 @@
           "schema_version": 1,
           "parameter_version": 1,
           "block_height": 4099,
-          "state_commitment": "0xeeee"
+          "state_commitment": "7270703a7072756e653a737461746500eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
         },
         "segments": [
           {
             "schema_version": 1,
             "parameter_version": 1,
             "segment_index": 0,
-            "start_height": 4098,
+            "start_height": 4099,
             "end_height": 4099,
-            "segment_commitment": "0xffff"
+            "segment_commitment": "7270703a7072756e653a70726f6f6600dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
           }
         ],
         "commitment": {
           "schema_version": 1,
           "parameter_version": 1,
-          "aggregate_commitment": "0x1111"
+          "aggregate_commitment": "7270703a7072756e653a636f6d6d6974aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         },
-        "binding_digest": "0x2222"
+        "binding_digest": "7270703a7072756e653a656e766c70005555555555555555555555555555555555555555555555555555555555555555"
       },
       "recursive_commitment": "0x3333",
       "recursive_previous_commitment": null,
@@ -118,15 +118,24 @@
             "schema_version": 1,
             "parameter_version": 1,
             "block_height": 4099,
-            "state_commitment": "0xeeee"
+            "state_commitment": "7270703a7072756e653a7374617465008888888888888888888888888888888888888888888888888888888888888888"
           },
-          "segments": [],
+          "segments": [
+            {
+              "schema_version": 1,
+              "parameter_version": 1,
+              "segment_index": 0,
+              "start_height": 4099,
+              "end_height": 4099,
+              "segment_commitment": "7270703a7072756e653a70726f6f6600eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            }
+          ],
           "commitment": {
             "schema_version": 1,
             "parameter_version": 1,
-            "aggregate_commitment": "0x1111"
+            "aggregate_commitment": "7270703a7072756e653a636f6d6d6974bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           },
-          "binding_digest": "0x2222"
+          "binding_digest": "7270703a7072756e653a656e766c70006666666666666666666666666666666666666666666666666666666666666666"
         },
         "recursive_commitment": "0x3333",
         "recursive_previous_commitment": null,
@@ -155,24 +164,24 @@
                   "schema_version": 1,
                   "parameter_version": 1,
                   "block_height": 4097,
-                  "state_commitment": "0xaaaa"
+                  "state_commitment": "7270703a7072756e653a7374617465007777777777777777777777777777777777777777777777777777777777777777"
                 },
                 "segments": [
                   {
                     "schema_version": 1,
                     "parameter_version": 1,
                     "segment_index": 0,
-                    "start_height": 4096,
+                    "start_height": 4097,
                     "end_height": 4097,
-                    "segment_commitment": "0xbbbb"
+                    "segment_commitment": "7270703a7072756e653a70726f6f6600ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
                   }
                 ],
                 "commitment": {
                   "schema_version": 1,
                   "parameter_version": 1,
-                  "aggregate_commitment": "0xcccc"
+                  "aggregate_commitment": "7270703a7072756e653a636f6d6d6974cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
                 },
-                "binding_digest": "0xdddd"
+                "binding_digest": "7270703a7072756e653a656e766c70004444444444444444444444444444444444444444444444444444444444444444"
               },
               "previous_commitment": "0xeeee",
               "payload_expectations": {

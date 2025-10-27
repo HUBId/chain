@@ -20,6 +20,72 @@ fn proptest_config() -> ProptestConfig {
     }
 }
 
+const TEST_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1);
+const TEST_PARAMETER_VERSION: ParameterVersion = ParameterVersion::new(0);
+const TEST_SEGMENT_INDEX: SegmentIndex = SegmentIndex::new(0);
+
+fn decode_hex_digest(value: &str) -> [u8; 32] {
+    let bytes = hex::decode(value).expect("hex decode");
+    bytes.as_slice().try_into().expect("32-byte digest")
+}
+
+fn encode_hex_digest(bytes: &[u8; 32]) -> String {
+    hex::encode(bytes)
+}
+
+fn fabricate_pruning_proof(
+    height: u64,
+    previous_hash: [u8; 32],
+    previous_state: [u8; 32],
+    pruned_tx: [u8; 32],
+    resulting: [u8; 32],
+) -> PruningProof {
+    let snapshot = Snapshot::new(
+        TEST_SCHEMA_VERSION,
+        TEST_PARAMETER_VERSION,
+        BlockHeight::new(height),
+        TaggedDigest::new(SNAPSHOT_STATE_TAG, previous_state),
+    )
+    .expect("snapshot");
+
+    let segment = ProofSegment::new(
+        TEST_SCHEMA_VERSION,
+        TEST_PARAMETER_VERSION,
+        TEST_SEGMENT_INDEX,
+        BlockHeight::new(height),
+        BlockHeight::new(height),
+        TaggedDigest::new(PROOF_SEGMENT_TAG, pruned_tx),
+    )
+    .expect("segment");
+
+    let aggregate = super::compute_pruning_aggregate(
+        height,
+        &previous_hash,
+        snapshot.state_commitment().digest(),
+        segment.segment_commitment().digest(),
+    );
+
+    let commitment = Commitment::new(TEST_SCHEMA_VERSION, TEST_PARAMETER_VERSION, aggregate)
+        .expect("commitment");
+
+    let binding = super::compute_pruning_binding(
+        &commitment.aggregate_commitment(),
+        &resulting,
+    );
+
+    Arc::new(
+        rpp_pruning::Envelope::new(
+            TEST_SCHEMA_VERSION,
+            TEST_PARAMETER_VERSION,
+            snapshot,
+            vec![segment],
+            commitment,
+            binding,
+        )
+        .expect("envelope"),
+    )
+}
+
 prop_compose! {
     fn arb_hex_digest()(bytes in prop::array::uniform32(any::<u8>())) -> String {
         hex::encode(bytes)
@@ -30,32 +96,6 @@ prop_compose! {
     fn arb_decimal_string()(value in 0u128..1_000_000_000_000u128) -> String {
         value.to_string()
     }
-}
-
-const TEST_SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1);
-const TEST_PARAMETER_VERSION: ParameterVersion = ParameterVersion::new(0);
-const TEST_SEGMENT_INDEX: SegmentIndex = SegmentIndex::new(0);
-
-fn decode_hex_digest(value: &str) -> [u8; 32] {
-    let bytes = hex::decode(value).expect("hex decode");
-    bytes.as_slice().try_into().expect("32-byte digest")
-}
-
-fn fabricate_pruning_proof(
-    height: u64,
-    previous_hash: &str,
-    previous_state: &str,
-    pruned_tx: &str,
-    resulting: &str,
-) -> PruningProof {
-    super::canonical_pruning_from_parts(
-        height,
-        previous_hash,
-        previous_state,
-        pruned_tx,
-        resulting,
-    )
-    .expect("envelope")
 }
 
 fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningProof {
@@ -94,11 +134,10 @@ fn tamper_previous_hash(proof: &PruningProof, header: &BlockHeader) -> PruningPr
 
 prop_compose! {
     fn arb_pruning_fixture()(height in 0u64..1_000,
-                             prev_hash in arb_hex_digest(),
-                             prev_state in arb_hex_digest(),
-                             pruned_tx in arb_hex_digest(),
-                             resulting in arb_hex_digest(),
-                             tx_root in arb_hex_digest(),
+                             prev_hash_bytes in prop::array::uniform32(any::<u8>()),
+                             prev_state_bytes in prop::array::uniform32(any::<u8>()),
+                             segment_bytes in prop::array::uniform32(any::<u8>()),
+                             resulting_state_bytes in prop::array::uniform32(any::<u8>()),
                              utxo_root in arb_hex_digest(),
                              reputation_root in arb_hex_digest(),
                              timetoke_root in arb_hex_digest(),
@@ -117,16 +156,16 @@ prop_compose! {
     {
         let proof = fabricate_pruning_proof(
             height,
-            &prev_hash,
-            &prev_state,
-            &pruned_tx,
-            &resulting,
+            prev_hash_bytes,
+            prev_state_bytes,
+            segment_bytes,
+            resulting_state_bytes,
         );
         let header = BlockHeader {
             height: height + 1,
-            previous_hash: prev_hash,
-            tx_root,
-            state_root: resulting,
+            previous_hash: encode_hex_digest(&prev_hash_bytes),
+            tx_root: encode_hex_digest(&segment_bytes),
+            state_root: encode_hex_digest(&resulting_state_bytes),
             utxo_root,
             reputation_root,
             timetoke_root,

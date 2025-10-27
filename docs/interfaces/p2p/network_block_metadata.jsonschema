@@ -33,15 +33,6 @@
       "type": "string",
       "pattern": "^[0-9a-fA-F]{96}$"
     },
-    "NetworkPruningEnvelopeHeader": {
-      "type": "object",
-      "required": ["schema_version", "parameter_version"],
-      "properties": {
-        "schema_version": {"type": "integer", "minimum": 0},
-        "parameter_version": {"type": "integer", "minimum": 0}
-      },
-      "additionalProperties": false
-    },
     "NetworkPruningSnapshot": {
       "type": "object",
       "required": [
@@ -95,14 +86,16 @@
     "NetworkPruningEnvelope": {
       "type": "object",
       "required": [
-        "header",
+        "schema_version",
+        "parameter_version",
         "snapshot",
         "segments",
         "commitment",
         "binding_digest"
       ],
       "properties": {
-        "header": {"$ref": "#/$defs/NetworkPruningEnvelopeHeader"},
+        "schema_version": {"type": "integer", "minimum": 0},
+        "parameter_version": {"type": "integer", "minimum": 0},
         "snapshot": {"$ref": "#/$defs/NetworkPruningSnapshot"},
         "segments": {
           "type": "array",
