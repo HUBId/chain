@@ -196,12 +196,9 @@ impl<'a> WalletProver<'a> {
                 )));
             }
         }
-        let pruned_segment = pruning
-            .segments()
-            .first()
-            .ok_or_else(|| {
-                ChainError::Crypto("pruning envelope missing transaction segment".into())
-            })?;
+        let pruned_segment = pruning.segments().first().ok_or_else(|| {
+            ChainError::Crypto("pruning envelope missing transaction segment".into())
+        })?;
         let pruned_tx_root = hex::encode(pruned_segment.segment_commitment().digest());
         let capacity = previous_identities.len() + previous_txs.len();
         let mut original_hashes = Vec::with_capacity(capacity);
@@ -227,8 +224,10 @@ impl<'a> WalletProver<'a> {
             ));
         }
 
-        let original_set: HashSet<&str> =
-            original_transactions.iter().map(|value| value.as_str()).collect();
+        let original_set: HashSet<&str> = original_transactions
+            .iter()
+            .map(|value| value.as_str())
+            .collect();
         if let Some(missing) = removed
             .iter()
             .find(|value| !original_set.contains(value.as_str()))
@@ -311,7 +310,13 @@ impl<'a> WalletProver<'a> {
             .map(|proof| proof.expect_stwo().map(|inner| inner.clone()))
             .collect::<ChainResult<Vec<_>>>()?;
         let state_owned = state_proof.expect_stwo()?.clone();
-        let pruning_owned = pruning_proof.expect_stwo()?.clone();
+        let pruning_owned = pruning_proof.expect_stwo()?;
+        if pruning_owned.kind != ProofKind::Pruning {
+            return Err(ChainError::Crypto(format!(
+                "expected pruning proof but received {:?}",
+                pruning_owned.kind
+            )));
+        }
         let aggregator = RecursiveAggregator::new(self.parameters.clone());
         let state_roots = StateCommitmentSnapshot::from_commitments(state_commitments);
         aggregator.build_witness(
@@ -321,7 +326,6 @@ impl<'a> WalletProver<'a> {
             &uptime_owned,
             &consensus_owned,
             &state_owned,
-            &pruning_owned,
             pruning_envelope,
             &state_roots,
             block_height,

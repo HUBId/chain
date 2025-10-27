@@ -8,8 +8,6 @@ use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
 use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_pruning::{Envelope, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
-const EMPTY_PREFIXED_DIGEST: PrefixedDigest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
-
 /// Snapshot of the ledger commitments that must anchor the recursive witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StateCommitmentSnapshot {
@@ -90,47 +88,26 @@ fn fold_pruning_digests(
     binding_digest: &[u8],
     segment_commitments: &[PrefixedDigest],
 ) -> ChainResult<FieldElement> {
-    RecursiveCircuit::fold_pruning_digests(
-        hasher,
-        parameters,
-        binding_digest,
-        segment_commitments,
-    )
-    .map_err(|err| ChainError::Crypto(err.to_string()))
+    RecursiveCircuit::fold_pruning_digests(hasher, parameters, binding_digest, segment_commitments)
+        .map_err(|err| ChainError::Crypto(err.to_string()))
 }
 
 fn envelope_prefixed_commitments(envelope: &Envelope) -> (PrefixedDigest, Vec<PrefixedDigest>) {
     let binding = envelope.binding_digest().prefixed_bytes();
-    let segments = envelope
+    let mut segments: Vec<_> = envelope
         .segments()
         .iter()
-        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .map(|segment| {
+            (
+                segment.segment_index().as_u32(),
+                segment.segment_commitment().prefixed_bytes(),
+            )
+        })
         .collect();
+    segments.sort_by_key(|(index, _)| *index);
+    let commitments = segments.into_iter().map(|(_, digest)| digest).collect();
 
-    (binding, segments)
-}
-
-fn extract_pruning_commitments(
-    pruning_proof: &StarkProof,
-    pruning_envelope: &Envelope,
-) -> ChainResult<(PrefixedDigest, Vec<PrefixedDigest>)> {
-    let (witness_binding, witness_segments) = match &pruning_proof.payload {
-        ProofPayload::Pruning(witness) => (
-            witness.pruning_binding_digest.clone(),
-            witness.pruning_segment_commitments.clone(),
-        ),
-        _ => {
-            return Err(ChainError::Crypto(
-                "pruning proof missing pruning witness payload".into(),
-            ))
-        }
-    };
-
-    if witness_binding != EMPTY_PREFIXED_DIGEST || !witness_segments.is_empty() {
-        Ok((witness_binding, witness_segments))
-    } else {
-        Ok(envelope_prefixed_commitments(pruning_envelope))
-    }
+    (binding, commitments)
 }
 
 fn compute_recursive_commitment(
@@ -209,6 +186,9 @@ impl RecursiveAggregator {
     }
 
     /// Build the recursive witness combining the supplied proof commitments.
+    ///
+    /// Pruning commitments are sourced from the provided envelope and
+    /// canonicalized by segment index prior to hashing.
     #[allow(clippy::too_many_arguments)]
     pub fn build_witness(
         &self,
@@ -218,7 +198,6 @@ impl RecursiveAggregator {
         uptime_proofs: &[StarkProof],
         consensus_proofs: &[StarkProof],
         state_proof: &StarkProof,
-        pruning_proof: &StarkProof,
         pruning_envelope: &Envelope,
         state_roots: &StateCommitmentSnapshot,
         block_height: u64,
@@ -250,15 +229,8 @@ impl RecursiveAggregator {
         }
 
         ensure_kind(state_proof, ProofKind::State)?;
-        ensure_kind(pruning_proof, ProofKind::Pruning)?;
-
         let (pruning_binding_digest, pruning_segment_commitments) =
-            extract_pruning_commitments(pruning_proof, pruning_envelope)?;
-        validate_pruning_commitments(
-            pruning_envelope,
-            &pruning_binding_digest,
-            &pruning_segment_commitments,
-        )?;
+            envelope_prefixed_commitments(pruning_envelope);
 
         let aggregated = compute_recursive_commitment(
             &self.parameters,
@@ -295,6 +267,9 @@ impl RecursiveAggregator {
     }
 
     /// Compute the recursive aggregation commitment without constructing a witness.
+    ///
+    /// The pruning envelope is canonicalized by segment index before folding the
+    /// commitments into the Poseidon accumulator.
     pub fn aggregate_commitment(
         &self,
         previous_commitment: Option<&str>,
@@ -304,10 +279,11 @@ impl RecursiveAggregator {
         consensus_commitments: &[String],
         state_commitment: &str,
         state_roots: &StateCommitmentSnapshot,
-        pruning_binding_digest: &PrefixedDigest,
-        pruning_segment_commitments: &[PrefixedDigest],
+        pruning_envelope: &Envelope,
         block_height: u64,
     ) -> ChainResult<FieldElement> {
+        let (pruning_binding_digest, pruning_segment_commitments) =
+            envelope_prefixed_commitments(pruning_envelope);
         compute_recursive_commitment(
             &self.parameters,
             previous_commitment,
@@ -317,32 +293,11 @@ impl RecursiveAggregator {
             consensus_commitments,
             state_commitment,
             state_roots,
-            pruning_binding_digest,
-            pruning_segment_commitments,
+            &pruning_binding_digest,
+            &pruning_segment_commitments,
             block_height,
         )
     }
-}
-
-fn validate_pruning_commitments(
-    envelope: &Envelope,
-    binding_digest: &PrefixedDigest,
-    segment_commitments: &[PrefixedDigest],
-) -> ChainResult<()> {
-    let (expected_binding, expected_segments) = envelope_prefixed_commitments(envelope);
-    if binding_digest != &expected_binding {
-        return Err(ChainError::Crypto(
-            "pruning binding digest mismatch with envelope".into(),
-        ));
-    }
-
-    if segment_commitments != expected_segments.as_slice() {
-        return Err(ChainError::Crypto(
-            "pruning segment commitments mismatch with envelope".into(),
-        ));
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -351,7 +306,6 @@ mod tests {
     use crate::reputation::{ReputationWeights, Tier};
     use crate::stwo::circuit::consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower};
     use crate::stwo::circuit::identity::IdentityWitness;
-    use crate::stwo::circuit::pruning::PruningWitness;
     use crate::stwo::circuit::recursive::{
         PrefixedDigest as CircuitPrefixedDigest, RecursiveWitness as CircuitRecursiveWitness,
     };
@@ -365,8 +319,8 @@ mod tests {
     use crate::types::{Account, SignedTransaction, Stake, Transaction};
     use rpp_pruning::{
         BlockHeight, Commitment, Envelope, ParameterVersion, ProofSegment, SchemaVersion,
-        SegmentIndex, TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH,
-        ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+        SegmentIndex, TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG,
+        PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
     };
     use uuid::Uuid;
 
@@ -518,39 +472,6 @@ mod tests {
         )
     }
 
-    fn dummy_pruning_proof(
-        parameters: &StarkParameters,
-        commitment: String,
-        pruning_binding_digest: PrefixedDigest,
-        pruning_segment_commitments: Vec<PrefixedDigest>,
-    ) -> StarkProof {
-        let original = "22".repeat(32);
-        let hasher = parameters.poseidon_hasher();
-        let pruning_fold = fold_pruning_digests(
-            &hasher,
-            parameters,
-            &pruning_binding_digest,
-            &pruning_segment_commitments,
-        )
-        .expect("compute pruning fold")
-        .to_hex();
-        let witness = PruningWitness {
-            previous_tx_root: "33".repeat(32),
-            pruned_tx_root: "44".repeat(32),
-            original_transactions: vec![original.clone()],
-            removed_transactions: vec![original],
-            pruning_binding_digest,
-            pruning_segment_commitments,
-            pruning_fold,
-        };
-        make_proof(
-            parameters,
-            ProofKind::Pruning,
-            ProofPayload::Pruning(witness),
-            commitment,
-        )
-    }
-
     fn dummy_uptime_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
         let witness = UptimeWitness {
             wallet_address: "wallet".into(),
@@ -686,9 +607,6 @@ mod tests {
         let state_commitment = hasher
             .hash(&[params.element_from_u64(99), zero.clone(), zero.clone()])
             .to_hex();
-        let pruning_proof_commitment = hasher
-            .hash(&[params.element_from_u64(77), zero.clone(), zero.clone()])
-            .to_hex();
         let state_roots = sample_state_roots(2);
 
         let pruning_envelope = sample_pruning_envelope();
@@ -717,8 +635,7 @@ mod tests {
                 &[],
                 &previous_state_commitment,
                 &previous_state_roots,
-                &previous_binding,
-                &previous_segments,
+                &previous_envelope,
                 1,
             )
             .expect("previous aggregate commitment");
@@ -759,13 +676,6 @@ mod tests {
             .map(|commitment| dummy_consensus_proof(&params, commitment))
             .collect();
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
-        let pruning_proof = dummy_pruning_proof(
-            &params,
-            pruning_proof_commitment.clone(),
-            pruning_binding_digest.clone(),
-            pruning_segment_commitments.clone(),
-        );
-
         let witness = aggregator
             .build_witness(
                 Some(&previous_proof),
@@ -774,7 +684,6 @@ mod tests {
                 &uptime_proofs,
                 &consensus_proofs,
                 &state_proof,
-                &pruning_proof,
                 &pruning_envelope,
                 &state_roots,
                 2,
@@ -794,8 +703,7 @@ mod tests {
                 &consensus_commitments,
                 &state_commitment,
                 &state_roots,
-                &pruning_binding_digest,
-                &pruning_segment_commitments,
+                &pruning_envelope,
                 2,
             )
             .expect("aggregate commitment");
@@ -828,20 +736,13 @@ mod tests {
         let state_commitment = hasher
             .hash(&[params.element_from_u64(15), zero.clone(), zero.clone()])
             .to_hex();
-        let pruning_proof_commitment = hasher
-            .hash(&[params.element_from_u64(16), zero.clone(), zero.clone()])
-            .to_hex();
         let identity_commitment = hasher
             .hash(&[params.element_from_u64(25), zero.clone(), zero.clone()])
             .to_hex();
         let state_roots = sample_state_roots(3);
         let pruning_envelope = sample_pruning_envelope();
-        let pruning_binding_digest = pruning_envelope.binding_digest().prefixed_bytes();
-        let pruning_segment_commitments: Vec<_> = pruning_envelope
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
+        let (pruning_binding_digest, pruning_segment_commitments) =
+            envelope_prefixed_commitments(&pruning_envelope);
 
         let previous_tx_commitments = vec![hasher
             .hash(&[params.element_from_u64(3), zero.clone(), zero.clone()])
@@ -849,12 +750,8 @@ mod tests {
         let previous_identity_commitments = vec![identity_commitment.clone()];
         let previous_roots = sample_state_roots(2);
         let previous_envelope = sample_pruning_envelope();
-        let previous_binding = previous_envelope.binding_digest().prefixed_bytes();
-        let previous_segments: Vec<_> = previous_envelope
-            .segments()
-            .iter()
-            .map(|segment| segment.segment_commitment().prefixed_bytes())
-            .collect();
+        let (previous_binding, previous_segments) =
+            envelope_prefixed_commitments(&previous_envelope);
         let previous_aggregate = aggregator
             .aggregate_commitment(
                 None,
@@ -864,8 +761,7 @@ mod tests {
                 &[],
                 &state_commitment,
                 &previous_roots,
-                &previous_binding,
-                &previous_segments,
+                &previous_envelope,
                 1,
             )
             .expect("previous aggregate commitment");
@@ -886,12 +782,6 @@ mod tests {
         );
 
         let state_proof = dummy_state_proof(&params, state_commitment.clone());
-        let pruning_proof = dummy_pruning_proof(
-            &params,
-            pruning_proof_commitment.clone(),
-            pruning_binding_digest.clone(),
-            pruning_segment_commitments.clone(),
-        );
         let identity_proof = dummy_identity_proof(&params, identity_commitment.clone());
 
         let witness = aggregator
@@ -902,7 +792,6 @@ mod tests {
                 &[],
                 &[],
                 &state_proof,
-                &pruning_proof,
                 &pruning_envelope,
                 &state_roots,
                 2,
@@ -926,8 +815,7 @@ mod tests {
                 &[],
                 &state_commitment,
                 &state_roots,
-                &pruning_binding_digest,
-                &pruning_segment_commitments,
+                &pruning_envelope,
                 2,
             )
             .expect("aggregate commitment");
@@ -944,5 +832,100 @@ mod tests {
             witness.pruning_segment_commitments,
             pruning_segment_commitments
         );
+    }
+
+    #[test]
+    fn aggregator_canonicalizes_pruning_segments() {
+        let aggregator = RecursiveAggregator::with_blueprint();
+        let params = StarkParameters::blueprint_default();
+        let hasher = params.poseidon_hasher();
+        let zero = FieldElement::zero(params.modulus());
+
+        let schema = SchemaVersion::new(1);
+        let version = ParameterVersion::new(1);
+        let snapshot = rpp_pruning::Snapshot::new(
+            schema,
+            version,
+            BlockHeight::new(1),
+            TaggedDigest::new(SNAPSHOT_STATE_TAG, [0x10; DIGEST_LENGTH]),
+        )
+        .expect("snapshot");
+        let later_segment = ProofSegment::new(
+            schema,
+            version,
+            SegmentIndex::new(5),
+            BlockHeight::new(1),
+            BlockHeight::new(2),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x45; DIGEST_LENGTH]),
+        )
+        .expect("segment high");
+        let earlier_segment = ProofSegment::new(
+            schema,
+            version,
+            SegmentIndex::new(3),
+            BlockHeight::new(2),
+            BlockHeight::new(3),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x34; DIGEST_LENGTH]),
+        )
+        .expect("segment low");
+        let commitment = Commitment::new(
+            schema,
+            version,
+            TaggedDigest::new(COMMITMENT_TAG, [0x56; DIGEST_LENGTH]),
+        )
+        .expect("commitment");
+        let envelope = Envelope::new(
+            schema,
+            version,
+            snapshot,
+            vec![later_segment, earlier_segment],
+            commitment,
+            TaggedDigest::new(ENVELOPE_TAG, [0x67; DIGEST_LENGTH]),
+        )
+        .expect("envelope");
+
+        let (expected_binding, expected_segments) = envelope_prefixed_commitments(&envelope);
+
+        let identity_commitment = hasher
+            .hash(&[params.element_from_u64(11), zero.clone(), zero.clone()])
+            .to_hex();
+        let identity_proof = dummy_identity_proof(&params, identity_commitment.clone());
+        let state_commitment = hasher
+            .hash(&[params.element_from_u64(21), zero.clone(), zero.clone()])
+            .to_hex();
+        let state_roots = sample_state_roots(4);
+        let state_proof = dummy_state_proof(&params, state_commitment.clone());
+
+        let witness = aggregator
+            .build_witness(
+                None,
+                &[identity_proof],
+                &[],
+                &[],
+                &[],
+                &state_proof,
+                &envelope,
+                &state_roots,
+                3,
+            )
+            .expect("recursive witness with canonical pruning data");
+
+        assert_eq!(witness.pruning_binding_digest, expected_binding);
+        assert_eq!(witness.pruning_segment_commitments, expected_segments);
+
+        let aggregated = aggregator
+            .aggregate_commitment(
+                None,
+                &[identity_commitment],
+                &[],
+                &[],
+                &[],
+                &state_commitment,
+                &state_roots,
+                &envelope,
+                3,
+            )
+            .expect("aggregate commitment");
+        assert_eq!(witness.aggregated_commitment, aggregated.to_hex());
     }
 }
