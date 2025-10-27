@@ -31,6 +31,8 @@ use crate::proof_system::ProofVerifier;
 use crate::types::ChainProof;
 #[cfg(feature = "official")]
 use keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
+#[cfg(feature = "official")]
+use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Thin adapter exposing the STWO integration through the shared backend
 /// interface.  The concrete proving routines are wired in lazily to keep the
@@ -1378,7 +1380,24 @@ mod tests {
             .as_ref()
             .map(|value| string_to_field(parameters, value))
             .unwrap_or_else(|| FieldElement::zero(parameters.modulus()));
-        let pruning = parameters.element_from_bytes(&witness.pruning_binding_digest);
+        let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
+        let prefixed_digest_to_field = |digest: &[u8]| {
+            assert_eq!(
+                digest.len(),
+                expected,
+                "invalid prefixed digest length: expected {} bytes, found {}",
+                expected,
+                digest.len()
+            );
+            parameters.element_from_bytes(digest)
+        };
+        let mut pruning_fold = zero.clone();
+        let binding_element = prefixed_digest_to_field(&witness.pruning_binding_digest);
+        pruning_fold = hasher.hash(&[pruning_fold.clone(), binding_element, zero.clone()]);
+        for digest in &witness.pruning_segment_commitments {
+            let element = prefixed_digest_to_field(digest);
+            pruning_fold = hasher.hash(&[pruning_fold.clone(), element, zero.clone()]);
+        }
         let mut commitments = witness.identity_commitments.clone();
         commitments.extend(witness.tx_commitments.clone());
         commitments.extend(witness.uptime_commitments.clone());
@@ -1401,7 +1420,7 @@ mod tests {
             parameters.element_from_u64(witness.block_height),
         ]);
 
-        hasher.hash(&[previous, state_digest, pruning, activity])
+        hasher.hash(&[previous, state_digest, pruning_fold, activity])
     }
 
     fn state_root_for(accounts: &[Account]) -> String {

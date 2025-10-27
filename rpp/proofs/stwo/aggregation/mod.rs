@@ -6,7 +6,7 @@ use crate::rpp::GlobalStateCommitments;
 use crate::stwo::circuit::recursive::{PrefixedDigest, RecursiveWitness};
 use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
 use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
-use rpp_pruning::Envelope;
+use rpp_pruning::{Envelope, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Snapshot of the ledger commitments that must anchor the recursive witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +57,20 @@ fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     parameters.element_from_bytes(&bytes)
 }
 
+fn prefixed_digest_to_field(
+    parameters: &StarkParameters,
+    digest: &[u8],
+) -> ChainResult<FieldElement> {
+    let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
+    if digest.len() != expected {
+        return Err(ChainError::Crypto(format!(
+            "invalid prefixed digest length: expected {expected} bytes, found {}",
+            digest.len()
+        )));
+    }
+    Ok(parameters.element_from_bytes(digest))
+}
+
 fn ensure_kind(proof: &StarkProof, expected: ProofKind) -> ChainResult<()> {
     if proof.kind != expected {
         return Err(ChainError::Crypto(format!(
@@ -82,6 +96,23 @@ fn fold_commitments(
     accumulator
 }
 
+fn fold_pruning_digests(
+    hasher: &PoseidonHasher,
+    parameters: &StarkParameters,
+    binding_digest: &[u8],
+    segment_commitments: &[PrefixedDigest],
+) -> ChainResult<FieldElement> {
+    let zero = FieldElement::zero(parameters.modulus());
+    let mut accumulator = zero.clone();
+    let binding_element = prefixed_digest_to_field(parameters, binding_digest)?;
+    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+    for digest in segment_commitments {
+        let element = prefixed_digest_to_field(parameters, digest)?;
+        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+    }
+    Ok(accumulator)
+}
+
 fn envelope_prefixed_commitments(envelope: &Envelope) -> (PrefixedDigest, Vec<PrefixedDigest>) {
     let binding = envelope.binding_digest().prefixed_bytes();
     let segments = envelope
@@ -103,8 +134,9 @@ fn compute_recursive_commitment(
     state_commitment: &str,
     state_roots: &StateCommitmentSnapshot,
     pruning_binding_digest: &PrefixedDigest,
+    pruning_segment_commitments: &[PrefixedDigest],
     block_height: u64,
-) -> FieldElement {
+) -> ChainResult<FieldElement> {
     let hasher = parameters.poseidon_hasher();
     let previous = previous_commitment
         .map(|value| string_to_field(parameters, value))
@@ -115,7 +147,12 @@ fn compute_recursive_commitment(
     all_commitments.extend_from_slice(uptime_commitments);
     all_commitments.extend_from_slice(consensus_commitments);
     let activity_digest = fold_commitments(&hasher, parameters, &all_commitments);
-    let pruning_element = parameters.element_from_bytes(pruning_binding_digest);
+    let pruning_fold = fold_pruning_digests(
+        &hasher,
+        parameters,
+        pruning_binding_digest,
+        pruning_segment_commitments,
+    )?;
     let state_digest = hasher.hash(&[
         string_to_field(parameters, state_commitment),
         string_to_field(parameters, &state_roots.global_state_root),
@@ -127,7 +164,7 @@ fn compute_recursive_commitment(
         parameters.element_from_u64(block_height),
     ]);
 
-    hasher.hash(&[previous, state_digest, pruning_element, activity_digest])
+    Ok(hasher.hash(&[previous, state_digest, pruning_fold, activity_digest]))
 }
 
 fn extract_previous_commitment(previous: Option<&StarkProof>) -> ChainResult<Option<String>> {
@@ -224,8 +261,9 @@ impl RecursiveAggregator {
             &state_proof.commitment,
             state_roots,
             &pruning_binding_digest,
+            &pruning_segment_commitments,
             block_height,
-        );
+        )?;
 
         Ok(RecursiveWitness {
             previous_commitment,
@@ -258,8 +296,9 @@ impl RecursiveAggregator {
         state_commitment: &str,
         state_roots: &StateCommitmentSnapshot,
         pruning_binding_digest: &PrefixedDigest,
+        pruning_segment_commitments: &[PrefixedDigest],
         block_height: u64,
-    ) -> FieldElement {
+    ) -> ChainResult<FieldElement> {
         compute_recursive_commitment(
             &self.parameters,
             previous_commitment,
@@ -270,6 +309,7 @@ impl RecursiveAggregator {
             state_commitment,
             state_roots,
             pruning_binding_digest,
+            pruning_segment_commitments,
             block_height,
         )
     }
@@ -642,17 +682,20 @@ mod tests {
         let previous_envelope = sample_pruning_envelope();
         let (previous_binding, previous_segments) =
             envelope_prefixed_commitments(&previous_envelope);
-        let previous_field = aggregator.aggregate_commitment(
-            None,
-            &previous_identity_commitments,
-            &previous_tx_commitments,
-            &[],
-            &[],
-            &previous_state_commitment,
-            &previous_state_roots,
-            &previous_binding,
-            1,
-        );
+        let previous_field = aggregator
+            .aggregate_commitment(
+                None,
+                &previous_identity_commitments,
+                &previous_tx_commitments,
+                &[],
+                &[],
+                &previous_state_commitment,
+                &previous_state_roots,
+                &previous_binding,
+                &previous_segments,
+                1,
+            )
+            .expect("previous aggregate commitment");
         let previous_commitment_hex = previous_field.to_hex();
         let previous_proof = dummy_recursive_proof(
             &params,
@@ -711,17 +754,20 @@ mod tests {
             witness.previous_commitment,
             Some(previous_commitment_hex.clone())
         );
-        let expected = aggregator.aggregate_commitment(
-            Some(previous_commitment_hex.as_str()),
-            &identity_commitments,
-            &tx_commitments,
-            &uptime_commitments,
-            &consensus_commitments,
-            &state_commitment,
-            &state_roots,
-            &pruning_binding_digest,
-            2,
-        );
+        let expected = aggregator
+            .aggregate_commitment(
+                Some(previous_commitment_hex.as_str()),
+                &identity_commitments,
+                &tx_commitments,
+                &uptime_commitments,
+                &consensus_commitments,
+                &state_commitment,
+                &state_roots,
+                &pruning_binding_digest,
+                &pruning_segment_commitments,
+                2,
+            )
+            .expect("aggregate commitment");
         assert_eq!(witness.aggregated_commitment, expected.to_hex());
         assert_eq!(witness.identity_commitments, identity_commitments);
         assert_eq!(witness.tx_commitments, tx_commitments);
@@ -778,17 +824,20 @@ mod tests {
             .iter()
             .map(|segment| segment.segment_commitment().prefixed_bytes())
             .collect();
-        let previous_aggregate = aggregator.aggregate_commitment(
-            None,
-            &previous_identity_commitments,
-            &previous_tx_commitments,
-            &[],
-            &[],
-            &state_commitment,
-            &previous_roots,
-            &previous_binding,
-            1,
-        );
+        let previous_aggregate = aggregator
+            .aggregate_commitment(
+                None,
+                &previous_identity_commitments,
+                &previous_tx_commitments,
+                &[],
+                &[],
+                &state_commitment,
+                &previous_roots,
+                &previous_binding,
+                &previous_segments,
+                1,
+            )
+            .expect("previous aggregate commitment");
         let previous_hex = previous_aggregate.to_hex();
         let previous = dummy_recursive_proof(
             &params,
@@ -832,17 +881,20 @@ mod tests {
         assert!(witness.tx_commitments.is_empty());
         assert!(witness.uptime_commitments.is_empty());
         assert!(witness.consensus_commitments.is_empty());
-        let expected = aggregator.aggregate_commitment(
-            Some(previous_hex.as_str()),
-            &[identity_commitment],
-            &[],
-            &[],
-            &[],
-            &state_commitment,
-            &state_roots,
-            &pruning_binding_digest,
-            2,
-        );
+        let expected = aggregator
+            .aggregate_commitment(
+                Some(previous_hex.as_str()),
+                &[identity_commitment],
+                &[],
+                &[],
+                &[],
+                &state_commitment,
+                &state_roots,
+                &pruning_binding_digest,
+                &pruning_segment_commitments,
+                2,
+            )
+            .expect("aggregate commitment");
         assert_eq!(witness.aggregated_commitment, expected.to_hex());
         assert_eq!(witness.state_commitment, state_commitment);
         assert_eq!(witness.global_state_root, state_roots.global_state_root);
