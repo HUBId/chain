@@ -11,9 +11,10 @@ use crate::errors::{ChainError, ChainResult};
 use crate::proof_backend::{ProofBytes, TxPublicInputs};
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
-    AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, PruningProof,
-    SignedTransaction, UptimeClaim,
+    AttestedIdentityRequest, BlockProofBundle, ChainProof, IdentityGenesis, SignedTransaction,
+    UptimeClaim,
 };
+use rpp_pruning::Envelope;
 
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::verifier::Plonky3Verifier;
@@ -251,7 +252,7 @@ pub trait ProofProver {
         expected_previous_state_root: Option<&str>,
         previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
-        pruning: &PruningProof,
+        pruning: &Envelope,
         removed: Vec<String>,
     ) -> ChainResult<Self::PruningWitness>;
 

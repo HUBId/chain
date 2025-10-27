@@ -11,9 +11,10 @@ use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
 use crate::types::{
-    Account, AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, PruningProofExt,
-    SignedTransaction, Stake, UptimeClaim,
+    Account, AttestedIdentityRequest, ChainProof, IdentityGenesis, SignedTransaction, Stake,
+    UptimeClaim,
 };
+use rpp_pruning::Envelope;
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};
 use crate::stwo::circuit::{
@@ -184,10 +185,10 @@ impl<'a> WalletProver<'a> {
         expected_previous_state_root: Option<&str>,
         previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
-        pruning: &PruningProof,
+        pruning: &Envelope,
         removed: Vec<String>,
     ) -> ChainResult<PruningWitness> {
-        let snapshot_state_root = pruning.snapshot_state_root_hex();
+        let snapshot_state_root = hex::encode(pruning.snapshot().state_commitment().digest());
         if let Some(expected) = expected_previous_state_root {
             if expected != snapshot_state_root {
                 return Err(ChainError::Crypto(format!(
@@ -195,11 +196,13 @@ impl<'a> WalletProver<'a> {
                 )));
             }
         }
-        let pruned_tx_root = pruning
-            .pruned_transaction_root_hex()
+        let pruned_segment = pruning
+            .segments()
+            .first()
             .ok_or_else(|| {
                 ChainError::Crypto("pruning envelope missing transaction segment".into())
             })?;
+        let pruned_tx_root = hex::encode(pruned_segment.segment_commitment().digest());
         let capacity = previous_identities.len() + previous_txs.len();
         let mut original_hashes = Vec::with_capacity(capacity);
         let mut original_transactions = Vec::with_capacity(capacity);
@@ -419,7 +422,7 @@ impl<'a> ProofProver for WalletProver<'a> {
         expected_previous_state_root: Option<&str>,
         previous_identities: &[AttestedIdentityRequest],
         previous_txs: &[SignedTransaction],
-        pruning: &PruningProof,
+        pruning: &Envelope,
         removed: Vec<String>,
     ) -> ChainResult<Self::PruningWitness> {
         self.derive_pruning_witness(

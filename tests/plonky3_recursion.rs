@@ -66,7 +66,7 @@ fn plonky3_recursive_flow_roundtrip() {
     let header = canonical_pruning_header();
     let pruning = pruning_from_previous(None, &header);
     let pruning_witness = prover
-        .build_pruning_witness(None, &[], &[], &pruning, Vec::new())
+        .build_pruning_witness(None, &[], &[], pruning.as_ref(), Vec::new())
         .unwrap();
     let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
 

@@ -4272,7 +4272,8 @@ impl NodeInner {
         let backend = StwoBackend::new();
         let backend_kind = ProofSystemKind::Stwo;
 
-        let previous_state_root_hex = pruning_proof.snapshot_state_root_hex();
+        let previous_state_root_hex =
+            hex::encode(pruning_proof.snapshot().state_commitment().digest());
         let state_witness = {
             let span = proof_operation_span(
                 "build_state_witness",
@@ -4331,7 +4332,7 @@ impl NodeInner {
                 expected_previous_state_root.as_deref(),
                 &previous_identities,
                 &previous_transactions,
-                pruning_proof,
+                pruning_proof.as_ref(),
                 Vec::new(),
             )?
         };
