@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 mod account;
 mod block;
 mod identity;
@@ -5,7 +7,7 @@ mod proofs;
 mod transaction;
 mod uptime;
 
-pub type PruningProof = rpp_pruning::Envelope;
+pub type PruningProof = Arc<rpp_pruning::Envelope>;
 pub type MaybePruningProof = Option<PruningProof>;
 
 pub use crate::identity_tree::IdentityCommitmentProof;

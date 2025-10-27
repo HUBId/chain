@@ -11,8 +11,8 @@ use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::state::merkle::compute_merkle_root;
 use crate::storage::Storage;
 use crate::types::{
-    Account, AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, SignedTransaction,
-    Stake, UptimeClaim,
+    Account, AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, PruningProofExt,
+    SignedTransaction, Stake, UptimeClaim,
 };
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};

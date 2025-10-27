@@ -12,8 +12,8 @@ use crate::errors::{ChainError, ChainResult};
 use crate::proof_system::ProofProver;
 use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
-    AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, SignedTransaction,
-    UptimeClaim,
+    AttestedIdentityRequest, ChainProof, IdentityGenesis, PruningProof, PruningProofExt,
+    SignedTransaction, UptimeClaim,
 };
 
 use super::aggregation::RecursiveAggregator;

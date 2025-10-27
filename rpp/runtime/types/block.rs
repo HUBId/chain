@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::sync::Arc;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -284,14 +285,14 @@ mod pruning_ext {
 
     impl PruningProofExt for PruningProof {
         fn envelope_metadata(&self) -> PruningEnvelopeMetadata {
-            let snapshot = rpp_pruning::Envelope::snapshot(self);
+            let snapshot = self.snapshot();
             let snapshot_metadata = PruningSnapshotMetadata {
                 schema_version: u16::from(snapshot.schema_version()),
                 parameter_version: u16::from(snapshot.parameter_version()),
                 block_height: snapshot.block_height().as_u64(),
                 state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
             };
-            let segment_metadata = rpp_pruning::Envelope::segments(self)
+            let segment_metadata = self.segments()
                 .iter()
                 .map(|segment| PruningSegmentMetadata {
                     schema_version: u16::from(segment.schema_version()),
@@ -302,32 +303,32 @@ mod pruning_ext {
                     segment_commitment: TaggedDigestHex::from(&segment.segment_commitment()),
                 })
                 .collect();
-            let commitment = rpp_pruning::Envelope::commitment(self);
+            let commitment = self.commitment();
             let commitment_metadata = PruningCommitmentMetadata {
                 schema_version: u16::from(commitment.schema_version()),
                 parameter_version: u16::from(commitment.parameter_version()),
                 aggregate_commitment: TaggedDigestHex::from(&commitment.aggregate_commitment()),
             };
             PruningEnvelopeMetadata {
-                schema_version: u16::from(rpp_pruning::Envelope::schema_version(self)),
-                parameter_version: u16::from(rpp_pruning::Envelope::parameter_version(self)),
+                schema_version: u16::from(self.schema_version()),
+                parameter_version: u16::from(self.parameter_version()),
                 snapshot: snapshot_metadata,
                 segments: segment_metadata,
                 commitment: commitment_metadata,
-                binding_digest: TaggedDigestHex::from(&rpp_pruning::Envelope::binding_digest(self)),
+                binding_digest: TaggedDigestHex::from(&self.binding_digest()),
             }
         }
 
         fn binding_digest(&self) -> TaggedDigest {
-            rpp_pruning::Envelope::binding_digest(self)
+            self.binding_digest()
         }
 
         fn aggregate_commitment(&self) -> TaggedDigest {
-            rpp_pruning::Envelope::commitment(self).aggregate_commitment()
+            self.commitment().aggregate_commitment()
         }
 
         fn snapshot_metadata(&self) -> PruningSnapshotMetadata {
-            let snapshot = rpp_pruning::Envelope::snapshot(self);
+            let snapshot = self.snapshot();
             PruningSnapshotMetadata {
                 schema_version: u16::from(snapshot.schema_version()),
                 parameter_version: u16::from(snapshot.parameter_version()),
@@ -337,7 +338,7 @@ mod pruning_ext {
         }
 
         fn segment_metadata(&self) -> Vec<PruningSegmentMetadata> {
-            rpp_pruning::Envelope::segments(self)
+            self.segments()
                 .iter()
                 .map(|segment| PruningSegmentMetadata {
                     schema_version: u16::from(segment.schema_version()),
@@ -351,7 +352,7 @@ mod pruning_ext {
         }
 
         fn commitment_metadata(&self) -> PruningCommitmentMetadata {
-            let commitment = rpp_pruning::Envelope::commitment(self);
+            let commitment = self.commitment();
             PruningCommitmentMetadata {
                 schema_version: u16::from(commitment.schema_version()),
                 parameter_version: u16::from(commitment.parameter_version()),
@@ -360,50 +361,49 @@ mod pruning_ext {
         }
 
         fn binding_digest_hex(&self) -> String {
-            encode_tagged_digest_hex(&rpp_pruning::Envelope::binding_digest(self))
+            encode_tagged_digest_hex(&self.binding_digest())
         }
 
         fn aggregate_commitment_hex(&self) -> String {
-            encode_tagged_digest_hex(&rpp_pruning::Envelope::commitment(self).aggregate_commitment())
+            encode_tagged_digest_hex(&self.commitment().aggregate_commitment())
         }
 
         fn schema_version(&self) -> u16 {
-            u16::from(rpp_pruning::Envelope::schema_version(self))
+            u16::from(self.schema_version())
         }
 
         fn parameter_version(&self) -> u16 {
-            u16::from(rpp_pruning::Envelope::parameter_version(self))
+            u16::from(self.parameter_version())
         }
 
         fn snapshot_height(&self) -> u64 {
-            rpp_pruning::Envelope::snapshot(self)
-                .block_height()
-                .as_u64()
+            self.snapshot().block_height().as_u64()
         }
 
         fn snapshot_state_root_hex(&self) -> String {
-            TaggedDigestHex::from(&rpp_pruning::Envelope::snapshot(self).state_commitment()).into_inner()
+            TaggedDigestHex::from(&self.snapshot().state_commitment()).into_inner()
         }
 
         fn pruned_transaction_root_hex(&self) -> Option<String> {
-            rpp_pruning::Envelope::segments(self)
-                .get(0)
+            self.segments()
+                .iter()
+                .find(|segment| segment.segment_index() == PRUNING_SEGMENT_INDEX)
                 .map(|segment| TaggedDigestHex::from(&segment.segment_commitment()).into_inner())
         }
 
         fn verify(&self, previous: Option<&Block>, header: &BlockHeader) -> ChainResult<()> {
-            if rpp_pruning::Envelope::schema_version(self) != PRUNING_SCHEMA_VERSION {
+            if self.schema_version() != PRUNING_SCHEMA_VERSION {
                 return Err(ChainError::Crypto(
                     "pruning proof schema version mismatch".into(),
                 ));
             }
-            if rpp_pruning::Envelope::parameter_version(self) != PRUNING_PARAMETER_VERSION {
+            if self.parameter_version() != PRUNING_PARAMETER_VERSION {
                 return Err(ChainError::Crypto(
                     "pruning proof parameter version mismatch".into(),
                 ));
             }
 
-            let snapshot = rpp_pruning::Envelope::snapshot(self);
+            let snapshot = self.snapshot();
             if snapshot.schema_version() != PRUNING_SCHEMA_VERSION
                 || snapshot.parameter_version() != PRUNING_PARAMETER_VERSION
             {
@@ -434,7 +434,7 @@ mod pruning_ext {
                 ));
             }
 
-            let segments = rpp_pruning::Envelope::segments(self);
+            let segments = self.segments();
             if segments.len() != 1 {
                 return Err(ChainError::Crypto(
                     "pruning proof must carry exactly one proof segment".into(),
@@ -480,7 +480,7 @@ mod pruning_ext {
                 &segment_commitment,
             );
 
-            let commitment = rpp_pruning::Envelope::commitment(self);
+            let commitment = self.commitment();
             if commitment.schema_version() != PRUNING_SCHEMA_VERSION
                 || commitment.parameter_version() != PRUNING_PARAMETER_VERSION
             {
@@ -496,16 +496,15 @@ mod pruning_ext {
 
             let resulting_state_root = decode_hex_digest("resulting state root", &header.state_root)?;
             let expected_binding = compute_pruning_binding(&aggregate, &resulting_state_root);
-            if rpp_pruning::Envelope::binding_digest(self) != expected_binding {
+            if self.binding_digest() != expected_binding {
                 return Err(ChainError::Crypto(
                     "pruning proof binding digest mismatch".into(),
                 ));
             }
 
             if let Some(_) = previous {
-                let schema_digest = derive_version_digest(u16::from(rpp_pruning::Envelope::schema_version(self)));
-                let parameter_digest =
-                    derive_version_digest(u16::from(rpp_pruning::Envelope::parameter_version(self)));
+                let schema_digest = derive_version_digest(u16::from(self.schema_version()));
+                let parameter_digest = derive_version_digest(u16::from(self.parameter_version()));
                 let firewood_envelope: &storage_firewood::pruning::PruningProof = self;
 
                 if !FirewoodPruner::verify_pruned_state_with_digests(
@@ -569,7 +568,7 @@ mod pruning_ext {
             .binding_digest
             .to_tagged_digest("pruning binding digest", ENVELOPE_TAG)?;
 
-        let envelope = PruningProof::new(
+        let envelope = rpp_pruning::Envelope::new(
             SchemaVersion::new(metadata.schema_version),
             ParameterVersion::new(metadata.parameter_version),
             snapshot,
@@ -579,7 +578,7 @@ mod pruning_ext {
         )
         .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?;
 
-        Ok(envelope)
+        Ok(Arc::new(envelope))
     }
 
     pub fn pruning_genesis(state_root: &str) -> PruningProof {
@@ -693,7 +692,7 @@ mod pruning_ext {
             &resulting_state,
         );
 
-        PruningProof::new(
+        Ok(Arc::new(rpp_pruning::Envelope::new(
             PRUNING_SCHEMA_VERSION,
             PRUNING_PARAMETER_VERSION,
             snapshot,
@@ -701,7 +700,7 @@ mod pruning_ext {
             commitment,
             binding,
         )
-        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))
+        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?))
     }
 }
 
