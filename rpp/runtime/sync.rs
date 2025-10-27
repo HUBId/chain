@@ -1093,6 +1093,12 @@ mod tests {
         pruning: &PruningProof,
     ) -> StarkProof {
         let previous_commitment = previous_commitment.or_else(|| Some(RecursiveProof::anchor()));
+        let pruning_binding_digest = pruning.binding_digest().prefixed_bytes();
+        let pruning_segment_commitments = pruning
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
         StarkProof {
             kind: ProofKind::Recursive,
             commitment: aggregated_commitment.clone(),
@@ -1112,6 +1118,8 @@ mod tests {
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
                 pruning_commitment: pruning.binding_digest_hex(),
+                pruning_binding_digest,
+                pruning_segment_commitments,
                 block_height: header.height,
             }),
             trace: ExecutionTrace {

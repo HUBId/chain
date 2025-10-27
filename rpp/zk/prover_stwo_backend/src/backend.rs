@@ -741,6 +741,7 @@ mod tests {
         UptimePublicInputs, VerifyingKey, WitnessBytes, WitnessHeader,
     };
     use rand::{rngs::StdRng, RngCore, SeedableRng};
+    use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
     const EMPTY_LEAF_DOMAIN: &[u8] = b"rpp-zsi-empty-leaf";
     const NODE_DOMAIN: &[u8] = b"rpp-zsi-node";
@@ -1192,6 +1193,11 @@ mod tests {
         let zsi_root = parameters.element_from_u64(122).to_hex();
         let proof_root = parameters.element_from_u64(133).to_hex();
         let block_height = 9;
+        let pruning_binding_digest = [0x44u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+        let pruning_segment_commitments = vec![
+            [0x55u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+            [0x66u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+        ];
 
         let mut witness = RecursiveWitness {
             previous_commitment: None,
@@ -1208,6 +1214,8 @@ mod tests {
             zsi_root,
             proof_root,
             pruning_commitment,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             block_height,
         };
 
@@ -1350,7 +1358,7 @@ mod tests {
             .as_ref()
             .map(|value| string_to_field(parameters, value))
             .unwrap_or_else(|| FieldElement::zero(parameters.modulus()));
-        let pruning = string_to_field(parameters, &witness.pruning_commitment);
+        let pruning = parameters.element_from_bytes(&witness.pruning_binding_digest);
         let mut commitments = witness.identity_commitments.clone();
         commitments.extend(witness.tx_commitments.clone());
         commitments.extend(witness.uptime_commitments.clone());

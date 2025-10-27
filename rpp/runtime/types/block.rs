@@ -2114,6 +2114,12 @@ mod tests {
                 zsi_root: header.zsi_root.clone(),
                 proof_root: header.proof_root.clone(),
                 pruning_commitment: pruning.binding_digest_hex(),
+                pruning_binding_digest: pruning.binding_digest().prefixed_bytes(),
+                pruning_segment_commitments: pruning
+                    .segments()
+                    .iter()
+                    .map(|segment| segment.segment_commitment().prefixed_bytes())
+                    .collect(),
                 block_height: header.height,
             }),
             trace: ExecutionTrace {
@@ -2209,6 +2215,11 @@ mod tests {
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
                 pruning_commitment: "bb".repeat(32),
+                pruning_binding_digest: [0x44; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+                pruning_segment_commitments: vec![
+                    [0x55; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+                    [0x66; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+                ],
                 block_height: 0,
             }),
             ProofKind::Uptime => ProofPayload::Uptime(UptimeWitness {

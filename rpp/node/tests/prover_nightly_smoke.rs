@@ -18,7 +18,7 @@ use prover_stwo_backend::official::aggregation::{
     StateCommitmentSnapshot as OfficialStateCommitmentSnapshot,
 };
 use prover_stwo_backend::official::circuit::pruning::PruningWitness;
-use prover_stwo_backend::official::circuit::recursive::RecursiveWitness;
+use prover_stwo_backend::official::circuit::recursive::{PrefixedDigest, RecursiveWitness};
 use prover_stwo_backend::official::circuit::state::StateWitness;
 use prover_stwo_backend::official::circuit::uptime::UptimeWitness;
 use prover_stwo_backend::official::proof::StarkProof;
@@ -29,6 +29,11 @@ use rpp_chain::reputation::{ReputationWeights, Tier};
 use rpp_chain::stwo::aggregation::StateCommitmentSnapshot as ChainStateCommitmentSnapshot;
 use rpp_chain::types::{BlockProofBundle, ChainProof};
 use rpp_chain::utils::merkle::merkle_root;
+use rpp_pruning::{
+    BlockHeight, Commitment, Envelope, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex,
+    Snapshot, TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
+    SNAPSHOT_STATE_TAG,
+};
 
 const MAX_PROOF_LEN: usize = 256 * 1024; // 256 KiB leaves plenty of headroom for nightly smoke tests.
 
@@ -209,6 +214,50 @@ fn sample_uptime_witness() -> UptimeWitness {
     }
 }
 
+fn sample_pruning_envelope_artifacts() -> (PrefixedDigest, Vec<PrefixedDigest>) {
+    let schema = SchemaVersion::new(1);
+    let params = ParameterVersion::new(1);
+    let snapshot = Snapshot::new(
+        schema,
+        params,
+        BlockHeight::new(1),
+        TaggedDigest::new(SNAPSHOT_STATE_TAG, [0x91; DIGEST_LENGTH]).expect("snapshot"),
+    )
+    .expect("snapshot");
+    let segment = ProofSegment::new(
+        schema,
+        params,
+        SegmentIndex::new(0),
+        BlockHeight::new(1),
+        BlockHeight::new(2),
+        TaggedDigest::new(PROOF_SEGMENT_TAG, [0x92; DIGEST_LENGTH]).expect("segment"),
+    )
+    .expect("segment");
+    let commitment = Commitment::new(
+        schema,
+        params,
+        TaggedDigest::new(COMMITMENT_TAG, [0x93; DIGEST_LENGTH]).expect("commitment"),
+    )
+    .expect("commitment");
+    let envelope = Envelope::new(
+        schema,
+        params,
+        snapshot,
+        vec![segment],
+        commitment,
+        TaggedDigest::new(ENVELOPE_TAG, [0x94; DIGEST_LENGTH]).expect("binding"),
+    )
+    .expect("envelope");
+
+    let binding = envelope.binding_digest().prefixed_bytes();
+    let segments = envelope
+        .segments()
+        .iter()
+        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .collect();
+    (binding, segments)
+}
+
 fn sample_state_commitments() -> OfficialStateCommitmentSnapshot {
     OfficialStateCommitmentSnapshot::from_header_fields(
         hex::encode([0x11u8; 32]),
@@ -228,6 +277,7 @@ fn sample_recursive_witness(
     uptime_commitments: &[String],
     block_height: u64,
 ) -> RecursiveWitness {
+    let (pruning_binding_digest, pruning_segment_commitments) = sample_pruning_envelope_artifacts();
     let aggregator = OfficialRecursiveAggregator::with_blueprint();
     let aggregated = aggregator.aggregate_commitment(
         None,
@@ -237,7 +287,7 @@ fn sample_recursive_witness(
         &[],
         &state_proof.commitment,
         state_commitments,
-        &pruning_proof.commitment,
+        &pruning_binding_digest,
         block_height,
     );
 
@@ -256,6 +306,8 @@ fn sample_recursive_witness(
         zsi_root: state_commitments.zsi_root.clone(),
         proof_root: state_commitments.proof_root.clone(),
         pruning_commitment: pruning_proof.commitment.clone(),
+        pruning_binding_digest,
+        pruning_segment_commitments,
         block_height,
     }
 }
