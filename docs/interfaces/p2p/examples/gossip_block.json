@@ -34,32 +34,30 @@
   },
   "proof_artifacts": [],
   "pruning_proof": {
-    "envelope": {
+    "schema_version": 1,
+    "parameter_version": 0,
+    "snapshot": {
       "schema_version": 1,
       "parameter_version": 0,
-      "snapshot": {
+      "block_height": 41,
+      "state_commitment": "7270703a7072756e653a7374617465004040404040404040404040404040404040404040404040404040404040404040"
+    },
+    "segments": [
+      {
         "schema_version": 1,
         "parameter_version": 0,
-        "block_height": 41,
-        "state_commitment": "7270703a7072756e653a7374617465004040404040404040404040404040404040404040404040404040404040404040"
-      },
-      "segments": [
-        {
-          "schema_version": 1,
-          "parameter_version": 0,
-          "segment_index": 0,
-          "start_height": 41,
-          "end_height": 41,
-          "segment_commitment": "7270703a7072756e653a70726f6f66004141414141414141414141414141414141414141414141414141414141414141"
-        }
-      ],
-      "commitment": {
-        "schema_version": 1,
-        "parameter_version": 0,
-        "aggregate_commitment": "7270703a7072756e653a636f6d6d69744242424242424242424242424242424242424242424242424242424242424242"
-      },
-      "binding_digest": "7270703a7072756e653a656e766c70004343434343434343434343434343434343434343434343434343434343434343"
-    }
+        "segment_index": 0,
+        "start_height": 41,
+        "end_height": 41,
+        "segment_commitment": "7270703a7072756e653a70726f6f66004141414141414141414141414141414141414141414141414141414141414141"
+      }
+    ],
+    "commitment": {
+      "schema_version": 1,
+      "parameter_version": 0,
+      "aggregate_commitment": "7270703a7072756e653a636f6d6d69744242424242424242424242424242424242424242424242424242424242424242"
+    },
+    "binding_digest": "7270703a7072756e653a656e766c70004343434343434343434343434343434343434343434343434343434343434343"
   },
   "recursive_proof": {
     "system": "Stwo",
