@@ -17,7 +17,7 @@ pub(crate) use block::StoredBlock;
 pub use block::{
     Block, BlockHeader, BlockMetadata, ProofSystem, PruningCommitmentMetadata, PruningEnvelopeMetadata,
     PruningProofExt, PruningSegmentMetadata, PruningSnapshotMetadata, RecursiveProof, ReputationUpdate,
-    TimetokeUpdate,
+    TimetokeUpdate, ValidatedPruningEnvelope,
 };
 pub use block::{
     canonical_pruning_from_block, canonical_pruning_from_parts, canonical_pruning_genesis,
