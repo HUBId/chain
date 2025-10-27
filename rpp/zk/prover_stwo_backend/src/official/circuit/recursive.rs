@@ -79,7 +79,7 @@ impl RecursiveCircuit {
         Ok(acc)
     }
 
-    fn fold_pruning_digests(
+    pub(crate) fn fold_pruning_digests(
         hasher: &PoseidonHasher,
         params: &StarkParameters,
         binding_digest: &[u8],

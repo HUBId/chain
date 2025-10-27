@@ -179,10 +179,7 @@ impl NodeVerifier {
         state_commitments: &StateCommitmentSnapshot,
     ) -> FieldElement {
         let aggregator = RecursiveAggregator::new(self.parameters.clone());
-        let pruning_binding_element = self
-            .parameters
-            .element_from_bytes(&witness.pruning_binding_digest);
-        aggregator.aggregate_commitment_with_binding_element(
+        aggregator.aggregate_commitment(
             witness.previous_commitment.as_deref(),
             &witness.identity_commitments,
             &witness.tx_commitments,
@@ -190,7 +187,7 @@ impl NodeVerifier {
             &witness.consensus_commitments,
             &witness.state_commitment,
             state_commitments,
-            &pruning_binding_element,
+            &witness.pruning_binding_digest,
             &witness.pruning_segment_commitments,
             witness.block_height,
         )

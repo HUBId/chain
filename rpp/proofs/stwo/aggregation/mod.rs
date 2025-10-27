@@ -3,7 +3,7 @@
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::GlobalStateCommitments;
 
-use crate::stwo::circuit::recursive::{PrefixedDigest, RecursiveWitness};
+use crate::stwo::circuit::recursive::{PrefixedDigest, RecursiveCircuit, RecursiveWitness};
 use crate::stwo::params::{FieldElement, PoseidonHasher, StarkParameters};
 use crate::stwo::proof::{ProofKind, ProofPayload, StarkProof};
 use rpp_pruning::{Envelope, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
@@ -57,20 +57,6 @@ fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     parameters.element_from_bytes(&bytes)
 }
 
-fn prefixed_digest_to_field(
-    parameters: &StarkParameters,
-    digest: &[u8],
-) -> ChainResult<FieldElement> {
-    let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
-    if digest.len() != expected {
-        return Err(ChainError::Crypto(format!(
-            "invalid prefixed digest length: expected {expected} bytes, found {}",
-            digest.len()
-        )));
-    }
-    Ok(parameters.element_from_bytes(digest))
-}
-
 fn ensure_kind(proof: &StarkProof, expected: ProofKind) -> ChainResult<()> {
     if proof.kind != expected {
         return Err(ChainError::Crypto(format!(
@@ -102,15 +88,13 @@ fn fold_pruning_digests(
     binding_digest: &[u8],
     segment_commitments: &[PrefixedDigest],
 ) -> ChainResult<FieldElement> {
-    let zero = FieldElement::zero(parameters.modulus());
-    let mut accumulator = zero.clone();
-    let binding_element = prefixed_digest_to_field(parameters, binding_digest)?;
-    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
-    for digest in segment_commitments {
-        let element = prefixed_digest_to_field(parameters, digest)?;
-        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
-    }
-    Ok(accumulator)
+    RecursiveCircuit::fold_pruning_digests(
+        hasher,
+        parameters,
+        binding_digest,
+        segment_commitments,
+    )
+    .map_err(|err| ChainError::Crypto(err.to_string()))
 }
 
 fn envelope_prefixed_commitments(envelope: &Envelope) -> (PrefixedDigest, Vec<PrefixedDigest>) {
@@ -512,16 +496,16 @@ mod tests {
     fn dummy_pruning_proof(parameters: &StarkParameters, commitment: String) -> StarkProof {
         let original = "22".repeat(32);
         let hasher = parameters.poseidon_hasher();
-        let zero = FieldElement::zero(parameters.modulus());
         let pruning_binding_digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
         let pruning_segment_commitments = Vec::new();
-        let pruning_fold = hasher
-            .hash(&[
-                zero.clone(),
-                parameters.element_from_bytes(&pruning_binding_digest),
-                zero.clone(),
-            ])
-            .to_hex();
+        let pruning_fold = fold_pruning_digests(
+            &hasher,
+            parameters,
+            &pruning_binding_digest,
+            &pruning_segment_commitments,
+        )
+        .expect("compute pruning fold")
+        .to_hex();
         let witness = PruningWitness {
             previous_tx_root: "33".repeat(32),
             pruned_tx_root: "44".repeat(32),

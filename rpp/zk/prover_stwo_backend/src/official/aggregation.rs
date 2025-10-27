@@ -1,6 +1,5 @@
-use crate::official::circuit::recursive::PrefixedDigest;
+use crate::official::circuit::recursive::{PrefixedDigest, RecursiveCircuit};
 use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
-use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Snapshot of ledger commitments anchoring the recursive aggregation witness.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,18 +39,6 @@ fn string_to_field(parameters: &StarkParameters, value: &str) -> FieldElement {
     parameters.element_from_bytes(&bytes)
 }
 
-fn prefixed_digest_to_field(parameters: &StarkParameters, digest: &[u8]) -> FieldElement {
-    let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
-    assert_eq!(
-        digest.len(),
-        expected,
-        "invalid prefixed digest length: expected {} bytes, found {}",
-        expected,
-        digest.len()
-    );
-    parameters.element_from_bytes(digest)
-}
-
 fn fold_commitments(
     hasher: &PoseidonHasher,
     parameters: &StarkParameters,
@@ -67,18 +54,19 @@ fn fold_commitments(
     accumulator
 }
 
-fn fold_pruning_elements(
+pub(crate) fn pruning_fold_from_canonical_bytes(
     hasher: &PoseidonHasher,
     parameters: &StarkParameters,
-    binding_element: &FieldElement,
-    segment_elements: &[FieldElement],
+    pruning_binding_digest: &[u8],
+    pruning_segment_commitments: &[PrefixedDigest],
 ) -> FieldElement {
-    let zero = FieldElement::zero(parameters.modulus());
-    let mut accumulator = hasher.hash(&[zero.clone(), binding_element.clone(), zero.clone()]);
-    for segment in segment_elements {
-        accumulator = hasher.hash(&[accumulator.clone(), segment.clone(), zero.clone()]);
-    }
-    accumulator
+    RecursiveCircuit::fold_pruning_digests(
+        hasher,
+        parameters,
+        pruning_binding_digest,
+        pruning_segment_commitments,
+    )
+    .unwrap_or_else(|err| panic!("failed to fold pruning digests: {err}"))
 }
 
 fn compute_recursive_commitment(
@@ -90,8 +78,8 @@ fn compute_recursive_commitment(
     consensus_commitments: &[String],
     state_commitment: &str,
     state_roots: &StateCommitmentSnapshot,
-    pruning_binding_element: &FieldElement,
-    pruning_segment_elements: &[FieldElement],
+    pruning_binding_digest: &PrefixedDigest,
+    pruning_segment_commitments: &[PrefixedDigest],
     block_height: u64,
 ) -> FieldElement {
     let hasher = parameters.poseidon_hasher();
@@ -105,11 +93,11 @@ fn compute_recursive_commitment(
     all_commitments.extend_from_slice(consensus_commitments);
     let activity_digest = fold_commitments(&hasher, parameters, &all_commitments);
 
-    let pruning_fold = fold_pruning_elements(
+    let pruning_fold = pruning_fold_from_canonical_bytes(
         &hasher,
         parameters,
-        pruning_binding_element,
-        pruning_segment_elements,
+        pruning_binding_digest,
+        pruning_segment_commitments,
     );
     let state_digest = hasher.hash(&[
         string_to_field(parameters, state_commitment),
@@ -159,12 +147,6 @@ impl RecursiveAggregator {
         pruning_segment_commitments: &[PrefixedDigest],
         block_height: u64,
     ) -> FieldElement {
-        let pruning_binding_element =
-            prefixed_digest_to_field(&self.parameters, pruning_binding_digest);
-        let segment_elements: Vec<FieldElement> = pruning_segment_commitments
-            .iter()
-            .map(|digest| prefixed_digest_to_field(&self.parameters, digest))
-            .collect();
         compute_recursive_commitment(
             &self.parameters,
             previous_commitment,
@@ -174,41 +156,8 @@ impl RecursiveAggregator {
             consensus_commitments,
             state_commitment,
             state_roots,
-            &pruning_binding_element,
-            &segment_elements,
-            block_height,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn aggregate_commitment_with_binding_element(
-        &self,
-        previous_commitment: Option<&str>,
-        identity_commitments: &[String],
-        tx_commitments: &[String],
-        uptime_commitments: &[String],
-        consensus_commitments: &[String],
-        state_commitment: &str,
-        state_roots: &StateCommitmentSnapshot,
-        pruning_binding_element: &FieldElement,
-        pruning_segment_commitments: &[PrefixedDigest],
-        block_height: u64,
-    ) -> FieldElement {
-        let segment_elements: Vec<FieldElement> = pruning_segment_commitments
-            .iter()
-            .map(|digest| prefixed_digest_to_field(&self.parameters, digest))
-            .collect();
-        compute_recursive_commitment(
-            &self.parameters,
-            previous_commitment,
-            identity_commitments,
-            tx_commitments,
-            uptime_commitments,
-            consensus_commitments,
-            state_commitment,
-            state_roots,
-            pruning_binding_element,
-            &segment_elements,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             block_height,
         )
     }

@@ -258,22 +258,14 @@ impl<'a> WalletProver<'a> {
             .map(|segment| segment.segment_commitment().prefixed_bytes())
             .collect();
         let hasher = self.parameters.poseidon_hasher();
-        let zero = FieldElement::zero(self.parameters.modulus());
-        let mut pruning_accumulator = hasher.hash(&[
-            zero.clone(),
-            self.parameters
-                .element_from_bytes(&pruning_binding_digest),
-            zero.clone(),
-        ]);
-        for digest in &pruning_segment_commitments {
-            let element = self.parameters.element_from_bytes(digest);
-            pruning_accumulator = hasher.hash(&[
-                pruning_accumulator.clone(),
-                element,
-                zero.clone(),
-            ]);
-        }
-        let pruning_fold = pruning_accumulator.to_hex();
+        let pruning_fold = RecursiveCircuit::fold_pruning_digests(
+            &hasher,
+            &self.parameters,
+            &pruning_binding_digest,
+            &pruning_segment_commitments,
+        )
+        .map_err(map_circuit_error)?
+        .to_hex();
         Ok(PruningWitness {
             previous_tx_root,
             pruned_tx_root,

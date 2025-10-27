@@ -22,6 +22,8 @@ use prover_backend_interface::{
 };
 
 #[cfg(feature = "official")]
+use crate::official::aggregation::pruning_fold_from_canonical_bytes;
+#[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
 #[cfg(feature = "official")]
 use crate::official::verifier::NodeVerifier;
@@ -1195,20 +1197,16 @@ mod tests {
 
         let parameters = StarkParameters::blueprint_default();
         let hasher = parameters.poseidon_hasher();
-        let zero = FieldElement::zero(parameters.modulus());
         let pruning_binding_digest =
             TaggedDigest::new(ENVELOPE_TAG, [0x44u8; DIGEST_LENGTH]).prefixed_bytes();
         let pruning_segment_commitments =
             vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x57u8; DIGEST_LENGTH]).prefixed_bytes()];
-        let mut accumulator = hasher.hash(&[
-            zero.clone(),
-            parameters.element_from_bytes(&pruning_binding_digest),
-            zero.clone(),
-        ]);
-        for digest in &pruning_segment_commitments {
-            let element = parameters.element_from_bytes(digest);
-            accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
-        }
+        let accumulator = pruning_fold_from_canonical_bytes(
+            &hasher,
+            &parameters,
+            &pruning_binding_digest,
+            &pruning_segment_commitments,
+        );
 
         PruningWitness {
             previous_tx_root,
@@ -1400,24 +1398,12 @@ mod tests {
             .as_ref()
             .map(|value| string_to_field(parameters, value))
             .unwrap_or_else(|| FieldElement::zero(parameters.modulus()));
-        let expected = DOMAIN_TAG_LENGTH + DIGEST_LENGTH;
-        let prefixed_digest_to_field = |digest: &[u8]| {
-            assert_eq!(
-                digest.len(),
-                expected,
-                "invalid prefixed digest length: expected {} bytes, found {}",
-                expected,
-                digest.len()
-            );
-            parameters.element_from_bytes(digest)
-        };
-        let mut pruning_fold = zero.clone();
-        let binding_element = prefixed_digest_to_field(&witness.pruning_binding_digest);
-        pruning_fold = hasher.hash(&[pruning_fold.clone(), binding_element, zero.clone()]);
-        for digest in &witness.pruning_segment_commitments {
-            let element = prefixed_digest_to_field(digest);
-            pruning_fold = hasher.hash(&[pruning_fold.clone(), element, zero.clone()]);
-        }
+        let pruning_fold = pruning_fold_from_canonical_bytes(
+            &hasher,
+            parameters,
+            &witness.pruning_binding_digest,
+            &witness.pruning_segment_commitments,
+        );
         let mut commitments = witness.identity_commitments.clone();
         commitments.extend(witness.tx_commitments.clone());
         commitments.extend(witness.uptime_commitments.clone());
