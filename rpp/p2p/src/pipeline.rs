@@ -1201,6 +1201,10 @@ pub struct NetworkBlockMetadata {
     pub proof_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pruning: Option<NetworkPruningEnvelope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruning_binding_digest: Option<NetworkTaggedDigestHex>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pruning_segment_commitments: Vec<NetworkTaggedDigestHex>,
     pub recursion_anchor: String,
 }
 
@@ -2098,6 +2102,8 @@ mod tests {
                 new_state_root: hex::encode([0x22; 32]),
                 proof_hash: hex::encode([0x33; 32]),
                 pruning: Some(pruning_envelope.clone()),
+                pruning_binding_digest: Some(prefixed_hex(ENVELOPE_TAG, 0x40)),
+                pruning_segment_commitments: vec![prefixed_hex(PROOF_SEGMENT_TAG, 0x20)],
                 recursion_anchor: "anchor".into(),
             },
             chunks: vec![NetworkStateSyncChunk {

@@ -51,6 +51,104 @@ const PRUNING_AGGREGATE_PREFIX: &[u8] = b"rpp:prune:aggregate:v1";
 const PRUNING_BINDING_PREFIX: &[u8] = b"rpp:prune:binding:v1";
 const RECURSIVE_ANCHOR_SEED: &[u8] = b"rpp-recursive-anchor";
 
+type PrefixedDigest = [u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+
+const EMPTY_PREFIXED_DIGEST: PrefixedDigest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+
+mod serde_prefixed_digest_hex {
+    use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &PrefixedDigest, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(value))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<PrefixedDigest, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = String::deserialize(deserializer)?;
+        if encoded.is_empty() {
+            return Ok([0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]);
+        }
+        let bytes = hex::decode(&encoded).map_err(serde::de::Error::custom)?;
+        if bytes.len() != DOMAIN_TAG_LENGTH + DIGEST_LENGTH {
+            return Err(serde::de::Error::custom(format!(
+                "expected {} bytes, found {}",
+                DOMAIN_TAG_LENGTH + DIGEST_LENGTH,
+                bytes.len()
+            )));
+        }
+        let mut digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+        digest.copy_from_slice(&bytes);
+        Ok(digest)
+    }
+}
+
+mod serde_prefixed_digest_vec_hex {
+    use super::{PrefixedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+    use serde::de::{SeqAccess, Visitor};
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::fmt;
+
+    pub fn serialize<S>(values: &Vec<PrefixedDigest>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(values.len()))?;
+        for value in values {
+            seq.serialize_element(&hex::encode(value))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<PrefixedDigest>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct PrefixedDigestVecVisitor;
+
+        impl<'de> Visitor<'de> for PrefixedDigestVecVisitor {
+            type Value = Vec<PrefixedDigest>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a sequence of hex-encoded prefixed digests")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(encoded) = seq.next_element::<String>()? {
+                    if encoded.is_empty() {
+                        values.push([0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]);
+                        continue;
+                    }
+                    let bytes = hex::decode(&encoded).map_err(serde::de::Error::custom)?;
+                    if bytes.len() != DOMAIN_TAG_LENGTH + DIGEST_LENGTH {
+                        return Err(serde::de::Error::custom(format!(
+                            "expected {} bytes, found {}",
+                            DOMAIN_TAG_LENGTH + DIGEST_LENGTH,
+                            bytes.len()
+                        )));
+                    }
+                    let mut digest = [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH];
+                    digest.copy_from_slice(&bytes);
+                    values.push(digest);
+                }
+                Ok(values)
+            }
+        }
+
+        deserializer.deserialize_seq(PrefixedDigestVecVisitor)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BlockHeader {
     pub height: u64,
@@ -829,6 +927,10 @@ pub struct RecursiveProof {
     pub commitment: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_commitment: Option<String>,
+    #[serde(default, with = "serde_prefixed_digest_hex")]
+    pub pruning_binding_digest: PrefixedDigest,
+    #[serde(default, with = "serde_prefixed_digest_vec_hex")]
+    pub pruning_segment_commitments: Vec<PrefixedDigest>,
     pub proof: ChainProof,
 }
 
@@ -849,6 +951,8 @@ impl RecursiveProof {
         system: ProofSystem,
         commitment: String,
         previous_commitment: Option<String>,
+        pruning_binding_digest: PrefixedDigest,
+        pruning_segment_commitments: Vec<PrefixedDigest>,
         proof: ChainProof,
     ) -> ChainResult<Self> {
         #[cfg(not(feature = "backend-plonky3"))]
@@ -890,6 +994,8 @@ impl RecursiveProof {
             system,
             commitment,
             previous_commitment,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             proof,
         })
     }
@@ -923,12 +1029,20 @@ impl RecursiveProof {
             #[cfg(feature = "backend-rpp-stark")]
             ChainProof::RppStark(_) => ProofSystem::RppStark,
         };
-        let instance = Self {
+        let pruning_binding_digest = pruning.binding_digest().prefixed_bytes();
+        let pruning_segment_commitments = pruning
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
+        let instance = Self::from_parts(
             system,
             commitment,
             previous_commitment,
-            proof: proof.clone(),
-        };
+            pruning_binding_digest,
+            pruning_segment_commitments,
+            proof.clone(),
+        )?;
         instance.verify(header, pruning, previous)?;
         Ok(instance)
     }
@@ -961,6 +1075,7 @@ impl RecursiveProof {
         self.ensure_system_matches()?;
         self.verify_previous_link(previous)?;
         self.verify_commitment_matches_proof()?;
+        self.verify_pruning_bytes(pruning)?;
         match self.system {
             ProofSystem::Stwo => self.verify_stwo(header, pruning, previous),
             ProofSystem::Plonky3 => self.verify_plonky3(previous),
@@ -1023,6 +1138,44 @@ impl RecursiveProof {
                 "recursive proof commitment does not match embedded proof".into(),
             ));
         }
+        Ok(())
+    }
+
+    fn verify_pruning_bytes(&self, pruning: &PruningProof) -> ChainResult<()> {
+        let canonical_binding = pruning.binding_digest().prefixed_bytes();
+        if self.pruning_binding_digest != EMPTY_PREFIXED_DIGEST
+            && self.pruning_binding_digest != canonical_binding
+        {
+            return Err(ChainError::Crypto(
+                "recursive proof pruning binding digest mismatch".into(),
+            ));
+        }
+
+        let canonical_segments: Vec<PrefixedDigest> = pruning
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
+
+        if !self.pruning_segment_commitments.is_empty() {
+            if self.pruning_segment_commitments.len() != canonical_segments.len() {
+                return Err(ChainError::Crypto(
+                    "recursive proof pruning segment commitment count mismatch".into(),
+                ));
+            }
+
+            if !self
+                .pruning_segment_commitments
+                .iter()
+                .zip(canonical_segments.iter())
+                .all(|(lhs, rhs)| lhs == rhs)
+            {
+                return Err(ChainError::Crypto(
+                    "recursive proof pruning segment commitment mismatch".into(),
+                ));
+            }
+        }
+
         Ok(())
     }
 
@@ -2669,6 +2822,10 @@ pub struct BlockMetadata {
     pub proof_hash: String,
     #[serde(default)]
     pub pruning: Option<PruningEnvelopeMetadata>,
+    #[serde(default, with = "serde_prefixed_digest_hex")]
+    pub pruning_binding_digest: PrefixedDigest,
+    #[serde(default, with = "serde_prefixed_digest_vec_hex")]
+    pub pruning_segment_commitments: Vec<PrefixedDigest>,
     pub recursive_commitment: String,
     #[serde(default)]
     pub recursive_previous_commitment: Option<String>,
@@ -2698,6 +2855,10 @@ struct BlockMetadataSerde {
     pub pruning_schema_version: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pruning_parameter_version: Option<u16>,
+    #[serde(default, with = "serde_prefixed_digest_hex")]
+    pub pruning_binding_digest: PrefixedDigest,
+    #[serde(default, with = "serde_prefixed_digest_vec_hex")]
+    pub pruning_segment_commitments: Vec<PrefixedDigest>,
     pub recursive_commitment: String,
     #[serde(default)]
     pub recursive_previous_commitment: Option<String>,
@@ -2721,6 +2882,8 @@ impl From<BlockMetadataSerde> for BlockMetadata {
             pruning_aggregate_commitment,
             pruning_schema_version,
             pruning_parameter_version,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             recursive_commitment,
             recursive_previous_commitment,
             recursive_system,
@@ -2739,6 +2902,31 @@ impl From<BlockMetadataSerde> for BlockMetadata {
             )
         });
 
+        let mut pruning_binding_digest = pruning_binding_digest;
+        let mut pruning_segment_commitments = pruning_segment_commitments;
+        if pruning_binding_digest == EMPTY_PREFIXED_DIGEST && pruning_segment_commitments.is_empty()
+        {
+            if let Some(metadata) = &pruning {
+                if let Ok(digest) = metadata
+                    .binding_digest
+                    .to_tagged_digest("pruning metadata binding digest", ENVELOPE_TAG)
+                {
+                    pruning_binding_digest = digest.prefixed_bytes();
+                }
+
+                let mut segments = Vec::new();
+                for (index, segment) in metadata.segments.iter().enumerate() {
+                    if let Ok(digest) = segment.segment_commitment.to_tagged_digest(
+                        &format!("pruning metadata segment commitment #{index}"),
+                        PROOF_SEGMENT_TAG,
+                    ) {
+                        segments.push(digest.prefixed_bytes());
+                    }
+                }
+                pruning_segment_commitments = segments;
+            }
+        }
+
         Self {
             height,
             hash,
@@ -2747,6 +2935,8 @@ impl From<BlockMetadataSerde> for BlockMetadata {
             new_state_root,
             proof_hash,
             pruning,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             recursive_commitment,
             recursive_previous_commitment,
             recursive_system,
@@ -2765,6 +2955,8 @@ impl From<BlockMetadata> for BlockMetadataSerde {
             new_state_root,
             proof_hash,
             pruning,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             recursive_commitment,
             recursive_previous_commitment,
             recursive_system,
@@ -2817,6 +3009,8 @@ impl From<BlockMetadata> for BlockMetadataSerde {
             pruning_aggregate_commitment,
             pruning_schema_version,
             pruning_parameter_version,
+            pruning_binding_digest,
+            pruning_segment_commitments,
             recursive_commitment,
             recursive_previous_commitment,
             recursive_system,
@@ -2892,6 +3086,13 @@ fn non_empty_string(value: String) -> Option<String> {
 impl BlockMetadata {
     pub fn from_block(block: &Block) -> Self {
         let pruning = block.pruning_proof.envelope_metadata();
+        let pruning_binding_digest = block.pruning_proof.binding_digest().prefixed_bytes();
+        let pruning_segment_commitments = block
+            .pruning_proof
+            .segments()
+            .iter()
+            .map(|segment| segment.segment_commitment().prefixed_bytes())
+            .collect();
         let previous_state_root = pruning
             .snapshot
             .state_commitment
@@ -2906,6 +3107,8 @@ impl BlockMetadata {
             new_state_root: block.header.state_root.clone(),
             proof_hash: block.header.proof_root.clone(),
             pruning: Some(pruning),
+            pruning_binding_digest,
+            pruning_segment_commitments,
             recursive_commitment: block.recursive_proof.commitment.clone(),
             recursive_previous_commitment: block.recursive_proof.previous_commitment.clone(),
             recursive_system: block.recursive_proof.system.clone(),

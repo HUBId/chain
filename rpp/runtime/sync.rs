@@ -28,8 +28,8 @@ use rpp_pruning::{COMMITMENT_TAG, DOMAIN_TAG_LENGTH, DIGEST_LENGTH};
 use rpp_p2p::{
     LightClientHead, LightClientSync, NetworkBlockMetadata, NetworkGlobalStateCommitments,
     NetworkLightClientUpdate, NetworkPayloadExpectations, NetworkReconstructionRequest,
-    NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError,
-    RecursiveProofVerifier, SnapshotChunk, SnapshotChunkStream, SnapshotStore,
+    NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
+    PipelineError, RecursiveProofVerifier, SnapshotChunk, SnapshotChunkStream, SnapshotStore,
     TransactionProofVerifier,
 };
 
@@ -94,10 +94,22 @@ impl RecursiveProofVerifier for RuntimeRecursiveProofVerifier {
             #[cfg(feature = "backend-rpp-stark")]
             ChainProof::RppStark(_) => ProofSystem::RppStark,
         };
+        let (pruning_binding_digest, pruning_segment_commitments) = match &artifact {
+            ChainProof::Stwo(stark) => match &stark.payload {
+                ProofPayload::Recursive(witness) => (
+                    witness.pruning_binding_digest,
+                    witness.pruning_segment_commitments.clone(),
+                ),
+                _ => ([0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH], Vec::new()),
+            },
+            _ => ([0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH], Vec::new()),
+        };
         let recursive = RecursiveProof::from_parts(
             system,
             expected_commitment.to_string(),
             previous_commitment.map(|value| value.to_string()),
+            pruning_binding_digest,
+            pruning_segment_commitments,
             artifact.clone(),
         )
         .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
@@ -852,6 +864,20 @@ fn encode_global_commitments(
 }
 
 fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
+    let pruning_binding_digest = if metadata.pruning_binding_digest
+        == [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]
+    {
+        None
+    } else {
+        Some(NetworkTaggedDigestHex::from(hex::encode(
+            metadata.pruning_binding_digest,
+        )))
+    };
+    let pruning_segment_commitments: Vec<NetworkTaggedDigestHex> = metadata
+        .pruning_segment_commitments
+        .iter()
+        .map(|digest| NetworkTaggedDigestHex::from(hex::encode(digest)))
+        .collect();
     NetworkBlockMetadata {
         height: metadata.height,
         hash: metadata.hash.clone(),
@@ -863,6 +889,8 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
             .pruning
             .as_ref()
             .map(encode_pruning_envelope),
+        pruning_binding_digest,
+        pruning_segment_commitments,
         recursion_anchor: metadata.recursive_anchor.clone(),
     }
 }

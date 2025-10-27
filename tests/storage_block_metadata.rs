@@ -138,10 +138,18 @@ fn make_block(height: u64, previous: Option<&Block>) -> Block {
         hex::encode([height as u8 + 13; 32]),
     );
     let pruning_proof = pruning_from_previous(previous, &header);
+    let pruning_binding_digest = pruning_proof.binding_digest().prefixed_bytes();
+    let pruning_segment_commitments = pruning_proof
+        .segments()
+        .iter()
+        .map(|segment| segment.segment_commitment().prefixed_bytes())
+        .collect();
     let recursive_proof = RecursiveProof::from_parts(
         ProofSystem::Stwo,
         "99".repeat(32),
         None,
+        pruning_binding_digest,
+        pruning_segment_commitments,
         ChainProof::Stwo(dummy_recursive_proof(
             None,
             "99".repeat(32),
@@ -205,6 +213,14 @@ fn storage_persists_extended_block_metadata() {
         .expect("read metadata")
         .expect("metadata present");
     assert_eq!(persisted.proof_hash, genesis.header.proof_root);
+    assert_eq!(
+        persisted.pruning_binding_digest,
+        metadata.pruning_binding_digest
+    );
+    assert_eq!(
+        persisted.pruning_segment_commitments,
+        metadata.pruning_segment_commitments
+    );
     assert_eq!(persisted.previous_state_root, metadata.previous_state_root);
     assert_eq!(persisted.new_state_root, metadata.new_state_root);
     let persisted_pruning = persisted
