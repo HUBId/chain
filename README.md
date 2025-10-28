@@ -82,6 +82,14 @@ In order to build firewood, the following dependencies must be installed:
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
 
+Use the provided Make targets to build the workspace with the correct
+toolchains:
+
+- `make build:stable` calls `cargo +1.79.0 build --workspace` while excluding
+  the prover crates that require nightly features.
+- `make build:nightly` runs `cargo +nightly build` in the `prover/` workspace so
+  nightly-only components stay isolated.
+
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
 
@@ -179,8 +187,11 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 
 ## Test
 
+Use the Makefile helpers to run the appropriate test suites:
+
 ```sh
-cargo test --release
+make test:stable   # runs cargo +1.79.0 test for the stable workspace
+make test:nightly  # runs cargo +nightly test inside prover/
 ```
 
 ## License
