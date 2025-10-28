@@ -195,10 +195,10 @@ run_suite() {
   case "$backend" in
     default)
       backend_args=()
-      toolchain=("+nightly-2025-07-14")
+      toolchain=()
       ;;
     stwo)
-      backend_args=("--no-default-features" "--features" "prover-stwo")
+      backend_args=("--no-default-features" "--features" "stwo")
       toolchain=("+nightly-2025-07-14")
       ;;
     plonky3)
@@ -248,10 +248,10 @@ run_integration_focus_tests() {
   case "$backend" in
     default)
       backend_args=()
-      toolchain=("+nightly-2025-07-14")
+      toolchain=()
       ;;
     stwo)
-      backend_args=("--no-default-features" "--features" "prover-stwo")
+      backend_args=("--no-default-features" "--features" "stwo")
       toolchain=("+nightly-2025-07-14")
       ;;
     plonky3)
