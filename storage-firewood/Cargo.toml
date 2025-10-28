@@ -14,6 +14,8 @@ tempfile = "3.10"
 thiserror = "1.0"
 rpp-pruning = { path = "../rpp/pruning" }
 metrics = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.5"

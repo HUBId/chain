@@ -97,6 +97,7 @@ pub struct FirewoodKv {
     commit_boundaries: VecDeque<SequenceNumber>,
     replay_inflight: Option<InflightTransaction>,
     next_tx_id: u64,
+    directory: PathBuf,
 }
 
 impl FirewoodKv {
@@ -113,6 +114,7 @@ impl FirewoodKv {
             commit_boundaries: VecDeque::new(),
             replay_inflight: None,
             next_tx_id: 0,
+            directory: directory.to_path_buf(),
         };
 
         let (records, rolled_back) = kv.replay()?;
@@ -127,6 +129,10 @@ impl FirewoodKv {
             .increment(rolled_back as u64);
         }
         Ok(kv)
+    }
+
+    pub fn base_dir(&self) -> &Path {
+        &self.directory
     }
 
     fn replay(&self) -> Result<(Vec<(SequenceNumber, LogRecord)>, u64), KvError> {

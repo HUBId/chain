@@ -812,6 +812,8 @@ pub struct NodeConfig {
     pub queue_weights: QueueWeightsConfig,
     #[serde(skip)]
     pub malachite: MalachiteConfig,
+    #[serde(default)]
+    pub storage: FirewoodStorageConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -864,6 +866,59 @@ fn default_consensus_pipeline_path() -> PathBuf {
 
 fn default_max_proof_size_bytes() -> usize {
     4 * 1024 * 1024
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FirewoodSyncPolicyConfig {
+    Always,
+    Deferred,
+}
+
+impl Default for FirewoodSyncPolicyConfig {
+    fn default() -> Self {
+        Self::Always
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FirewoodStorageConfig {
+    pub snapshot_dir: PathBuf,
+    pub proof_dir: PathBuf,
+    pub sync_policy: FirewoodSyncPolicyConfig,
+    pub commit_io_budget_bytes: u64,
+    pub compaction_io_budget_bytes: u64,
+}
+
+impl FirewoodStorageConfig {
+    pub fn snapshot_dir_or(&self, fallback: &Path) -> PathBuf {
+        if self.snapshot_dir == PathBuf::default() {
+            fallback.to_path_buf()
+        } else {
+            self.snapshot_dir.clone()
+        }
+    }
+
+    pub fn proof_dir_or(&self, fallback: &Path) -> PathBuf {
+        if self.proof_dir == PathBuf::default() {
+            fallback.to_path_buf()
+        } else {
+            self.proof_dir.clone()
+        }
+    }
+}
+
+impl Default for FirewoodStorageConfig {
+    fn default() -> Self {
+        Self {
+            snapshot_dir: default_snapshot_dir(),
+            proof_dir: PathBuf::from("./data/proofs"),
+            sync_policy: FirewoodSyncPolicyConfig::Always,
+            commit_io_budget_bytes: 64 * 1024 * 1024,
+            compaction_io_budget_bytes: 128 * 1024 * 1024,
+        }
+    }
 }
 
 impl NodeConfig {
@@ -955,6 +1010,8 @@ impl NodeConfig {
                 fs::create_dir_all(parent)?;
             }
         }
+        fs::create_dir_all(&self.storage.snapshot_dir)?;
+        fs::create_dir_all(&self.storage.proof_dir)?;
         Ok(())
     }
 
@@ -1025,6 +1082,16 @@ impl NodeConfig {
                 "node configuration requires max_proof_size_bytes to be greater than 0".into(),
             ));
         }
+        if self.storage.commit_io_budget_bytes == 0 {
+            return Err(ChainError::Config(
+                "node configuration storage.commit_io_budget_bytes must be greater than 0".into(),
+            ));
+        }
+        if self.storage.compaction_io_budget_bytes == 0 {
+            return Err(ChainError::Config(
+                "node configuration storage.compaction_io_budget_bytes must be greater than 0".into(),
+            ));
+        }
         if let Some(token) = &self.rpc_auth_token {
             if token.trim().is_empty() {
                 return Err(ChainError::Config(
@@ -1086,6 +1153,7 @@ impl Default for NodeConfig {
             reputation: ReputationConfig::default(),
             queue_weights: QueueWeightsConfig::default(),
             malachite: MalachiteConfig::default(),
+            storage: FirewoodStorageConfig::default(),
         }
     }
 }

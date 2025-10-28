@@ -1,4 +1,5 @@
 pub mod api;
+pub mod column_family;
 pub mod kv;
 pub mod pruning;
 pub mod schema;
@@ -6,7 +7,10 @@ pub mod state;
 pub mod tree;
 pub mod wal;
 
-pub use crate::state::FirewoodState as Storage;
+pub use crate::pruning::SnapshotManifest;
+pub use crate::state::{
+    FirewoodState as Storage, StorageOptions, SyncPolicy, STORAGE_LAYOUT_VERSION,
+};
 
 #[cfg(test)]
 mod tests {
