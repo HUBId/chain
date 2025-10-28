@@ -1900,8 +1900,6 @@ dependencies = [
 [[package]]
 name = "fastrace"
 version = "0.7.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "318783b9fefe06130ab664ff1779215657586b004c0c7f3d6ece16d658936d06"
 dependencies = [
  "fastant",
  "fastrace-macro",
@@ -1915,8 +1913,6 @@ dependencies = [
 [[package]]
 name = "fastrace-macro"
 version = "0.7.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7079009cf129d63c850dee732b58d7639d278a47ad99c607954ac94cfd57ef4"
 dependencies = [
  "proc-macro-error2",
  "proc-macro2",
@@ -5892,7 +5888,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.7.9",
- "base64 0.21.7",
+ "base64 0.22.1",
  "bincode",
  "blake2",
  "blake3",
@@ -5942,8 +5938,8 @@ dependencies = [
  "thiserror 2.0.12",
  "tokio",
  "tokio-stream",
- "toml 0.8.23",
- "tower 0.4.13",
+ "toml 0.9.6",
+ "tower 0.5.2",
  "tracing",
  "tracing-test",
  "uuid",
@@ -5975,6 +5971,7 @@ dependencies = [
  "prover_stwo_backend",
  "schnorrkel",
  "serde",
+ "sha2",
  "thiserror 2.0.12",
 ]
 
@@ -6742,7 +6739,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 1.0.69",
+ "thiserror 2.0.12",
 ]
 
 [[package]]
