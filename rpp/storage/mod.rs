@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use storage_firewood::api::StateUpdate;
 use storage_firewood::kv::FirewoodKv;
-use storage_firewood::pruning::FirewoodPruner;
+use storage_firewood::pruning::{FirewoodPruner, PersistedPrunerState};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
@@ -29,6 +29,7 @@ const BLOCK_METADATA_PREFIX: &[u8] = b"block_metadata/";
 pub(crate) const PRUNING_PROOF_PREFIX: &[u8] = b"pruning_proofs/";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 const WALLET_UTXO_SNAPSHOT_KEY: &[u8] = b"wallet_utxo_snapshot";
+const PRUNER_STATE_KEY: &[u8] = b"pruner_state";
 
 const SCHEMA_ACCOUNTS: &str = "accounts";
 
@@ -47,9 +48,13 @@ pub struct Storage {
 impl Storage {
     pub fn open(path: &Path) -> ChainResult<Self> {
         let kv = FirewoodKv::open(path)?;
+        let pruner = match Self::read_pruner_state_raw(&kv)? {
+            Some(state) => FirewoodPruner::from_persisted(state),
+            None => FirewoodPruner::new(8),
+        };
         let storage = Self {
             kv: Arc::new(Mutex::new(kv)),
-            pruner: Arc::new(Mutex::new(FirewoodPruner::new(8))),
+            pruner: Arc::new(Mutex::new(pruner)),
         };
         storage.ensure_schema_supported()?;
         Ok(storage)
@@ -134,6 +139,22 @@ impl Storage {
         }
     }
 
+    fn persist_pruner_state_raw(
+        kv: &mut FirewoodKv,
+        state: &PersistedPrunerState,
+    ) -> ChainResult<()> {
+        let encoded = bincode::serialize(state)?;
+        kv.put(metadata_key(PRUNER_STATE_KEY), encoded);
+        Ok(())
+    }
+
+    fn read_pruner_state_raw(kv: &FirewoodKv) -> ChainResult<Option<PersistedPrunerState>> {
+        match kv.get(&metadata_key(PRUNER_STATE_KEY)) {
+            Some(bytes) => Ok(Some(bincode::deserialize(&bytes)?)),
+            None => Ok(None),
+        }
+    }
+
     pub(crate) fn open_db(path: &Path) -> ChainResult<FirewoodKv> {
         FirewoodKv::open(path).map_err(ChainError::from)
     }
@@ -163,10 +184,15 @@ impl Storage {
     }
 
     pub fn persist_pruning_proof(&self, height: u64, proof: &PruningProof) -> ChainResult<()> {
+        let pruner_state = {
+            let pruner = self.pruner.lock();
+            pruner.export_state()
+        };
         let mut kv = self.kv.lock();
         let canonical = CanonicalPruningEnvelope::from(proof.as_ref());
         let data = rpp_pruning::canonical_bincode_options().serialize(&canonical)?;
         kv.put(metadata_key(&pruning_proof_suffix(height)), data);
+        Self::persist_pruner_state_raw(&mut kv, &pruner_state)?;
         kv.commit()?;
         Ok(())
     }
@@ -622,7 +648,12 @@ mod tests {
         Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
         RecursiveProof, pruning_from_previous,
     };
+    use serde::Deserialize;
     use std::sync::Arc;
+    use std::{
+        fs::{self, OpenOptions},
+        io::{Read, Write},
+    };
     use storage_firewood::api::StateUpdate;
     use ed25519_dalek::Signature;
     use hex;
@@ -738,6 +769,102 @@ mod tests {
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         }
+    }
+
+    #[derive(Deserialize)]
+    enum WalRecord {
+        Put { key: Vec<u8>, value: Vec<u8> },
+        Delete { key: Vec<u8> },
+        Commit { root: [u8; 32] },
+    }
+
+    fn truncate_last_commit(path: &std::path::Path) -> ChainResult<()> {
+        let mut file = OpenOptions::new().read(true).open(path)?;
+        let mut offsets = Vec::new();
+        let mut cursor = 0u64;
+
+        loop {
+            let mut len_buf = [0u8; 4];
+            match file.read_exact(&mut len_buf) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(err) => return Err(ChainError::Io(err)),
+            }
+
+            let len = u32::from_le_bytes(len_buf) as usize;
+            let mut buf = vec![0u8; len];
+            file.read_exact(&mut buf)?;
+
+            let record: WalRecord = bincode::deserialize(&buf)?;
+            offsets.push((cursor, 4 + len as u64, record));
+            cursor += 4 + len as u64;
+        }
+
+        let Some((offset, _, WalRecord::Commit { .. })) = offsets.pop() else {
+            return Ok(());
+        };
+
+        drop(file);
+        let mut writable = OpenOptions::new().write(true).open(path)?;
+        writable.set_len(offset)?;
+        writable.flush()?;
+        Ok(())
+    }
+
+    #[test]
+    fn pruner_state_recovers_after_partial_commit() -> ChainResult<()> {
+        let temp_dir = tempdir()?;
+        fs::create_dir_all(temp_dir.path())?;
+
+        let storage = Storage::open(temp_dir.path())?;
+
+        let receipt_one = storage.apply_state_updates(
+            Some(1),
+            vec![StateUpdate {
+                schema: SCHEMA_ACCOUNTS.to_string(),
+                key: b"alice".to_vec(),
+                value: Some(vec![1, 2, 3]),
+            }],
+        )?;
+        let proof_one = receipt_one
+            .pruning_proof
+            .clone()
+            .expect("pruning proof for first block");
+        storage.persist_pruning_proof(1, &proof_one)?;
+        let root_one = receipt_one.new_root;
+
+        drop(storage);
+
+        let storage = Storage::open(temp_dir.path())?;
+        let receipt_two = storage.apply_state_updates(
+            Some(2),
+            vec![StateUpdate {
+                schema: SCHEMA_ACCOUNTS.to_string(),
+                key: b"alice".to_vec(),
+                value: None,
+            }],
+        )?;
+        let proof_two = receipt_two
+            .pruning_proof
+            .clone()
+            .expect("pruning proof for second block");
+        storage.persist_pruning_proof(2, &proof_two)?;
+        drop(storage);
+
+        let wal_path = temp_dir.path().join("firewood.wal");
+        truncate_last_commit(&wal_path)?;
+
+        let storage = Storage::open(temp_dir.path())?;
+        let resumed_root = storage.state_root()?;
+        assert_eq!(resumed_root, root_one, "partial commit should roll back");
+
+        let account = storage.read_account("alice")?;
+        assert!(account.is_some(), "account data must survive rollback");
+
+        assert!(storage.load_pruning_proof(1)?.is_some());
+        assert!(storage.load_pruning_proof(2)?.is_none());
+
+        Ok(())
     }
 
     fn dummy_recursive_proof(

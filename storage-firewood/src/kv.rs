@@ -72,11 +72,23 @@ impl FirewoodKv {
     fn replay(&self) -> Result<Vec<(SequenceNumber, LogRecord)>, KvError> {
         let records = self.wal.replay_from(0)?;
         let mut decoded = Vec::with_capacity(records.len());
-        for (seq, raw) in records {
+        let mut last_commit_index = None;
+
+        for (index, (seq, raw)) in records.into_iter().enumerate() {
             let record = bincode::deserialize(&raw).map_err(|_| WalError::Corrupt)?;
+            if matches!(record, LogRecord::Commit { .. }) {
+                last_commit_index = Some(index);
+            }
             decoded.push((seq, record));
         }
-        Ok(decoded)
+
+        match last_commit_index {
+            Some(index) => {
+                decoded.truncate(index + 1);
+                Ok(decoded)
+            }
+            None => Ok(Vec::new()),
+        }
     }
 
     fn apply_record(&mut self, sequence: SequenceNumber, record: LogRecord) {

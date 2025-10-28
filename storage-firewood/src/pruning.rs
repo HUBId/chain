@@ -5,6 +5,7 @@ use rpp_pruning::{
     BlockHeight, Commitment, Envelope, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex,
     Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
+use serde::{Deserialize, Serialize};
 
 const SNAPSHOT_PREFIX: &[u8] = b"fw-pruning-snapshot";
 const SEGMENT_PREFIX: &[u8] = b"fw-pruning-segment";
@@ -15,6 +16,20 @@ const ENVELOPE_PREFIX: &[u8] = b"fw-pruning-envelope";
 struct SnapshotRecord {
     block_height: BlockHeight,
     state_commitment: TaggedDigest,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PersistedPrunerSnapshot {
+    block_height: u64,
+    state_commitment: Hash,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PersistedPrunerState {
+    pub retain: usize,
+    pub schema_digest: Hash,
+    pub parameter_digest: Hash,
+    pub snapshots: Vec<PersistedPrunerSnapshot>,
 }
 
 fn schema_version_from_digest(digest: &Hash) -> SchemaVersion {
@@ -219,6 +234,33 @@ impl FirewoodPruner {
         }
     }
 
+    pub fn from_persisted(state: PersistedPrunerState) -> Self {
+        let mut pruner = FirewoodPruner::with_digests(
+            state.retain.max(1),
+            state.schema_digest,
+            state.parameter_digest,
+        );
+
+        let mut snapshots = VecDeque::with_capacity(state.snapshots.len());
+        for snapshot in state.snapshots {
+            let record = SnapshotRecord {
+                block_height: BlockHeight::new(snapshot.block_height),
+                state_commitment: TaggedDigest::new(
+                    SNAPSHOT_STATE_TAG,
+                    snapshot.state_commitment,
+                ),
+            };
+            snapshots.push_back(record);
+        }
+
+        while snapshots.len() > pruner.retain {
+            snapshots.pop_front();
+        }
+
+        pruner.snapshots = snapshots;
+        pruner
+    }
+
     pub fn prune_block(&mut self, block_id: u64, root: Hash) -> Envelope {
         let block_height = BlockHeight::new(block_id);
         let state_commitment = compute_state_commitment(
@@ -313,6 +355,24 @@ impl FirewoodPruner {
         proof: &Envelope,
     ) -> bool {
         verify_with_digests(&schema_digest, &parameter_digest, root, proof)
+    }
+
+    pub fn export_state(&self) -> PersistedPrunerState {
+        let snapshots = self
+            .snapshots
+            .iter()
+            .map(|record| PersistedPrunerSnapshot {
+                block_height: record.block_height.as_u64(),
+                state_commitment: *record.state_commitment.digest(),
+            })
+            .collect();
+
+        PersistedPrunerState {
+            retain: self.retain,
+            schema_digest: self.schema_digest,
+            parameter_digest: self.parameter_digest,
+            snapshots,
+        }
     }
 }
 
