@@ -14,7 +14,7 @@ license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
-rust-version.workspace = true
+rust-version = "1.79"
 
 [lib]
 crate-type = ["staticlib"]

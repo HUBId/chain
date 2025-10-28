@@ -2,7 +2,7 @@
 name = "rpp-p2p-macros"
 version = "0.1.0"
 edition = "2021"
-rust-version.workspace = true
+rust-version = "1.79"
 
 [lib]
 proc-macro = true
