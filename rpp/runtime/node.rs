@@ -98,7 +98,10 @@ use prover_stwo_backend::backend::{
     decode_consensus_proof, decode_pruning_proof, decode_recursive_proof, decode_state_proof,
     StwoBackend,
 };
-use crate::sync::{PayloadProvider, ReconstructionEngine, ReconstructionPlan, StateSyncPlan};
+use crate::sync::{
+    invariants::enforce_block_invariants, PayloadProvider, ReconstructionEngine, ReconstructionPlan,
+    StateSyncPlan,
+};
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
     ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, PruningProofExt,
@@ -3059,13 +3062,55 @@ impl NodeInner {
                 missing_heights.push(request.height);
             }
         }
+        missing_heights.sort_unstable();
+        missing_heights.dedup();
         let mut stored_proofs = Vec::new();
-        for height in &missing_heights {
-            match self.storage.read_block_record(*height)? {
+        let mut previous_cache: Option<Block> = None;
+        for height in missing_heights.iter().copied() {
+            match self.storage.read_block_record(height)? {
                 Some(record) => {
+                    let mut block = record.into_block();
+                    let metadata = self
+                        .storage
+                        .read_block_metadata(height)?
+                        .ok_or_else(|| {
+                            ChainError::CommitmentMismatch(format!(
+                                "missing block metadata for height {height}"
+                            ))
+                        })?;
+                    let previous_block = if block.header.height == 0 {
+                        None
+                    } else {
+                        let expected_height = block.header.height - 1;
+                        if previous_cache
+                            .as_ref()
+                            .map(|candidate| candidate.header.height)
+                            != Some(expected_height)
+                        {
+                            let predecessor = self
+                                .storage
+                                .read_block(expected_height)?
+                                .ok_or_else(|| {
+                                    ChainError::CommitmentMismatch(format!(
+                                        "missing predecessor block at height {expected_height}"
+                                    ))
+                                })?;
+                            previous_cache = Some(predecessor);
+                        }
+                        previous_cache.as_ref()
+                    };
+
+                    enforce_block_invariants(
+                        &mut block,
+                        &metadata,
+                        Some(&block.pruning_proof),
+                        previous_block,
+                    )?;
+
                     self.storage
-                        .persist_pruning_proof(*height, &record.envelope.pruning_proof)?;
-                    stored_proofs.push(*height);
+                        .persist_pruning_proof(height, &block.pruning_proof)?;
+                    stored_proofs.push(height);
+                    previous_cache = Some(block);
                 }
                 None => {
                     warn!(height, "missing block record for pruning proof persistence");
