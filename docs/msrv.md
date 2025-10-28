@@ -11,7 +11,8 @@ branches. It is composed of three ordered jobs:
 
 1. **MSRV minimal feature matrix**
    - Installs the Rust 1.79.0 toolchain.
-   - Installs `cargo-msrv` and `cargo-hack`.
+   - Installs `cargo-msrv` (pinned to `0.17.1`, the latest release compatible with
+     Rust 1.79.0) and `cargo-hack`.
    - Verifies the workspace builds with the declared MSRV via
      `cargo msrv verify --toolchain 1.79.0 --path .`.
    - Detects lockfile drift by running `cargo update --locked` and asserting that
@@ -43,7 +44,8 @@ To reproduce the CI coverage locally:
 ```bash
 # Minimal matrix on the MSRV toolchain
 rustup toolchain install 1.79.0
-cargo +1.79.0 install --locked cargo-hack cargo-msrv
+cargo +1.79.0 install --locked cargo-hack
+cargo +1.79.0 install --locked cargo-msrv --version 0.17.1
 cargo +1.79.0 msrv verify --toolchain 1.79.0 --path .
 cargo +1.79.0 hack check --workspace --all-targets --no-dev-deps --locked --no-default-features
 cargo +1.79.0 hack check --workspace --all-targets --no-dev-deps --locked --each-feature \

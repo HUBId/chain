@@ -38,7 +38,7 @@ jobs:
       - name: Install tooling
         run: |
           cargo install --locked cargo-hack
-          cargo install --locked cargo-msrv
+          cargo install --locked cargo-msrv --version 0.17.1
 
       - name: Verify lockfile stability
         run: |
