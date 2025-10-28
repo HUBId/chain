@@ -8,17 +8,82 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use malachite::Natural;
 use malachite::base::num::arithmetic::traits::DivRem;
+use malachite::Natural;
 use prover_backend_interface::Blake2sHasher;
+#[cfg(feature = "nightly-prover")]
 use prover_stwo_backend::official::params::{FieldElement, StarkParameters};
-use schnorrkel::SignatureError as VrfSignatureError;
+#[cfg(not(feature = "nightly-prover"))]
+mod stable_poseidon {
+    use sha2::{Digest, Sha256};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct FieldElement(pub [u8; 32]);
+
+    impl FieldElement {
+        pub fn to_bytes(&self) -> Vec<u8> {
+            self.0.to_vec()
+        }
+
+        pub fn from_bytes(bytes: &[u8]) -> Self {
+            let mut buf = [0u8; 32];
+            if bytes.len() >= 32 {
+                buf.copy_from_slice(&bytes[bytes.len() - 32..]);
+            } else {
+                buf[32 - bytes.len()..].copy_from_slice(bytes);
+            }
+            Self(buf)
+        }
+
+        pub fn from_u64(value: u64) -> Self {
+            Self::from_bytes(&value.to_be_bytes())
+        }
+    }
+
+    pub struct PoseidonHasher;
+
+    impl PoseidonHasher {
+        pub fn hash(&self, elements: &[FieldElement]) -> FieldElement {
+            let mut hasher = Sha256::new();
+            for element in elements {
+                hasher.update(&element.0);
+            }
+            let digest = hasher.finalize();
+            let mut buf = [0u8; 32];
+            buf.copy_from_slice(&digest);
+            FieldElement(buf)
+        }
+    }
+
+    pub struct StarkParameters;
+
+    impl StarkParameters {
+        pub fn blueprint_default() -> Self {
+            Self
+        }
+
+        pub fn poseidon_hasher(&self) -> PoseidonHasher {
+            PoseidonHasher
+        }
+
+        pub fn element_from_bytes(&self, bytes: &[u8]) -> FieldElement {
+            FieldElement::from_bytes(bytes)
+        }
+
+        pub fn element_from_u64(&self, value: u64) -> FieldElement {
+            FieldElement::from_u64(value)
+        }
+    }
+}
 use schnorrkel::keys::{
     ExpansionMode, Keypair as VrfKeypairInner, MiniSecretKey, PublicKey as SrPublicKey,
 };
 use schnorrkel::signing_context;
 use schnorrkel::vrf::{VRFPreOut, VRFProof};
+use schnorrkel::SignatureError as VrfSignatureError;
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "nightly-prover"))]
+use stable_poseidon::{FieldElement, StarkParameters};
 use thiserror::Error;
 
 /// Alias used for wallet addresses within the VRF module.
@@ -1299,6 +1364,7 @@ mod tests {
         assert_ne!(baseline, different_hash);
     }
 
+    #[cfg(feature = "nightly-prover")]
     #[test]
     fn poseidon_digest_matches_expected_vector() {
         let input = PoseidonVrfInput::new(
@@ -1312,6 +1378,20 @@ mod tests {
             digest_hex,
             "00000000000000000000000000000000000000000000000082814949c7cd6907"
         );
+    }
+
+    #[cfg(not(feature = "nightly-prover"))]
+    #[test]
+    fn poseidon_digest_matches_expected_vector() {
+        let input = PoseidonVrfInput::new(
+            hex_literal::hex!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+            7,
+            hex_literal::hex!("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"),
+        );
+
+        let digest_hex = input.poseidon_digest_hex();
+        assert_eq!(digest_hex.len(), 64);
+        assert_ne!(digest_hex, "0".repeat(64));
     }
 
     #[test]

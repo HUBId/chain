@@ -102,7 +102,7 @@ path = "../vendor/hex-literal/1.0.0"
 [[patch.crates-io]]
 name = "stwo-official"
 version = "0.1.1"
-path = "../rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
+path = "../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
 
 [[patch.crates-io]]
 name = "p3-air"

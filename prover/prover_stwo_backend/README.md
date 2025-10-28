@@ -7,9 +7,9 @@ CI.
 
 ## Toolchain
 
-The STWO fork relies on nightly-only dependencies. The workspace pins a nightly
-release via the top-level `rust-toolchain.toml`, so consumers inherit the
-correct toolchain automatically—no additional setup is required.
+The STWO fork relies on nightly-only dependencies. The prover-specific
+subworkspace ships its own pinned toolchain under `prover/rust-toolchain.toml`,
+ensuring callers only opt into nightly when they build the prover crates.
 
 ## Feature flags
 
@@ -30,7 +30,7 @@ path you need:
 ```toml
 [dependencies]
 prover-backend-interface = { path = "../rpp/zk/backend-interface", features = ["prover-stwo"] }
-prover_stwo_backend = { path = "../rpp/zk/prover_stwo_backend", features = ["prover-stwo"] }
+prover_stwo_backend = { path = "../prover/prover_stwo_backend", features = ["prover-stwo"] }
 ```
 
 Switch to the SIMD accelerated prover by toggling the feature list:
@@ -38,7 +38,7 @@ Switch to the SIMD accelerated prover by toggling the feature list:
 ```toml
 [dependencies]
 prover-backend-interface = { path = "../rpp/zk/backend-interface", features = ["prover-stwo-simd"] }
-prover_stwo_backend = { path = "../rpp/zk/prover_stwo_backend", features = ["prover-stwo-simd"] }
+prover_stwo_backend = { path = "../prover/prover_stwo_backend", features = ["prover-stwo-simd"] }
 ```
 
 The backend interface crate tracks the same feature names, allowing downstream

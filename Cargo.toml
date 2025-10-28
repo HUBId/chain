@@ -36,7 +36,15 @@ resolver = "2"
 [workspace.features]
 vendor_electrs = ["rpp-chain/vendor_electrs"]
 integration = []
+nightly-prover = [
+    "rpp-chain/nightly-prover",
+    "rpp-consensus/nightly-prover",
+    "rpp-wallet/nightly-prover",
+    "rpp-crypto-vrf/nightly-prover",
+    "rpp-node/nightly-prover",
+]
 prover-stwo = [
+    "nightly-prover",
     "rpp-chain/prover-stwo",
     "rpp-consensus/prover-stwo",
     "rpp-wallet/prover-stwo",
@@ -44,6 +52,7 @@ prover-stwo = [
     "prover_stwo_backend/prover-stwo",
 ]
 prover-stwo-simd = [
+    "nightly-prover",
     "prover-stwo",
     "rpp-chain/prover-stwo-simd",
     "rpp-consensus/prover-stwo-simd",
@@ -101,7 +110,7 @@ firewood-macros = { path = "firewood-macros", version = "0.0.12" }
 firewood-storage = { path = "storage", version = "0.0.12" }
 firewood-ffi = { path = "ffi", version = "0.0.12" }
 firewood-triehash = { path = "triehash", version = "0.0.12" }
-prover_stwo_backend = { path = "rpp/zk/prover_stwo_backend", version = "1.0.0", default-features = false }
+prover_stwo_backend = { path = "prover/prover_stwo_backend", version = "1.0.0", default-features = false }
 
 # common dependencies
 aquamarine = "0.6.0"

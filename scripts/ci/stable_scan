@@ -17,7 +17,7 @@ RG_COMMON_ARGS=(
   --glob '!.git/*'
   --glob '!target/**'
   --glob '!vendor/**'
-  --glob '!rpp/zk/prover_stwo_backend/vendor/**'
+  --glob '!prover/prover_stwo_backend/vendor/**'
 )
 
 mapfile -t feature_hits < <(rg "${RG_COMMON_ARGS[@]}" --glob '*.rs' '#!\[feature' || true)
