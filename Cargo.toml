@@ -15,6 +15,22 @@ members = [
   "rpp/pruning",
   "rpp/node",
 ]
+default-members = [
+  "benchmark",
+  "ffi",
+  "firewood-macros",
+  "firewood",
+  "fwdctl",
+  "storage",
+  "storage-firewood",
+  "triehash",
+  "rpp/crypto-vrf",
+  "rpp/identity-tree",
+  "rpp/p2p",
+  "rpp/chain",
+  "rpp/pruning",
+  "rpp/node",
+]
 resolver = "2"
 
 [workspace.features]
@@ -43,7 +59,7 @@ license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
 repository = "https://github.com/ava-labs/firewood"
 readme = "README.md"
-rust-version = "1.79.0"
+rust-version = "1.79"
 
 [profile.release]
 debug = true

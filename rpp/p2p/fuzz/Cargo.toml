@@ -2,6 +2,7 @@
 name = "rpp-p2p-fuzz"
 version = "0.0.0"
 edition = "2021"
+rust-version = "1.79"
 publish = false
 
 [package.metadata]
