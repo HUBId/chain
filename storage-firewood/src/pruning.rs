@@ -6,6 +6,7 @@ use rpp_pruning::{
     Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const SNAPSHOT_PREFIX: &[u8] = b"fw-pruning-snapshot";
 const SEGMENT_PREFIX: &[u8] = b"fw-pruning-segment";
@@ -30,6 +31,31 @@ pub struct PersistedPrunerState {
     pub schema_digest: Hash,
     pub parameter_digest: Hash,
     pub snapshots: Vec<PersistedPrunerSnapshot>,
+    #[serde(default)]
+    pub layout_version: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SnapshotManifest {
+    pub layout_version: u32,
+    pub block_height: u64,
+    pub state_root: String,
+    pub schema_digest: String,
+    pub parameter_digest: String,
+    pub schema_version: u16,
+    pub parameter_version: u16,
+    pub proof_file: String,
+    pub proof_checksum: String,
+}
+
+impl SnapshotManifest {
+    pub fn checksum_matches(&self, data: &[u8]) -> bool {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let digest = hasher.finalize();
+        let encoded = hex::encode(digest);
+        encoded == self.proof_checksum
+    }
 }
 
 fn schema_version_from_digest(digest: &Hash) -> SchemaVersion {
@@ -245,10 +271,7 @@ impl FirewoodPruner {
         for snapshot in state.snapshots {
             let record = SnapshotRecord {
                 block_height: BlockHeight::new(snapshot.block_height),
-                state_commitment: TaggedDigest::new(
-                    SNAPSHOT_STATE_TAG,
-                    snapshot.state_commitment,
-                ),
+                state_commitment: TaggedDigest::new(SNAPSHOT_STATE_TAG, snapshot.state_commitment),
             };
             snapshots.push_back(record);
         }
@@ -372,6 +395,48 @@ impl FirewoodPruner {
             schema_digest: self.schema_digest,
             parameter_digest: self.parameter_digest,
             snapshots,
+            layout_version: 0,
+        }
+    }
+
+    pub fn schema_digest(&self) -> Hash {
+        self.schema_digest
+    }
+
+    pub fn parameter_digest(&self) -> Hash {
+        self.parameter_digest
+    }
+
+    pub fn schema_version(&self) -> SchemaVersion {
+        self.schema_version
+    }
+
+    pub fn parameter_version(&self) -> ParameterVersion {
+        self.parameter_version
+    }
+
+    pub fn manifest(
+        &self,
+        layout_version: u32,
+        block_height: u64,
+        state_root: Hash,
+        proof_file: String,
+        proof_bytes: &[u8],
+    ) -> SnapshotManifest {
+        let mut hasher = Sha256::new();
+        hasher.update(proof_bytes);
+        let checksum = hex::encode(hasher.finalize());
+
+        SnapshotManifest {
+            layout_version,
+            block_height,
+            state_root: hex::encode(state_root),
+            schema_digest: hex::encode(self.schema_digest),
+            parameter_digest: hex::encode(self.parameter_digest),
+            schema_version: self.schema_version.get(),
+            parameter_version: self.parameter_version.get(),
+            proof_file,
+            proof_checksum: checksum,
         }
     }
 }

@@ -6068,6 +6068,7 @@ version = "0.0.12"
 dependencies = [
  "bincode",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6732,11 +6733,14 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "blake3",
+ "hex",
+ "metrics",
  "parking_lot",
  "proptest",
  "rpp-pruning",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 1.0.69",
 ]
