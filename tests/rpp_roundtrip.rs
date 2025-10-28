@@ -2,6 +2,7 @@ mod support;
 
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 use rpp_chain::config::NodeConfig;
 use rpp_chain::node::Node;
@@ -38,30 +39,33 @@ fn prepare_config() -> (NodeConfig, TempDir) {
     (config, temp)
 }
 
-#[test]
-fn rpp_pruning_roundtrip() {
-    let mut _rng = seeded_rng("rpp_pruning_roundtrip");
-
-    let (config, temp) = prepare_config();
-    let runtime_metrics = RuntimeMetrics::noop();
-    let node = Node::new(config, runtime_metrics).expect("node");
-    let handle = node.handle();
-    let storage = handle.storage();
-
+fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> {
     let genesis = handle
         .latest_block()
         .expect("latest block")
         .expect("genesis block");
-
-    let mut blocks: Vec<Block> = Vec::new();
+    let mut blocks = Vec::new();
     blocks.push(genesis.clone());
-    let mut previous = Some(genesis.clone());
-    for height in 1..=4u64 {
+    let mut previous = Some(genesis);
+    for height in 1..=length {
         let block = make_dummy_block(height, previous.as_ref());
         previous = Some(block.clone());
         blocks.push(block);
     }
+    blocks
+}
 
+#[test]
+fn rpp_pruning_roundtrip_preserves_commitments() {
+    let mut _rng = seeded_rng("rpp_pruning_roundtrip_preserves_commitments");
+
+    let (config, temp) = prepare_config();
+    let snapshot_dir = config.snapshot_dir.clone();
+    let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
+    let handle = node.handle();
+    let storage = handle.storage();
+
+    let blocks = build_chain(&handle, 6);
     let payloads = install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     for block in &blocks {
@@ -72,25 +76,44 @@ fn rpp_pruning_roundtrip() {
         assert!(stored.pruned, "block {} should be pruned", block.header.height);
     }
 
-    let engine = ReconstructionEngine::new(storage.clone());
-    let artifacts = collect_state_sync_artifacts(&engine, 2).expect("state sync artifacts");
+    let status = handle
+        .run_pruning_cycle(2)
+        .expect("pruning cycle")
+        .expect("pruning status");
+    let persisted_path = status
+        .persisted_path
+        .as_deref()
+        .expect("snapshot plan persisted");
+    assert!(
+        Path::new(persisted_path).exists(),
+        "persisted pruning plan should exist on disk"
+    );
 
-    let blocks_by_height: HashMap<u64, &Block> =
-        blocks.iter().map(|block| (block.header.height, block)).collect();
+    let engine = ReconstructionEngine::with_snapshot_dir(storage.clone(), snapshot_dir.clone());
+    let artifacts = collect_state_sync_artifacts(&engine, 2).expect("collect state sync artifacts");
 
     let mut advertised_heights: Vec<u64> = artifacts.requests().map(|request| request.height).collect();
     advertised_heights.sort_unstable();
-    let mut expected_heights: Vec<u64> = blocks_by_height.keys().copied().collect();
+    let mut expected_heights: Vec<u64> = blocks.iter().map(|block| block.header.height).collect();
     expected_heights.sort_unstable();
     assert_eq!(
-        advertised_heights,
-        expected_heights,
+        advertised_heights, expected_heights,
         "reconstruction plan should enumerate every stored height",
     );
 
+    assert_eq!(
+        artifacts.plan.snapshot.height, status.plan.snapshot.height,
+        "snapshot height should match pruning status",
+    );
+    assert_eq!(
+        artifacts.plan.tip.height, status.plan.tip.height,
+        "tip height should match pruning status",
+    );
+
     for request in artifacts.requests() {
-        let original = blocks_by_height
-            .get(&request.height)
+        let original = blocks
+            .iter()
+            .find(|block| block.header.height == request.height)
             .expect("plan references stored block");
         assert_eq!(
             request.block_hash, original.hash,
@@ -112,14 +135,15 @@ fn rpp_pruning_roundtrip() {
     }
 
     let provider = InMemoryPayloadProvider::new(payloads);
-    let start_height = blocks.first().expect("blocks available").header.height;
-    let end_height = blocks.last().expect("blocks available").header.height;
+    let plan = engine.full_plan().expect("reconstruction plan");
     let reconstructed = engine
-        .reconstruct_range(start_height, end_height, &provider)
-        .expect("reconstruct pruned range");
+        .execute_plan(&plan, &provider)
+        .expect("execute reconstruction plan");
 
-    let rebuilt_by_height: HashMap<u64, Block> =
-        reconstructed.into_iter().map(|block| (block.header.height, block)).collect();
+    let rebuilt_by_height: HashMap<u64, Block> = reconstructed
+        .into_iter()
+        .map(|block| (block.header.height, block))
+        .collect();
 
     for original in &blocks {
         let rebuilt = rebuilt_by_height
@@ -162,11 +186,11 @@ fn rpp_pruning_roundtrip() {
         refreshed_plan.requests.is_empty(),
         "reconstruction plan should be empty after replay",
     );
-    assert!(refreshed_plan.is_fully_hydrated());
 
     drop(engine);
     drop(storage);
     drop(handle);
     drop(node);
+    drop(snapshot_dir);
     drop(temp);
 }

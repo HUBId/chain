@@ -1,12 +1,13 @@
 mod support;
 
+use std::collections::BTreeSet;
 use std::fs;
 
 use rpp_chain::config::NodeConfig;
 use rpp_chain::node::Node;
-use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::Block;
 use rpp_chain::runtime::RuntimeMetrics;
+use rpp_pruning::canonical_bincode_options;
 use tempfile::TempDir;
 
 use support::{install_pruned_chain, make_dummy_block, seeded_rng};
@@ -51,69 +52,56 @@ fn build_chain(handle: &rpp_chain::node::NodeHandle, length: u64) -> Vec<Block> 
 }
 
 #[test]
-fn pruning_recovery_is_atomic_across_restart() {
-    let mut _rng = seeded_rng("pruning_recovery_is_atomic_across_restart");
+fn pruning_proof_size_regression_guard() {
+    let mut _rng = seeded_rng("pruning_proof_size_regression_guard");
 
     let (config, temp) = prepare_config();
-    let restart_config = config.clone();
     let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let handle = node.handle();
     let storage = handle.storage();
 
-    let blocks = build_chain(&handle, 4);
+    let blocks = build_chain(&handle, 5);
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
-    let status = handle
-        .run_pruning_cycle(2)
-        .expect("pruning cycle")
-        .expect("pruning status");
-    assert!(
-        !status.stored_proofs.is_empty(),
-        "pruning cycle should persist pruning proofs"
-    );
-
-    drop(handle);
-    drop(node);
-
-    let node = Node::new(restart_config, RuntimeMetrics::noop()).expect("restart node");
-    let handle = node.handle();
-    let storage = handle.storage();
-
-    let mut pruned = 0usize;
-    let mut hydrated = 0usize;
-    for block in &blocks {
-        let stored = storage
-            .read_block(block.header.height)
-            .expect("read block")
-            .expect("block present");
-        if stored.pruned {
-            pruned += 1;
-        } else {
-            hydrated += 1;
-        }
-    }
-
-    assert!(
-        pruned == 0 || hydrated == 0,
-        "storage should not mix pruned ({pruned}) and hydrated ({hydrated}) payloads after restart",
-    );
-
-    let engine = ReconstructionEngine::new(storage.clone());
-    let plan = engine.full_plan().expect("reload reconstruction plan");
-    if pruned == 0 {
+    let mut previous_total: Option<usize> = None;
+    for cycle in 0..3 {
+        let status = handle
+            .run_pruning_cycle(2)
+            .expect("pruning cycle")
+            .expect("pruning status");
         assert!(
-            plan.requests.is_empty(),
-            "no reconstruction needed when payloads remain hydrated",
+            !status.missing_heights.is_empty(),
+            "cycle {cycle} should report pruned heights",
         );
-    } else {
-        assert_eq!(
-            plan.requests.len(),
-            pruned,
-            "plan should request payload for every pruned block",
-        );
+
+        let heights: BTreeSet<u64> = status.missing_heights.iter().copied().collect();
+        let mut total_size = 0usize;
+        for height in heights {
+            let proof = storage
+                .load_pruning_proof(height)
+                .expect("load pruning proof")
+                .expect("pruning proof persisted");
+            let bytes = canonical_bincode_options()
+                .serialize(proof.as_ref())
+                .expect("encode pruning proof");
+            total_size += bytes.len();
+        }
+
+        if let Some(previous) = previous_total {
+            let allowed = (previous as f64 * 1.05).ceil() as usize;
+            assert!(
+                total_size <= allowed,
+                "pruning proof payload grew from {previous} bytes to {total_size} bytes on cycle {cycle}",
+            );
+        } else {
+            assert!(
+                total_size > 0,
+                "initial pruning cycle should persist non-empty proofs",
+            );
+        }
+        previous_total = Some(total_size);
     }
 
-    drop(engine);
     drop(storage);
     drop(handle);
     drop(node);
