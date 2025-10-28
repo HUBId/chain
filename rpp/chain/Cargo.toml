@@ -19,7 +19,7 @@ prover-stwo = [
     "rpp-consensus/prover-stwo",
 ]
 prover-stwo-simd = [
-    "prover-stwo",
+    "stwo",
     "prover-backend-interface/prover-stwo-simd",
     "prover_stwo_backend/simd",
     "rpp-consensus/prover-stwo-simd",
@@ -46,6 +46,7 @@ vendor_electrs = [
     "dep:rpp-wallet",
     "rpp-wallet/vendor_electrs",
 ]
+stwo = ["prover-stwo"]
 
 [dependencies]
 anyhow = "1"
