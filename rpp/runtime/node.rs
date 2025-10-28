@@ -88,7 +88,7 @@ use crate::runtime::{
 };
 use crate::state::lifecycle::StateLifecycle;
 use crate::state::merkle::compute_merkle_root;
-use crate::storage::{StateTransitionReceipt, Storage};
+use crate::storage::{ConsensusRecoveryState, StateTransitionReceipt, Storage};
 use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
 #[cfg(feature = "prover-stwo")]
@@ -135,6 +135,13 @@ struct ChainTip {
     height: u64,
     last_hash: [u8; 32],
     pruning: Option<PruningEnvelopeMetadata>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ConsensusLockState {
+    height: u64,
+    round: u64,
+    block_hash: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -770,6 +777,8 @@ pub(crate) struct NodeInner {
     vote_mempool: RwLock<VecDeque<SignedBftVote>>,
     proposal_inbox: RwLock<HashMap<(u64, Address), VerifiedProposal>>,
     consensus_rounds: RwLock<HashMap<u64, u64>>,
+    consensus_lock: RwLock<Option<ConsensusLockState>>,
+    consensus_state: RwLock<ConsensusRecoveryState>,
     evidence_pool: RwLock<EvidencePool>,
     pruning_status: RwLock<Option<PruningJobStatus>>,
     vrf_metrics: RwLock<crate::vrf::VrfSelectionMetrics>,
@@ -1176,6 +1185,22 @@ impl Node {
         let queue_weights = config.queue_weights.clone();
         let consensus_telemetry = Arc::new(ConsensusTelemetry::new(runtime_metrics.clone()));
         let audit_exporter = AuditExporter::new(&config.data_dir.join("audits"))?;
+        let consensus_state_record = storage.read_consensus_state()?.unwrap_or_default();
+        let mut consensus_rounds_map = HashMap::new();
+        if consensus_state_record.locked_proposal.is_some() || consensus_state_record.round > 0 {
+            consensus_rounds_map.insert(
+                consensus_state_record.height,
+                consensus_state_record.round,
+            );
+        }
+        let consensus_lock_state = consensus_state_record
+            .locked_proposal
+            .as_ref()
+            .map(|hash| ConsensusLockState {
+                height: consensus_state_record.height,
+                round: consensus_state_record.round,
+                block_hash: hash.clone(),
+            });
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -1200,7 +1225,9 @@ impl Node {
             }),
             vote_mempool: RwLock::new(VecDeque::new()),
             proposal_inbox: RwLock::new(HashMap::new()),
-            consensus_rounds: RwLock::new(HashMap::new()),
+            consensus_rounds: RwLock::new(consensus_rounds_map),
+            consensus_lock: RwLock::new(consensus_lock_state),
+            consensus_state: RwLock::new(consensus_state_record),
             evidence_pool: RwLock::new(EvidencePool::default()),
             pruning_status: RwLock::new(None),
             vrf_metrics: RwLock::new(crate::vrf::VrfSelectionMetrics::default()),
@@ -3775,6 +3802,24 @@ impl NodeInner {
             "recorded consensus evidence"
         );
         self.emit_witness_json(GossipTopic::WitnessMeta, &evidence);
+        if evidence.kind == EvidenceKind::InvalidProposal {
+            let should_clear = {
+                let lock = self.consensus_lock.read();
+                lock.as_ref()
+                    .map(|locked| {
+                        locked.height == evidence.height
+                            && (evidence.block_hashes.is_empty()
+                                || evidence
+                                    .block_hashes
+                                    .iter()
+                                    .any(|hash| hash == &locked.block_hash))
+                    })
+                    .unwrap_or(false)
+            };
+            if should_clear {
+                self.clear_consensus_lock();
+            }
+        }
         if let Some(vote_kind) = evidence.vote_kind {
             let mut mempool = self.vote_mempool.write();
             mempool.retain(|vote| {
@@ -4263,17 +4308,40 @@ impl NodeInner {
     }
 
     fn observe_consensus_round(&self, height: u64, round: u64) {
-        let mut rounds = self.consensus_rounds.write();
-        let entry = rounds.entry(height).or_insert(round);
-        if round > *entry {
-            *entry = round;
+        {
+            let mut rounds = self.consensus_rounds.write();
+            let entry = rounds.entry(height).or_insert(round);
+            if round > *entry {
+                *entry = round;
+            }
         }
+        let should_clear_lock = {
+            let lock = self.consensus_lock.read();
+            lock.as_ref()
+                .map(|locked| locked.height == height && round > locked.round)
+                .unwrap_or(false)
+        };
+        if should_clear_lock {
+            self.clear_consensus_lock();
+        }
+        self.persist_observed_consensus_round(None);
     }
 
     fn prune_consensus_rounds_below(&self, threshold_height: u64) {
-        self.consensus_rounds
+        self
+            .consensus_rounds
             .write()
             .retain(|&tracked_height, _| tracked_height >= threshold_height);
+        let should_clear_lock = {
+            let lock = self.consensus_lock.read();
+            lock.as_ref()
+                .map(|locked| locked.height < threshold_height)
+                .unwrap_or(false)
+        };
+        if should_clear_lock {
+            self.clear_consensus_lock();
+        }
+        self.persist_observed_consensus_round(Some(threshold_height));
     }
 
     fn take_verified_proposal(&self, height: u64, proposer: &Address) -> Option<Block> {
@@ -4281,6 +4349,143 @@ impl NodeInner {
         inbox
             .remove(&(height, proposer.clone()))
             .map(|proposal| proposal.block)
+    }
+
+    fn persist_consensus_state<F>(&self, update: F)
+    where
+        F: FnOnce(&mut ConsensusRecoveryState),
+    {
+        let mut state = self.consensus_state.write();
+        let mut updated = state.clone();
+        update(&mut updated);
+        if Self::consensus_states_equal(&state, &updated) {
+            return;
+        }
+        match self.storage.write_consensus_state(&updated) {
+            Ok(()) => {
+                *state = updated;
+            }
+            Err(err) => {
+                warn!(?err, "failed to persist consensus recovery state");
+            }
+        }
+    }
+
+    fn consensus_states_equal(
+        current: &ConsensusRecoveryState,
+        updated: &ConsensusRecoveryState,
+    ) -> bool {
+        if current.height != updated.height
+            || current.round != updated.round
+            || current.locked_proposal != updated.locked_proposal
+        {
+            return false;
+        }
+        match (&current.last_certificate, &updated.last_certificate) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                let left_bytes = bincode::serialize(left);
+                let right_bytes = bincode::serialize(right);
+                match (left_bytes, right_bytes) {
+                    (Ok(left_encoded), Ok(right_encoded)) => left_encoded == right_encoded,
+                    (Err(err), _) | (_, Err(err)) => {
+                        warn!(?err, "failed to serialize consensus certificate for comparison");
+                        false
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
+    fn persist_observed_consensus_round(&self, fallback_height: Option<u64>) {
+        let observed = {
+            let rounds = self.consensus_rounds.read();
+            rounds
+                .iter()
+                .max_by_key(|(height, _)| *height)
+                .map(|(height, round)| (*height, *round))
+        };
+        let (height, round) = if let Some(entry) = observed {
+            entry
+        } else {
+            let fallback = fallback_height.unwrap_or_else(|| {
+                self.chain_tip
+                    .read()
+                    .height
+                    .saturating_add(1)
+            });
+            (fallback, 0)
+        };
+        self.persist_consensus_state(|state| {
+            state.height = height;
+            state.round = round;
+        });
+    }
+
+    fn set_consensus_lock(&self, height: u64, round: u64, block_hash: &str) {
+        let new_lock = ConsensusLockState {
+            height,
+            round,
+            block_hash: block_hash.to_string(),
+        };
+        let already_locked = {
+            let lock = self.consensus_lock.read();
+            lock.as_ref() == Some(&new_lock)
+        };
+        if already_locked {
+            return;
+        }
+        {
+            let mut lock = self.consensus_lock.write();
+            *lock = Some(new_lock.clone());
+        }
+        self.persist_consensus_state(|state| {
+            state.height = height;
+            state.round = round;
+            state.locked_proposal = Some(new_lock.block_hash.clone());
+        });
+        debug!(
+            height,
+            round,
+            block_hash = %new_lock.block_hash,
+            "consensus lock updated"
+        );
+    }
+
+    fn clear_consensus_lock(&self) {
+        let cleared = {
+            let mut lock = self.consensus_lock.write();
+            lock.take()
+        };
+        if cleared.is_some() {
+            self.persist_consensus_state(|state| {
+                state.locked_proposal = None;
+            });
+            debug!("consensus lock cleared");
+        }
+    }
+
+    fn clear_consensus_lock_for(&self, height: u64, block_hash: &str) {
+        let should_clear = {
+            let lock = self.consensus_lock.read();
+            lock.as_ref()
+                .map(|locked| locked.height == height && locked.block_hash == block_hash)
+                .unwrap_or(false)
+        };
+        if should_clear {
+            self.clear_consensus_lock();
+        }
+    }
+
+    fn record_committed_certificate(&self, certificate: &ConsensusCertificate) {
+        let cert_clone = certificate.clone();
+        self.persist_consensus_state(|state| {
+            state.height = cert_clone.height;
+            state.round = cert_clone.round;
+            state.locked_proposal = None;
+            state.last_certificate = Some(cert_clone.clone());
+        });
     }
 
     #[cfg(feature = "prover-stwo")]
@@ -4674,41 +4879,6 @@ impl NodeInner {
     )]
     fn produce_block(&self) -> ChainResult<()> {
         let span = Span::current();
-        let mut identity_pending: Vec<AttestedIdentityRequest> = Vec::new();
-        {
-            let mut mempool = self.identity_mempool.write();
-            while identity_pending.len() < self.config.max_block_identity_registrations {
-                if let Some(request) = mempool.pop_front() {
-                    identity_pending.push(request);
-                } else {
-                    break;
-                }
-            }
-        }
-
-        let mut pending: Vec<TransactionProofBundle> = Vec::new();
-        {
-            let mut mempool = self.mempool.write();
-            while pending.len() < self.config.max_block_transactions {
-                if let Some(tx) = mempool.pop_front() {
-                    pending.push(tx);
-                } else {
-                    break;
-                }
-            }
-        }
-        self.purge_transaction_metadata(&pending);
-        let has_uptime = !self.uptime_mempool.read().is_empty();
-        if pending.is_empty() && identity_pending.is_empty() && !has_uptime {
-            return Ok(());
-        }
-        let mut uptime_pending: Vec<RecordedUptimeProof> = Vec::new();
-        {
-            let mut mempool = self.uptime_mempool.write();
-            while let Some(record) = mempool.pop_front() {
-                uptime_pending.push(record);
-            }
-        }
         let tip_snapshot = self.chain_tip.read().clone();
         let height = tip_snapshot.height + 1;
         span.record("height", &height);
@@ -4767,6 +4937,7 @@ impl NodeInner {
         let round_id = round.round();
         self.consensus_telemetry
             .record_round_start(height, round_id, &selection.proposer);
+
         if selection.proposer != self.address {
             if let Some(proposal) = self.take_verified_proposal(height, &selection.proposer) {
                 info!(
@@ -4801,6 +4972,8 @@ impl NodeInner {
                     self.consensus_telemetry
                         .record_failed_vote("local_precommit".to_string());
                     self.update_runtime_metrics();
+                } else {
+                    self.set_consensus_lock(height, round.round(), &block_hash);
                 }
                 let external_votes = self.drain_votes_for(height, &block_hash);
                 for vote in &external_votes {
@@ -4823,37 +4996,38 @@ impl NodeInner {
                         }
                         self.consensus_telemetry
                             .record_failed_vote("external_vote".to_string());
+                        self.update_runtime_metrics();
                     }
                 }
-                if round.commit_reached() {
-                    info!(height, proposer = %selection.proposer, "commit quorum observed externally");
-                    self.consensus_telemetry.record_quorum(height, round_id);
-                    let previous_block = if height == 0 {
-                        None
-                    } else {
-                        self.storage.read_block(height - 1)?
-                    };
-                    let mut archived_votes = vec![local_prevote.clone(), local_precommit.clone()];
-                    archived_votes.extend(external_votes.clone());
-                    let finalization_ctx =
-                        FinalizationContext::External(ExternalFinalizationContext {
-                            round,
-                            block: proposal,
-                            previous_block,
-                            archived_votes,
-                        });
-                    match self.finalize_block(finalization_ctx)? {
-                        FinalizationOutcome::Sealed { block, tip_height } => {
-                            let _ = (block, tip_height);
-                            self.consensus_telemetry.record_round_end(height, round_id);
-                            self.update_runtime_metrics();
-                        }
-                        FinalizationOutcome::AwaitingQuorum => {}
+                let mut recorded_votes = vec![local_prevote.clone(), local_precommit.clone()];
+                recorded_votes.extend(external_votes.clone());
+
+                let finalization_ctx = FinalizationContext::Local(LocalFinalizationContext {
+                    round,
+                    block_hash,
+                    header: proposal.header.clone(),
+                    parent_height: proposal.header.height.saturating_sub(1),
+                    commitments: proposal.commitments.clone(),
+                    accepted_identities: Vec::new(),
+                    transactions: proposal.transactions.clone(),
+                    transaction_proofs: Vec::new(),
+                    identity_proofs: Vec::new(),
+                    uptime_proofs: Vec::new(),
+                    timetoke_updates: Vec::new(),
+                    reputation_updates: Vec::new(),
+                    recorded_votes,
+                });
+                match self.finalize_block(finalization_ctx)? {
+                    FinalizationOutcome::Sealed { block, tip_height } => {
+                        let _ = (block, tip_height);
+                        self.consensus_telemetry.record_quorum(height, round_id);
+                        self.consensus_telemetry.record_round_end(height, round_id);
+                        self.update_runtime_metrics();
                     }
-                    return Ok(());
+                    FinalizationOutcome::AwaitingQuorum => {}
                 }
             } else {
-                info!(
+                warn!(
                     proposer = %selection.proposer,
                     height,
                     "no verified proposal available for external leader"
@@ -4861,8 +5035,66 @@ impl NodeInner {
             }
             return Ok(());
         }
-        if round.total_power().clone() == Natural::from(0u32) {
+
+        if selection.total_voting_power == 0 {
             warn!("validator set has no voting power");
+            return Ok(());
+        }
+
+        let existing_lock = self.consensus_lock.read().clone();
+        if let Some(lock) = existing_lock {
+            if lock.height == height && lock.round == round_id {
+                debug!(
+                    height,
+                    round = round_id,
+                    block_hash = %lock.block_hash,
+                    "consensus lock persists; skipping duplicate proposal"
+                );
+                return Ok(());
+            }
+        }
+
+        let has_identity_candidates = { !self.identity_mempool.read().is_empty() };
+        let has_transaction_candidates = { !self.mempool.read().is_empty() };
+        let has_uptime_candidates = { !self.uptime_mempool.read().is_empty() };
+        if !has_identity_candidates && !has_transaction_candidates && !has_uptime_candidates {
+            return Ok(());
+        }
+
+        let mut identity_pending: Vec<AttestedIdentityRequest> = Vec::new();
+        {
+            let mut mempool = self.identity_mempool.write();
+            while identity_pending.len() < self.config.max_block_identity_registrations {
+                if let Some(request) = mempool.pop_front() {
+                    identity_pending.push(request);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        let mut pending: Vec<TransactionProofBundle> = Vec::new();
+        {
+            let mut mempool = self.mempool.write();
+            while pending.len() < self.config.max_block_transactions {
+                if let Some(tx) = mempool.pop_front() {
+                    pending.push(tx);
+                } else {
+                    break;
+                }
+            }
+        }
+        self.purge_transaction_metadata(&pending);
+
+        let mut uptime_pending: Vec<RecordedUptimeProof> = Vec::new();
+        {
+            let mut mempool = self.uptime_mempool.write();
+            while let Some(record) = mempool.pop_front() {
+                uptime_pending.push(record);
+            }
+        }
+
+        if pending.is_empty() && identity_pending.is_empty() && uptime_pending.is_empty() {
             return Ok(());
         }
 
@@ -5030,6 +5262,7 @@ impl NodeInner {
             BftVoteKind::PreCommit,
         );
         round.register_precommit(&local_precommit)?;
+        self.set_consensus_lock(height, round.round(), &block_hash_hex);
 
         let external_votes = self.drain_votes_for(height, &block_hash_hex);
         for vote in &external_votes {
@@ -5086,7 +5319,6 @@ impl NodeInner {
         }
         Ok(())
     }
-
     fn finalize_block(&self, ctx: FinalizationContext) -> ChainResult<FinalizationOutcome> {
         match ctx {
             FinalizationContext::Local(ctx) => self.finalize_local_block(ctx),
@@ -5349,6 +5581,8 @@ impl NodeInner {
         tip.last_hash = block.block_hash();
         tip.pruning = pruning_metadata;
         info!(height = tip.height, "sealed block");
+        self.record_committed_certificate(&block.consensus);
+        self.clear_consensus_lock_for(block.header.height, &block.hash);
         self.evidence_pool
             .write()
             .prune_below(block.header.height.saturating_add(1));
@@ -5692,6 +5926,8 @@ impl NodeInner {
             "sealed external block"
         );
         drop(tip);
+        self.record_committed_certificate(&block.consensus);
+        self.clear_consensus_lock_for(block.header.height, &block.hash);
 
         self.evidence_pool
             .write()

@@ -8,6 +8,9 @@ use storage_firewood::api::StateUpdate;
 use storage_firewood::kv::FirewoodKv;
 use storage_firewood::pruning::{FirewoodPruner, PersistedPrunerState};
 
+use serde::{Deserialize, Serialize};
+
+use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
@@ -30,6 +33,7 @@ pub(crate) const PRUNING_PROOF_PREFIX: &[u8] = b"pruning_proofs/";
 pub(crate) const SCHEMA_VERSION_KEY: &[u8] = b"schema_version";
 const WALLET_UTXO_SNAPSHOT_KEY: &[u8] = b"wallet_utxo_snapshot";
 const PRUNER_STATE_KEY: &[u8] = b"pruner_state";
+const CONSENSUS_STATE_KEY: &[u8] = b"consensus_state";
 
 const SCHEMA_ACCOUNTS: &str = "accounts";
 
@@ -43,6 +47,16 @@ pub struct StateTransitionReceipt {
 pub struct Storage {
     kv: Arc<Mutex<FirewoodKv>>,
     pruner: Arc<Mutex<FirewoodPruner>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ConsensusRecoveryState {
+    pub height: u64,
+    pub round: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locked_proposal: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_certificate: Option<ConsensusCertificate>,
 }
 
 impl Storage {
@@ -172,6 +186,23 @@ impl Storage {
     pub fn write_metadata_blob(&self, key: &[u8], value: Vec<u8>) -> ChainResult<()> {
         let mut kv = self.kv.lock();
         kv.put(metadata_key(key), value);
+        kv.commit()?;
+        Ok(())
+    }
+
+    pub fn read_consensus_state(&self) -> ChainResult<Option<ConsensusRecoveryState>> {
+        let kv = self.kv.lock();
+        if let Some(bytes) = kv.get(&metadata_key(CONSENSUS_STATE_KEY)) {
+            Ok(Some(bincode::deserialize(&bytes)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn write_consensus_state(&self, state: &ConsensusRecoveryState) -> ChainResult<()> {
+        let encoded = bincode::serialize(state)?;
+        let mut kv = self.kv.lock();
+        kv.put(metadata_key(CONSENSUS_STATE_KEY), encoded);
         kv.commit()?;
         Ok(())
     }
