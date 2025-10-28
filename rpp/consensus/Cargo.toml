@@ -6,13 +6,18 @@ rust-version = "1.79"
 
 [features]
 default = ["prover-mock"]
-prover-stwo = [
-    "prover-backend-interface/prover-stwo",
+nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",
+    "rpp-crypto-vrf/nightly-prover",
+]
+prover-stwo = [
+    "nightly-prover",
+    "prover-backend-interface/prover-stwo",
 ]
 prover-stwo-simd = [
     "prover-stwo",
+    "nightly-prover",
     "prover-backend-interface/prover-stwo-simd",
     "prover_stwo_backend/simd",
 ]

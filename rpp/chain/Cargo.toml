@@ -11,15 +11,20 @@ build = "build.rs"
 
 [features]
 default = ["prover-mock"]
-prover-stwo = [
-    "prover-backend-interface/prover-stwo",
+nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",
     "dep:stwo",
+    "rpp-crypto-vrf/nightly-prover",
+]
+prover-stwo = [
+    "nightly-prover",
+    "prover-backend-interface/prover-stwo",
     "rpp-consensus/prover-stwo",
 ]
 prover-stwo-simd = [
     "prover-stwo",
+    "nightly-prover",
     "prover-backend-interface/prover-stwo-simd",
     "prover_stwo_backend/simd",
     "rpp-consensus/prover-stwo-simd",
@@ -83,7 +88,7 @@ serde_json = "1.0"
 semver = "1.0"
 sha2 = "0.10"
 storage-firewood = { path = "../../storage-firewood" }
-stwo = { package = "stwo-official", path = "../zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo", default-features = false, optional = true }
+stwo = { package = "stwo-official", path = "../../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo", default-features = false, optional = true }
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
