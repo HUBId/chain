@@ -52,15 +52,11 @@
           "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
           "parameter_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
           "snapshot": {
-            "schema_version": 1,
-            "parameter_version": 1,
             "block_height": 1023,
             "state_commitment": "7270703a7072756e653a7374617465001111111111111111111111111111111111111111111111111111111111111111"
           },
           "segments": [
             {
-              "schema_version": 1,
-              "parameter_version": 1,
               "segment_index": 0,
               "start_height": 1023,
               "end_height": 1023,
@@ -68,8 +64,6 @@
             }
           ],
           "commitment": {
-            "schema_version": 1,
-            "parameter_version": 1,
             "aggregate_commitment": "7270703a7072756e653a636f6d6d6974aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           },
           "binding_digest": "7270703a7072756e653a656e766c70004444444444444444444444444444444444444444444444444444444444444444"
