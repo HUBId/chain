@@ -17,6 +17,9 @@
 //!   and match domain tags.  This makes round-tripping through
 //!   [`serde`]/[`bincode`] deterministic when combined with
 //!   [`canonical_bincode_options`].
+//! * Conversion helpers validate that schema and parameter digests encode the
+//!   same versions as the structured documents, preventing stale or
+//!   cross-wired pruning artifacts from entering gossip or storage.
 //!
 //! The domain tags are ASCII identifiers padded to sixteen bytes.  They are
 //!   chosen to describe the semantic context of the digest:
@@ -63,6 +66,15 @@ pub enum ValidationError {
         /// Inclusive upper bound of the range that failed validation.
         end: BlockHeight,
     },
+    /// Raised when a schema or parameter digest encodes an unexpected version.
+    VersionDigestMismatch {
+        /// Component whose digest prefix encoded the wrong version.
+        component: &'static str,
+        /// Version expected by the structured document.
+        expected: u16,
+        /// Version encoded inside the digest prefix.
+        found: u16,
+    },
 }
 
 impl fmt::Display for ValidationError {
@@ -77,7 +89,22 @@ impl fmt::Display for ValidationError {
                 )
             }
             ValidationError::InvalidSegmentRange { start, end } => {
-                write!(f, "invalid proof segment range: {} > {}", start.as_u64(), end.as_u64())
+                write!(
+                    f,
+                    "invalid proof segment range: {} > {}",
+                    start.as_u64(),
+                    end.as_u64()
+                )
+            }
+            ValidationError::VersionDigestMismatch {
+                component,
+                expected,
+                found,
+            } => {
+                write!(
+                    f,
+                    "{component} digest encodes version {found}, expected {expected}"
+                )
             }
         }
     }
@@ -220,6 +247,20 @@ impl SegmentIndex {
     /// Returns the underlying index as a `u32`.
     pub const fn as_u32(self) -> u32 {
         self.get()
+    }
+}
+
+impl SchemaVersion {
+    /// Returns the canonical Firewood digest associated with this version.
+    pub fn canonical_digest(self) -> [u8; DIGEST_LENGTH] {
+        canonical_version_digest(self.get())
+    }
+}
+
+impl ParameterVersion {
+    /// Returns the canonical Firewood digest associated with this version.
+    pub fn canonical_digest(self) -> [u8; DIGEST_LENGTH] {
+        canonical_version_digest(self.get())
     }
 }
 
@@ -443,6 +484,161 @@ impl Envelope {
     }
 }
 
+fn canonical_version_digest(version: u16) -> [u8; DIGEST_LENGTH] {
+    let mut digest = [0u8; DIGEST_LENGTH];
+    digest[..2].copy_from_slice(&version.to_be_bytes());
+    digest
+}
+
+fn version_from_digest(digest: &[u8; DIGEST_LENGTH]) -> u16 {
+    u16::from_be_bytes([digest[0], digest[1]])
+}
+
+fn ensure_version_matches(
+    component: &'static str,
+    digest: &[u8; DIGEST_LENGTH],
+    version: u16,
+) -> Result<(), ValidationError> {
+    let found = version_from_digest(digest);
+    if found == version {
+        Ok(())
+    } else {
+        Err(ValidationError::VersionDigestMismatch {
+            component,
+            expected: version,
+            found,
+        })
+    }
+}
+
+/// Firewood-specific wrapper that pairs canonical envelopes with schema and parameter digests.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirewoodEnvelope {
+    schema_digest: [u8; DIGEST_LENGTH],
+    parameter_digest: [u8; DIGEST_LENGTH],
+    schema_version: SchemaVersion,
+    parameter_version: ParameterVersion,
+    snapshot: Snapshot,
+    #[serde(default)]
+    segments: Vec<ProofSegment>,
+    commitment: Commitment,
+    binding_digest: TaggedDigest,
+}
+
+impl FirewoodEnvelope {
+    /// Builds a Firewood envelope after ensuring the digests encode the supplied versions.
+    pub fn new(
+        schema_digest: [u8; DIGEST_LENGTH],
+        parameter_digest: [u8; DIGEST_LENGTH],
+        schema_version: SchemaVersion,
+        parameter_version: ParameterVersion,
+        snapshot: Snapshot,
+        segments: Vec<ProofSegment>,
+        commitment: Commitment,
+        binding_digest: TaggedDigest,
+    ) -> Result<Self, ValidationError> {
+        ensure_version_matches(
+            "envelope.schema_version",
+            &schema_digest,
+            schema_version.get(),
+        )?;
+        ensure_version_matches(
+            "envelope.parameter_version",
+            &parameter_digest,
+            parameter_version.get(),
+        )?;
+        ensure_version_matches(
+            "snapshot.schema_version",
+            &schema_digest,
+            snapshot.schema_version().get(),
+        )?;
+        ensure_version_matches(
+            "snapshot.parameter_version",
+            &parameter_digest,
+            snapshot.parameter_version().get(),
+        )?;
+        ensure_version_matches(
+            "commitment.schema_version",
+            &schema_digest,
+            commitment.schema_version().get(),
+        )?;
+        ensure_version_matches(
+            "commitment.parameter_version",
+            &parameter_digest,
+            commitment.parameter_version().get(),
+        )?;
+        for segment in &segments {
+            ensure_version_matches(
+                "segment.schema_version",
+                &schema_digest,
+                segment.schema_version().get(),
+            )?;
+            ensure_version_matches(
+                "segment.parameter_version",
+                &parameter_digest,
+                segment.parameter_version().get(),
+            )?;
+        }
+
+        Ok(Self {
+            schema_digest,
+            parameter_digest,
+            schema_version,
+            parameter_version,
+            snapshot,
+            segments,
+            commitment,
+            binding_digest,
+        })
+    }
+
+    /// Returns the schema digest carried by the Firewood envelope.
+    pub const fn schema_digest(&self) -> &[u8; DIGEST_LENGTH] {
+        &self.schema_digest
+    }
+
+    /// Returns the parameter digest carried by the Firewood envelope.
+    pub const fn parameter_digest(&self) -> &[u8; DIGEST_LENGTH] {
+        &self.parameter_digest
+    }
+
+    /// Converts this Firewood wrapper back into the canonical [`Envelope`].
+    pub fn into_envelope(self) -> Result<Envelope, ValidationError> {
+        Envelope::new(
+            self.schema_version,
+            self.parameter_version,
+            self.snapshot,
+            self.segments,
+            self.commitment,
+            self.binding_digest,
+        )
+    }
+}
+
+impl From<&Envelope> for FirewoodEnvelope {
+    fn from(envelope: &Envelope) -> Self {
+        FirewoodEnvelope::new(
+            envelope.schema_version().canonical_digest(),
+            envelope.parameter_version().canonical_digest(),
+            envelope.schema_version(),
+            envelope.parameter_version(),
+            envelope.snapshot().clone(),
+            envelope.segments().to_vec(),
+            envelope.commitment().clone(),
+            envelope.binding_digest(),
+        )
+        .expect("envelope must be internally consistent")
+    }
+}
+
+impl TryFrom<FirewoodEnvelope> for Envelope {
+    type Error = ValidationError;
+
+    fn try_from(value: FirewoodEnvelope) -> Result<Self, Self::Error> {
+        value.into_envelope()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,17 +678,15 @@ mod tests {
             TaggedDigest::new(COMMITMENT_TAG, [0x33; DIGEST_LENGTH]),
         )
         .unwrap();
-        let segments = vec![
-            ProofSegment::new(
-                SchemaVersion::new(1),
-                ParameterVersion::new(2),
-                SegmentIndex::new(0),
-                BlockHeight::new(3),
-                BlockHeight::new(4),
-                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x44; DIGEST_LENGTH]),
-            )
-            .unwrap(),
-        ];
+        let segments = vec![ProofSegment::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            SegmentIndex::new(0),
+            BlockHeight::new(3),
+            BlockHeight::new(4),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x44; DIGEST_LENGTH]),
+        )
+        .unwrap()];
 
         let wrong_tag_result = Envelope::new(
             SchemaVersion::new(1),
@@ -505,6 +699,113 @@ mod tests {
         assert!(matches!(
             wrong_tag_result,
             Err(ValidationError::UnexpectedDomainTag { .. })
+        ));
+    }
+
+    #[test]
+    fn firewood_envelope_roundtrip_serializes_identically() {
+        let snapshot = Snapshot::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            BlockHeight::new(3),
+            TaggedDigest::new(SNAPSHOT_STATE_TAG, [0x22; DIGEST_LENGTH]),
+        )
+        .unwrap();
+        let segment = ProofSegment::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            SegmentIndex::new(0),
+            BlockHeight::new(3),
+            BlockHeight::new(3),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x33; DIGEST_LENGTH]),
+        )
+        .unwrap();
+        let commitment = Commitment::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            TaggedDigest::new(COMMITMENT_TAG, [0x44; DIGEST_LENGTH]),
+        )
+        .unwrap();
+        let envelope = Envelope::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            snapshot,
+            vec![segment],
+            commitment,
+            TaggedDigest::new(ENVELOPE_TAG, [0x55; DIGEST_LENGTH]),
+        )
+        .unwrap();
+
+        let firewood = FirewoodEnvelope::from(&envelope);
+        let encoded_a = canonical_bincode_options()
+            .serialize(&firewood)
+            .expect("serialize firewood");
+        let encoded_b = canonical_bincode_options()
+            .serialize(&firewood)
+            .expect("serialize firewood");
+        assert_eq!(encoded_a, encoded_b);
+
+        let json_a = serde_json::to_string(&firewood).expect("json firewood");
+        let json_b = serde_json::to_string(&firewood).expect("json firewood");
+        assert_eq!(json_a, json_b);
+
+        let decoded: FirewoodEnvelope = canonical_bincode_options()
+            .deserialize(&encoded_a)
+            .expect("decode firewood");
+        let restored: Envelope = decoded.try_into().expect("firewood converts");
+        assert_eq!(restored, envelope);
+    }
+
+    #[test]
+    fn firewood_envelope_rejects_swapped_digests() {
+        let snapshot = Snapshot::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            BlockHeight::new(3),
+            TaggedDigest::new(SNAPSHOT_STATE_TAG, [0x22; DIGEST_LENGTH]),
+        )
+        .unwrap();
+        let segment = ProofSegment::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            SegmentIndex::new(0),
+            BlockHeight::new(3),
+            BlockHeight::new(3),
+            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x33; DIGEST_LENGTH]),
+        )
+        .unwrap();
+        let commitment = Commitment::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            TaggedDigest::new(COMMITMENT_TAG, [0x44; DIGEST_LENGTH]),
+        )
+        .unwrap();
+        let envelope = Envelope::new(
+            SchemaVersion::new(1),
+            ParameterVersion::new(2),
+            snapshot,
+            vec![segment],
+            commitment,
+            TaggedDigest::new(ENVELOPE_TAG, [0x55; DIGEST_LENGTH]),
+        )
+        .unwrap();
+
+        let schema_digest = envelope.schema_version().canonical_digest();
+        let parameter_digest = envelope.parameter_version().canonical_digest();
+        let swapped = FirewoodEnvelope::new(
+            parameter_digest,
+            schema_digest,
+            envelope.schema_version(),
+            envelope.parameter_version(),
+            envelope.snapshot().clone(),
+            envelope.segments().to_vec(),
+            envelope.commitment().clone(),
+            envelope.binding_digest(),
+        );
+        assert!(matches!(
+            swapped,
+            Err(ValidationError::VersionDigestMismatch { component, .. })
+                if component.contains("schema")
         ));
     }
 }

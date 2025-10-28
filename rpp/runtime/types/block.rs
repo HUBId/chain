@@ -38,9 +38,9 @@ use super::{
 use self::pruning_ext::PruningProofExt;
 
 use rpp_pruning::{
-    BlockHeight, Commitment, DomainTag, ParameterVersion, ProofSegment, SchemaVersion,
-    SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH,
-    ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+    BlockHeight, Commitment, DomainTag, FirewoodEnvelope, ParameterVersion, ProofSegment,
+    SchemaVersion, SegmentIndex, Snapshot, TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH,
+    DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
 };
 
 const ZERO_DIGEST_HEX: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -151,6 +151,10 @@ mod serde_prefixed_digest_vec_hex {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct CanonicalPruningEnvelope {
+    #[serde(default)]
+    pub schema_digest: [u8; DIGEST_LENGTH],
+    #[serde(default)]
+    pub parameter_digest: [u8; DIGEST_LENGTH],
     pub schema_version: SchemaVersion,
     pub parameter_version: ParameterVersion,
     pub snapshot: Snapshot,
@@ -162,7 +166,10 @@ pub(crate) struct CanonicalPruningEnvelope {
 
 impl From<&rpp_pruning::Envelope> for CanonicalPruningEnvelope {
     fn from(envelope: &rpp_pruning::Envelope) -> Self {
+        let firewood = FirewoodEnvelope::from(envelope);
         Self {
+            schema_digest: *firewood.schema_digest(),
+            parameter_digest: *firewood.parameter_digest(),
             schema_version: envelope.schema_version(),
             parameter_version: envelope.parameter_version(),
             snapshot: envelope.snapshot().clone(),
@@ -175,7 +182,19 @@ impl From<&rpp_pruning::Envelope> for CanonicalPruningEnvelope {
 
 impl CanonicalPruningEnvelope {
     pub fn into_envelope(self) -> ChainResult<rpp_pruning::Envelope> {
-        rpp_pruning::Envelope::new(
+        let schema_digest = if self.schema_digest == [0u8; DIGEST_LENGTH] {
+            self.schema_version.canonical_digest()
+        } else {
+            self.schema_digest
+        };
+        let parameter_digest = if self.parameter_digest == [0u8; DIGEST_LENGTH] {
+            self.parameter_version.canonical_digest()
+        } else {
+            self.parameter_digest
+        };
+        let firewood = FirewoodEnvelope::new(
+            schema_digest,
+            parameter_digest,
             self.schema_version,
             self.parameter_version,
             self.snapshot,
@@ -183,7 +202,10 @@ impl CanonicalPruningEnvelope {
             self.commitment,
             self.binding_digest,
         )
-        .map_err(|err| ChainError::Crypto(format!("invalid stored pruning envelope: {err}")))
+        .map_err(|err| ChainError::Crypto(format!("invalid stored pruning envelope: {err}")))?;
+        firewood
+            .into_envelope()
+            .map_err(|err| ChainError::Crypto(format!("invalid stored pruning envelope: {err}")))
     }
 }
 
@@ -435,6 +457,10 @@ pub struct PruningCommitmentMetadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PruningEnvelopeMetadata {
+    #[serde(default)]
+    pub schema_digest: String,
+    #[serde(default)]
+    pub parameter_digest: String,
     pub schema_version: u16,
     pub parameter_version: u16,
     pub snapshot: PruningSnapshotMetadata,
@@ -446,7 +472,7 @@ pub struct PruningEnvelopeMetadata {
 mod pruning_ext {
     use super::{
         compute_pruning_aggregate, compute_pruning_binding, decode_hex_digest,
-        decode_tagged_digest, derive_version_digest, encode_tagged_digest_hex, Block, BlockHeader,
+        decode_tagged_digest, encode_tagged_digest_hex, Block, BlockHeader,
         ChainError, ChainResult, PruningCommitmentMetadata, PruningEnvelopeMetadata,
         PruningSegmentMetadata, PruningSnapshotMetadata, TaggedDigestHex, ZERO_DIGEST_HEX,
         PRUNING_PARAMETER_VERSION, PRUNING_SCHEMA_VERSION, PRUNING_SEGMENT_INDEX,
@@ -652,8 +678,8 @@ mod pruning_ext {
             }
 
             if let Some(_) = previous {
-                let schema_digest = derive_version_digest(u16::from(envelope.schema_version()));
-                let parameter_digest = derive_version_digest(u16::from(envelope.parameter_version()));
+                let schema_digest = envelope.schema_version().canonical_digest();
+                let parameter_digest = envelope.parameter_version().canonical_digest();
 
                 if !FirewoodPruner::verify_pruned_state_with_digests(
                     schema_digest,
@@ -742,7 +768,10 @@ mod pruning_ext {
                 parameter_version: u16::from(commitment.parameter_version()),
                 aggregate_commitment: TaggedDigestHex::from(&commitment.aggregate_commitment()),
             };
+            let firewood = FirewoodEnvelope::from(self.as_ref());
             PruningEnvelopeMetadata {
+                schema_digest: hex::encode(firewood.schema_digest()),
+                parameter_digest: hex::encode(firewood.parameter_digest()),
                 schema_version: u16::from(self.schema_version()),
                 parameter_version: u16::from(self.parameter_version()),
                 snapshot: snapshot_metadata,
@@ -830,6 +859,19 @@ mod pruning_ext {
     }
 
     pub fn pruning_from_metadata(metadata: PruningEnvelopeMetadata) -> ChainResult<PruningProof> {
+        let schema_version = SchemaVersion::new(metadata.schema_version);
+        let parameter_version = ParameterVersion::new(metadata.parameter_version);
+        let schema_digest = if metadata.schema_digest.is_empty() {
+            schema_version.canonical_digest()
+        } else {
+            decode_hex_digest("pruning schema digest", &metadata.schema_digest)?
+        };
+        let parameter_digest = if metadata.parameter_digest.is_empty() {
+            parameter_version.canonical_digest()
+        } else {
+            decode_hex_digest("pruning parameter digest", &metadata.parameter_digest)?
+        };
+
         let snapshot_meta = metadata.snapshot;
         let state_commitment = snapshot_meta
             .state_commitment
@@ -874,15 +916,21 @@ mod pruning_ext {
             .binding_digest
             .to_tagged_digest("pruning binding digest", ENVELOPE_TAG)?;
 
-        let envelope = rpp_pruning::Envelope::new(
-            SchemaVersion::new(metadata.schema_version),
-            ParameterVersion::new(metadata.parameter_version),
+        let firewood = FirewoodEnvelope::new(
+            schema_digest,
+            parameter_digest,
+            schema_version,
+            parameter_version,
             snapshot,
             segments,
             commitment,
             binding,
         )
         .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?;
+
+        let envelope = firewood
+            .into_envelope()
+            .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?;
 
         Ok(Arc::new(envelope))
     }
@@ -1028,12 +1076,6 @@ fn decode_hex_digest(label: &str, value: &str) -> ChainResult<[u8; 32]> {
 
 fn encode_tagged_digest_hex(digest: &TaggedDigest) -> String {
     hex::encode(digest.prefixed_bytes())
-}
-
-fn derive_version_digest(version: u16) -> [u8; 32] {
-    let mut digest = [0u8; 32];
-    digest[..2].copy_from_slice(&version.to_be_bytes());
-    digest
 }
 
 fn parse_tagged_digest_hex(

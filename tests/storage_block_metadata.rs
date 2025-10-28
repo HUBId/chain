@@ -304,6 +304,14 @@ fn storage_persists_extended_block_metadata() {
         assert_eq!(segment.segment_commitment.as_str(), expected_hex);
     }
     assert_eq!(
+        persisted_pruning.schema_digest,
+        expected_pruning.schema_digest
+    );
+    assert_eq!(
+        persisted_pruning.parameter_digest,
+        expected_pruning.parameter_digest
+    );
+    assert_eq!(
         persisted_pruning.binding_digest.as_str(),
         expected_pruning.binding_digest.as_str()
     );

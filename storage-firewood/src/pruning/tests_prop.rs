@@ -1,7 +1,9 @@
 use super::*;
 use bincode::Options;
 use proptest::prelude::*;
-use rpp_pruning::{Envelope, Snapshot, TaggedDigest, SNAPSHOT_STATE_TAG};
+use rpp_pruning::{
+    Envelope, FirewoodEnvelope, Snapshot, TaggedDigest, ValidationError, SNAPSHOT_STATE_TAG,
+};
 use std::collections::BTreeMap;
 
 #[allow(dead_code)]
@@ -43,14 +45,19 @@ proptest! {
         let mut pruner = FirewoodPruner::new(retain);
         for (id, root) in entries.iter().cloned() {
             let proof = pruner.prune_block(id, root);
+            let firewood = FirewoodEnvelope::from(&proof);
             let encoded = rpp_pruning::canonical_bincode_options()
-                .serialize(&proof)
+                .serialize(&firewood)
                 .expect("serialize pruning envelope");
-            let decoded: Envelope = rpp_pruning::canonical_bincode_options()
+            let decoded: FirewoodEnvelope = rpp_pruning::canonical_bincode_options()
                 .deserialize(&encoded)
                 .expect("deserialize pruning envelope");
-            assert_eq!(decoded, proof);
-            assert!(FirewoodPruner::verify_pruned_state(root, &decoded));
+            let restored: Envelope = decoded.try_into().expect("firewood envelope");
+            assert_eq!(restored, proof);
+            let json_a = serde_json::to_string(&firewood).expect("serialize firewood envelope");
+            let json_b = serde_json::to_string(&firewood).expect("serialize firewood envelope");
+            assert_eq!(json_a, json_b);
+            assert!(FirewoodPruner::verify_pruned_state(root, &restored));
         }
     }
 }
@@ -80,6 +87,33 @@ proptest! {
             )
             .expect("tag preserved");
             assert!(!FirewoodPruner::verify_pruned_state(root, &corrupted));
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(proptest_config())]
+    fn firewood_helpers_reject_swapped_digests((retain, entries) in arb_pruning_sequence()) {
+        let mut pruner = FirewoodPruner::new(retain);
+        for (id, root) in entries.iter().cloned() {
+            let proof = pruner.prune_block(id, root);
+            let firewood = FirewoodEnvelope::from(&proof);
+            let schema_digest = *firewood.schema_digest();
+            let parameter_digest = *firewood.parameter_digest();
+            let swapped = FirewoodEnvelope::new(
+                parameter_digest,
+                schema_digest,
+                proof.schema_version(),
+                proof.parameter_version(),
+                proof.snapshot().clone(),
+                proof.segments().to_vec(),
+                proof.commitment().clone(),
+                proof.binding_digest(),
+            );
+            assert!(matches!(
+                swapped,
+                Err(ValidationError::VersionDigestMismatch { .. })
+            ));
         }
     }
 }
