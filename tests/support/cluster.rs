@@ -225,6 +225,11 @@ pub struct TestClusterNode {
     connected_peers: Arc<RwLock<HashSet<PeerId>>>,
 }
 
+enum RestartMode {
+    Graceful,
+    Crash,
+}
+
 impl TestClusterNode {
     /// Wait until the node observes the expected number of connected peers.
     pub async fn wait_for_peer_count(&self, expected: usize, timeout: Duration) -> Result<()> {
@@ -275,6 +280,14 @@ impl TestClusterNode {
     }
 
     pub async fn restart(&mut self) -> Result<()> {
+        self.restart_with_mode(RestartMode::Graceful).await
+    }
+
+    pub async fn crash_and_restart(&mut self) -> Result<()> {
+        self.restart_with_mode(RestartMode::Crash).await
+    }
+
+    async fn restart_with_mode(&mut self, mode: RestartMode) -> Result<()> {
         let identity = self
             .node_handle
             .network_identity_profile()
@@ -282,15 +295,23 @@ impl TestClusterNode {
 
         self.orchestrator.shutdown();
 
-        self.p2p_handle
-            .shutdown()
-            .await
-            .map_err(|err| anyhow!("failed to stop libp2p node {0}: {1}", self.index, err))?;
+        match mode {
+            RestartMode::Graceful => {
+                self.p2p_handle.shutdown().await.map_err(|err| {
+                    anyhow!("failed to stop libp2p node {0}: {1}", self.index, err)
+                })?;
 
-        self.node_handle
-            .stop()
-            .await
-            .with_context(|| format!("failed to stop node runtime for node {}", self.index))?;
+                self.node_handle.stop().await.with_context(|| {
+                    format!("failed to stop node runtime for node {}", self.index)
+                })?;
+            }
+            RestartMode::Crash => {
+                self.node_task.abort();
+                self.p2p_task.abort();
+                self.gossip_task.abort();
+                self.connection_task.abort();
+            }
+        }
 
         let old_node_task = std::mem::replace(
             &mut self.node_task,
@@ -303,8 +324,17 @@ impl TestClusterNode {
         let old_gossip_task = std::mem::replace(&mut self.gossip_task, tokio::spawn(async { () }));
         let old_connection_task =
             std::mem::replace(&mut self.connection_task, tokio::spawn(async { () }));
-        let _ = old_node_task.await;
-        let _ = old_p2p_task.await;
+
+        match mode {
+            RestartMode::Graceful => {
+                let _ = old_node_task.await?;
+                let _ = old_p2p_task.await?;
+            }
+            RestartMode::Crash => {
+                let _ = old_node_task.await;
+                let _ = old_p2p_task.await;
+            }
+        }
         let _ = old_gossip_task.await;
         let _ = old_connection_task.await;
 
