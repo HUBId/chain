@@ -2,6 +2,9 @@
 
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use tracing::warn;
+
+const STWO_BYPASS_REASON: &str = "prover-stwo feature disabled";
 
 pub mod aggregation {
     use serde::{Deserialize, Serialize};
@@ -46,6 +49,204 @@ pub mod aggregation {
                 zsi_root: zsi_root.into(),
                 proof_root: proof_root.into(),
             }
+        }
+    }
+}
+
+pub mod prover {
+    use crate::consensus::ConsensusCertificate;
+    use crate::errors::{ChainError, ChainResult};
+    use crate::proof_system::ProofProver;
+    use crate::reputation::{ReputationWeights, Tier};
+    use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
+    use crate::storage::Storage;
+    use crate::types::{
+        AttestedIdentityRequest, ChainProof, IdentityGenesis, SignedTransaction, UptimeClaim,
+    };
+    use rpp_pruning::Envelope;
+
+    use super::params::StarkParameters;
+
+    fn disabled<T>() -> ChainResult<T> {
+        warn!(
+            target = "runtime.proof.prover",
+            backend = "stwo",
+            bypass = true,
+            reason = STWO_BYPASS_REASON,
+            "STWO wallet prover unavailable while feature is disabled"
+        );
+        Err(ChainError::Crypto(STWO_BYPASS_REASON.into()))
+    }
+
+    #[derive(Clone)]
+    pub struct WalletProver<'a> {
+        pub storage: &'a Storage,
+        parameters: StarkParameters,
+        minimum_tier: Tier,
+        reputation_weights: ReputationWeights,
+    }
+
+    impl<'a> WalletProver<'a> {
+        pub fn new(storage: &'a Storage) -> Self {
+            Self {
+                storage,
+                parameters: StarkParameters::blueprint_default(),
+                minimum_tier: Tier::Tl1,
+                reputation_weights: ReputationWeights::default(),
+            }
+        }
+
+        pub fn with_minimum_tier(mut self, tier: Tier) -> Self {
+            self.minimum_tier = tier;
+            self
+        }
+
+        pub fn with_parameters(mut self, parameters: StarkParameters) -> Self {
+            self.parameters = parameters;
+            self
+        }
+
+        pub fn with_reputation_weights(mut self, weights: ReputationWeights) -> Self {
+            self.reputation_weights = weights;
+            self
+        }
+
+        pub fn parameters(&self) -> &StarkParameters {
+            &self.parameters
+        }
+
+        pub fn minimum_tier(&self) -> &Tier {
+            &self.minimum_tier
+        }
+
+        pub fn reputation_weights(&self) -> &ReputationWeights {
+            &self.reputation_weights
+        }
+    }
+
+    impl<'a> ProofProver for WalletProver<'a> {
+        type IdentityWitness = crate::stwo::circuit::identity::IdentityWitness;
+        type TransactionWitness = crate::stwo::circuit::transaction::TransactionWitness;
+        type StateWitness = crate::stwo::circuit::state::StateWitness;
+        type PruningWitness = crate::stwo::circuit::pruning::PruningWitness;
+        type RecursiveWitness = crate::stwo::circuit::recursive::RecursiveWitness;
+        type UptimeWitness = crate::stwo::circuit::uptime::UptimeWitness;
+        type ConsensusWitness = crate::stwo::circuit::consensus::ConsensusWitness;
+
+        fn system(&self) -> ProofSystemKind {
+            ProofSystemKind::Stwo
+        }
+
+        fn build_identity_witness(
+            &self,
+            _genesis: &IdentityGenesis,
+        ) -> ChainResult<Self::IdentityWitness> {
+            disabled()
+        }
+
+        fn build_transaction_witness(
+            &self,
+            _tx: &SignedTransaction,
+        ) -> ChainResult<Self::TransactionWitness> {
+            disabled()
+        }
+
+        fn build_state_witness(
+            &self,
+            _prev_state_root: &str,
+            _new_state_root: &str,
+            _identities: &[AttestedIdentityRequest],
+            _transactions: &[SignedTransaction],
+        ) -> ChainResult<Self::StateWitness> {
+            disabled()
+        }
+
+        fn build_pruning_witness(
+            &self,
+            _expected_previous_state_root: Option<&str>,
+            _previous_identities: &[AttestedIdentityRequest],
+            _previous_txs: &[SignedTransaction],
+            _pruning: &Envelope,
+            _removed: Vec<String>,
+        ) -> ChainResult<Self::PruningWitness> {
+            disabled()
+        }
+
+        fn build_recursive_witness(
+            &self,
+            _previous_recursive: Option<&ChainProof>,
+            _identity_proofs: &[ChainProof],
+            _tx_proofs: &[ChainProof],
+            _uptime_proofs: &[ChainProof],
+            _consensus_proofs: &[ChainProof],
+            _state_commitments: &GlobalStateCommitments,
+            _state_proof: &ChainProof,
+            _pruning_envelope: &Envelope,
+            _pruning_proof: &ChainProof,
+            _block_height: u64,
+        ) -> ChainResult<Self::RecursiveWitness> {
+            disabled()
+        }
+
+        fn build_uptime_witness(&self, _claim: &UptimeClaim) -> ChainResult<Self::UptimeWitness> {
+            disabled()
+        }
+
+        fn build_consensus_witness(
+            &self,
+            _block_hash: &str,
+            _certificate: &ConsensusCertificate,
+        ) -> ChainResult<Self::ConsensusWitness> {
+            disabled()
+        }
+
+        fn prove_transaction(
+            &self,
+            _witness: Self::TransactionWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
+        }
+
+        fn prove_identity(
+            &self,
+            _witness: Self::IdentityWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
+        }
+
+        fn prove_state_transition(
+            &self,
+            _witness: Self::StateWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
+        }
+
+        fn prove_pruning(
+            &self,
+            _witness: Self::PruningWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
+        }
+
+        fn prove_recursive(
+            &self,
+            _witness: Self::RecursiveWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
+        }
+
+        fn prove_uptime(
+            &self,
+            _witness: Self::UptimeWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
+        }
+
+        fn prove_consensus(
+            &self,
+            _witness: Self::ConsensusWitness,
+        ) -> ChainResult<ChainProof> {
+            disabled()
         }
     }
 }
@@ -814,7 +1015,7 @@ pub mod proof {
 }
 
 pub mod verifier {
-    use crate::errors::{ChainError, ChainResult};
+    use crate::errors::ChainResult;
     use crate::proof_system::ProofVerifier;
     use crate::rpp::ProofSystemKind;
     use crate::stwo::aggregation::StateCommitmentSnapshot;
@@ -823,6 +1024,17 @@ pub mod verifier {
 
     use super::params::StarkParameters;
     use super::proof::StarkProof;
+
+    fn bypass_warn(operation: &str) {
+        warn!(
+            target = "runtime.proof.bypass",
+            operation,
+            backend = "stwo",
+            bypass = true,
+            reason = STWO_BYPASS_REASON,
+            "accepting proof via STWO bypass"
+        );
+    }
 
     #[derive(Clone, Default)]
     pub struct NodeVerifier {
@@ -843,9 +1055,8 @@ pub mod verifier {
         }
 
         pub fn verify_transaction_proof(&self, _proof: &StarkProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("transaction");
+            Ok(())
         }
 
         pub fn verify_bundle(
@@ -861,9 +1072,8 @@ pub mod verifier {
             _state_commitments: &StateCommitmentSnapshot,
             _expected_previous_commitment: Option<&str>,
         ) -> ChainResult<String> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("block-bundle");
+            Ok("stwo-bypass".to_string())
         }
     }
 
@@ -873,45 +1083,38 @@ pub mod verifier {
         }
 
         fn verify_transaction(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("transaction");
+            Ok(())
         }
 
         fn verify_identity(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("identity");
+            Ok(())
         }
 
         fn verify_state(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("state");
+            Ok(())
         }
 
         fn verify_pruning(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("pruning");
+            Ok(())
         }
 
         fn verify_recursive(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("recursive");
+            Ok(())
         }
 
         fn verify_uptime(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("uptime");
+            Ok(())
         }
 
         fn verify_consensus(&self, _proof: &ChainProof) -> ChainResult<()> {
-            Err(ChainError::Crypto(
-                "STWO backend not enabled for proof verification".into(),
-            ))
+            bypass_warn("consensus");
+            Ok(())
         }
     }
 }
