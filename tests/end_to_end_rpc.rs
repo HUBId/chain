@@ -78,7 +78,7 @@ impl RpcTestHarness {
             None,
             false,
         );
-        let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None).await });
+        let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None, true).await });
 
         let client = Client::builder()
             .build()

@@ -273,7 +273,7 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
     let server_context = context.clone();
     let server = tokio::spawn(async move {
         // ignore failures triggered by aborting the server at the end of the test
-        let _ = api::serve(server_context, addr, None, None).await;
+        let _ = api::serve(server_context, addr, None, None, true).await;
     });
 
     sleep(Duration::from_millis(100)).await;

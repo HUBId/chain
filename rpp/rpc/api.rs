@@ -976,6 +976,7 @@ pub async fn serve(
     addr: SocketAddr,
     auth_token: Option<String>,
     allowed_origin: Option<String>,
+    enable_wallet_routes: bool,
 ) -> ChainResult<()> {
     let security = ApiSecurity::new(auth_token, allowed_origin)?;
     let request_limit_per_minute = context.request_limit_per_minute();
@@ -986,9 +987,6 @@ pub async fn serve(
         .route("/health/live", get(health_live))
         .route("/health/ready", get(health_ready))
         .route("/runtime/mode", get(runtime_mode).post(update_runtime_mode))
-        .route("/ui/history", get(ui_history))
-        .route("/ui/send/preview", post(ui_send_preview))
-        .route("/ui/receive", get(ui_receive))
         .route("/ui/node", get(ui_node_status))
         .route("/ui/reputation", get(ui_reputation))
         .route("/ui/bft/membership", get(ui_bft_membership))
@@ -1033,38 +1031,45 @@ pub async fn serve(
         .route("/blocks/latest", get(latest_block))
         .route("/blocks/:height", get(block_by_height))
         .route("/accounts/:address", get(account_info))
-        .route("/wallet/account", get(wallet_account))
-        .route("/wallet/balance/:address", get(wallet_balance))
-        .route("/wallet/reputation/:address", get(wallet_reputation))
-        .route("/wallet/tier/:address", get(wallet_tier))
-        .route("/wallet/history", get(wallet_history))
-        .route("/wallet/send/preview", post(wallet_send_preview))
-        .route("/wallet/tx/build", post(wallet_build_transaction))
-        .route("/wallet/tx/sign", post(wallet_sign_transaction))
-        .route("/wallet/tx/prove", post(wallet_prove_transaction))
-        .route("/wallet/tx/submit", post(wallet_submit_transaction))
-        .route("/wallet/receive", get(wallet_receive_addresses))
-        .route("/wallet/node", get(wallet_node_view))
-        .route("/wallet/state/root", get(wallet_state_root))
-        .route(
-            "/wallet/uptime/scheduler",
-            get(wallet_uptime_scheduler_status),
-        )
-        .route(
-            "/wallet/uptime/scheduler/trigger",
-            post(wallet_trigger_uptime_scheduler),
-        )
-        .route(
-            "/wallet/uptime/scheduler/offload",
-            post(wallet_offload_uptime_proof),
-        )
-        .route("/wallet/uptime/proof", post(wallet_generate_uptime))
-        .route("/wallet/uptime/submit", post(wallet_submit_uptime))
-        .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
-        .route("/wallet/pipeline/telemetry", get(wallet_pipeline_telemetry))
-        .route("/wallet/pipeline/stream", get(wallet_pipeline_stream))
-        .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
-        .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
+        .route("/wallet/state/root", get(wallet_state_root));
+
+    if enable_wallet_routes {
+        router = router
+            .route("/ui/history", get(ui_history))
+            .route("/ui/send/preview", post(ui_send_preview))
+            .route("/ui/receive", get(ui_receive))
+            .route("/wallet/account", get(wallet_account))
+            .route("/wallet/balance/:address", get(wallet_balance))
+            .route("/wallet/reputation/:address", get(wallet_reputation))
+            .route("/wallet/tier/:address", get(wallet_tier))
+            .route("/wallet/history", get(wallet_history))
+            .route("/wallet/send/preview", post(wallet_send_preview))
+            .route("/wallet/tx/build", post(wallet_build_transaction))
+            .route("/wallet/tx/sign", post(wallet_sign_transaction))
+            .route("/wallet/tx/prove", post(wallet_prove_transaction))
+            .route("/wallet/tx/submit", post(wallet_submit_transaction))
+            .route("/wallet/receive", get(wallet_receive_addresses))
+            .route("/wallet/node", get(wallet_node_view))
+            .route(
+                "/wallet/uptime/scheduler",
+                get(wallet_uptime_scheduler_status),
+            )
+            .route(
+                "/wallet/uptime/scheduler/trigger",
+                post(wallet_trigger_uptime_scheduler),
+            )
+            .route(
+                "/wallet/uptime/scheduler/offload",
+                post(wallet_offload_uptime_proof),
+            )
+            .route("/wallet/uptime/proof", post(wallet_generate_uptime))
+            .route("/wallet/uptime/submit", post(wallet_submit_uptime))
+            .route("/wallet/pipeline/dashboard", get(wallet_pipeline_dashboard))
+            .route("/wallet/pipeline/telemetry", get(wallet_pipeline_telemetry))
+            .route("/wallet/pipeline/stream", get(wallet_pipeline_stream))
+            .route("/wallet/pipeline/wait", post(wallet_pipeline_wait))
+            .route("/wallet/pipeline/shutdown", post(wallet_pipeline_shutdown));
+    }
 
     if security.cors_enabled() {
         router = router.layer(middleware::from_fn_with_state(
