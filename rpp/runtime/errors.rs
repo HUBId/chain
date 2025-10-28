@@ -21,6 +21,14 @@ pub enum ChainError {
     Crypto(String),
     #[error("transaction rejected: {0}")]
     Transaction(String),
+    #[error("invalid proof: {0}")]
+    InvalidProof(String),
+    #[error("commitment mismatch: {0}")]
+    CommitmentMismatch(String),
+    #[error("commitment monotonicity violated: {0}")]
+    MonotonicityViolation(String),
+    #[error("snapshot replay failed: {0}")]
+    SnapshotReplayFailed(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }

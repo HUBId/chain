@@ -36,6 +36,249 @@ use rpp_pruning::{
     TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
 };
 
+pub mod invariants {
+    use std::sync::Arc;
+
+    use crate::errors::{ChainError, ChainResult};
+    use crate::types::{
+        Block, BlockMetadata, PruningProof, PruningProofExt, RecursiveProof,
+    };
+
+    /// Invariant I1: Commitment consistency across block header, metadata, and proofs.
+    pub fn check_i1_commitment_consistency(
+        block: &Block,
+        metadata: &BlockMetadata,
+    ) -> ChainResult<()> {
+        if block.header.height != metadata.height {
+            return Err(ChainError::CommitmentMismatch(format!(
+                "block height {} does not match metadata height {}",
+                block.header.height, metadata.height
+            )));
+        }
+
+        if block.hash != metadata.hash {
+            return Err(ChainError::CommitmentMismatch(format!(
+                "block hash mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if block.header.state_root != metadata.new_state_root {
+            return Err(ChainError::CommitmentMismatch(format!(
+                "state root mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if block.header.proof_root != metadata.proof_hash {
+            return Err(ChainError::CommitmentMismatch(format!(
+                "proof root mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if block.recursive_proof.commitment != metadata.recursive_commitment {
+            return Err(ChainError::CommitmentMismatch(format!(
+                "recursive commitment mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if block.recursive_proof.system != metadata.recursive_system {
+            return Err(ChainError::CommitmentMismatch(format!(
+                "recursive proof system mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if let Some(expected) = metadata.recursive_previous_commitment.as_deref() {
+            let actual = block
+                .recursive_proof
+                .previous_commitment
+                .as_deref()
+                .map(str::to_owned)
+                .unwrap_or_else(RecursiveProof::anchor);
+            if actual != expected {
+                return Err(ChainError::CommitmentMismatch(format!(
+                    "recursive previous commitment mismatch at height {}",
+                    metadata.height
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Invariant I2: Anti-forgery guarantees for pruning commitments and recursive system binding.
+    pub fn check_i2_anti_forgery(
+        block: &Block,
+        metadata: &BlockMetadata,
+        pruning_proof: Option<&PruningProof>,
+    ) -> ChainResult<()> {
+        match pruning_proof {
+            Some(proof) => {
+                let envelope_metadata = proof.envelope_metadata();
+                if metadata.pruning.as_ref() != Some(&envelope_metadata) {
+                    return Err(ChainError::CommitmentMismatch(format!(
+                        "pruning metadata mismatch at height {}",
+                        metadata.height
+                    )));
+                }
+
+                if metadata.pruning_binding_digest != proof.binding_digest().prefixed_bytes() {
+                    return Err(ChainError::CommitmentMismatch(format!(
+                        "pruning binding digest mismatch at height {}",
+                        metadata.height
+                    )));
+                }
+
+                let proof_segments: Vec<_> = proof
+                    .segments()
+                    .iter()
+                    .map(|segment| segment.segment_commitment().prefixed_bytes())
+                    .collect();
+                if metadata.pruning_segment_commitments != proof_segments {
+                    return Err(ChainError::CommitmentMismatch(format!(
+                        "pruning segment commitments mismatch at height {}",
+                        metadata.height
+                    )));
+                }
+            }
+            None => {
+                if block.pruned {
+                    return Err(ChainError::InvalidProof(format!(
+                        "missing pruning proof for pruned block at height {}",
+                        metadata.height
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Invariant I3: Monotonicity of the recursive commitment chain.
+    pub fn check_i3_previous_commitment_monotonicity(
+        block: &Block,
+        metadata: &BlockMetadata,
+        previous: Option<&Block>,
+    ) -> ChainResult<()> {
+        if let Some(prev_block) = previous {
+            let expected_commitment = prev_block.recursive_proof.commitment.as_str();
+            match metadata.recursive_previous_commitment.as_deref() {
+                Some(actual) if actual == expected_commitment => {}
+                Some(actual) => {
+                    return Err(ChainError::MonotonicityViolation(format!(
+                        "previous commitment metadata mismatch at height {} (expected {}, got {})",
+                        metadata.height, expected_commitment, actual
+                    )));
+                }
+                None => {
+                    return Err(ChainError::MonotonicityViolation(format!(
+                        "missing previous commitment metadata at height {}",
+                        metadata.height
+                    )));
+                }
+            }
+
+            match block.recursive_proof.previous_commitment.as_deref() {
+                Some(actual) if actual == expected_commitment => {}
+                Some(actual) => {
+                    return Err(ChainError::MonotonicityViolation(format!(
+                        "block previous commitment mismatch at height {} (expected {}, got {})",
+                        metadata.height, expected_commitment, actual
+                    )));
+                }
+                None => {
+                    return Err(ChainError::MonotonicityViolation(format!(
+                        "missing block previous commitment at height {}",
+                        metadata.height
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Invariant I4: Header monotonicity across the chain.
+    pub fn check_i4_header_monotonicity(
+        block: &Block,
+        previous: Option<&Block>,
+    ) -> ChainResult<()> {
+        if let Some(prev_block) = previous {
+            if block.header.height != prev_block.header.height + 1 {
+                return Err(ChainError::MonotonicityViolation(format!(
+                    "non-sequential block height at {} (previous {})",
+                    block.header.height, prev_block.header.height
+                )));
+            }
+
+            if block.header.previous_hash != prev_block.hash {
+                return Err(ChainError::MonotonicityViolation(format!(
+                    "previous hash mismatch at height {}",
+                    block.header.height
+                )));
+            }
+        } else if block.header.height != 0 {
+            return Err(ChainError::MonotonicityViolation(format!(
+                "missing predecessor for non-genesis height {}",
+                block.header.height
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Invariant I5: Replay validation of state transitions using metadata and pruning proofs.
+    pub fn check_i5_snapshot_replay(
+        metadata: &BlockMetadata,
+        pruning_proof: Option<&PruningProof>,
+        previous: Option<&Block>,
+    ) -> ChainResult<()> {
+        if let Some(prev_block) = previous {
+            if metadata.previous_state_root != prev_block.header.state_root {
+                return Err(ChainError::SnapshotReplayFailed(format!(
+                    "previous state root mismatch at height {}",
+                    metadata.height
+                )));
+            }
+        }
+
+        if let Some(proof) = pruning_proof {
+            if metadata.previous_state_root
+                != proof.snapshot_metadata().state_commitment.as_str()
+            {
+                return Err(ChainError::SnapshotReplayFailed(format!(
+                    "snapshot state root mismatch at height {}",
+                    metadata.height
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn enforce_block_invariants(
+        block: &mut Block,
+        metadata: &BlockMetadata,
+        pruning_proof: Option<&PruningProof>,
+        previous: Option<&Block>,
+    ) -> ChainResult<()> {
+        check_i1_commitment_consistency(block, metadata)?;
+        check_i2_anti_forgery(block, metadata, pruning_proof)?;
+        check_i3_previous_commitment_monotonicity(block, metadata, previous)?;
+        check_i4_header_monotonicity(block, previous)?;
+        check_i5_snapshot_replay(metadata, pruning_proof, previous)?;
+
+        if let Some(proof) = pruning_proof {
+            block.pruning_proof = Arc::clone(proof);
+        }
+
+        Ok(())
+    }
+}
+
 pub fn stream_state_sync_chunks(
     store: &SnapshotStore,
     root: &Hash,
@@ -704,28 +947,44 @@ impl ReconstructionEngine {
         records.sort_by_key(|record| record.height());
         let mut previous: Option<Block> = None;
         for record in records {
-            let block = record.into_block();
-            if let Some(prev_block) = previous.as_ref() {
-                if block.header.height != prev_block.header.height + 1 {
-                    return Err(ChainError::Crypto(
-                        "invalid block height progression in proof chain".into(),
-                    ));
-                }
-                if block.header.previous_hash != prev_block.hash {
-                    return Err(ChainError::Crypto(
-                        "invalid previous hash in proof chain".into(),
-                    ));
-                }
-            }
+            let mut block = record.into_block();
+            let metadata = self
+                .storage
+                .read_block_metadata(block.header.height)?
+                .ok_or_else(|| {
+                    ChainError::CommitmentMismatch(format!(
+                        "missing block metadata for height {}",
+                        block.header.height
+                    ))
+                })?;
+
+            let pruning_ref: Option<&PruningProof> = Some(&block.pruning_proof);
+            invariants::enforce_block_invariants(
+                &mut block,
+                &metadata,
+                pruning_ref,
+                previous.as_ref(),
+            )?;
+
             block
                 .pruning_proof
-                .verify(previous.as_ref(), &block.header)?;
+                .verify(previous.as_ref(), &block.header)
+                .map_err(|err| {
+                    ChainError::InvalidProof(format!(
+                        "pruning proof verification failed at height {}: {err}",
+                        metadata.height
+                    ))
+                })?;
             let previous_recursive = previous.as_ref().map(|prev| &prev.recursive_proof);
-            block.recursive_proof.verify(
-                &block.header,
-                &block.pruning_proof,
-                previous_recursive,
-            )?;
+            block
+                .recursive_proof
+                .verify(&block.header, &block.pruning_proof, previous_recursive)
+                .map_err(|err| {
+                    ChainError::InvalidProof(format!(
+                        "recursive proof verification failed at height {}: {err}",
+                        metadata.height
+                    ))
+                })?;
             previous = Some(block);
         }
         Ok(())
@@ -827,7 +1086,14 @@ impl ReconstructionEngine {
             let block =
                 self.hydrate_block(block, &metadata, pruning_proof, provider, previous.as_ref())?;
             let proposer_key = self.proposer_public_key(&block.header.proposer)?;
-            block.verify_without_stark(previous.as_ref(), &proposer_key)?;
+            block
+                .verify_without_stark(previous.as_ref(), &proposer_key)
+                .map_err(|err| {
+                    ChainError::SnapshotReplayFailed(format!(
+                        "state replay validation failed at height {}: {err}",
+                        metadata.height
+                    ))
+                })?;
             previous = Some(block.clone());
             results.push(block);
         }
@@ -879,126 +1145,7 @@ impl ReconstructionEngine {
         pruning_proof: Option<&PruningProof>,
         previous: Option<&Block>,
     ) -> ChainResult<()> {
-        if block.header.height != metadata.height {
-            return Err(ChainError::Config(format!(
-                "block height mismatch for metadata height {} (block reported {})",
-                metadata.height, block.header.height,
-            )));
-        }
-        if block.hash != metadata.hash {
-            return Err(ChainError::Config(format!(
-                "block hash mismatch at height {}",
-                metadata.height
-            )));
-        }
-        if block.header.state_root != metadata.new_state_root {
-            return Err(ChainError::Config(format!(
-                "state root mismatch at height {}",
-                metadata.height
-            )));
-        }
-        if block.header.proof_root != metadata.proof_hash {
-            return Err(ChainError::Config(format!(
-                "proof root mismatch at height {}",
-                metadata.height
-            )));
-        }
-
-        if block.recursive_proof.commitment != metadata.recursive_commitment {
-            return Err(ChainError::Config(format!(
-                "recursive commitment mismatch at height {}",
-                metadata.height
-            )));
-        }
-
-        if let Some(expected) = metadata.recursive_previous_commitment.as_deref() {
-            let actual = block
-                .recursive_proof
-                .previous_commitment
-                .as_deref()
-                .map(|value| value.to_owned())
-                .unwrap_or_else(RecursiveProof::anchor);
-            if actual != expected {
-                return Err(ChainError::Config(format!(
-                    "recursive previous commitment mismatch at height {}",
-                    metadata.height
-                )));
-            }
-        }
-
-        if let Some(prev_block) = previous {
-            let expected_commitment = prev_block.recursive_proof.commitment.as_str();
-            match metadata.recursive_previous_commitment.as_deref() {
-                Some(actual) if actual == expected_commitment => {}
-                Some(_) => {
-                    return Err(ChainError::Config(format!(
-                        "previous commitment metadata mismatch at height {}",
-                        metadata.height
-                    )));
-                }
-                None => {
-                    return Err(ChainError::Config(format!(
-                        "missing previous commitment metadata at height {}",
-                        metadata.height
-                    )));
-                }
-            }
-            if let Some(actual) = block.recursive_proof.previous_commitment.as_deref() {
-                if actual != expected_commitment {
-                    return Err(ChainError::Config(format!(
-                        "block previous commitment mismatch at height {}",
-                        metadata.height
-                    )));
-                }
-            }
-            if metadata.previous_state_root != prev_block.header.state_root {
-                return Err(ChainError::Config(format!(
-                    "previous state root mismatch at height {}",
-                    metadata.height
-                )));
-            }
-        }
-
-        if let Some(proof) = pruning_proof {
-            block.pruning_proof = Arc::clone(proof);
-            let envelope_metadata = proof.envelope_metadata();
-            if metadata.pruning.as_ref() != Some(&envelope_metadata) {
-                return Err(ChainError::Config(format!(
-                    "pruning metadata mismatch at height {}",
-                    metadata.height
-                )));
-            }
-            if metadata.pruning_binding_digest != proof.binding_digest().prefixed_bytes() {
-                return Err(ChainError::Config(format!(
-                    "pruning binding digest mismatch at height {}",
-                    metadata.height
-                )));
-            }
-            let proof_segments: Vec<_> = proof
-                .segments()
-                .iter()
-                .map(|segment| segment.segment_commitment().prefixed_bytes())
-                .collect();
-            if metadata.pruning_segment_commitments != proof_segments {
-                return Err(ChainError::Config(format!(
-                    "pruning segment commitments mismatch at height {}",
-                    metadata.height
-                )));
-            }
-            if metadata.previous_state_root != proof.snapshot_metadata().state_commitment.as_str() {
-                return Err(ChainError::Config(format!(
-                    "snapshot state root mismatch at height {}",
-                    metadata.height
-                )));
-            }
-        } else if block.pruned {
-            return Err(ChainError::Config(format!(
-                "missing pruning proof for pruned block at height {}",
-                metadata.height
-            )));
-        }
-
-        Ok(())
+        invariants::enforce_block_invariants(block, metadata, pruning_proof, previous)
     }
 
     fn apply_payload(block: &mut Block, payload: BlockPayload) {

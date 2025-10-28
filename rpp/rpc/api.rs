@@ -2233,9 +2233,13 @@ fn vrf_response(
 }
 
 fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {
-    let status = match err {
-        ChainError::Transaction(_) => StatusCode::BAD_REQUEST,
-        ChainError::Config(_) => StatusCode::BAD_REQUEST,
+    let status = match &err {
+        ChainError::Transaction(_)
+        | ChainError::Config(_)
+        | ChainError::InvalidProof(_)
+        | ChainError::CommitmentMismatch(_)
+        | ChainError::MonotonicityViolation(_)
+        | ChainError::SnapshotReplayFailed(_) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (
