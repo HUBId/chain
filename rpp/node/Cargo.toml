@@ -9,6 +9,7 @@ repository = "https://github.com/ava-labs/firewood"
 [features]
 default = ["prover-mock"]
 prover-stwo = ["rpp-chain/prover-stwo"]
+stwo = ["prover-stwo"]
 prover-stwo-simd = [
     "prover-stwo",
     "rpp-chain/prover-stwo-simd",
