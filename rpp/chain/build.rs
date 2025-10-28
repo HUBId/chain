@@ -2,11 +2,13 @@ use std::env;
 
 use rustc_version::{version_meta, Channel};
 
-/// Enables the `nightly` cfg when the opt-in STWO prover features are built.
-/// These builds require either a nightly toolchain or `RUSTC_BOOTSTRAP`.
+/// Enables the `nightly` cfg when the opt-in STWO prover features (including the
+/// SIMD variant) are built. These builds require either a nightly toolchain or
+/// setting `RUSTC_BOOTSTRAP` explicitly.
 fn main() {
     if env::var_os("CARGO_FEATURE_STWO")
         .or_else(|| env::var_os("CARGO_FEATURE_PROVER_STWO"))
+        .or_else(|| env::var_os("CARGO_FEATURE_PROVER_STWO_SIMD"))
         .is_none()
     {
         return;

@@ -33,6 +33,6 @@ jobs:
         with:
           shared-key: ci-${{ matrix.name }}
       - name: Cargo build
-        run: cargo build --workspace --all-targets ${{ matrix.features }}
+        run: cargo build --workspace --all-targets --locked ${{ matrix.features }}
       - name: Cargo test
-        run: cargo test --workspace --all-targets ${{ matrix.features }}
+        run: cargo test --workspace --all-targets --locked ${{ matrix.features }}
