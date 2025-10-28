@@ -1,0 +1,67 @@
+[package]
+name = "fastrace"
+version = "0.7.14"
+
+categories = ["development-tools::debugging"]
+description = "A high-performance timeline tracing library for Rust"
+documentation = "https://docs.rs/fastrace"
+keywords = ["tracing", "span", "datadog", "jaeger", "opentelemetry"]
+readme = "../README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+enable = ["fastrace-macro/enable"]
+
+[dependencies]
+fastant = "0.1"
+fastrace-macro = { workspace = true }
+parking_lot = "0.12"
+pin-project = { version = "1.1.8" }
+rand = "0.9"
+rtrb = "0.3"
+serde = { workspace = true }
+
+[dev-dependencies]
+async-trait = "0.1"
+crossbeam = "0.8"
+divan = "0.1"
+# fastrace = { path = ".", features = ["enable"] }
+fastrace-opentelemetry = { workspace = true }
+flume = "0.11"
+futures-timer = "3"
+insta = "1.43.1"
+mockall = "0.13"
+opentelemetry = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+pollster = { version = "0.4.0" }
+rand = "0.9"
+serial_test = "3.1"
+tokio = { workspace = true }
+tracing = { version = "0.1" }
+tracing-opentelemetry = { version = "0.31.0" }
+tracing-subscriber = { version = "0.3.19" }
+
+[[bench]]
+harness = false
+name = "trace"
+
+[[bench]]
+harness = false
+name = "compare"
+
+[[bench]]
+harness = false
+name = "spsc"
+
+[[bench]]
+harness = false
+name = "id"
+
+[[bench]]
+harness = false
+name = "vec"

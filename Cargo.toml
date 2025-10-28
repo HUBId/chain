@@ -113,44 +113,44 @@ firewood-triehash = { path = "triehash", version = "0.0.12" }
 prover_stwo_backend = { path = "prover/prover_stwo_backend", version = "1.0.0", default-features = false }
 
 # common dependencies
-aquamarine = "0.6.0"
-bytemuck = "1.23.1"
-bytemuck_derive = "1.10.0"
-clap = { version = "4.5.41", features = ["derive"] }
-coarsetime = "0.1.36"
-fastrace = "0.7.14"
-hex = "0.4.3"
-integer-encoding = "4.0.2"
-log = "0.4.27"
-metrics = "0.24.2"
-metrics-util = "0.20.0"
-nonzero_ext = "0.3.0"
-rand_distr = "0.5.1"
-sha2 = "0.10.9"
-smallvec = "1.15.1"
-test-case = "3.3.1"
-thiserror = "2.0.12"
-serde_json = "1.0"
+aquamarine = "=0.6.0"
+bytemuck = "=1.23.2"
+bytemuck_derive = "=1.10.2"
+clap = { version = "=4.5.50", default-features = false, features = ["derive", "std"] }
+coarsetime = "=0.1.36"
+fastrace = "=0.7.14"
+hex = "=0.4.3"
+integer-encoding = "=4.0.2"
+log = "=0.4.28"
+metrics = "=0.24.2"
+metrics-util = "=0.20.0"
+nonzero_ext = "=0.3.0"
+rand_distr = "=0.5.1"
+sha2 = "=0.10.9"
+smallvec = "=1.15.1"
+test-case = "=3.3.1"
+thiserror = "=2.0.12"
+serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
 
 # common dev dependencies
-criterion = "0.7.0"
-ethereum-types = "0.15.1"
-hex-literal = "1.0.0"
-pprof = "0.15.0"
-rand = "0.9.2"
-tempfile = "3.20.0"
+criterion = "=0.7.0"
+ethereum-types = "=0.15.1"
+hex-literal = "=1.0.0"
+pprof = "=0.15.0"
+rand = "=0.9.2"
+tempfile = "=3.23.0"
 
 # vendored libp2p dependencies
-asynchronous-codec = "0.7.0"
-env_logger = "0.11.8"
-futures = "0.3.30"
-futures-bounded = "0.2.4"
-futures-rustls = { version = "0.26.0", default-features = false }
-getrandom = "0.2"
-hashlink = "0.10.0"
-hickory-proto = { version = "0.25.2", default-features = false }
-hickory-resolver = { version = "0.25.2", default-features = false }
-if-watch = "3.2.1"
+asynchronous-codec = "=0.7.0"
+env_logger = "=0.11.8"
+futures = "=0.3.31"
+futures-bounded = "=0.2.4"
+futures-rustls = { version = "=0.26.0", default-features = false }
+getrandom = "=0.2.16"
+hashlink = "=0.10.0"
+hickory-proto = { version = "=0.25.2", default-features = false }
+hickory-resolver = { version = "=0.25.2", default-features = false }
+if-watch = "=3.2.1"
 libp2p = { version = "0.56.0", path = "vendor/libp2p/libp2p" }
 libp2p-allow-block-list = { version = "0.6.0", path = "vendor/libp2p/misc/allow-block-list" }
 libp2p-connection-limits = { version = "0.6.0", path = "vendor/libp2p/misc/connection-limits" }
@@ -165,40 +165,40 @@ libp2p-quic = { version = "0.13.0", path = "vendor/libp2p/transports/quic" }
 libp2p-peer-store = { version = "0.1.0", path = "vendor/libp2p/misc/peer-store" }
 libp2p-ping = { version = "0.47.0", path = "vendor/libp2p/protocols/ping" }
 libp2p-request-response = { version = "0.29.0", path = "vendor/libp2p/protocols/request-response" }
-libc = "0.2"
+libc = "=0.2.177"
 libp2p-swarm = { version = "0.47.0", path = "vendor/libp2p/swarm" }
 libp2p-swarm-derive = { version = "=0.35.1", path = "vendor/libp2p/swarm-derive" }
-libp2p-tcp = { version = "0.44.0", path = "vendor/libp2p/transports/tcp" }
-libp2p-tls = { version = "0.6.2", path = "vendor/libp2p/transports/tls" }
-libp2p-mplex = { version = "0.43.1", path = "vendor/libp2p/muxers/mplex" }
-libp2p-muxer-test-harness = { version = "0.1.0", path = "vendor/libp2p/muxers/test-harness" }
-libp2p-webrtc-utils = { version = "0.4.0", path = "vendor/libp2p/misc/webrtc-utils" }
-libp2p-yamux = { version = "0.47.0", path = "vendor/libp2p/muxers/yamux" }
-multiaddr = "0.18.1"
-multihash = "0.19.1"
-multistream-select = { version = "0.13.0", path = "vendor/libp2p/misc/multistream-select" }
-prometheus-client = "0.23"
-quick-protobuf-codec = { version = "0.3.1", path = "vendor/libp2p/misc/quick-protobuf-codec" }
+libp2p-tcp = { version = "=0.44.0", path = "vendor/libp2p/transports/tcp" }
+libp2p-tls = { version = "=0.6.2", path = "vendor/libp2p/transports/tls" }
+libp2p-mplex = { version = "=0.43.1", path = "vendor/libp2p/muxers/mplex" }
+libp2p-muxer-test-harness = { version = "=0.1.0", path = "vendor/libp2p/muxers/test-harness" }
+libp2p-webrtc-utils = { version = "=0.4.0", path = "vendor/libp2p/misc/webrtc-utils" }
+libp2p-yamux = { version = "=0.47.0", path = "vendor/libp2p/muxers/yamux" }
+multiaddr = "=0.18.2"
+multihash = "=0.19.3"
+multistream-select = { version = "=0.13.0", path = "vendor/libp2p/misc/multistream-select" }
+prometheus-client = "=0.23.1"
+quick-protobuf-codec = { version = "=0.3.1", path = "vendor/libp2p/misc/quick-protobuf-codec" }
 quickcheck = { package = "quickcheck-ext", path = "vendor/libp2p/misc/quickcheck-ext" }
-rcgen = "0.13"
-ring = "0.17.12"
-rw-stream-sink = { version = "0.4.0", path = "vendor/libp2p/misc/rw-stream-sink" }
-tokio = { version = "1.38", default-features = false }
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
-unsigned-varint = "0.8.0"
-web-time = "1.1.0"
+rcgen = "=0.13.2"
+ring = "=0.17.14"
+rw-stream-sink = { version = "=0.4.0", path = "vendor/libp2p/misc/rw-stream-sink" }
+tokio = { version = "=1.48.0", default-features = false, features = ["macros"] }
+tracing = { version = "=0.1.41", default-features = false, features = ["attributes", "log", "std"] }
+tracing-subscriber = { version = "=0.3.20", default-features = false, features = ["fmt", "std"] }
+unsigned-varint = "=0.8.0"
+web-time = "=1.1.0"
 
 # plonky3 proof system dependencies
-p3-air = { version = "0.3.0", default-features = false }
-p3-baby-bear = { version = "0.3.0", default-features = false }
-p3-challenger = { version = "0.3.0", default-features = false }
-p3-commit = { version = "0.3.0", default-features = false }
-p3-field = { version = "0.3.0", default-features = false }
-p3-mersenne-31 = { version = "0.3.0", default-features = false }
-p3-matrix = { version = "0.3.0", default-features = false }
-p3-poseidon = { version = "0.3.0", default-features = false }
-p3-util = { version = "0.3.0", default-features = false }
+p3-air = { version = "=0.3.0", default-features = false }
+p3-baby-bear = { version = "=0.3.0", default-features = false }
+p3-challenger = { version = "=0.3.0", default-features = false }
+p3-commit = { version = "=0.3.0", default-features = false }
+p3-field = { version = "=0.3.0", default-features = false }
+p3-mersenne-31 = { version = "=0.3.0", default-features = false }
+p3-matrix = { version = "=0.3.0", default-features = false }
+p3-poseidon = { version = "=0.3.0", default-features = false }
+p3-util = { version = "=0.3.0", default-features = false }
 
 
 [patch.crates-io]
@@ -208,4 +208,6 @@ yamux-old = { package = "yamux", path = "rpp/p2p/vendor/yamux/0.12.1" }
 base64ct = { version = "1.6.0", path = "vendor/base64ct/1.6.0" }
 hex-literal = { version = "1.0.0", path = "vendor/hex-literal/1.0.0" }
 p3-mds = { version = "0.3.0", path = "vendor/p3-mds/0.3.0" }
+fastrace = { version = "0.7.14", path = "vendor/fastrace/0.7.14" }
+fastrace-macro = { version = "0.7.14", path = "vendor/fastrace-macro/0.7.14" }
 

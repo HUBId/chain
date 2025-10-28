@@ -1,0 +1,35 @@
+[package]
+name = "fastrace-macro"
+version = "0.7.14"
+
+categories = ["development-tools::debugging"]
+description = "Attribute procedural macro for fastrace"
+documentation = "https://docs.rs/fastrace-macro"
+keywords = ["tracing", "span", "datadog", "jaeger", "opentelemetry"]
+readme = "README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[features]
+enable = []
+
+[dependencies]
+proc-macro-error2 = "2.0.1"
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = [
+  "full",
+  "parsing",
+  "extra-traits",
+  "proc-macro",
+  "visit-mut",
+] }
+
+[dev-dependencies]
+# fastrace = { workspace = true }
