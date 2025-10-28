@@ -13,6 +13,7 @@ serde_json = "1.0"
 tempfile = "3.10"
 thiserror = "1.0"
 rpp-pruning = { path = "../rpp/pruning" }
+metrics = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.5"

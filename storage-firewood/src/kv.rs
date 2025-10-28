@@ -1,7 +1,16 @@
+//! Firewood's append-only key/value store backed by a write-ahead log.
+//!
+//! Transactions are encoded as a `Begin` marker, the staged `Put`/`Delete` mutations, and a
+//! terminal `Commit` record carrying the resulting state root. During recovery the mutations are
+//! buffered until the matching `Commit` marker is observed so partially written transactions are
+//! discarded instead of being materialised.
+
 use std::{
     collections::{BTreeMap, VecDeque},
-    fs,
-    path::Path,
+    env, fs,
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -16,12 +25,51 @@ pub type Hash = [u8; 32];
 /// checkpoints.
 const WAL_RETENTION_WINDOW: usize = 3;
 
+const WAL_TRANSACTION_METRIC: &str = "firewood.wal.transactions";
+const WAL_TRANSACTION_RESULT_LABEL: &str = "result";
+const WAL_TRANSACTION_COMMITTED: &str = "committed";
+const WAL_TRANSACTION_ROLLED_BACK: &str = "rolled_back";
+const COMMIT_PAUSE_ENV: &str = "FIREWOOD_KV_COMMIT_PAUSE_PATH";
+
+/// Representation of a staged mutation recorded in the WAL.
+#[derive(Debug, Clone)]
+enum Mutation {
+    Put { key: Vec<u8>, value: Vec<u8> },
+    Delete { key: Vec<u8> },
+}
+
+impl Mutation {
+    fn apply(self, state: &mut BTreeMap<Vec<u8>, Vec<u8>>) {
+        match self {
+            Mutation::Put { key, value } => {
+                state.insert(key, value);
+            }
+            Mutation::Delete { key } => {
+                state.remove(&key);
+            }
+        }
+    }
+
+    fn into_record(self) -> LogRecord {
+        match self {
+            Mutation::Put { key, value } => LogRecord::Put { key, value },
+            Mutation::Delete { key } => LogRecord::Delete { key },
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct InflightTransaction {
+    mutations: Vec<Mutation>,
+}
+
 /// Binary log record encoded into the WAL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum LogRecord {
     Put { key: Vec<u8>, value: Vec<u8> },
     Delete { key: Vec<u8> },
     Commit { root: Hash },
+    Begin { id: u64 },
 }
 
 /// Error type reported by the Firewood KV engine.
@@ -45,8 +93,10 @@ pub enum KvError {
 pub struct FirewoodKv {
     wal: FileWal,
     state: BTreeMap<Vec<u8>, Vec<u8>>,
-    pending: Vec<LogRecord>,
+    pending: Vec<Mutation>,
     commit_boundaries: VecDeque<SequenceNumber>,
+    replay_inflight: Option<InflightTransaction>,
+    next_tx_id: u64,
 }
 
 impl FirewoodKv {
@@ -61,15 +111,25 @@ impl FirewoodKv {
             state: BTreeMap::new(),
             pending: Vec::new(),
             commit_boundaries: VecDeque::new(),
+            replay_inflight: None,
+            next_tx_id: 0,
         };
 
-        kv.replay()?
-            .into_iter()
-            .for_each(|(seq, record)| kv.apply_record(seq, record));
+        let (records, rolled_back) = kv.replay()?;
+        for (seq, record) in records {
+            kv.apply_record(seq, record);
+        }
+        if rolled_back > 0 {
+            metrics::counter!(
+                WAL_TRANSACTION_METRIC,
+                WAL_TRANSACTION_RESULT_LABEL => WAL_TRANSACTION_ROLLED_BACK
+            )
+            .increment(rolled_back as u64);
+        }
         Ok(kv)
     }
 
-    fn replay(&self) -> Result<Vec<(SequenceNumber, LogRecord)>, KvError> {
+    fn replay(&self) -> Result<(Vec<(SequenceNumber, LogRecord)>, u64), KvError> {
         let records = self.wal.replay_from(0)?;
         let mut decoded = Vec::with_capacity(records.len());
         let mut last_commit_index = None;
@@ -82,28 +142,60 @@ impl FirewoodKv {
             decoded.push((seq, record));
         }
 
-        match last_commit_index {
-            Some(index) => {
-                decoded.truncate(index + 1);
-                Ok(decoded)
-            }
-            None => Ok(Vec::new()),
-        }
+        let rolled_back_transactions = if let Some(index) = last_commit_index {
+            let tail = decoded.split_off(index + 1);
+            tail.iter()
+                .filter(|(_, record)| matches!(record, LogRecord::Begin { .. }))
+                .count() as u64
+        } else {
+            let count = decoded
+                .iter()
+                .filter(|(_, record)| matches!(record, LogRecord::Begin { .. }))
+                .count() as u64;
+            decoded.clear();
+            count
+        };
+
+        Ok((decoded, rolled_back_transactions))
     }
 
     fn apply_record(&mut self, sequence: SequenceNumber, record: LogRecord) {
         match record {
             LogRecord::Put { key, value } => {
-                self.state.insert(key, value);
+                if let Some(inflight) = &mut self.replay_inflight {
+                    inflight.mutations.push(Mutation::Put { key, value });
+                } else {
+                    Mutation::Put { key, value }.apply(&mut self.state);
+                }
             }
             LogRecord::Delete { key } => {
-                self.state.remove(&key);
+                if let Some(inflight) = &mut self.replay_inflight {
+                    inflight.mutations.push(Mutation::Delete { key });
+                } else {
+                    Mutation::Delete { key }.apply(&mut self.state);
+                }
             }
-            LogRecord::Commit { .. } => {
+            LogRecord::Commit { root } => {
+                if let Some(inflight) = self.replay_inflight.take() {
+                    for mutation in inflight.mutations {
+                        mutation.apply(&mut self.state);
+                    }
+                    debug_assert_eq!(
+                        self.hash_state(),
+                        root,
+                        "replayed state hash diverged from WAL commit"
+                    );
+                }
                 self.commit_boundaries.push_back(sequence);
                 if self.commit_boundaries.len() > WAL_RETENTION_WINDOW {
                     self.commit_boundaries.pop_front();
                 }
+            }
+            LogRecord::Begin { id } => {
+                self.replay_inflight = Some(InflightTransaction {
+                    mutations: Vec::new(),
+                });
+                self.next_tx_id = self.next_tx_id.max(id + 1);
             }
         }
     }
@@ -126,16 +218,12 @@ impl FirewoodKv {
 
     fn record_put(&mut self, key: Vec<u8>, value: Vec<u8>) {
         self.state.insert(key.clone(), value.clone());
-        self.pending.push(LogRecord::Put { key, value });
+        self.pending.push(Mutation::Put { key, value });
     }
 
     fn record_delete(&mut self, key: &[u8]) {
         self.state.remove(key);
-        self.pending.push(LogRecord::Delete { key: key.to_vec() });
-    }
-
-    fn seal_commit(&mut self, root: Hash) {
-        self.pending.push(LogRecord::Commit { root });
+        self.pending.push(Mutation::Delete { key: key.to_vec() });
     }
 
     fn retain_recent(&mut self) -> Result<(), KvError> {
@@ -152,6 +240,13 @@ impl FirewoodKv {
             }
         }
         Ok(())
+    }
+
+    fn commit_pause_path() -> Option<PathBuf> {
+        match env::var(COMMIT_PAUSE_ENV) {
+            Ok(path) if !path.is_empty() => Some(PathBuf::from(path)),
+            _ => None,
+        }
     }
 
     /// Stage a put mutation.
@@ -176,18 +271,44 @@ impl FirewoodKv {
         }
 
         let root = self.hash_state();
-        self.seal_commit(root);
+        let tx_id = self.next_tx_id;
+        self.next_tx_id = self.next_tx_id.wrapping_add(1);
 
-        for record in self.pending.drain(..) {
+        let mutations = self.pending.clone();
+
+        let begin_record = LogRecord::Begin { id: tx_id };
+        let begin_raw = bincode::serialize(&begin_record).expect("serialize begin record");
+        self.wal.append(&begin_raw)?;
+
+        for mutation in &mutations {
+            let record = mutation.clone().into_record();
             let raw = bincode::serialize(&record).expect("serialize log record");
-            let seq = self.wal.append(&raw)?;
-            if matches!(record, LogRecord::Commit { .. }) {
-                self.commit_boundaries.push_back(seq);
+            self.wal.append(&raw)?;
+        }
+
+        if let Some(pause_path) = Self::commit_pause_path() {
+            let _ = fs::write(&pause_path, b"ready");
+            while pause_path.exists() {
+                thread::sleep(Duration::from_millis(50));
             }
         }
 
+        let commit_record = LogRecord::Commit { root };
+        let commit_raw = bincode::serialize(&commit_record).expect("serialize commit record");
+        let commit_seq = self.wal.append(&commit_raw)?;
+        self.commit_boundaries.push_back(commit_seq);
+
         self.wal.sync()?;
         self.retain_recent()?;
+
+        self.pending.clear();
+
+        metrics::counter!(
+            WAL_TRANSACTION_METRIC,
+            WAL_TRANSACTION_RESULT_LABEL => WAL_TRANSACTION_COMMITTED
+        )
+        .increment(1);
+
         Ok(root)
     }
 
