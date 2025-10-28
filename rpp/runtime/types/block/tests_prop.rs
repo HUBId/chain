@@ -279,8 +279,66 @@ proptest! {
         let reconstructed = pruning_from_metadata(metadata.clone())
             .expect("metadata should rebuild pruning proof");
         assert_eq!(reconstructed, fixture.proof);
+        let expected_schema_digest = hex::encode(fixture.proof.schema_version().canonical_digest());
+        let expected_parameter_digest =
+            hex::encode(fixture.proof.parameter_version().canonical_digest());
         let expected_binding = hex::encode(fixture.proof.binding_digest().prefixed_bytes());
+        let json_a = serde_json::to_string(&metadata).expect("serialize metadata");
+        let json_b = serde_json::to_string(&metadata).expect("serialize metadata");
+        assert_eq!(json_a, json_b);
+        assert_eq!(metadata.schema_digest, expected_schema_digest);
+        assert_eq!(metadata.parameter_digest, expected_parameter_digest);
         assert_eq!(metadata.binding_digest.as_str(), expected_binding);
+    }
+}
+
+proptest! {
+    #![proptest_config(proptest_config())]
+    fn canonical_envelope_serialization_is_deterministic(fixture in arb_pruning_fixture()) {
+        let canonical = CanonicalPruningEnvelope::from(fixture.proof.as_ref());
+        let encoded_a = rpp_pruning::canonical_bincode_options()
+            .serialize(&canonical)
+            .expect("serialize canonical envelope");
+        let encoded_b = rpp_pruning::canonical_bincode_options()
+            .serialize(&canonical)
+            .expect("serialize canonical envelope");
+        assert_eq!(encoded_a, encoded_b);
+
+        let decoded: CanonicalPruningEnvelope = rpp_pruning::canonical_bincode_options()
+            .deserialize(&encoded_a)
+            .expect("deserialize canonical envelope");
+        let restored = decoded
+            .into_envelope()
+            .expect("canonical envelope converts");
+        assert_eq!(Arc::new(restored), fixture.proof);
+    }
+}
+
+proptest! {
+    #![proptest_config(proptest_config())]
+    fn pruning_metadata_rejects_swapped_digests(fixture in arb_pruning_fixture()) {
+        let mut metadata = fixture.proof.envelope_metadata();
+        std::mem::swap(&mut metadata.schema_digest, &mut metadata.parameter_digest);
+        match pruning_from_metadata(metadata) {
+            Err(ChainError::Crypto(message)) => {
+                assert!(message.contains("digest"));
+            }
+            other => panic!("unexpected result for swapped digests: {other:?}"),
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(proptest_config())]
+    fn canonical_envelope_rejects_swapped_digests(fixture in arb_pruning_fixture()) {
+        let mut canonical = CanonicalPruningEnvelope::from(fixture.proof.as_ref());
+        std::mem::swap(&mut canonical.schema_digest, &mut canonical.parameter_digest);
+        match canonical.into_envelope() {
+            Err(ChainError::Crypto(message)) => {
+                assert!(message.contains("digest"));
+            }
+            other => panic!("unexpected result for swapped digests: {other:?}"),
+        }
     }
 }
 
