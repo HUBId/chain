@@ -1,3 +1,5 @@
+mod support;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,6 +16,8 @@ use serde::Serialize;
 use tempfile::TempDir;
 use tokio::sync::broadcast::{self, Receiver};
 use tokio::time::timeout;
+
+use support::{collect_state_sync_artifacts, mutate_hex};
 
 const GOSSIP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -122,7 +126,7 @@ async fn light_client_rejects_mismatched_commitment() {
         .first()
         .expect("at least one light client update")
         .clone();
-    bad_update.proof_commitment = flip_last_hex_digit(&bad_update.proof_commitment);
+    bad_update.proof_commitment = mutate_hex(&bad_update.proof_commitment);
 
     let bytes = publish_snapshot(&fixture.handle, &mut receiver, &bad_update).await;
     let error = light_client
@@ -166,34 +170,6 @@ async fn light_client_fails_when_chunk_missing() {
         }
         other => panic!("unexpected error variant: {other:?}"),
     }
-}
-
-fn flip_last_hex_digit(commitment: &str) -> String {
-    assert_eq!(commitment.len(), 64, "commitment must be 32-byte hex");
-    let mut chars: Vec<char> = commitment.chars().collect();
-    let last = chars
-        .last_mut()
-        .expect("commitment should contain at least one character");
-    *last = match *last {
-        '0' => '1',
-        '1' => '2',
-        '2' => '3',
-        '3' => '4',
-        '4' => '5',
-        '5' => '6',
-        '6' => '7',
-        '7' => '8',
-        '8' => '9',
-        '9' => 'a',
-        'a' => 'b',
-        'b' => 'c',
-        'c' => 'd',
-        'd' => 'e',
-        'e' => 'f',
-        'f' => '0',
-        other => panic!("unexpected hex digit: {other}"),
-    };
-    chars.into_iter().collect()
 }
 
 async fn publish_snapshot<T>(
@@ -246,21 +222,18 @@ impl StateSyncFixture {
             .expect("prune genesis payload");
         assert!(pruned, "expected genesis payload to be pruned");
         let engine = ReconstructionEngine::new(storage.clone());
-        let plan = engine.state_sync_plan(1).expect("state sync plan");
+        let artifacts = collect_state_sync_artifacts(&engine, 1).expect("state sync artifacts");
         assert!(
-            !plan.chunks.is_empty(),
+            !artifacts.plan.chunks.is_empty(),
             "state sync plan should contain at least one chunk"
         );
-        let plan_summary = plan.to_network_plan().expect("network state sync plan");
-        let chunk_messages = plan.chunk_messages().expect("chunk messages");
-        let updates = plan.light_client_messages().expect("light client updates");
         Self {
             temp_dir,
             node,
             handle,
-            plan: plan_summary,
-            chunk_messages,
-            updates,
+            plan: artifacts.network_plan,
+            chunk_messages: artifacts.chunk_messages,
+            updates: artifacts.updates,
         }
     }
 }

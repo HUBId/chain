@@ -4,6 +4,7 @@ pub mod consensus;
 pub mod observability;
 pub mod random;
 pub mod transactions;
+pub mod sync;
 
 pub use cluster::{
     HarnessPipelineDashboardSnapshot, HarnessPipelineError, HarnessPipelineEvent,
@@ -20,3 +21,9 @@ pub use observability::{
 };
 
 pub use random::seeded_rng;
+pub use sync::{
+    collect_state_sync_artifacts, corrupt_chunk_commitment, corrupt_chunk_proof,
+    corrupt_light_client_commitment, dummy_pruning_proof, dummy_recursive_proof, dummy_state_proof,
+    install_pruned_chain, make_dummy_block, mutate_base64, mutate_hex, snapshot_from_block,
+    InMemoryPayloadProvider, StateSyncArtifacts,
+};
