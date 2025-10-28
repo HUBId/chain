@@ -1174,16 +1174,12 @@ impl From<&str> for NetworkVersionDigestHex {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPruningSnapshot {
-    pub schema_version: u16,
-    pub parameter_version: u16,
     pub block_height: u64,
     pub state_commitment: NetworkTaggedDigestHex,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPruningSegment {
-    pub schema_version: u16,
-    pub parameter_version: u16,
     pub segment_index: u32,
     pub start_height: u64,
     pub end_height: u64,
@@ -1192,8 +1188,6 @@ pub struct NetworkPruningSegment {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NetworkPruningCommitment {
-    pub schema_version: u16,
-    pub parameter_version: u16,
     pub aggregate_commitment: NetworkTaggedDigestHex,
 }
 
@@ -2087,22 +2081,16 @@ mod tests {
             schema_version_digest: version_digest(1),
             parameter_version_digest: version_digest(0),
             snapshot: NetworkPruningSnapshot {
-                schema_version: 1,
-                parameter_version: 0,
                 block_height: 0,
                 state_commitment: prefixed_hex(SNAPSHOT_STATE_TAG, 0x10),
             },
             segments: vec![NetworkPruningSegment {
-                schema_version: 1,
-                parameter_version: 0,
                 segment_index: 0,
                 start_height: 0,
                 end_height: 0,
                 segment_commitment: prefixed_hex(PROOF_SEGMENT_TAG, 0x20),
             }],
             commitment: NetworkPruningCommitment {
-                schema_version: 1,
-                parameter_version: 0,
                 aggregate_commitment: prefixed_hex(COMMITMENT_TAG, 0x30),
             },
             binding_digest: prefixed_hex(ENVELOPE_TAG, 0x40),

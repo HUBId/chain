@@ -66,14 +66,10 @@
     "NetworkPruningSnapshot": {
       "type": "object",
       "required": [
-        "schema_version",
-        "parameter_version",
         "block_height",
         "state_commitment"
       ],
       "properties": {
-        "schema_version": {"type": "integer", "minimum": 0},
-        "parameter_version": {"type": "integer", "minimum": 0},
         "block_height": {"type": "integer", "minimum": 0},
         "state_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
@@ -82,16 +78,12 @@
     "NetworkPruningSegment": {
       "type": "object",
       "required": [
-        "schema_version",
-        "parameter_version",
         "segment_index",
         "start_height",
         "end_height",
         "segment_commitment"
       ],
       "properties": {
-        "schema_version": {"type": "integer", "minimum": 0},
-        "parameter_version": {"type": "integer", "minimum": 0},
         "segment_index": {"type": "integer", "minimum": 0},
         "start_height": {"type": "integer", "minimum": 0},
         "end_height": {"type": "integer", "minimum": 0},
@@ -101,14 +93,8 @@
     },
     "NetworkPruningCommitment": {
       "type": "object",
-      "required": [
-        "schema_version",
-        "parameter_version",
-        "aggregate_commitment"
-      ],
+      "required": ["aggregate_commitment"],
       "properties": {
-        "schema_version": {"type": "integer", "minimum": 0},
-        "parameter_version": {"type": "integer", "minimum": 0},
         "aggregate_commitment": {"$ref": "#/$defs/TaggedDigestHex"}
       },
       "additionalProperties": false

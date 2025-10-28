@@ -42,22 +42,16 @@ fn sample_pruning_envelope() -> NetworkPruningEnvelope {
         schema_version_digest: version_digest(1),
         parameter_version_digest: version_digest(0),
         snapshot: NetworkPruningSnapshot {
-            schema_version: 1,
-            parameter_version: 0,
             block_height: 0,
             state_commitment: tagged_hex_digest(SNAPSHOT_STATE_TAG, 0x01),
         },
         segments: vec![NetworkPruningSegment {
-            schema_version: 1,
-            parameter_version: 0,
             segment_index: 0,
             start_height: 0,
             end_height: 0,
             segment_commitment: tagged_hex_digest(PROOF_SEGMENT_TAG, 0x02),
         }],
         commitment: NetworkPruningCommitment {
-            schema_version: 1,
-            parameter_version: 0,
             aggregate_commitment: tagged_hex_digest(COMMITMENT_TAG, 0x03),
         },
         binding_digest: tagged_hex_digest(ENVELOPE_TAG, 0x04),

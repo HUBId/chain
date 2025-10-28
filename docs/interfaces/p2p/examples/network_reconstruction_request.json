@@ -14,15 +14,11 @@
     "schema_version_digest": "0001000000000000000000000000000000000000000000000000000000000000",
     "parameter_version_digest": "0000000000000000000000000000000000000000000000000000000000000000",
     "snapshot": {
-      "schema_version": 1,
-      "parameter_version": 0,
       "block_height": 4095,
       "state_commitment": "7270703a7072756e653a7374617465002020202020202020202020202020202020202020202020202020202020202020"
     },
     "segments": [
       {
-        "schema_version": 1,
-        "parameter_version": 0,
         "segment_index": 0,
         "start_height": 4095,
         "end_height": 4095,
@@ -30,8 +26,6 @@
       }
     ],
     "commitment": {
-      "schema_version": 1,
-      "parameter_version": 0,
       "aggregate_commitment": "7270703a7072756e653a636f6d6d69742222222222222222222222222222222222222222222222222222222222222222"
     },
     "binding_digest": "7270703a7072756e653a656e766c70002323232323232323232323232323232323232323232323232323232323232323"

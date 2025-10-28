@@ -932,8 +932,6 @@ fn encode_pruning_envelope(pruning: &PruningEnvelopeMetadata) -> NetworkPruningE
             pruning.parameter_version_digest.as_str(),
         ),
         snapshot: NetworkPruningSnapshot {
-            schema_version: pruning.snapshot.schema_version,
-            parameter_version: pruning.snapshot.parameter_version,
             block_height: pruning.snapshot.block_height,
             state_commitment: NetworkTaggedDigestHex::from(
                 pruning.snapshot.state_commitment.as_str(),
@@ -943,8 +941,6 @@ fn encode_pruning_envelope(pruning: &PruningEnvelopeMetadata) -> NetworkPruningE
             .segments
             .iter()
             .map(|segment| NetworkPruningSegment {
-                schema_version: segment.schema_version,
-                parameter_version: segment.parameter_version,
                 segment_index: segment.segment_index,
                 start_height: segment.start_height,
                 end_height: segment.end_height,
@@ -954,8 +950,6 @@ fn encode_pruning_envelope(pruning: &PruningEnvelopeMetadata) -> NetworkPruningE
             })
             .collect(),
         commitment: NetworkPruningCommitment {
-            schema_version: pruning.commitment.schema_version,
-            parameter_version: pruning.commitment.parameter_version,
             aggregate_commitment: NetworkTaggedDigestHex::from(
                 pruning.commitment.aggregate_commitment.as_str(),
             ),
