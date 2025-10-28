@@ -2,7 +2,7 @@
 name = "rpp-node"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.79"
+rust-version = "1.83"
 description = "Executable entrypoint for running an RPP node"
 repository = "https://github.com/ava-labs/firewood"
 
@@ -10,10 +10,11 @@ repository = "https://github.com/ava-labs/firewood"
 default = ["prover-mock"]
 prover-stwo = ["rpp-chain/prover-stwo"]
 prover-stwo-simd = [
-    "prover-stwo",
+    "stwo",
     "rpp-chain/prover-stwo-simd",
 ]
 prover-mock = ["rpp-chain/prover-mock"]
+stwo = ["rpp-chain/stwo"]
 
 [dependencies]
 anyhow = "1.0"

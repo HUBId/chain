@@ -20,15 +20,18 @@ resolver = "2"
 [workspace.features]
 vendor_electrs = ["rpp-chain/vendor_electrs"]
 integration = []
-prover-stwo = [
-    "rpp-chain/prover-stwo",
+stwo = [
+    "rpp-chain/stwo",
     "rpp-consensus/prover-stwo",
     "rpp-wallet/prover-stwo",
-    "rpp-node/prover-stwo",
+    "rpp-node/stwo",
     "prover_stwo_backend/prover-stwo",
 ]
+prover-stwo = [
+    "stwo",
+]
 prover-stwo-simd = [
-    "prover-stwo",
+    "stwo",
     "rpp-chain/prover-stwo-simd",
     "rpp-consensus/prover-stwo-simd",
     "rpp-wallet/prover-stwo-simd",
@@ -43,7 +46,7 @@ license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
 repository = "https://github.com/ava-labs/firewood"
 readme = "README.md"
-rust-version = "1.79.0"
+rust-version = "1.83.0"
 
 [profile.release]
 debug = true
