@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::scenario::NodeRole;
+
 use super::collector::{FaultRecord, MeshChangeRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -19,7 +21,76 @@ pub struct SimulationSummary {
     pub mesh_changes: Vec<MeshChangeRecord>,
     pub faults: Vec<FaultRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reputation_drift: Option<ReputationDrift>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier_drift: Option<TierDrift>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bft_success: Option<BftSuccessSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof_latency: Option<ProofLatencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub performance: Option<PerformanceKpi>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub node_performance: Vec<NodePerformance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<ComparisonReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodePerformance {
+    pub peer_id: String,
+    pub role: NodeRole,
+    pub publishes: usize,
+    pub receives: usize,
+    pub duplicates: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReputationDrift {
+    pub mean_receives: f64,
+    pub std_dev_receives: f64,
+    pub max_receives: usize,
+    pub min_receives: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TierBucket {
+    pub tier: String,
+    pub count: usize,
+    pub average_receives: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TierDrift {
+    pub expected_per_tier: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckets: Vec<TierBucket>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BftSuccessSummary {
+    pub rounds: usize,
+    pub quorum: usize,
+    pub successes: usize,
+    pub success_rate: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProofLatencySummary {
+    pub p50_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub max_ms: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PerformanceKpi {
+    pub duration_secs: f64,
+    pub publish_rate_per_sec: f64,
+    pub receive_rate_per_sec: f64,
+    pub duplicate_rate: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_proof_latency_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -117,7 +188,7 @@ pub fn calculate_percentiles(samples: &[f64]) -> Option<PropagationPercentiles> 
     })
 }
 
-fn percentile(samples: &[f64], quantile: f64) -> f64 {
+pub(crate) fn percentile(samples: &[f64], quantile: f64) -> f64 {
     if samples.is_empty() {
         return 0.0;
     }
@@ -157,6 +228,12 @@ mod tests {
             }),
             mesh_changes: vec![],
             faults: vec![],
+            reputation_drift: None,
+            tier_drift: None,
+            bft_success: None,
+            proof_latency: None,
+            performance: None,
+            node_performance: Vec::new(),
             comparison: None,
         };
         let multi = SimulationSummary {
@@ -169,6 +246,12 @@ mod tests {
             }),
             mesh_changes: vec![],
             faults: vec![],
+            reputation_drift: None,
+            tier_drift: None,
+            bft_success: None,
+            proof_latency: None,
+            performance: None,
+            node_performance: Vec::new(),
             comparison: None,
         };
 

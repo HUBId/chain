@@ -1,12 +1,14 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use rpp_p2p::vendor::gossipsub::IdentTopic;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rpp_p2p::vendor::gossipsub::IdentTopic;
+use rpp_p2p::vendor::PeerId;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -17,7 +19,7 @@ use crate::faults::PartitionFault;
 use crate::metrics::{exporters, Collector, FaultEvent, SimEvent, SimulationSummary};
 use crate::multiprocess;
 use crate::node_adapter::{spawn_node, Node, NodeHandle};
-use crate::scenario::{LinkParams, Scenario, TopologyType};
+use crate::scenario::{LinkParams, NodeRole, Scenario, TopologyType};
 use crate::topology::{
     annotate_links, AnnotatedLink, ErdosRenyiTopology, KRegularTopology, RingTopology,
     ScaleFreeTopology, SmallWorldTopology, Topology,
@@ -67,9 +69,11 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     );
 
     let mut nodes = Vec::with_capacity(node_count);
+    let roles = scenario.node_roles();
     for idx in 0..node_count {
         let node = spawn_node(idx, topic.clone()).context("failed to spawn node")?;
-        nodes.push(node);
+        let role = roles.get(idx).copied().unwrap_or(NodeRole::Wallet);
+        nodes.push((node, role));
     }
 
     let mut handles = Vec::with_capacity(node_count);
@@ -77,7 +81,15 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     let harness_event_tx = event_tx.clone();
     let mut forwarders = Vec::new();
 
-    for Node { handle, mut events, .. } in nodes.into_iter() {
+    let mut role_map: HashMap<PeerId, NodeRole> = HashMap::with_capacity(node_count);
+
+    for (
+        Node {
+            handle, mut events, ..
+        },
+        role,
+    ) in nodes.into_iter()
+    {
         let tx_clone = event_tx.clone();
         forwarders.push(tokio::spawn(async move {
             while let Some(event) = events.recv().await {
@@ -86,11 +98,17 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
                 }
             }
         }));
+        role_map.insert(handle.peer_id.clone(), role);
         handles.push(handle);
     }
     drop(event_tx);
 
-    let collector = Arc::new(Mutex::new(Collector::new(Instant::now())));
+    let collector = Arc::new(Mutex::new(Collector::new(
+        Instant::now(),
+        role_map,
+        Duration::from_millis(scenario.sim.duration_ms),
+        scenario.validator_quorum(),
+    )));
     let collector_task = {
         let collector = Arc::clone(&collector);
         tokio::spawn(async move {

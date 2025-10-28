@@ -21,6 +21,47 @@ pub fn render_compact(summary: &SimulationSummary) -> String {
         writeln!(&mut out, "Propagation    : (no samples)").unwrap();
     }
 
+    if let Some(proof) = &summary.proof_latency {
+        writeln!(&mut out, "Proof p99      : {:>8.2} ms", proof.p99_ms).unwrap();
+        writeln!(&mut out, "Proof max      : {:>8.2} ms", proof.max_ms).unwrap();
+    }
+
+    if let Some(reputation) = &summary.reputation_drift {
+        writeln!(
+            &mut out,
+            "Validator μ     : {:>8.2}",
+            reputation.mean_receives
+        )
+        .unwrap();
+        writeln!(
+            &mut out,
+            "Validator σ     : {:>8.2}",
+            reputation.std_dev_receives
+        )
+        .unwrap();
+    }
+
+    if let Some(bft) = &summary.bft_success {
+        writeln!(
+            &mut out,
+            "BFT success  : {:>8.2}% ({}/{})",
+            bft.success_rate * 100.0,
+            bft.successes,
+            bft.rounds
+        )
+        .unwrap();
+    }
+
+    if let Some(perf) = &summary.performance {
+        writeln!(
+            &mut out,
+            "Throughput  : {:>8.2} rx/s",
+            perf.receive_rate_per_sec
+        )
+        .unwrap();
+        writeln!(&mut out, "Duplicates  : {:>8.3}", perf.duplicate_rate).unwrap();
+    }
+
     if summary.mesh_changes.is_empty() {
         writeln!(&mut out, "Mesh changes  : none").unwrap();
     } else {
@@ -86,7 +127,10 @@ pub fn render_compact(summary: &SimulationSummary) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::{ComparisonReport, PropagationPercentiles, RunDeltas, RunMetrics};
+    use crate::metrics::{
+        BftSuccessSummary, ComparisonReport, PerformanceKpi, ProofLatencySummary,
+        PropagationPercentiles, ReputationDrift, RunDeltas, RunMetrics,
+    };
 
     #[test]
     fn formats_summary() {
@@ -100,6 +144,33 @@ mod tests {
             }),
             mesh_changes: vec![],
             faults: vec![],
+            reputation_drift: Some(ReputationDrift {
+                mean_receives: 32.0,
+                std_dev_receives: 4.5,
+                max_receives: 40,
+                min_receives: 25,
+            }),
+            tier_drift: None,
+            bft_success: Some(BftSuccessSummary {
+                rounds: 10,
+                quorum: 14,
+                successes: 9,
+                success_rate: 0.9,
+            }),
+            proof_latency: Some(ProofLatencySummary {
+                p50_ms: 80.0,
+                p95_ms: 120.0,
+                p99_ms: 150.0,
+                max_ms: 210.0,
+            }),
+            performance: Some(PerformanceKpi {
+                duration_secs: 60.0,
+                publish_rate_per_sec: 0.7,
+                receive_rate_per_sec: 7.0,
+                duplicate_rate: 0.01,
+                mean_proof_latency_ms: Some(90.0),
+            }),
+            node_performance: Vec::new(),
             comparison: None,
         };
 
@@ -152,6 +223,12 @@ mod tests {
             }),
             mesh_changes: vec![],
             faults: vec![],
+            reputation_drift: None,
+            tier_drift: None,
+            bft_success: None,
+            proof_latency: None,
+            performance: None,
+            node_performance: Vec::new(),
             comparison: Some(comparison),
         };
 

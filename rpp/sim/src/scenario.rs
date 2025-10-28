@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::faults::{ByzantineFault, ChurnFault, PartitionFault};
 use crate::traffic::{
@@ -24,6 +24,8 @@ pub struct Scenario {
     pub regions: RegionsSection,
     #[serde(default)]
     pub links: LinksSection,
+    #[serde(default)]
+    pub cluster: ClusterSection,
     #[serde(default)]
     pub metrics: Option<MetricsSection>,
     #[serde(default)]
@@ -156,6 +158,43 @@ impl Default for LinksSection {
         );
         Self { entries }
     }
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct ClusterSection {
+    #[serde(default)]
+    pub validators: usize,
+    #[serde(default)]
+    pub wallets: usize,
+}
+
+impl ClusterSection {
+    pub fn total_nodes(&self) -> usize {
+        self.validators + self.wallets
+    }
+
+    pub fn quorum_threshold(&self) -> Option<usize> {
+        if self.validators == 0 {
+            None
+        } else {
+            Some(((self.validators * 2) / 3) + 1)
+        }
+    }
+
+    pub fn role_for_index(&self, index: usize) -> NodeRole {
+        if index < self.validators {
+            NodeRole::Validator
+        } else {
+            NodeRole::Wallet
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeRole {
+    Validator,
+    Wallet,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -297,6 +336,13 @@ impl Scenario {
                 ));
             }
         }
+        if self.cluster.total_nodes() > 0 && self.cluster.total_nodes() != self.topology.n {
+            return Err(anyhow!(
+                "cluster role counts ({}) must match node count ({})",
+                self.cluster.total_nodes(),
+                self.topology.n
+            ));
+        }
         match self.topology.topology_type {
             TopologyType::Ring | TopologyType::KRegular | TopologyType::SmallWorld => {
                 if self.topology.k.is_none() {
@@ -420,6 +466,20 @@ impl Scenario {
                 cfg.publishers.clone(),
             )
         })
+    }
+
+    pub fn node_roles(&self) -> Vec<NodeRole> {
+        if self.cluster.total_nodes() == 0 {
+            vec![NodeRole::Wallet; self.topology.n]
+        } else {
+            (0..self.topology.n)
+                .map(|idx| self.cluster.role_for_index(idx))
+                .collect()
+        }
+    }
+
+    pub fn validator_quorum(&self) -> Option<usize> {
+        self.cluster.quorum_threshold()
     }
 
     pub fn traffic_program(&self) -> Result<TrafficProgram> {
