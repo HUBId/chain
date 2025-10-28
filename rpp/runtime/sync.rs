@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use base64::{engine::general_purpose, Engine as _};
 use hex;
@@ -18,21 +19,21 @@ use crate::rpp::GlobalStateCommitments;
 use crate::storage::Storage;
 use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
-use crate::types::StoredBlock;
 use crate::types::{
-    Block, BlockMetadata, BlockPayload, ChainProof, PruningEnvelopeMetadata, ProofSystem,
-    PruningProofExt, RecursiveProof, SignedTransaction, TransactionProofBundle, pruning_from_previous,
+    pruning_from_previous, Block, BlockMetadata, BlockPayload, ChainProof, ProofSystem,
+    PruningEnvelopeMetadata, PruningProof, PruningProofExt, RecursiveProof, SignedTransaction,
+    StoredBlock, TransactionProofBundle,
 };
 use blake3::Hash;
-use rpp_pruning::{
-    COMMITMENT_TAG, DOMAIN_TAG_LENGTH, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG, TaggedDigest,
-};
 use rpp_p2p::{
     LightClientHead, LightClientSync, NetworkBlockMetadata, NetworkGlobalStateCommitments,
     NetworkLightClientUpdate, NetworkPayloadExpectations, NetworkReconstructionRequest,
     NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
     PipelineError, RecursiveProofVerifier, SnapshotChunk, SnapshotChunkStream, SnapshotStore,
     TransactionProofVerifier,
+};
+use rpp_pruning::{
+    TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
 };
 
 pub fn stream_state_sync_chunks(
@@ -348,16 +349,34 @@ pub struct PayloadExpectations {
 }
 
 impl PayloadExpectations {
-    fn from_record(record: &StoredBlock) -> Self {
-        let witnesses = &record.envelope.module_witnesses;
+    fn new(
+        transaction_proofs: usize,
+        transaction_witnesses: usize,
+        timetoke_witnesses: usize,
+        reputation_witnesses: usize,
+        zsi_witnesses: usize,
+        consensus_witnesses: usize,
+    ) -> Self {
         Self {
-            transaction_proofs: record.envelope.stark.transaction_proofs.len(),
-            transaction_witnesses: witnesses.transactions.len(),
-            timetoke_witnesses: witnesses.timetoke.len(),
-            reputation_witnesses: witnesses.reputation.len(),
-            zsi_witnesses: witnesses.zsi.len(),
-            consensus_witnesses: witnesses.consensus.len(),
+            transaction_proofs,
+            transaction_witnesses,
+            timetoke_witnesses,
+            reputation_witnesses,
+            zsi_witnesses,
+            consensus_witnesses,
         }
+    }
+
+    fn from_block(block: &Block) -> Self {
+        let witnesses = &block.module_witnesses;
+        Self::new(
+            block.stark.transaction_proofs.len(),
+            witnesses.transactions.len(),
+            witnesses.timetoke.len(),
+            witnesses.reputation.len(),
+            witnesses.zsi.len(),
+            witnesses.consensus.len(),
+        )
     }
 }
 
@@ -379,22 +398,31 @@ pub struct ReconstructionRequest {
 }
 
 impl ReconstructionRequest {
-    fn from_record(record: &StoredBlock) -> ChainResult<Self> {
-        let header = &record.envelope.header;
-        let pruning = record.pruning_metadata();
+    fn from_metadata(
+        metadata: &BlockMetadata,
+        pruning_proof: &PruningProof,
+        block: &Block,
+    ) -> ChainResult<Self> {
+        let pruning = metadata
+            .pruning
+            .clone()
+            .unwrap_or_else(|| pruning_proof.envelope_metadata());
         Ok(Self {
-            height: header.height,
-            block_hash: record.hash().to_string(),
-            tx_root: header.tx_root.clone(),
-            state_root: header.state_root.clone(),
-            utxo_root: header.utxo_root.clone(),
-            reputation_root: header.reputation_root.clone(),
-            timetoke_root: header.timetoke_root.clone(),
-            zsi_root: header.zsi_root.clone(),
-            proof_root: header.proof_root.clone(),
+            height: metadata.height,
+            block_hash: metadata.hash.clone(),
+            tx_root: block.header.tx_root.clone(),
+            state_root: block.header.state_root.clone(),
+            utxo_root: block.header.utxo_root.clone(),
+            reputation_root: block.header.reputation_root.clone(),
+            timetoke_root: block.header.timetoke_root.clone(),
+            zsi_root: block.header.zsi_root.clone(),
+            proof_root: block.header.proof_root.clone(),
             pruning,
-            previous_commitment: record.previous_recursive_commitment()?,
-            payload_expectations: PayloadExpectations::from_record(record),
+            previous_commitment: metadata
+                .recursive_previous_commitment
+                .clone()
+                .or_else(|| block.recursive_proof.previous_commitment.clone()),
+            payload_expectations: PayloadExpectations::from_block(block),
         })
     }
 }
@@ -569,36 +597,60 @@ impl ReconstructionEngine {
             ));
         }
 
-        let mut records = self.storage.load_block_records_from(start_height)?;
-        if records.is_empty() {
+        let mut snapshot_block: Option<Block> = None;
+        let mut snapshot_metadata: Option<BlockMetadata> = None;
+        let mut previous: Option<Block> = None;
+        let mut requests = Vec::new();
+
+        for height in start_height..=tip.height {
+            let metadata = self.storage.read_block_metadata(height)?.ok_or_else(|| {
+                ChainError::Config(format!("missing block metadata for height {height}"))
+            })?;
+            let mut block = self
+                .storage
+                .read_block(height)?
+                .ok_or_else(|| ChainError::Config("missing block in storage".into()))?;
+            let pruning_proof = self.storage.load_pruning_proof(height)?;
+            self.ensure_block_consistency(
+                &mut block,
+                &metadata,
+                pruning_proof.as_ref(),
+                previous.as_ref(),
+            )?;
+
+            if block.pruned {
+                let proof = pruning_proof.as_ref().ok_or_else(|| {
+                    ChainError::Config(format!(
+                        "missing pruning proof for pruned block at height {height}"
+                    ))
+                })?;
+                requests.push(ReconstructionRequest::from_metadata(
+                    &metadata, proof, &block,
+                )?);
+            }
+
+            if snapshot_block.is_none() {
+                snapshot_metadata = Some(metadata.clone());
+                snapshot_block = Some(block.clone());
+            }
+
+            previous = Some(block);
+        }
+
+        let Some(snapshot_metadata) = snapshot_metadata else {
             return Err(ChainError::Config(
                 "no blocks found for reconstruction".into(),
             ));
-        }
-        records.retain(|record| record.height() <= tip.height);
-        if records.is_empty() {
-            return Err(ChainError::Config(
-                "no blocks available up to the tip".into(),
-            ));
-        }
+        };
+        let snapshot_block = snapshot_block.expect("snapshot block initialised");
+        let snapshot = SnapshotSummary::from_metadata(&snapshot_metadata, &snapshot_block)?;
 
-        records.sort_by_key(|record| record.height());
-        let anchor_record = &records[0];
-        let snapshot = SnapshotSummary::from_record(anchor_record)?;
-        let mut requests = Vec::new();
-        for record in &records {
-            if record.is_pruned() {
-                requests.push(ReconstructionRequest::from_record(record)?);
-            }
-        }
-
-        let plan = ReconstructionPlan {
+        Ok(ReconstructionPlan {
             start_height: snapshot.height,
             tip,
             snapshot,
             requests,
-        };
-        Ok(plan)
+        })
     }
 
     pub fn full_plan(&self) -> ChainResult<ReconstructionPlan> {
@@ -680,17 +732,40 @@ impl ReconstructionEngine {
     }
 
     pub fn light_client_feed(&self, start_height: u64) -> ChainResult<Vec<LightClientUpdate>> {
-        let mut records = self.storage.load_block_records_from(start_height)?;
-        records.sort_by_key(|record| record.height());
+        let tip = match self.storage.tip()? {
+            Some(tip) => tip,
+            None => return Ok(Vec::new()),
+        };
+        if start_height > tip.height {
+            return Ok(Vec::new());
+        }
+
         let mut updates = Vec::new();
-        for record in records {
-            let header = &record.envelope.header;
+        let mut previous: Option<Block> = None;
+        for height in start_height..=tip.height {
+            let metadata = self.storage.read_block_metadata(height)?.ok_or_else(|| {
+                ChainError::Config(format!("missing block metadata for height {height}"))
+            })?;
+            let mut block = self
+                .storage
+                .read_block(height)?
+                .ok_or_else(|| ChainError::Config("missing block in storage".into()))?;
+            let pruning_proof = self.storage.load_pruning_proof(height)?;
+            self.ensure_block_consistency(
+                &mut block,
+                &metadata,
+                pruning_proof.as_ref(),
+                previous.as_ref(),
+            )?;
+
             updates.push(LightClientUpdate {
-                height: header.height,
-                block_hash: record.hash().to_string(),
-                state_root: header.state_root.clone(),
-                recursive_proof: record.envelope.stark.recursive_proof.clone(),
+                height: metadata.height,
+                block_hash: metadata.hash.clone(),
+                state_root: block.header.state_root.clone(),
+                recursive_proof: block.recursive_proof.clone(),
             });
+
+            previous = Some(block);
         }
         Ok(updates)
     }
@@ -700,30 +775,10 @@ impl ReconstructionEngine {
         height: u64,
         provider: &P,
     ) -> ChainResult<Block> {
-        let tip = self
-            .storage
-            .tip()?
-            .ok_or_else(|| ChainError::Config("blockchain tip not initialised".into()))?;
-        if height > tip.height {
-            return Err(ChainError::Config(
-                "requested height exceeds current tip".into(),
-            ));
-        }
-        let previous = if height == 0 {
-            None
-        } else {
-            Some(self.storage.read_block(height - 1)?.ok_or_else(|| {
-                ChainError::Config("missing previous block for reconstruction".into())
-            })?)
-        };
-        let record = self
-            .storage
-            .read_block_record(height)?
-            .ok_or_else(|| ChainError::Config("missing block in storage".into()))?;
-        let block = self.hydrate_record(record, provider)?;
-        let proposer_key = self.proposer_public_key(&block.header.proposer)?;
-        block.verify_without_stark(previous.as_ref(), &proposer_key)?;
-        Ok(block)
+        let mut blocks = self.reconstruct_range(height, height, provider)?;
+        blocks
+            .pop()
+            .ok_or_else(|| ChainError::Config("missing block in reconstructed range".into()))
     }
 
     pub fn reconstruct_range<P: PayloadProvider>(
@@ -748,18 +803,29 @@ impl ReconstructionEngine {
         let mut previous = if start_height == 0 {
             None
         } else {
-            Some(
-                self.storage
-                    .read_block(start_height - 1)?
-                    .ok_or_else(|| ChainError::Config("missing block before range".into()))?,
-            )
+            let metadata = self
+                .storage
+                .read_block_metadata(start_height - 1)?
+                .ok_or_else(|| ChainError::Config("missing block metadata before range".into()))?;
+            let mut block = self
+                .storage
+                .read_block(start_height - 1)?
+                .ok_or_else(|| ChainError::Config("missing block before range".into()))?;
+            let pruning_proof = self.storage.load_pruning_proof(start_height - 1)?;
+            self.ensure_block_consistency(&mut block, &metadata, pruning_proof.as_ref(), None)?;
+            Some(block)
         };
         for height in start_height..=end_height {
-            let record = self
+            let metadata = self.storage.read_block_metadata(height)?.ok_or_else(|| {
+                ChainError::Config(format!("missing block metadata for height {height}"))
+            })?;
+            let mut block = self
                 .storage
-                .read_block_record(height)?
+                .read_block(height)?
                 .ok_or_else(|| ChainError::Config("missing block in storage".into()))?;
-            let block = self.hydrate_record(record, provider)?;
+            let pruning_proof = self.storage.load_pruning_proof(height)?;
+            let block =
+                self.hydrate_block(block, &metadata, pruning_proof, provider, previous.as_ref())?;
             let proposer_key = self.proposer_public_key(&block.header.proposer)?;
             block.verify_without_stark(previous.as_ref(), &proposer_key)?;
             previous = Some(block.clone());
@@ -785,17 +851,164 @@ impl ReconstructionEngine {
         self.reconstruct_range(plan.start_height, plan.tip.height, provider)
     }
 
-    fn hydrate_record<P: PayloadProvider>(
+    fn hydrate_block<P: PayloadProvider>(
         &self,
-        record: StoredBlock,
+        mut block: Block,
+        metadata: &BlockMetadata,
+        pruning_proof: Option<PruningProof>,
         provider: &P,
+        previous: Option<&Block>,
     ) -> ChainResult<Block> {
-        if !record.is_pruned() {
-            return Ok(record.into_block());
+        self.ensure_block_consistency(&mut block, metadata, pruning_proof.as_ref(), previous)?;
+        if !block.pruned {
+            return Ok(block);
         }
-        let request = ReconstructionRequest::from_record(&record)?;
+        let proof = pruning_proof
+            .as_ref()
+            .ok_or_else(|| ChainError::Config("missing pruning proof for pruned block".into()))?;
+        let request = ReconstructionRequest::from_metadata(metadata, proof, &block)?;
         let payload = provider.fetch_payload(&request)?;
-        Ok(record.into_block_with_payload(payload))
+        Self::apply_payload(&mut block, payload);
+        Ok(block)
+    }
+
+    fn ensure_block_consistency(
+        &self,
+        block: &mut Block,
+        metadata: &BlockMetadata,
+        pruning_proof: Option<&PruningProof>,
+        previous: Option<&Block>,
+    ) -> ChainResult<()> {
+        if block.header.height != metadata.height {
+            return Err(ChainError::Config(format!(
+                "block height mismatch for metadata height {} (block reported {})",
+                metadata.height, block.header.height,
+            )));
+        }
+        if block.hash != metadata.hash {
+            return Err(ChainError::Config(format!(
+                "block hash mismatch at height {}",
+                metadata.height
+            )));
+        }
+        if block.header.state_root != metadata.new_state_root {
+            return Err(ChainError::Config(format!(
+                "state root mismatch at height {}",
+                metadata.height
+            )));
+        }
+        if block.header.proof_root != metadata.proof_hash {
+            return Err(ChainError::Config(format!(
+                "proof root mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if block.recursive_proof.commitment != metadata.recursive_commitment {
+            return Err(ChainError::Config(format!(
+                "recursive commitment mismatch at height {}",
+                metadata.height
+            )));
+        }
+
+        if let Some(expected) = metadata.recursive_previous_commitment.as_deref() {
+            let actual = block
+                .recursive_proof
+                .previous_commitment
+                .as_deref()
+                .map(|value| value.to_owned())
+                .unwrap_or_else(RecursiveProof::anchor);
+            if actual != expected {
+                return Err(ChainError::Config(format!(
+                    "recursive previous commitment mismatch at height {}",
+                    metadata.height
+                )));
+            }
+        }
+
+        if let Some(prev_block) = previous {
+            let expected_commitment = prev_block.recursive_proof.commitment.as_str();
+            match metadata.recursive_previous_commitment.as_deref() {
+                Some(actual) if actual == expected_commitment => {}
+                Some(_) => {
+                    return Err(ChainError::Config(format!(
+                        "previous commitment metadata mismatch at height {}",
+                        metadata.height
+                    )));
+                }
+                None => {
+                    return Err(ChainError::Config(format!(
+                        "missing previous commitment metadata at height {}",
+                        metadata.height
+                    )));
+                }
+            }
+            if let Some(actual) = block.recursive_proof.previous_commitment.as_deref() {
+                if actual != expected_commitment {
+                    return Err(ChainError::Config(format!(
+                        "block previous commitment mismatch at height {}",
+                        metadata.height
+                    )));
+                }
+            }
+            if metadata.previous_state_root != prev_block.header.state_root {
+                return Err(ChainError::Config(format!(
+                    "previous state root mismatch at height {}",
+                    metadata.height
+                )));
+            }
+        }
+
+        if let Some(proof) = pruning_proof {
+            block.pruning_proof = Arc::clone(proof);
+            let envelope_metadata = proof.envelope_metadata();
+            if metadata.pruning.as_ref() != Some(&envelope_metadata) {
+                return Err(ChainError::Config(format!(
+                    "pruning metadata mismatch at height {}",
+                    metadata.height
+                )));
+            }
+            if metadata.pruning_binding_digest != proof.binding_digest().prefixed_bytes() {
+                return Err(ChainError::Config(format!(
+                    "pruning binding digest mismatch at height {}",
+                    metadata.height
+                )));
+            }
+            let proof_segments: Vec<_> = proof
+                .segments()
+                .iter()
+                .map(|segment| segment.segment_commitment().prefixed_bytes())
+                .collect();
+            if metadata.pruning_segment_commitments != proof_segments {
+                return Err(ChainError::Config(format!(
+                    "pruning segment commitments mismatch at height {}",
+                    metadata.height
+                )));
+            }
+            if metadata.previous_state_root != proof.snapshot_metadata().state_commitment.as_str() {
+                return Err(ChainError::Config(format!(
+                    "snapshot state root mismatch at height {}",
+                    metadata.height
+                )));
+            }
+        } else if block.pruned {
+            return Err(ChainError::Config(format!(
+                "missing pruning proof for pruned block at height {}",
+                metadata.height
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn apply_payload(block: &mut Block, payload: BlockPayload) {
+        block.identities = payload.identities;
+        block.transactions = payload.transactions;
+        block.uptime_proofs = payload.uptime_proofs;
+        block.timetoke_updates = payload.timetoke_updates;
+        block.reputation_updates = payload.reputation_updates;
+        block.bft_votes = payload.bft_votes;
+        block.pruned = false;
     }
 
     fn proposer_public_key(&self, proposer: &str) -> ChainResult<PublicKey> {
@@ -821,11 +1034,11 @@ impl ReconstructionEngine {
 }
 
 impl SnapshotSummary {
-    fn from_record(record: &StoredBlock) -> ChainResult<Self> {
-        let header = &record.envelope.header;
+    fn from_metadata(metadata: &BlockMetadata, block: &Block) -> ChainResult<Self> {
+        let header = &block.header;
         Ok(Self {
-            height: header.height,
-            block_hash: record.hash().to_string(),
+            height: metadata.height,
+            block_hash: metadata.hash.clone(),
             commitments: GlobalStateCommitments {
                 global_state_root: decode_digest(&header.state_root)?,
                 utxo_root: decode_digest(&header.utxo_root)?,
@@ -834,7 +1047,7 @@ impl SnapshotSummary {
                 zsi_root: decode_digest(&header.zsi_root)?,
                 proof_root: decode_digest(&header.proof_root)?,
             },
-            chain_commitment: record.envelope.recursive_proof.commitment.clone(),
+            chain_commitment: metadata.recursive_commitment.clone(),
         })
     }
 }
@@ -866,15 +1079,14 @@ fn encode_global_commitments(
 }
 
 fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
-    let pruning_binding_digest = if metadata.pruning_binding_digest
-        == [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH]
-    {
-        None
-    } else {
-        Some(NetworkTaggedDigestHex::from(hex::encode(
-            metadata.pruning_binding_digest,
-        )))
-    };
+    let pruning_binding_digest =
+        if metadata.pruning_binding_digest == [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH] {
+            None
+        } else {
+            Some(NetworkTaggedDigestHex::from(hex::encode(
+                metadata.pruning_binding_digest,
+            )))
+        };
     let pruning_segment_commitments: Vec<NetworkTaggedDigestHex> = metadata
         .pruning_segment_commitments
         .iter()
@@ -887,10 +1099,7 @@ fn encode_block_metadata(metadata: &BlockMetadata) -> NetworkBlockMetadata {
         previous_state_root: metadata.previous_state_root.clone(),
         new_state_root: metadata.new_state_root.clone(),
         proof_hash: metadata.proof_hash.clone(),
-        pruning: metadata
-            .pruning
-            .as_ref()
-            .map(encode_pruning_envelope),
+        pruning: metadata.pruning.as_ref().map(encode_pruning_envelope),
         pruning_binding_digest,
         pruning_segment_commitments,
         recursion_anchor: metadata.recursive_anchor.clone(),
@@ -941,11 +1150,7 @@ fn encode_chunk(chunk: &StateSyncChunk) -> ChainResult<NetworkStateSyncChunk> {
         proofs.push(tagged_digest_hex_to_base64(
             "pruning aggregate commitment",
             &commitment_tag,
-            request
-                .pruning
-                .commitment
-                .aggregate_commitment
-                .as_str(),
+            request.pruning.commitment.aggregate_commitment.as_str(),
         )?);
     }
     Ok(NetworkStateSyncChunk {
@@ -961,9 +1166,8 @@ fn tagged_digest_hex_to_base64(
     expected_tag: &[u8; DOMAIN_TAG_LENGTH],
     value: &str,
 ) -> ChainResult<String> {
-    let bytes = hex::decode(value).map_err(|err| {
-        ChainError::Config(format!("invalid {label} encoding: {err}"))
-    })?;
+    let bytes = hex::decode(value)
+        .map_err(|err| ChainError::Config(format!("invalid {label} encoding: {err}")))?;
     if bytes.len() != DOMAIN_TAG_LENGTH + DIGEST_LENGTH {
         return Err(ChainError::Config(format!(
             "{label} must encode exactly {} bytes",
@@ -1104,9 +1308,8 @@ mod tests {
         let zero = FieldElement::zero(parameters.modulus());
         let pruning_binding_digest =
             TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-        let pruning_segment_commitments = vec![
-            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-        ];
+        let pruning_segment_commitments =
+            vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes()];
         let pruning_fold = {
             let mut accumulator = zero.clone();
             let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
