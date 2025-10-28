@@ -422,11 +422,13 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let runtime_mode = Arc::new(RwLock::new(mode));
     let mut node_handle: Option<NodeHandle> = None;
     let mut node_runtime: Option<JoinHandle<()>> = None;
-    let mut rpc_addr: Option<std::net::SocketAddr> = None;
     let mut rpc_auth: Option<String> = None;
     let mut rpc_origin: Option<String> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
+
+    let node_rpc_addr = node_bundle.as_ref().map(|bundle| bundle.value.rpc_listen);
+    let wallet_rpc_addr = wallet_bundle.as_ref().map(|bundle| bundle.value.rpc_listen);
 
     if let Some(bundle) = node_bundle.take() {
         let config = bundle.value;
@@ -485,8 +487,6 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             listen_addr = %config.p2p.listen_addr,
             "p2p endpoint configured"
         );
-
-        rpc_addr = Some(config.rpc_listen);
         rpc_auth = config.rpc_auth_token.clone();
         rpc_origin = config.rpc_allowed_origin.clone();
         rpc_requests_per_minute = config.rpc_requests_per_minute.and_then(NonZeroU64::new);
@@ -518,13 +518,33 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         let keypair = load_or_generate_keypair(&wallet_config.key_path)
             .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
         let wallet = Arc::new(Wallet::new(storage, keypair, Arc::clone(&runtime_metrics)));
-        rpc_addr.get_or_insert(wallet_config.rpc_listen);
         wallet_instance = Some(wallet);
     }
 
-    let rpc_addr = rpc_addr
-        .ok_or_else(|| anyhow!("no runtime role selected"))
-        .map_err(BootstrapError::configuration)?;
+    let rpc_addr = match (node_rpc_addr, wallet_rpc_addr) {
+        (Some(node_addr), Some(wallet_addr)) => {
+            if node_addr != wallet_addr {
+                let node_key =
+                    describe_config_key(ConfigRole::Node, node_metadata.as_ref(), "rpc_listen");
+                let wallet_key =
+                    describe_config_key(ConfigRole::Wallet, wallet_metadata.as_ref(), "rpc_listen");
+                let message = format!(
+                    "listener mismatch: {node_key} ({node_addr}) must match {wallet_key} ({wallet_addr})"
+                );
+                return Err(BootstrapError::configuration(ConfigurationError::conflict(
+                    message,
+                )));
+            }
+            node_addr
+        }
+        (Some(addr), None) | (None, Some(addr)) => addr,
+        (None, None) => {
+            return Err(BootstrapError::configuration(anyhow!(
+                "no runtime role selected"
+            )));
+        }
+    };
+
     if node_handle.is_none() {
         info!(target = "rpc", listen = %rpc_addr, "rpc endpoint configured");
     }
@@ -540,9 +560,16 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
 
     let rpc_auth_token = rpc_auth.clone();
     let rpc_allowed_origin = rpc_origin.clone();
+    let wallet_routes_enabled = wallet_instance.is_some();
     let rpc_task = tokio::spawn(async move {
-        if let Err(err) =
-            rpp_chain::api::serve(rpc_context, rpc_addr, rpc_auth_token, rpc_allowed_origin).await
+        if let Err(err) = rpp_chain::api::serve(
+            rpc_context,
+            rpc_addr,
+            rpc_auth_token,
+            rpc_allowed_origin,
+            wallet_routes_enabled,
+        )
+        .await
         {
             error!(?err, "rpc server terminated");
         }
@@ -550,6 +577,28 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
 
     if let Some(wallet) = &wallet_instance {
         info!(address = %wallet.address(), "wallet runtime initialised");
+    }
+
+    if node_handle.is_some() {
+        if let Some(addr) = node_rpc_addr {
+            info!(
+                target = "pipeline",
+                pipeline = "node",
+                listen = %addr,
+                "pipeline=\"node\" started"
+            );
+        }
+    }
+
+    if wallet_routes_enabled {
+        if let Some(addr) = wallet_rpc_addr.or(node_rpc_addr) {
+            info!(
+                target = "pipeline",
+                pipeline = "wallet",
+                listen = %addr,
+                "pipeline=\"wallet\" started"
+            );
+        }
     }
 
     let outcome = match (node_handle.clone(), node_runtime) {

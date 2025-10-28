@@ -308,12 +308,14 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         rpc_requests_per_minute,
         rpc_auth_token.is_some(),
     );
+    let wallet_routes_enabled = wallet_instance.is_some();
     let api_task = tokio::spawn(async move {
         api::serve(
             context,
             rpc_addr,
             rpc_auth_token.clone(),
             rpc_allowed_origin.clone(),
+            wallet_routes_enabled,
         )
         .await
         .map_err(|err| anyhow!(err))
