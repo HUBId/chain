@@ -46,7 +46,7 @@ proptest! {
             let encoded = rpp_pruning::canonical_bincode_options()
                 .serialize(&proof)
                 .expect("serialize pruning envelope");
-            let decoded: PruningProof = rpp_pruning::canonical_bincode_options()
+            let decoded: Envelope = rpp_pruning::canonical_bincode_options()
                 .deserialize(&encoded)
                 .expect("deserialize pruning envelope");
             assert_eq!(decoded, proof);
