@@ -107,7 +107,7 @@ fn verify_with_digests(
     schema_digest: &Hash,
     parameter_digest: &Hash,
     root: Hash,
-    proof: &PruningProof,
+    proof: &Envelope,
 ) -> bool {
     let schema_version = schema_version_from_digest(schema_digest);
     let parameter_version = parameter_version_from_digest(parameter_digest);
@@ -183,8 +183,6 @@ fn verify_with_digests(
     proof.binding_digest() == expected_binding
 }
 
-pub type PruningProof = Envelope;
-
 /// Lightweight pruning manager that tracks block snapshots and constructs canonical envelopes.
 #[derive(Debug)]
 pub struct FirewoodPruner {
@@ -221,7 +219,7 @@ impl FirewoodPruner {
         }
     }
 
-    pub fn prune_block(&mut self, block_id: u64, root: Hash) -> PruningProof {
+    pub fn prune_block(&mut self, block_id: u64, root: Hash) -> Envelope {
         let block_height = BlockHeight::new(block_id);
         let state_commitment = compute_state_commitment(
             &self.schema_digest,
@@ -295,11 +293,11 @@ impl FirewoodPruner {
         .expect("binding digest must carry the envelope tag")
     }
 
-    pub fn verify_with_config(&self, root: Hash, proof: &PruningProof) -> bool {
+    pub fn verify_with_config(&self, root: Hash, proof: &Envelope) -> bool {
         verify_with_digests(&self.schema_digest, &self.parameter_digest, root, proof)
     }
 
-    pub fn verify_pruned_state(root: Hash, proof: &PruningProof) -> bool {
+    pub fn verify_pruned_state(root: Hash, proof: &Envelope) -> bool {
         Self::verify_pruned_state_with_digests(
             Self::DEFAULT_SCHEMA_DIGEST,
             Self::DEFAULT_PARAMETER_DIGEST,
@@ -312,7 +310,7 @@ impl FirewoodPruner {
         schema_digest: Hash,
         parameter_digest: Hash,
         root: Hash,
-        proof: &PruningProof,
+        proof: &Envelope,
     ) -> bool {
         verify_with_digests(&schema_digest, &parameter_digest, root, proof)
     }
