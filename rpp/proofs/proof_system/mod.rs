@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use blake3::hash;
-use tracing::info_span;
+use tracing::{info_span, warn};
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
@@ -35,7 +35,7 @@ use serde::Serialize;
 #[cfg(not(feature = "prover-stwo"))]
 type StateCommitmentSnapshot = DisabledStateCommitmentSnapshot;
 
-const STWO_DISABLED_ERROR: &str = "STWO prover disabled";
+const STWO_BYPASS_REASON: &str = "prover-stwo feature disabled";
 
 #[derive(Clone)]
 struct StwoVerifierDispatch {
@@ -58,6 +58,16 @@ impl StwoVerifierDispatch {
         }
     }
 
+    #[cfg(feature = "prover-stwo")]
+    fn is_bypass(&self) -> bool {
+        false
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    fn is_bypass(&self) -> bool {
+        true
+    }
+
     fn verifier(&self) -> ChainResult<&dyn ProofVerifier> {
         #[cfg(feature = "prover-stwo")]
         {
@@ -66,7 +76,7 @@ impl StwoVerifierDispatch {
 
         #[cfg(not(feature = "prover-stwo"))]
         {
-            Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+            Ok(self as &dyn ProofVerifier)
         }
     }
 
@@ -127,7 +137,7 @@ impl StwoVerifierDispatch {
             state_commitments,
             expected_previous_commitment,
         );
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     #[cfg(feature = "prover-stwo")]
@@ -136,6 +146,15 @@ impl StwoVerifierDispatch {
         proof: &prover_stwo_backend::backend::DecodedTxProof,
     ) -> ChainResult<()> {
         self.inner.verify_transaction_proof(proof)
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    fn verify_decoded_transaction(
+        &self,
+        proof: &prover_stwo_backend::backend::DecodedTxProof,
+    ) -> ChainResult<()> {
+        let _ = proof;
+        Ok(())
     }
 }
 
@@ -182,37 +201,37 @@ impl ProofVerifier for StwoVerifierDispatch {
 
     fn verify_transaction(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     fn verify_identity(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     fn verify_recursive(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 
     fn verify_consensus(&self, proof: &ChainProof) -> ChainResult<()> {
         let _ = proof;
-        Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+        Ok(())
     }
 }
 
@@ -325,6 +344,7 @@ pub trait ProofVerifier {
 pub struct BackendVerificationMetrics {
     pub accepted: u64,
     pub rejected: u64,
+    pub bypassed: u64,
     pub total_duration_ms: u64,
 }
 
@@ -365,7 +385,7 @@ impl VerifierMetrics {
         }
     }
 
-    fn record(&self, system: ProofSystemKind, duration: Duration, succeeded: bool) {
+    fn record(&self, system: ProofSystemKind, duration: Duration, succeeded: bool, bypass: bool) {
         let label = proof_system_label(system).to_string();
         let mut guard = self.inner.lock();
         let entry = guard
@@ -375,6 +395,9 @@ impl VerifierMetrics {
             entry.accepted = entry.accepted.saturating_add(1);
         } else {
             entry.rejected = entry.rejected.saturating_add(1);
+        }
+        if bypass {
+            entry.bypassed = entry.bypassed.saturating_add(1);
         }
         entry.total_duration_ms = entry
             .total_duration_ms
@@ -609,7 +632,7 @@ impl ProofVerifierRegistry {
                 proof.system()
             )));
         }
-        self.record_backend(ProofSystemKind::RppStark, || {
+        self.record_backend(ProofSystemKind::RppStark, "rpp-stark-report", || {
             self.rpp_stark.verify_with_report(proof, proof_kind)
         })
     }
@@ -619,7 +642,7 @@ impl ProofVerifierRegistry {
         &self,
         bundle: &BlockProofBundle,
     ) -> ChainResult<()> {
-        self.record_backend(ProofSystemKind::RppStark, || {
+        self.record_backend(ProofSystemKind::RppStark, "rpp-stark-block-bundle", || {
             self.rpp_stark.verify_block_bundle(bundle)
         })
     }
@@ -706,7 +729,15 @@ impl ProofVerifierRegistry {
         #[cfg(not(feature = "prover-stwo"))]
         {
             let _ = (proof_bytes, public_inputs);
-            Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
+            warn!(
+                target = "runtime.proof.bypass",
+                operation = "decoded-transaction",
+                backend = %proof_system_label(ProofSystemKind::Stwo),
+                bypass = true,
+                reason = STWO_BYPASS_REASON,
+                "accepting proof via STWO bypass"
+            );
+            Ok(())
         }
 
         #[cfg(feature = "prover-stwo")]
@@ -749,7 +780,7 @@ impl ProofVerifierRegistry {
             ));
         }
 
-        self.record_backend(ProofSystemKind::Stwo, || {
+        self.record_backend(ProofSystemKind::Stwo, "decoded-transaction", || {
             self.stwo.verify_decoded_transaction(&decoded)
         })
     }
@@ -769,8 +800,7 @@ impl ProofVerifierRegistry {
         match bundle.state_proof.system() {
             ProofSystemKind::Stwo => {
                 self.ensure_bundle_system(bundle, ProofSystemKind::Stwo)?;
-                #[cfg(feature = "prover-stwo")]
-                let result = self.record_backend(ProofSystemKind::Stwo, || {
+                self.record_backend(ProofSystemKind::Stwo, "block-bundle", || {
                     self.stwo.verify_bundle(
                         identity_proofs,
                         &bundle.transaction_proofs,
@@ -783,28 +813,12 @@ impl ProofVerifierRegistry {
                         state_commitments,
                         expected_previous_commitment,
                     )
-                });
-                #[cfg(not(feature = "prover-stwo"))]
-                let result = {
-                    let _ = (
-                        identity_proofs,
-                        &bundle.transaction_proofs,
-                        uptime_proofs,
-                        consensus_proofs,
-                        &bundle.state_proof,
-                        &bundle.pruning_proof,
-                        &bundle.recursive_proof,
-                        state_commitments,
-                        expected_previous_commitment,
-                    );
-                    Err(ChainError::Crypto(STWO_DISABLED_ERROR.into()))
-                };
-                result
+                })
             }
             #[cfg(feature = "backend-plonky3")]
             ProofSystemKind::Plonky3 => {
                 self.ensure_bundle_system(bundle, ProofSystemKind::Plonky3)?;
-                self.record_backend(ProofSystemKind::Plonky3, || {
+                self.record_backend(ProofSystemKind::Plonky3, "block-bundle", || {
                     self.plonky3
                         .verify_bundle(bundle, expected_previous_commitment)
                 })
@@ -823,7 +837,7 @@ impl ProofVerifierRegistry {
                 for proof in consensus_proofs {
                     self.verify_consensus(proof)?;
                 }
-                self.record_backend(ProofSystemKind::RppStark, || {
+                self.record_backend(ProofSystemKind::RppStark, "block-bundle", || {
                     self.rpp_stark.verify_block_bundle(bundle)
                 })
             }
@@ -850,28 +864,59 @@ impl ProofVerifierRegistry {
         let verifier = self.proof_verifier(proof)?;
         let system = verifier.system();
         let fingerprint = proof_fingerprint(proof);
+        let bypass = matches!(system, ProofSystemKind::Stwo) && self.stwo.is_bypass();
         let span = info_span!(
             "runtime.proof.verify",
             operation,
             backend = ?system,
-            proof_hash = %fingerprint
+            proof_hash = %fingerprint,
+            bypass_mode = bypass
         );
         let _guard = span.enter();
+        if bypass {
+            warn!(
+                target = "runtime.proof.bypass",
+                operation,
+                backend = %proof_system_label(system),
+                proof_hash = %fingerprint,
+                bypass = true,
+                reason = STWO_BYPASS_REASON,
+                "accepting proof via STWO bypass"
+            );
+        }
         let started = Instant::now();
         let result = verify_fn(verifier, proof);
         let success = result.is_ok();
-        self.metrics.record(system, started.elapsed(), success);
+        self.metrics
+            .record(system, started.elapsed(), success, bypass);
         result
     }
 
-    fn record_backend<F, T>(&self, system: ProofSystemKind, action: F) -> ChainResult<T>
+    fn record_backend<F, T>(
+        &self,
+        system: ProofSystemKind,
+        operation: &'static str,
+        action: F,
+    ) -> ChainResult<T>
     where
         F: FnOnce() -> ChainResult<T>,
     {
+        let bypass = matches!(system, ProofSystemKind::Stwo) && self.stwo.is_bypass();
+        if bypass {
+            warn!(
+                target = "runtime.proof.bypass",
+                operation,
+                backend = %proof_system_label(system),
+                bypass = true,
+                reason = STWO_BYPASS_REASON,
+                "accepting proof via STWO bypass"
+            );
+        }
         let started = Instant::now();
         let result = action();
         let success = result.is_ok();
-        self.metrics.record(system, started.elapsed(), success);
+        self.metrics
+            .record(system, started.elapsed(), success, bypass);
         result
     }
 }
@@ -956,6 +1001,76 @@ mod tests {
             .names()
             .iter()
             .any(|name| name == "runtime.proof.verify"));
+    }
+}
+
+#[cfg(all(test, not(feature = "prover-stwo")))]
+mod bypass_tests {
+    use super::*;
+    use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+    use tracing_test::{logs_contain, traced_test};
+
+    fn dummy_recursive_proof() -> ChainProof {
+        use crate::stwo::circuit::{recursive::RecursiveWitness, ExecutionTrace};
+        use crate::stwo::proof::{
+            CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+        };
+
+        let witness = RecursiveWitness {
+            previous_commitment: None,
+            aggregated_commitment: String::new(),
+            identity_commitments: Vec::new(),
+            tx_commitments: Vec::new(),
+            uptime_commitments: Vec::new(),
+            consensus_commitments: Vec::new(),
+            state_commitment: String::new(),
+            global_state_root: String::new(),
+            utxo_root: String::new(),
+            reputation_root: String::new(),
+            timetoke_root: String::new(),
+            zsi_root: String::new(),
+            proof_root: String::new(),
+            pruning_binding_digest: [0u8; DOMAIN_TAG_LENGTH + DIGEST_LENGTH],
+            pruning_segment_commitments: Vec::new(),
+            block_height: 0,
+        };
+
+        let proof = StarkProof {
+            kind: ProofKind::Recursive,
+            commitment: String::new(),
+            public_inputs: Vec::new(),
+            payload: ProofPayload::Recursive(witness),
+            trace: ExecutionTrace { segments: Vec::new() },
+            commitment_proof: CommitmentSchemeProofData::default(),
+            fri_proof: FriProof::default(),
+        };
+
+        ChainProof::Stwo(proof)
+    }
+
+    #[test]
+    #[traced_test]
+    fn stwo_bypass_accepts_and_logs() {
+        let registry = ProofVerifierRegistry::default();
+        let proof = dummy_recursive_proof();
+
+        registry
+            .verify_recursive(&proof)
+            .expect("bypass should accept recursive proof");
+
+        assert!(
+            logs_contain("accepting proof via STWO bypass"),
+            "expected bypass warning to be emitted"
+        );
+
+        let snapshot = registry.metrics_snapshot();
+        let stwo_metrics = snapshot
+            .per_backend
+            .get("stwo")
+            .expect("metrics entry for stwo backend");
+        assert_eq!(stwo_metrics.accepted, 1);
+        assert_eq!(stwo_metrics.bypassed, 1);
+        assert_eq!(stwo_metrics.rejected, 0);
     }
 }
 
