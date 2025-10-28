@@ -44,6 +44,7 @@ FEATURE_ARGS=()
 PASSTHROUGH_ARGS=()
 FEATURE_SET_SELECTED=""
 BACKEND="default"
+TOOLCHAIN_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -151,15 +152,19 @@ done
 case "$BACKEND" in
   default)
     BACKEND_ARGS=()
+    TOOLCHAIN_ARGS=()
     ;;
   stwo)
-    BACKEND_ARGS=("--no-default-features" "--features" "prover-stwo")
+    BACKEND_ARGS=("--no-default-features" "--features" "stwo")
+    TOOLCHAIN_ARGS=("+nightly-2025-07-14")
     ;;
   plonky3)
     BACKEND_ARGS=("--features" "backend-plonky3")
+    TOOLCHAIN_ARGS=()
     ;;
   rpp-stark)
     BACKEND_ARGS=("--features" "backend-rpp-stark")
+    TOOLCHAIN_ARGS=()
     ;;
   *)
     echo "error: unsupported backend '$BACKEND'" >&2
@@ -167,4 +172,4 @@ case "$BACKEND" in
     ;;
 esac
 
-cargo build "${PROFILE_ARGS[@]}" "${BACKEND_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
+cargo "${TOOLCHAIN_ARGS[@]}" build "${PROFILE_ARGS[@]}" "${BACKEND_ARGS[@]}" "${FEATURE_ARGS[@]}" "${PASSTHROUGH_ARGS[@]}"
