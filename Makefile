@@ -1,7 +1,7 @@
 # Helper targets for running workspace builds with explicit toolchains.
 
 STABLE_TOOLCHAIN ?= +1.79.0
-NIGHTLY_TOOLCHAIN ?= +nightly
+NIGHTLY_TOOLCHAIN ?= +nightly-2025-07-14
 PROVER_MANIFEST ?= prover/Cargo.toml
 PROVER_CRATES ?= prover_stwo_backend
 

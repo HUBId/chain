@@ -124,14 +124,16 @@ jobs:
       with:
         toolchain: ${{ env.MSRV }}
     - name: "install Rust nightly"
-      uses: dtolnay/rust-toolchain@nightly
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly-2025-07-14
     - uses: Swatinem/rust-cache@v2
       with:
         save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Select minimal version
-      run: cargo +nightly update -Z minimal-versions
+      run: cargo +nightly-2025-07-14 update -Z minimal-versions
     - name: Fix up Cargo.lock
-      run: cargo +nightly update -p crc32fast --precise 1.1.1
+      run: cargo +nightly-2025-07-14 update -p crc32fast --precise 1.1.1
     - name: Run tests
       run: >
         cargo +${{ env.MSRV }}

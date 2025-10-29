@@ -9,23 +9,25 @@ jobs:
   fuzz:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      NIGHTLY_TOOLCHAIN: nightly-2025-07-14
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install nightly toolchain
-        run: rustup toolchain install nightly --profile minimal
+        run: rustup toolchain install "$NIGHTLY_TOOLCHAIN" --profile minimal
 
       - name: Install cargo-fuzz
-        run: cargo +nightly install cargo-fuzz --locked
+        run: cargo +"$NIGHTLY_TOOLCHAIN" install cargo-fuzz --locked
 
       - name: Run fuzzers
         working-directory: rpp/p2p
         run: |
-          cargo +nightly fuzz run handle_meta -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_meta-
-          cargo +nightly fuzz run handle_blocks -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_blocks-
-          cargo +nightly fuzz run handle_votes -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_votes-
-          cargo +nightly fuzz run admission_evaluate_publish -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/admission_evaluate_publish-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_meta-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_blocks -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_blocks-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_votes -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_votes-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run admission_evaluate_publish -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/admission_evaluate_publish-
 
       - name: Package corpora
         working-directory: rpp/p2p/fuzz

@@ -64,7 +64,7 @@ continues to compile in `no_std` environments. We vendor its manifest files and
 locally you can invoke Cargo directly against the vendored sources:
 
 ```bash
-cargo +nightly -Z sparse-registry -Z avoid-dev-deps \
+cargo +nightly-2025-07-14 -Z sparse-registry -Z avoid-dev-deps \
     run --manifest-path vendor/stwo-dev/0.1.1/staging/ensure-verifier-no_std/Cargo.toml
 ```
 

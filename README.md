@@ -87,8 +87,8 @@ toolchains:
 
 - `make build:stable` calls `cargo +1.79.0 build --workspace` while excluding
   the prover crates that require nightly features.
-- `make build:nightly` runs `cargo +nightly build` in the `prover/` workspace so
-  nightly-only components stay isolated.
+- `make build:nightly` runs `cargo +nightly-2025-07-14 build` in the `prover/`
+  workspace so nightly-only components stay isolated.
 
 More detailed build instructions, including some scripts,
 can be found in the [benchmark setup scripts](benchmark/setup-scripts).
@@ -191,7 +191,7 @@ Use the Makefile helpers to run the appropriate test suites:
 
 ```sh
 make test:stable   # runs cargo +1.79.0 test for the stable workspace
-make test:nightly  # runs cargo +nightly test inside prover/
+make test:nightly  # runs cargo +nightly-2025-07-14 test inside prover/
 ```
 
 ## License
