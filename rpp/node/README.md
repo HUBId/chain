@@ -9,19 +9,21 @@ TOML file or command-line flags.
 
 `rpp-node` re-exports most of its functionality from the `rpp-chain` crate and
 shares the same dependency graph. The available cargo features toggle which
-proving backend is compiled in:
+proving backend is compiled in. Builds now default to the lightweight mock
+prover so local workflows do not require the heavier STWO toolchain:
 
 | Feature            | Description                                                          | Default |
 | ------------------ | -------------------------------------------------------------------- | ------- |
-| `prover-stwo`      | Enables the STWO proving backend.                                     | ✅      |
+| `prover-mock`      | Swaps in a lightweight mock prover useful for tests and local setups. | ✅      |
+| `stwo`             | Convenience flag that enables the STWO proving backend stack.         | ⬜️      |
+| `prover-stwo`      | Enables the STWO proving backend (implicitly turned on by `stwo`).    | ⬜️      |
 | `prover-stwo-simd` | Extends `prover-stwo` with optional SIMD acceleration where available. | ⬜️      |
-| `prover-mock`      | Swaps in a lightweight mock prover useful for tests and local setups. | ⬜️      |
 
 To run with a different backend, disable the default feature and select the one
 you need, e.g.:
 
 ```bash
-cargo run -p rpp-node --no-default-features --features prover-mock
+cargo run -p rpp-node --no-default-features --features stwo
 ```
 
 ## Example configuration

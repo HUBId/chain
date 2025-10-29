@@ -84,7 +84,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 4.1 Testpyramide
 1. **Unit-Tests**: Deterministische Tests für VRF-Thresholds, Reward-Berechnung, Reputation-/Timetoke-Funktionen.
-2. **Property-Based Tests**: Proptest-Szenarien decken `ConsensusRound::new` (Quorum, Fallback-Pfade), Reward-Distribution (`distribute_rewards`) und Evidence-Slashings (`submit_evidence`/`slash`) ab. Die Suites laufen mit den Standard-Features (`prover-stwo`) sowie der Minimal-Feature-Matrix über `scripts/test.sh --integration`.
+2. **Property-Based Tests**: Proptest-Szenarien decken `ConsensusRound::new` (Quorum, Fallback-Pfade), Reward-Distribution (`distribute_rewards`) und Evidence-Slashings (`submit_evidence`/`slash`) ab. Die Suites laufen mit den Standard-Features (`prover-mock`) sowie der Minimal-Feature-Matrix über `scripts/test.sh --integration`; optionale STWO-Läufe aktivieren `--features prover-stwo` (bzw. das Workspace-Flag `stwo`).
 3. **Integrationstests**: Simulierte Konsensrunden mit Mock-Netzwerk, um Quorum und Proof-Embedding zu verifizieren.
 4. **Systemtests / Testnet**: Mehrknoten-Simulation mit realem Netzwerkstack und Telemetrie-Sammlung.
 5. **Fuzzing**: Eingabe-Fuzzing für Netzwerk-Nachrichten und Proof-Verifizierer.
