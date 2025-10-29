@@ -1,5 +1,13 @@
 # Interface Schema Changelog
 
+# 2025-11-29
+
+- Added consolidated interface overview in `docs/interfaces/spec.md`, linking
+  gossip topics, RPC endpoints, and state transition receipts to their schema
+  snapshots and validation tests.
+- Introduced `state_transition_receipt.jsonschema` with an accompanying example
+  document and storage schema tests to cover Firewood transition receipts.
+
 ## 2025-10-24
 
 - Added RPC schemas describing `/state-sync/head` and `/state-sync/chunk/:id`

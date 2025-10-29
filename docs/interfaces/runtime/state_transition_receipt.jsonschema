@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/runtime/state_transition_receipt.json",
+  "title": "StateTransitionReceipt",
+  "description": "Receipt emitted after applying Firewood state transitions, including optional pruning proof material.",
+  "type": "object",
+  "required": ["previous_root", "new_root", "pruning_proof"],
+  "properties": {
+    "previous_root": {
+      "type": "array",
+      "description": "32-byte Firewood state root prior to applying the transition.",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "minItems": 32,
+      "maxItems": 32
+    },
+    "new_root": {
+      "type": "array",
+      "description": "32-byte Firewood state root after applying the transition.",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 255
+      },
+      "minItems": 32,
+      "maxItems": 32
+    },
+    "pruning_proof": {
+      "description": "Optional pruning proof captured after the transition when pruning is enabled.",
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "../p2p/gossip_block.jsonschema#/$defs/PruningProof"}
+      ]
+    }
+  },
+  "additionalProperties": false
+}

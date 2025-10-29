@@ -1,0 +1,16 @@
+{
+  "address": "rpp1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+  "public_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "input": {
+    "last_block_header": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "epoch": 42,
+    "tier_seed": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "proof": {
+    "randomness": "12345678901234567890",
+    "preoutput": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "proof": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "tier": "Tl3",
+  "timetoke_hours": 128
+}

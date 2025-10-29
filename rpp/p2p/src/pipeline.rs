@@ -2277,6 +2277,16 @@ mod interface_schemas {
         assert_eq!(roundtrip, example);
     }
 
+    fn assert_schema_matches(schema_file: &str, example_file: &str) {
+        let schema = load_schema(schema_file);
+        let compiled = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&schema)
+            .expect("schema compiles");
+        let example = load_example(example_file);
+        compiled.validate(&example).expect("example matches schema");
+    }
+
     #[test]
     fn global_state_commitments_schema_roundtrip() {
         assert_roundtrip::<NetworkGlobalStateCommitments>(
@@ -2338,6 +2348,83 @@ mod interface_schemas {
         assert_roundtrip::<NetworkMetaTelemetryReport>(
             "p2p/meta_telemetry.jsonschema",
             "p2p/examples/meta_telemetry.json",
+        );
+    }
+
+    #[test]
+    fn gossip_block_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/gossip_block.jsonschema",
+            "p2p/examples/gossip_block.json",
+        );
+    }
+
+    #[test]
+    fn gossip_vote_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/gossip_vote.jsonschema",
+            "p2p/examples/gossip_vote.json",
+        );
+    }
+
+    #[test]
+    fn vrf_proof_schema_matches_example() {
+        assert_schema_matches("p2p/vrf_proof.jsonschema", "p2p/examples/vrf_proof.json");
+    }
+
+    #[test]
+    fn snapshot_chunk_stream_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/state_sync_chunk_stream.jsonschema",
+            "p2p/examples/state_sync_chunk_stream.json",
+        );
+    }
+
+    #[test]
+    fn witness_proof_summary_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/witness_proof_summary.jsonschema",
+            "p2p/examples/witness_proof_summary.json",
+        );
+    }
+
+    #[test]
+    fn meta_evidence_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/meta_evidence.jsonschema",
+            "p2p/examples/meta_evidence.json",
+        );
+    }
+
+    #[test]
+    fn meta_reputation_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/meta_reputation.jsonschema",
+            "p2p/examples/meta_reputation.json",
+        );
+    }
+
+    #[test]
+    fn meta_feature_announcement_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/meta_feature_announcement.jsonschema",
+            "p2p/examples/meta_feature_announcement.json",
+        );
+    }
+
+    #[test]
+    fn witness_meta_evidence_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/witness_meta_evidence.jsonschema",
+            "p2p/examples/witness_meta_evidence.json",
+        );
+    }
+
+    #[test]
+    fn meta_timetoke_schema_matches_example() {
+        assert_schema_matches(
+            "p2p/meta_timetoke.jsonschema",
+            "p2p/examples/meta_timetoke.json",
         );
     }
 }
