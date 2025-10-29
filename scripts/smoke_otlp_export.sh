@@ -313,6 +313,15 @@ for pipeline in "${PIPELINE_LABELS[@]}"; do
   fi
 done
 
+if [[ "${MODE}" == "wallet" || "${MODE}" == "hybrid" ]]; then
+  DIAG_ENDPOINT="${RPP_WALLET_HEALTH_ENDPOINT:-http://127.0.0.1:9942/health}"
+  DIAG_CMD=("${SCRIPT_DIR}/wallet_diag.sh" "--mode" "${MODE}" "--endpoint" "${DIAG_ENDPOINT}" "--log" "${NODE_LOG}")
+  if [[ -n "${AUTH_TOKEN}" ]]; then
+    DIAG_CMD+=("--auth-token" "${AUTH_TOKEN}")
+  fi
+  "${DIAG_CMD[@]}"
+fi
+
 if ! grep -q "${EXPECTED_SIGNAL}" <<<"${COLLECTOR_LOGS}"; then
   echo "failed to observe exported spans in collector output" >&2
   exit 1

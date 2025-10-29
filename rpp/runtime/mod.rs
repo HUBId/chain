@@ -139,6 +139,7 @@ impl RuntimeProfile {
 pub mod node_runtime;
 pub mod supervisor;
 pub mod telemetry;
+pub mod wallet;
 
 pub use telemetry::TelemetryExporterBuilder;
 pub use telemetry::metrics::{
