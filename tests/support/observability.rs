@@ -136,11 +136,10 @@ pub fn write_node_config_with(
     config.snapshot_dir = node_root.join("snapshots");
     config.proof_cache_dir = node_root.join("proofs");
     config.consensus_pipeline_path = node_root.join("consensus/pipeline.json");
-    config.p2p.peerstore_path = node_root.join("p2p/peerstore.json");
-    config.p2p.gossip_path = Some(node_root.join("p2p/gossip.json"));
-    config.p2p.listen_addr =
-        format!("/ip4/127.0.0.1/tcp/{}", ports.next_port()?).into();
-    config.rpc_listen = format!("127.0.0.1:{}", ports.next_port()?)
+    config.network.p2p.peerstore_path = node_root.join("p2p/peerstore.json");
+    config.network.p2p.gossip_path = Some(node_root.join("p2p/gossip.json"));
+    config.network.p2p.listen_addr = format!("/ip4/127.0.0.1/tcp/{}", ports.next_port()?).into();
+    config.network.rpc.listen = format!("127.0.0.1:{}", ports.next_port()?)
         .parse()
         .context("invalid rpc listen address")?;
 
@@ -159,8 +158,8 @@ pub fn write_node_config_with(
     }
 
     update(&mut config);
-    ports.reserve(config.rpc_listen.port());
-    if let Some(port) = extract_port(config.p2p.listen_addr.to_string()) {
+    ports.reserve(config.network.rpc.listen.port());
+    if let Some(port) = extract_port(config.network.p2p.listen_addr.to_string()) {
         ports.reserve(port);
     }
 

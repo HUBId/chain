@@ -34,10 +34,15 @@ config_version = "1.0"
 data_dir = "./data"
 key_path = "./keys/node.toml"
 vrf_key_path = "./keys/vrf.toml"
-rpc_listen = "127.0.0.1:8545"
 block_time_ms = 2000
 max_block_transactions = 512
 mempool_limit = 4096
+
+[network.rpc]
+listen = "127.0.0.1:8545"
+
+[network.limits.per_ip_token_bucket]
+replenish_per_minute = 900
 
 [rollout.telemetry]
 enabled = true
@@ -45,7 +50,7 @@ endpoint = "https://telemetry.example.com/ingest"
 auth_token = "super-secret-token"
 sample_interval_secs = 30
 
-[p2p]
+[network.p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/7600"
 ```
 
@@ -60,8 +65,8 @@ The binary exposes a number of flags for common overrides:
 | ---- | ------- |
 | `--config <PATH>` | Load configuration from the given TOML file (defaults to the built-in defaults).
 | `--data-dir <PATH>` | Override `data_dir`.
-| `--rpc-listen <ADDR>` | Override `rpc_listen` with a socket address such as `0.0.0.0:8545`.
-| `--rpc-auth-token <TOKEN>` | Override `rpc_auth_token`. Pass an empty string to clear it.
+| `--rpc-listen <ADDR>` | Override `network.rpc.listen` with a socket address such as `0.0.0.0:8545`.
+| `--rpc-auth-token <TOKEN>` | Override `network.rpc.auth_token`. Pass an empty string to clear it.
 | `--telemetry-endpoint <URL>` | Override `rollout.telemetry.endpoint`. Empty strings disable telemetry.
 | `--telemetry-auth-token <TOKEN>` | Override `rollout.telemetry.auth_token`. Empty strings clear the token.
 | `--telemetry-sample-interval <SECS>` | Override `rollout.telemetry.sample_interval_secs` (seconds).

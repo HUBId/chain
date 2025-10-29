@@ -17,11 +17,10 @@ use tempfile::TempDir;
 mod support;
 
 use support::{
-    capture_child_output, locate_rpp_node_binary, pick_free_tcp_port, send_ctrl_c,
-    start_log_drain, wait_for_exit, wait_for_log, wait_for_pipeline_marker,
-    write_node_config, write_node_config_with, write_wallet_config,
-    write_wallet_config_with, ChildTerminationGuard, ModeContext, PortAllocator,
-    TelemetryExpectation,
+    capture_child_output, locate_rpp_node_binary, pick_free_tcp_port, send_ctrl_c, start_log_drain,
+    wait_for_exit, wait_for_log, wait_for_pipeline_marker, write_node_config,
+    write_node_config_with, write_wallet_config, write_wallet_config_with, ChildTerminationGuard,
+    ModeContext, PortAllocator, TelemetryExpectation,
 };
 
 const OBSERVABILITY_ENV: &str = "RPP_OBSERVABILITY_ASSERTS";
@@ -154,10 +153,7 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
         bootstrap_log
     );
     assert!(
-        bootstrap_log.contains(&format!(
-            "\"config_source\":\"{}\"",
-            spec.config_source
-        )),
+        bootstrap_log.contains(&format!("\"config_source\":\"{}\"", spec.config_source)),
         "bootstrap log missing config source: {}",
         bootstrap_log
     );
@@ -172,10 +168,7 @@ fn run_mode_switch(binary: &Path, spec: &ModeSpec) -> Result<()> {
         telemetry_log
     );
     assert!(
-        telemetry_log.contains(&format!(
-            "\"config_source\":\"{}\"",
-            spec.config_source
-        )),
+        telemetry_log.contains(&format!("\"config_source\":\"{}\"", spec.config_source)),
         "telemetry log missing config source: {}",
         telemetry_log
     );
@@ -351,18 +344,14 @@ fn validator_dry_run_rejects_invalid_configuration() -> Result<()> {
         Some(TelemetryExpectation::WithEndpoint),
         &mut ports,
         |config| {
-            config.rpc_listen = node_addr;
+            config.network.rpc.listen = node_addr;
         },
     )?;
     ports.reserve(node_addr.port());
 
-    let wallet_config = write_wallet_config_with(
-        temp_dir.path(),
-        &mut ports,
-        |config| {
-            config.wallet.rpc.listen = wallet_addr;
-        },
-    )?;
+    let wallet_config = write_wallet_config_with(temp_dir.path(), &mut ports, |config| {
+        config.wallet.rpc.listen = wallet_addr;
+    })?;
     ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)
@@ -388,7 +377,7 @@ fn validator_dry_run_rejects_invalid_configuration() -> Result<()> {
         "stderr missing mismatch message: {stderr}"
     );
     assert!(
-        stderr.contains("node-config.toml::rpc_listen"),
+        stderr.contains("node-config.toml::network.rpc.listen"),
         "stderr missing node rpc reference: {stderr}"
     );
     assert!(
@@ -423,18 +412,14 @@ fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
         Some(TelemetryExpectation::Disabled),
         &mut ports,
         |config| {
-            config.rpc_listen = node_addr;
+            config.network.rpc.listen = node_addr;
         },
     )?;
     ports.reserve(node_addr.port());
 
-    let wallet_config = write_wallet_config_with(
-        temp_dir.path(),
-        &mut ports,
-        |config| {
-            config.wallet.rpc.listen = wallet_addr;
-        },
-    )?;
+    let wallet_config = write_wallet_config_with(temp_dir.path(), &mut ports, |config| {
+        config.wallet.rpc.listen = wallet_addr;
+    })?;
     ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)
@@ -459,7 +444,7 @@ fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
         "stderr missing mismatch message: {stderr}"
     );
     assert!(
-        stderr.contains("node-config.toml::rpc_listen"),
+        stderr.contains("node-config.toml::network.rpc.listen"),
         "stderr missing node rpc reference: {stderr}"
     );
     assert!(
@@ -504,18 +489,14 @@ fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
         Some(TelemetryExpectation::WithEndpoint),
         &mut ports,
         |config| {
-            config.rpc_listen = node_addr;
+            config.network.rpc.listen = node_addr;
         },
     )?;
     ports.reserve(node_addr.port());
 
-    let wallet_config = write_wallet_config_with(
-        temp_dir.path(),
-        &mut ports,
-        |config| {
-            config.wallet.rpc.listen = wallet_addr;
-        },
-    )?;
+    let wallet_config = write_wallet_config_with(temp_dir.path(), &mut ports, |config| {
+        config.wallet.rpc.listen = wallet_addr;
+    })?;
     ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)
@@ -540,7 +521,7 @@ fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
         "stderr missing mismatch message: {stderr}"
     );
     assert!(
-        stderr.contains("node-config.toml::rpc_listen"),
+        stderr.contains("node-config.toml::network.rpc.listen"),
         "stderr missing node rpc reference: {stderr}"
     );
     assert!(
@@ -586,8 +567,8 @@ fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
         Some(TelemetryExpectation::WithEndpoint),
         &mut ports,
         |config| {
-            config.rpc_listen = node_rpc_addr;
-            config.p2p.listen_addr = p2p_multiaddr.clone();
+            config.network.rpc.listen = node_rpc_addr;
+            config.network.p2p.listen_addr = p2p_multiaddr.clone();
         },
     )?;
     ports.reserve(node_rpc_addr.port());
@@ -595,13 +576,9 @@ fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
         ports.reserve(port);
     }
 
-    let wallet_config = write_wallet_config_with(
-        temp_dir.path(),
-        &mut ports,
-        |config| {
-            config.wallet.rpc.listen = wallet_addr;
-        },
-    )?;
+    let wallet_config = write_wallet_config_with(temp_dir.path(), &mut ports, |config| {
+        config.wallet.rpc.listen = wallet_addr;
+    })?;
     ports.reserve(wallet_addr.port());
 
     let output = Command::new(&binary)

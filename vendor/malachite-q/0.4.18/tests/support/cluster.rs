@@ -178,17 +178,17 @@ impl TestCluster {
             config.data_dir = data_dir.clone();
             config.snapshot_dir = data_dir.join("snapshots");
             config.proof_cache_dir = data_dir.join("proofs");
-            config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-            config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+            config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+            config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
             config.key_path = keys_dir.join("node.toml");
             config.p2p_key_path = keys_dir.join("p2p.toml");
             config.vrf_key_path = keys_dir.join("vrf.toml");
             config.block_time_ms = 200;
             config.mempool_limit = 256;
             config.target_validator_count = count;
-            config.rpc_listen = rpc_socket(index)?;
+            config.network.rpc.listen = rpc_socket(index)?;
             let (listen_addr, _) = random_listen_addr()?;
-            config.p2p.listen_addr = listen_addr.clone();
+            config.network.p2p.listen_addr = listen_addr.clone();
             config.rollout.feature_gates.pruning = false;
             config.rollout.feature_gates.recursive_proofs = false;
             config.rollout.feature_gates.reconstruction = false;
@@ -223,7 +223,7 @@ impl TestCluster {
         for (index, temp_dir, mut config, _address, _listen_addr) in prepared {
             config.genesis.accounts = genesis_accounts.clone();
             config.genesis.chain_id = "test-cluster".to_string();
-            config.p2p.bootstrap_peers = listen_addrs
+            config.network.p2p.bootstrap_peers = listen_addrs
                 .iter()
                 .enumerate()
                 .filter_map(|(peer_index, addr)| {

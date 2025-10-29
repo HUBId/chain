@@ -300,7 +300,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
     fn from(config: &NodeConfig) -> Self {
         Self {
             identity_path: config.p2p_key_path.clone(),
-            p2p: config.p2p.clone(),
+            p2p: config.network.p2p.clone(),
             telemetry: config.rollout.telemetry.clone(),
             metrics: RuntimeMetrics::noop(),
             identity: None,
@@ -1526,7 +1526,8 @@ impl NodeInner {
             },
         };
         let label = event.label().to_string();
-        self.runtime_metrics.record_reputation_penalty(label.clone());
+        self.runtime_metrics
+            .record_reputation_penalty(label.clone());
         self.network
             .apply_reputation_event(peer.clone(), event)
             .map_err(NodeError::from)?;

@@ -760,6 +760,270 @@ impl P2pConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    pub p2p: P2pConfig,
+    pub rpc: NetworkRpcConfig,
+    pub tls: NetworkTlsConfig,
+    pub limits: NetworkLimitsConfig,
+}
+
+impl NetworkConfig {
+    fn validate(&self) -> ChainResult<()> {
+        self.p2p.validate()?;
+        self.rpc.validate()?;
+        self.tls.validate()?;
+        self.limits.validate()?;
+        Ok(())
+    }
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            p2p: P2pConfig::default(),
+            rpc: NetworkRpcConfig::default(),
+            tls: NetworkTlsConfig::default(),
+            limits: NetworkLimitsConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkRpcConfig {
+    pub listen: SocketAddr,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_origin: Option<String>,
+}
+
+impl NetworkRpcConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if let Some(token) = &self.auth_token {
+            if token.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "network.rpc.auth_token must not be empty".into(),
+                ));
+            }
+        }
+        if let Some(origin) = &self.allowed_origin {
+            if origin.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "network.rpc.allowed_origin must not be empty".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for NetworkRpcConfig {
+    fn default() -> Self {
+        Self {
+            listen: default_network_rpc_listen(),
+            auth_token: None,
+            allowed_origin: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkTlsConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_key: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_ca: Option<PathBuf>,
+    pub require_client_auth: bool,
+}
+
+impl NetworkTlsConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        let certificate = self
+            .certificate
+            .as_ref()
+            .ok_or_else(|| {
+                ChainError::Config(
+                    "network.tls.certificate must be configured when TLS is enabled".into(),
+                )
+            })?
+            .clone();
+        let private_key = self
+            .private_key
+            .as_ref()
+            .ok_or_else(|| {
+                ChainError::Config(
+                    "network.tls.private_key must be configured when TLS is enabled".into(),
+                )
+            })?
+            .clone();
+
+        validate_tls_path("network.tls.certificate", &certificate)?;
+        validate_tls_path("network.tls.private_key", &private_key)?;
+
+        if self.require_client_auth {
+            let client_ca = self
+                .client_ca
+                .as_ref()
+                .ok_or_else(|| {
+                    ChainError::Config(
+                        "network.tls.client_ca must be configured when client authentication is required"
+                            .into(),
+                    )
+                })?
+                .clone();
+            validate_tls_path("network.tls.client_ca", &client_ca)?;
+        } else if let Some(path) = &self.client_ca {
+            validate_tls_path("network.tls.client_ca", path)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for NetworkTlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            certificate: None,
+            private_key: None,
+            client_ca: None,
+            require_client_auth: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkLimitsConfig {
+    pub header_read_timeout_ms: u64,
+    pub read_timeout_ms: u64,
+    pub write_timeout_ms: u64,
+    pub max_header_bytes: usize,
+    pub max_body_bytes: usize,
+    pub per_ip_token_bucket: NetworkTokenBucketConfig,
+}
+
+impl NetworkLimitsConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.header_read_timeout_ms == 0 {
+            return Err(ChainError::Config(
+                "network.limits.header_read_timeout_ms must be greater than 0".into(),
+            ));
+        }
+        if self.read_timeout_ms == 0 {
+            return Err(ChainError::Config(
+                "network.limits.read_timeout_ms must be greater than 0".into(),
+            ));
+        }
+        if self.write_timeout_ms == 0 {
+            return Err(ChainError::Config(
+                "network.limits.write_timeout_ms must be greater than 0".into(),
+            ));
+        }
+        if self.max_header_bytes == 0 {
+            return Err(ChainError::Config(
+                "network.limits.max_header_bytes must be greater than 0".into(),
+            ));
+        }
+        if self.max_body_bytes == 0 {
+            return Err(ChainError::Config(
+                "network.limits.max_body_bytes must be greater than 0".into(),
+            ));
+        }
+        self.per_ip_token_bucket
+            .validate("network.limits.per_ip_token_bucket")
+    }
+}
+
+impl Default for NetworkLimitsConfig {
+    fn default() -> Self {
+        Self {
+            header_read_timeout_ms: 5_000,
+            read_timeout_ms: 15_000,
+            write_timeout_ms: 15_000,
+            max_header_bytes: 16 * 1024,
+            max_body_bytes: 2 * 1024 * 1024,
+            per_ip_token_bucket: NetworkTokenBucketConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkTokenBucketConfig {
+    pub enabled: bool,
+    pub burst: u64,
+    pub replenish_per_minute: u64,
+}
+
+impl NetworkTokenBucketConfig {
+    fn validate(&self, label: &str) -> ChainResult<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.burst == 0 {
+            return Err(ChainError::Config(format!(
+                "{label}.burst must be greater than 0"
+            )));
+        }
+        if self.replenish_per_minute == 0 {
+            return Err(ChainError::Config(format!(
+                "{label}.replenish_per_minute must be greater than 0"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Default for NetworkTokenBucketConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            burst: 120,
+            replenish_per_minute: 60,
+        }
+    }
+}
+
+fn validate_tls_path(label: &str, path: &Path) -> ChainResult<()> {
+    if path.as_os_str().is_empty() {
+        return Err(ChainError::Config(format!(
+            "{label} must not be an empty path"
+        )));
+    }
+
+    let metadata = fs::metadata(path).map_err(|err| {
+        ChainError::Config(format!(
+            "{label} ({}) could not be accessed: {err}",
+            path.display()
+        ))
+    })?;
+
+    if !metadata.is_file() {
+        return Err(ChainError::Config(format!(
+            "{label} ({}) must be a file",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+fn default_network_rpc_listen() -> SocketAddr {
+    "127.0.0.1:7070".parse().expect("socket addr")
+}
+
 pub const NODE_CONFIG_VERSION: &str = "1.0";
 
 fn default_node_config_version() -> String {
@@ -783,13 +1047,6 @@ pub struct NodeConfig {
     pub proof_cache_dir: PathBuf,
     #[serde(default = "default_consensus_pipeline_path")]
     pub consensus_pipeline_path: PathBuf,
-    pub rpc_listen: SocketAddr,
-    #[serde(default)]
-    pub rpc_auth_token: Option<String>,
-    #[serde(default)]
-    pub rpc_allowed_origin: Option<String>,
-    #[serde(default)]
-    pub rpc_requests_per_minute: Option<u64>,
     pub block_time_ms: u64,
     pub max_block_transactions: usize,
     #[serde(default = "default_max_block_identity_registrations")]
@@ -804,7 +1061,7 @@ pub struct NodeConfig {
     #[serde(default)]
     pub rollout: RolloutConfig,
     #[serde(default)]
-    pub p2p: P2pConfig,
+    pub network: NetworkConfig,
     pub genesis: GenesisConfig,
     #[serde(default)]
     pub reputation: ReputationConfig,
@@ -949,8 +1206,8 @@ impl NodeConfig {
     fn apply_hybrid_defaults(&mut self) {
         self.rollout.telemetry.enabled = true;
         self.rollout.telemetry.sample_interval_secs = 30;
-        self.p2p.heartbeat_interval_ms = 4_000;
-        self.p2p.gossip_rate_limit_per_sec = 192;
+        self.network.p2p.heartbeat_interval_ms = 4_000;
+        self.network.p2p.gossip_rate_limit_per_sec = 192;
         self.malachite.proof.proof_batch_size = 96;
         self.malachite.proof.proof_cache_ttl_secs = 720;
         self.malachite.proof.max_recursive_depth = 5;
@@ -960,8 +1217,8 @@ impl NodeConfig {
         self.rollout.telemetry.enabled = true;
         self.rollout.telemetry.sample_interval_secs = 15;
         self.rollout.release_channel = ReleaseChannel::Testnet;
-        self.p2p.heartbeat_interval_ms = 3_000;
-        self.p2p.gossip_rate_limit_per_sec = 256;
+        self.network.p2p.heartbeat_interval_ms = 3_000;
+        self.network.p2p.gossip_rate_limit_per_sec = 256;
         self.malachite.proof.proof_batch_size = 128;
         self.malachite.proof.proof_cache_ttl_secs = 600;
         self.malachite.proof.max_recursive_depth = 6;
@@ -1002,10 +1259,10 @@ impl NodeConfig {
         if let Some(parent) = self.consensus_pipeline_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        if let Some(parent) = self.p2p.peerstore_path.parent() {
+        if let Some(parent) = self.network.p2p.peerstore_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        if let Some(path) = self.p2p.gossip_path.as_ref() {
+        if let Some(path) = self.network.p2p.gossip_path.as_ref() {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -1089,33 +1346,13 @@ impl NodeConfig {
         }
         if self.storage.compaction_io_budget_bytes == 0 {
             return Err(ChainError::Config(
-                "node configuration storage.compaction_io_budget_bytes must be greater than 0".into(),
+                "node configuration storage.compaction_io_budget_bytes must be greater than 0"
+                    .into(),
             ));
         }
-        if let Some(token) = &self.rpc_auth_token {
-            if token.trim().is_empty() {
-                return Err(ChainError::Config(
-                    "node configuration rpc_auth_token must not be empty".into(),
-                ));
-            }
-        }
-        if let Some(origin) = &self.rpc_allowed_origin {
-            if origin.trim().is_empty() {
-                return Err(ChainError::Config(
-                    "node configuration rpc_allowed_origin must not be empty".into(),
-                ));
-            }
-        }
-        if let Some(limit) = self.rpc_requests_per_minute {
-            if limit == 0 {
-                return Err(ChainError::Config(
-                    "node configuration rpc_requests_per_minute must be greater than 0".into(),
-                ));
-            }
-        }
+        self.network.validate()?;
         self.rollout.telemetry.validate()?;
         self.queue_weights.validate()?;
-        self.p2p.validate()?;
         self.secrets.validate_with_path(&self.vrf_key_path)?;
         Ok(())
     }
@@ -1123,9 +1360,9 @@ impl NodeConfig {
 
 impl Default for NodeConfig {
     fn default() -> Self {
-        let mut p2p = P2pConfig::default();
-        p2p.peerstore_path = default_peerstore_path();
-        p2p.gossip_path = default_gossip_state_path();
+        let mut network = NetworkConfig::default();
+        network.p2p.peerstore_path = default_peerstore_path();
+        network.p2p.gossip_path = default_gossip_state_path();
         Self {
             config_version: default_node_config_version(),
             data_dir: PathBuf::from("./data"),
@@ -1136,10 +1373,6 @@ impl Default for NodeConfig {
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
-            rpc_listen: "127.0.0.1:7070".parse().expect("valid socket addr"),
-            rpc_auth_token: None,
-            rpc_allowed_origin: None,
-            rpc_requests_per_minute: None,
             block_time_ms: 5_000,
             max_block_transactions: 512,
             max_block_identity_registrations: default_max_block_identity_registrations(),
@@ -1148,7 +1381,7 @@ impl Default for NodeConfig {
             target_validator_count: default_target_validator_count(),
             max_proof_size_bytes: default_max_proof_size_bytes(),
             rollout: RolloutConfig::default(),
-            p2p,
+            network,
             genesis: GenesisConfig::default(),
             reputation: ReputationConfig::default(),
             queue_weights: QueueWeightsConfig::default(),
@@ -1436,6 +1669,233 @@ mod tests {
     }
 
     #[test]
+    fn node_config_validation_rejects_empty_network_auth_token() {
+        let mut config = NodeConfig::default();
+        config.network.rpc.auth_token = Some("   ".into());
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.rpc.auth_token"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_empty_network_allowed_origin() {
+        let mut config = NodeConfig::default();
+        config.network.rpc.allowed_origin = Some("".into());
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.rpc.allowed_origin"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_zero_network_timeouts() {
+        let mut config = NodeConfig::default();
+        config.network.limits.header_read_timeout_ms = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.limits.header_read_timeout_ms"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        let mut config = NodeConfig::default();
+        config.network.limits.read_timeout_ms = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.limits.read_timeout_ms"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        let mut config = NodeConfig::default();
+        config.network.limits.write_timeout_ms = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.limits.write_timeout_ms"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_zero_network_body_limits() {
+        let mut config = NodeConfig::default();
+        config.network.limits.max_header_bytes = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.limits.max_header_bytes"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        let mut config = NodeConfig::default();
+        config.network.limits.max_body_bytes = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.limits.max_body_bytes"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_invalid_token_bucket() {
+        let mut config = NodeConfig::default();
+        config.network.limits.per_ip_token_bucket.burst = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("per_ip_token_bucket.burst"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        let mut config = NodeConfig::default();
+        config
+            .network
+            .limits
+            .per_ip_token_bucket
+            .replenish_per_minute = 0;
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("per_ip_token_bucket.replenish_per_minute"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_missing_tls_files() {
+        let mut config = NodeConfig::default();
+        let temp = tempdir().expect("tempdir");
+        let cert_path = temp.path().join("server.pem");
+        let key_path = temp.path().join("server-key.pem");
+        fs::write(&key_path, "key").expect("write key");
+        config.network.tls.enabled = true;
+        config.network.tls.certificate = Some(cert_path.clone());
+        config.network.tls.private_key = Some(key_path.clone());
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.tls.certificate"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        let mut config = NodeConfig::default();
+        fs::write(&cert_path, "certificate").expect("write cert");
+        config.network.tls.enabled = true;
+        config.network.tls.certificate = Some(cert_path);
+        config.network.tls.private_key = Some(temp.path().join("missing-key.pem"));
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.tls.private_key"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+
+        let mut config = NodeConfig::default();
+        config.network.tls.enabled = true;
+        config.network.tls.require_client_auth = true;
+        config.network.tls.certificate = Some(temp.path().join("server.pem"));
+        config.network.tls.private_key = Some(key_path);
+        config.network.tls.client_ca = Some(temp.path().join("missing-ca.pem"));
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("network.tls.client_ca"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn node_config_validation_rejects_tls_directories() {
+        let mut config = NodeConfig::default();
+        let temp = tempdir().expect("tempdir");
+        let dir = temp.path().join("certs");
+        fs::create_dir(&dir).expect("create dir");
+        let key_path = temp.path().join("server-key.pem");
+        fs::write(&key_path, "key").expect("write key");
+        config.network.tls.enabled = true;
+        config.network.tls.certificate = Some(dir);
+        config.network.tls.private_key = Some(key_path);
+        let error = config.validate().expect_err("validation should fail");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("must be a file"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
     fn malachite_config_uses_defaults_when_missing() {
         let dir = tempdir().expect("tempdir");
         let missing = dir.path().join("missing.toml");
@@ -1511,8 +1971,8 @@ max_round_extensions = 2
         let config = NodeConfig::for_mode(RuntimeMode::Hybrid);
 
         assert!(config.rollout.telemetry.enabled);
-        assert_eq!(config.p2p.heartbeat_interval_ms, 4_000);
-        assert_eq!(config.p2p.gossip_rate_limit_per_sec, 192);
+        assert_eq!(config.network.p2p.heartbeat_interval_ms, 4_000);
+        assert_eq!(config.network.p2p.gossip_rate_limit_per_sec, 192);
         assert_eq!(config.malachite.proof.proof_batch_size, 96);
         assert_eq!(config.malachite.proof.proof_cache_ttl_secs, 720);
     }
@@ -1524,8 +1984,8 @@ max_round_extensions = 2
         assert!(config.rollout.telemetry.enabled);
         assert_eq!(config.rollout.telemetry.sample_interval_secs, 15);
         assert_eq!(config.rollout.release_channel, ReleaseChannel::Testnet);
-        assert_eq!(config.p2p.heartbeat_interval_ms, 3_000);
-        assert_eq!(config.p2p.gossip_rate_limit_per_sec, 256);
+        assert_eq!(config.network.p2p.heartbeat_interval_ms, 3_000);
+        assert_eq!(config.network.p2p.gossip_rate_limit_per_sec, 256);
         assert_eq!(config.malachite.proof.proof_batch_size, 128);
         assert_eq!(config.malachite.proof.proof_cache_ttl_secs, 600);
         assert_eq!(config.malachite.proof.max_recursive_depth, 6);
@@ -1669,7 +2129,12 @@ impl WalletAuthConfig {
             return Ok(());
         }
 
-        match self.token.as_ref().map(|value| value.trim()).filter(|v| !v.is_empty()) {
+        match self
+            .token
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|v| !v.is_empty())
+        {
             Some(_) => {}
             None => {
                 return Err(ChainError::Config(
@@ -1733,10 +2198,7 @@ impl WalletAuthTlsConfig {
             ))
         })?;
 
-        for (path, field) in [
-            (certificate, "certificate"),
-            (private_key, "private_key"),
-        ] {
+        for (path, field) in [(certificate, "certificate"), (private_key, "private_key")] {
             if path.as_os_str().is_empty() {
                 return Err(ChainError::Config(format!(
                     "wallet configuration {label}.{field} must not be empty"
@@ -2003,7 +2465,7 @@ impl WalletConfig {
             self.wallet.auth.validate(true)?;
             if let Some(node) = node {
                 let wallet_listen = self.wallet.rpc.listen;
-                let node_listen = node.rpc_listen;
+                let node_listen = node.network.rpc.listen;
                 if wallet_listen.port() != 0
                     && node_listen.port() != 0
                     && wallet_listen.port() == node_listen.port()

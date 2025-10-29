@@ -67,9 +67,13 @@ include = "./config/node.toml"
 data_dir = "/var/lib/rpp"
 snapshot_dir = "/var/lib/rpp/snapshots"
 proof_cache_dir = "/var/lib/rpp/proofs"
-rpc_listen = "0.0.0.0:7070"
-rpc_requests_per_minute = 900
 mempool_limit = 16384
+
+[network.rpc]
+listen = "0.0.0.0:7070"
+
+[network.limits.per_ip_token_bucket]
+replenish_per_minute = 900
 
 [rollout]
 release_channel = "testnet"
@@ -147,7 +151,7 @@ Key tips while editing the configuration:
 - **Snapshots and proofs:** Place `snapshot_dir` and `proof_cache_dir` on fast,
   persistent storage. Missing snapshots force peers to re-sync from genesis and
   slow down validator recovery after restarts.
-- **RPC throttling:** Raise `rpc_requests_per_minute` cautiously and monitor the
+- **RPC throttling:** Raise `network.limits.per_ip_token_bucket.replenish_per_minute` cautiously and monitor the
   `/status/mempool` telemetry to ensure external users cannot exhaust CPU with
   bursts of submission attempts.
 

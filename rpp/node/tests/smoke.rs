@@ -246,11 +246,11 @@ fn write_configuration(base: &Path, telemetry: bool) -> Result<PathBuf> {
     config.snapshot_dir = base.join("snapshots");
     config.proof_cache_dir = base.join("proofs");
 
-    config.p2p.peerstore_path = base.join("p2p/peerstore.json");
-    config.p2p.gossip_path = Some(base.join("p2p/gossip.json"));
-    config.p2p.listen_addr = format!("/ip4/127.0.0.1/tcp/{}", pick_free_tcp_port()?);
+    config.network.p2p.peerstore_path = base.join("p2p/peerstore.json");
+    config.network.p2p.gossip_path = Some(base.join("p2p/gossip.json"));
+    config.network.p2p.listen_addr = format!("/ip4/127.0.0.1/tcp/{}", pick_free_tcp_port()?);
 
-    config.rpc_listen = format!("127.0.0.1:{}", pick_free_tcp_port()?)
+    config.network.rpc.listen = format!("127.0.0.1:{}", pick_free_tcp_port()?)
         .parse()
         .context("failed to parse rpc listen address")?;
 
