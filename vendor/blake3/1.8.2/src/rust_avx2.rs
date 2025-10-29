@@ -202,7 +202,8 @@ unsafe fn interleave128(a: __m256i, b: __m256i) -> (__m256i, __m256i) {
 // the vecs into contiguous storage and then use gather instructions. This third approach is to use
 // a series of unpack instructions to interleave the vectors. In my benchmarks, interleaving is the
 // fastest approach. To test this, run `cargo +nightly-2025-07-14 bench --bench libtest load_8` in the
-// https://github.com/oconnor663/bao_experiments repo to match our pinned toolchain.
+// https://github.com/oconnor663/bao_experiments repo using the pinned `cargo +nightly-2025-07-14`
+// toolchain.
 #[inline(always)]
 unsafe fn transpose_vecs(vecs: &mut [__m256i; DEGREE]) {
     // Interleave 32-bit lanes. The low unpack is lanes 00/11/44/55, and the high is 22/33/66/77.
