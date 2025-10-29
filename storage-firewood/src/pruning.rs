@@ -25,6 +25,16 @@ pub struct PersistedPrunerSnapshot {
     state_commitment: Hash,
 }
 
+impl PersistedPrunerSnapshot {
+    pub fn block_height(&self) -> u64 {
+        self.block_height
+    }
+
+    pub fn state_commitment(&self) -> Hash {
+        self.state_commitment
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistedPrunerState {
     pub retain: usize,
