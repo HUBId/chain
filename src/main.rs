@@ -27,16 +27,22 @@ use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2p
 use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier,
 };
+use rpp_chain::runtime::wallet::rpc::AuthToken;
+use rpp_chain::runtime::wallet::runtime::{
+    NodeConnector as WalletNodeConnector, WalletRuntime, WalletRuntimeConfig, WalletRuntimeHandle,
+};
+use rpp_chain::runtime::wallet::sync::DeterministicSync;
 use rpp_chain::runtime::{RuntimeMetrics, RuntimeMode, RuntimeProfile};
 use rpp_chain::storage::Storage;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::types::BlockPayload;
 use rpp_chain::wallet::Wallet;
 
+use rpp_chain::errors::ChainResult;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
-use rpp_chain::errors::{ChainError, ChainResult};
+use rpp_chain::errors::ChainError;
 use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
@@ -55,6 +61,15 @@ impl StoragePayloadProvider {
         Self {
             storage: storage.clone(),
         }
+    }
+}
+
+#[derive(Default)]
+struct LocalWalletNodeConnector;
+
+impl WalletNodeConnector<Wallet> for LocalWalletNodeConnector {
+    fn attach(&self, _wallet: &Wallet) -> ChainResult<()> {
+        Ok(())
     }
 }
 
@@ -172,6 +187,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
     let mut gossip_task: Option<JoinHandle<Result<()>>> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
+    let mut wallet_runtime_handle: Option<WalletRuntimeHandle> = None;
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path, resolved.mode)?;
@@ -285,23 +301,56 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
                 Arc::new(Wallet::new(storage, keypair, wallet_metrics))
             }
         };
-        wallet_instance = Some(wallet);
-        if rpc_auth_token.is_none() && config.wallet.auth.enabled {
-            rpc_auth_token = config.wallet.auth.token.clone();
+        let mut runtime_config = WalletRuntimeConfig::new(config.wallet.rpc.listen);
+        runtime_config.allowed_origin = config.wallet.rpc.allowed_origin.clone();
+        if config.wallet.auth.enabled {
+            runtime_config.auth_token = config
+                .wallet
+                .auth
+                .token
+                .clone()
+                .map(AuthToken::new);
+        }
+        runtime_config.requests_per_minute = config
+            .wallet
+            .rpc
+            .requests_per_minute
+            .and_then(NonZeroU64::new);
+
+        let sync_provider = Box::new(DeterministicSync::new(wallet.address().to_string()));
+        let connector: Option<Box<dyn WalletNodeConnector<Wallet>>> =
+            if resolved.mode.includes_node() {
+                Some(Box::new(LocalWalletNodeConnector::default()))
+            } else {
+                None
+            };
+
+        let runtime_handle = WalletRuntime::start(
+            Arc::clone(&wallet),
+            runtime_config,
+            Arc::clone(&runtime_metrics),
+            sync_provider,
+            connector,
+        )
+        .map_err(|err| anyhow!(err))?;
+
+        if rpc_auth_token.is_none() {
+            rpc_auth_token = runtime_handle
+                .auth_token()
+                .map(|token| token.secret().to_string());
         }
         if rpc_allowed_origin.is_none() {
-            rpc_allowed_origin = config.wallet.rpc.allowed_origin.clone();
+            rpc_allowed_origin = runtime_handle.allowed_origin().cloned();
         }
         if rpc_requests_per_minute.is_none() {
-            rpc_requests_per_minute = config
-                .wallet
-                .rpc
-                .requests_per_minute
-                .and_then(NonZeroU64::new);
+            rpc_requests_per_minute = runtime_handle.requests_per_minute();
         }
         if rpc_addr.is_none() {
-            rpc_addr = Some(config.wallet.rpc.listen);
+            rpc_addr = Some(runtime_handle.listen_addr());
         }
+
+        wallet_instance = Some(runtime_handle.wallet());
+        wallet_runtime_handle = Some(runtime_handle);
     }
 
     if node_handle.is_none() && wallet_instance.is_none() {
@@ -376,6 +425,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         orchestrator_instance,
         p2p_handle,
         gossip_task,
+        wallet_runtime_handle,
     )
     .await
 }
@@ -616,6 +666,7 @@ async fn run_until_shutdown(
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     p2p_handle: Option<P2pHandle>,
     gossip_task: Option<JoinHandle<Result<()>>>,
+    wallet_runtime: Option<WalletRuntimeHandle>,
 ) -> Result<()> {
     let (completion_tx, mut completion_rx) = mpsc::unbounded_channel::<Result<()>>();
 
@@ -645,6 +696,13 @@ async fn run_until_shutdown(
 
     if let Some(orchestrator) = orchestrator.as_ref() {
         orchestrator.shutdown();
+    }
+
+    if let Some(handle) = wallet_runtime.as_ref() {
+        handle
+            .shutdown()
+            .await
+            .map_err(|err| anyhow!(err))?;
     }
 
     if shutdown_requested {
