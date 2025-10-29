@@ -1,0 +1,57 @@
+name: Nightly Prover
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  nightly-prover:
+    name: Nightly prover validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up nightly Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: clippy, rustfmt
+
+      - name: Build prover (scalar)
+        run: cargo +nightly build --workspace --no-default-features --features prover-stwo
+
+      - name: Build prover (SIMD)
+        run: cargo +nightly build --workspace --no-default-features --features prover-stwo-simd
+
+      - name: Test prover
+        run: cargo +nightly test --workspace --no-default-features --features prover-stwo
+
+      - name: Lint prover
+        run: cargo +nightly clippy --workspace --all-targets --no-default-features --features prover-stwo -- -D warnings
+
+      - name: Check formatting
+        run: cargo +nightly fmt --all -- --check
+
+      - name: Prepare prover artifacts
+        run: |
+          NODE_BIN="target/debug/node"
+          if [ ! -f "$NODE_BIN" ]; then
+            echo "Expected binary $NODE_BIN not found"
+            exit 1
+          fi
+          mkdir -p artifacts
+          cp "$NODE_BIN" artifacts/chain-nightly-prover
+          (cd artifacts && sha256sum chain-nightly-prover > chain-nightly-prover.sha256)
+
+      - name: Upload prover artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-nightly-prover
+          path: |
+            artifacts/chain-nightly-prover
+            artifacts/chain-nightly-prover.sha256
+          if-no-files-found: error
