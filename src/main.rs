@@ -300,6 +300,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
 
     let rpc_addr = rpc_addr.ok_or_else(|| anyhow!("no runtime role selected"))?;
 
+    let wallet_runtime_active = wallet_instance.is_some();
     let context = api::ApiContext::new(
         runtime_mode.clone(),
         node_handle.clone(),
@@ -307,15 +308,14 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         orchestrator_instance.clone(),
         rpc_requests_per_minute,
         rpc_auth_token.is_some(),
+        wallet_runtime_active,
     );
-    let wallet_routes_enabled = wallet_instance.is_some();
     let api_task = tokio::spawn(async move {
         api::serve(
             context,
             rpc_addr,
             rpc_auth_token.clone(),
             rpc_allowed_origin.clone(),
-            wallet_routes_enabled,
         )
         .await
         .map_err(|err| anyhow!(err))

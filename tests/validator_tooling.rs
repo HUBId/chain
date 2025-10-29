@@ -123,12 +123,13 @@ async fn validator_rpc_and_cli_tooling() -> Result<()> {
     let context = api::ApiContext::new(
         runtime_mode,
         Some(node_handle),
-        Some(wallet),
+        Some(wallet.clone()),
         Some(orchestrator),
         None,
         false,
+        true,
     );
-    let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None, true).await });
+    let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None).await });
 
     let client = Client::builder()
         .build()
