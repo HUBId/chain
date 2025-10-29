@@ -3805,7 +3805,7 @@ dependencies = [
  "libp2p-identity",
  "libp2p-swarm 0.47.0",
  "libp2p-yamux",
- "rcgen",
+ "rcgen 0.13.2",
  "ring",
  "rustls",
  "rustls-webpki",
@@ -5682,6 +5682,18 @@ dependencies = [
 
 [[package]]
 name = "rcgen"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48406db8ac1f3cbc7dcdb56ec355343817958a356ff430259bb07baf7607e1e1"
+dependencies = [
+ "pem",
+ "ring",
+ "time",
+ "yasna",
+]
+
+[[package]]
+name = "rcgen"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
@@ -5920,6 +5932,7 @@ dependencies = [
  "prover-backend-interface",
  "prover_stwo_backend",
  "rand 0.8.5",
+ "rcgen 0.12.1",
  "reqwest 0.12.24",
  "rpp-consensus",
  "rpp-crypto-vrf",
@@ -5928,6 +5941,8 @@ dependencies = [
  "rpp-stark",
  "rpp-wallet",
  "rustc_version",
+ "rustls",
+ "rustls-pemfile",
  "semver",
  "serde",
  "serde_json",
@@ -5937,9 +5952,11 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "toml 0.9.6",
  "tower 0.5.2",
+ "tower-http",
  "tracing",
  "tracing-test",
  "uuid",
@@ -6191,6 +6208,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a9586e9ee2b4f8fab52a0048ca7334d7024eef48e2cb9407e3497bb7cab7fa7"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -6209,6 +6227,15 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
+dependencies = [
+ "base64 0.21.7",
 ]
 
 [[package]]
@@ -7435,8 +7462,10 @@ dependencies = [
  "futures-util",
  "http 1.3.1",
  "http-body 1.0.1",
+ "http-body-util",
  "iri-string",
  "pin-project-lite",
+ "tokio",
  "tower 0.5.2",
  "tower-layer",
  "tower-service",

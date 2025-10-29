@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
 use std::future::Future;
-use std::net::SocketAddr;
+use std::io::BufReader;
+use std::net::{IpAddr, SocketAddr};
 use std::num::NonZeroU64;
+use std::path::Path;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -13,36 +15,47 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use axum::body::Body;
 use axum::error_handling::HandleErrorLayer;
+use axum::extract::connect_info::ConnectInfo;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::header;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::Response;
 use axum::response::sse::{Event, KeepAlive, Sse};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
-use hex;
+use base64::Engine as _;
 use futures::future::pending;
+use hex;
+use hyper::body::Incoming;
+use hyper::service::service_fn;
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::fs;
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, watch};
-use tokio_stream::Stream;
-use tokio_stream::StreamExt;
+use tokio::sync::{oneshot, watch, Notify};
+use tokio::task::JoinSet;
+use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::{BroadcastStream, WatchStream};
-use tower::ServiceBuilder;
-use tower::Service;
+use tokio_stream::Stream;
+use tokio_stream::StreamExt;
 use tower::layer::Layer;
 use tower::limit::RateLimitLayer;
+use tower::Service;
+use tower::ServiceBuilder;
+use tower::ServiceExt;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::{RequestBodyTimeoutLayer, ResponseBodyTimeoutLayer, TimeoutLayer};
 use tracing::{info, warn};
 
 use crate::consensus::SignedBftVote;
 use crate::crypto::{
-    DynVrfKeyStore, VrfKeyIdentifier, VrfKeypair, generate_vrf_keypair, vrf_public_key_from_hex,
-    vrf_public_key_to_hex, vrf_secret_key_to_hex,
+    generate_vrf_keypair, vrf_public_key_from_hex, vrf_public_key_to_hex, vrf_secret_key_to_hex,
+    DynVrfKeyStore, VrfKeyIdentifier, VrfKeypair,
 };
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "vendor_electrs")]
@@ -50,11 +63,10 @@ use crate::interfaces::WalletTrackerSnapshot;
 use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
-    BftMembership, BlockProofArtifactsView, ConsensusStatus, DEFAULT_STATE_SYNC_CHUNK,
-    MempoolStatus, NodeHandle, NodeStatus, P2pCensorshipReport, PendingUptimeSummary,
-    PruningJobStatus, RolloutStatus, UptimeSchedulerRun, UptimeSchedulerStatus, VrfStatus,
-    VrfThresholdStatus, ValidatorConsensusTelemetry, ValidatorMempoolTelemetry,
-    ValidatorTelemetryView,
+    BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
+    P2pCensorshipReport, PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
+    UptimeSchedulerStatus, ValidatorConsensusTelemetry, ValidatorMempoolTelemetry,
+    ValidatorTelemetryView, VrfStatus, VrfThresholdStatus, DEFAULT_STATE_SYNC_CHUNK,
 };
 use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
@@ -63,11 +75,12 @@ use crate::orchestration::{
 use crate::proof_system::VerifierMetricsSnapshot;
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::TimetokeRecord;
+use crate::runtime::config::{
+    NetworkLimitsConfig, NetworkTlsConfig, P2pAllowlistEntry, QueueWeightsConfig,
+    SecretsBackendConfig, SecretsConfig,
+};
 use crate::runtime::{
     ProofRpcMethod, RpcMethod, RpcResult, RuntimeMetrics, RuntimeMode, WalletRpcMethod,
-};
-use crate::runtime::config::{
-    P2pAllowlistEntry, QueueWeightsConfig, SecretsBackendConfig, SecretsConfig,
 };
 use crate::sync::ReconstructionPlan;
 use crate::types::{
@@ -81,12 +94,19 @@ use crate::wallet::{
 #[cfg(feature = "vendor_electrs")]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
 use blake3::Hash as Blake3Hash;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
     NetworkStateSyncChunk, NetworkStateSyncPlan, SnapshotChunk,
 };
+use rustls::crypto::aws_lc_rs;
+use rustls::pki_types::{
+    CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer, PrivatePkcs8KeyDer, PrivateSec1KeyDer,
+};
+use rustls::server::{ClientCertVerifier, WebPkiClientVerifier};
+use rustls::{RootCertStore, ServerConfig};
+use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LightHeadSse {
@@ -971,10 +991,133 @@ where
                     Ok(response)
                 }
                 Err(err) => {
-                    metrics.record_rpc_request(rpc_method, RpcResult::from_error(), start.elapsed());
+                    metrics.record_rpc_request(
+                        rpc_method,
+                        RpcResult::from_error(),
+                        start.elapsed(),
+                    );
                     Err(err)
                 }
             }
+        })
+    }
+}
+
+fn unwrap_infallible<T>(result: Result<T, Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => match err {},
+    }
+}
+
+#[derive(Clone)]
+struct PerIpTokenBucketLayer {
+    state: Arc<PerIpTokenBucketState>,
+}
+
+impl PerIpTokenBucketLayer {
+    fn new(burst: u64, replenish_per_minute: u64) -> Self {
+        Self {
+            state: Arc::new(PerIpTokenBucketState::new(burst, replenish_per_minute)),
+        }
+    }
+}
+
+impl<S> Layer<S> for PerIpTokenBucketLayer {
+    type Service = PerIpTokenBucketService<S>;
+
+    fn layer(&self, inner: S) -> Self::Service {
+        PerIpTokenBucketService {
+            inner,
+            state: self.state.clone(),
+        }
+    }
+}
+
+struct PerIpTokenBucketState {
+    buckets: Mutex<HashMap<IpAddr, TokenBucket>>,
+    burst: f64,
+    replenish_per_second: f64,
+}
+
+impl PerIpTokenBucketState {
+    fn new(burst: u64, replenish_per_minute: u64) -> Self {
+        let replenish_per_second = replenish_per_minute as f64 / 60.0;
+        Self {
+            buckets: Mutex::new(HashMap::new()),
+            burst: burst as f64,
+            replenish_per_second,
+        }
+    }
+
+    fn try_acquire(&self, ip: IpAddr) -> bool {
+        let mut buckets = self.buckets.lock();
+        let bucket = buckets.entry(ip).or_insert_with(|| TokenBucket {
+            tokens: self.burst,
+            last_refill: Instant::now(),
+        });
+
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(bucket.last_refill);
+        if elapsed.as_secs_f64() > 0.0 {
+            bucket.tokens =
+                (bucket.tokens + self.replenish_per_second * elapsed.as_secs_f64()).min(self.burst);
+            bucket.last_refill = now;
+        }
+
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+struct TokenBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+#[derive(Clone)]
+struct PerIpTokenBucketService<S> {
+    inner: S,
+    state: Arc<PerIpTokenBucketState>,
+}
+
+impl<S> Service<Request<Body>> for PerIpTokenBucketService<S>
+where
+    S: Service<Request<Body>, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response;
+    type Error = Infallible;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let remote_ip = request
+            .extensions()
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|info| info.0.ip());
+        let mut inner = self.inner.clone();
+        let state = self.state.clone();
+
+        Box::pin(async move {
+            if let Some(ip) = remote_ip {
+                if !state.try_acquire(ip) {
+                    let response = Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .body(Body::from("rate limit exceeded"))
+                        .unwrap();
+                    return Ok(response);
+                }
+            }
+
+            inner.call(request).await
         })
     }
 }
@@ -984,12 +1127,16 @@ pub async fn serve(
     addr: SocketAddr,
     auth_token: Option<String>,
     allowed_origin: Option<String>,
+    limits: NetworkLimitsConfig,
+    tls: NetworkTlsConfig,
 ) -> ChainResult<()> {
     serve_with_shutdown(
         context,
         addr,
         auth_token,
         allowed_origin,
+        limits,
+        tls,
         pending(),
         None,
     )
@@ -1001,6 +1148,8 @@ pub async fn serve_with_shutdown<F>(
     addr: SocketAddr,
     auth_token: Option<String>,
     allowed_origin: Option<String>,
+    limits: NetworkLimitsConfig,
+    tls: NetworkTlsConfig,
     shutdown: F,
     ready: Option<oneshot::Sender<Result<(), std::io::Error>>>,
 ) -> ChainResult<()>
@@ -1123,11 +1272,33 @@ where
         );
     }
 
+    let header_timeout = Duration::from_millis(limits.header_read_timeout_ms);
+    let read_timeout = Duration::from_millis(limits.read_timeout_ms);
+    let write_timeout = Duration::from_millis(limits.write_timeout_ms);
+    let max_header_bytes = limits.max_header_bytes;
+
+    let mut service_builder = ServiceBuilder::new();
+    if limits.per_ip_token_bucket.enabled {
+        service_builder = service_builder.layer(PerIpTokenBucketLayer::new(
+            limits.per_ip_token_bucket.burst,
+            limits.per_ip_token_bucket.replenish_per_minute,
+        ));
+    }
+    service_builder = service_builder
+        .layer(RequestBodyLimitLayer::new(limits.max_body_bytes))
+        .layer(RequestBodyTimeoutLayer::new(read_timeout))
+        .layer(ResponseBodyTimeoutLayer::new(write_timeout))
+        .layer(TimeoutLayer::new(header_timeout));
+
+    router = router.layer(service_builder);
     router = router.layer(RpcMetricsLayer::new(metrics));
 
     let router = router.with_state(context);
+    let mut make_service = router.into_make_service_with_connect_info::<SocketAddr>();
 
-    let listener = match TcpListener::bind(addr).await {
+    let tls_acceptor = build_tls_acceptor(&tls).await?;
+
+    let mut listener = match TcpListener::bind(addr).await {
         Ok(listener) => {
             if let Some(sender) = ready {
                 let _ = sender.send(Ok(()));
@@ -1141,11 +1312,220 @@ where
             return Err(ChainError::Io(err));
         }
     };
-    info!(?addr, "RPC server listening");
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown)
+
+    info!(?addr, tls_enabled = tls.enabled, "RPC server listening");
+
+    let notify = Arc::new(Notify::new());
+    let mut tasks: JoinSet<()> = JoinSet::new();
+    let mut shutdown = Box::pin(shutdown);
+
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                break;
+            }
+            accept_result = listener.accept() => {
+                let (stream, remote_addr) = match accept_result {
+                    Ok(value) => value,
+                    Err(err) => {
+                        warn!(error = %err, "failed to accept RPC connection");
+                        continue;
+                    }
+                };
+
+                let tower_service = unwrap_infallible(make_service.call(remote_addr).await);
+                let tls_acceptor = tls_acceptor.clone();
+                let notify = notify.clone();
+                tasks.spawn(async move {
+                    let io = match tls_acceptor {
+                        Some(acceptor) => match acceptor.accept(stream).await {
+                            Ok(tls_stream) => TokioIo::new(tls_stream),
+                            Err(err) => {
+                                warn!(?remote_addr, error = %err, "TLS handshake failed");
+                                return;
+                            }
+                        },
+                        None => TokioIo::new(stream),
+                    };
+
+                    let hyper_service = service_fn(move |request: Request<Incoming>| {
+                        let service = tower_service.clone();
+                        async move { service.oneshot(request).await }
+                    });
+
+                    let mut builder = HyperConnBuilder::new(TokioExecutor::new());
+                    #[cfg(feature = "http1")]
+                    {
+                        let http1 = builder.http1();
+                        http1.timer(TokioTimer::new());
+                        http1.header_read_timeout(header_timeout);
+                        http1.read_timeout(read_timeout);
+                        http1.write_timeout(write_timeout);
+                        http1.max_header_list_size(max_header_bytes.min(u32::MAX as usize) as u32);
+                    }
+                    #[cfg(feature = "http2")]
+                    builder.http2().enable_connect_protocol();
+
+                    let mut conn = builder.serve_connection_with_upgrades(io, hyper_service);
+                    tokio::pin!(conn);
+                    let shutdown_signal = notify.notified();
+                    tokio::pin!(shutdown_signal);
+
+                    loop {
+                        tokio::select! {
+                            result = &mut conn => {
+                                if let Err(err) = result {
+                                    warn!(?remote_addr, error = %err, "RPC connection terminated with error");
+                                }
+                                break;
+                            }
+                            _ = &mut shutdown_signal => {
+                                conn.as_mut().graceful_shutdown();
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    notify.notify_waiters();
+    while tasks.join_next().await.is_some() {}
+
+    Ok(())
+}
+
+async fn build_tls_acceptor(config: &NetworkTlsConfig) -> ChainResult<Option<TlsAcceptor>> {
+    if !config.enabled {
+        return Ok(None);
+    }
+
+    let certificate_path = config
+        .certificate
+        .as_ref()
+        .ok_or_else(|| ChainError::Config("network.tls.certificate is required".into()))?;
+    let private_key_path = config
+        .private_key
+        .as_ref()
+        .ok_or_else(|| ChainError::Config("network.tls.private_key is required".into()))?;
+
+    let certificates = load_certificates(certificate_path).await?;
+    let private_key = load_private_key(private_key_path).await?;
+
+    let _ = aws_lc_rs::default_provider().install_default();
+
+    let mut builder = ServerConfig::builder()
+        .with_safe_default_protocol_versions()
+        .map_err(|err| {
+            ChainError::Config(format!("failed to configure TLS protocol versions: {err}"))
+        })?;
+
+    if let Some(ca_path) = config.client_ca.as_ref() {
+        let verifier = build_client_verifier(ca_path, config.require_client_auth).await?;
+        builder = builder.with_client_cert_verifier(verifier);
+    } else {
+        if config.require_client_auth {
+            return Err(ChainError::Config(
+                "network.tls.client_ca must be configured when client authentication is required"
+                    .into(),
+            ));
+        }
+
+        builder = builder.with_no_client_auth();
+    }
+
+    let mut server_config = builder
+        .with_single_cert(certificates, private_key)
+        .map_err(|err| ChainError::Config(format!("failed to build TLS server config: {err}")))?;
+
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    Ok(Some(TlsAcceptor::from(Arc::new(server_config))))
+}
+
+async fn build_client_verifier(
+    ca_path: &Path,
+    require_client_auth: bool,
+) -> ChainResult<Arc<dyn ClientCertVerifier>> {
+    let ca_certs = load_certificates(ca_path).await?;
+    let mut roots = RootCertStore::empty();
+    for cert in &ca_certs {
+        roots
+            .add(cert.clone())
+            .map_err(|err| ChainError::Config(format!("invalid client CA certificate: {err}")))?;
+    }
+
+    let roots = Arc::new(roots);
+    let mut builder = WebPkiClientVerifier::builder(roots);
+    if !require_client_auth {
+        builder = builder.allow_unauthenticated();
+    }
+
+    builder.build().map_err(|err| {
+        ChainError::Config(format!(
+            "failed to build client certificate verifier: {err}"
+        ))
+    })
+}
+
+async fn load_certificates(path: &Path) -> ChainResult<Vec<CertificateDer<'static>>> {
+    let bytes = fs::read(path)
         .await
-        .map_err(|err| ChainError::Io(std::io::Error::new(std::io::ErrorKind::Other, err)))
+        .map_err(|err| ChainError::Config(format!("failed to read {path:?}: {err}")))?;
+    let mut reader = BufReader::new(bytes.as_slice());
+    let certs = certs(&mut reader).map_err(|err| {
+        ChainError::Config(format!("failed to parse certificates from {path:?}: {err}"))
+    })?;
+    Ok(certs
+        .into_iter()
+        .map(|cert| CertificateDer::from(cert).into_owned())
+        .collect())
+}
+
+async fn load_private_key(path: &Path) -> ChainResult<PrivateKeyDer<'static>> {
+    let bytes = fs::read(path)
+        .await
+        .map_err(|err| ChainError::Config(format!("failed to read {path:?}: {err}")))?;
+
+    let mut reader = BufReader::new(bytes.as_slice());
+    if let Some(key) = pkcs8_private_keys(&mut reader)
+        .map_err(|err| {
+            ChainError::Config(format!("failed to parse private key from {path:?}: {err}"))
+        })?
+        .into_iter()
+        .next()
+    {
+        let key = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key));
+        return Ok(key.clone_key());
+    }
+
+    let mut reader = BufReader::new(bytes.as_slice());
+    if let Some(key) = rsa_private_keys(&mut reader)
+        .map_err(|err| {
+            ChainError::Config(format!("failed to parse private key from {path:?}: {err}"))
+        })?
+        .into_iter()
+        .next()
+    {
+        let key = PrivateKeyDer::from(PrivatePkcs1KeyDer::from(key));
+        return Ok(key.clone_key());
+    }
+
+    let mut reader = BufReader::new(bytes.as_slice());
+    if let Some(key) = ec_private_keys(&mut reader)
+        .map_err(|err| {
+            ChainError::Config(format!("failed to parse private key from {path:?}: {err}"))
+        })?
+        .into_iter()
+        .next()
+    {
+        let key = PrivateKeyDer::from(PrivateSec1KeyDer::from(key));
+        return Ok(key.clone_key());
+    }
+
+    Err(ChainError::Config(format!(
+        "no valid private key found in {path:?}"
+    )))
 }
 
 async fn health(State(state): State<ApiContext>) -> Json<HealthResponse> {
@@ -1536,8 +1916,7 @@ async fn submit_vrf_proof(
 ) -> Result<(StatusCode, Json<SubmitVrfProofResponse>), (StatusCode, Json<ErrorResponse>)> {
     let node = state.require_node()?;
     let submission = build_vrf_submission(request)?;
-    node
-        .submit_vrf_submission(submission)
+    node.submit_vrf_submission(submission)
         .map_err(to_http_error)?;
 
     Ok((
@@ -1798,8 +2177,7 @@ fn build_vrf_submission(
         tier_seed,
     } = input;
 
-    let last_block_header =
-        decode_hex_array::<32>(&last_block_header, "input.last_block_header")?;
+    let last_block_header = decode_hex_array::<32>(&last_block_header, "input.last_block_header")?;
     let tier_seed = decode_hex_array::<32>(&tier_seed, "input.tier_seed")?;
 
     let public_key_hex = public_key
@@ -1830,11 +2208,8 @@ fn decode_hex_array<const N: usize>(
     value: &str,
     field: &'static str,
 ) -> Result<[u8; N], (StatusCode, Json<ErrorResponse>)> {
-    let decoded = hex::decode(value).map_err(|_| {
-        invalid_vrf_request(format!(
-            "{field} must be a {N}-byte hex string"
-        ))
-    })?;
+    let decoded = hex::decode(value)
+        .map_err(|_| invalid_vrf_request(format!("{field} must be a {N}-byte hex string")))?;
 
     if decoded.len() != N {
         return Err(invalid_vrf_request(format!(
@@ -2591,8 +2966,8 @@ mod interface_schemas {
         SignTxRequest, SignTxResponse,
     };
     use jsonschema::{Draft, JSONSchema};
-    use serde::Serialize;
     use serde::de::DeserializeOwned;
+    use serde::Serialize;
     use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};

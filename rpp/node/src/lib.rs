@@ -605,6 +605,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         );
         let auth_token = rpc_auth.clone();
         let allowed_origin = rpc_origin.clone();
+        let limits = config.network.limits.clone();
+        let tls = config.network.tls.clone();
 
         server_tasks.spawn(async move {
             let shutdown = async move {
@@ -615,6 +617,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 addr,
                 auth_token,
                 allowed_origin,
+                limits,
+                tls,
                 shutdown,
                 Some(ready_tx),
             )
@@ -662,6 +666,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         );
         let auth_token = rpc_auth.clone();
         let allowed_origin = rpc_origin.clone();
+        let limits = config.network.limits.clone();
+        let tls = config.network.tls.clone();
 
         server_tasks.spawn(async move {
             let shutdown = async move {
@@ -672,6 +678,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 wallet_addr,
                 auth_token,
                 allowed_origin,
+                limits,
+                tls,
                 shutdown,
                 Some(ready_tx),
             )
