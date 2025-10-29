@@ -258,7 +258,22 @@ pub struct BootstrapOptions {
     pub write_config: bool,
 }
 
+pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
+    if matches!(mode, RuntimeMode::Validator | RuntimeMode::Hybrid)
+        && cfg!(not(feature = "prover-stwo"))
+    {
+        let mode_name = mode.as_str();
+        return Err(BootstrapError::configuration(anyhow!(
+            "the {mode_name} runtime requires the `prover-stwo` feature. rebuild with `cargo build -p rpp-node --release --no-default-features --features prover-stwo` (or replace `prover-stwo` with `prover-stwo-simd` if SIMD acceleration is desired)."
+        )));
+    }
+
+    Ok(())
+}
+
 pub async fn run(mode: RuntimeMode, options: RuntimeOptions) -> BootstrapResult<()> {
+    ensure_prover_backend(mode)?;
+
     let bootstrap_mode = mode;
     let dry_run = options.dry_run;
     let bootstrap_options = options.into_bootstrap_options(mode);

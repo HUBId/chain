@@ -141,6 +141,7 @@ async fn run_runtime(
     mode: RuntimeMode,
     options: rpp_node::RuntimeOptions,
 ) -> rpp_node::BootstrapResult<()> {
+    rpp_node::ensure_prover_backend(mode)?;
     rpp_node::run(mode, options).await
 }
 

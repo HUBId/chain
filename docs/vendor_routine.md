@@ -109,3 +109,9 @@ Mit einem dokumentierten und erfolgreichen Batch 1 existiert ein erprobtes Must
 * Regelmäßige Integritätsprüfung mittels Hashes (z. B. `sha256sum`) kann optional ergänzt werden, um unbeabsichtigte Änderungen an Vendor-Dateien aufzuspüren.
 * Änderungen am Prozess werden im selben Dokument nachgeführt, damit alle Teams auf einen gemeinsamen Stand zugreifen.
 
+## Produktions-Build-Checkliste (STWO-Backend)
+
+1. **Toolchain pinnen:** Vor dem Build `rustup override set nightly-2025-07-14` oder `cargo +nightly-2025-07-14 …` verwenden, damit die STWO-Sources aus `vendor/stwo-dev/` gebaut werden können.
+2. **Features wählen:** Produktions-Artefakte mit `cargo +nightly-2025-07-14 build -p rpp-node --release --no-default-features --features prod,prover-stwo` (bzw. `prover-stwo-simd`) erzeugen. Builds ohne dieses Feature brechen seit dem neuen CLI-Gate sofort ab.
+3. **Backend verifizieren:** Direkt nach dem Build `cargo +nightly-2025-07-14 run -p rpp-node --bin validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Nur wenn der Lauf ohne den Fehlerhinweis „requires the `prover-stwo` feature“ endet, ist der STWO-Backendcode aktiv und für Deployments freigegeben.
+
