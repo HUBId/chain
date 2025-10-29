@@ -276,7 +276,7 @@ impl TestCluster {
             {
                 let mut wallet_config = WalletConfig::default();
                 wallet_config.data_dir = node_root.join("wallet");
-                wallet_config.key_path = config.key_path.clone();
+                wallet_config.wallet.keys.key_path = config.key_path.clone();
                 wallet_config
                     .ensure_directories()
                     .map_err(|err| anyhow!(err))?;

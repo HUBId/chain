@@ -1,6 +1,31 @@
 data_dir = "./data"
+
+[wallet.keys]
 key_path = "./keys/wallet.toml"
-rpc_listen = "127.0.0.1:9090"
+
+[wallet.rpc]
+listen = "127.0.0.1:9090"
+allowed_origin = null
+requests_per_minute = null
+
+[wallet.auth]
+enabled = false
+token = null
+
+[wallet.auth.tls]
+certificate = null
+private_key = null
+ca_certificate = null
+
+[wallet.budgets]
+submit_transaction_per_minute = 120
+proof_generation_per_minute = 60
+pipeline_depth = 64
+
+[wallet.rescan]
+auto_trigger = false
+lookback_blocks = 2880
+chunk_size = 64
 
 [node]
 embedded = false

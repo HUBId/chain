@@ -315,6 +315,13 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())
         .map_err(BootstrapError::configuration)?;
 
+    if let Some(bundle) = wallet_bundle.as_ref() {
+        bundle
+            .value
+            .validate_for_mode(mode, node_bundle.as_ref().map(|bundle| &bundle.value))
+            .map_err(BootstrapError::configuration)?;
+    }
+
     let node_metadata = node_bundle
         .as_ref()
         .and_then(|bundle| bundle.metadata.as_ref().cloned());
@@ -391,6 +398,27 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             "resolved wallet configuration"
         );
     }
+    if let Some(bundle) = wallet_bundle.as_ref() {
+        let rpc = &bundle.value.wallet.rpc;
+        let auth = &bundle.value.wallet.auth;
+        let budgets = &bundle.value.wallet.budgets;
+        let rescan = &bundle.value.wallet.rescan;
+        info!(
+            target = "config",
+            role = "wallet",
+            listen = %rpc.listen,
+            auth_enabled = auth.enabled,
+            allowed_origin = rpc.allowed_origin.as_deref(),
+            rpc_requests_per_minute = rpc.requests_per_minute,
+            submit_budget_per_minute = budgets.submit_transaction_per_minute,
+            proof_budget_per_minute = budgets.proof_generation_per_minute,
+            pipeline_depth = budgets.pipeline_depth,
+            rescan_auto_trigger = rescan.auto_trigger,
+            rescan_chunk_size = rescan.chunk_size,
+            rescan_lookback_blocks = rescan.lookback_blocks,
+            "resolved wallet service parameters"
+        );
+    }
 
     if options.write_config {
         if let Some(bundle) = node_bundle.as_ref() {
@@ -431,7 +459,9 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
 
     let node_rpc_addr = node_bundle.as_ref().map(|bundle| bundle.value.rpc_listen);
-    let wallet_rpc_addr = wallet_bundle.as_ref().map(|bundle| bundle.value.rpc_listen);
+    let wallet_rpc_addr = wallet_bundle
+        .as_ref()
+        .map(|bundle| bundle.value.wallet.rpc.listen);
 
     if let Some(bundle) = node_bundle.take() {
         let config = bundle.value;
@@ -518,10 +548,24 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             Storage::open(&wallet_config.data_dir.join("db"))
                 .map_err(|err| BootstrapError::startup(anyhow!(err)))?
         };
-        let keypair = load_or_generate_keypair(&wallet_config.key_path)
+        let keypair = load_or_generate_keypair(&wallet_config.wallet.keys.key_path)
             .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
         let wallet = Arc::new(Wallet::new(storage, keypair, Arc::clone(&runtime_metrics)));
         wallet_instance = Some(wallet);
+
+        if rpc_auth.is_none() && wallet_config.wallet.auth.enabled {
+            rpc_auth = wallet_config.wallet.auth.token.clone();
+        }
+        if rpc_origin.is_none() {
+            rpc_origin = wallet_config.wallet.rpc.allowed_origin.clone();
+        }
+        if rpc_requests_per_minute.is_none() {
+            rpc_requests_per_minute = wallet_config
+                .wallet
+                .rpc
+                .requests_per_minute
+                .and_then(NonZeroU64::new);
+        }
     }
 
     if let Some(wallet) = &wallet_instance {
@@ -598,10 +642,12 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             node_handle.clone(),
             Some(Arc::clone(wallet)),
             orchestrator_instance.clone(),
-            None,
-            false,
+            rpc_requests_per_minute,
+            rpc_auth.is_some(),
             wallet_runtime_active,
         );
+        let auth_token = rpc_auth.clone();
+        let allowed_origin = rpc_origin.clone();
 
         server_tasks.spawn(async move {
             let shutdown = async move {
@@ -610,8 +656,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             let result = rpp_chain::api::serve_with_shutdown(
                 context,
                 wallet_addr,
-                None,
-                None,
+                auth_token,
+                allowed_origin,
                 shutdown,
                 Some(ready_tx),
             )
@@ -931,7 +977,7 @@ fn ensure_listener_conflicts(
     let mut conflicts = Vec::new();
 
     let node_rpc = node_bundle.value.rpc_listen;
-    let wallet_rpc = wallet_bundle.value.rpc_listen;
+    let wallet_rpc = wallet_bundle.value.wallet.rpc.listen;
     if node_rpc.port() != 0
         && wallet_rpc.port() != 0
         && node_rpc.port() == wallet_rpc.port()
@@ -940,7 +986,8 @@ fn ensure_listener_conflicts(
             || wallet_rpc.ip().is_unspecified())
     {
         let node_key = describe_config_key(ConfigRole::Node, node_metadata, "rpc_listen");
-        let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, "rpc_listen");
+        let wallet_key =
+            describe_config_key(ConfigRole::Wallet, wallet_metadata, "wallet.rpc.listen");
         conflicts.push(format!(
             "{wallet_key} ({wallet_rpc}) conflicts with {node_key} ({node_rpc}); update the configuration to use distinct addresses"
         ));
@@ -949,7 +996,8 @@ fn ensure_listener_conflicts(
     if let Some(port) = extract_tcp_port(&node_bundle.value.p2p.listen_addr) {
         if port != 0 && port == wallet_rpc.port() {
             let node_key = describe_config_key(ConfigRole::Node, node_metadata, "p2p.listen_addr");
-            let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, "rpc_listen");
+            let wallet_key =
+                describe_config_key(ConfigRole::Wallet, wallet_metadata, "wallet.rpc.listen");
             conflicts.push(format!(
                 "{wallet_key} ({wallet_rpc}) reuses TCP port {port}, which is already reserved by {node_key} ({})",
                 node_bundle.value.p2p.listen_addr
@@ -2168,7 +2216,7 @@ mod tests {
         node_config.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7600".to_string();
 
         let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
-        wallet_config.rpc_listen = node_config.rpc_listen;
+        wallet_config.wallet.rpc.listen = node_config.rpc_listen;
 
         let node_bundle = ConfigBundle {
             value: node_config,
@@ -2193,7 +2241,7 @@ mod tests {
         node_config.rpc_listen = "127.0.0.1:7000".parse().expect("socket addr");
 
         let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
-        wallet_config.rpc_listen = "127.0.0.1:8000".parse().expect("socket addr");
+        wallet_config.wallet.rpc.listen = "127.0.0.1:8000".parse().expect("socket addr");
 
         let node_bundle = ConfigBundle {
             value: node_config,
@@ -2237,7 +2285,7 @@ mod tests {
         node_config.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7500".to_string();
 
         let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
-        wallet_config.rpc_listen = node_config.rpc_listen;
+        wallet_config.wallet.rpc.listen = node_config.rpc_listen;
 
         let node_bundle = ConfigBundle {
             value: node_config,

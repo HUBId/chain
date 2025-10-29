@@ -18,7 +18,7 @@
 use bitflags::bitflags;
 use smallvec::SmallVec;
 use std::fmt::{self, Debug, LowerHex};
-use std::iter::{FusedIterator, once};
+use std::iter::{once, FusedIterator};
 use std::ops::Add;
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
@@ -159,10 +159,10 @@ impl Add<Path> for Path {
 impl Iterator for BytesIterator<'_> {
     type Item = u8;
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(&hi) = self.nibbles_iter.next()
-            && let Some(&lo) = self.nibbles_iter.next()
-        {
-            return Some(hi * 16 + lo);
+        if let Some(&hi) = self.nibbles_iter.next() {
+            if let Some(&lo) = self.nibbles_iter.next() {
+                return Some(hi * 16 + lo);
+            }
         }
         None
     }
