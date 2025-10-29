@@ -1,0 +1,25 @@
+title = "Firewood gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "False positives for test data and documentation snippets"
+regexes = [
+  '''(?i)test[-_ ]?(token|secret|key)''',
+  '''(?i)example[-_ ]?(token|secret|key)'''
+]
+paths = [
+  '''docs/.*''',
+  '''tests?/fixtures?/.*'''
+]
+
+[[rules]]
+id = "firewood-generic-api-key"
+description = "Generic high-entropy API token"
+regex = '''(?i)(api|auth)[-_ ]?(token|key)['"`:=\s]+[0-9a-zA-Z]{32,}'''
+
+[[rules]]
+id = "firewood-private-key"
+description = "Private key block"
+regex = '''-----BEGIN (?:[A-Z ]+)?PRIVATE KEY-----'''
