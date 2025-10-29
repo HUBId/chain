@@ -9,6 +9,12 @@ All notable changes to this project will be documented in this file.
 - Align all nightly Rust toolchain references on `nightly-2025-07-14`, update CI to guard the pin, and document the one-time cache cleanup required after installing the new compiler.
 - Confirm contributors have the cleanup steps for stale nightly artifacts (`cargo clean -p prover_stwo_backend`, `rm -rf prover/target`, uninstall toolchains older than `nightly-2025-07-14`) and record the stable/nightly build separation verified on Rust 1.79 and the pinned nightly toolchain.
 
+### 📚 Documentation
+
+- Point operators to the VRF telemetry endpoints exposed by `/status/node` and
+  the `target_validator_count` / `rollout.telemetry.*` configuration knobs so
+  the new metrics surface alongside existing dashboards.【F:docs/poseidon_vrf.md†L55-L104】【F:config/node.toml†L8-L76】
+
 ## [0.0.12] - 2025-08-26
 
 ### 🚀 Features

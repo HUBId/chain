@@ -50,6 +50,26 @@ production builds.
   backend still behaves as a deterministic stub rather than talking to a real
   Plonky3 engine.【F:rpp/proofs/plonky3/crypto.rs†L360-L436】
 
+## Poseidon VRF coverage
+
+The Poseidon-backed VRF stack that the blueprint scoped is now fully wired:
+
+* `rpp/crypto-vrf` ships the VRF key lifecycle, Poseidon input tuple helpers,
+  and randomness/proof derivation utilities so operators can generate and store
+  the required key material without relying on external tooling.【F:rpp/crypto-vrf/src/lib.rs†L247-L360】
+* The same crate covers epoch rotation, replay protection, and threshold
+  selection: `VrfEpochManager` deduplicates submissions per epoch, while
+  `select_validators` applies the weighted lottery, entropy beacon updates, and
+  fallback handling described in the blueprint.【F:rpp/crypto-vrf/src/lib.rs†L648-L999】
+* Consensus integrates the VRF outputs directly; `ConsensusRound::new` loads the
+  validated submissions, captures the selection audit trail, and records the
+  per-round metrics that `NodeStatus` exposes through the runtime RPC layer.
+  Operators can now query `/status/node` for `vrf_metrics` alongside the usual
+  consensus health information.【F:rpp/consensus/node.rs†L360-L450】【F:rpp/runtime/node.rs†L3921-L3936】
+
+These additions retire the `vrf.poseidon_impl`, `vrf.epoch_management`, and
+`vrf.monitoring` backlog items in the blueprint module.【F:rpp/proofs/blueprint/mod.rs†L190-L210】
+
 **Net result:** the Plonky3 pathway remains a mock that validates the plumbing
 but provides no cryptographic guarantees until real setup artifacts and prover
 executables are integrated.
@@ -65,6 +85,7 @@ progress without digging into the Rust module:
 | Firewood ↔ STWO interfaces | `state.lifecycle_api`, `state.block_metadata`, `state.pruning_jobs` | Lifecycle-Trait und Block-Metadaten werden inzwischen implementiert und getestet; Pruning-Jobs stehen weiter aus.【F:rpp/storage/state/lifecycle.rs†L11-L218】【F:rpp/storage/mod.rs†L277-L335】【F:rpp/proofs/blueprint/mod.rs†L110-L127】 |
 | Wallet/STWO workflows | `wallet.utxo_policies`, `wallet.zsi_workflow`, `wallet.stwo_circuits`, `wallet.uptime_proofs` | Todo【F:rpp/proofs/blueprint/mod.rs†L135-L157】 |
 | Plonky3 backend enablement | Roadmap Schritt 3 (Proof system phase) | Todo【F:docs/roadmap_implementation_plan.md†L19-L77】 |
+| VRF validator selection | `vrf.poseidon_impl`, `vrf.epoch_management`, `vrf.monitoring` | Done – VRF keygen, thresholding, and telemetry are live; alerting still relies on the manual checks in the VRF troubleshooting runbook, so follow-up automation remains open.【F:rpp/proofs/blueprint/mod.rs†L190-L210】【F:rpp/crypto-vrf/src/lib.rs†L247-L999】【F:rpp/runtime/node.rs†L3921-L3936】【F:docs/validator_troubleshooting.md†L9-L38】 |
 
 ## Historical note
 
