@@ -10,8 +10,12 @@ stable and nightly builds:
 - `make test:stable` runs the stable test suite under the same pinned toolchain
   and excludes the prover workspace crates.
 - `make build:nightly` enters the prover sub-workspace and builds it with
-  `cargo +nightly`.
-- `make test:nightly` executes the prover tests with the nightly toolchain.
+  `cargo +nightly-2025-07-14`.
+- `make test:nightly` executes the prover tests with the pinned nightly toolchain.
+
+Install or update the nightly compiler with `rustup toolchain install nightly-2025-07-14 --profile minimal` and remove obsolete
+artifacts (`cargo clean -p prover-stwo-backend`, `rm -rf prover/target`) after switching to the new pin so that stale builds from
+older toolchains do not interfere with CI caches.
 
 Set `STABLE_TOOLCHAIN`, `NIGHTLY_TOOLCHAIN`, or `PROVER_MANIFEST` when invoking
 `make` to override the defaults, for example

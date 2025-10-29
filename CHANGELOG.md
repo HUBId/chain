@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### ⚙️ Miscellaneous Tasks
+
+- Align all nightly Rust toolchain references on `nightly-2025-07-14`, update CI to guard the pin, and document the one-time cache cleanup required after installing the new compiler.
+
 ## [0.0.12] - 2025-08-26
 
 ### 🚀 Features

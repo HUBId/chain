@@ -1,9 +1,9 @@
 # STWO Official Public API Survey (v0.1.1)
 
-This document records the results of running `cargo +nightly public-api` against the vendored `stwo-official` crate (commit/tag v0.1.1) to check for the types that the RPP toolchain expects to re-export.
+This document records the results of running `cargo +nightly-2025-07-14 public-api` against the vendored `stwo-official` crate (commit/tag v0.1.1) to check for the types that the RPP toolchain expects to re-export.
 
 ```
-cargo +nightly public-api -p stwo-official --manifest-path prover/prover_stwo_backend/vendor/stwo-dev/crates/stwo/Cargo.toml > /tmp/stwo_public_api.txt
+cargo +nightly-2025-07-14 public-api -p stwo-official --manifest-path prover/prover_stwo_backend/vendor/stwo-dev/crates/stwo/Cargo.toml > /tmp/stwo_public_api.txt
 ```
 
 ## Summary of findings
