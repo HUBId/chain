@@ -15,8 +15,8 @@ use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
 use crate::types::{
-    Account, Block, BlockMetadata, CanonicalPruningEnvelope, PruningProof, PruningProofExt,
-    StoredBlock, pruning_from_previous,
+    pruning_from_previous, Account, Block, BlockMetadata, CanonicalPruningEnvelope, PruningProof,
+    PruningProofExt, StoredBlock,
 };
 
 pub const STORAGE_SCHEMA_VERSION: u32 = 2;
@@ -42,6 +42,94 @@ pub struct StateTransitionReceipt {
     pub previous_root: [u8; 32],
     pub new_root: [u8; 32],
     pub pruning_proof: Option<PruningProof>,
+}
+
+#[cfg(test)]
+mod interface_schemas {
+    use crate::storage::StateTransitionReceipt;
+    use jsonschema::{Draft, JSONSchema};
+    use serde::de::DeserializeOwned;
+    use serde::Serialize;
+    use serde_json::Value;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn interfaces_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/interfaces")
+    }
+
+    fn load_json(path: &Path) -> Value {
+        let raw = fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("unable to read {}: {err}", path.display()));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|err| panic!("invalid JSON in {}: {err}", path.display()))
+    }
+
+    fn resolve_refs(value: &mut Value, base: &Path) {
+        match value {
+            Value::Object(map) => {
+                if let Some(reference) = map.get("$ref").and_then(Value::as_str) {
+                    let target_path = base.join(reference);
+                    let mut target = load_json(&target_path);
+                    let target_base = target_path
+                        .parent()
+                        .map(Path::to_path_buf)
+                        .unwrap_or_else(|| base.to_path_buf());
+                    resolve_refs(&mut target, &target_base);
+                    *value = target;
+                } else {
+                    for sub in map.values_mut() {
+                        resolve_refs(sub, base);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    resolve_refs(item, base);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn load_schema(segment: &str) -> Value {
+        let path = interfaces_dir().join(segment);
+        let mut schema = load_json(&path);
+        let base = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| interfaces_dir());
+        resolve_refs(&mut schema, &base);
+        schema
+    }
+
+    fn load_example(segment: &str) -> Value {
+        load_json(&interfaces_dir().join(segment))
+    }
+
+    fn assert_roundtrip<T>(schema_file: &str, example_file: &str)
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let schema = load_schema(schema_file);
+        let compiled = JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(&schema)
+            .expect("schema compiles");
+        let example = load_example(example_file);
+        compiled.validate(&example).expect("example matches schema");
+        let typed: T = serde_json::from_value(example.clone()).expect("deserialize example");
+        let roundtrip = serde_json::to_value(&typed).expect("serialize payload");
+        assert_eq!(roundtrip, example);
+    }
+
+    #[test]
+    fn state_transition_receipt_schema_roundtrip() {
+        assert_roundtrip::<StateTransitionReceipt>(
+            "runtime/state_transition_receipt.jsonschema",
+            "runtime/examples/state_transition_receipt.json",
+        );
+    }
 }
 
 pub struct Storage {
@@ -605,8 +693,7 @@ impl Storage {
         }
         let pruning = block.pruning_proof.envelope_metadata();
         if metadata.previous_state_root.is_empty() {
-            metadata.previous_state_root =
-                pruning.snapshot.state_commitment.as_str().to_owned();
+            metadata.previous_state_root = pruning.snapshot.state_commitment.as_str().to_owned();
         }
         if metadata.new_state_root.is_empty() {
             metadata.new_state_root = block.header.state_root.clone();
@@ -676,8 +763,13 @@ mod tests {
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::{
-        Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof, PruningProof,
-        RecursiveProof, pruning_from_previous,
+        pruning_from_previous, Block, BlockHeader, BlockMetadata, BlockProofBundle, ChainProof,
+        PruningProof, RecursiveProof,
+    };
+    use ed25519_dalek::Signature;
+    use hex;
+    use rpp_pruning::{
+        TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
     };
     use serde::Deserialize;
     use std::sync::Arc;
@@ -686,12 +778,7 @@ mod tests {
         io::{Read, Write},
     };
     use storage_firewood::api::StateUpdate;
-    use ed25519_dalek::Signature;
-    use hex;
     use tempfile::tempdir;
-    use rpp_pruning::{
-        TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
-    };
 
     #[test]
     fn pruning_proofs_are_arc_wrapped() {
@@ -767,9 +854,8 @@ mod tests {
         let zero = FieldElement::zero(parameters.modulus());
         let pruning_binding_digest =
             TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-        let pruning_segment_commitments = vec![
-            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-        ];
+        let pruning_segment_commitments =
+            vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes()];
         let pruning_fold = {
             let mut accumulator = zero.clone();
             let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
@@ -1089,10 +1175,7 @@ mod tests {
         let pruning = tip.pruning_metadata().expect("pruning metadata");
         assert_eq!(
             tip.pruning_binding_digest,
-            genesis
-                .pruning_proof
-                .binding_digest()
-                .prefixed_bytes()
+            genesis.pruning_proof.binding_digest().prefixed_bytes()
         );
         let expected_segments: Vec<_> = genesis
             .pruning_proof
@@ -1101,20 +1184,22 @@ mod tests {
             .map(|segment| segment.segment_commitment().prefixed_bytes())
             .collect();
         assert_eq!(tip.pruning_segment_commitments, expected_segments);
-        let expected_binding =
-            hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
+        let expected_binding = hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
         assert_eq!(pruning.binding_digest.as_str(), expected_binding);
         let expected_commitment = hex::encode(
             genesis
                 .pruning_proof
                 .aggregate_commitment()
-                .prefixed_bytes()
+                .prefixed_bytes(),
         );
         assert_eq!(
             pruning.commitment.aggregate_commitment.as_str(),
             expected_commitment
         );
-        assert_eq!(pruning.schema_version, genesis.pruning_proof.schema_version());
+        assert_eq!(
+            pruning.schema_version,
+            genesis.pruning_proof.schema_version()
+        );
         assert_eq!(
             pruning.parameter_version,
             genesis.pruning_proof.parameter_version()
@@ -1148,10 +1233,7 @@ mod tests {
         assert_eq!(loaded.new_state_root, genesis.header.state_root);
         assert_eq!(
             loaded.pruning_binding_digest,
-            genesis
-                .pruning_proof
-                .binding_digest()
-                .prefixed_bytes()
+            genesis.pruning_proof.binding_digest().prefixed_bytes()
         );
         let expected_segments: Vec<_> = genesis
             .pruning_proof
@@ -1161,20 +1243,22 @@ mod tests {
             .collect();
         assert_eq!(loaded.pruning_segment_commitments, expected_segments);
         let pruning = loaded.pruning_metadata().expect("pruning metadata");
-        let expected_binding =
-            hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
+        let expected_binding = hex::encode(genesis.pruning_proof.binding_digest().prefixed_bytes());
         assert_eq!(pruning.binding_digest.as_str(), expected_binding);
         let expected_commitment = hex::encode(
             genesis
                 .pruning_proof
                 .aggregate_commitment()
-                .prefixed_bytes()
+                .prefixed_bytes(),
         );
         assert_eq!(
             pruning.commitment.aggregate_commitment.as_str(),
             expected_commitment
         );
-        assert_eq!(pruning.schema_version, genesis.pruning_proof.schema_version());
+        assert_eq!(
+            pruning.schema_version,
+            genesis.pruning_proof.schema_version()
+        );
         assert_eq!(
             pruning.parameter_version,
             genesis.pruning_proof.parameter_version()

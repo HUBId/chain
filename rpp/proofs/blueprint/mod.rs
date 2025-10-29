@@ -92,13 +92,13 @@ impl Blueprint {
                         key: "architecture.document_foundations",
                         title: "Ist-Architektur dokumentieren",
                         detail: "Bestehende Node-, Wallet- und Proof-Pipelines beschreiben, um gemeinsame Basis zu schaffen.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "architecture.spec_interfaces",
                         title: "Schnittstellen spezifizieren",
                         detail: "Nachrichtenformate, Gossip-Topics und Zustandsübergänge definieren und versionieren.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                 ],
             },
@@ -365,7 +365,11 @@ impl Blueprint {
                 done += 1.0;
             }
         }
-        if total == 0.0 { 1.0 } else { done / total }
+        if total == 0.0 {
+            1.0
+        } else {
+            done / total
+        }
     }
 }
 
@@ -391,11 +395,10 @@ mod tests {
     #[test]
     fn mark_status_updates_tasks() {
         let mut plan = Blueprint::rpp_end_to_end();
-        assert!(
-            plan.pending_tasks()
-                .iter()
-                .any(|task| task.key == "p2p.integrate_libp2p")
-        );
+        assert!(plan
+            .pending_tasks()
+            .iter()
+            .any(|task| task.key == "p2p.integrate_libp2p"));
 
         plan.mark_status("p2p.integrate_libp2p", TaskStatus::InProgress)
             .unwrap();

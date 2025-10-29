@@ -4,7 +4,7 @@
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="wallet" value="Wallet Service\n(rpp::wallet)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="wallet" value="Wallet Service\n(rpp::wallet::ui)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="120" y="120" width="200" height="100" as="geometry"/>
         </mxCell>
         <mxCell id="node" value="Node Runtime\n(rpp::runtime::node)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=14;" vertex="1" parent="1">
@@ -22,7 +22,7 @@
         <mxCell id="vrf" value="VRF &amp; Epochs\n(rpp::vrf)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="760" y="280" width="200" height="100" as="geometry"/>
         </mxCell>
-        <mxCell id="p2p" value="P2P / Gossip\n(rpp::p2p)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#cce5ff;strokeColor=#2e73b8;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="p2p" value="P2P / Gossip\n(rpp_p2p::pipeline)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#cce5ff;strokeColor=#2e73b8;fontSize=14;" vertex="1" parent="1">
           <mxGeometry x="560" y="440" width="220" height="100" as="geometry"/>
         </mxCell>
         <mxCell id="edge_wallet_node" value="submit tx/identity" style="endArrow=block;html=1;strokeWidth=2;fontSize=12;" edge="1" source="wallet" target="node" parent="1">

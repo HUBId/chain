@@ -1,83 +1,100 @@
-# Architekturgrundlagen
+# Architecture Foundations
 
-## 1. Aktueller Funktionsumfang
+## 1. Runtime Node and Execution Pipeline
+- `NodeInner` owns the Firewood storage handle, ledger, and dedicated queues for
+  transactions, identities, votes, uptime proofs, witness gossip, and VRF
+  submissions. It also keeps consensus state, pruning jobs, and the
+  `ProofVerifierRegistry` so proof verifications execute inside the runtime
+  boundary.【F:rpp/runtime/node.rs†L760-L796】
+- `NodeHandle` exposes submission APIs for every mempool and wires the gossip
+  runtime. When a libp2p handle is attached the node spawns dedicated tasks to
+  publish witness payloads, process gossip events (blocks, votes, VRF
+  submissions, evidence, timetoke deltas, witness channels), and forward them
+  into the consensus queues.【F:rpp/runtime/node.rs†L2061-L2075】【F:rpp/runtime/node.rs†L2544-L2680】
+- The runtime persists post-finalisation state through the `StateLifecycle`
+  helper: after sealing a block it emits Firewood commitments, stores pruning
+  proofs, and calls `StateLifecycle::apply_block` to derive the
+  `StateTransitionReceipt` used by downstream snapshot tooling.【F:rpp/runtime/node.rs†L5938-L6011】
+  `StateLifecycle` exposes uniform `apply_block`, `prove_transition`, and
+  `verify_transition` hooks so integration tests and alternative storage backends
+  can drive transitions without reaching into internal structs.【F:rpp/storage/state/lifecycle.rs†L13-L86】
 
-### 1.1 Node-Laufzeit und Konsens
-- `NodeInner` bündelt Schlüsselmaterial, Ledger-State, Pruning-Kanäle und sämtliche Mempools (Transaktionen, Identitäten, Votes, Uptime, VRF) und stellt Telemetrie sowie Gossip-Anbindung bereit.【F:rpp/runtime/node.rs†L392-L420】【F:rpp/runtime/node.rs†L639-L674】
-- Konsensstrukturen wie `SignedBftVote`, `ConsensusCertificate` und `ConsensusRound` kapseln BFT-Votes inklusive Malachite-basierter Gewichtung und Slashing-Evidence.【F:rpp/consensus/node.rs†L173-L263】【F:rpp/consensus/node.rs†L265-L329】
+## 2. Wallet Orchestration
+- The wallet keeps an embedded runtime configuration, boots the node process on
+  demand, and tracks the resulting `NodeHandle` so UI commands can reuse the
+  existing node instance.【F:rpp/wallet/ui/wallet.rs†L1067-L1122】
+- Pipeline state (orchestrator dashboards, error feeds, witness gossip) is
+  streamed into the UI by subscribing to the orchestrator channels and the node’s
+  witness gossip topics, ensuring the wallet mirrors the node pipeline in real
+  time.【F:rpp/wallet/ui/wallet.rs†L1123-L1197】
+- Electrs tracker integration shares the same infrastructure: once tracker
+  handles are configured the wallet attaches to witness gossip topics exposed by
+  the node adapters and forwards finality telemetry into long-running UI tasks.【F:rpp/wallet/ui/wallet.rs†L945-L1015】
 
-### 1.2 Wallet- und Proof-Workflow
-- Die Wallet-UI orchestriert Key-Management, VRF-Audits, Node-Starts und Submit-Flows; dabei wird der `WalletProver` für Witness-Ableitung, Reputation-Checks und STWO-Proofs genutzt.【F:rpp/wallet/ui/wallet.rs†L415-L500】【F:rpp/wallet/ui/wallet.rs†L965-L1174】
-- `WalletProver` generiert Identitäts-, Transaktions-, State-, Pruning- und Uptime-Zeugen direkt aus dem Firewood-Storage, prüft Tier-Schwellen und erzeugt STWO-Proof-Payloads zur Weitergabe an den Node.【F:rpp/proofs/stwo/prover/mod.rs†L40-L131】【F:rpp/proofs/stwo/prover/mod.rs†L133-L221】【F:rpp/proofs/stwo/prover/mod.rs†L223-L321】
-- Typen wie `IdentityDeclaration`, `SignedTransaction` und `UptimeProof` kapseln Commitments, Signaturen und Anti-Replay-Informationen für ZSI-Integrität und Konsistenzprüfungen.【F:rpp/runtime/types/identity.rs†L17-L188】【F:rpp/runtime/types/transaction.rs†L13-L109】【F:rpp/runtime/types/uptime.rs†L11-L126】
+## 3. Proof Construction and Verification
+- `WalletProver` implements `ProofProver` and derives identity, transaction,
+  state, pruning, recursive, uptime, and consensus witnesses directly from the
+  Firewood-backed storage snapshot. It wraps every witness builder with concrete
+  STWO proof generation methods so each pipeline stage emits a canonical
+  `ChainProof`.【F:rpp/proofs/stwo/prover/mod.rs†L408-L519】
+- `StateLifecycle` integrates the prover and verifier registry: it reuses the
+  wallet prover to build state transition witnesses, produces STWO state proofs,
+  and verifies witness payloads against the expected roots before exposing the
+  receipt. The same interface is consumed by the runtime node when persisting
+  Firewood transitions.【F:rpp/storage/state/lifecycle.rs†L45-L86】
 
-### 1.3 Storage, Proofs und APIs
-- Die Firewood-gestützte Storage-Schicht persistiert Accounts, Blöcke und Metadaten samt Pruner, während Block-Header State-/Proof-Wurzeln, VRF-Metriken und Timetoke-Deltas transportieren.【F:rpp/storage/mod.rs†L15-L139】【F:rpp/runtime/types/block.rs†L37-L149】
-- `ChainProof` abstrahiert STWO-, Plonky3- und RPP-STARK-Bundles und erlaubt dem Node, Zeugen und Payloads je Backend zu verwalten.【F:rpp/runtime/types/proofs.rs†L11-L118】【F:rpp/runtime/node.rs†L120-L183】
-- Das Axum-basierte HTTP-Interface exporiert Status-, Submit- und Telemetrie-Endpunkte für Wallet-, Konsens- und Uptime-Flows und greift dabei auf `NodeHandle` zu.【F:rpp/rpc/api.rs†L1-L208】【F:rpp/runtime/node.rs†L1359-L1506】
-- `StateLifecycleService` kapselt `apply_block`, `prove_transition` und `verify_transition` und erleichtert so Tests für fehlerhafte STWO-Payloads sowie alternative Implementierungen.【F:rpp/storage/state/lifecycle.rs†L11-L153】
-- `Storage::read_block_metadata` liefert pro Block erweiterte Metadaten inklusive Proof-Hash und Rekursionsanker; die P2P-Schemata spiegeln die zusätzlichen Felder wider.【F:rpp/storage/mod.rs†L277-L335】【F:docs/interfaces/p2p/network_block_metadata.jsonschema†L1-L17】
+## 4. Gossip and Network Backbone
+- Gossip topics are versioned under `/rpp/gossip/*` and cover block proposals,
+  votes, proof bundles, VRF submissions, snapshot sync, and witness relays. The
+  topic set is centralised in `rpp_p2p::topics::GossipTopic`, ensuring every
+  network component references the same canonical identifiers.【F:rpp/p2p/src/topics.rs†L6-L85】
+- Once the node attaches to a libp2p handle it consumes structured `NodeEvent`
+  messages: block proposals feed the proposal inbox, votes enter the consensus
+  queues, VRF submissions update the epoch lottery, evidence and timetoke deltas
+  adjust local state, and witness payloads are re-broadcast over the dedicated
+  witness fan-out channels.【F:rpp/runtime/node.rs†L2544-L2680】
+- Schema snapshots for all gossip payloads live under
+  [`docs/interfaces/p2p`](interfaces/p2p_payloads.md) and are validated by the
+  `rpp_p2p` schema round-trip tests, keeping the documentation aligned with the
+  `rpp_p2p` ingestion pipeline.【F:rpp/p2p/src/pipeline.rs†L2204-L2339】
 
-> **Hinweis (Storage-Übergang 2024):** Die ursprüngliche RocksDB-Schicht wurde durch den Firewood-Stack (append-only KV, WAL, Pruner) ersetzt. Historische Deployments erfordern daher eine Migration auf das Firewood-Schema, bevor neue Builds gestartet werden.【F:rpp/storage/mod.rs†L43-L132】【F:storage-firewood/src/kv.rs†L41-L118】
+## 5. Interface Contract
+- [`docs/interfaces/spec.md`](interfaces/spec.md) consolidates the canonical JSON
+  Schemas for gossip topics, RPC endpoints, and state transition receipts. Each
+  table links to the schema snapshot, the handler or topic in code, and the test
+  module that enforces the contract.【F:docs/interfaces/spec.md†L1-L133】
+- Runtime payload schemas (transactions, uptime, state transition receipts) are
+  validated by unit tests in `rpp::runtime::types` and `rpp::storage`, while the
+  RPC and gossip schemas are validated by their respective module tests. These
+  schema tests run in CI via the standard `cargo test` workflows, providing
+  automated drift detection for the published contracts.【F:rpp/runtime/types/mod.rs†L41-L124】【F:rpp/runtime/types/mod.rs†L125-L160】【F:rpp/storage/mod.rs†L664-L760】【F:rpp/storage/mod.rs†L842-L924】【F:rpp/rpc/api.rs†L2968-L3088】【F:rpp/p2p/src/pipeline.rs†L2204-L2339】
 
-## 2. Blueprint-Ausrichtung (`Blueprint::rpp_end_to_end`)
+## 6. Updated Diagrams
+- `docs/architecture/wallet_node_sequence.drawio` and the derived SVG illustrate
+  the wallet → prover → node → storage flow with crate-qualified component names
+  and the witness feedback loop for telemetry.
+- `docs/architecture/rpp_domain_model.drawio` and its SVG capture the runtime,
+  storage, proof, VRF, consensus, and gossip domains with the crate names used in
+  the current implementation.
 
-Die folgende Übersicht spiegelt die Schlüssel aus `rpp/proofs/blueprint/mod.rs` wider und verortet vorhandene bzw. geplante Artefakte in diesem Dokument.
+## 7. Blueprint Alignment (`Blueprint::rpp_end_to_end`)
 
-| SectionId / Task-Key | Beschreibung im Blueprint | Abdeckung in diesem Dokument |
+| SectionId / Task-Key | Blueprint Description | Coverage in this Document |
 | --- | --- | --- |
-| `architecture.document_foundations` | Ist-Architektur dokumentieren | Kapitel 1 (Node, Wallet, Proof, Storage) sowie Sequenz-/Domänenmodelle decken die aktuellen Pfade ab. |
-| `architecture.spec_interfaces` | Schnittstellen spezifizieren | Kapitel 4 beschreibt Formate & APIs, ergänzt durch Blueprint-Referenzen in Kapitel 5. |
-| `firewood-stwo.state.lifecycle_api` | Lifecycle-Services extrahieren | Kapitel 5 verweist auf Firewood↔STWO-Lücken und die zugehörigen Speicher-/Proof-Flüsse. |
-| `firewood-stwo.state.block_metadata` | Block-Metadaten erweitern | Kapitel 1.3 beleuchtet Header-Felder und Commitments. |
-| `firewood-stwo.state.pruning_jobs` | Pruning-Proofs automatisieren | Kapitel 5 listet offene Arbeiten für Pruning-Historie. |
-| `wallet-workflows.wallet.utxo_policies` | UTXO- und Tier-Policies | Kapitel 1.2 beschreibt Reputation- und Tier-Prüfungen des WalletProvers. |
-| `wallet-workflows.wallet.zsi_workflow` | ZSI-ID Lifecycle | Kapitel 1.2 & Sequenzdiagramm markieren Genesis/BFT-Abläufe. |
-| `wallet-workflows.wallet.stwo_circuits` | STWO-Circuits erweitern | Kapitel 1.2/1.3 verlinkt Witness-/Proof-Erstellung sowie Backend-Abstraktionen. |
-| `wallet-workflows.wallet.uptime_proofs` | Uptime-Proofs integrieren | Kapitel 1.2 und Kapitel 4 führen die Nachrichtenformate & APIs auf. |
-| `libp2p.p2p.integrate_libp2p` | Libp2p integrieren | Kapitel 5 nennt Gossip-Aufgaben und verweist auf Node/P2P-Interaktionen im Domänenmodell. |
-| `libp2p.p2p.admission_control` | Admission-Control | Kapitel 5 dokumentiert die noch offenen Reputation-Gates auf Gossip-Ebene. |
-| `libp2p.p2p.snapshot_sync` | Snapshot-Sync | Kapitel 5 markiert Synchronisationsbedarf (Node↔Storage↔P2P). |
-| `vrf.poseidon_impl` | Poseidon-VRF umsetzen | Kapitel 1.1 & Kapitel 5 erfassen VRF-Mempool und Epoch-Management. |
-| `vrf.epoch_management` | Epochenverwaltung | Kapitel 1.1 beschreibt `VrfEpochManager`; Lücken werden in Kapitel 5 adressiert. |
-| `vrf.monitoring` | VRF-Monitoring | Kapitel 5 hebt die nötigen Telemetriepfade hervor. |
-| `bft.distributed_loop` / `bft.evidence_slashing` / `bft.rewards` | BFT-Loop, Evidence & Rewards | Kapitel 1.1 und Kapitel 5 dokumentieren Konsensstatus, Evidence-Pool und Reward-Offenstände. |
-| `electrs.modes` / `electrs.ui_rpc` / `electrs.validator_mode` | Electrs-Integration | Kapitel 1.2 (Wallet UI) sowie Kapitel 5 kennzeichnen die Vendor-spezifischen Pfade. |
-| `lifecycle.pipeline` / `lifecycle.state_sync` / `lifecycle.observability` | End-to-End Lifecycle | Kapitel 5 adressiert Orchestrierung, Light-Clients und Observability. |
-| `testing.unit` / `testing.integration` / `testing.simulation` | Test- & Validierungssuite | Kapitel 5 fasst die Test-/Simulationsanforderungen zusammen. |
-
-## 3. Sequenz- und Domänenmodelle
-
-- **Wallet → Node Sequenzfluss:** `docs/architecture/wallet_node_sequence.drawio` / `wallet_node_sequence.svg`
-
-  ![Wallet → Node Sequenz](architecture/wallet_node_sequence.svg)
-
-- **Domänenmodell RPP Runtime:** `docs/architecture/rpp_domain_model.drawio` / `rpp_domain_model.svg`
-
-  ![Domänenmodell RPP Runtime](architecture/rpp_domain_model.svg)
-
-Die Diagramme verdeutlichen die Abfolge von Wallet-basierten Submit-Flows sowie die Systemgrenzen zwischen Runtime, Proof-Backends, Storage, Konsens, VRF und Netzwerk, passend zu den Blueprint-Schlüsseln `architecture.document_foundations` und `architecture.spec_interfaces`.
-
-## 4. Nachrichten- und Schnittstellenspezifikation
-
-### 4.1 Datenformate
-- **Transaction**: Enthält Absender, Empfänger, Betrag, Fee, Nonce, optionales Memo und Timestamp; Hash und kanonische Bytes basieren auf JSON-Encoding.【F:rpp/runtime/types/transaction.rs†L15-L56】
-- **SignedTransaction**: Bindet die Transaktion an eine Ed25519-Signatur samt öffentlichem Schlüssel und UUID, inklusive Verifikationsroutine.【F:rpp/runtime/types/transaction.rs†L60-L95】
-- **IdentityDeclaration**: Kombination aus `IdentityGenesis` (PK, VRF-Tag, State-/Identity-Root, Commitment-Proof) und `IdentityProof` (Commitment + ChainProof).【F:rpp/runtime/types/identity.rs†L17-L55】
-- **BlockHeader**: Trägt Höhenangabe, Hash des Vorgängers, Wurzeln für Transaktionen/State/UTXO/Reputation/Timetoke/ZSI/Proofs sowie VRF-Schlüssel, VRF-Proof und Proposer-Metadaten.【F:rpp/runtime/types/block.rs†L38-L113】
-- **BlockProofBundle**: Aggregiert Transaktions-, State-, Pruning- und Recursive-Proofs und kapselt Backend-spezifische Artefakte über `ChainProof`.【F:rpp/runtime/types/proofs.rs†L11-L94】
-- **UptimeProof**: Speichert Commitment über Online-Fenster, optionale Meta-Daten (Node-Uhr, Epoch, Head-Hash) und den ZK-Proof.【F:rpp/runtime/types/uptime.rs†L10-L114】
-
-Aktuelle JSON-Schema-Snapshots für diese Payloads sowie RPC- und P2P-Themen liegen unter [`docs/interfaces`](interfaces/runtime_payloads.md) und werden im [Interface Changelog](interfaces/CHANGELOG.md) nachgeführt.
-
-### 4.2 Zustands- & Service-Schnittstellen
-- **ProofProver / WalletProver**: Liefert Zeugen für Identität, Transaktion, State, Pruning und Uptime über lokale Storage-Snapshots, inklusive Reputation-Gewichtung und Tier-Schwellen.【F:rpp/proofs/stwo/prover/mod.rs†L42-L179】
-- **NodeHandle**: Bietet Status- und Submit-Methoden für Transaktionen, Identitäten, Votes und Uptime-Proofs und dient als API-Backbone für das HTTP-Interface.【F:rpp/runtime/node.rs†L1359-L1506】【F:rpp/rpc/api.rs†L1-L195】
-- **Consensus-Zertifikate & Votes**: Definieren Nachrichtenbytes für PreVote/PreCommit, Hashing- und Verifikationspfade für Ed25519-gestützte Signaturen sowie Aggregationsmetriken.【F:rpp/consensus/node.rs†L169-L233】
-
-## 5. Nächste Schritte für Architekturangleichung
-1. **`firewood-stwo.state.lifecycle_api` & `state.pruning_jobs`:** Schnittstellen zwischen Storage, Ledger und Proof-System modularisieren (Block-/Pruning-Jobs automatisieren, Lifecycle-Services versionieren).
-2. **`wallet-workflows`-Tasks:** UTXO/Tier-Policies finalisieren, ZSI-Attestierungsflow dokumentieren und Uptime-Proofs end-to-end testen.
-3. **`libp2p` & `vrf` Tasks:** Gossip-Admission-Control, Snapshot-Sync sowie Epoch-/VRF-Verteilung an den Sequenzfluss ankoppeln und Telemetrie ausbauen.
-4. **`block-lifecycle` & `testing`:** Pipeline-Orchestrierung für Blockproduktion vs. Light-Client-Sync beschreiben und Test-/Simulationsabdeckung nach Blueprint-Anforderungen ausweiten.
-5. **Lifecycle-Testabdeckung:** Unit- und Integrationstests prüfen STWO-Negativpfade sowie Firewood-Metadaten-Backfills.【F:rpp/storage/state/lifecycle.rs†L155-L218】【F:tests/storage_block_metadata.rs†L109-L143】
+| `architecture.document_foundations` | Document the current architecture | Sections 1–4 describe the live runtime, wallet, proof, and gossip flows backed by code references. |
+| `architecture.spec_interfaces` | Publish interface specifications | Section 5 links to the consolidated interface spec and enumerates the schema tests guarding it. |
+| `firewood-stwo.state.lifecycle_api` | Extract lifecycle services | Sections 1 & 3 call out the `StateLifecycle` API and how it is used by the node. |
+| `firewood-stwo.state.block_metadata` | Extend block metadata | Sections 1 & 4 describe the Firewood receipts and gossip metadata that expose pruning commitments. |
+| `firewood-stwo.state.pruning_jobs` | Automate pruning proofs | Section 1 references the runtime’s pruning job tracking and storage receipts. |
+| `wallet-workflows.wallet.utxo_policies` | Model wallet UTXO/tier policies | Section 2 covers the wallet runtime orchestration and pipeline feeds. |
+| `wallet-workflows.wallet.zsi_workflow` | Capture ZSI identity lifecycle | Sections 2 & 3 detail how identities are orchestrated through wallet proofs and node mempools. |
+| `wallet-workflows.wallet.stwo_circuits` | Expand STWO circuits | Section 3 documents how witnesses and proofs map to the prover traits. |
+| `wallet-workflows.wallet.uptime_proofs` | Integrate uptime proofs | Sections 2 & 3 cover wallet scheduling and STWO uptime witnesses. |
+| `libp2p.p2p.integrate_libp2p` | Integrate libp2p backbone | Section 4 outlines the gossip topic wiring and node event handling. |
+| `libp2p.p2p.admission_control` | Admission control | Section 4 highlights witness fan-out and gossip ingestion points controlling network flows. |
+| `libp2p.p2p.snapshot_sync` | Snapshot sync | Section 4 references snapshot topics and schemas under `docs/interfaces/p2p`. |
+| `vrf.poseidon_impl` / `vrf.epoch_management` | VRF implementation & epochs | Sections 1 & 4 cover the VRF mempool, submission handling, and epoch manager usage. |
+| `vrf.monitoring` | VRF monitoring | Sections 1 & 4 describe VRF metrics exposed by the runtime. |
+| `bft.*` | BFT loops, evidence, rewards | Sections 1 & 4 note the consensus state, evidence pool, and gossip integration. |
+| `lifecycle.*` | Lifecycle orchestration | Sections 1, 3, & 5 show the end-to-end pipeline and contract tests. |
+| `testing.*` | Test and validation suite | Section 5 enumerates the schema tests enforced in CI. |
