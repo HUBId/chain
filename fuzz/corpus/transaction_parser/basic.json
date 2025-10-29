@@ -1,0 +1,19 @@
+{
+  "transaction": {
+    "id": "00000000-0000-0000-0000-000000000000",
+    "payload": {
+      "from": "validator-addr-01",
+      "to": "validator-addr-02",
+      "amount": 1,
+      "fee": 1,
+      "nonce": 0,
+      "memo": null,
+      "timestamp": 0
+    },
+    "signature": "00",
+    "public_key": "00"
+  },
+  "proof": {
+    "stwo": null
+  }
+}

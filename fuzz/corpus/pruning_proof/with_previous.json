@@ -1,0 +1,53 @@
+{
+  "proof": {
+    "pruned_height": 41,
+    "previous_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "previous_state_root": "2222222222222222222222222222222222222222222222222222222222222222",
+    "pruned_tx_root": "3333333333333333333333333333333333333333333333333333333333333333",
+    "resulting_state_root": "2222222222222222222222222222222222222222222222222222222222222222",
+    "witness_commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "header": {
+    "height": 42,
+    "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "tx_root": "1111111111111111111111111111111111111111111111111111111111111111",
+    "state_root": "2222222222222222222222222222222222222222222222222222222222222222",
+    "utxo_root": "3333333333333333333333333333333333333333333333333333333333333333",
+    "reputation_root": "4444444444444444444444444444444444444444444444444444444444444444",
+    "timetoke_root": "5555555555555555555555555555555555555555555555555555555555555555",
+    "zsi_root": "6666666666666666666666666666666666666666666666666666666666666666",
+    "proof_root": "7777777777777777777777777777777777777777777777777777777777777777",
+    "total_stake": "9000000000000000000000000000000000000000",
+    "randomness": "8888888888888888888888888888888888888888888888888888888888888888",
+    "vrf_public_key": "9999999999999999999999999999999999999999999999999999999999999999",
+    "vrf_preoutput": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "vrf_proof": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "timestamp": 1730000000,
+    "proposer": "validator-addr-01",
+    "leader_tier": "Tl5",
+    "leader_timetoke": 72
+  },
+  "previous": {
+    "hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "header": {
+      "height": 41,
+      "previous_hash": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "tx_root": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "state_root": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "utxo_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "reputation_root": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "timetoke_root": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "zsi_root": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "proof_root": "0101010101010101010101010101010101010101010101010101010101010101",
+      "total_stake": "8000000000000000000000000000000000000000",
+      "randomness": "0202020202020202020202020202020202020202020202020202020202020202",
+      "vrf_public_key": "0303030303030303030303030303030303030303030303030303030303030303",
+      "vrf_preoutput": "0404040404040404040404040404040404040404040404040404040404040404",
+      "vrf_proof": "0505050505050505050505050505050505050505050505050505050505050505",
+      "timestamp": 1729999000,
+      "proposer": "validator-addr-00",
+      "leader_tier": "Tl4",
+      "leader_timetoke": 64
+    }
+  }
+}
