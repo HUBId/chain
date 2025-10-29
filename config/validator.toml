@@ -16,8 +16,6 @@ backend = "filesystem"
 
 snapshot_dir = "./data/snapshots"
 proof_cache_dir = "./data/proofs"
-rpc_listen = "127.0.0.1:7070"
-rpc_requests_per_minute = 600
 block_time_ms = 5000
 max_block_transactions = 512
 max_block_identity_registrations = 32
@@ -26,11 +24,30 @@ epoch_length = 1440
 target_validator_count = 100
 max_proof_size_bytes = 4194304
 
+[network.rpc]
+listen = "127.0.0.1:7070"
+
+[network.limits]
+header_read_timeout_ms = 5000
+read_timeout_ms = 15000
+write_timeout_ms = 15000
+max_header_bytes = 16384
+max_body_bytes = 2097152
+
+[network.limits.per_ip_token_bucket]
+enabled = true
+burst = 120
+replenish_per_minute = 60
+
+[network.tls]
+enabled = false
+require_client_auth = false
+
 [queue_weights]
 priority = 0.7
 fee = 0.3
 
-[p2p]
+[network.p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/7600"
 bootstrap_peers = []
 heartbeat_interval_ms = 3000 # validator override: faster heartbeat for leader sync
@@ -42,7 +59,7 @@ replay_window_size = 1024
 peerstore_path = "./data/p2p/peerstore.json"
 gossip_path = "./data/p2p/gossip.json"
 
-[p2p.reputation_heuristics]
+[network.p2p.reputation_heuristics]
 vote_timeout_penalty = 0.4
 proof_relay_penalty = 0.6
 gossip_backpressure_penalty = 0.25

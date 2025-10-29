@@ -26,13 +26,13 @@ fn configure_node(temp: &TempDir) -> Result<NodeConfig> {
     config.key_path = keys_dir.join("node.toml");
     config.p2p_key_path = keys_dir.join("p2p.toml");
     config.vrf_key_path = keys_dir.join("vrf.toml");
-    config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-    config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+    config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+    config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
 
     let rpc_port = available_port()?;
-    config.rpc_listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), rpc_port);
+    config.network.rpc.listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), rpc_port);
     let p2p_port = available_port()?;
-    config.p2p.listen_addr = format!("/ip4/127.0.0.1/tcp/{p2p_port}");
+    config.network.p2p.listen_addr = format!("/ip4/127.0.0.1/tcp/{p2p_port}");
     config.block_time_ms = 200;
     config.mempool_limit = 128;
 
@@ -41,6 +41,7 @@ fn configure_node(temp: &TempDir) -> Result<NodeConfig> {
 
 fn p2p_port(config: &NodeConfig) -> u16 {
     config
+        .network
         .p2p
         .listen_addr
         .rsplit('/')

@@ -101,8 +101,8 @@ impl PreparedCluster {
             config.snapshot_dir = data_dir.join("snapshots");
             config.proof_cache_dir = data_dir.join("proofs");
             config.consensus_pipeline_path = data_dir.join("p2p/consensus_pipeline.json");
-            config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-            config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+            config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+            config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
             config.key_path = keys_dir.join("node.toml");
             config.p2p_key_path = keys_dir.join("p2p.toml");
             config.vrf_key_path = keys_dir.join("vrf.toml");
@@ -110,9 +110,9 @@ impl PreparedCluster {
             config.mempool_limit = 256;
             config.target_validator_count = count;
             config.malachite.validator.validator_set_size = count;
-            config.rpc_listen = rpc_socket(index)?;
+            config.network.rpc.listen = rpc_socket(index)?;
             let (listen_addr, _) = random_listen_addr()?;
-            config.p2p.listen_addr = listen_addr.clone();
+            config.network.p2p.listen_addr = listen_addr.clone();
             config.rollout.feature_gates.pruning = false;
             config.rollout.feature_gates.recursive_proofs = false;
             config.rollout.feature_gates.reconstruction = false;
@@ -152,7 +152,7 @@ impl PreparedCluster {
         for node in prepared.iter_mut() {
             node.config.genesis.accounts = genesis_accounts.clone();
             node.config.genesis.chain_id = "test-cluster".to_string();
-            node.config.p2p.bootstrap_peers = listen_addrs
+            node.config.network.p2p.bootstrap_peers = listen_addrs
                 .iter()
                 .enumerate()
                 .filter_map(|(peer_index, addr)| {
@@ -895,13 +895,13 @@ impl ProcessTestCluster {
             let stdout_task = spawn_output_task(index, "stdout", child.stdout.take());
             let stderr_task = spawn_output_task(index, "stderr", child.stderr.take());
 
-            wait_for_process_ready(&client, &mut child, config.rpc_listen, index).await?;
+            wait_for_process_ready(&client, &mut child, config.network.rpc.listen, index).await?;
 
             nodes.push(ProcessClusterNode {
                 index,
                 config_path,
-                rpc_addr: config.rpc_listen,
-                p2p_listen_addr: config.p2p.listen_addr.clone(),
+                rpc_addr: config.network.rpc.listen,
+                p2p_listen_addr: config.network.p2p.listen_addr.clone(),
                 child,
                 temp_dir,
                 stdout_task,

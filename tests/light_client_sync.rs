@@ -248,11 +248,11 @@ fn prepare_config() -> (NodeConfig, TempDir) {
     config.data_dir = data_dir.clone();
     config.snapshot_dir = data_dir.join("snapshots");
     config.proof_cache_dir = data_dir.join("proofs");
-    config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-    config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+    config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+    config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
     config.key_path = keys_dir.join("node.toml");
     config.p2p_key_path = keys_dir.join("p2p.toml");
     config.vrf_key_path = keys_dir.join("vrf.toml");
-    config.rpc_listen = "127.0.0.1:0".parse().expect("rpc listen");
+    config.network.rpc.listen = "127.0.0.1:0".parse().expect("rpc listen");
     (config, temp_dir)
 }

@@ -63,7 +63,7 @@ impl RpcTestHarness {
             .nodes()
             .first()
             .context("cluster returned no nodes")?;
-        let addr = primary.config.rpc_listen;
+        let addr = primary.config.network.rpc.listen;
         let node_handle = primary.node_handle.clone();
         let runtime_handle = node_handle.clone();
         let wallet = primary.wallet.clone();

@@ -23,8 +23,8 @@ or they are rejected with `401` responses.【F:config/validator.toml†L1-L34】
 ## Rate limiting and abuse protections
 
 The RPC server can enforce a global requests-per-minute limit via the
-`rpc_requests_per_minute` configuration key. When set, an Axum `RateLimitLayer`
-wraps all routes and throttles clients exceeding the budget.【F:config/validator.toml†L17-L48】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L960-L1047】
+`network.limits.per_ip_token_bucket` configuration block. When enabled, an Axum
+`RateLimitLayer` wraps all routes and throttles clients exceeding the budget.【F:config/validator.toml†L17-L48】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L960-L1047】
 
 - Combine rate limiting with reverse proxies (e.g., Envoy, NGINX) for per-IP
   accounting. The in-process limiter is intentionally simple and guards against
@@ -35,7 +35,7 @@ wraps all routes and throttles clients exceeding the budget.【F:config/validato
 
 ## Cross-origin access
 
-Set `rpc_allowed_origin` in the node configuration (or pass `--rpc-allowed-origin`
+Set `network.rpc.allowed_origin` in the node configuration (or pass `--rpc-allowed-origin`
 via CLI) to enable CORS for browser dashboards. The middleware whitelists the
 provided origin, mirrors it on responses, and handles preflight OPTIONS
 requests.【F:rpp/node/src/lib.rs†L541-L563】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L780-L829】

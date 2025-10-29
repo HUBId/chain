@@ -136,4 +136,5 @@ tier check can succeed.【F:rpp/rpc/api.rs†L73-L94】
   sensitive material and remove the file after uploading it to your secret
   store.【F:rpp/node/src/main.rs†L124-L158】
 * **Rate limiting**: telemetry requests respect the global RPC rate limiter, so
-  avoid polling the endpoint faster than the configured `rpc_requests_per_minute`.
+  avoid polling the endpoint faster than the configured
+  `network.limits.per_ip_token_bucket.replenish_per_minute`.

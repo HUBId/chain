@@ -29,8 +29,8 @@ use malachite::Natural;
 use rpp::proofs::rpp::TransactionWitness;
 use rpp::runtime::node::MempoolStatus;
 use rpp::runtime::types::{
-    Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof, PruningProofExt,
-    SignedTransaction, pruning_from_previous,
+    pruning_from_previous, Block as RuntimeBlock, BlockHeader as RuntimeBlockHeader, ChainProof,
+    PruningProofExt, SignedTransaction,
 };
 use rpp_p2p::GossipTopic;
 use sha2::{Digest, Sha512};
@@ -812,11 +812,11 @@ pub mod test_helpers {
     use rpp::stwo::proof::{
         CommitmentSchemeProofData, ExecutionTrace, FriProof, ProofKind, ProofPayload, StarkProof,
     };
+    use rpp::types::BftVote;
+    use rpp::vrf::generate_vrf_keypair;
     use rpp_pruning::{
         TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
     };
-    use rpp::types::BftVote;
-    use rpp::vrf::generate_vrf_keypair;
     use sha2::{Digest, Sha256};
 
     use crate::vendor::electrs::types::{
@@ -953,9 +953,9 @@ pub mod test_helpers {
         config.key_path = keys_dir.join("node.toml");
         config.vrf_key_path = keys_dir.join("vrf.toml");
         config.p2p_key_path = keys_dir.join("p2p.toml");
-        config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-        config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
-        config.rpc_listen = SocketAddr::from(([127, 0, 0, 1], 0));
+        config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+        config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+        config.network.rpc.listen = SocketAddr::from(([127, 0, 0, 1], 0));
         config.rollout.feature_gates.recursive_proofs = true;
         config
     }
@@ -1213,9 +1213,8 @@ pub mod test_helpers {
         let zero = FieldElement::zero(parameters.modulus());
         let pruning_binding_digest =
             TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-        let pruning_segment_commitments = vec![
-            TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-        ];
+        let pruning_segment_commitments =
+            vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes()];
         let pruning_fold = {
             let mut accumulator = zero.clone();
             let binding_element = parameters.element_from_bytes(&pruning_binding_digest);

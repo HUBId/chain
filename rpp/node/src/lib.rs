@@ -458,7 +458,9 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
 
-    let node_rpc_addr = node_bundle.as_ref().map(|bundle| bundle.value.rpc_listen);
+    let node_rpc_addr = node_bundle
+        .as_ref()
+        .map(|bundle| bundle.value.network.rpc.listen);
     let wallet_rpc_addr = wallet_bundle
         .as_ref()
         .map(|bundle| bundle.value.wallet.rpc.listen);
@@ -480,7 +482,11 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             .map_err(BootstrapError::startup)?;
 
         info!(address = %handle.address(), "node runtime started");
-        info!(target = "rpc", listen = %config.rpc_listen, "rpc endpoint configured");
+        info!(
+            target = "rpc",
+            listen = %config.network.rpc.listen,
+            "rpc endpoint configured"
+        );
         if config.rollout.telemetry.enabled {
             let http_endpoint = config
                 .rollout
@@ -517,12 +523,20 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         }
         info!(
             target = "p2p",
-            listen_addr = %config.p2p.listen_addr,
+            listen_addr = %config.network.p2p.listen_addr,
             "p2p endpoint configured"
         );
-        rpc_auth = config.rpc_auth_token.clone();
-        rpc_origin = config.rpc_allowed_origin.clone();
-        rpc_requests_per_minute = config.rpc_requests_per_minute.and_then(NonZeroU64::new);
+        rpc_auth = config.network.rpc.auth_token.clone();
+        rpc_origin = config.network.rpc.allowed_origin.clone();
+        if config.network.limits.per_ip_token_bucket.enabled {
+            rpc_requests_per_minute = NonZeroU64::new(
+                config
+                    .network
+                    .limits
+                    .per_ip_token_bucket
+                    .replenish_per_minute,
+            );
+        }
 
         let p2p_handle = handle.p2p_handle();
         let (orchestrator, shutdown_rx) = PipelineOrchestrator::new(handle.clone(), p2p_handle);
@@ -976,7 +990,7 @@ fn ensure_listener_conflicts(
     let wallet_metadata = wallet_bundle.metadata.as_ref();
     let mut conflicts = Vec::new();
 
-    let node_rpc = node_bundle.value.rpc_listen;
+    let node_rpc = node_bundle.value.network.rpc.listen;
     let wallet_rpc = wallet_bundle.value.wallet.rpc.listen;
     if node_rpc.port() != 0
         && wallet_rpc.port() != 0
@@ -985,7 +999,7 @@ fn ensure_listener_conflicts(
             || node_rpc.ip().is_unspecified()
             || wallet_rpc.ip().is_unspecified())
     {
-        let node_key = describe_config_key(ConfigRole::Node, node_metadata, "rpc_listen");
+        let node_key = describe_config_key(ConfigRole::Node, node_metadata, "network.rpc.listen");
         let wallet_key =
             describe_config_key(ConfigRole::Wallet, wallet_metadata, "wallet.rpc.listen");
         conflicts.push(format!(
@@ -993,14 +1007,15 @@ fn ensure_listener_conflicts(
         ));
     }
 
-    if let Some(port) = extract_tcp_port(&node_bundle.value.p2p.listen_addr) {
+    if let Some(port) = extract_tcp_port(&node_bundle.value.network.p2p.listen_addr) {
         if port != 0 && port == wallet_rpc.port() {
-            let node_key = describe_config_key(ConfigRole::Node, node_metadata, "p2p.listen_addr");
+            let node_key =
+                describe_config_key(ConfigRole::Node, node_metadata, "network.p2p.listen_addr");
             let wallet_key =
                 describe_config_key(ConfigRole::Wallet, wallet_metadata, "wallet.rpc.listen");
             conflicts.push(format!(
                 "{wallet_key} ({wallet_rpc}) reuses TCP port {port}, which is already reserved by {node_key} ({})",
-                node_bundle.value.p2p.listen_addr
+                node_bundle.value.network.p2p.listen_addr
             ));
         }
     }
@@ -1299,14 +1314,14 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
         config.data_dir = dir.clone();
     }
     if let Some(addr) = options.rpc_listen {
-        config.rpc_listen = addr;
+        config.network.rpc.listen = addr;
     }
     if let Some(token) = options.rpc_auth_token.as_ref() {
         let token = token.trim();
         if token.is_empty() {
-            config.rpc_auth_token = None;
+            config.network.rpc.auth_token = None;
         } else {
-            config.rpc_auth_token = Some(token.to_string());
+            config.network.rpc.auth_token = Some(token.to_string());
         }
     }
     if let Some(endpoint) = options.telemetry_endpoint.as_ref() {
@@ -2212,11 +2227,11 @@ mod tests {
     #[test]
     fn ensure_listener_conflicts_accepts_matching_configuration() {
         let mut node_config = NodeConfig::for_mode(RuntimeMode::Hybrid);
-        node_config.rpc_listen = "127.0.0.1:7070".parse().expect("socket addr");
-        node_config.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7600".to_string();
+        node_config.network.rpc.listen = "127.0.0.1:7070".parse().expect("socket addr");
+        node_config.network.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7600".to_string();
 
         let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
-        wallet_config.wallet.rpc.listen = node_config.rpc_listen;
+        wallet_config.wallet.rpc.listen = node_config.network.rpc.listen;
 
         let node_bundle = ConfigBundle {
             value: node_config,
@@ -2238,7 +2253,7 @@ mod tests {
     #[test]
     fn ensure_listener_conflicts_detects_rpc_mismatch() {
         let mut node_config = NodeConfig::for_mode(RuntimeMode::Hybrid);
-        node_config.rpc_listen = "127.0.0.1:7000".parse().expect("socket addr");
+        node_config.network.rpc.listen = "127.0.0.1:7000".parse().expect("socket addr");
 
         let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
         wallet_config.wallet.rpc.listen = "127.0.0.1:8000".parse().expect("socket addr");
@@ -2281,11 +2296,11 @@ mod tests {
     #[test]
     fn ensure_listener_conflicts_detects_port_reuse() {
         let mut node_config = NodeConfig::for_mode(RuntimeMode::Hybrid);
-        node_config.rpc_listen = "127.0.0.1:7500".parse().expect("socket addr");
-        node_config.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7500".to_string();
+        node_config.network.rpc.listen = "127.0.0.1:7500".parse().expect("socket addr");
+        node_config.network.p2p.listen_addr = "/ip4/0.0.0.0/tcp/7500".to_string();
 
         let mut wallet_config = WalletConfig::for_mode(RuntimeMode::Hybrid);
-        wallet_config.wallet.rpc.listen = node_config.rpc_listen;
+        wallet_config.wallet.rpc.listen = node_config.network.rpc.listen;
 
         let node_bundle = ConfigBundle {
             value: node_config,

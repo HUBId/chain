@@ -38,11 +38,11 @@ use rpp_chain::storage::Storage;
 use rpp_chain::types::BlockPayload;
 use rpp_chain::wallet::Wallet;
 
-use rpp_chain::errors::ChainResult;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::config::ElectrsConfig;
 #[cfg(feature = "vendor_electrs")]
 use rpp_chain::errors::ChainError;
+use rpp_chain::errors::ChainResult;
 use rpp_chain::gossip::{spawn_node_event_worker, NodeGossipProcessor};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::vendor::electrs::firewood_adapter::RuntimeAdapters;
@@ -191,9 +191,9 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
         let config = load_or_init_node_config(node_config_path, resolved.mode)?;
-        let addr = config.rpc_listen;
-        rpc_auth_token = config.rpc_auth_token.clone();
-        rpc_allowed_origin = config.rpc_allowed_origin.clone();
+        let addr = config.network.rpc.listen;
+        rpc_auth_token = config.network.rpc.auth_token.clone();
+        rpc_allowed_origin = config.network.rpc.allowed_origin.clone();
         let node = Node::new(config.clone(), Arc::clone(&runtime_metrics))?;
         let network_identity = node
             .network_identity_profile()
@@ -223,7 +223,15 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             node.start().await.map_err(|err| anyhow!(err))
         }));
         rpc_addr = Some(addr);
-        rpc_requests_per_minute = config.rpc_requests_per_minute.and_then(NonZeroU64::new);
+        if config.network.limits.per_ip_token_bucket.enabled {
+            rpc_requests_per_minute = NonZeroU64::new(
+                config
+                    .network
+                    .limits
+                    .per_ip_token_bucket
+                    .replenish_per_minute,
+            );
+        }
 
         let (orchestrator, shutdown_rx) =
             PipelineOrchestrator::new(handle.clone(), p2p_handle.clone());
@@ -304,12 +312,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         let mut runtime_config = WalletRuntimeConfig::new(config.wallet.rpc.listen);
         runtime_config.allowed_origin = config.wallet.rpc.allowed_origin.clone();
         if config.wallet.auth.enabled {
-            runtime_config.auth_token = config
-                .wallet
-                .auth
-                .token
-                .clone()
-                .map(AuthToken::new);
+            runtime_config.auth_token = config.wallet.auth.token.clone().map(AuthToken::new);
         }
         runtime_config.requests_per_minute = config
             .wallet
@@ -699,10 +702,7 @@ async fn run_until_shutdown(
     }
 
     if let Some(handle) = wallet_runtime.as_ref() {
-        handle
-            .shutdown()
-            .await
-            .map_err(|err| anyhow!(err))?;
+        handle.shutdown().await.map_err(|err| anyhow!(err))?;
     }
 
     if shutdown_requested {

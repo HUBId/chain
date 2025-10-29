@@ -32,9 +32,9 @@ use tokio::task::JoinHandle;
 use tokio::time;
 use tracing::field::display;
 use tracing::instrument;
+use tracing::Instrument;
 use tracing::Span;
 use tracing::{debug, error, info, info_span, warn};
-use tracing::Instrument;
 
 use hex;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -93,23 +93,18 @@ use crate::stwo::circuit::transaction::TransactionWitness;
 use crate::stwo::proof::ProofPayload;
 #[cfg(feature = "prover-stwo")]
 use crate::stwo::prover::WalletProver;
-#[cfg(feature = "prover-stwo")]
-use prover_stwo_backend::backend::{
-    decode_consensus_proof, decode_pruning_proof, decode_recursive_proof, decode_state_proof,
-    StwoBackend,
-};
 use crate::sync::{
-    invariants::enforce_block_invariants, PayloadProvider, ReconstructionEngine, ReconstructionPlan,
-    StateSyncPlan,
-};
-use crate::types::{
-    Account, Address, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockProofBundle,
-    ChainProof, IdentityDeclaration, PruningEnvelopeMetadata, PruningProof, PruningProofExt,
-    RecursiveProof, ReputationUpdate,
-    SignedTransaction, Stake, TimetokeUpdate, TransactionProofBundle, UptimeProof,
-    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM, pruning_from_previous,
+    invariants::enforce_block_invariants, PayloadProvider, ReconstructionEngine,
+    ReconstructionPlan, StateSyncPlan,
 };
 use crate::types::serde_pruning_proof;
+use crate::types::{
+    pruning_from_previous, Account, Address, AttestedIdentityRequest, Block, BlockHeader,
+    BlockMetadata, BlockProofBundle, ChainProof, IdentityDeclaration, PruningEnvelopeMetadata,
+    PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate, SignedTransaction, Stake,
+    TimetokeUpdate, TransactionProofBundle, UptimeProof, IDENTITY_ATTESTATION_GOSSIP_MIN,
+    IDENTITY_ATTESTATION_QUORUM,
+};
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
 };
@@ -119,13 +114,18 @@ use crate::zk::rpp_adapter::compute_public_digest;
 use crate::zk::rpp_verifier::RppStarkVerificationReport;
 use blake3::Hash;
 use libp2p::PeerId;
+#[cfg(feature = "prover-stwo")]
+use prover_stwo_backend::backend::{
+    decode_consensus_proof, decode_pruning_proof, decode_recursive_proof, decode_state_proof,
+    StwoBackend,
+};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, SnapshotChunk, SnapshotChunkStream,
     SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
-use rpp_pruning::{SNAPSHOT_STATE_TAG, TaggedDigest};
+use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
@@ -1188,19 +1188,18 @@ impl Node {
         let consensus_state_record = storage.read_consensus_state()?.unwrap_or_default();
         let mut consensus_rounds_map = HashMap::new();
         if consensus_state_record.locked_proposal.is_some() || consensus_state_record.round > 0 {
-            consensus_rounds_map.insert(
-                consensus_state_record.height,
-                consensus_state_record.round,
-            );
+            consensus_rounds_map
+                .insert(consensus_state_record.height, consensus_state_record.round);
         }
-        let consensus_lock_state = consensus_state_record
-            .locked_proposal
-            .as_ref()
-            .map(|hash| ConsensusLockState {
-                height: consensus_state_record.height,
-                round: consensus_state_record.round,
-                block_hash: hash.clone(),
-            });
+        let consensus_lock_state =
+            consensus_state_record
+                .locked_proposal
+                .as_ref()
+                .map(|hash| ConsensusLockState {
+                    height: consensus_state_record.height,
+                    round: consensus_state_record.round,
+                    block_hash: hash.clone(),
+                });
         let inner = Arc::new(NodeInner {
             block_interval: Duration::from_millis(config.block_time_ms),
             config,
@@ -1256,21 +1255,26 @@ impl Node {
                                 topic = %topic_clone,
                                 queue_depth
                             );
-                            tokio::spawn(async move {
-                                if let Err(err) = runtime
-                                    .report_gossip_backpressure(topic_clone.clone(), queue_depth)
-                                    .await
-                                {
-                                    warn!(
-                                        target: "node",
-                                        ?topic_clone,
-                                        queue_depth,
-                                        ?err,
-                                        "failed to report gossip backpressure"
-                                    );
+                            tokio::spawn(
+                                async move {
+                                    if let Err(err) = runtime
+                                        .report_gossip_backpressure(
+                                            topic_clone.clone(),
+                                            queue_depth,
+                                        )
+                                        .await
+                                    {
+                                        warn!(
+                                            target: "node",
+                                            ?topic_clone,
+                                            queue_depth,
+                                            ?err,
+                                            "failed to report gossip backpressure"
+                                        );
+                                    }
                                 }
-                            }
-                            .instrument(span));
+                                .instrument(span),
+                            );
                         }
                     }
                 }));
@@ -1342,8 +1346,8 @@ mod tests {
     use crate::vrf::{self, PoseidonVrfInput, VrfProof, VrfSubmission, VrfSubmissionPool};
     use ed25519_dalek::{Keypair, PublicKey, SecretKey, Signer};
     use malachite::Natural;
-    use tempfile::tempdir;
     use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
 
     use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
     use tracing_subscriber::registry::LookupSpan;
@@ -2879,20 +2883,22 @@ impl NodeInner {
 
         let completion = Arc::clone(self);
         let completion_span = info_span!("runtime.node.run.join");
-        tokio::spawn(async move {
-            match run_task.await {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    warn!(?err, "node runtime exited with error");
+        tokio::spawn(
+            async move {
+                match run_task.await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        warn!(?err, "node runtime exited with error");
+                    }
+                    Err(err) => {
+                        warn!(?err, "node runtime join error");
+                    }
                 }
-                Err(err) => {
-                    warn!(?err, "node runtime join error");
-                }
+                completion.drain_worker_tasks().await;
+                completion.completion.notify_waiters();
             }
-            completion.drain_worker_tasks().await;
-            completion.completion.notify_waiters();
-        }
-        .instrument(completion_span))
+            .instrument(completion_span),
+        )
     }
 
     pub async fn start(
@@ -2907,12 +2913,14 @@ impl NodeInner {
                 ChainError::Config(format!("failed to initialise p2p runtime: {err}"))
             })?;
         let p2p_span = info_span!("runtime.p2p.run");
-        let p2p_task = tokio::spawn(async move {
-            if let Err(err) = p2p_inner.run().await {
-                warn!(?err, "p2p runtime exited with error");
+        let p2p_task = tokio::spawn(
+            async move {
+                if let Err(err) = p2p_inner.run().await {
+                    warn!(?err, "p2p runtime exited with error");
+                }
             }
-        }
-        .instrument(p2p_span));
+            .instrument(p2p_span),
+        );
         handle
             .inner
             .initialise_p2p_runtime(p2p_handle, Some(p2p_task))
@@ -3097,14 +3105,11 @@ impl NodeInner {
             match self.storage.read_block_record(height)? {
                 Some(record) => {
                     let mut block = record.into_block();
-                    let metadata = self
-                        .storage
-                        .read_block_metadata(height)?
-                        .ok_or_else(|| {
-                            ChainError::CommitmentMismatch(format!(
-                                "missing block metadata for height {height}"
-                            ))
-                        })?;
+                    let metadata = self.storage.read_block_metadata(height)?.ok_or_else(|| {
+                        ChainError::CommitmentMismatch(format!(
+                            "missing block metadata for height {height}"
+                        ))
+                    })?;
                     let previous_block = if block.header.height == 0 {
                         None
                     } else {
@@ -3114,10 +3119,8 @@ impl NodeInner {
                             .map(|candidate| candidate.header.height)
                             != Some(expected_height)
                         {
-                            let predecessor = self
-                                .storage
-                                .read_block(expected_height)?
-                                .ok_or_else(|| {
+                            let predecessor =
+                                self.storage.read_block(expected_height)?.ok_or_else(|| {
                                     ChainError::CommitmentMismatch(format!(
                                         "missing predecessor block at height {expected_height}"
                                     ))
@@ -3342,10 +3345,9 @@ impl NodeInner {
         if self.config.rollout.feature_gates.recursive_proofs {
             #[cfg(feature = "backend-rpp-stark")]
             {
-                let verification = if let (Some(bytes), Some(inputs)) = (
-                    bundle.stwo_proof_bytes(),
-                    bundle.stwo_public_inputs(),
-                ) {
+                let verification = if let (Some(bytes), Some(inputs)) =
+                    (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs())
+                {
                     let proof_bytes = ProofBytes(bytes.clone());
                     self.verifiers.verify_stwo_proof_bytes(&proof_bytes, inputs)
                 } else {
@@ -3369,10 +3371,9 @@ impl NodeInner {
             }
             #[cfg(not(feature = "backend-rpp-stark"))]
             {
-                let verification = if let (Some(bytes), Some(inputs)) = (
-                    bundle.stwo_proof_bytes(),
-                    bundle.stwo_public_inputs(),
-                ) {
+                let verification = if let (Some(bytes), Some(inputs)) =
+                    (bundle.stwo_proof_bytes(), bundle.stwo_public_inputs())
+                {
                     let proof_bytes = ProofBytes(bytes.clone());
                     self.verifiers.verify_stwo_proof_bytes(&proof_bytes, inputs)
                 } else {
@@ -4274,14 +4275,16 @@ impl NodeInner {
         let tier = profile.tier;
         let runtime_profile = RuntimeIdentityProfile::from(profile);
         let refresh_span = info_span!("runtime.identity.refresh", tier = ?tier);
-        tokio::spawn(async move {
-            if let Err(err) = handle.update_identity(runtime_profile).await {
-                warn!(?err, tier = ?tier, "failed to update libp2p identity profile");
-            } else {
-                debug!(tier = ?tier, "updated libp2p identity profile");
+        tokio::spawn(
+            async move {
+                if let Err(err) = handle.update_identity(runtime_profile).await {
+                    warn!(?err, tier = ?tier, "failed to update libp2p identity profile");
+                } else {
+                    debug!(tier = ?tier, "updated libp2p identity profile");
+                }
             }
-        }
-        .instrument(refresh_span));
+            .instrument(refresh_span),
+        );
     }
 
     fn drain_votes_for(&self, height: u64, block_hash: &str) -> Vec<SignedBftVote> {
@@ -4328,8 +4331,7 @@ impl NodeInner {
     }
 
     fn prune_consensus_rounds_below(&self, threshold_height: u64) {
-        self
-            .consensus_rounds
+        self.consensus_rounds
             .write()
             .retain(|&tracked_height, _| tracked_height >= threshold_height);
         let should_clear_lock = {
@@ -4389,7 +4391,10 @@ impl NodeInner {
                 match (left_bytes, right_bytes) {
                     (Ok(left_encoded), Ok(right_encoded)) => left_encoded == right_encoded,
                     (Err(err), _) | (_, Err(err)) => {
-                        warn!(?err, "failed to serialize consensus certificate for comparison");
+                        warn!(
+                            ?err,
+                            "failed to serialize consensus certificate for comparison"
+                        );
                         false
                     }
                 }
@@ -4409,12 +4414,8 @@ impl NodeInner {
         let (height, round) = if let Some(entry) = observed {
             entry
         } else {
-            let fallback = fallback_height.unwrap_or_else(|| {
-                self.chain_tip
-                    .read()
-                    .height
-                    .saturating_add(1)
-            });
+            let fallback =
+                fallback_height.unwrap_or_else(|| self.chain_tip.read().height.saturating_add(1));
             (fallback, 0)
         };
         self.persist_consensus_state(|state| {
@@ -4560,7 +4561,8 @@ impl NodeInner {
                 .prove_state(&state_pk, &state_bytes)
                 .map_err(Self::map_backend_error)?
         };
-        let state_stark = decode_state_proof(&state_proof_bytes).map_err(Self::map_backend_error)?;
+        let state_stark =
+            decode_state_proof(&state_proof_bytes).map_err(Self::map_backend_error)?;
         let state_chain_proof = ChainProof::Stwo(state_stark);
 
         let previous_transactions = previous_block
@@ -4569,8 +4571,8 @@ impl NodeInner {
         let previous_identities = previous_block
             .map(|block| block.identities.clone())
             .unwrap_or_default();
-        let expected_previous_state_root = previous_block
-            .map(|block| block.header.state_root.clone());
+        let expected_previous_state_root =
+            previous_block.map(|block| block.header.state_root.clone());
         let pruning_witness = {
             let span = proof_operation_span(
                 "build_pruning_witness",
@@ -4716,8 +4718,7 @@ impl NodeInner {
 
         let module_witnesses = ledger.drain_module_witnesses();
         let module_artifacts = ledger.stage_module_witnesses(&module_witnesses)?;
-        let mut proof_artifacts =
-            Self::collect_proof_artifacts(&bundle, max_proof_size_bytes)?;
+        let mut proof_artifacts = Self::collect_proof_artifacts(&bundle, max_proof_size_bytes)?;
         proof_artifacts.extend(module_artifacts);
 
         Ok(LocalProofArtifacts {
@@ -5403,15 +5404,11 @@ impl NodeInner {
             Some(&block_hash),
             self.config.max_proof_size_bytes,
         )?;
-        let consensus_proof = consensus_proof.ok_or_else(|| {
-            ChainError::Crypto("local consensus proof missing".into())
-        })?;
+        let consensus_proof = consensus_proof
+            .ok_or_else(|| ChainError::Crypto("local consensus proof missing".into()))?;
 
         #[cfg(feature = "backend-rpp-stark")]
-        if let Err(err) = self
-            .verifiers
-            .verify_rpp_stark_block_bundle(&stark_bundle)
-        {
+        if let Err(err) = self.verifiers.verify_rpp_stark_block_bundle(&stark_bundle) {
             error!(
                 height,
                 block_hash = %block_hash,
@@ -5465,10 +5462,7 @@ impl NodeInner {
         #[cfg(feature = "backend-rpp-stark")]
         let recursive_result = match &recursive_stark {
             ChainProof::RppStark(_) => self
-                .verify_rpp_stark_with_metrics(
-                    ProofVerificationKind::Recursive,
-                    &recursive_stark,
-                )
+                .verify_rpp_stark_with_metrics(ProofVerificationKind::Recursive, &recursive_stark)
                 .map(|_| ()),
             _ => self.verifiers.verify_recursive(&recursive_stark),
         };
@@ -5568,11 +5562,8 @@ impl NodeInner {
             self.storage.store_block(&block, &metadata)?;
         }
         if self.config.rollout.feature_gates.pruning && block.header.height > 0 {
-            let span = storage_flush_span(
-                "prune_block_payload",
-                block.header.height - 1,
-                &block.hash,
-            );
+            let span =
+                storage_flush_span("prune_block_payload", block.header.height - 1, &block.hash);
             let _guard = span.enter();
             let _ = self.storage.prune_block_payload(block.header.height - 1)?;
         }
@@ -6137,8 +6128,8 @@ mod tests {
         config.data_dir = data_dir.clone();
         config.snapshot_dir = data_dir.join("snapshots");
         config.proof_cache_dir = data_dir.join("proofs");
-        config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-        config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+        config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+        config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
         config.key_path = keys_dir.join("node.toml");
         config.p2p_key_path = keys_dir.join("p2p.toml");
         config.vrf_key_path = keys_dir.join("vrf.toml");
@@ -6216,7 +6207,9 @@ mod tests {
             vec![0x01, 0x02],
         ));
         let expected_commitment = match &proof {
-            ChainProof::RppStark(stark) => compute_public_digest(stark.public_inputs()).into_bytes(),
+            ChainProof::RppStark(stark) => {
+                compute_public_digest(stark.public_inputs()).into_bytes()
+            }
             _ => unreachable!(),
         };
         let artifact = NodeInner::proof_artifact(ProofModule::Utxo, &proof, 16_384)

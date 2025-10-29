@@ -114,7 +114,7 @@ async fn validator_rpc_and_cli_tooling() -> Result<()> {
         .nodes()
         .first()
         .context("cluster returned no nodes")?;
-    let addr = primary.config.rpc_listen;
+    let addr = primary.config.network.rpc.listen;
     let node_handle = primary.node_handle.clone();
     let wallet = primary.wallet.clone();
     let orchestrator = primary.orchestrator.clone();

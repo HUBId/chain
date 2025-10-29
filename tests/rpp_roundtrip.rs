@@ -26,8 +26,8 @@ fn prepare_config() -> (NodeConfig, TempDir) {
     config.data_dir = data_dir.clone();
     config.snapshot_dir = data_dir.join("snapshots");
     config.proof_cache_dir = data_dir.join("proofs");
-    config.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
-    config.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
+    config.network.p2p.peerstore_path = data_dir.join("p2p/peerstore.json");
+    config.network.p2p.gossip_path = Some(data_dir.join("p2p/gossip.json"));
     config.key_path = keys_dir.join("node.toml");
     config.p2p_key_path = keys_dir.join("p2p.toml");
     config.vrf_key_path = keys_dir.join("vrf.toml");
@@ -35,7 +35,7 @@ fn prepare_config() -> (NodeConfig, TempDir) {
     config.rollout.feature_gates.reconstruction = true;
     config.rollout.feature_gates.recursive_proofs = false;
     config.rollout.feature_gates.consensus_enforcement = false;
-    config.rpc_listen = "127.0.0.1:0".parse().expect("rpc listen");
+    config.network.rpc.listen = "127.0.0.1:0".parse().expect("rpc listen");
     (config, temp)
 }
 
@@ -73,7 +73,11 @@ fn rpp_pruning_roundtrip_preserves_commitments() {
             .read_block(block.header.height)
             .expect("read stored block")
             .expect("block persisted");
-        assert!(stored.pruned, "block {} should be pruned", block.header.height);
+        assert!(
+            stored.pruned,
+            "block {} should be pruned",
+            block.header.height
+        );
     }
 
     let status = handle
@@ -92,7 +96,8 @@ fn rpp_pruning_roundtrip_preserves_commitments() {
     let engine = ReconstructionEngine::with_snapshot_dir(storage.clone(), snapshot_dir.clone());
     let artifacts = collect_state_sync_artifacts(&engine, 2).expect("collect state sync artifacts");
 
-    let mut advertised_heights: Vec<u64> = artifacts.requests().map(|request| request.height).collect();
+    let mut advertised_heights: Vec<u64> =
+        artifacts.requests().map(|request| request.height).collect();
     advertised_heights.sort_unstable();
     let mut expected_heights: Vec<u64> = blocks.iter().map(|block| block.header.height).collect();
     expected_heights.sort_unstable();
