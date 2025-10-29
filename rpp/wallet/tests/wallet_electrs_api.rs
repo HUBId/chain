@@ -23,7 +23,9 @@ use rpp::proofs::rpp::{
     encode_transaction_witness, AccountBalanceWitness, TransactionUtxoSnapshot, TransactionWitness,
     UtxoOutpoint,
 };
-use rpp::runtime::config::FeatureGates as NodeFeatureGates;
+use rpp::runtime::config::{
+    FeatureGates as NodeFeatureGates, NetworkLimitsConfig, NetworkTlsConfig,
+};
 use rpp::runtime::node::Node;
 use rpp::runtime::sync::{PayloadProvider, ReconstructionRequest, RuntimeRecursiveProofVerifier};
 use rpp::runtime::types::proofs::{ChainProof, RppStarkProof};
@@ -274,7 +276,15 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
     let server_context = context.clone();
     let server = tokio::spawn(async move {
         // ignore failures triggered by aborting the server at the end of the test
-        let _ = api::serve(server_context, addr, None, None).await;
+        let _ = api::serve(
+            server_context,
+            addr,
+            None,
+            None,
+            NetworkLimitsConfig::default(),
+            NetworkTlsConfig::default(),
+        )
+        .await;
     });
 
     sleep(Duration::from_millis(100)).await;

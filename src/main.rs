@@ -21,6 +21,7 @@ use rpp_chain::crypto::{
 use rpp_chain::migration;
 use rpp_chain::node::{Node, NodeHandle};
 use rpp_chain::orchestration::PipelineOrchestrator;
+use rpp_chain::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
 use rpp_chain::runtime::node_runtime::node::NodeRuntimeConfig;
 use rpp_chain::runtime::node_runtime::{NodeHandle as P2pHandle, NodeInner as P2pNode};
 #[cfg(feature = "vendor_electrs")]
@@ -187,6 +188,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
     let mut orchestrator_shutdown: Option<watch::Receiver<bool>> = None;
     let mut gossip_task: Option<JoinHandle<Result<()>>> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
+    let mut rpc_limits = NetworkLimitsConfig::default();
+    let mut rpc_tls = NetworkTlsConfig::default();
     let mut wallet_runtime_handle: Option<WalletRuntimeHandle> = None;
 
     if let Some(node_config_path) = resolved.node_config.as_ref() {
@@ -194,6 +197,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         let addr = config.network.rpc.listen;
         rpc_auth_token = config.network.rpc.auth_token.clone();
         rpc_allowed_origin = config.network.rpc.allowed_origin.clone();
+        rpc_limits = config.network.limits.clone();
+        rpc_tls = config.network.tls.clone();
         let node = Node::new(config.clone(), Arc::clone(&runtime_metrics))?;
         let network_identity = node
             .network_identity_profile()
@@ -381,6 +386,8 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             rpc_addr,
             rpc_auth_token.clone(),
             rpc_allowed_origin.clone(),
+            rpc_limits,
+            rpc_tls,
         )
         .await
         .map_err(|err| anyhow!(err))

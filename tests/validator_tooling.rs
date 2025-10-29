@@ -14,6 +14,7 @@ mod support;
 use support::cluster::TestCluster;
 
 use rpp_chain::api;
+use rpp_chain::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
 use rpp_chain::runtime::RuntimeMode;
 
 #[test]
@@ -129,7 +130,17 @@ async fn validator_rpc_and_cli_tooling() -> Result<()> {
         false,
         true,
     );
-    let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None).await });
+    let rpc_task = tokio::spawn(async move {
+        api::serve(
+            context,
+            addr,
+            None,
+            None,
+            NetworkLimitsConfig::default(),
+            NetworkTlsConfig::default(),
+        )
+        .await
+    });
 
     let client = Client::builder()
         .build()

@@ -17,6 +17,7 @@ use rpp_chain::crypto::{
 use rpp_chain::node::NodeHandle;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::reputation::{ReputationWeights, Tier};
+use rpp_chain::runtime::config::{NetworkLimitsConfig, NetworkTlsConfig};
 use rpp_chain::runtime::RuntimeMode;
 use rpp_chain::stwo::circuit::transaction::TransactionWitness;
 use rpp_chain::stwo::circuit::ExecutionTrace;
@@ -79,7 +80,17 @@ impl RpcTestHarness {
             false,
             true,
         );
-        let rpc_task = tokio::spawn(async move { api::serve(context, addr, None, None).await });
+        let rpc_task = tokio::spawn(async move {
+            api::serve(
+                context,
+                addr,
+                None,
+                None,
+                NetworkLimitsConfig::default(),
+                NetworkTlsConfig::default(),
+            )
+            .await
+        });
 
         let client = Client::builder()
             .build()
