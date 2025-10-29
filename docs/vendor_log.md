@@ -22,6 +22,8 @@ Folgeschritte:
 * Mehr-PR-Prozess: STWO-Integration wird über mehrere PRs mit einem Diff-Limit von ca. 25 000 geänderten Zeilen gestaffelt.
 * Toolchain-Vorgabe: Das vendorte Backend benötigt die Nightly-Toolchain `nightly-2025-07-14` laut `vendor/stwo-dev/rust-toolchain.toml`.
 * Quellenreferenz: Ausgangspunkt ist das Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
+* Runtime-Gating: Validator- und Hybrid-Läufe brechen nun sofort mit einem Hinweis auf das fehlende Feature ab, wenn der Build ohne `--features prod,prover-stwo` (oder `prover-stwo-simd`) erfolgt. Produktions-Builds müssen daher `cargo +nightly-2025-07-14 build -p rpp-node --release --no-default-features --features prod,prover-stwo` (bzw. `prover-stwo-simd`) ausführen.
+* Verifikation vor Deployments: Nach dem Build `cargo +nightly-2025-07-14 run -p rpp-node --bin validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Der Lauf muss ohne den neuen Fehler „requires the `prover-stwo` feature“ zurückkehren, andernfalls ist das Backend nicht aktiv.
 
 #### Import – constraint-framework-Staging (2025-10-17)
 

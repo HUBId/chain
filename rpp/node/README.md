@@ -8,20 +8,31 @@ TOML file or command-line flags.
 ## Features & dependencies
 
 `rpp-node` re-exports most of its functionality from the `rpp-chain` crate and
-shares the same dependency graph. The available cargo features toggle which
-proving backend is compiled in:
+shares the same dependency graph. The available cargo features separate
+development and production builds while letting operators pick the proving
+backend explicitly:
 
-| Feature            | Description                                                          | Default |
-| ------------------ | -------------------------------------------------------------------- | ------- |
-| `prover-stwo`      | Enables the STWO proving backend.                                     | ✅      |
-| `prover-stwo-simd` | Extends `prover-stwo` with optional SIMD acceleration where available. | ⬜️      |
-| `prover-mock`      | Swaps in a lightweight mock prover useful for tests and local setups. | ⬜️      |
+| Feature            | Description                                                                                   | Default |
+| ------------------ | --------------------------------------------------------------------------------------------- | ------- |
+| `dev`              | Convenience bundle for local development; enables the mock prover for fast iterative testing. | ✅      |
+| `prod`             | Marker feature for production builds. Combine with a backend feature to select the prover.     | ⬜️      |
+| `prover-stwo`      | Enables the nightly STWO proving backend. Requires the `nightly-2025-07-14` Rust toolchain.    | ⬜️      |
+| `prover-stwo-simd` | Extends `prover-stwo` with optional SIMD acceleration where available.                        | ⬜️      |
+| `prover-mock`      | Swaps in a lightweight mock prover useful for tests and local setups.                          | ⬜️      |
 
-To run with a different backend, disable the default feature and select the one
-you need, e.g.:
+Production builds **must** disable the defaults and opt into the STWO backend
+explicitly, for example:
 
 ```bash
-cargo run -p rpp-node --no-default-features --features prover-mock
+cargo build -p rpp-node --release \
+  --no-default-features --features prod,prover-stwo
+```
+
+For development workflows that still need the mock backend, keep the default or
+enable it explicitly:
+
+```bash
+cargo run -p rpp-node --features dev
 ```
 
 ## Example configuration
