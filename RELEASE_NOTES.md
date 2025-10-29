@@ -19,6 +19,10 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   installation, configuration with `config/node.toml`, rollout feature gates,
   telemetry options, and recovery procedures for VRF mismatches and missing
   snapshots.
+- Updated the Poseidon VRF notes to highlight the `/status/node` telemetry
+  payload and the `target_validator_count` / `rollout.telemetry.*` knobs in
+  `config/node.toml`, giving operators concrete endpoints and toggles for the
+  new metrics.【F:docs/poseidon_vrf.md†L55-L104】【F:config/node.toml†L8-L76】
 
 ### Risks
 

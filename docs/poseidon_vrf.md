@@ -41,6 +41,18 @@ The crypto module owns the VRF key lifecycle:
 - Hex helpers (`vrf_public_key_to_hex`, `vrf_secret_key_to_hex`, and their
   parsing counterparts) ease CLI and configuration plumbing.
 
+These helpers are shipped in-tree through `rpp/crypto-vrf` and the runtime's
+crypto wrapper so nodes can manage Poseidon VRF material without external
+tooling.【F:rpp/crypto-vrf/src/lib.rs†L247-L360】【F:rpp/crypto/mod.rs†L542-L575】
+
+## Epoch management & thresholding
+
+`VrfEpochManager` rotates epochs, deduplicates submissions, and carries the
+entropy beacon forward, while `select_validators` executes the weighted lottery
+and fallback selection defined in the blueprint. Together they provide the
+replay protection, per-epoch thresholds, and audit data that consensus consumes
+when finalising validator sets.【F:rpp/crypto-vrf/src/lib.rs†L648-L999】
+
 ## Consensus Integration
 Consensus evaluation paths request Poseidon-backed proofs when VRF key material
 is available and fall back to computing the raw digest only when no secret key
@@ -61,6 +73,10 @@ exceeds the number of submissions, the threshold saturates so every participant
 qualifies; otherwise the deterministic jitter keeps similarly seeded nodes from
 repeatedly colliding on the cutoff.
 
+`ConsensusRound::new` wires those helpers directly, persisting the VRF audit
+trail and metrics that the runtime later publishes via its status endpoints, so
+no additional adapter crate is required.【F:rpp/consensus/node.rs†L360-L450】
+
 ## Audit Trail & History
 Consensus rounds now emit structured `VrfSelectionRecord` entries that capture
 the address, tier, timetoke balance, published proof, and the final verdict for
@@ -78,7 +94,7 @@ exposed by `NodeConfig::load_or_generate_vrf_keypair`; filesystem storage at
 `config.vrf_key_path` remains the default, while production deployments can
 switch to `secrets.backend = "vault"` to keep tokens and TLS credentials
 outside of the node logs. The `target_validator_count` configuration entry
-drives the dynamic threshold used for per-epoch validator selection.【F:rpp/runtime/config.rs†L567-L574】【F:config/node.toml†L8-L13】
+drives the dynamic threshold used for per-epoch validator selection.【F:rpp/runtime/config.rs†L567-L574】【F:config/node.toml†L8-L21】
 
 ## Telemetry & Metrics
 `GET /status/node` now surfaces a `vrf_metrics` payload containing the submission
@@ -87,6 +103,10 @@ validator was promoted in the last round. The payload also reports participation
 rate, the cumulative validator weight, and the epoch entropy beacon produced by
 the VRF epoch manager so operators can chart fairness and randomness drift
 alongside consensus and mempool health.
+
+Telemetry streaming is gated by `rollout.telemetry.*` in `config/node.toml`, and
+operators still rely on the troubleshooting runbook to wire alerts around the
+new metrics until automated dashboards land.【F:config/node.toml†L62-L76】【F:rpp/runtime/node.rs†L3921-L3936】【F:docs/validator_troubleshooting.md†L9-L38】
 
 ## Testing Guidance
 Run `cargo test vrf::tests` to exercise the Poseidon digest helpers, VRF
