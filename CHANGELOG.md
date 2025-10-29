@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### ⚙️ Miscellaneous Tasks
 
 - Align all nightly Rust toolchain references on `nightly-2025-07-14`, update CI to guard the pin, and document the one-time cache cleanup required after installing the new compiler.
+- Confirm contributors have the cleanup steps for stale nightly artifacts (`cargo clean -p prover_stwo_backend`, `rm -rf prover/target`, uninstall toolchains older than `nightly-2025-07-14`) and record the stable/nightly build separation verified on Rust 1.79 and the pinned nightly toolchain.
 
 ## [0.0.12] - 2025-08-26
 

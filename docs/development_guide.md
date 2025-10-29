@@ -14,8 +14,9 @@ stable and nightly builds:
 - `make test:nightly` executes the prover tests with the pinned nightly toolchain.
 
 Install or update the nightly compiler with `rustup toolchain install nightly-2025-07-14 --profile minimal` and remove obsolete
-artifacts (`cargo clean -p prover-stwo-backend`, `rm -rf prover/target`) after switching to the new pin so that stale builds from
-older toolchains do not interfere with CI caches.
+artifacts after switching to the new pin so that stale builds from older toolchains do not interfere with CI caches. Run
+`cargo clean -p prover_stwo_backend`, delete the prover workspace target directory with `rm -rf prover/target`, and uninstall any
+nightly toolchains older than `nightly-2025-07-14` (for example `rustup toolchain uninstall nightly-2025-06-30`).
 
 Set `STABLE_TOOLCHAIN`, `NIGHTLY_TOOLCHAIN`, or `PROVER_MANIFEST` when invoking
 `make` to override the defaults, for example
