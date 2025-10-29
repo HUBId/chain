@@ -111,13 +111,13 @@ impl Blueprint {
                         key: "state.lifecycle_api",
                         title: "Lifecycle-Services extrahieren",
                         detail: "apply_block, prove_transition und verify_transition als modulare Services veröffentlichen.",
-                        status: TaskStatus::InProgress,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "state.block_metadata",
                         title: "Block-Metadaten erweitern",
                         detail: "Blockpersistenz um alte/neue Roots, Proof-Hashes und Rekursionsanker ergänzen.",
-                        status: TaskStatus::InProgress,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "state.pruning_jobs",

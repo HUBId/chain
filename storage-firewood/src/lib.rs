@@ -1,6 +1,7 @@
 pub mod api;
 pub mod column_family;
 pub mod kv;
+pub mod lifecycle;
 pub mod pruning;
 pub mod schema;
 pub mod state;
@@ -11,6 +12,7 @@ pub use crate::pruning::SnapshotManifest;
 pub use crate::state::{
     FirewoodState as Storage, StorageOptions, SyncPolicy, STORAGE_LAYOUT_VERSION,
 };
+pub use lifecycle::{FirewoodLifecycle, LifecycleError, LifecycleReceipt, LifecycleStatus};
 
 #[cfg(test)]
 mod tests {

@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
-use serde::Serialize;
+use serde::{de::DeserializeOwned, Serialize};
 use thiserror::Error;
 
 use crate::{
     column_family::ColumnFamily,
     kv::{FirewoodKv, Hash, KvError},
-    pruning::{FirewoodPruner, PersistedPrunerSnapshot, PersistedPrunerState},
+    pruning::{FirewoodPruner, PersistedPrunerState, SnapshotManifest},
     tree::{FirewoodTree, MerkleProof},
 };
 
@@ -228,6 +228,56 @@ impl FirewoodState {
         let tree = self.tree.read();
         tree.get_proof(key)
     }
+
+    pub(crate) fn load_meta<T: DeserializeOwned>(
+        &self,
+        key: &str,
+    ) -> Result<Option<T>, StateError> {
+        Ok(self.meta_cf.get_json(key)?)
+    }
+
+    pub(crate) fn store_meta<T: Serialize>(&self, key: &str, value: &T) -> Result<(), StateError> {
+        self.meta_cf
+            .put_json(key, value, self.options.sync_policy == SyncPolicy::Always)?;
+        Ok(())
+    }
+
+    pub(crate) fn import_snapshot_artifacts(
+        &self,
+        manifest_name: &str,
+        manifest: &SnapshotManifest,
+        proof_bytes: &[u8],
+    ) -> Result<(), StateError> {
+        self.snapshots_cf.put_json(
+            manifest_name,
+            manifest,
+            self.options.sync_policy == SyncPolicy::Always,
+        )?;
+        self.proofs_cf.put_bytes(
+            &manifest.proof_file,
+            proof_bytes,
+            self.options.sync_policy == SyncPolicy::Always,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn remove_snapshots_newer_than(&self, height: u64) -> Result<(), StateError> {
+        let keys = self.snapshots_cf.list_keys()?;
+        for key in keys {
+            if let Some(id) = snapshot_id_from_name(&key) {
+                if id > height {
+                    if let Some(manifest) = self.snapshots_cf.get_json::<SnapshotManifest>(&key)? {
+                        self.snapshots_cf.remove(&key)?;
+                        self.proofs_cf.remove(&manifest.proof_file)?;
+                    } else {
+                        self.snapshots_cf.remove(&key)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
 }
 
 impl From<bincode::Error> for StateError {
@@ -311,7 +361,7 @@ fn prune_old_artifacts(
     let retain: HashSet<String> = state
         .snapshots
         .iter()
-        .map(|PersistedPrunerSnapshot { block_height, .. }| format!("{block_height:020}"))
+        .map(|snapshot| format!("{:020}", snapshot.block_height()))
         .collect();
 
     for entry in snapshots_cf.list_keys()? {
@@ -331,6 +381,11 @@ fn prune_old_artifacts(
     }
 
     Ok(())
+}
+
+fn snapshot_id_from_name(name: &str) -> Option<u64> {
+    let id = name.strip_suffix(".json")?;
+    id.parse().ok()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
