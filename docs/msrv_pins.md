@@ -23,3 +23,11 @@ builds reproducible.
 
 All other workspace crates that depend on these libraries use workspace
 inheritance so the pinned versions apply uniformly across every crate.
+
+## Review schedule
+
+The release engineering team revalidates each pin during the bi-monthly MSRV
+review (first week of even-numbered months). Pinned crates are also audited when
+upstream publishes a security advisory or when a dependent workspace crate
+requires new functionality. After validation, update this table and reference the
+review in the pull request description.
