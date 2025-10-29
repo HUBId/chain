@@ -34,7 +34,7 @@ one of them through the Firewood workspace, ensure the `std` and `prover`
 features are enabled and invoke Cargo from the repository root:
 
 ```bash
-cargo bench -p stwo --features "std prover" --bench merkle
+cargo +nightly-2025-07-14 bench -p stwo --features "std prover" --bench merkle
 ```
 
 Cargo will rebuild the vendored crate from `vendor/stwo-dev/0.1.1/staging` and

@@ -993,8 +993,8 @@ fn test_serde() {
     assert_eq!(hash_from_bytestring_cbor, hash);
 }
 
-// `cargo +nightly-2025-07-14 miri test` currently works, but it takes forever, because some of our test
-// inputs are quite large. Most of our unsafe code is platform specific and incompatible with Miri
+// Running `cargo +nightly-2025-07-14 miri test` currently works, but it takes forever, because some of our
+// test inputs are quite large. Most of our unsafe code is platform specific and incompatible with Miri
 // anyway, but we'd like it to be possible for callers to run their own tests under Miri, assuming
 // they don't use incompatible features like Rayon or mmap. This test should get reasonable
 // coverage of our public API without using any large inputs, so we can run it in CI and catch
