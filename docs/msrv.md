@@ -45,3 +45,23 @@ make test:stable
 and run in an isolated workspace. When experimenting with a newer compiler,
 invoke cargo directly (e.g., `cargo +1.80.0 test`) but ensure CI still passes on
 Rust 1.79.0 before opening a pull request.
+
+## 2025-02-20 toolchain maintenance log
+
+- Ran the requested artifact cleanup (`cargo clean -p prover_stwo_backend` and
+  manual removal of `prover/target/`) to clear stale STWO builds. No cached
+  toolchains older than `nightly-2025-07-14` were present, so no further
+  pruning was required.
+- `make build:stable` and `make test:stable` with `RUSTUP_TOOLCHAIN=1.79.0`
+  currently fail because several workspace dependencies now declare MSRVs above
+  1.79.0. The blockers include `askama`, the ICU stack (`icu_*` crates), the
+  libp2p components, `malachite-*`, `rayon`, and the `time` crates. Each emits
+  `requires rustc` errors pointing to Rust 1.80–1.83, so we must either pin
+  compatible patch releases or schedule an MSRV bump during the next review
+  window before the stable workspace can be rebuilt.
+- Nightly prover builds succeeded on `cargo +nightly-2025-07-14 build`, but
+  `make test:nightly` surfaced six failing prover/verifier round-trip tests that
+  assert `verify_*` routines still succeed on freshly generated proofs. The
+  failures affect block, identity, reputation, and transaction proofs as well
+  as the verifier tampering checks. Follow-up work is required to restore those
+  invariants on the refreshed nightly workspace.
