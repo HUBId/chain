@@ -24,10 +24,11 @@ use axum::{BoxError, Json, Router};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use hex;
+use futures::future::pending;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 use tokio_stream::Stream;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -184,6 +185,7 @@ pub struct ApiContext {
     auth_token_enabled: bool,
     state_sync_api: Option<Arc<dyn StateSyncApi>>,
     metrics: Arc<RuntimeMetrics>,
+    wallet_runtime_active: bool,
 }
 
 impl ApiContext {
@@ -194,6 +196,7 @@ impl ApiContext {
         orchestrator: Option<Arc<PipelineOrchestrator>>,
         request_limit_per_minute: Option<NonZeroU64>,
         auth_token_enabled: bool,
+        wallet_runtime_active: bool,
     ) -> Self {
         #[cfg(feature = "vendor_electrs")]
         let tracker = wallet.as_ref().and_then(|wallet| wallet.tracker_handle());
@@ -221,6 +224,7 @@ impl ApiContext {
             auth_token_enabled,
             state_sync_api,
             metrics,
+            wallet_runtime_active,
         }
     }
 
@@ -246,7 +250,11 @@ impl ApiContext {
     }
 
     fn wallet_available(&self) -> bool {
-        self.wallet.is_some()
+        self.wallet_runtime_active && self.wallet.is_some()
+    }
+
+    fn wallet_routes_enabled(&self) -> bool {
+        self.wallet_runtime_active
     }
 
     fn node_enabled(&self) -> bool {
@@ -976,11 +984,33 @@ pub async fn serve(
     addr: SocketAddr,
     auth_token: Option<String>,
     allowed_origin: Option<String>,
-    enable_wallet_routes: bool,
 ) -> ChainResult<()> {
+    serve_with_shutdown(
+        context,
+        addr,
+        auth_token,
+        allowed_origin,
+        pending(),
+        None,
+    )
+    .await
+}
+
+pub async fn serve_with_shutdown<F>(
+    context: ApiContext,
+    addr: SocketAddr,
+    auth_token: Option<String>,
+    allowed_origin: Option<String>,
+    shutdown: F,
+    ready: Option<oneshot::Sender<Result<(), std::io::Error>>>,
+) -> ChainResult<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let security = ApiSecurity::new(auth_token, allowed_origin)?;
     let request_limit_per_minute = context.request_limit_per_minute();
     let metrics = context.metrics();
+    let enable_wallet_routes = context.wallet_routes_enabled();
 
     let mut router = Router::new()
         .route("/health", get(health))
@@ -1097,9 +1127,23 @@ pub async fn serve(
 
     let router = router.with_state(context);
 
-    let listener = TcpListener::bind(addr).await?;
+    let listener = match TcpListener::bind(addr).await {
+        Ok(listener) => {
+            if let Some(sender) = ready {
+                let _ = sender.send(Ok(()));
+            }
+            listener
+        }
+        Err(err) => {
+            if let Some(sender) = ready {
+                let _ = sender.send(Err(std::io::Error::new(err.kind(), err.to_string())));
+            }
+            return Err(ChainError::Io(err));
+        }
+    };
     info!(?addr, "RPC server listening");
     axum::serve(listener, router)
+        .with_graceful_shutdown(shutdown)
         .await
         .map_err(|err| ChainError::Io(std::io::Error::new(std::io::ErrorKind::Other, err)))
 }
@@ -2455,6 +2499,7 @@ mod telemetry_tests {
             None,
             None,
             false,
+            false,
         )
         .with_metrics(metrics.clone());
 
@@ -2500,6 +2545,7 @@ mod telemetry_tests {
             None,
             None,
             None,
+            false,
             false,
         )
         .with_metrics(metrics.clone());

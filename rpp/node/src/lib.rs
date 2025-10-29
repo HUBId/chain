@@ -1,8 +1,10 @@
 use std::env;
 use std::fmt;
+use std::future::Future;
 use std::io::Write;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -19,7 +21,8 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use tokio::task::{JoinError, JoinHandle};
+use tokio::sync::oneshot;
+use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tracing::field::{Field, Visit};
 use tracing::{error, info, info_span, warn, Event, Subscriber};
 use tracing_opentelemetry::OpenTelemetryLayer;
@@ -521,97 +524,236 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         wallet_instance = Some(wallet);
     }
 
-    let rpc_addr = match (node_rpc_addr, wallet_rpc_addr) {
-        (Some(node_addr), Some(wallet_addr)) => {
-            if node_addr != wallet_addr {
-                let node_key =
-                    describe_config_key(ConfigRole::Node, node_metadata.as_ref(), "rpc_listen");
-                let wallet_key =
-                    describe_config_key(ConfigRole::Wallet, wallet_metadata.as_ref(), "rpc_listen");
-                let message = format!(
-                    "listener mismatch: {node_key} ({node_addr}) must match {wallet_key} ({wallet_addr})"
-                );
-                return Err(BootstrapError::configuration(ConfigurationError::conflict(
-                    message,
-                )));
-            }
-            node_addr
-        }
-        (Some(addr), None) | (None, Some(addr)) => addr,
-        (None, None) => {
-            return Err(BootstrapError::configuration(anyhow!(
-                "no runtime role selected"
-            )));
-        }
-    };
-
-    if node_handle.is_none() {
-        info!(target = "rpc", listen = %rpc_addr, "rpc endpoint configured");
-    }
-
-    let rpc_context = ApiContext::new(
-        Arc::clone(&runtime_mode),
-        node_handle.clone(),
-        wallet_instance.clone(),
-        orchestrator_instance.clone(),
-        rpc_requests_per_minute,
-        rpc_auth.is_some(),
-    );
-
-    let rpc_auth_token = rpc_auth.clone();
-    let rpc_allowed_origin = rpc_origin.clone();
-    let wallet_routes_enabled = wallet_instance.is_some();
-    let rpc_task = tokio::spawn(async move {
-        if let Err(err) = rpp_chain::api::serve(
-            rpc_context,
-            rpc_addr,
-            rpc_auth_token,
-            rpc_allowed_origin,
-            wallet_routes_enabled,
-        )
-        .await
-        {
-            error!(?err, "rpc server terminated");
-        }
-    });
-
     if let Some(wallet) = &wallet_instance {
         info!(address = %wallet.address(), "wallet runtime initialised");
     }
 
-    if node_handle.is_some() {
-        if let Some(addr) = node_rpc_addr {
-            info!(
-                target = "pipeline",
-                pipeline = "node",
-                listen = %addr,
-                "pipeline=\"node\" started"
-            );
+    let wallet_runtime_active = wallet_instance.is_some();
+    let mut server_tasks: JoinSet<(PipelineRole, Result<(), anyhow::Error>)> = JoinSet::new();
+    let mut active_pipelines: Vec<PipelineHandle> = Vec::new();
+
+    if let Some(addr) = node_rpc_addr {
+        let role = PipelineRole::Node;
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let context = ApiContext::new(
+            Arc::clone(&runtime_mode),
+            node_handle.clone(),
+            wallet_instance.clone(),
+            orchestrator_instance.clone(),
+            rpc_requests_per_minute,
+            rpc_auth.is_some(),
+            false,
+        );
+        let auth_token = rpc_auth.clone();
+        let allowed_origin = rpc_origin.clone();
+
+        server_tasks.spawn(async move {
+            let shutdown = async move {
+                let _ = shutdown_rx.await;
+            };
+            let result = rpp_chain::api::serve_with_shutdown(
+                context,
+                addr,
+                auth_token,
+                allowed_origin,
+                shutdown,
+                Some(ready_tx),
+            )
+            .await
+            .map_err(|err| anyhow!(err));
+            (role, result)
+        });
+
+        match ready_rx.await {
+            Ok(Ok(())) => {
+                info!(
+                    target = "pipeline",
+                    pipeline = role.as_str(),
+                    listen = %addr,
+                    "pipeline=\"{}\" started",
+                    role.as_str()
+                );
+            }
+            Ok(Err(err)) => {
+                return Err(BootstrapError::startup(anyhow!(err)));
+            }
+            Err(err) => {
+                return Err(BootstrapError::startup(anyhow!(err)));
+            }
+        }
+
+        active_pipelines.push(PipelineHandle {
+            shutdown: Some(shutdown_tx),
+        });
+    }
+
+    if let (Some(wallet_addr), Some(wallet)) = (wallet_rpc_addr, wallet_instance.as_ref()) {
+        let role = PipelineRole::Wallet;
+        info!(target = "rpc", listen = %wallet_addr, "wallet rpc endpoint configured");
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let context = ApiContext::new(
+            Arc::clone(&runtime_mode),
+            node_handle.clone(),
+            Some(Arc::clone(wallet)),
+            orchestrator_instance.clone(),
+            None,
+            false,
+            wallet_runtime_active,
+        );
+
+        server_tasks.spawn(async move {
+            let shutdown = async move {
+                let _ = shutdown_rx.await;
+            };
+            let result = rpp_chain::api::serve_with_shutdown(
+                context,
+                wallet_addr,
+                None,
+                None,
+                shutdown,
+                Some(ready_tx),
+            )
+            .await
+            .map_err(|err| anyhow!(err));
+            (role, result)
+        });
+
+        match ready_rx.await {
+            Ok(Ok(())) => {
+                info!(
+                    target = "pipeline",
+                    pipeline = role.as_str(),
+                    listen = %wallet_addr,
+                    "pipeline=\"{}\" started",
+                    role.as_str()
+                );
+            }
+            Ok(Err(err)) => {
+                return Err(BootstrapError::startup(anyhow!(err)));
+            }
+            Err(err) => {
+                return Err(BootstrapError::startup(anyhow!(err)));
+            }
+        }
+
+        active_pipelines.push(PipelineHandle {
+            shutdown: Some(shutdown_tx),
+        });
+    }
+
+    if active_pipelines.is_empty() {
+        return Err(BootstrapError::configuration(anyhow!(
+            "no runtime role selected"
+        )));
+    }
+
+    let mut shutdown_future: Option<Pin<Box<dyn Future<Output = ShutdownOutcome> + Send>>> =
+        match (node_handle.clone(), node_runtime) {
+            (Some(handle), Some(runtime)) => {
+                Some(Box::pin(wait_for_node_shutdown(handle, runtime)) as _)
+            }
+            _ => Some(Box::pin(wait_for_signal_shutdown()) as _),
+        };
+
+    let mut shutdown_result: Option<ShutdownOutcome> = None;
+    let mut pipeline_error: Option<anyhow::Error> = None;
+    let mut shutting_down = false;
+
+    loop {
+        if shutting_down {
+            break;
+        }
+
+        if let Some(fut) = shutdown_future.as_mut() {
+            tokio::select! {
+                biased;
+                result = server_tasks.join_next(), if !server_tasks.is_empty() => {
+                    if let Some(task) = result {
+                        match task {
+                            Ok((role, Ok(()))) => {
+                                if !shutting_down {
+                                    pipeline_error = Some(anyhow!(
+                                        "{} pipeline terminated unexpectedly",
+                                        role.as_str()
+                                    ));
+                                    shutting_down = true;
+                                }
+                            }
+                            Ok((_, Err(err))) => {
+                                pipeline_error = Some(err);
+                                shutting_down = true;
+                            }
+                            Err(err) => {
+                                pipeline_error = Some(anyhow!(err));
+                                shutting_down = true;
+                            }
+                        }
+                    }
+                }
+                outcome = fut => {
+                    shutdown_result = Some(outcome);
+                    shutting_down = true;
+                    shutdown_future = None;
+                }
+            }
+        } else if !server_tasks.is_empty() {
+            if let Some(task) = server_tasks.join_next().await {
+                match task {
+                    Ok((role, Ok(()))) => {
+                        if !shutting_down {
+                            pipeline_error = Some(anyhow!(
+                                "{} pipeline terminated unexpectedly",
+                                role.as_str()
+                            ));
+                            shutting_down = true;
+                        }
+                    }
+                    Ok((_, Err(err))) => {
+                        pipeline_error = Some(err);
+                        shutting_down = true;
+                    }
+                    Err(err) => {
+                        pipeline_error = Some(anyhow!(err));
+                        shutting_down = true;
+                    }
+                }
+            } else {
+                break;
+            }
+        } else {
+            break;
         }
     }
 
-    if wallet_routes_enabled {
-        if let Some(addr) = wallet_rpc_addr.or(node_rpc_addr) {
-            info!(
-                target = "pipeline",
-                pipeline = "wallet",
-                listen = %addr,
-                "pipeline=\"wallet\" started"
-            );
+    for handle in &mut active_pipelines {
+        if let Some(tx) = handle.shutdown.take() {
+            let _ = tx.send(());
         }
     }
 
-    let outcome = match (node_handle.clone(), node_runtime) {
-        (Some(handle), Some(runtime)) => wait_for_node_shutdown(handle, runtime).await,
-        _ => wait_for_signal_shutdown().await,
-    };
-
-    rpc_task.abort();
-    if let Err(err) = rpc_task.await {
-        if !err.is_cancelled() {
-            warn!(?err, "rpc server join failed");
+    while let Some(task) = server_tasks.join_next().await {
+        match task {
+            Ok((_, Ok(()))) => {}
+            Ok((_, Err(err))) => {
+                if pipeline_error.is_none() {
+                    pipeline_error = Some(err);
+                }
+            }
+            Err(err) => {
+                if pipeline_error.is_none() {
+                    pipeline_error = Some(anyhow!(err));
+                }
+            }
         }
     }
+
+    if let Some(err) = pipeline_error {
+        return Err(BootstrapError::runtime(err));
+    }
+
+    let outcome = shutdown_result.unwrap_or(ShutdownOutcome::Clean);
 
     match outcome {
         ShutdownOutcome::Clean => Ok(()),
@@ -786,25 +928,24 @@ fn ensure_listener_conflicts(
 
     let node_metadata = node_bundle.metadata.as_ref();
     let wallet_metadata = wallet_bundle.metadata.as_ref();
-    let mut mismatches = Vec::new();
     let mut conflicts = Vec::new();
 
-    let shared_listeners = [(
-        "rpc_listen",
-        node_bundle.value.rpc_listen,
-        wallet_bundle.value.rpc_listen,
-    )];
-    for (key, node_addr, wallet_addr) in shared_listeners {
-        if node_addr != wallet_addr {
-            let node_key = describe_config_key(ConfigRole::Node, node_metadata, key);
-            let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, key);
-            mismatches.push(format!(
-                "{node_key} ({node_addr}) must match {wallet_key} ({wallet_addr})"
-            ));
-        }
+    let node_rpc = node_bundle.value.rpc_listen;
+    let wallet_rpc = wallet_bundle.value.rpc_listen;
+    if node_rpc.port() != 0
+        && wallet_rpc.port() != 0
+        && node_rpc.port() == wallet_rpc.port()
+        && (node_rpc.ip() == wallet_rpc.ip()
+            || node_rpc.ip().is_unspecified()
+            || wallet_rpc.ip().is_unspecified())
+    {
+        let node_key = describe_config_key(ConfigRole::Node, node_metadata, "rpc_listen");
+        let wallet_key = describe_config_key(ConfigRole::Wallet, wallet_metadata, "rpc_listen");
+        conflicts.push(format!(
+            "{wallet_key} ({wallet_rpc}) conflicts with {node_key} ({node_rpc}); update the configuration to use distinct addresses"
+        ));
     }
 
-    let wallet_rpc = wallet_bundle.value.rpc_listen;
     if let Some(port) = extract_tcp_port(&node_bundle.value.p2p.listen_addr) {
         if port != 0 && port == wallet_rpc.port() {
             let node_key = describe_config_key(ConfigRole::Node, node_metadata, "p2p.listen_addr");
@@ -816,18 +957,13 @@ fn ensure_listener_conflicts(
         }
     }
 
-    if mismatches.is_empty() && conflicts.is_empty() {
+    if conflicts.is_empty() {
         Ok(())
     } else {
-        let mut details = Vec::new();
-        if !mismatches.is_empty() {
-            details.push(format!("listener mismatch: {}", mismatches.join("; ")));
-        }
-        if !conflicts.is_empty() {
-            details.push(format!("listener conflict: {}", conflicts.join("; ")));
-        }
-
-        Err(ConfigurationError::conflict(details.join("; ")).into())
+        Err(
+            ConfigurationError::conflict(format!("listener conflict: {}", conflicts.join("; ")))
+                .into(),
+        )
     }
 }
 
@@ -863,6 +999,25 @@ enum ShutdownEvent {
     CtrlC(std::io::Result<()>),
     #[cfg(unix)]
     SigTerm(Option<i32>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PipelineRole {
+    Node,
+    Wallet,
+}
+
+impl PipelineRole {
+    fn as_str(&self) -> &'static str {
+        match self {
+            PipelineRole::Node => "node",
+            PipelineRole::Wallet => "wallet",
+        }
+    }
+}
+
+struct PipelineHandle {
+    shutdown: Option<oneshot::Sender<()>>,
 }
 
 #[derive(Debug)]
