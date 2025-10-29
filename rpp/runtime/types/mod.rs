@@ -12,26 +12,23 @@ pub use crate::identity_tree::IdentityCommitmentProof;
 pub use account::{Account, IdentityBinding, Stake, WalletBindingChange};
 pub use block::BlockPayload;
 pub(crate) use block::StoredBlock;
-pub(crate) use block::{CanonicalPruningEnvelope, serde_pruning_proof};
-pub use block::{
-    Block, BlockHeader, BlockMetadata, ProofSystem, PruningCommitmentMetadata, PruningEnvelopeMetadata,
-    PruningProofExt, PruningSegmentMetadata, PruningSnapshotMetadata, RecursiveProof, ReputationUpdate,
-    TimetokeUpdate, ValidatedPruningEnvelope,
-};
 pub use block::{
     canonical_pruning_from_block, canonical_pruning_from_parts, canonical_pruning_genesis,
     pruning_from_metadata, pruning_from_previous, pruning_genesis,
 };
+pub(crate) use block::{serde_pruning_proof, CanonicalPruningEnvelope};
+pub use block::{
+    Block, BlockHeader, BlockMetadata, ProofSystem, PruningCommitmentMetadata,
+    PruningEnvelopeMetadata, PruningProofExt, PruningSegmentMetadata, PruningSnapshotMetadata,
+    RecursiveProof, ReputationUpdate, TimetokeUpdate, ValidatedPruningEnvelope,
+};
 pub use identity::{
-    AttestedIdentityRequest, IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
-    IdentityDeclaration, IdentityGenesis, IdentityProof,
+    AttestedIdentityRequest, IdentityDeclaration, IdentityGenesis, IdentityProof,
+    IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM,
 };
-pub use proofs::{
-    BlockProofBundle, ChainProof,
-    #[cfg(feature = "backend-rpp-stark")]
-    RppStarkProof,
-    TransactionProofBundle,
-};
+#[cfg(feature = "backend-rpp-stark")]
+pub use proofs::RppStarkProof;
+pub use proofs::{BlockProofBundle, ChainProof, TransactionProofBundle};
 pub use transaction::{SignedTransaction, Transaction, TransactionEnvelope};
 pub use uptime::{UptimeClaim, UptimeProof};
 
@@ -40,7 +37,7 @@ pub type AccountId = Address;
 
 #[cfg(test)]
 mod interface_schemas {
-    use super::{Transaction, TransactionEnvelope, SignedTransaction, UptimeClaim, UptimeProof};
+    use super::{SignedTransaction, Transaction, TransactionEnvelope, UptimeClaim, UptimeProof};
     use jsonschema::{Draft, JSONSchema};
     use serde::de::DeserializeOwned;
     use serde::Serialize;
@@ -53,12 +50,10 @@ mod interface_schemas {
     }
 
     fn load_json(path: &Path) -> Value {
-        let raw = fs::read_to_string(path).unwrap_or_else(|err| {
-            panic!("unable to read {}: {err}", path.display())
-        });
-        serde_json::from_str(&raw).unwrap_or_else(|err| {
-            panic!("invalid JSON in {}: {err}", path.display())
-        })
+        let raw = fs::read_to_string(path)
+            .unwrap_or_else(|err| panic!("unable to read {}: {err}", path.display()));
+        serde_json::from_str(&raw)
+            .unwrap_or_else(|err| panic!("invalid JSON in {}: {err}", path.display()))
     }
 
     fn resolve_refs(value: &mut Value, base: &Path) {
@@ -113,9 +108,7 @@ mod interface_schemas {
             .compile(&schema)
             .expect("schema compiles");
         let example = load_example(example_file);
-        compiled
-            .validate(&example)
-            .expect("example matches schema");
+        compiled.validate(&example).expect("example matches schema");
         let typed: T = serde_json::from_value(example.clone()).expect("deserialize example");
         let roundtrip = serde_json::to_value(&typed).expect("serialize payload");
         assert_eq!(roundtrip, example);

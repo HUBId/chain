@@ -71,10 +71,10 @@ resolved node configuration to disk for auditing.【F:rpp/node/src/lib.rs†L229
 
 ## Port collision remediation
 
-Hybrid and validator modes must share a single RPC listener between node and wallet. The loader compares
-addresses after parsing both configs and surfaces actionable errors when ports mismatch or when the
+Hybrid and validator modes must dedicate distinct RPC listeners for the node and wallet. The loader compares
+addresses after parsing both configs and surfaces actionable errors when sockets overlap or when the
 wallet RPC collides with the node P2P listener. Update one of the templates (or override on the CLI)
-so the RPC sockets align.【F:rpp/node/src/lib.rs†L722-L775】
+so the RPC ports no longer reuse the same TCP binding.【F:rpp/node/src/lib.rs†L722-L775】
 
 For more operational guidance, consult the [startup runbook](runbooks/startup.md) and the
 [observability runbook](runbooks/observability.md).

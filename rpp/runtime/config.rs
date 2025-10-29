@@ -1571,11 +1571,32 @@ max_round_extensions = 2
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletServiceConfig {
+    pub rpc: WalletRpcConfig,
+    pub auth: WalletAuthConfig,
+    pub keys: WalletKeysConfig,
+    pub budgets: WalletBudgetsConfig,
+    pub rescan: WalletRescanConfig,
+}
+
+impl Default for WalletServiceConfig {
+    fn default() -> Self {
+        Self {
+            rpc: WalletRpcConfig::default(),
+            auth: WalletAuthConfig::default(),
+            keys: WalletKeysConfig::default(),
+            budgets: WalletBudgetsConfig::default(),
+            rescan: WalletRescanConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WalletConfig {
     pub data_dir: PathBuf,
-    pub key_path: PathBuf,
-    #[serde(default = "default_wallet_rpc_listen")]
-    pub rpc_listen: SocketAddr,
+    #[serde(default)]
+    pub wallet: WalletServiceConfig,
     #[serde(default)]
     pub node: WalletNodeRuntimeConfig,
     #[cfg(feature = "vendor_electrs")]
@@ -1583,8 +1604,268 @@ pub struct WalletConfig {
     pub electrs: Option<ElectrsConfig>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletRpcConfig {
+    #[serde(default = "default_wallet_rpc_listen")]
+    pub listen: SocketAddr,
+    #[serde(default)]
+    pub allowed_origin: Option<String>,
+    #[serde(default)]
+    pub requests_per_minute: Option<u64>,
+}
+
+impl WalletRpcConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if let Some(origin) = &self.allowed_origin {
+            if origin.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "wallet configuration wallet.rpc.allowed_origin must not be empty".into(),
+                ));
+            }
+        }
+        if let Some(limit) = self.requests_per_minute {
+            if limit == 0 {
+                return Err(ChainError::Config(
+                    "wallet configuration wallet.rpc.requests_per_minute must be greater than 0"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletRpcConfig {
+    fn default() -> Self {
+        Self {
+            listen: default_wallet_rpc_listen(),
+            allowed_origin: None,
+            requests_per_minute: None,
+        }
+    }
+}
+
 fn default_wallet_rpc_listen() -> SocketAddr {
     "127.0.0.1:9090".parse().expect("valid socket addr")
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletAuthConfig {
+    pub enabled: bool,
+    pub token: Option<String>,
+    pub tls: Option<WalletAuthTlsConfig>,
+}
+
+impl WalletAuthConfig {
+    fn validate(&self, require_tls: bool) -> ChainResult<()> {
+        if !self.enabled {
+            if let Some(tls) = &self.tls {
+                if tls.is_configured() {
+                    tls.validate("wallet.auth.tls")?;
+                }
+            }
+            return Ok(());
+        }
+
+        match self.token.as_ref().map(|value| value.trim()).filter(|v| !v.is_empty()) {
+            Some(_) => {}
+            None => {
+                return Err(ChainError::Config(
+                    "wallet configuration wallet.auth.token must be provided when authentication is enabled"
+                        .into(),
+                ));
+            }
+        }
+
+        if require_tls {
+            let tls = self
+                .tls
+                .as_ref()
+                .ok_or_else(|| {
+                    ChainError::Config(
+                        "wallet configuration wallet.auth.tls must be configured when authentication is enabled"
+                            .into(),
+                    )
+                })?;
+            tls.validate("wallet.auth.tls")?;
+        } else if let Some(tls) = &self.tls {
+            tls.validate("wallet.auth.tls")?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Default for WalletAuthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            token: None,
+            tls: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletAuthTlsConfig {
+    pub certificate: Option<PathBuf>,
+    pub private_key: Option<PathBuf>,
+    pub ca_certificate: Option<PathBuf>,
+}
+
+impl WalletAuthTlsConfig {
+    fn is_configured(&self) -> bool {
+        self.certificate.is_some() || self.private_key.is_some() || self.ca_certificate.is_some()
+    }
+
+    fn validate(&self, label: &str) -> ChainResult<()> {
+        let certificate = self.certificate.as_ref().ok_or_else(|| {
+            ChainError::Config(format!(
+                "wallet configuration {label}.certificate must be provided when TLS is enabled"
+            ))
+        })?;
+        let private_key = self.private_key.as_ref().ok_or_else(|| {
+            ChainError::Config(format!(
+                "wallet configuration {label}.private_key must be provided when TLS is enabled"
+            ))
+        })?;
+
+        for (path, field) in [
+            (certificate, "certificate"),
+            (private_key, "private_key"),
+        ] {
+            if path.as_os_str().is_empty() {
+                return Err(ChainError::Config(format!(
+                    "wallet configuration {label}.{field} must not be empty"
+                )));
+            }
+            if !path.exists() {
+                return Err(ChainError::Config(format!(
+                    "wallet configuration {label}.{field} references {} which does not exist",
+                    path.display()
+                )));
+            }
+        }
+
+        if let Some(ca) = &self.ca_certificate {
+            if ca.as_os_str().is_empty() {
+                return Err(ChainError::Config(format!(
+                    "wallet configuration {label}.ca_certificate must not be empty"
+                )));
+            }
+            if !ca.exists() {
+                return Err(ChainError::Config(format!(
+                    "wallet configuration {label}.ca_certificate references {} which does not exist",
+                    ca.display()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletKeysConfig {
+    pub key_path: PathBuf,
+}
+
+impl WalletKeysConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.key_path.as_os_str().is_empty() {
+            return Err(ChainError::Config(
+                "wallet configuration wallet.keys.key_path must not be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletKeysConfig {
+    fn default() -> Self {
+        Self {
+            key_path: PathBuf::from("./keys/wallet.toml"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletBudgetsConfig {
+    pub submit_transaction_per_minute: u64,
+    pub proof_generation_per_minute: u64,
+    pub pipeline_depth: usize,
+}
+
+impl WalletBudgetsConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.submit_transaction_per_minute == 0 {
+            return Err(ChainError::Config(
+                "wallet configuration wallet.budgets.submit_transaction_per_minute must be greater than 0"
+                    .into(),
+            ));
+        }
+        if self.proof_generation_per_minute == 0 {
+            return Err(ChainError::Config(
+                "wallet configuration wallet.budgets.proof_generation_per_minute must be greater than 0"
+                    .into(),
+            ));
+        }
+        if self.pipeline_depth == 0 {
+            return Err(ChainError::Config(
+                "wallet configuration wallet.budgets.pipeline_depth must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletBudgetsConfig {
+    fn default() -> Self {
+        Self {
+            submit_transaction_per_minute: 120,
+            proof_generation_per_minute: 60,
+            pipeline_depth: 64,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletRescanConfig {
+    pub auto_trigger: bool,
+    pub lookback_blocks: u64,
+    pub chunk_size: u64,
+}
+
+impl WalletRescanConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.lookback_blocks == 0 {
+            return Err(ChainError::Config(
+                "wallet configuration wallet.rescan.lookback_blocks must be greater than 0".into(),
+            ));
+        }
+        if self.chunk_size == 0 {
+            return Err(ChainError::Config(
+                "wallet configuration wallet.rescan.chunk_size must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for WalletRescanConfig {
+    fn default() -> Self {
+        Self {
+            auto_trigger: false,
+            lookback_blocks: 2_880,
+            chunk_size: 64,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1623,6 +1904,9 @@ impl WalletConfig {
     }
 
     fn apply_hybrid_defaults(&mut self) {
+        if self.wallet.rpc.requests_per_minute.is_none() {
+            self.wallet.rpc.requests_per_minute = Some(600);
+        }
         self.node.embedded = false;
         if self.node.gossip_endpoints.is_empty() {
             self.node
@@ -1675,7 +1959,7 @@ impl WalletConfig {
 
     pub fn ensure_directories(&self) -> ChainResult<()> {
         fs::create_dir_all(&self.data_dir)?;
-        if let Some(parent) = self.key_path.parent() {
+        if let Some(parent) = self.wallet.keys.key_path.parent() {
             fs::create_dir_all(parent)?;
         }
         #[cfg(feature = "vendor_electrs")]
@@ -1684,6 +1968,11 @@ impl WalletConfig {
     }
 
     fn validate(&self) -> ChainResult<()> {
+        self.wallet.rpc.validate()?;
+        self.wallet.keys.validate()?;
+        self.wallet.budgets.validate()?;
+        self.wallet.rescan.validate()?;
+        self.wallet.auth.validate(false)?;
         if !self.node.embedded && self.node.gossip_endpoints.is_empty() {
             return Err(ChainError::Config(
                 "wallet node runtime requires gossip endpoints when embedded node is disabled"
@@ -1702,6 +1991,44 @@ impl WalletConfig {
         }
         #[cfg(feature = "vendor_electrs")]
         self.validate_electrs()?;
+        Ok(())
+    }
+
+    pub fn validate_for_mode(
+        &self,
+        mode: RuntimeMode,
+        node: Option<&NodeConfig>,
+    ) -> ChainResult<()> {
+        if mode.includes_node() {
+            self.wallet.auth.validate(true)?;
+            if let Some(node) = node {
+                let wallet_listen = self.wallet.rpc.listen;
+                let node_listen = node.rpc_listen;
+                if wallet_listen.port() != 0
+                    && node_listen.port() != 0
+                    && wallet_listen.port() == node_listen.port()
+                    && (wallet_listen.ip() == node_listen.ip()
+                        || wallet_listen.ip().is_unspecified()
+                        || node_listen.ip().is_unspecified())
+                {
+                    return Err(ChainError::Config(
+                        "wallet configuration wallet.rpc.listen must use a distinct address from the node RPC listener in hybrid/validator modes"
+                            .into(),
+                    ));
+                }
+                if let Some(port) = extract_tcp_port(&node.p2p.listen_addr) {
+                    if port != 0 && wallet_listen.port() == port {
+                        return Err(ChainError::Config(
+                            "wallet configuration wallet.rpc.listen must not reuse the node P2P TCP port"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+        } else {
+            self.wallet.auth.validate(false)?;
+        }
+
         Ok(())
     }
 
@@ -1744,8 +2071,7 @@ impl Default for WalletConfig {
     fn default() -> Self {
         Self {
             data_dir: PathBuf::from("./data"),
-            key_path: PathBuf::from("./keys/wallet.toml"),
-            rpc_listen: default_wallet_rpc_listen(),
+            wallet: WalletServiceConfig::default(),
             node: WalletNodeRuntimeConfig {
                 embedded: false,
                 gossip_endpoints: vec!["/ip4/127.0.0.1/tcp/7600".to_string()],
@@ -1754,6 +2080,20 @@ impl Default for WalletConfig {
             electrs: default_wallet_electrs_config(),
         }
     }
+}
+
+fn extract_tcp_port(multiaddr: &str) -> Option<u16> {
+    let mut parts = multiaddr.split('/').filter(|segment| !segment.is_empty());
+    while let Some(protocol) = parts.next() {
+        if protocol.eq_ignore_ascii_case("tcp") {
+            if let Some(value) = parts.next() {
+                if let Ok(port) = value.parse::<u16>() {
+                    return Some(port);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(feature = "vendor_electrs")]

@@ -235,7 +235,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             let db_path = config.data_dir.join("db");
             Storage::open(&db_path)?
         };
-        let keypair = load_or_generate_keypair(&config.key_path)?;
+        let keypair = load_or_generate_keypair(&config.wallet.keys.key_path)?;
         #[cfg(feature = "vendor_electrs")]
         let mut electrs_context: Option<(ElectrsConfig, ElectrsHandles)> = None;
         #[cfg(feature = "vendor_electrs")]
@@ -286,8 +286,21 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
             }
         };
         wallet_instance = Some(wallet);
+        if rpc_auth_token.is_none() && config.wallet.auth.enabled {
+            rpc_auth_token = config.wallet.auth.token.clone();
+        }
+        if rpc_allowed_origin.is_none() {
+            rpc_allowed_origin = config.wallet.rpc.allowed_origin.clone();
+        }
+        if rpc_requests_per_minute.is_none() {
+            rpc_requests_per_minute = config
+                .wallet
+                .rpc
+                .requests_per_minute
+                .and_then(NonZeroU64::new);
+        }
         if rpc_addr.is_none() {
-            rpc_addr = Some(config.rpc_listen);
+            rpc_addr = Some(config.wallet.rpc.listen);
         }
     }
 

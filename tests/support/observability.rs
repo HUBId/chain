@@ -187,13 +187,13 @@ pub fn write_wallet_config_with(
     let mut config = WalletConfig::default();
     let wallet_root = base.join("wallet");
     config.data_dir = wallet_root.join("data");
-    config.key_path = wallet_root.join("keys/wallet.toml");
-    config.rpc_listen = format!("127.0.0.1:{}", ports.next_port()?)
+    config.wallet.keys.key_path = wallet_root.join("keys/wallet.toml");
+    config.wallet.rpc.listen = format!("127.0.0.1:{}", ports.next_port()?)
         .parse()
         .context("invalid wallet rpc listen address")?;
 
     update(&mut config);
-    ports.reserve(config.rpc_listen.port());
+    ports.reserve(config.wallet.rpc.listen.port());
 
     config
         .ensure_directories()

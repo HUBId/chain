@@ -360,7 +360,7 @@ fn validator_dry_run_rejects_invalid_configuration() -> Result<()> {
         temp_dir.path(),
         &mut ports,
         |config| {
-            config.rpc_listen = wallet_addr;
+            config.wallet.rpc.listen = wallet_addr;
         },
     )?;
     ports.reserve(wallet_addr.port());
@@ -392,7 +392,7 @@ fn validator_dry_run_rejects_invalid_configuration() -> Result<()> {
         "stderr missing node rpc reference: {stderr}"
     );
     assert!(
-        stderr.contains("wallet-config.toml::rpc_listen"),
+        stderr.contains("wallet-config.toml::wallet.rpc.listen"),
         "stderr missing wallet rpc reference: {stderr}"
     );
 
@@ -432,7 +432,7 @@ fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
         temp_dir.path(),
         &mut ports,
         |config| {
-            config.rpc_listen = wallet_addr;
+            config.wallet.rpc.listen = wallet_addr;
         },
     )?;
     ports.reserve(wallet_addr.port());
@@ -463,7 +463,7 @@ fn hybrid_rejects_mismatched_rpc_listeners() -> Result<()> {
         "stderr missing node rpc reference: {stderr}"
     );
     assert!(
-        stderr.contains("wallet-config.toml::rpc_listen"),
+        stderr.contains("wallet-config.toml::wallet.rpc.listen"),
         "stderr missing wallet rpc reference: {stderr}"
     );
     assert!(
@@ -513,7 +513,7 @@ fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
         temp_dir.path(),
         &mut ports,
         |config| {
-            config.rpc_listen = wallet_addr;
+            config.wallet.rpc.listen = wallet_addr;
         },
     )?;
     ports.reserve(wallet_addr.port());
@@ -544,7 +544,7 @@ fn validator_rejects_mismatched_rpc_listeners() -> Result<()> {
         "stderr missing node rpc reference: {stderr}"
     );
     assert!(
-        stderr.contains("wallet-config.toml::rpc_listen"),
+        stderr.contains("wallet-config.toml::wallet.rpc.listen"),
         "stderr missing wallet rpc reference: {stderr}"
     );
     assert!(
@@ -599,7 +599,7 @@ fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
         temp_dir.path(),
         &mut ports,
         |config| {
-            config.rpc_listen = wallet_addr;
+            config.wallet.rpc.listen = wallet_addr;
         },
     )?;
     ports.reserve(wallet_addr.port());
@@ -626,7 +626,7 @@ fn validator_rejects_wallet_reusing_p2p_port() -> Result<()> {
         "stderr missing conflict message: {stderr}"
     );
     assert!(
-        stderr.contains("wallet-config.toml::rpc_listen"),
+        stderr.contains("wallet-config.toml::wallet.rpc.listen"),
         "stderr missing wallet rpc reference: {stderr}"
     );
     assert!(
