@@ -20,7 +20,12 @@ pub use admission::{
     AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
     ReputationOutcome,
 };
-pub use behaviour::snapshots::{SnapshotProvider, SnapshotSessionId, SnapshotsBehaviour};
+pub use behaviour::snapshots::{
+    SnapshotItemKind, SnapshotProvider, SnapshotResumeState, SnapshotSessionId, SnapshotsRequest,
+    SnapshotsResponse,
+};
+#[cfg(feature = "request-response")]
+pub use behaviour::snapshots::{SnapshotProtocolError, SnapshotsBehaviour, SnapshotsEvent};
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
 pub use peerstore::{
