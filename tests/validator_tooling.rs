@@ -128,6 +128,7 @@ async fn validator_rpc_and_cli_tooling() -> Result<()> {
         Some(orchestrator),
         None,
         false,
+        None,
         true,
     );
     let rpc_task = tokio::spawn(async move {

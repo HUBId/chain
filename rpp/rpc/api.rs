@@ -198,7 +198,7 @@ pub struct ApiContext {
     mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
     wallet: Option<Arc<Wallet>>,
-    #[cfg(feature = "vendor_electrs")]
+#[cfg(feature = "vendor_electrs")]
     tracker: Option<WalletTrackerHandle>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     request_limit_per_minute: Option<NonZeroU64>,
@@ -206,6 +206,7 @@ pub struct ApiContext {
     state_sync_api: Option<Arc<dyn StateSyncApi>>,
     metrics: Arc<RuntimeMetrics>,
     wallet_runtime_active: bool,
+    pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
 }
 
 impl ApiContext {
@@ -216,6 +217,7 @@ impl ApiContext {
         orchestrator: Option<Arc<PipelineOrchestrator>>,
         request_limit_per_minute: Option<NonZeroU64>,
         auth_token_enabled: bool,
+        pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
         wallet_runtime_active: bool,
     ) -> Self {
         #[cfg(feature = "vendor_electrs")]
@@ -245,6 +247,7 @@ impl ApiContext {
             state_sync_api,
             metrics,
             wallet_runtime_active,
+            pruning_status,
         }
     }
 
@@ -279,6 +282,12 @@ impl ApiContext {
 
     fn node_enabled(&self) -> bool {
         self.node_available() && self.current_mode().includes_node()
+    }
+
+    fn pruning_status_stream(
+        &self,
+    ) -> Option<watch::Receiver<Option<PruningJobStatus>>> {
+        self.pruning_status.as_ref().map(Clone::clone)
     }
 
     fn wallet_enabled(&self) -> bool {
@@ -2874,6 +2883,7 @@ mod telemetry_tests {
             None,
             None,
             false,
+            None,
             false,
         )
         .with_metrics(metrics.clone());
@@ -2921,6 +2931,7 @@ mod telemetry_tests {
             None,
             None,
             false,
+            None,
             false,
         )
         .with_metrics(metrics.clone());
