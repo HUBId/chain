@@ -7,8 +7,8 @@ use log::warn;
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network,
-    NetworkError, NodeIdentity, NullSnapshotProvider, Peerstore, PeerstoreConfig, PeerstoreError,
-    ReputationHeuristics, TierLevel,
+    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, ReputationHeuristics,
+    SnapshotProviderHandle, TierLevel,
 };
 use std::str::FromStr;
 use thiserror::Error;
@@ -152,6 +152,7 @@ impl NetworkResources {
         p2p_config: &P2pConfig,
         identity_profile: Option<IdentityProfile>,
         feature_gates: FeatureGates,
+        snapshot_provider: Option<SnapshotProviderHandle>,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
         let peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
@@ -192,7 +193,7 @@ impl NetworkResources {
             config.gossip_rate_limit_per_sec(),
             config.replay_window_size(),
             config.reputation_heuristics(),
-            Some(Arc::new(NullSnapshotProvider::default())),
+            snapshot_provider,
         )?;
         if let Some(profile) = profile {
             network.update_identity(

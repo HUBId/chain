@@ -122,8 +122,9 @@ use prover_stwo_backend::backend::{
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, SnapshotChunk, SnapshotChunkStream,
-    SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError, SnapshotChunk,
+    SnapshotChunkStream, SnapshotItemKind, SnapshotProvider, SnapshotProviderHandle,
+    SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 
@@ -841,6 +842,172 @@ pub enum FinalizationOutcome {
 #[derive(Clone)]
 pub struct NodeHandle {
     inner: Arc<NodeInner>,
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeSnapshotSession {
+    plan: NetworkStateSyncPlan,
+    updates: Vec<NetworkLightClientUpdate>,
+    snapshot_root: Hash,
+}
+
+struct RuntimeSnapshotProvider {
+    inner: Arc<NodeInner>,
+    chunk_size: usize,
+    sessions: ParkingMutex<HashMap<SnapshotSessionId, RuntimeSnapshotSession>>,
+    snapshots: RwLock<SnapshotStore>,
+}
+
+impl RuntimeSnapshotProvider {
+    fn new(inner: Arc<NodeInner>, chunk_size: usize) -> SnapshotProviderHandle {
+        Arc::new(Self {
+            inner,
+            chunk_size,
+            sessions: ParkingMutex::new(HashMap::new()),
+            snapshots: RwLock::new(SnapshotStore::new(chunk_size)),
+        }) as SnapshotProviderHandle
+    }
+
+    fn decode_root(plan: &NetworkStateSyncPlan) -> Result<Hash, PipelineError> {
+        let root = plan.snapshot.commitments.global_state_root.clone();
+        let bytes = hex::decode(&root).map_err(|err| {
+            PipelineError::SnapshotVerification(format!(
+                "invalid snapshot root encoding '{root}': {err}"
+            ))
+        })?;
+        let array: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+            PipelineError::SnapshotVerification(format!(
+                "snapshot root must encode 32 bytes, received {}",
+                bytes.len()
+            ))
+        })?;
+        Ok(Hash::from_bytes(array))
+    }
+}
+
+impl SnapshotProvider for RuntimeSnapshotProvider {
+    type Error = PipelineError;
+
+    fn fetch_plan(
+        &self,
+        session_id: SnapshotSessionId,
+    ) -> Result<NetworkStateSyncPlan, Self::Error> {
+        let state_plan = self
+            .inner
+            .state_sync_plan(self.chunk_size)
+            .map_err(|err| PipelineError::SnapshotVerification(format!(
+                "failed to build state sync plan: {err}"
+            )))?;
+        let network_plan = state_plan
+            .to_network_plan()
+            .map_err(|err| PipelineError::SnapshotVerification(format!(
+                "failed to encode state sync plan: {err}"
+            )))?;
+        let updates = state_plan
+            .light_client_messages()
+            .map_err(|err| PipelineError::SnapshotVerification(format!(
+                "failed to encode light client updates: {err}"
+            )))?;
+        let snapshot_root = Self::decode_root(&network_plan)?;
+        self.sessions.lock().insert(
+            session_id,
+            RuntimeSnapshotSession {
+                plan: network_plan.clone(),
+                updates,
+                snapshot_root,
+            },
+        );
+        Ok(network_plan)
+    }
+
+    fn fetch_chunk(
+        &self,
+        session_id: SnapshotSessionId,
+        chunk_index: u64,
+    ) -> Result<SnapshotChunk, Self::Error> {
+        let snapshot_root = {
+            let sessions = self.sessions.lock();
+            let session = sessions
+                .get(&session_id)
+                .ok_or(PipelineError::SnapshotNotFound)?;
+            session.snapshot_root
+        };
+        let store = self.snapshots.read();
+        let stream = self
+            .inner
+            .stream_state_sync_chunks(&*store, &snapshot_root)
+            .map_err(|err| PipelineError::SnapshotVerification(format!(
+                "failed to stream state sync chunks: {err}"
+            )))?;
+        let total = stream.total();
+        if chunk_index >= total {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "state sync chunk {chunk_index} out of range (total {total})"
+            )));
+        }
+        self
+            .inner
+            .state_sync_chunk_by_index(&*store, &snapshot_root, chunk_index)
+            .map_err(|err| PipelineError::SnapshotVerification(format!(
+                "failed to fetch state sync chunk {chunk_index}: {err}"
+            )))
+    }
+
+    fn fetch_update(
+        &self,
+        session_id: SnapshotSessionId,
+        update_index: u64,
+    ) -> Result<NetworkLightClientUpdate, Self::Error> {
+        let index = usize::try_from(update_index).map_err(|_| {
+            PipelineError::SnapshotVerification(format!(
+                "light client update index {update_index} exceeds addressable range"
+            ))
+        })?;
+        let sessions = self.sessions.lock();
+        let session = sessions
+            .get(&session_id)
+            .ok_or(PipelineError::SnapshotNotFound)?;
+        session
+            .updates
+            .get(index)
+            .cloned()
+            .ok_or_else(|| {
+                PipelineError::SnapshotVerification(format!(
+                    "light client update index {update_index} out of range (total {})",
+                    session.updates.len()
+                ))
+            })
+    }
+
+    fn resume_session(
+        &self,
+        session_id: SnapshotSessionId,
+        chunk_index: u64,
+        update_index: u64,
+    ) -> Result<SnapshotResumeState, Self::Error> {
+        let sessions = self.sessions.lock();
+        if !sessions.contains_key(&session_id) {
+            return Err(PipelineError::SnapshotNotFound);
+        }
+        Ok(SnapshotResumeState {
+            next_chunk_index: chunk_index,
+            next_update_index: update_index,
+        })
+    }
+
+    fn acknowledge(
+        &self,
+        session_id: SnapshotSessionId,
+        _kind: SnapshotItemKind,
+        _index: u64,
+    ) -> Result<(), Self::Error> {
+        let sessions = self.sessions.lock();
+        if sessions.contains_key(&session_id) {
+            Ok(())
+        } else {
+            Err(PipelineError::SnapshotNotFound)
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2449,11 +2616,15 @@ impl NodeInner {
         self.witness_channels.attach_publisher(publisher);
     }
 
-    fn runtime_config(&self) -> ChainResult<P2pRuntimeConfig> {
+    fn runtime_config(self: &Arc<Self>) -> ChainResult<P2pRuntimeConfig> {
         let mut config = P2pRuntimeConfig::from(&self.config);
         let profile = self.network_identity_profile()?;
         config.identity = Some(RuntimeIdentityProfile::from(profile));
         config.metrics = self.runtime_metrics.clone();
+        config.snapshot_provider = Some(RuntimeSnapshotProvider::new(
+            Arc::clone(self),
+            DEFAULT_STATE_SYNC_CHUNK,
+        ));
         Ok(config)
     }
 

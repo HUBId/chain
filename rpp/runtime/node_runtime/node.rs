@@ -15,7 +15,8 @@ use rpp_p2p::{
     NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport,
     NetworkPeerTelemetry, NodeIdentity, PeerstoreError, PersistentConsensusStorage,
     PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent,
-    ReputationHeuristics, RuntimeProofValidator, SeenDigestRecord, TierLevel, VoteOutcome,
+    ReputationHeuristics, RuntimeProofValidator, SeenDigestRecord, SnapshotProviderHandle,
+    TierLevel, VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -294,6 +295,7 @@ pub struct NodeRuntimeConfig {
     pub proof_storage_path: PathBuf,
     pub consensus_storage_path: PathBuf,
     pub feature_gates: FeatureGates,
+    pub snapshot_provider: Option<SnapshotProviderHandle>,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -307,6 +309,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             proof_storage_path: config.proof_cache_dir.join("gossip_proofs.json"),
             consensus_storage_path: config.consensus_pipeline_path.clone(),
             feature_gates: config.rollout.feature_gates.clone(),
+            snapshot_provider: None,
         }
     }
 }
@@ -321,6 +324,14 @@ impl fmt::Debug for NodeRuntimeConfig {
             .field("proof_storage_path", &self.proof_storage_path)
             .field("consensus_storage_path", &self.consensus_storage_path)
             .field("feature_gates", &self.feature_gates)
+            .field(
+                "snapshot_provider",
+                if self.snapshot_provider.is_some() {
+                    &"Some(..)"
+                } else {
+                    &"None"
+                },
+            )
             .finish()
     }
 }
@@ -927,6 +938,7 @@ impl NodeInner {
             &config.p2p,
             config.identity.clone(),
             config.feature_gates.clone(),
+            config.snapshot_provider.clone(),
         )?;
         let (network, identity) = resources.into_parts();
         let (command_tx, command_rx) = mpsc::channel(64);
@@ -1902,6 +1914,7 @@ mod tests {
             proof_storage_path,
             consensus_storage_path,
             feature_gates: FeatureGates::default(),
+            snapshot_provider: None,
         }
     }
 
