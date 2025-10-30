@@ -1290,6 +1290,17 @@ impl Network {
         Ok(())
     }
 
+    /// Clears the pending request flag for the given snapshot session.
+    ///
+    /// This helper is intended for integration tests that emulate interrupted
+    /// transports where an in-flight request should be considered cancelled so
+    /// the session can be resumed from explicit offsets.
+    pub fn force_clear_snapshot_pending(&mut self, session: SnapshotSessionId) {
+        if let Some(state) = self.snapshot_sessions.get_mut(&session) {
+            state.pending_request = None;
+        }
+    }
+
     pub fn cancel_snapshot_stream(
         &mut self,
         session: SnapshotSessionId,
