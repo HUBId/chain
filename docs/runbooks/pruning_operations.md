@@ -54,7 +54,11 @@ raise incidents when three consecutive scheduled runs fail.
    message and failing command.
 3. Fetch the latest `PruningJobStatus` via `/snapshots/jobs` to review missing
    heights and the persisted plan location.
-4. If failures point to storage gaps, trigger the snapshot rebuild workflow
+4. Start a snapshot stream via `POST /p2p/snapshots` and poll
+   `GET /p2p/snapshots/<session>` to ensure downstream consumers can ingest
+   the advertised plan. If the session errors or never verifies, the problem
+   likely sits with the provider rather than the pruning worker.【F:rpp/rpc/src/routes/p2p.rs†L16-L102】【F:docs/network/snapshots.md†L1-L120】
+5. If failures point to storage gaps, trigger the snapshot rebuild workflow
    from the change runbook and escalate to the storage team.
 
 ### B. Metrics gap or zeroed dashboards
