@@ -1,3 +1,4 @@
+pub mod policy;
 pub mod proofs;
 pub mod tabs;
 pub mod wallet;

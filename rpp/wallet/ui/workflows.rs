@@ -7,11 +7,12 @@ use crate::reputation::{
     minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
 };
 use crate::rpp::{AssetType, UtxoOutpoint, UtxoRecord};
-use crate::state::utxo::{locking_script_hash, StoredUtxo, UtxoState};
 use crate::runtime::RuntimeMetrics;
+use crate::state::utxo::{locking_script_hash, StoredUtxo, UtxoState};
 use crate::types::{Account, Address, IdentityDeclaration, TransactionProofBundle, UptimeProof};
 use serde::{Deserialize, Serialize};
 
+use super::policy::{self, TieredEvaluation};
 use super::tabs::SendPreview;
 use super::wallet::Wallet;
 
@@ -27,6 +28,32 @@ pub struct ReputationStatus {
 pub struct TransactionPolicy {
     pub required_tier: Tier,
     pub status: ReputationStatus,
+    pub utxo: UtxoPolicyStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UtxoPolicyStatus {
+    pub tier: Tier,
+    pub input_count: usize,
+    pub max_inputs: usize,
+    pub debit_value: u128,
+    pub max_debit_value: u128,
+    pub change_value: u128,
+    pub max_change_value: u128,
+}
+
+impl From<TieredEvaluation> for UtxoPolicyStatus {
+    fn from(value: TieredEvaluation) -> Self {
+        Self {
+            tier: value.tier,
+            input_count: value.input_count,
+            max_inputs: value.limits.max_inputs,
+            debit_value: value.debit_value,
+            max_debit_value: value.limits.max_debit_value,
+            change_value: value.change_value,
+            max_change_value: value.limits.max_change_value,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -270,6 +297,13 @@ impl<'a> WalletWorkflows<'a> {
         let remaining = total_input_value
             .checked_sub(total_debit)
             .ok_or_else(|| ChainError::Transaction("selected inputs insufficient".into()))?;
+        let utxo_evaluation = policy::evaluate_tiered_spend(
+            sender_account.reputation.tier,
+            utxo_inputs.len(),
+            total_debit,
+            remaining,
+        )
+        .map_err(|violation| ChainError::Transaction(violation.to_string()))?;
         let mut planned_outputs = Vec::new();
         if amount > 0 {
             planned_outputs.push(planned_utxo(
@@ -326,6 +360,7 @@ impl<'a> WalletWorkflows<'a> {
         let policy = TransactionPolicy {
             required_tier,
             status,
+            utxo: UtxoPolicyStatus::from(utxo_evaluation),
         };
         let state_root = self.wallet.firewood_state_root()?;
         let ledger_commitment = ledger.global_commitments().utxo_root;
@@ -654,6 +689,9 @@ mod tests {
             .expect("workflow should succeed");
         assert!(workflow.policy.required_tier >= Tier::Tl2);
         assert_eq!(workflow.policy.status.tier, Tier::Tl5);
+        assert_eq!(workflow.policy.utxo.tier, Tier::Tl5);
+        assert!(workflow.policy.utxo.max_debit_value >= 1_000_000);
+        assert!(workflow.policy.utxo.max_inputs >= workflow.utxo_inputs.len());
     }
 
     #[test]
