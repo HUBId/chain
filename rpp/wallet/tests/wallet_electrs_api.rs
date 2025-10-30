@@ -269,6 +269,7 @@ async fn wallet_tracker_history_surfaces_via_api() -> Result<()> {
         None,
         None,
         false,
+        None,
         true,
     );
 

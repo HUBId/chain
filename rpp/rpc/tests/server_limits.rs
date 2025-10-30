@@ -39,6 +39,7 @@ async fn spawn_server(
         None,
         None,
         false,
+        None,
         false,
     );
 

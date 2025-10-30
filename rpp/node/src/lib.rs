@@ -1,3 +1,5 @@
+mod services;
+
 use std::env;
 use std::fmt;
 use std::future::Future;
@@ -21,7 +23,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 use tokio::task::{JoinError, JoinHandle, JoinSet};
 use tracing::field::{Field, Visit};
 use tracing::{error, info, info_span, warn, Event, Subscriber};
@@ -35,7 +37,7 @@ use tracing_subscriber::Layer;
 use rpp_chain::api::ApiContext;
 use rpp_chain::config::{NodeConfig, TelemetryConfig, WalletConfig};
 use rpp_chain::crypto::load_or_generate_keypair;
-use rpp_chain::node::{Node, NodeHandle};
+use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
 use rpp_chain::orchestration::PipelineOrchestrator;
 use rpp_chain::runtime::{
     init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, RuntimeMode,
@@ -43,6 +45,8 @@ use rpp_chain::runtime::{
 };
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
+
+use crate::services::pruning::PruningService;
 
 pub use rpp_chain::runtime::RuntimeMode;
 
@@ -468,6 +472,8 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let runtime_mode = Arc::new(RwLock::new(mode));
     let mut node_handle: Option<NodeHandle> = None;
     let mut node_runtime: Option<JoinHandle<()>> = None;
+    let mut pruning_service: Option<PruningService> = None;
+    let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
     let mut rpc_auth: Option<String> = None;
     let mut rpc_origin: Option<String> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
@@ -497,6 +503,11 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             .map_err(BootstrapError::startup)?;
 
         info!(address = %handle.address(), "node runtime started");
+
+        let service = PruningService::start(handle.clone(), &config);
+        pruning_status_stream = Some(service.subscribe_status());
+        pruning_service = Some(service);
+
         info!(
             target = "rpc",
             listen = %config.network.rpc.listen,
@@ -616,6 +627,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             orchestrator_instance.clone(),
             rpc_requests_per_minute,
             rpc_auth.is_some(),
+            pruning_status_stream.clone(),
             false,
         );
         let auth_token = rpc_auth.clone();
@@ -677,6 +689,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             orchestrator_instance.clone(),
             rpc_requests_per_minute,
             rpc_auth.is_some(),
+            pruning_status_stream.clone(),
             wallet_runtime_active,
         );
         let auth_token = rpc_auth.clone();
@@ -734,9 +747,11 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
 
     let mut shutdown_future: Option<Pin<Box<dyn Future<Output = ShutdownOutcome> + Send>>> =
         match (node_handle.clone(), node_runtime) {
-            (Some(handle), Some(runtime)) => {
-                Some(Box::pin(wait_for_node_shutdown(handle, runtime)) as _)
-            }
+            (Some(handle), Some(runtime)) => Some(Box::pin(wait_for_node_shutdown(
+                handle,
+                runtime,
+                pruning_service.take(),
+            )) as _),
             _ => Some(Box::pin(wait_for_signal_shutdown()) as _),
         };
 
@@ -1115,6 +1130,7 @@ enum ShutdownOutcome {
 async fn wait_for_node_shutdown(
     handle: NodeHandle,
     mut runtime: JoinHandle<()>,
+    pruning: Option<PruningService>,
 ) -> ShutdownOutcome {
     tokio::pin!(runtime);
 
@@ -1169,6 +1185,10 @@ async fn wait_for_node_shutdown(
             }
             runtime_result = Some((&mut runtime).await);
         }
+    }
+
+    if let Some(service) = &pruning {
+        service.shutdown().await;
     }
 
     match runtime_result {
