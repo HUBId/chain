@@ -108,7 +108,7 @@ use crate::identity::NodeIdentity;
 use crate::peerstore::{Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
 use crate::pipeline::{
-    NetworkLightClientUpdate, NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError,
+    NetworkLightClientUpdate, NetworkStateSyncPlan, PipelineError, SnapshotChunk,
 };
 use crate::security::{RateLimiter, ReplayProtector};
 use crate::tier::TierLevel;
@@ -453,7 +453,7 @@ pub enum NetworkEvent {
         peer: PeerId,
         session: SnapshotSessionId,
         index: u64,
-        chunk: NetworkStateSyncChunk,
+        chunk: SnapshotChunk,
     },
     SnapshotUpdate {
         peer: PeerId,
@@ -808,7 +808,7 @@ impl Network {
         gossip_rate_limit_per_sec: u64,
         replay_window_size: usize,
         heuristics: ReputationHeuristics,
-        snapshots_provider: SnapshotProviderHandle,
+        snapshots_provider: Option<SnapshotProviderHandle>,
     ) -> Result<Self, NetworkError> {
         let handshake = {
             let mut payload = handshake;
@@ -833,6 +833,11 @@ impl Network {
             let limiter = rate_limiter.clone();
             yamux::allow(move |peer: &PeerId| limiter.lock().allow(peer.clone()))
         };
+
+        let snapshots_provider: SnapshotProviderHandle = snapshots_provider.unwrap_or_else(|| {
+            Arc::new(NullSnapshotProvider::default())
+                as Arc<dyn SnapshotProvider<Error = PipelineError> + Send + Sync>
+        });
 
         let snapshots_provider_for_behaviour = snapshots_provider.clone();
 
@@ -1122,7 +1127,7 @@ impl Network {
         gossip_state: Option<Arc<GossipStateStore>>,
         _gossip_rate_limit_per_sec: u64,
         _replay_window_size: usize,
-        _snapshots_provider: SnapshotProviderHandle,
+        _snapshots_provider: Option<SnapshotProviderHandle>,
     ) -> Result<Self, NetworkError> {
         Err(NetworkError::TransportDisabled)
     }
@@ -2158,7 +2163,7 @@ mod tests {
             128,
             1_024,
             ReputationHeuristics::default(),
-            Arc::new(NullSnapshotProvider::default()),
+            None,
         )
         .expect("network")
     }
@@ -2187,7 +2192,7 @@ mod tests {
             128,
             1_024,
             ReputationHeuristics::default(),
-            Arc::new(NullSnapshotProvider::default()),
+            None,
         )
         .expect("network");
 

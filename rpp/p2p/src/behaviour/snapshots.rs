@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::pipeline::{
-    NetworkLightClientUpdate, NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError,
+    NetworkLightClientUpdate, NetworkStateSyncPlan, PipelineError, SnapshotChunk,
 };
 use crate::vendor::PeerId;
 
@@ -110,17 +110,17 @@ pub enum SnapshotsRequest {
 pub enum SnapshotsResponse {
     Plan {
         session_id: SnapshotSessionId,
-        plan: NetworkStateSyncPlan,
+        plan: Vec<u8>,
     },
     Chunk {
         session_id: SnapshotSessionId,
         chunk_index: u64,
-        chunk: NetworkStateSyncChunk,
+        chunk: Vec<u8>,
     },
     LightClientUpdate {
         session_id: SnapshotSessionId,
         update_index: u64,
-        update: NetworkLightClientUpdate,
+        update: Vec<u8>,
     },
     Resume {
         session_id: SnapshotSessionId,
@@ -151,7 +151,7 @@ pub trait SnapshotProvider: Send + Sync + 'static {
         &self,
         session_id: SnapshotSessionId,
         chunk_index: u64,
-    ) -> Result<NetworkStateSyncChunk, Self::Error>;
+    ) -> Result<SnapshotChunk, Self::Error>;
 
     fn fetch_update(
         &self,
@@ -188,7 +188,7 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
         &self,
         session_id: SnapshotSessionId,
         chunk_index: u64,
-    ) -> Result<NetworkStateSyncChunk, Self::Error> {
+    ) -> Result<SnapshotChunk, Self::Error> {
         (**self).fetch_chunk(session_id, chunk_index)
     }
 
@@ -237,7 +237,7 @@ impl SnapshotProvider for NullSnapshotProvider {
         &self,
         _session_id: SnapshotSessionId,
         _chunk_index: u64,
-    ) -> Result<NetworkStateSyncChunk, Self::Error> {
+    ) -> Result<SnapshotChunk, Self::Error> {
         Err(PipelineError::SnapshotNotFound)
     }
 
@@ -297,7 +297,7 @@ pub enum SnapshotsEvent {
         peer: PeerId,
         session_id: SnapshotSessionId,
         chunk_index: u64,
-        chunk: NetworkStateSyncChunk,
+        chunk: SnapshotChunk,
     },
     LightClientUpdate {
         peer: PeerId,
@@ -644,11 +644,28 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     ) {
         match request {
             SnapshotsRequest::Plan { session_id } => match self.provider.fetch_plan(session_id) {
-                Ok(plan) => {
-                    let _ = self
-                        .inner
-                        .send_response(channel, SnapshotsResponse::Plan { session_id, plan });
-                }
+                Ok(plan) => match serde_json::to_vec(&plan) {
+                    Ok(plan) => {
+                        let _ = self
+                            .inner
+                            .send_response(channel, SnapshotsResponse::Plan { session_id, plan });
+                    }
+                    Err(err) => {
+                        let message = format!("encode plan: {err}");
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::Error {
+                                session_id,
+                                message: message.clone(),
+                            },
+                        );
+                        self.pending_events.push_back(SnapshotsEvent::Error {
+                            peer,
+                            session_id,
+                            error: SnapshotProtocolError::Provider(message),
+                        });
+                    }
+                },
                 Err(err) => {
                     let message = err.to_string();
                     let _ = self.inner.send_response(
@@ -669,16 +686,33 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 session_id,
                 chunk_index,
             } => match self.provider.fetch_chunk(session_id, chunk_index) {
-                Ok(chunk) => {
-                    let _ = self.inner.send_response(
-                        channel,
-                        SnapshotsResponse::Chunk {
+                Ok(chunk) => match serde_json::to_vec(&chunk) {
+                    Ok(chunk) => {
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::Chunk {
+                                session_id,
+                                chunk_index,
+                                chunk,
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        let message = format!("encode chunk: {err}");
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::Error {
+                                session_id,
+                                message: message.clone(),
+                            },
+                        );
+                        self.pending_events.push_back(SnapshotsEvent::Error {
+                            peer,
                             session_id,
-                            chunk_index,
-                            chunk,
-                        },
-                    );
-                }
+                            error: SnapshotProtocolError::Provider(message),
+                        });
+                    }
+                },
                 Err(err) => {
                     let message = err.to_string();
                     let _ = self.inner.send_response(
@@ -699,16 +733,33 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 session_id,
                 update_index,
             } => match self.provider.fetch_update(session_id, update_index) {
-                Ok(update) => {
-                    let _ = self.inner.send_response(
-                        channel,
-                        SnapshotsResponse::LightClientUpdate {
+                Ok(update) => match serde_json::to_vec(&update) {
+                    Ok(update) => {
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::LightClientUpdate {
+                                session_id,
+                                update_index,
+                                update,
+                            },
+                        );
+                    }
+                    Err(err) => {
+                        let message = format!("encode update: {err}");
+                        let _ = self.inner.send_response(
+                            channel,
+                            SnapshotsResponse::Error {
+                                session_id,
+                                message: message.clone(),
+                            },
+                        );
+                        self.pending_events.push_back(SnapshotsEvent::Error {
+                            peer,
                             session_id,
-                            update_index,
-                            update,
-                        },
-                    );
-                }
+                            error: SnapshotProtocolError::Provider(message),
+                        });
+                    }
+                },
                 Err(err) => {
                     let message = err.to_string();
                     let _ = self.inner.send_response(
@@ -819,48 +870,75 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         response: SnapshotsResponse,
     ) {
         match response {
-            SnapshotsResponse::Plan { plan, .. } => {
-                let state = self
-                    .sessions
-                    .entry(session_id)
-                    .or_insert_with(|| SessionState::new(peer.clone()));
-                state.next_chunk_index = 0;
-                state.next_update_index = 0;
-                self.pending_events.push_back(SnapshotsEvent::Plan {
-                    peer,
-                    session_id,
-                    plan,
-                });
-            }
+            SnapshotsResponse::Plan { plan, .. } => match serde_json::from_slice(&plan) {
+                Ok(plan) => {
+                    let state = self
+                        .sessions
+                        .entry(session_id)
+                        .or_insert_with(|| SessionState::new(peer.clone()));
+                    state.next_chunk_index = 0;
+                    state.next_update_index = 0;
+                    self.pending_events.push_back(SnapshotsEvent::Plan {
+                        peer,
+                        session_id,
+                        plan,
+                    });
+                }
+                Err(err) => {
+                    self.pending_events.push_back(SnapshotsEvent::Error {
+                        peer,
+                        session_id,
+                        error: SnapshotProtocolError::Remote(format!("decode plan: {err}")),
+                    });
+                }
+            },
             SnapshotsResponse::Chunk {
                 chunk_index, chunk, ..
-            } => {
-                if let Some(state) = self.sessions.get_mut(&session_id) {
-                    state.next_chunk_index = chunk_index.saturating_add(1);
+            } => match serde_json::from_slice(&chunk) {
+                Ok(chunk) => {
+                    if let Some(state) = self.sessions.get_mut(&session_id) {
+                        state.next_chunk_index = chunk_index.saturating_add(1);
+                    }
+                    self.pending_events.push_back(SnapshotsEvent::Chunk {
+                        peer,
+                        session_id,
+                        chunk_index,
+                        chunk,
+                    });
                 }
-                self.pending_events.push_back(SnapshotsEvent::Chunk {
-                    peer,
-                    session_id,
-                    chunk_index,
-                    chunk,
-                });
-            }
+                Err(err) => {
+                    self.pending_events.push_back(SnapshotsEvent::Error {
+                        peer,
+                        session_id,
+                        error: SnapshotProtocolError::Remote(format!("decode chunk: {err}")),
+                    });
+                }
+            },
             SnapshotsResponse::LightClientUpdate {
                 update_index,
                 update,
                 ..
-            } => {
-                if let Some(state) = self.sessions.get_mut(&session_id) {
-                    state.next_update_index = update_index.saturating_add(1);
+            } => match serde_json::from_slice(&update) {
+                Ok(update) => {
+                    if let Some(state) = self.sessions.get_mut(&session_id) {
+                        state.next_update_index = update_index.saturating_add(1);
+                    }
+                    self.pending_events
+                        .push_back(SnapshotsEvent::LightClientUpdate {
+                            peer,
+                            session_id,
+                            update_index,
+                            update,
+                        });
                 }
-                self.pending_events
-                    .push_back(SnapshotsEvent::LightClientUpdate {
+                Err(err) => {
+                    self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
                         session_id,
-                        update_index,
-                        update,
+                        error: SnapshotProtocolError::Remote(format!("decode update: {err}")),
                     });
-            }
+                }
+            },
             SnapshotsResponse::Resume {
                 chunk_index,
                 update_index,

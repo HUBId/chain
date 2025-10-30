@@ -192,7 +192,7 @@ impl NetworkResources {
             config.gossip_rate_limit_per_sec(),
             config.replay_window_size(),
             config.reputation_heuristics(),
-            Arc::new(NullSnapshotProvider::default()),
+            Some(Arc::new(NullSnapshotProvider::default())),
         )?;
         if let Some(profile) = profile {
             network.update_identity(

@@ -12,8 +12,8 @@ use rpp_p2p::vendor::{identity, PeerId};
 use rpp_p2p::{
     AdmissionControl, AdmissionError, AllowlistedPeer, GossipTopic, HandshakePayload,
     IdentityMetadata, IdentityVerifier, Network, NetworkError, NetworkEvent, NodeIdentity,
-    NullSnapshotProvider, Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent,
-    ReputationHeuristics, TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
+    Peerstore, PeerstoreConfig, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
+    TierLevel, TopicPermission, VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 use tempfile::tempdir;
@@ -93,7 +93,7 @@ fn init_network(
         rate_limit,
         replay,
         ReputationHeuristics::default(),
-        Arc::new(NullSnapshotProvider::default()),
+        None,
     )
     .expect("network")
 }
