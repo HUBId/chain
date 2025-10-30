@@ -77,8 +77,6 @@ enum NodeCommand {
     },
     ResumeSnapshotStream {
         session: SnapshotSessionId,
-        next_chunk: u64,
-        next_update: u64,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     CancelSnapshotStream {
@@ -376,39 +374,25 @@ impl From<NetworkIdentityProfile> for IdentityProfile {
 
 #[derive(Clone, Debug)]
 pub struct SnapshotStreamStatus {
+    pub session: SnapshotSessionId,
     pub peer: PeerId,
     pub root: String,
-    pub snapshot_height: Option<u64>,
-    pub chunk_total: Option<u64>,
-    pub update_total: Option<u64>,
-    pub received_chunks: HashSet<u64>,
-    pub received_updates: HashSet<u64>,
-    pub next_chunk: u64,
-    pub next_update: u64,
     pub last_chunk_index: Option<u64>,
     pub last_update_index: Option<u64>,
     pub last_update_height: Option<u64>,
-    pub completed: bool,
     pub verified: Option<bool>,
     pub error: Option<String>,
 }
 
 impl SnapshotStreamStatus {
-    fn new(peer: PeerId, root: String) -> Self {
+    fn new(session: SnapshotSessionId, peer: PeerId, root: String) -> Self {
         Self {
+            session,
             peer,
             root,
-            snapshot_height: None,
-            chunk_total: None,
-            update_total: None,
-            received_chunks: HashSet::new(),
-            received_updates: HashSet::new(),
-            next_chunk: 0,
-            next_update: 0,
             last_chunk_index: None,
             last_update_index: None,
             last_update_height: None,
-            completed: false,
             verified: None,
             error: None,
         }
@@ -534,6 +518,8 @@ pub enum NodeError {
     CommandChannelClosed,
     #[error("gossip propagation disabled")]
     GossipDisabled,
+    #[error("snapshot stream not found")]
+    SnapshotStreamNotFound,
 }
 
 struct GossipPipelines {
@@ -1016,7 +1002,7 @@ pub struct NodeInner {
     gossip_enabled: bool,
     reputation_heuristics: ReputationHeuristics,
     pipelines: GossipPipelines,
-    snapshot_streams: RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>,
+    snapshot_streams: Arc<RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>>,
     heuristic_counters: HashMap<PeerId, PeerHeuristics>,
 }
 
@@ -1039,6 +1025,7 @@ impl NodeInner {
         let mut pipelines = GossipPipelines::initialise(&config, command_tx.clone())?;
         let light_client_heads = pipelines.light_client.subscribe_light_client_heads();
         pipelines.register_voter(identity.peer_id(), identity.tier());
+        let snapshot_streams = Arc::new(RwLock::new(HashMap::new()));
         let handle = NodeHandle {
             commands: command_tx.clone(),
             metrics: metrics.clone(),
@@ -1046,6 +1033,7 @@ impl NodeInner {
             events: event_tx.clone(),
             local_peer_id: identity.peer_id(),
             light_client_heads,
+            snapshot_streams: snapshot_streams.clone(),
         };
         let local_features = config
             .identity
@@ -1067,7 +1055,7 @@ impl NodeInner {
             gossip_enabled: network_config.gossip_enabled(),
             reputation_heuristics: heuristics,
             pipelines,
-            snapshot_streams: RwLock::new(HashMap::new()),
+            snapshot_streams,
             peer_features: HashMap::new(),
             local_features,
             heuristic_counters: HashMap::new(),
@@ -1142,7 +1130,8 @@ impl NodeInner {
         let default_root = root_hint.clone().unwrap_or_default();
         let entry = streams
             .entry(session)
-            .or_insert_with(|| SnapshotStreamStatus::new(peer.clone(), default_root));
+            .or_insert_with(|| SnapshotStreamStatus::new(session, peer.clone(), default_root));
+        entry.session = session;
         entry.peer = peer.clone();
         if let Some(root) = root_hint {
             if !root.is_empty() {
@@ -1162,8 +1151,9 @@ impl NodeInner {
         let reason = reason.into();
         let status = self.update_snapshot_status(session, &peer, None, |status| {
             status.error = Some(reason.clone());
-            status.completed = true;
-            status.verified = Some(false);
+            if status.verified != Some(true) {
+                status.verified = Some(false);
+            }
         });
         let _ = self.events.send(NodeEvent::SnapshotStreamFailed {
             session,
@@ -1242,48 +1232,47 @@ impl NodeInner {
                     .map_err(NodeError::from);
                 if result.is_ok() {
                     self.update_snapshot_status(session, &peer, Some(root), |status| {
-                        status.completed = false;
-                        status.verified = None;
-                        status.error = None;
-                        status.next_chunk = 0;
-                        status.next_update = 0;
                         status.last_chunk_index = None;
                         status.last_update_index = None;
                         status.last_update_height = None;
+                        status.verified = None;
+                        status.error = None;
                     });
                 }
                 let _ = response.send(result);
                 Ok(false)
             }
-            NodeCommand::ResumeSnapshotStream {
-                session,
-                next_chunk,
-                next_update,
-                response,
-            } => {
+            NodeCommand::ResumeSnapshotStream { session, response } => {
+                let resume_params = {
+                    let streams = self.snapshot_streams.read();
+                    streams.get(&session).map(|status| {
+                        let next_chunk = status
+                            .last_chunk_index
+                            .map(|index| index.saturating_add(1))
+                            .unwrap_or(0);
+                        let next_update = status
+                            .last_update_index
+                            .map(|index| index.saturating_add(1))
+                            .unwrap_or(0);
+                        (status.peer.clone(), next_chunk, next_update)
+                    })
+                };
+                let (peer, next_chunk, next_update) = match resume_params {
+                    Some(params) => params,
+                    None => {
+                        let _ = response.send(Err(NodeError::SnapshotStreamNotFound));
+                        return Ok(false);
+                    }
+                };
                 let result = self
                     .network
                     .resume_snapshot_stream(session, next_chunk, next_update)
                     .map_err(NodeError::from);
                 if result.is_ok() {
-                    let peer = {
-                        let streams = self.snapshot_streams.read();
-                        streams.get(&session).map(|status| status.peer.clone())
-                    };
-                    if let Some(peer) = peer {
-                        self.update_snapshot_status(session, &peer, None, |status| {
-                            status.next_chunk = next_chunk;
-                            status.next_update = next_update;
-                            status.completed = false;
-                            status.error = None;
-                        });
-                    } else {
-                        debug!(
-                            target: "node",
-                            session = session.get(),
-                            "resume requested for unknown snapshot session"
-                        );
-                    }
+                    self.update_snapshot_status(session, &peer, None, |status| {
+                        status.error = None;
+                        status.verified = None;
+                    });
                 }
                 let _ = response.send(result);
                 Ok(false)
@@ -1293,6 +1282,9 @@ impl NodeInner {
                     .network
                     .cancel_snapshot_stream(session)
                     .map_err(NodeError::from);
+                if result.is_ok() {
+                    self.snapshot_streams.write().remove(&session);
+                }
                 let _ = response.send(result);
                 Ok(false)
             }
@@ -1725,17 +1717,9 @@ impl NodeInner {
                             &peer,
                             Some(plan.snapshot.chain_commitment.clone()),
                             |status| {
-                                status.snapshot_height = Some(plan.snapshot.height);
-                                status.chunk_total = Some(plan.chunks.len() as u64);
-                                status.update_total = Some(plan.light_client_updates.len() as u64);
-                                status.received_chunks.clear();
-                                status.received_updates.clear();
-                                status.next_chunk = 0;
-                                status.next_update = 0;
                                 status.last_chunk_index = None;
                                 status.last_update_index = None;
                                 status.last_update_height = None;
-                                status.completed = false;
                                 status.verified = None;
                                 status.error = None;
                             },
@@ -1802,15 +1786,12 @@ impl NodeInner {
                         let root = chunk.root.to_hex().to_string();
                         let status =
                             self.update_snapshot_status(session, &peer, Some(root), |status| {
-                                if status.chunk_total.is_none() {
-                                    status.chunk_total = Some(chunk.total);
-                                }
-                                status.received_chunks.insert(index);
-                                if status.next_chunk <= index {
-                                    status.next_chunk = index.saturating_add(1);
-                                }
-                                status.last_chunk_index = Some(index);
-                                status.completed = false;
+                                status.last_chunk_index = Some(
+                                    status
+                                        .last_chunk_index
+                                        .map(|previous| previous.max(index))
+                                        .unwrap_or(index),
+                                );
                                 status.error = None;
                             });
                         let stage = SnapshotStreamProgressStage::Chunk {
@@ -1881,13 +1862,14 @@ impl NodeInner {
                         );
                         let update_clone = update.clone();
                         let status = self.update_snapshot_status(session, &peer, None, |status| {
-                            status.received_updates.insert(index);
-                            if status.next_update <= index {
-                                status.next_update = index.saturating_add(1);
+                            let previous = status.last_update_index;
+                            let updated_index = previous
+                                .map(|existing| existing.max(index))
+                                .unwrap_or(index);
+                            status.last_update_index = Some(updated_index);
+                            if previous.map_or(true, |existing| index >= existing) {
+                                status.last_update_height = Some(update.height);
                             }
-                            status.last_update_index = Some(index);
-                            status.last_update_height = Some(update.height);
-                            status.completed = false;
                             status.error = None;
                         });
                         let stage = SnapshotStreamProgressStage::Update {
@@ -1928,7 +1910,6 @@ impl NodeInner {
                 match self.pipelines.light_client.verify() {
                     Ok(verified) => {
                         let status = self.update_snapshot_status(session, &peer, None, |status| {
-                            status.completed = true;
                             status.verified = Some(verified);
                             status.error = None;
                         });
@@ -2167,6 +2148,7 @@ pub struct NodeHandle {
     events: broadcast::Sender<NodeEvent>,
     local_peer_id: PeerId,
     light_client_heads: watch::Receiver<Option<LightClientHead>>,
+    snapshot_streams: Arc<RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>>,
 }
 
 impl NodeHandle {
@@ -2183,6 +2165,19 @@ impl NodeHandle {
     /// Returns the latest verified light client head, if any have been observed.
     pub fn latest_light_client_head(&self) -> Option<LightClientHead> {
         self.light_client_heads.borrow().clone()
+    }
+
+    /// Returns the current snapshot stream status for the provided session, if known.
+    pub fn snapshot_stream_status(
+        &self,
+        session: SnapshotSessionId,
+    ) -> Option<SnapshotStreamStatus> {
+        self.snapshot_streams.read().get(&session).cloned()
+    }
+
+    /// Returns all tracked snapshot stream statuses.
+    pub fn all_snapshot_streams(&self) -> Vec<SnapshotStreamStatus> {
+        self.snapshot_streams.read().values().cloned().collect()
     }
 
     /// Updates the metrics that will be forwarded to telemetry.
@@ -2255,15 +2250,11 @@ impl NodeHandle {
     pub async fn resume_snapshot_stream(
         &self,
         session: SnapshotSessionId,
-        next_chunk: u64,
-        next_update: u64,
     ) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(NodeCommand::ResumeSnapshotStream {
                 session,
-                next_chunk,
-                next_update,
                 response: tx,
             })
             .await
