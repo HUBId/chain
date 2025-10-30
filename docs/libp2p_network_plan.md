@@ -51,10 +51,10 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
    - DoD-Nachweis: `rpp/p2p/tests/multi_node_quorum.rs` deckt Block- und Vote-Gossip ab, inklusive Neustart der Knoten und Persistenzprüfung der Abstimmungszustände.
 
 9. **Snapshots & Light-Client-Sync**
-   - Streaming von Firewood-Snapshots via libp2p-Request/Response oder Chunked Gossip.
-   - Light-Clients empfangen nur Headers + Recursive Proofs, validieren Roots.
-   - DoD: Light-Client-Test lädt Snapshot + Proof, validiert erfolgreich.
-   - DoD-Nachweis: `tests/light_client_sync.rs` publiziert einen State-Sync-Plan über `GossipTopic::Snapshots`, repliziert Chunk- und Proof-Daten und lässt einen `LightClientSync` die Commitments validieren.
+   - Snapshot-Streaming nutzt das dedizierte Request/Response-Behaviour (`SnapshotsBehaviour`) mit Resume-/Ack-Unterstützung, das Pläne, Chunks und Light-Client-Updates über `/rpp/snapshots/1.0.0` austauscht.【F:rpp/p2p/src/behaviour/snapshots.rs†L58-L957】
+   - Der Node-Runtime-Session-Manager verfolgt jedes Streaming über `SnapshotStreamStatus`, kann Sitzungen fortsetzen und meldet Fehler/EOL-Ereignisse an RPC und Telemetrie.【F:rpp/runtime/node_runtime/node.rs†L375-L1288】
+   - Light-Clients konsumieren den Stream via `LightClientSync`, validieren Recursive Proofs und veröffentlichen neue Köpfe erst nach vollständiger Verifikation.【F:rpp/p2p/src/pipeline.rs†L1311-L1497】【F:rpp/runtime/node_runtime/node.rs†L1005-L1015】
+   - DoD: Integrationstest `tests/network/snapshots.rs` startet den RPC-Flow gegen einen realen Cluster, streamt Snapshots und überprüft, dass der Light-Client-Head den verifizierten Höhestand erreicht.【F:tests/network/snapshots.rs†L1-L120】
 
 10. **Meta-Kanal & Telemetrie**
     - Peer-Heartbeat, Latenzen, Versionen über `meta` Topic publizieren.
@@ -95,9 +95,9 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 
 ## Abhängigkeiten & Milestones
 1. *Milestone A (Phasen 0–1):* Funktionsfähiger Gossip-Backbone mit Admission-Control. **Status:** ✅ Tier-basierte Zugriffslogik aktiv, abgesichert durch Integrationstests (`rpp/p2p/tests/access_control.rs`).
-2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich. **Status:** 🚧 Block/Vote-Gossip in `rpp/p2p/tests/multi_node_quorum.rs` aktiv.
+2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich. **Status:** ✅ Gossip-Quorum in `rpp/p2p/tests/multi_node_quorum.rs` und Snapshot-Streaming über `/rpp/snapshots/1.0.0` inkl. Light-Client-Verifikation stehen.【F:rpp/p2p/src/behaviour/snapshots.rs†L58-L957】【F:tests/network/snapshots.rs†L1-L120】
    - Gossip-Quorum nachgewiesen, Persistenz inkl. Neustart-Checks vorhanden.
-   - Snapshot-Pipeline und Light-Client-Sync stehen aus.
+   - Snapshot-Pipeline + Light-Client-Sync laufen über `SnapshotStreamStatus` und `LightClientSync`, RPCs dokumentiert in `docs/network/snapshots.md`.【F:rpp/runtime/node_runtime/node.rs†L375-L1288】【F:rpp/p2p/src/pipeline.rs†L1311-L1497】【F:docs/network/snapshots.md†L1-L120】
 3. *Milestone C (Phase 3):* Produktionsreife mit Security, Persistenz, Simulation.
 
 Jede Milestone-Abnahme setzt neben den DoD-Kriterien auch Peer-to-Peer-Tests über mindestens drei Knoten voraus.
