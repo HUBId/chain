@@ -127,5 +127,9 @@ rustc_version = "=0.4.1"
 name = "server_limits"
 path = "rpp/rpc/tests/server_limits.rs"
 
+[[test]]
+name = "pruning"
+path = "rpp/rpc/tests/pruning.rs"
+
 [lints]
 workspace = true

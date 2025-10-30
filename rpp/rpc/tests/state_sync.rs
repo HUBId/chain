@@ -100,6 +100,7 @@ fn test_context(api: Arc<dyn StateSyncApi>) -> ApiContext {
         None,
         false,
         None,
+        None,
         false,
     )
     .with_state_sync_api(api)

@@ -14,6 +14,8 @@ use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
+pub mod pruner;
+
 use crate::types::{
     pruning_from_previous, Account, Block, BlockMetadata, CanonicalPruningEnvelope, PruningProof,
     PruningProofExt, StoredBlock,
