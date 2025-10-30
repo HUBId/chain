@@ -10,6 +10,7 @@ use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
@@ -50,6 +51,7 @@ use rpp_chain::wallet::Wallet;
 
 use crate::config::{PruningCliOverrides, PruningOverrides};
 use crate::services::pruning::PruningService;
+use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
 pub use rpp_chain::runtime::RuntimeMode;
 
@@ -482,12 +484,14 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut node_handle: Option<NodeHandle> = None;
     let mut node_runtime: Option<JoinHandle<()>> = None;
     let mut pruning_service: Option<PruningService> = None;
+    let mut uptime_service: Option<UptimeScheduler> = None;
     let mut pruning_api: Option<Arc<dyn PruningServiceApi>> = None;
     let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
     let mut rpc_auth: Option<String> = None;
     let mut rpc_origin: Option<String> = None;
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
+    let mut uptime_cadence: Option<Duration> = None;
 
     let node_rpc_addr = node_bundle
         .as_ref()
@@ -584,6 +588,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         info!("pipeline orchestrator started");
         orchestrator_instance = Some(orchestrator.clone());
 
+        uptime_cadence = Some(cadence_from_config(&config));
         node_handle = Some(handle);
         node_runtime = Some(runtime);
     }
@@ -605,6 +610,18 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             .map_err(|err| BootstrapError::startup(anyhow!(err)))?;
         let wallet = Arc::new(Wallet::new(storage, keypair, Arc::clone(&runtime_metrics)));
         wallet_instance = Some(wallet);
+
+        if uptime_service.is_none() {
+            if let (Some(handle), Some(cadence), Some(wallet_arc)) = (
+                node_handle.as_ref(),
+                uptime_cadence,
+                wallet_instance.as_ref(),
+            ) {
+                let scheduler =
+                    UptimeScheduler::start(handle.clone(), Arc::clone(wallet_arc), cadence);
+                uptime_service = Some(scheduler);
+            }
+        }
 
         if rpc_auth.is_none() && wallet_config.wallet.auth.enabled {
             rpc_auth = wallet_config.wallet.auth.token.clone();
@@ -766,6 +783,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 handle,
                 runtime,
                 pruning_service.take(),
+                uptime_service.take(),
             )) as _),
             _ => Some(Box::pin(wait_for_signal_shutdown()) as _),
         };
@@ -1146,6 +1164,7 @@ async fn wait_for_node_shutdown(
     handle: NodeHandle,
     mut runtime: JoinHandle<()>,
     pruning: Option<PruningService>,
+    mut uptime: Option<UptimeScheduler>,
 ) -> ShutdownOutcome {
     tokio::pin!(runtime);
 
@@ -1203,6 +1222,9 @@ async fn wait_for_node_shutdown(
     }
 
     if let Some(service) = &pruning {
+        service.shutdown().await;
+    }
+    if let Some(service) = uptime.as_ref() {
         service.shutdown().await;
     }
 

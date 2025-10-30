@@ -14,11 +14,16 @@ use crate::messages::{
     TalliedVote,
 };
 use crate::proof_backend::ProofBackend;
+use crate::reputation::{
+    MalachiteReputationManager, SlashingTrigger, UptimeObservation, UptimeOutcome,
+};
 use crate::rewards::{distribute_rewards, RewardDistribution};
 use crate::validator::{
-    select_validators, VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry, ValidatorSet,
+    select_validators, StakeInfo, VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry,
+    ValidatorSet,
 };
 use crate::{ConsensusError, ConsensusResult};
+use tracing::warn;
 
 static MESSAGE_SENDER: OnceLock<Mutex<Option<UnboundedSender<ConsensusMessage>>>> = OnceLock::new();
 
@@ -306,6 +311,7 @@ pub struct ConsensusState {
     pub pending_evidence: Vec<EvidenceRecord>,
     pub pending_rewards: Vec<RewardDistribution>,
     pub reputation_root: String,
+    pub reputation: MalachiteReputationManager,
     message_rx: Option<UnboundedReceiver<ConsensusMessage>>,
     _message_tx: UnboundedSender<ConsensusMessage>,
     pub last_activity: Instant,
@@ -322,18 +328,23 @@ impl ConsensusState {
         genesis: GenesisConfig,
         proof_backend: Arc<dyn ProofBackend>,
     ) -> Result<Self, ConsensusError> {
-        let validator_set = select_validators(
-            genesis.epoch,
-            &genesis.validator_outputs,
-            &genesis.validator_ledger,
-        );
+        let GenesisConfig {
+            epoch,
+            validator_outputs,
+            validator_ledger,
+            reputation_root,
+            config,
+        } = genesis;
+
+        let validator_set = select_validators(epoch, &validator_outputs, &validator_ledger);
+        let reputation = MalachiteReputationManager::new(validator_ledger);
         let (sender, receiver) = unbounded_channel();
         register_message_sender(Some(sender.clone()));
 
         let mut state = Self {
-            config: genesis.config,
+            config,
             block_height: 0,
-            epoch: genesis.epoch,
+            epoch,
             round: 0,
             validator_set,
             current_leader: None,
@@ -346,7 +357,8 @@ impl ConsensusState {
             pending_proofs: Vec::new(),
             pending_evidence: Vec::new(),
             pending_rewards: Vec::new(),
-            reputation_root: genesis.reputation_root,
+            reputation_root,
+            reputation,
             message_rx: Some(receiver),
             _message_tx: sender,
             last_activity: Instant::now(),
@@ -703,6 +715,44 @@ impl ConsensusState {
             .sum();
         self.validator_set.total_voting_power = total;
         self.validator_set.quorum_threshold = (total * 2) / 3 + 1;
+    }
+
+    pub fn ingest_uptime_observation(&mut self, observation: UptimeObservation) -> UptimeOutcome {
+        let outcome = self.reputation.ingest_observation(observation);
+
+        if let Some(tier) = outcome.new_tier {
+            if let Some(validator) = self
+                .validator_set
+                .validators
+                .iter_mut()
+                .find(|validator| validator.id == outcome.validator)
+            {
+                if let Some(score) = outcome.new_score {
+                    validator.reputation_score = score;
+                }
+                validator.reputation_tier = tier;
+                if let Some(entry) = self.reputation.ledger().get(&validator.id) {
+                    validator.update_weight(StakeInfo::from(entry));
+                }
+            }
+            self.recompute_totals();
+        }
+
+        if let Some(trigger) = &outcome.slashing_trigger {
+            warn!(
+                validator = %trigger.validator,
+                reason = %trigger.reason,
+                window_start = trigger.window_start,
+                window_end = trigger.window_end,
+                "uptime observation produced slashing trigger",
+            );
+        }
+
+        outcome
+    }
+
+    pub fn take_slashing_triggers(&mut self) -> Vec<SlashingTrigger> {
+        self.reputation.take_slashing_triggers()
     }
 }
 

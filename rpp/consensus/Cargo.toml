@@ -36,6 +36,7 @@ prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { workspace = true, optional = true }
 rpp-crypto-vrf = { path = "../crypto-vrf" }
 prover_mock_backend = { path = "../zk/prover_mock_backend", optional = true }
+tracing = { version = "=0.1.41", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 proptest = "1.4"
