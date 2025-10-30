@@ -79,6 +79,10 @@ use crate::runtime::config::{
     NetworkLimitsConfig, NetworkTlsConfig, P2pAllowlistEntry, QueueWeightsConfig,
     SecretsBackendConfig, SecretsConfig,
 };
+use crate::runtime::node_runtime::node::{
+    NodeError as P2pNodeError, NodeHandle as P2pRuntimeHandle, SnapshotSessionId,
+    SnapshotStreamStatus,
+};
 use crate::runtime::{
     ProofRpcMethod, RpcMethod, RpcResult, RuntimeMetrics, RuntimeMode, WalletRpcMethod,
 };
@@ -111,6 +115,7 @@ use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_key
 
 #[path = "src/routes/mod.rs"]
 mod routes;
+pub use routes::p2p::{snapshot_stream_status, start_snapshot_stream};
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
 
 #[derive(Clone, Debug, Serialize)]
@@ -198,6 +203,71 @@ pub trait StateSyncApi: Send + Sync {
     async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError>;
 }
 
+#[derive(Debug)]
+pub enum SnapshotStreamRuntimeError {
+    Runtime(P2pNodeError),
+    SessionNotFound(u64),
+}
+
+impl fmt::Display for SnapshotStreamRuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Runtime(err) => write!(f, "{err}"),
+            Self::SessionNotFound(session) => {
+                write!(f, "snapshot session {session} not found")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SnapshotStreamRuntimeError {}
+
+#[async_trait]
+pub trait SnapshotStreamRuntime: Send + Sync {
+    async fn start_snapshot_stream(
+        &self,
+        session: u64,
+        peer: NetworkPeerId,
+        root: String,
+    ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>;
+
+    fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus>;
+}
+
+#[derive(Clone)]
+struct NodeSnapshotStreamRuntime {
+    handle: P2pRuntimeHandle,
+}
+
+impl NodeSnapshotStreamRuntime {
+    fn new(handle: P2pRuntimeHandle) -> Self {
+        Self { handle }
+    }
+}
+
+#[async_trait]
+impl SnapshotStreamRuntime for NodeSnapshotStreamRuntime {
+    async fn start_snapshot_stream(
+        &self,
+        session: u64,
+        peer: NetworkPeerId,
+        root: String,
+    ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError> {
+        let session_id = SnapshotSessionId::new(session);
+        self.handle
+            .start_snapshot_stream(session_id, peer, root)
+            .await
+            .map_err(SnapshotStreamRuntimeError::Runtime)?;
+        self.snapshot_stream_status(session)
+            .ok_or(SnapshotStreamRuntimeError::SessionNotFound(session))
+    }
+
+    fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus> {
+        let session_id = SnapshotSessionId::new(session);
+        self.handle.snapshot_stream_status(session_id)
+    }
+}
+
 pub trait PruningServiceApi: Send + Sync {
     fn rebuild_snapshots(
         &self,
@@ -254,6 +324,7 @@ pub struct ApiContext {
     metrics: Arc<RuntimeMetrics>,
     wallet_runtime_active: bool,
     pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
+    snapshot_runtime: Option<Arc<dyn SnapshotStreamRuntime>>,
 }
 
 impl ApiContext {
@@ -297,6 +368,7 @@ impl ApiContext {
             metrics,
             wallet_runtime_active,
             pruning_status,
+            snapshot_runtime: None,
         }
     }
 
@@ -369,6 +441,10 @@ impl ApiContext {
         self.pruning_service.as_ref().map(Arc::clone)
     }
 
+    fn snapshot_runtime(&self) -> Option<Arc<dyn SnapshotStreamRuntime>> {
+        self.snapshot_runtime.as_ref().map(Arc::clone)
+    }
+
     fn require_pruning_service(
         &self,
     ) -> Result<Arc<dyn PruningServiceApi>, (StatusCode, Json<ErrorResponse>)> {
@@ -379,6 +455,17 @@ impl ApiContext {
             return Err(unavailable("node"));
         }
         Ok(service)
+    }
+
+    fn require_snapshot_runtime(
+        &self,
+    ) -> Result<Arc<dyn SnapshotStreamRuntime>, (StatusCode, Json<ErrorResponse>)> {
+        if let Some(runtime) = self.snapshot_runtime() {
+            return Ok(runtime);
+        }
+        let node = self.require_node()?;
+        let handle = node.p2p_handle().ok_or_else(|| not_started("p2p"))?;
+        Ok(Arc::new(NodeSnapshotStreamRuntime::new(handle)))
     }
 
     pub fn metrics(&self) -> Arc<RuntimeMetrics> {
@@ -409,6 +496,11 @@ impl ApiContext {
 
     pub fn with_metrics(mut self, metrics: Arc<RuntimeMetrics>) -> Self {
         self.metrics = metrics;
+        self
+    }
+
+    pub fn with_snapshot_runtime(mut self, runtime: Arc<dyn SnapshotStreamRuntime>) -> Self {
+        self.snapshot_runtime = Some(runtime);
         self
     }
 
@@ -1264,6 +1356,11 @@ where
         .route("/validator/uptime", post(validator_submit_uptime))
         .route("/p2p/peers", get(p2p_meta_telemetry))
         .route("/p2p/censorship", get(p2p_censorship_report))
+        .route("/p2p/snapshots", post(routes::p2p::start_snapshot_stream))
+        .route(
+            "/p2p/snapshots/:id",
+            get(routes::p2p::snapshot_stream_status),
+        )
         .route("/p2p/access-lists", post(update_access_lists))
         .route("/status/node", get(node_status))
         .route("/status/mempool", get(mempool_status))
@@ -2766,6 +2863,57 @@ fn state_sync_error_to_http(err: StateSyncError) -> (StatusCode, Json<ErrorRespo
         StateSyncErrorKind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, Json(ErrorResponse { error: message }))
+}
+
+fn node_error_to_http(error: P2pNodeError) -> (StatusCode, Json<ErrorResponse>) {
+    match error {
+        P2pNodeError::SnapshotStreamNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "snapshot stream not found".into(),
+            }),
+        ),
+        P2pNodeError::GossipDisabled => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "gossip propagation disabled".into(),
+            }),
+        ),
+        P2pNodeError::CommandChannelClosed => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                error: "node runtime unavailable".into(),
+            }),
+        ),
+        P2pNodeError::NetworkSetup(err)
+        | P2pNodeError::Network(err)
+        | P2pNodeError::Peerstore(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                error: err.to_string(),
+            }),
+        ),
+        P2pNodeError::Pipeline(err) => (
+            StatusCode::BAD_GATEWAY,
+            Json(ErrorResponse {
+                error: err.to_string(),
+            }),
+        ),
+    }
+}
+
+pub(crate) fn snapshot_runtime_error_to_http(
+    error: SnapshotStreamRuntimeError,
+) -> (StatusCode, Json<ErrorResponse>) {
+    match error {
+        SnapshotStreamRuntimeError::Runtime(err) => node_error_to_http(err),
+        SnapshotStreamRuntimeError::SessionNotFound(session) => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("snapshot session {session} not found"),
+            }),
+        ),
+    }
 }
 
 fn bad_request(message: impl Into<String>) -> (StatusCode, Json<ErrorResponse>) {
