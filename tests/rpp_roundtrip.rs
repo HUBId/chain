@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use rpp_chain::config::NodeConfig;
+use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::{Block, BlockMetadata, PruningProofExt};
@@ -81,7 +81,7 @@ fn rpp_pruning_roundtrip_preserves_commitments() {
     }
 
     let status = handle
-        .run_pruning_cycle(2)
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
         .expect("pruning cycle")
         .expect("pruning status");
     let persisted_path = status

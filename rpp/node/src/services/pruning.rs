@@ -11,7 +11,6 @@ use tracing::{debug, info, warn};
 use rpp_chain::config::NodeConfig;
 use rpp_chain::node::{NodeHandle, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK};
 
-const DEFAULT_PRUNING_CADENCE: Duration = Duration::from_secs(30);
 const COMMAND_QUEUE_DEPTH: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
@@ -19,14 +18,16 @@ pub struct PruningSettings {
     pub chunk_size: usize,
     pub cadence: Duration,
     pub paused: bool,
+    pub retention_depth: u64,
 }
 
 impl PruningSettings {
-    pub fn from_config(_config: &NodeConfig) -> Self {
+    pub fn from_config(config: &NodeConfig) -> Self {
         Self {
             chunk_size: DEFAULT_STATE_SYNC_CHUNK,
-            cadence: DEFAULT_PRUNING_CADENCE,
-            paused: false,
+            cadence: Duration::from_secs(config.pruning.cadence_secs),
+            paused: config.pruning.emergency_pause,
+            retention_depth: config.pruning.retention_depth,
         }
     }
 }
@@ -35,6 +36,7 @@ impl PruningSettings {
 pub enum PruningCommandError {
     ServiceUnavailable,
     InvalidCadence,
+    InvalidRetention,
 }
 
 impl std::fmt::Display for PruningCommandError {
@@ -45,6 +47,9 @@ impl std::fmt::Display for PruningCommandError {
             }
             PruningCommandError::InvalidCadence => {
                 write!(f, "pruning cadence must be greater than zero")
+            }
+            PruningCommandError::InvalidRetention => {
+                write!(f, "pruning retention depth must be greater than zero")
             }
         }
     }
@@ -72,12 +77,14 @@ struct PruningServiceInner {
 
 struct PruningState {
     cadence: RwLock<Duration>,
+    retention_depth: RwLock<u64>,
     paused: AtomicBool,
 }
 
 enum Command {
     Trigger,
     UpdateCadence(Duration),
+    UpdateRetention(u64),
     SetPaused(bool),
 }
 
@@ -94,6 +101,7 @@ impl PruningService {
     pub fn with_settings(node: NodeHandle, settings: PruningSettings) -> Self {
         let state = Arc::new(PruningState {
             cadence: RwLock::new(settings.cadence),
+            retention_depth: RwLock::new(settings.retention_depth),
             paused: AtomicBool::new(settings.paused),
         });
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_DEPTH);
@@ -129,6 +137,7 @@ impl PruningService {
             cadence_secs = settings.cadence.as_secs(),
             chunk_size = settings.chunk_size,
             paused = settings.paused,
+            retention_depth = settings.retention_depth,
             "pruning service started"
         );
 
@@ -151,6 +160,10 @@ impl PruningService {
 
     pub fn cadence(&self) -> Duration {
         *self.inner.state.cadence.read()
+    }
+
+    pub fn retention_depth(&self) -> u64 {
+        *self.inner.state.retention_depth.read()
     }
 
     pub fn is_paused(&self) -> bool {
@@ -183,6 +196,10 @@ impl PruningServiceHandle {
         *self.inner.state.cadence.read()
     }
 
+    pub fn retention_depth(&self) -> u64 {
+        *self.inner.state.retention_depth.read()
+    }
+
     pub fn paused(&self) -> bool {
         self.inner.state.paused.load(Ordering::SeqCst)
     }
@@ -205,6 +222,22 @@ impl PruningServiceHandle {
             .await
             .map_err(|_| PruningCommandError::ServiceUnavailable)?;
         *self.inner.state.cadence.write() = cadence;
+        Ok(())
+    }
+
+    pub async fn set_retention_depth(
+        &self,
+        retention_depth: u64,
+    ) -> Result<(), PruningCommandError> {
+        if retention_depth == 0 {
+            return Err(PruningCommandError::InvalidRetention);
+        }
+        self.inner
+            .commands
+            .send(Command::UpdateRetention(retention_depth))
+            .await
+            .map_err(|_| PruningCommandError::ServiceUnavailable)?;
+        *self.inner.state.retention_depth.write() = retention_depth;
         Ok(())
     }
 
@@ -254,6 +287,9 @@ async fn run_worker(
                             ticker = time::interval(duration);
                             ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
                         }
+                        Some(Command::UpdateRetention(depth)) => {
+                            *state.retention_depth.write() = depth;
+                        }
                         Some(Command::SetPaused(paused)) => {
                             state.paused.store(paused, Ordering::SeqCst);
                             if !paused {
@@ -278,7 +314,8 @@ async fn run_worker(
             continue;
         }
 
-        if let Err(err) = run_pruning_cycle(&node, chunk_size, &status_tx) {
+        let retention_depth = *state.retention_depth.read();
+        if let Err(err) = run_pruning_cycle(&node, chunk_size, retention_depth, &status_tx) {
             warn!(?err, "pruning cycle failed");
         }
     }
@@ -289,9 +326,10 @@ async fn run_worker(
 fn run_pruning_cycle(
     node: &NodeHandle,
     chunk_size: usize,
+    retention_depth: u64,
     status_tx: &watch::Sender<Option<PruningJobStatus>>,
 ) -> Result<(), rpp_chain::errors::ChainError> {
-    let status = node.run_pruning_cycle(chunk_size)?;
+    let status = node.run_pruning_cycle(chunk_size, retention_depth)?;
     if let Err(err) = status_tx.send(status.clone()) {
         debug!(?err, "pruning status watchers dropped");
     }

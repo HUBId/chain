@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeSet;
 use std::fs;
 
-use rpp_chain::config::NodeConfig;
+use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::types::Block;
 use rpp_chain::runtime::RuntimeMetrics;
@@ -66,7 +66,7 @@ fn pruning_proof_size_regression_guard() {
     let mut previous_total: Option<usize> = None;
     for cycle in 0..3 {
         let status = handle
-            .run_pruning_cycle(2)
+            .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
             .expect("pruning cycle")
             .expect("pruning status");
         assert!(

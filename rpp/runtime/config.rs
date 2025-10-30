@@ -1030,6 +1030,9 @@ fn default_node_config_version() -> String {
     NODE_CONFIG_VERSION.to_string()
 }
 
+pub const DEFAULT_PRUNING_CADENCE_SECS: u64 = 30;
+pub const DEFAULT_PRUNING_RETENTION_DEPTH: u64 = 128;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
     #[serde(default = "default_node_config_version")]
@@ -1071,6 +1074,8 @@ pub struct NodeConfig {
     pub malachite: MalachiteConfig,
     #[serde(default)]
     pub storage: FirewoodStorageConfig,
+    #[serde(default)]
+    pub pruning: PruningConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -1354,6 +1359,7 @@ impl NodeConfig {
         self.rollout.telemetry.validate()?;
         self.queue_weights.validate()?;
         self.secrets.validate_with_path(&self.vrf_key_path)?;
+        self.pruning.validate()?;
         Ok(())
     }
 }
@@ -1387,7 +1393,59 @@ impl Default for NodeConfig {
             queue_weights: QueueWeightsConfig::default(),
             malachite: MalachiteConfig::default(),
             storage: FirewoodStorageConfig::default(),
+            pruning: PruningConfig::default(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PruningConfig {
+    pub cadence_secs: u64,
+    pub retention_depth: u64,
+    pub emergency_pause: bool,
+}
+
+impl PruningConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.cadence_secs == 0 {
+            return Err(ChainError::Config(
+                "pruning.cadence_secs must be greater than 0".into(),
+            ));
+        }
+        if self.retention_depth == 0 {
+            return Err(ChainError::Config(
+                "pruning.retention_depth must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for PruningConfig {
+    fn default() -> Self {
+        Self {
+            cadence_secs: DEFAULT_PRUNING_CADENCE_SECS,
+            retention_depth: DEFAULT_PRUNING_RETENTION_DEPTH,
+            emergency_pause: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pruning_config_defaults_are_valid() {
+        let config = NodeConfig::default();
+        assert_eq!(config.pruning.cadence_secs, DEFAULT_PRUNING_CADENCE_SECS);
+        assert_eq!(
+            config.pruning.retention_depth,
+            DEFAULT_PRUNING_RETENTION_DEPTH
+        );
+        assert!(!config.pruning.emergency_pause);
+        config.pruning.validate().expect("defaults should validate");
     }
 }
 
