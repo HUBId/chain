@@ -1,5 +1,6 @@
 mod config;
 mod services;
+mod telemetry;
 
 use std::env;
 use std::fmt;

@@ -14,6 +14,7 @@ use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::UtxoOutpoint;
 use crate::state::StoredUtxo;
+pub mod blueprint;
 pub mod pruner;
 
 use crate::types::{

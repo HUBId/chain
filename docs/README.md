@@ -9,6 +9,7 @@ configuration specifics, checklists, and runbooks as needed:
 - [Runbook: observability](runbooks/observability.md)
 - [Runbook: upgrade](runbooks/upgrade.md)
 - [Runbook: pruning](runbooks/pruning.md)
+- [Runbook: pruning operations](runbooks/pruning_operations.md)
 
 For additional topics, explore the existing documentation tree (e.g. `docs/telemetry.md` and
 `docs/validator_quickstart.md`).

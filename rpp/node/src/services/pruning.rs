@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::{mpsc, watch, Mutex};
@@ -13,6 +13,8 @@ use tracing::{debug, info, warn};
 use rpp_chain::api::{PruningServiceApi, PruningServiceError};
 use rpp_chain::config::NodeConfig;
 use rpp_chain::node::{NodeHandle, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK};
+
+use crate::telemetry::pruning::{CycleOutcome, CycleReason, PruningMetrics};
 use rpp_chain::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
 
 const COMMAND_QUEUE_DEPTH: usize = 8;
@@ -92,9 +94,19 @@ enum Command {
     SetPaused(bool),
 }
 
+#[derive(Clone, Copy)]
 enum RunReason {
     Manual,
     Scheduled,
+}
+
+impl From<RunReason> for CycleReason {
+    fn from(reason: RunReason) -> Self {
+        match reason {
+            RunReason::Manual => CycleReason::Manual,
+            RunReason::Scheduled => CycleReason::Scheduled,
+        }
+    }
 }
 
 impl PruningService {
@@ -144,6 +156,10 @@ impl PruningService {
             retention_depth = settings.retention_depth,
             "pruning service started"
         );
+
+        let metrics = PruningMetrics::global();
+        metrics.record_retention_depth(settings.retention_depth);
+        metrics.record_pause_state(settings.paused);
 
         PruningService {
             inner,
@@ -339,9 +355,13 @@ async fn run_worker(
                         }
                         Some(Command::UpdateRetention(depth)) => {
                             *state.retention_depth.write() = depth;
+                            PruningMetrics::global().record_retention_depth(depth);
                         }
                         Some(Command::SetPaused(paused)) => {
-                            state.paused.store(paused, Ordering::SeqCst);
+                            let was_paused = state.paused.swap(paused, Ordering::SeqCst);
+                            if was_paused != paused {
+                                PruningMetrics::global().record_pause_state(paused);
+                            }
                             if !paused {
                                 selected = Some(RunReason::Manual);
                             }
@@ -365,8 +385,19 @@ async fn run_worker(
         }
 
         let retention_depth = *state.retention_depth.read();
-        if let Err(err) = run_pruning_cycle(&node, chunk_size, retention_depth, &status_tx) {
-            warn!(?err, "pruning cycle failed");
+        let metrics = PruningMetrics::global();
+        metrics.record_retention_depth(retention_depth);
+
+        let cycle_reason: CycleReason = reason.into();
+        let started_at = Instant::now();
+        match run_pruning_cycle(&node, chunk_size, retention_depth, &status_tx) {
+            Ok(status) => {
+                metrics.record_cycle(cycle_reason, CycleOutcome::Success, started_at.elapsed(), status.as_ref());
+            }
+            Err(err) => {
+                metrics.record_cycle(cycle_reason, CycleOutcome::Failure, started_at.elapsed(), None);
+                warn!(?err, "pruning cycle failed");
+            }
         }
     }
 
@@ -378,10 +409,10 @@ fn run_pruning_cycle(
     chunk_size: usize,
     retention_depth: u64,
     status_tx: &watch::Sender<Option<PruningJobStatus>>,
-) -> Result<(), rpp_chain::errors::ChainError> {
+) -> Result<Option<PruningJobStatus>, rpp_chain::errors::ChainError> {
     let status = node.run_pruning_cycle(chunk_size, retention_depth)?;
     if let Err(err) = status_tx.send(status.clone()) {
         debug!(?err, "pruning status watchers dropped");
     }
-    Ok(())
+    Ok(status)
 }
