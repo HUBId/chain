@@ -32,6 +32,7 @@ mod linear;
 mod metrics;
 mod node;
 mod nodestore;
+pub mod snapshots;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
 mod trie_hash;
