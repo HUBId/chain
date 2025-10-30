@@ -5312,6 +5312,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "prover-stwo-circuits"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "prover_mock_backend"
 version = "0.1.0"
 dependencies = [
@@ -6107,6 +6115,7 @@ name = "rpp-wallet"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "firewood",
  "hex",
  "log",
@@ -6114,6 +6123,8 @@ dependencies = [
  "opentelemetry_sdk 0.30.0",
  "parking_lot",
  "prover-backend-interface",
+ "prover-stwo-circuits",
+ "prover_mock_backend",
  "prover_stwo_backend",
  "reqwest 0.12.24",
  "rpp-p2p",
@@ -8435,6 +8446,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "yamux"
 version = "0.12.1"
 dependencies = [
@@ -8586,11 +8604,4 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.107",
-]
-
-[[package]]
-name = "xtask"
-version = "0.1.0"
-dependencies = [
- "anyhow",
 ]

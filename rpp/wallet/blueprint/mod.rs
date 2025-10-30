@@ -53,7 +53,7 @@ impl Blueprint {
                     key: "wallet.stwo_circuits",
                     title: "STWO witness coverage",
                     detail: "Document wallet-side STWO circuits and witness derivation.",
-                    status: TaskStatus::Todo,
+                    status: TaskStatus::Done,
                 },
             ],
         }])

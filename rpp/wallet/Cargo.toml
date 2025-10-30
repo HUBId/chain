@@ -13,6 +13,7 @@ nightly-prover = [
 prover-stwo = [
     "nightly-prover",
     "prover-backend-interface/prover-stwo",
+    "dep:prover-stwo-circuits",
 ]
 prover-stwo-simd = [
     "prover-stwo",
@@ -37,6 +38,7 @@ vendor_electrs_test_support = ["vendor_electrs"]
 anyhow = "1"
 prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { workspace = true, optional = true }
+prover-stwo-circuits = { path = "../../prover/stwo", optional = true }
 sha2 = { version = "0.10", optional = true }
 storage-firewood = { path = "../../storage-firewood", optional = true }
 serde = { version = "1.0", features = ["derive"] }

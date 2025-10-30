@@ -23,7 +23,11 @@ compile_error!("features `prover-stwo` and `prover-mock` are mutually exclusive"
 pub use prover_backend_interface as proof_backend;
 
 #[cfg(feature = "prover-stwo")]
-pub use prover_stwo_backend;
+pub use prover_stwo_backend as stwo;
+
+#[cfg(not(feature = "prover-stwo"))]
+#[path = "../../rpp/chain/src/stwo_stub.rs"]
+pub mod stwo;
 
 #[cfg(feature = "vendor_electrs")]
 pub mod config;
@@ -39,3 +43,6 @@ pub mod rpc;
 
 /// Zero Sync identity lifecycle helpers.
 pub mod zsi;
+
+/// Wallet-facing proof helpers.
+pub mod proofs;
