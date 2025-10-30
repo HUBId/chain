@@ -2,8 +2,10 @@
 
 mod admission;
 mod behaviour;
+mod gossip;
 mod handshake;
 mod identity;
+mod metrics;
 mod peerstore;
 mod persistence;
 mod pipeline;

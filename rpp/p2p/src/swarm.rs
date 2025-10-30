@@ -103,8 +103,11 @@ use crate::admission::{
 use crate::behaviour::snapshots::{
     NullSnapshotProvider, SnapshotProvider, SnapshotSessionId, SnapshotsBehaviour, SnapshotsEvent,
 };
+use crate::gossip;
 use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
 use crate::identity::NodeIdentity;
+#[cfg(feature = "metrics")]
+use crate::metrics::AdmissionMetrics;
 use crate::peerstore::{Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
 use crate::pipeline::{
@@ -777,6 +780,8 @@ pub struct Network {
     snapshot_sessions: HashMap<SnapshotSessionId, SnapshotSessionState>,
     #[cfg(feature = "metrics")]
     metrics: NetworkMetrics,
+    #[cfg(feature = "metrics")]
+    admission_metrics: AdmissionMetrics,
 }
 
 #[cfg(not(all(
@@ -983,6 +988,8 @@ impl Network {
             identity.metadata().clone(),
             heuristics,
         ));
+        #[cfg(feature = "metrics")]
+        let admission_metrics = AdmissionMetrics::register(&mut metrics_registry);
         let mut network = Self {
             swarm,
             events_handle,
@@ -997,6 +1004,8 @@ impl Network {
             snapshot_sessions: HashMap::new(),
             #[cfg(feature = "metrics")]
             metrics: NetworkMetrics::new(metrics_registry),
+            #[cfg(feature = "metrics")]
+            admission_metrics,
         };
         let push_event: Arc<dyn Fn(NetworkEvent) + Send + Sync> = {
             let handle = network.events_handle.clone();
@@ -1501,7 +1510,17 @@ impl Network {
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    self.peerstore.record_handshake(peer, &request)?;
+                    match self.peerstore.record_handshake(peer, &request) {
+                        Ok(outcome) => {
+                            #[cfg(feature = "metrics")]
+                            self.admission_metrics.record_handshake(&peer, &outcome);
+                        }
+                        Err(err) => {
+                            #[cfg(feature = "metrics")]
+                            self.admission_metrics.record_handshake_error(&peer, &err);
+                            return Err(err.into());
+                        }
+                    }
                     let payload = self.sign_handshake()?;
                     self.swarm
                         .behaviour_mut()
@@ -1513,7 +1532,17 @@ impl Network {
                     Ok(None)
                 }
                 request_response::Message::Response { response, .. } => {
-                    self.peerstore.record_handshake(peer, &response)?;
+                    match self.peerstore.record_handshake(peer, &response) {
+                        Ok(outcome) => {
+                            #[cfg(feature = "metrics")]
+                            self.admission_metrics.record_handshake(&peer, &outcome);
+                        }
+                        Err(err) => {
+                            #[cfg(feature = "metrics")]
+                            self.admission_metrics.record_handshake_error(&peer, &err);
+                            return Err(err.into());
+                        }
+                    }
                     Ok(None)
                 }
             },
@@ -1582,10 +1611,13 @@ impl Network {
                         )?;
                         return Ok(None);
                     }
-                    match self
-                        .admission
-                        .can_remote_publish(&propagation_source, topic)
-                    {
+                    match gossip::evaluate_publish(
+                        &self.admission,
+                        #[cfg(feature = "metrics")]
+                        &self.admission_metrics,
+                        &propagation_source,
+                        topic,
+                    ) {
                         Ok(_) => {
                             let outcome = self.admission.record_event(
                                 propagation_source,
