@@ -1,6 +1,7 @@
 //! RPP P2P stack - libp2p-backed networking primitives.
 
 mod admission;
+mod behaviour;
 mod handshake;
 mod identity;
 mod peerstore;
@@ -19,6 +20,7 @@ pub use admission::{
     AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
     ReputationOutcome,
 };
+pub use behaviour::snapshots::{SnapshotProvider, SnapshotSessionId, SnapshotsBehaviour};
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
 pub use peerstore::{
