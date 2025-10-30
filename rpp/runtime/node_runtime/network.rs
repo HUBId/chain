@@ -7,8 +7,8 @@ use log::warn;
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network,
-    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, ReputationHeuristics,
-    TierLevel,
+    NetworkError, NodeIdentity, NullSnapshotProvider, Peerstore, PeerstoreConfig, PeerstoreError,
+    ReputationHeuristics, TierLevel,
 };
 use std::str::FromStr;
 use thiserror::Error;
@@ -192,6 +192,7 @@ impl NetworkResources {
             config.gossip_rate_limit_per_sec(),
             config.replay_window_size(),
             config.reputation_heuristics(),
+            Arc::new(NullSnapshotProvider::default()),
         )?;
         if let Some(profile) = profile {
             network.update_identity(

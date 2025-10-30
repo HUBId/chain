@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -6,9 +6,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use futures::StreamExt;
 use parking_lot::{Mutex, RwLock};
 use thiserror::Error;
-
-#[cfg(feature = "metrics")]
-use std::collections::HashMap;
 
 #[cfg(feature = "metrics")]
 use libp2p_metrics::Registry;
@@ -103,13 +100,21 @@ use crate::admission::{
     AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
     ReputationOutcome,
 };
+use crate::behaviour::snapshots::{
+    NullSnapshotProvider, SnapshotProvider, SnapshotSessionId, SnapshotsBehaviour, SnapshotsEvent,
+};
 use crate::handshake::{HandshakeCodec, HandshakePayload, TelemetryMetadata, HANDSHAKE_PROTOCOL};
 use crate::identity::NodeIdentity;
 use crate::peerstore::{Peerstore, PeerstoreError};
 use crate::persistence::GossipStateStore;
+use crate::pipeline::{
+    NetworkLightClientUpdate, NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError,
+};
 use crate::security::{RateLimiter, ReplayProtector};
 use crate::tier::TierLevel;
 use crate::topics::GossipTopic;
+
+pub type SnapshotProviderHandle = Arc<dyn SnapshotProvider<Error = PipelineError> + Send + Sync>;
 
 #[derive(Debug, Error)]
 pub enum NetworkError {
@@ -152,6 +157,7 @@ struct RppBehaviour {
     identify: identify::Behaviour,
     ping: ping::Behaviour,
     gossipsub: gossipsub::Behaviour,
+    snapshots: SnapshotsBehaviour<SnapshotProviderHandle>,
 }
 
 #[cfg(all(
@@ -166,6 +172,7 @@ enum RppBehaviourEvent {
     Identify(identify::Event),
     Ping(ping::Event),
     Gossipsub(gossipsub::Event),
+    Snapshots(SnapshotsEvent),
     Network(NetworkEvent),
 }
 
@@ -221,11 +228,24 @@ impl From<gossipsub::Event> for RppBehaviourEvent {
     feature = "gossipsub",
     feature = "identify",
     feature = "ping",
+    feature = "request-response",
+))]
+impl From<SnapshotsEvent> for RppBehaviourEvent {
+    fn from(event: SnapshotsEvent) -> Self {
+        RppBehaviourEvent::Snapshots(event)
+    }
+}
+
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
     feature = "request-response"
 ))]
 impl RppBehaviour {
     fn new(
         identity: &Keypair,
+        snapshots_provider: SnapshotProviderHandle,
         #[cfg(feature = "metrics")] metrics_registry: Option<&mut Registry>,
     ) -> Result<Self, NetworkError> {
         let protocols = std::iter::once((HANDSHAKE_PROTOCOL.to_string(), ProtocolSupport::Full));
@@ -238,6 +258,7 @@ impl RppBehaviour {
 
         let ping = ping::Behaviour::new(ping::Config::new());
         let mut gossipsub = Self::build_gossipsub(identity)?;
+        let snapshots = SnapshotsBehaviour::new(snapshots_provider);
 
         #[cfg(feature = "metrics")]
         if let Some(registry) = metrics_registry {
@@ -256,6 +277,7 @@ impl RppBehaviour {
             identify,
             ping,
             gossipsub,
+            snapshots,
         })
     }
 
@@ -421,6 +443,32 @@ pub enum NetworkEvent {
         peer: PeerId,
         topic: GossipTopic,
         data: Vec<u8>,
+    },
+    SnapshotPlan {
+        peer: PeerId,
+        session: SnapshotSessionId,
+        plan: NetworkStateSyncPlan,
+    },
+    SnapshotChunk {
+        peer: PeerId,
+        session: SnapshotSessionId,
+        index: u64,
+        chunk: NetworkStateSyncChunk,
+    },
+    SnapshotUpdate {
+        peer: PeerId,
+        session: SnapshotSessionId,
+        index: u64,
+        update: NetworkLightClientUpdate,
+    },
+    SnapshotStreamCompleted {
+        peer: PeerId,
+        session: SnapshotSessionId,
+    },
+    SnapshotStreamError {
+        peer: PeerId,
+        session: SnapshotSessionId,
+        reason: String,
     },
     PeerDisconnected {
         peer: PeerId,
@@ -595,6 +643,27 @@ struct PingReporter {
     events: Arc<ExternalEventHandle<RppBehaviourEvent>>,
 }
 
+#[derive(Debug, Clone)]
+struct SnapshotSessionState {
+    peer: PeerId,
+    total_chunks: u64,
+    total_updates: u64,
+    next_chunk: u64,
+    next_update: u64,
+}
+
+impl SnapshotSessionState {
+    fn new(peer: PeerId, total_chunks: u64, total_updates: u64) -> Self {
+        Self {
+            peer,
+            total_chunks,
+            total_updates,
+            next_chunk: 0,
+            next_update: 0,
+        }
+    }
+}
+
 impl PingReporter {
     fn new(peerstore: Arc<Peerstore>, events: Arc<ExternalEventHandle<RppBehaviourEvent>>) -> Self {
         Self { peerstore, events }
@@ -665,6 +734,8 @@ pub struct Network {
     gossip_state: Option<Arc<GossipStateStore>>,
     replay: ReplayProtector,
     rate_limiter: Arc<Mutex<RateLimiter>>,
+    snapshots_provider: SnapshotProviderHandle,
+    snapshot_sessions: HashMap<SnapshotSessionId, SnapshotSessionState>,
     #[cfg(feature = "metrics")]
     metrics: NetworkMetrics,
 }
@@ -698,6 +769,7 @@ impl Network {
         gossip_rate_limit_per_sec: u64,
         replay_window_size: usize,
         heuristics: ReputationHeuristics,
+        snapshots_provider: SnapshotProviderHandle,
     ) -> Result<Self, NetworkError> {
         let handshake = {
             let mut payload = handshake;
@@ -722,6 +794,8 @@ impl Network {
             let limiter = rate_limiter.clone();
             yamux::allow(move |peer: &PeerId| limiter.lock().allow(peer.clone()))
         };
+
+        let snapshots_provider_for_behaviour = snapshots_provider.clone();
 
         let builder = SwarmBuilder::with_existing_identity(local_key.clone())
             .with_tokio()
@@ -843,14 +917,15 @@ impl Network {
             )
             .map_err(|err| NetworkError::Noise(err.to_string()))?
             .with_behaviour(|keypair| {
+                let snapshots_provider = snapshots_provider_for_behaviour.clone();
                 #[cfg(feature = "metrics")]
                 {
-                    RppBehaviour::new(keypair, Some(&mut metrics_registry))
+                    RppBehaviour::new(keypair, snapshots_provider, Some(&mut metrics_registry))
                         .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
                 }
                 #[cfg(not(feature = "metrics"))]
                 {
-                    RppBehaviour::new(keypair)
+                    RppBehaviour::new(keypair, snapshots_provider)
                         .map_err(|err| Box::<dyn std::error::Error + Send + Sync>::from(err))
                 }
             })
@@ -874,6 +949,8 @@ impl Network {
             gossip_state,
             replay: ReplayProtector::with_capacity(replay_window_size),
             rate_limiter,
+            snapshots_provider,
+            snapshot_sessions: HashMap::new(),
             #[cfg(feature = "metrics")]
             metrics: NetworkMetrics::new(metrics_registry),
         };
@@ -1006,6 +1083,7 @@ impl Network {
         gossip_state: Option<Arc<GossipStateStore>>,
         _gossip_rate_limit_per_sec: u64,
         _replay_window_size: usize,
+        _snapshots_provider: SnapshotProviderHandle,
     ) -> Result<Self, NetworkError> {
         Err(NetworkError::TransportDisabled)
     }
@@ -1182,6 +1260,11 @@ impl Network {
                 }
                 SwarmEvent::Behaviour(RppBehaviourEvent::Gossipsub(event)) => {
                     if let Some(evt) = self.handle_gossipsub_event(event)? {
+                        return Ok(evt);
+                    }
+                }
+                SwarmEvent::Behaviour(RppBehaviourEvent::Snapshots(event)) => {
+                    if let Some(evt) = self.handle_snapshots_event(event)? {
                         return Ok(evt);
                     }
                 }
@@ -1514,6 +1597,170 @@ impl Network {
         }
     }
 
+    fn handle_snapshots_event(
+        &mut self,
+        event: SnapshotsEvent,
+    ) -> Result<Option<NetworkEvent>, NetworkError> {
+        match event {
+            SnapshotsEvent::Plan {
+                peer,
+                session_id,
+                plan,
+            } => {
+                let total_chunks = plan.chunks.len() as u64;
+                let total_updates = plan.light_client_updates.len() as u64;
+                self.snapshot_sessions.insert(
+                    session_id,
+                    SnapshotSessionState::new(peer.clone(), total_chunks, total_updates),
+                );
+                self.queue_snapshot_request(session_id)?;
+                Ok(Some(NetworkEvent::SnapshotPlan {
+                    peer,
+                    session: session_id,
+                    plan,
+                }))
+            }
+            SnapshotsEvent::Chunk {
+                peer,
+                session_id,
+                chunk_index,
+                chunk,
+            } => {
+                if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
+                    state.next_chunk = state.next_chunk.max(chunk_index.saturating_add(1));
+                }
+                self.queue_snapshot_request(session_id)?;
+                Ok(Some(NetworkEvent::SnapshotChunk {
+                    peer,
+                    session: session_id,
+                    index: chunk_index,
+                    chunk,
+                }))
+            }
+            SnapshotsEvent::LightClientUpdate {
+                peer,
+                session_id,
+                update_index,
+                update,
+            } => {
+                if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
+                    state.next_update = state.next_update.max(update_index.saturating_add(1));
+                }
+                self.queue_snapshot_request(session_id)?;
+                Ok(Some(NetworkEvent::SnapshotUpdate {
+                    peer,
+                    session: session_id,
+                    index: update_index,
+                    update,
+                }))
+            }
+            SnapshotsEvent::Resume {
+                peer,
+                session_id,
+                chunk_index,
+                update_index,
+            } => {
+                if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
+                    state.next_chunk = chunk_index.min(state.total_chunks);
+                    state.next_update = update_index.min(state.total_updates);
+                } else {
+                    let mut state = SnapshotSessionState::new(peer.clone(), 0, 0);
+                    state.next_chunk = chunk_index;
+                    state.next_update = update_index;
+                    self.snapshot_sessions.insert(session_id, state);
+                }
+                self.queue_snapshot_request(session_id)?;
+                Ok(None)
+            }
+            SnapshotsEvent::Ack {
+                peer, session_id, ..
+            } => {
+                self.snapshot_sessions.remove(&session_id);
+                self.push_network_event(NetworkEvent::SnapshotStreamCompleted {
+                    peer,
+                    session: session_id,
+                })?;
+                Ok(None)
+            }
+            SnapshotsEvent::InboundRequest { .. } => Ok(None),
+            SnapshotsEvent::Error {
+                peer,
+                session_id,
+                error,
+            } => {
+                self.snapshot_sessions.remove(&session_id);
+                Ok(Some(NetworkEvent::SnapshotStreamError {
+                    peer,
+                    session: session_id,
+                    reason: error.to_string(),
+                }))
+            }
+        }
+    }
+
+    fn queue_snapshot_request(
+        &mut self,
+        session_id: SnapshotSessionId,
+    ) -> Result<(), NetworkError> {
+        enum SnapshotAction {
+            RequestChunk(PeerId, u64),
+            RequestUpdate(PeerId, u64),
+            Completed(PeerId),
+            None,
+        }
+
+        let action = if let Some(state) = self.snapshot_sessions.get(&session_id) {
+            if state.next_chunk < state.total_chunks {
+                SnapshotAction::RequestChunk(state.peer.clone(), state.next_chunk)
+            } else if state.next_update < state.total_updates {
+                SnapshotAction::RequestUpdate(state.peer.clone(), state.next_update)
+            } else {
+                SnapshotAction::Completed(state.peer.clone())
+            }
+        } else {
+            SnapshotAction::None
+        };
+
+        match action {
+            SnapshotAction::RequestChunk(peer, index) => {
+                if self
+                    .swarm
+                    .behaviour_mut()
+                    .snapshots
+                    .request_chunk(peer, session_id, index)
+                    .is_some()
+                {
+                    if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
+                        state.next_chunk = index.saturating_add(1);
+                    }
+                }
+            }
+            SnapshotAction::RequestUpdate(peer, index) => {
+                if self
+                    .swarm
+                    .behaviour_mut()
+                    .snapshots
+                    .request_update(peer, session_id, index)
+                    .is_some()
+                {
+                    if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
+                        state.next_update = index.saturating_add(1);
+                    }
+                }
+            }
+            SnapshotAction::Completed(peer) => {
+                self.snapshot_sessions.remove(&session_id);
+                self.push_network_event(NetworkEvent::SnapshotStreamCompleted {
+                    peer,
+                    session: session_id,
+                })?;
+            }
+            SnapshotAction::None => {}
+        }
+
+        Ok(())
+    }
+
     fn bootstrap_known_peers(&mut self) {
         let local = self.local_peer_id();
         for record in self.peerstore.known_peers() {
@@ -1735,6 +1982,7 @@ mod tests {
             128,
             1_024,
             ReputationHeuristics::default(),
+            Arc::new(NullSnapshotProvider::default()),
         )
         .expect("network")
     }
@@ -1763,6 +2011,7 @@ mod tests {
             128,
             1_024,
             ReputationHeuristics::default(),
+            Arc::new(NullSnapshotProvider::default()),
         )
         .expect("network");
 

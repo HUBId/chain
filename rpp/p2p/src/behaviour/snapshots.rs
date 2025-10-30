@@ -1,10 +1,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::pipeline::{NetworkLightClientUpdate, NetworkStateSyncChunk, NetworkStateSyncPlan};
+use crate::pipeline::{
+    NetworkLightClientUpdate, NetworkStateSyncChunk, NetworkStateSyncPlan, PipelineError,
+};
 use crate::vendor::PeerId;
 
 #[cfg(feature = "request-response")]
@@ -169,6 +172,100 @@ pub trait SnapshotProvider: Send + Sync + 'static {
         kind: SnapshotItemKind,
         index: u64,
     ) -> Result<(), Self::Error>;
+}
+
+impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
+    type Error = T::Error;
+
+    fn fetch_plan(
+        &self,
+        session_id: SnapshotSessionId,
+    ) -> Result<NetworkStateSyncPlan, Self::Error> {
+        (**self).fetch_plan(session_id)
+    }
+
+    fn fetch_chunk(
+        &self,
+        session_id: SnapshotSessionId,
+        chunk_index: u64,
+    ) -> Result<NetworkStateSyncChunk, Self::Error> {
+        (**self).fetch_chunk(session_id, chunk_index)
+    }
+
+    fn fetch_update(
+        &self,
+        session_id: SnapshotSessionId,
+        update_index: u64,
+    ) -> Result<NetworkLightClientUpdate, Self::Error> {
+        (**self).fetch_update(session_id, update_index)
+    }
+
+    fn resume_session(
+        &self,
+        session_id: SnapshotSessionId,
+        chunk_index: u64,
+        update_index: u64,
+    ) -> Result<SnapshotResumeState, Self::Error> {
+        (**self).resume_session(session_id, chunk_index, update_index)
+    }
+
+    fn acknowledge(
+        &self,
+        session_id: SnapshotSessionId,
+        kind: SnapshotItemKind,
+        index: u64,
+    ) -> Result<(), Self::Error> {
+        (**self).acknowledge(session_id, kind, index)
+    }
+}
+
+/// Fallback snapshot provider returning `SnapshotNotFound` for every request.
+#[derive(Clone, Debug, Default)]
+pub struct NullSnapshotProvider;
+
+impl SnapshotProvider for NullSnapshotProvider {
+    type Error = PipelineError;
+
+    fn fetch_plan(
+        &self,
+        _session_id: SnapshotSessionId,
+    ) -> Result<NetworkStateSyncPlan, Self::Error> {
+        Err(PipelineError::SnapshotNotFound)
+    }
+
+    fn fetch_chunk(
+        &self,
+        _session_id: SnapshotSessionId,
+        _chunk_index: u64,
+    ) -> Result<NetworkStateSyncChunk, Self::Error> {
+        Err(PipelineError::SnapshotNotFound)
+    }
+
+    fn fetch_update(
+        &self,
+        _session_id: SnapshotSessionId,
+        _update_index: u64,
+    ) -> Result<NetworkLightClientUpdate, Self::Error> {
+        Err(PipelineError::SnapshotNotFound)
+    }
+
+    fn resume_session(
+        &self,
+        _session_id: SnapshotSessionId,
+        _chunk_index: u64,
+        _update_index: u64,
+    ) -> Result<SnapshotResumeState, Self::Error> {
+        Err(PipelineError::SnapshotNotFound)
+    }
+
+    fn acknowledge(
+        &self,
+        _session_id: SnapshotSessionId,
+        _kind: SnapshotItemKind,
+        _index: u64,
+    ) -> Result<(), Self::Error> {
+        Err(PipelineError::SnapshotNotFound)
+    }
 }
 
 #[cfg(feature = "request-response")]

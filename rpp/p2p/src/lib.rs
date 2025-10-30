@@ -21,8 +21,8 @@ pub use admission::{
     ReputationOutcome,
 };
 pub use behaviour::snapshots::{
-    SnapshotItemKind, SnapshotProvider, SnapshotResumeState, SnapshotSessionId, SnapshotsRequest,
-    SnapshotsResponse,
+    NullSnapshotProvider, SnapshotItemKind, SnapshotProvider, SnapshotResumeState,
+    SnapshotSessionId, SnapshotsRequest, SnapshotsResponse,
 };
 #[cfg(feature = "request-response")]
 pub use behaviour::snapshots::{SnapshotProtocolError, SnapshotsBehaviour, SnapshotsEvent};
@@ -39,17 +39,18 @@ pub use pipeline::{
     GossipPayloadError, GossipVoteValidator, JsonProofValidator, LightClientHead, LightClientSync,
     MetaTelemetry, NetworkBlockMetadata, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
     NetworkMetaTelemetryReport, NetworkPayloadExpectations, NetworkPeerTelemetry,
-    NetworkPruningCommitment, NetworkPruningEnvelope, NetworkPruningSegment, NetworkPruningSnapshot,
-    NetworkReconstructionRequest,
-    NetworkSnapshotSummary, NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex,
-    PersistentProofStorage, PipelineError, ProofMempool, ProofRecord, ProofStorage,
-    RuntimeProofValidator, SnapshotChunk, SnapshotChunkStream, SnapshotStore, TelemetryEvent,
-    TransactionProofVerifier, VoteOutcome,
+    NetworkPruningCommitment, NetworkPruningEnvelope, NetworkPruningSegment,
+    NetworkPruningSnapshot, NetworkReconstructionRequest, NetworkSnapshotSummary,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex, PersistentProofStorage,
+    PipelineError, ProofMempool, ProofRecord, ProofStorage, RuntimeProofValidator, SnapshotChunk,
+    SnapshotChunkStream, SnapshotStore, TelemetryEvent, TransactionProofVerifier, VoteOutcome,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
 pub use rpp_p2p_macros::NetworkBehaviour;
 pub use security::{RateLimiter, ReplayProtector};
 pub use simulator::{NetworkSimulation, SimulationReport};
-pub use swarm::{Network, NetworkError, NetworkEvent, NetworkMetricsSnapshot};
+pub use swarm::{
+    Network, NetworkError, NetworkEvent, NetworkMetricsSnapshot, SnapshotProviderHandle,
+};
 pub use tier::TierLevel;
 pub use topics::GossipTopic;

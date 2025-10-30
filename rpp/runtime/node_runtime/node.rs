@@ -1471,6 +1471,64 @@ impl NodeInner {
                     let _ = self.events.send(NodeEvent::Gossip { peer, topic, data });
                 }
             }
+            NetworkEvent::SnapshotPlan { peer, session, plan } => {
+                debug!(
+                    target: "node",
+                    %peer,
+                    session = session.get(),
+                    height = plan.snapshot.height,
+                    "snapshot plan received"
+                );
+            }
+            NetworkEvent::SnapshotChunk {
+                peer,
+                session,
+                index,
+                ..,
+            } => {
+                debug!(
+                    target: "node",
+                    %peer,
+                    session = session.get(),
+                    %index,
+                    "snapshot chunk received"
+                );
+            }
+            NetworkEvent::SnapshotUpdate {
+                peer,
+                session,
+                index,
+                ..,
+            } => {
+                debug!(
+                    target: "node",
+                    %peer,
+                    session = session.get(),
+                    %index,
+                    "snapshot update received"
+                );
+            }
+            NetworkEvent::SnapshotStreamCompleted { peer, session } => {
+                info!(
+                    target: "node",
+                    %peer,
+                    session = session.get(),
+                    "snapshot stream completed"
+                );
+            }
+            NetworkEvent::SnapshotStreamError {
+                peer,
+                session,
+                reason,
+            } => {
+                warn!(
+                    target: "node",
+                    %peer,
+                    session = session.get(),
+                    %reason,
+                    "snapshot stream error"
+                );
+            }
             NetworkEvent::ReputationUpdated {
                 peer,
                 tier,
