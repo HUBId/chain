@@ -12,11 +12,12 @@ use rpp_p2p::{
     decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
     AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
     GossipVoteValidator, HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry,
-    NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkMetaTelemetryReport,
-    NetworkPeerTelemetry, NodeIdentity, PeerstoreError, PersistentConsensusStorage,
-    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent,
-    ReputationHeuristics, RuntimeProofValidator, SeenDigestRecord, SnapshotProviderHandle,
-    TierLevel, VoteOutcome,
+    NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
+    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity,
+    PeerstoreError, PersistentConsensusStorage, PersistentProofStorage, PipelineError,
+    ProofMempool, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
+    RuntimeProofValidator, SeenDigestRecord, SnapshotChunk, SnapshotProviderHandle,
+    SnapshotSessionId, TierLevel, VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -66,6 +67,22 @@ enum NodeCommand {
     ReloadAccessLists {
         allowlist: Vec<AllowlistedPeer>,
         blocklist: Vec<PeerId>,
+        response: oneshot::Sender<Result<(), NodeError>>,
+    },
+    StartSnapshotStream {
+        session: SnapshotSessionId,
+        peer: PeerId,
+        root: String,
+        response: oneshot::Sender<Result<(), NodeError>>,
+    },
+    ResumeSnapshotStream {
+        session: SnapshotSessionId,
+        next_chunk: u64,
+        next_update: u64,
+        response: oneshot::Sender<Result<(), NodeError>>,
+    },
+    CancelSnapshotStream {
+        session: SnapshotSessionId,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     Shutdown,
@@ -357,6 +374,62 @@ impl From<NetworkIdentityProfile> for IdentityProfile {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SnapshotStreamStatus {
+    pub peer: PeerId,
+    pub root: String,
+    pub snapshot_height: Option<u64>,
+    pub chunk_total: Option<u64>,
+    pub update_total: Option<u64>,
+    pub received_chunks: HashSet<u64>,
+    pub received_updates: HashSet<u64>,
+    pub next_chunk: u64,
+    pub next_update: u64,
+    pub last_chunk_index: Option<u64>,
+    pub last_update_index: Option<u64>,
+    pub last_update_height: Option<u64>,
+    pub completed: bool,
+    pub verified: Option<bool>,
+    pub error: Option<String>,
+}
+
+impl SnapshotStreamStatus {
+    fn new(peer: PeerId, root: String) -> Self {
+        Self {
+            peer,
+            root,
+            snapshot_height: None,
+            chunk_total: None,
+            update_total: None,
+            received_chunks: HashSet::new(),
+            received_updates: HashSet::new(),
+            next_chunk: 0,
+            next_update: 0,
+            last_chunk_index: None,
+            last_update_index: None,
+            last_update_height: None,
+            completed: false,
+            verified: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum SnapshotStreamProgressStage {
+    Plan {
+        plan: NetworkStateSyncPlan,
+    },
+    Chunk {
+        index: u64,
+        chunk: SnapshotChunk,
+    },
+    Update {
+        index: u64,
+        update: NetworkLightClientUpdate,
+    },
+}
+
 /// Events emitted by the node runtime for consumption by higher layers.
 #[derive(Clone, Debug)]
 pub enum NodeEvent {
@@ -425,6 +498,24 @@ pub enum NodeEvent {
         previous_root: String,
         new_root: String,
         pruning_proof: Option<PruningProof>,
+    },
+    SnapshotStreamProgress {
+        session: SnapshotSessionId,
+        peer: PeerId,
+        status: SnapshotStreamStatus,
+        stage: SnapshotStreamProgressStage,
+    },
+    SnapshotStreamCompleted {
+        session: SnapshotSessionId,
+        peer: PeerId,
+        status: SnapshotStreamStatus,
+        verified: bool,
+    },
+    SnapshotStreamFailed {
+        session: SnapshotSessionId,
+        peer: PeerId,
+        status: SnapshotStreamStatus,
+        reason: String,
     },
 }
 
@@ -925,6 +1016,7 @@ pub struct NodeInner {
     gossip_enabled: bool,
     reputation_heuristics: ReputationHeuristics,
     pipelines: GossipPipelines,
+    snapshot_streams: RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>,
     heuristic_counters: HashMap<PeerId, PeerHeuristics>,
 }
 
@@ -975,6 +1067,7 @@ impl NodeInner {
             gossip_enabled: network_config.gossip_enabled(),
             reputation_heuristics: heuristics,
             pipelines,
+            snapshot_streams: RwLock::new(HashMap::new()),
             peer_features: HashMap::new(),
             local_features,
             heuristic_counters: HashMap::new(),
@@ -1035,6 +1128,51 @@ impl NodeInner {
         }
     }
 
+    fn update_snapshot_status<F>(
+        &self,
+        session: SnapshotSessionId,
+        peer: &PeerId,
+        root_hint: Option<String>,
+        update: F,
+    ) -> SnapshotStreamStatus
+    where
+        F: FnOnce(&mut SnapshotStreamStatus),
+    {
+        let mut streams = self.snapshot_streams.write();
+        let default_root = root_hint.clone().unwrap_or_default();
+        let entry = streams
+            .entry(session)
+            .or_insert_with(|| SnapshotStreamStatus::new(peer.clone(), default_root));
+        entry.peer = peer.clone();
+        if let Some(root) = root_hint {
+            if !root.is_empty() {
+                entry.root = root;
+            }
+        }
+        update(entry);
+        entry.clone()
+    }
+
+    fn snapshot_stream_failure(
+        &self,
+        session: SnapshotSessionId,
+        peer: PeerId,
+        reason: impl Into<String>,
+    ) {
+        let reason = reason.into();
+        let status = self.update_snapshot_status(session, &peer, None, |status| {
+            status.error = Some(reason.clone());
+            status.completed = true;
+            status.verified = Some(false);
+        });
+        let _ = self.events.send(NodeEvent::SnapshotStreamFailed {
+            session,
+            peer,
+            status,
+            reason,
+        });
+    }
+
     async fn handle_command(&mut self, command: NodeCommand) -> Result<bool, NodeError> {
         match command {
             NodeCommand::Publish {
@@ -1088,6 +1226,72 @@ impl NodeInner {
                 let result = self
                     .network
                     .reload_access_lists(allowlist, blocklist)
+                    .map_err(NodeError::from);
+                let _ = response.send(result);
+                Ok(false)
+            }
+            NodeCommand::StartSnapshotStream {
+                session,
+                peer,
+                root,
+                response,
+            } => {
+                let result = self
+                    .network
+                    .start_snapshot_stream(session, peer.clone(), root.clone())
+                    .map_err(NodeError::from);
+                if result.is_ok() {
+                    self.update_snapshot_status(session, &peer, Some(root), |status| {
+                        status.completed = false;
+                        status.verified = None;
+                        status.error = None;
+                        status.next_chunk = 0;
+                        status.next_update = 0;
+                        status.last_chunk_index = None;
+                        status.last_update_index = None;
+                        status.last_update_height = None;
+                    });
+                }
+                let _ = response.send(result);
+                Ok(false)
+            }
+            NodeCommand::ResumeSnapshotStream {
+                session,
+                next_chunk,
+                next_update,
+                response,
+            } => {
+                let result = self
+                    .network
+                    .resume_snapshot_stream(session, next_chunk, next_update)
+                    .map_err(NodeError::from);
+                if result.is_ok() {
+                    let peer = {
+                        let streams = self.snapshot_streams.read();
+                        streams.get(&session).map(|status| status.peer.clone())
+                    };
+                    if let Some(peer) = peer {
+                        self.update_snapshot_status(session, &peer, None, |status| {
+                            status.next_chunk = next_chunk;
+                            status.next_update = next_update;
+                            status.completed = false;
+                            status.error = None;
+                        });
+                    } else {
+                        debug!(
+                            target: "node",
+                            session = session.get(),
+                            "resume requested for unknown snapshot session"
+                        );
+                    }
+                }
+                let _ = response.send(result);
+                Ok(false)
+            }
+            NodeCommand::CancelSnapshotStream { session, response } => {
+                let result = self
+                    .network
+                    .cancel_snapshot_stream(session)
                     .map_err(NodeError::from);
                 let _ = response.send(result);
                 Ok(false)
@@ -1483,42 +1687,236 @@ impl NodeInner {
                     let _ = self.events.send(NodeEvent::Gossip { peer, topic, data });
                 }
             }
-            NetworkEvent::SnapshotPlan { peer, session, plan } => {
-                debug!(
-                    target: "node",
-                    %peer,
-                    session = session.get(),
-                    height = plan.snapshot.height,
-                    "snapshot plan received"
-                );
+            NetworkEvent::SnapshotPlan {
+                peer,
+                session,
+                plan,
+            } => {
+                let payload = match serde_json::to_vec(&plan) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %err,
+                            "failed to encode snapshot plan"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("failed to encode snapshot plan: {err}"),
+                        );
+                        return;
+                    }
+                };
+                match self.pipelines.light_client.ingest_plan(&payload) {
+                    Ok(()) | Err(PipelineError::Duplicate) => {
+                        debug!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            height = plan.snapshot.height,
+                            "snapshot plan received"
+                        );
+                        let plan_clone = plan.clone();
+                        let status = self.update_snapshot_status(
+                            session,
+                            &peer,
+                            Some(plan.snapshot.chain_commitment.clone()),
+                            |status| {
+                                status.snapshot_height = Some(plan.snapshot.height);
+                                status.chunk_total = Some(plan.chunks.len() as u64);
+                                status.update_total = Some(plan.light_client_updates.len() as u64);
+                                status.received_chunks.clear();
+                                status.received_updates.clear();
+                                status.next_chunk = 0;
+                                status.next_update = 0;
+                                status.last_chunk_index = None;
+                                status.last_update_index = None;
+                                status.last_update_height = None;
+                                status.completed = false;
+                                status.verified = None;
+                                status.error = None;
+                            },
+                        );
+                        let stage = SnapshotStreamProgressStage::Plan { plan: plan_clone };
+                        let _ = self.events.send(NodeEvent::SnapshotStreamProgress {
+                            session,
+                            peer,
+                            status,
+                            stage,
+                        });
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            ?err,
+                            "failed to ingest snapshot plan"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("failed to ingest snapshot plan: {err}"),
+                        );
+                    }
+                }
             }
             NetworkEvent::SnapshotChunk {
                 peer,
                 session,
                 index,
-                ..,
+                chunk,
             } => {
-                debug!(
-                    target: "node",
-                    %peer,
-                    session = session.get(),
-                    %index,
-                    "snapshot chunk received"
-                );
+                let payload = match serde_json::to_vec(&chunk) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %index,
+                            %err,
+                            "failed to encode snapshot chunk"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("failed to encode snapshot chunk: {err}"),
+                        );
+                        return;
+                    }
+                };
+                match self.pipelines.light_client.ingest_chunk(&payload) {
+                    Ok(()) | Err(PipelineError::Duplicate) => {
+                        debug!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %index,
+                            "snapshot chunk received"
+                        );
+                        let chunk_clone = chunk.clone();
+                        let root = chunk.root.to_hex().to_string();
+                        let status =
+                            self.update_snapshot_status(session, &peer, Some(root), |status| {
+                                if status.chunk_total.is_none() {
+                                    status.chunk_total = Some(chunk.total);
+                                }
+                                status.received_chunks.insert(index);
+                                if status.next_chunk <= index {
+                                    status.next_chunk = index.saturating_add(1);
+                                }
+                                status.last_chunk_index = Some(index);
+                                status.completed = false;
+                                status.error = None;
+                            });
+                        let stage = SnapshotStreamProgressStage::Chunk {
+                            index,
+                            chunk: chunk_clone,
+                        };
+                        let _ = self.events.send(NodeEvent::SnapshotStreamProgress {
+                            session,
+                            peer,
+                            status,
+                            stage,
+                        });
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %index,
+                            ?err,
+                            "failed to ingest snapshot chunk"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("failed to ingest snapshot chunk: {err}"),
+                        );
+                    }
+                }
             }
             NetworkEvent::SnapshotUpdate {
                 peer,
                 session,
                 index,
-                ..,
+                update,
             } => {
-                debug!(
-                    target: "node",
-                    %peer,
-                    session = session.get(),
-                    %index,
-                    "snapshot update received"
-                );
+                let payload = match serde_json::to_vec(&update) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %index,
+                            %err,
+                            "failed to encode snapshot update"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("failed to encode snapshot update: {err}"),
+                        );
+                        return;
+                    }
+                };
+                match self
+                    .pipelines
+                    .light_client
+                    .ingest_light_client_update(&payload)
+                {
+                    Ok(()) | Err(PipelineError::Duplicate) => {
+                        debug!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %index,
+                            "snapshot update received"
+                        );
+                        let update_clone = update.clone();
+                        let status = self.update_snapshot_status(session, &peer, None, |status| {
+                            status.received_updates.insert(index);
+                            if status.next_update <= index {
+                                status.next_update = index.saturating_add(1);
+                            }
+                            status.last_update_index = Some(index);
+                            status.last_update_height = Some(update.height);
+                            status.completed = false;
+                            status.error = None;
+                        });
+                        let stage = SnapshotStreamProgressStage::Update {
+                            index,
+                            update: update_clone,
+                        };
+                        let _ = self.events.send(NodeEvent::SnapshotStreamProgress {
+                            session,
+                            peer,
+                            status,
+                            stage,
+                        });
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            %index,
+                            ?err,
+                            "failed to ingest snapshot update"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("failed to ingest snapshot update: {err}"),
+                        );
+                    }
+                }
             }
             NetworkEvent::SnapshotStreamCompleted { peer, session } => {
                 info!(
@@ -1527,6 +1925,35 @@ impl NodeInner {
                     session = session.get(),
                     "snapshot stream completed"
                 );
+                match self.pipelines.light_client.verify() {
+                    Ok(verified) => {
+                        let status = self.update_snapshot_status(session, &peer, None, |status| {
+                            status.completed = true;
+                            status.verified = Some(verified);
+                            status.error = None;
+                        });
+                        let _ = self.events.send(NodeEvent::SnapshotStreamCompleted {
+                            session,
+                            peer,
+                            status,
+                            verified,
+                        });
+                    }
+                    Err(err) => {
+                        warn!(
+                            target: "node",
+                            %peer,
+                            session = session.get(),
+                            ?err,
+                            "snapshot verification failed"
+                        );
+                        self.snapshot_stream_failure(
+                            session,
+                            peer,
+                            format!("snapshot verification failed: {err}"),
+                        );
+                    }
+                }
             }
             NetworkEvent::SnapshotStreamError {
                 peer,
@@ -1540,6 +1967,7 @@ impl NodeInner {
                     %reason,
                     "snapshot stream error"
                 );
+                self.snapshot_stream_failure(session, peer, reason);
             }
             NetworkEvent::ReputationUpdated {
                 peer,
@@ -1802,6 +2230,62 @@ impl NodeHandle {
             .send(NodeCommand::ReportBackpressure { topic, queue_depth })
             .await
             .map_err(|_| NodeError::CommandChannelClosed)
+    }
+
+    pub async fn start_snapshot_stream(
+        &self,
+        session: SnapshotSessionId,
+        peer: PeerId,
+        root: String,
+    ) -> Result<(), NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::StartSnapshotStream {
+                session,
+                peer,
+                root,
+                response: tx,
+            })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)??;
+        Ok(())
+    }
+
+    pub async fn resume_snapshot_stream(
+        &self,
+        session: SnapshotSessionId,
+        next_chunk: u64,
+        next_update: u64,
+    ) -> Result<(), NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::ResumeSnapshotStream {
+                session,
+                next_chunk,
+                next_update,
+                response: tx,
+            })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)??;
+        Ok(())
+    }
+
+    pub async fn cancel_snapshot_stream(
+        &self,
+        session: SnapshotSessionId,
+    ) -> Result<(), NodeError> {
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .send(NodeCommand::CancelSnapshotStream {
+                session,
+                response: tx,
+            })
+            .await
+            .map_err(|_| NodeError::CommandChannelClosed)?;
+        rx.await.map_err(|_| NodeError::CommandChannelClosed)??;
+        Ok(())
     }
 
     pub async fn heuristics_snapshot(&self) -> Result<Vec<(PeerId, PeerHeuristics)>, NodeError> {
