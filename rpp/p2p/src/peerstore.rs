@@ -13,7 +13,10 @@ use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::handshake::{HandshakePayload, TelemetryMetadata, VRF_HANDSHAKE_CONTEXT};
+use crate::handshake::{
+    emit_handshake_telemetry, HandshakeOutcome, HandshakePayload, TelemetryMetadata,
+    VRF_HANDSHAKE_CONTEXT,
+};
 use crate::tier::TierLevel;
 use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
 
@@ -33,6 +36,12 @@ pub enum PeerstoreError {
     InvalidVrf { peer: PeerId, reason: String },
     #[error("peer {peer} is blocklisted")]
     Blocklisted { peer: PeerId },
+    #[error("peer {peer} tier {actual:?} below allowlist requirement {required:?}")]
+    TierBelowAllowlist {
+        peer: PeerId,
+        required: TierLevel,
+        actual: TierLevel,
+    },
 }
 
 pub trait IdentityVerifier: Send + Sync {
@@ -504,13 +513,60 @@ impl Peerstore {
         &self,
         peer_id: PeerId,
         payload: &HandshakePayload,
-    ) -> Result<(), PeerstoreError> {
+    ) -> Result<HandshakeOutcome, PeerstoreError> {
         if self.is_blocklisted(&peer_id) {
+            let outcome = HandshakeOutcome::Blocklisted;
+            emit_handshake_telemetry(&peer_id, payload, &outcome);
             return Err(PeerstoreError::Blocklisted { peer: peer_id });
         }
-        let public_key = self.resolve_public_key(peer_id)?;
-        self.verify_signature(peer_id, payload, &public_key)?;
-        self.verify_vrf(peer_id, payload)?;
+
+        let allowlisted_tier = self.allowlist_tier(&peer_id);
+        if let Some(required) = allowlisted_tier {
+            if payload.tier < required {
+                let outcome = HandshakeOutcome::AllowlistTierMismatch {
+                    required,
+                    actual: payload.tier,
+                };
+                emit_handshake_telemetry(&peer_id, payload, &outcome);
+                return Err(PeerstoreError::TierBelowAllowlist {
+                    peer: peer_id,
+                    required,
+                    actual: payload.tier,
+                });
+            }
+        }
+
+        let public_key = match self.resolve_public_key(peer_id.clone()) {
+            Ok(key) => key,
+            Err(err) => {
+                if matches!(err, PeerstoreError::MissingPublicKey { .. }) {
+                    let outcome = HandshakeOutcome::MissingPublicKey;
+                    emit_handshake_telemetry(&peer_id, payload, &outcome);
+                }
+                return Err(err);
+            }
+        };
+
+        if let Err(err) = self.verify_signature(peer_id.clone(), payload, &public_key) {
+            if let Some(outcome) = match &err {
+                PeerstoreError::MissingSignature => Some(HandshakeOutcome::MissingSignature),
+                PeerstoreError::InvalidSignature { .. } => Some(HandshakeOutcome::InvalidSignature),
+                _ => None,
+            } {
+                emit_handshake_telemetry(&peer_id, payload, &outcome);
+            }
+            return Err(err);
+        }
+
+        if let Err(err) = self.verify_vrf(peer_id.clone(), payload) {
+            if let PeerstoreError::InvalidVrf { reason, .. } = &err {
+                let outcome = HandshakeOutcome::InvalidVrf {
+                    reason: reason.clone(),
+                };
+                emit_handshake_telemetry(&peer_id, payload, &outcome);
+            }
+            return Err(err);
+        }
 
         {
             let mut guard = self.peers.write();
@@ -523,7 +579,13 @@ impl Peerstore {
             entry.apply_handshake(payload);
             entry.clear_ban_if_elapsed();
         }
-        self.persist()
+        self.persist()?;
+        let outcome = HandshakeOutcome::Accepted {
+            tier: payload.tier,
+            allowlisted: allowlisted_tier.is_some(),
+        };
+        emit_handshake_telemetry(&peer_id, payload, &outcome);
+        Ok(outcome)
     }
 
     pub fn record_address(&self, peer_id: PeerId, addr: Multiaddr) -> Result<(), PeerstoreError> {
@@ -702,6 +764,14 @@ impl Peerstore {
 
     pub fn is_blocklisted(&self, peer_id: &PeerId) -> bool {
         self.blocklisted.read().contains(peer_id)
+    }
+
+    fn allowlist_tier(&self, peer_id: &PeerId) -> Option<TierLevel> {
+        self.allowlist
+            .read()
+            .iter()
+            .find(|entry| entry.peer == *peer_id)
+            .map(|entry| entry.tier)
     }
 
     fn resolve_public_key(&self, peer_id: PeerId) -> Result<identity::PublicKey, PeerstoreError> {
@@ -1027,9 +1097,16 @@ mod tests {
         let payload = signed_handshake(&keypair, "zsi", TierLevel::Tl3, Some(&secret));
 
         store.record_address(peer_id, addr.clone()).expect("addr");
-        store
+        let outcome = store
             .record_handshake(peer_id, &payload)
             .expect("handshake");
+        assert!(matches!(
+            outcome,
+            HandshakeOutcome::Accepted {
+                tier: TierLevel::Tl3,
+                ..
+            }
+        ));
 
         let loaded =
             Peerstore::open(PeerstoreConfig::persistent(&path).with_identity_verifier(verifier))
@@ -1065,9 +1142,16 @@ mod tests {
         let peer_id = PeerId::from(keypair.public());
         let payload = signed_handshake(&keypair, "peer", TierLevel::Tl1, Some(&secret));
 
-        store
+        let outcome = store
             .record_handshake(peer_id, &payload)
             .expect("handshake");
+        assert!(matches!(
+            outcome,
+            HandshakeOutcome::Accepted {
+                tier: TierLevel::Tl1,
+                ..
+            }
+        ));
 
         let snapshot = store
             .update_reputation(peer_id, 2.4)
@@ -1208,9 +1292,16 @@ mod tests {
         let peer_id = PeerId::from(keypair.public());
         let payload = signed_handshake(&keypair, "peer", TierLevel::Tl0, None);
 
-        store
+        let outcome = store
             .record_handshake(peer_id, &payload)
             .expect("handshake should be accepted");
+        assert!(matches!(
+            outcome,
+            HandshakeOutcome::Accepted {
+                tier: TierLevel::Tl0,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -1222,9 +1313,16 @@ mod tests {
         let peer_id = PeerId::from(keypair.public());
         let payload = signed_handshake(&keypair, "peer", TierLevel::Tl3, Some(&secret));
 
-        store
+        let outcome = store
             .record_handshake(peer_id, &payload)
             .expect("handshake should be accepted");
+        assert!(matches!(
+            outcome,
+            HandshakeOutcome::Accepted {
+                tier: TierLevel::Tl3,
+                ..
+            }
+        ));
     }
 
     #[test]

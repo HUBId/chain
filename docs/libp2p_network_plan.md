@@ -94,7 +94,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
 - **Observability:** Logs (structured), Tracing spans, Metrics.
 
 ## Abhängigkeiten & Milestones
-1. *Milestone A (Phasen 0–1):* Funktionsfähiger Gossip-Backbone mit Admission-Control. **Status:** ✅ Tier-basierte Zugriffslogik aktiv, abgesichert durch Integrationstests (`rpp/p2p/tests/access_control.rs`).
+1. *Milestone A (Phasen 0–1):* Funktionsfähiger Gossip-Backbone mit Admission-Control. **Status:** ✅ Tier-basierte Zugriffslogik aktiv, abgesichert durch Integrationstests (`rpp/p2p/tests/access_control.rs`). Handshake- und Gossip-Entscheidungen werden zusätzlich telemetriert und über Prometheus-Zähler nach Tier und Ablehnungsgrund ausgewiesen, sodass Allow-/Blocklist-Verletzungen sofort sichtbar sind.【F:rpp/p2p/src/peerstore.rs†L503-L585】【F:rpp/p2p/src/gossip/mod.rs†L1-L39】【F:rpp/p2p/src/metrics.rs†L1-L147】
 2. *Milestone B (Phase 2):* Block- und Snapshot-Datenpfade live, Light-Client-Sync möglich. **Status:** ✅ Gossip-Quorum in `rpp/p2p/tests/multi_node_quorum.rs` und Snapshot-Streaming über `/rpp/snapshots/1.0.0` inkl. Light-Client-Verifikation stehen.【F:rpp/p2p/src/behaviour/snapshots.rs†L58-L957】【F:tests/network/snapshots.rs†L1-L120】
    - Gossip-Quorum nachgewiesen, Persistenz inkl. Neustart-Checks vorhanden.
    - Snapshot-Pipeline + Light-Client-Sync laufen über `SnapshotStreamStatus` und `LightClientSync`, RPCs dokumentiert in `docs/network/snapshots.md`.【F:rpp/runtime/node_runtime/node.rs†L375-L1288】【F:rpp/p2p/src/pipeline.rs†L1311-L1497】【F:docs/network/snapshots.md†L1-L120】

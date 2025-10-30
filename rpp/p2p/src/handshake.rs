@@ -12,6 +12,8 @@ use crate::vendor::identity;
 pub use crate::vendor::protocols::request_response::MAX_HANDSHAKE_BYTES;
 #[cfg(feature = "request-response")]
 use crate::vendor::protocols::request_response::{self, read_handshake_payload, write_payload};
+use crate::vendor::PeerId;
+use tracing::{info, warn};
 
 pub const HANDSHAKE_PROTOCOL: &str = "/rpp/handshake/1.0.0";
 pub const VRF_HANDSHAKE_CONTEXT: &[u8] = b"rpp.handshake.vrf";
@@ -29,6 +31,130 @@ pub struct HandshakePayload {
     pub telemetry: Option<TelemetryMetadata>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub features: BTreeMap<String, bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandshakeOutcome {
+    Accepted {
+        tier: TierLevel,
+        allowlisted: bool,
+    },
+    Blocklisted,
+    MissingPublicKey,
+    MissingSignature,
+    InvalidSignature,
+    InvalidVrf {
+        reason: String,
+    },
+    AllowlistTierMismatch {
+        required: TierLevel,
+        actual: TierLevel,
+    },
+}
+
+impl HandshakeOutcome {
+    pub fn label(&self) -> &'static str {
+        match self {
+            HandshakeOutcome::Accepted { .. } => "accepted",
+            HandshakeOutcome::Blocklisted => "blocklisted",
+            HandshakeOutcome::MissingPublicKey => "missing_public_key",
+            HandshakeOutcome::MissingSignature => "missing_signature",
+            HandshakeOutcome::InvalidSignature => "invalid_signature",
+            HandshakeOutcome::InvalidVrf { .. } => "invalid_vrf",
+            HandshakeOutcome::AllowlistTierMismatch { .. } => "allowlist_tier_mismatch",
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            HandshakeOutcome::InvalidVrf { reason } => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+}
+
+pub fn emit_handshake_telemetry(
+    peer: &PeerId,
+    payload: &HandshakePayload,
+    outcome: &HandshakeOutcome,
+) {
+    let agent = payload
+        .telemetry
+        .as_ref()
+        .and_then(|meta| meta.tags.get("agent"))
+        .map(|value| value.as_str())
+        .unwrap_or("unknown");
+    let zsi_id = payload.zsi_id.as_str();
+    match outcome {
+        HandshakeOutcome::Accepted { tier, allowlisted } => {
+            info!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                tier = ?tier,
+                allowlisted = *allowlisted,
+                agent,
+                zsi_id,
+                "handshake_accepted"
+            );
+        }
+        HandshakeOutcome::InvalidVrf { reason } => {
+            warn!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                agent,
+                zsi_id,
+                reason = %reason,
+                "handshake_rejected_vrf"
+            );
+        }
+        HandshakeOutcome::AllowlistTierMismatch { required, actual } => {
+            warn!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                agent,
+                zsi_id,
+                required = ?required,
+                actual = ?actual,
+                "handshake_rejected_allowlist"
+            );
+        }
+        HandshakeOutcome::MissingPublicKey => {
+            warn!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                agent,
+                zsi_id,
+                "handshake_rejected_missing_public_key"
+            );
+        }
+        HandshakeOutcome::MissingSignature => {
+            warn!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                agent,
+                zsi_id,
+                "handshake_rejected_missing_signature"
+            );
+        }
+        HandshakeOutcome::InvalidSignature => {
+            warn!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                agent,
+                zsi_id,
+                "handshake_rejected_signature"
+            );
+        }
+        HandshakeOutcome::Blocklisted => {
+            warn!(
+                target: "telemetry.handshake",
+                peer = %peer,
+                agent,
+                zsi_id,
+                "handshake_rejected_blocklisted"
+            );
+        }
+    }
 }
 
 impl HandshakePayload {
