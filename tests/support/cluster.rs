@@ -42,7 +42,6 @@ use rpp_chain::runtime::sync::{
 use rpp_chain::runtime::types::proofs::TransactionProofBundle;
 use rpp_chain::runtime::types::transaction::{SignedTransaction, Transaction};
 use rpp_chain::runtime::RuntimeMetrics;
-use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::types::Address;
 use rpp_chain::wallet::Wallet;
 #[cfg(feature = "vendor_electrs")]
@@ -355,7 +354,8 @@ impl TestClusterNode {
                 self.index
             )
         })?;
-        // Übernehme den vom Node initialisierten Snapshot-Provider aus der Laufzeitkonfiguration.
+        // Übernehme den vom Node initialisierten Snapshot-Provider (inkl. SnapshotStore) aus der
+        // Laufzeitkonfiguration.
         runtime_config.metrics = RuntimeMetrics::noop();
         runtime_config.identity = Some(RuntimeIdentityProfile::from(identity));
         let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config).with_context(|| {
@@ -564,7 +564,8 @@ impl TestCluster {
             let mut runtime_config = node.runtime_config().with_context(|| {
                 format!("failed to derive runtime configuration for node {index}")
             })?;
-            // Übernehme den vom Node initialisierten Snapshot-Provider aus der Laufzeitkonfiguration.
+            // Übernehme den vom Node initialisierten Snapshot-Provider (inkl. SnapshotStore) aus der
+            // Laufzeitkonfiguration.
             runtime_config.metrics = RuntimeMetrics::noop();
             runtime_config.identity = Some(network_identity.into());
             let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config)
