@@ -346,9 +346,16 @@ impl TestClusterNode {
         .await
         .context("node runtime restart task panicked")?
         .with_context(|| format!("failed to construct node runtime for node {}", self.index))?;
+        let node = Arc::new(node);
         let node_handle = node.handle();
 
-        let mut runtime_config = NodeRuntimeConfig::from(&config);
+        let mut runtime_config = node.runtime_config().with_context(|| {
+            format!(
+                "failed to derive runtime configuration for node {}",
+                self.index
+            )
+        })?;
+        // Übernehme den vom Node initialisierten Snapshot-Provider aus der Laufzeitkonfiguration.
         runtime_config.metrics = RuntimeMetrics::noop();
         runtime_config.identity = Some(RuntimeIdentityProfile::from(identity));
         let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config).with_context(|| {
@@ -442,6 +449,12 @@ impl TestClusterNode {
             }
         };
 
+        let node = Arc::try_unwrap(node).map_err(|_| {
+            anyhow!(
+                "failed to reclaim node runtime for restart of node {}",
+                self.index
+            )
+        })?;
         let index = self.index;
         let node_task = tokio::spawn(async move {
             node.start()
@@ -543,11 +556,15 @@ impl TestCluster {
             .await
             .context("node runtime initialisation task panicked")?
             .with_context(|| format!("failed to construct node runtime for node {index}"))?;
+            let node = Arc::new(node);
             let node_handle = node.handle();
             let network_identity = node
                 .network_identity_profile()
                 .with_context(|| format!("failed to derive network identity for node {index}"))?;
-            let mut runtime_config = NodeRuntimeConfig::from(&config);
+            let mut runtime_config = node.runtime_config().with_context(|| {
+                format!("failed to derive runtime configuration for node {index}")
+            })?;
+            // Übernehme den vom Node initialisierten Snapshot-Provider aus der Laufzeitkonfiguration.
             runtime_config.metrics = RuntimeMetrics::noop();
             runtime_config.identity = Some(network_identity.into());
             let (p2p_runtime, p2p_handle) = P2pNode::new(runtime_config)
@@ -633,6 +650,12 @@ impl TestCluster {
                 }
             };
 
+            let node = Arc::try_unwrap(node).map_err(|_| {
+                anyhow!(
+                    "failed to reclaim node runtime when starting node {}",
+                    index
+                )
+            })?;
             let node_task = tokio::spawn(async move {
                 node.start()
                     .await
