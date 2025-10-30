@@ -135,5 +135,9 @@ path = "rpp/rpc/tests/pruning.rs"
 name = "pruning_validation"
 path = "../../tests/state_sync/pruning_validation.rs"
 
+[[test]]
+name = "p2p"
+path = "rpp/rpc/tests/p2p.rs"
+
 [lints]
 workspace = true
