@@ -23,4 +23,10 @@ build\:nightly:
 
 ## Run prover tests using the nightly toolchain.
 test\:nightly:
-	cargo $(NIGHTLY_TOOLCHAIN) test --manifest-path $(PROVER_MANIFEST) --workspace
+        cargo $(NIGHTLY_TOOLCHAIN) test --manifest-path $(PROVER_MANIFEST) --workspace
+
+.PHONY: pruning-validation
+
+## Run pruning receipt conformance checks to guard snapshot publication.
+pruning-validation:
+        cargo xtask pruning-validation

@@ -4,6 +4,9 @@
 [patch.crates-io]
 # Dummy-Tabelle, damit nachfolgende `[[patch.crates-io]]`-Einträge gültig sind.
 
+[alias]
+xtask = "run --package xtask --"
+
 [[patch.crates-io]]
 name = "anyhow"
 version = "1.0.100"
