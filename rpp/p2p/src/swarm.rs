@@ -61,7 +61,7 @@ use crate::vendor::ping::PingEventCallback;
     feature = "ping",
     feature = "request-response"
 ))]
-use crate::vendor::protocols::request_response::{self, ProtocolSupport};
+use crate::vendor::protocols::request_response::{self, OutboundRequestId, ProtocolSupport};
 #[cfg(all(
     feature = "gossipsub",
     feature = "identify",
@@ -643,24 +643,63 @@ struct PingReporter {
     events: Arc<ExternalEventHandle<RppBehaviourEvent>>,
 }
 
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response",
+))]
 #[derive(Debug, Clone)]
 struct SnapshotSessionState {
     peer: PeerId,
-    total_chunks: u64,
-    total_updates: u64,
+    root: String,
+    total_chunks: Option<u64>,
+    total_updates: Option<u64>,
     next_chunk: u64,
     next_update: u64,
+    pending_request: Option<OutboundRequestId>,
 }
 
+#[cfg(all(
+    feature = "gossipsub",
+    feature = "identify",
+    feature = "ping",
+    feature = "request-response",
+))]
 impl SnapshotSessionState {
-    fn new(peer: PeerId, total_chunks: u64, total_updates: u64) -> Self {
+    fn new(peer: PeerId, root: String) -> Self {
         Self {
             peer,
-            total_chunks,
-            total_updates,
+            root,
+            total_chunks: None,
+            total_updates: None,
             next_chunk: 0,
             next_update: 0,
+            pending_request: None,
         }
+    }
+
+    fn set_totals(&mut self, total_chunks: u64, total_updates: u64) {
+        self.total_chunks = Some(total_chunks);
+        self.total_updates = Some(total_updates);
+        self.next_chunk = self.next_chunk.min(total_chunks);
+        self.next_update = self.next_update.min(total_updates);
+    }
+
+    fn mark_chunk_received(&mut self, index: u64) {
+        self.pending_request = None;
+        self.next_chunk = self.next_chunk.max(index.saturating_add(1));
+    }
+
+    fn mark_update_received(&mut self, index: u64) {
+        self.pending_request = None;
+        self.next_update = self.next_update.max(index.saturating_add(1));
+    }
+
+    fn mark_resume(&mut self, chunk_index: u64, update_index: u64) {
+        self.pending_request = None;
+        self.next_chunk = chunk_index;
+        self.next_update = update_index;
     }
 }
 
@@ -1174,6 +1213,109 @@ impl Network {
         Ok(message_id)
     }
 
+    pub fn start_snapshot_stream(
+        &mut self,
+        session: SnapshotSessionId,
+        peer: PeerId,
+        root: String,
+    ) -> Result<(), NetworkError> {
+        if self.snapshot_sessions.contains_key(&session) {
+            tracing::warn!(%session, peer = %peer, "snapshot_session_already_started");
+            return Ok(());
+        }
+
+        if let Some(request_id) = self
+            .swarm
+            .behaviour_mut()
+            .snapshots
+            .request_plan(peer.clone(), session)
+        {
+            let mut state = SnapshotSessionState::new(peer, root);
+            state.pending_request = Some(request_id);
+            self.snapshot_sessions.insert(session, state);
+        } else {
+            tracing::warn!(%session, peer = %peer, "snapshot_plan_request_in_flight");
+        }
+
+        Ok(())
+    }
+
+    pub fn resume_snapshot_stream(
+        &mut self,
+        session: SnapshotSessionId,
+        next_chunk: u64,
+        next_update: u64,
+    ) -> Result<(), NetworkError> {
+        let peer = match self.snapshot_sessions.get(&session) {
+            Some(state) => {
+                if state.pending_request.is_some() {
+                    tracing::warn!(
+                        %session,
+                        peer = %state.peer,
+                        "snapshot_request_already_in_flight"
+                    );
+                    return Ok(());
+                }
+                state.peer.clone()
+            }
+            None => {
+                tracing::warn!(%session, "snapshot_session_unknown_for_resume");
+                return Ok(());
+            }
+        };
+
+        if let Some(state) = self.snapshot_sessions.get_mut(&session) {
+            state.next_chunk = next_chunk;
+            state.next_update = next_update;
+        }
+
+        if let Some(request_id) = self
+            .swarm
+            .behaviour_mut()
+            .snapshots
+            .request_resume(peer.clone(), session)
+        {
+            if let Some(state) = self.snapshot_sessions.get_mut(&session) {
+                state.pending_request = Some(request_id);
+            }
+        } else {
+            tracing::warn!(%session, peer = %peer, "snapshot_resume_request_in_flight");
+        }
+
+        Ok(())
+    }
+
+    pub fn cancel_snapshot_stream(
+        &mut self,
+        session: SnapshotSessionId,
+    ) -> Result<(), NetworkError> {
+        if let Some(state) = self.snapshot_sessions.remove(&session) {
+            if state.pending_request.is_some() {
+                tracing::debug!(%session, peer = %state.peer, "cancelling_snapshot_with_pending_request");
+            }
+            let peer = state.peer;
+            let reason = "cancelled".to_string();
+            if self
+                .swarm
+                .behaviour_mut()
+                .snapshots
+                .cancel_session(peer.clone(), session, reason.clone())
+                .is_none()
+            {
+                tracing::debug!(%session, peer = %peer, "snapshot_cancel_request_in_flight");
+            }
+            self.push_network_event(NetworkEvent::SnapshotStreamError {
+                peer,
+                session,
+                reason,
+            })?;
+        } else {
+            tracing::debug!(%session, "snapshot_cancel_ignored_unknown_session");
+        }
+
+        Ok(())
+    }
+
     pub fn metrics_snapshot(&self) -> NetworkMetricsSnapshot {
         #[cfg(feature = "metrics")]
         {
@@ -1609,11 +1751,40 @@ impl Network {
             } => {
                 let total_chunks = plan.chunks.len() as u64;
                 let total_updates = plan.light_client_updates.len() as u64;
-                self.snapshot_sessions.insert(
-                    session_id,
-                    SnapshotSessionState::new(peer.clone(), total_chunks, total_updates),
-                );
-                self.queue_snapshot_request(session_id)?;
+                let root = plan.snapshot.commitments.global_state_root.clone();
+
+                let mut mismatch: Option<(PeerId, String)> = None;
+                match self.snapshot_sessions.get_mut(&session_id) {
+                    Some(state) => {
+                        state.pending_request = None;
+                        if state.root.is_empty() {
+                            state.root = root.clone();
+                        } else if state.root != root {
+                            mismatch = Some((state.peer.clone(), state.root.clone()));
+                        }
+                        if mismatch.is_none() {
+                            state.set_totals(total_chunks, total_updates);
+                        }
+                    }
+                    None => {
+                        let mut state = SnapshotSessionState::new(peer.clone(), root.clone());
+                        state.set_totals(total_chunks, total_updates);
+                        self.snapshot_sessions.insert(session_id, state);
+                    }
+                }
+
+                if let Some((peer_id, expected_root)) = mismatch {
+                    self.snapshot_sessions.remove(&session_id);
+                    return Ok(Some(NetworkEvent::SnapshotStreamError {
+                        peer: peer_id,
+                        session: session_id,
+                        reason: format!(
+                            "snapshot root mismatch (expected {expected_root}, received {root})"
+                        ),
+                    }));
+                }
+
+                self.schedule_next_snapshot_request(session_id)?;
                 Ok(Some(NetworkEvent::SnapshotPlan {
                     peer,
                     session: session_id,
@@ -1627,9 +1798,9 @@ impl Network {
                 chunk,
             } => {
                 if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
-                    state.next_chunk = state.next_chunk.max(chunk_index.saturating_add(1));
+                    state.mark_chunk_received(chunk_index);
                 }
-                self.queue_snapshot_request(session_id)?;
+                self.schedule_next_snapshot_request(session_id)?;
                 Ok(Some(NetworkEvent::SnapshotChunk {
                     peer,
                     session: session_id,
@@ -1644,9 +1815,9 @@ impl Network {
                 update,
             } => {
                 if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
-                    state.next_update = state.next_update.max(update_index.saturating_add(1));
+                    state.mark_update_received(update_index);
                 }
-                self.queue_snapshot_request(session_id)?;
+                self.schedule_next_snapshot_request(session_id)?;
                 Ok(Some(NetworkEvent::SnapshotUpdate {
                     peer,
                     session: session_id,
@@ -1661,25 +1832,24 @@ impl Network {
                 update_index,
             } => {
                 if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
-                    state.next_chunk = chunk_index.min(state.total_chunks);
-                    state.next_update = update_index.min(state.total_updates);
+                    state.mark_resume(chunk_index, update_index);
                 } else {
-                    let mut state = SnapshotSessionState::new(peer.clone(), 0, 0);
-                    state.next_chunk = chunk_index;
-                    state.next_update = update_index;
+                    let mut state = SnapshotSessionState::new(peer.clone(), String::new());
+                    state.mark_resume(chunk_index, update_index);
                     self.snapshot_sessions.insert(session_id, state);
                 }
-                self.queue_snapshot_request(session_id)?;
+                self.schedule_next_snapshot_request(session_id)?;
                 Ok(None)
             }
             SnapshotsEvent::Ack {
                 peer, session_id, ..
             } => {
-                self.snapshot_sessions.remove(&session_id);
-                self.push_network_event(NetworkEvent::SnapshotStreamCompleted {
-                    peer,
-                    session: session_id,
-                })?;
+                if self.snapshot_sessions.remove(&session_id).is_some() {
+                    self.push_network_event(NetworkEvent::SnapshotStreamCompleted {
+                        peer,
+                        session: session_id,
+                    })?;
+                }
                 Ok(None)
             }
             SnapshotsEvent::InboundRequest { .. } => Ok(None),
@@ -1698,7 +1868,7 @@ impl Network {
         }
     }
 
-    fn queue_snapshot_request(
+    fn schedule_next_snapshot_request(
         &mut self,
         session_id: SnapshotSessionId,
     ) -> Result<(), NetworkError> {
@@ -1710,12 +1880,20 @@ impl Network {
         }
 
         let action = if let Some(state) = self.snapshot_sessions.get(&session_id) {
-            if state.next_chunk < state.total_chunks {
-                SnapshotAction::RequestChunk(state.peer.clone(), state.next_chunk)
-            } else if state.next_update < state.total_updates {
-                SnapshotAction::RequestUpdate(state.peer.clone(), state.next_update)
+            if state.pending_request.is_some() {
+                SnapshotAction::None
+            } else if let (Some(total_chunks), Some(total_updates)) =
+                (state.total_chunks, state.total_updates)
+            {
+                if state.next_chunk < total_chunks {
+                    SnapshotAction::RequestChunk(state.peer.clone(), state.next_chunk)
+                } else if state.next_update < total_updates {
+                    SnapshotAction::RequestUpdate(state.peer.clone(), state.next_update)
+                } else {
+                    SnapshotAction::Completed(state.peer.clone())
+                }
             } else {
-                SnapshotAction::Completed(state.peer.clone())
+                SnapshotAction::None
             }
         } else {
             SnapshotAction::None
@@ -1723,28 +1901,26 @@ impl Network {
 
         match action {
             SnapshotAction::RequestChunk(peer, index) => {
-                if self
-                    .swarm
-                    .behaviour_mut()
-                    .snapshots
-                    .request_chunk(peer, session_id, index)
-                    .is_some()
-                {
+                if let Some(request_id) = self.swarm.behaviour_mut().snapshots.request_chunk(
+                    peer.clone(),
+                    session_id,
+                    index,
+                ) {
                     if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
-                        state.next_chunk = index.saturating_add(1);
+                        state.pending_request = Some(request_id);
+                        state.next_chunk = state.next_chunk.max(index.saturating_add(1));
                     }
                 }
             }
             SnapshotAction::RequestUpdate(peer, index) => {
-                if self
-                    .swarm
-                    .behaviour_mut()
-                    .snapshots
-                    .request_update(peer, session_id, index)
-                    .is_some()
-                {
+                if let Some(request_id) = self.swarm.behaviour_mut().snapshots.request_update(
+                    peer.clone(),
+                    session_id,
+                    index,
+                ) {
                     if let Some(state) = self.snapshot_sessions.get_mut(&session_id) {
-                        state.next_update = index.saturating_add(1);
+                        state.pending_request = Some(request_id);
+                        state.next_update = state.next_update.max(index.saturating_add(1));
                     }
                 }
             }
