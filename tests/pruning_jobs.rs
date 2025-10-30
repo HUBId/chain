@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
-use rpp_chain::config::NodeConfig;
+use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::errors::{ChainError, ChainResult};
 use rpp_chain::node::{Node, PruningJobStatus};
 use rpp_chain::runtime::sync::{PayloadProvider, ReconstructionEngine, ReconstructionRequest};
@@ -40,7 +40,10 @@ fn pruning_plan_without_pending_blocks() {
     let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
     let handle = node.handle();
 
-    let status = handle.run_pruning_cycle(4).expect("cycle").expect("status");
+    let status = handle
+        .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("cycle")
+        .expect("status");
 
     assert!(
         status.missing_heights.is_empty(),
@@ -89,7 +92,10 @@ fn rebuild_succeeds_after_prune() {
         .prune_block_payload(genesis.header.height)
         .expect("prune payload");
 
-    let status = handle.run_pruning_cycle(4).expect("cycle").expect("status");
+    let status = handle
+        .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("cycle")
+        .expect("status");
     assert!(status.missing_heights.contains(&genesis.header.height));
     let persisted = storage
         .load_pruning_proof(genesis.header.height)
@@ -115,7 +121,10 @@ async fn gossip_emits_pruning_status() {
     let handle = node.handle();
     let mut receiver = node.subscribe_witness_gossip(GossipTopic::Snapshots);
 
-    handle.run_pruning_cycle(4).expect("cycle").expect("status");
+    handle
+        .run_pruning_cycle(4, DEFAULT_PRUNING_RETENTION_DEPTH)
+        .expect("cycle")
+        .expect("status");
 
     let bytes = timeout(Duration::from_secs(1), receiver.recv())
         .await

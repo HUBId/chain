@@ -2237,8 +2237,12 @@ impl NodeHandle {
         self.inner.reload_access_lists(allowlist, blocklist).await
     }
 
-    pub fn run_pruning_cycle(&self, chunk_size: usize) -> ChainResult<Option<PruningJobStatus>> {
-        self.inner.run_pruning_cycle(chunk_size)
+    pub fn run_pruning_cycle(
+        &self,
+        chunk_size: usize,
+        retention_depth: u64,
+    ) -> ChainResult<Option<PruningJobStatus>> {
+        self.inner.run_pruning_cycle(chunk_size, retention_depth)
     }
 
     pub fn pruning_job_status(&self) -> Option<PruningJobStatus> {
@@ -3080,7 +3084,11 @@ impl NodeInner {
         Ok(plan)
     }
 
-    fn run_pruning_cycle(&self, chunk_size: usize) -> ChainResult<Option<PruningJobStatus>> {
+    fn run_pruning_cycle(
+        &self,
+        chunk_size: usize,
+        retention_depth: u64,
+    ) -> ChainResult<Option<PruningJobStatus>> {
         if !self.config.rollout.feature_gates.reconstruction {
             return Ok(None);
         }
@@ -3088,8 +3096,39 @@ impl NodeInner {
             self.storage.clone(),
             self.config.snapshot_dir.clone(),
         );
-        let state_sync_plan = engine.state_sync_plan(chunk_size)?;
-        let reconstruction_plan = engine.full_plan()?;
+        let mut state_sync_plan = engine.state_sync_plan(chunk_size)?;
+        let mut reconstruction_plan = engine.full_plan()?;
+        let retention_floor = if retention_depth == 0 {
+            0
+        } else {
+            state_sync_plan
+                .tip
+                .height
+                .saturating_sub(retention_depth.saturating_sub(1))
+        };
+        for chunk in state_sync_plan.chunks.iter_mut() {
+            chunk
+                .requests
+                .retain(|request| request.height >= retention_floor);
+            if let Some(first) = chunk.requests.first() {
+                chunk.start_height = first.height;
+            }
+            if let Some(last) = chunk.requests.last() {
+                chunk.end_height = last.height;
+            }
+        }
+        state_sync_plan
+            .chunks
+            .retain(|chunk| !chunk.requests.is_empty());
+        state_sync_plan
+            .light_client_updates
+            .retain(|update| update.height >= retention_floor);
+        reconstruction_plan
+            .requests
+            .retain(|request| request.height >= retention_floor);
+        if let Some(first) = reconstruction_plan.requests.first() {
+            reconstruction_plan.start_height = first.height;
+        }
         let persisted_path = engine.persist_plan(&reconstruction_plan)?;
         let mut missing_heights = Vec::new();
         for chunk in &state_sync_plan.chunks {

@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use rpp_chain::config::NodeConfig;
+use rpp_chain::config::{NodeConfig, DEFAULT_PRUNING_RETENTION_DEPTH};
 use rpp_chain::node::Node;
 use rpp_chain::runtime::sync::ReconstructionEngine;
 use rpp_chain::runtime::types::Block;
@@ -64,7 +64,7 @@ fn pruning_recovery_is_atomic_across_restart() {
     install_pruned_chain(&storage, &blocks).expect("install pruned chain");
 
     let status = handle
-        .run_pruning_cycle(2)
+        .run_pruning_cycle(2, DEFAULT_PRUNING_RETENTION_DEPTH)
         .expect("pruning cycle")
         .expect("pruning status");
     assert!(

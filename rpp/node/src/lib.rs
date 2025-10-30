@@ -1,3 +1,4 @@
+mod config;
 mod services;
 
 use std::env;
@@ -46,6 +47,7 @@ use rpp_chain::runtime::{
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
+use crate::config::{PruningCliOverrides, PruningOverrides};
 use crate::services::pruning::PruningService;
 
 pub use rpp_chain::runtime::RuntimeMode;
@@ -195,6 +197,9 @@ pub struct RuntimeOptions {
     /// Persist the resulting configuration into the current working directory
     #[arg(long)]
     pub write_config: bool,
+
+    #[command(flatten)]
+    pub pruning: PruningCliOverrides,
 }
 
 impl RuntimeOptions {
@@ -212,6 +217,7 @@ impl RuntimeOptions {
             log_json,
             dry_run,
             write_config,
+            pruning,
         } = self;
 
         let node_config = if mode.includes_node() {
@@ -242,6 +248,7 @@ impl RuntimeOptions {
             log_json,
             dry_run,
             write_config,
+            pruning: pruning.into_overrides(),
         }
     }
 }
@@ -260,6 +267,7 @@ pub struct BootstrapOptions {
     pub log_json: bool,
     pub dry_run: bool,
     pub write_config: bool,
+    pub pruning: PruningOverrides,
 }
 
 pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
@@ -1391,6 +1399,23 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
             config.rollout.telemetry.enabled = true;
         }
     }
+    if let Some(cadence) = options.pruning.cadence_secs {
+        if cadence == 0 {
+            warn!("ignoring pruning cadence override of zero seconds");
+        } else {
+            config.pruning.cadence_secs = cadence;
+        }
+    }
+    if let Some(retention) = options.pruning.retention_depth {
+        if retention == 0 {
+            warn!("ignoring pruning retention override of zero");
+        } else {
+            config.pruning.retention_depth = retention;
+        }
+    }
+    if let Some(paused) = options.pruning.emergency_pause {
+        config.pruning.emergency_pause = paused;
+    }
 }
 
 fn persist_node_config(
@@ -2063,7 +2088,25 @@ mod tests {
             log_json: false,
             dry_run: true,
             write_config: false,
+            pruning: PruningOverrides::default(),
         }
+    }
+
+    #[test]
+    fn apply_pruning_overrides_updates_config() {
+        let mut config = NodeConfig::default();
+        let mut options = base_bootstrap_options();
+        options.pruning = PruningOverrides {
+            cadence_secs: Some(120),
+            retention_depth: Some(256),
+            emergency_pause: Some(true),
+        };
+
+        apply_overrides(&mut config, &options);
+
+        assert_eq!(config.pruning.cadence_secs, 120);
+        assert_eq!(config.pruning.retention_depth, 256);
+        assert!(config.pruning.emergency_pause);
     }
 
     #[cfg(unix)]

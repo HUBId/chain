@@ -20,6 +20,14 @@ epoch_length = 1440
 target_validator_count = 100
 max_proof_size_bytes = 4194304
 
+[pruning]
+# Interval between automatic pruning cycles, measured in seconds.
+cadence_secs = 30
+# Number of most recent finalized blocks that are guaranteed to remain hydrated.
+retention_depth = 128
+# When true, scheduled pruning cycles are paused until manually resumed.
+emergency_pause = false
+
 [network.rpc]
 listen = "127.0.0.1:7070"
 
