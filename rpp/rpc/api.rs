@@ -82,6 +82,7 @@ use crate::runtime::config::{
 use crate::runtime::{
     ProofRpcMethod, RpcMethod, RpcResult, RuntimeMetrics, RuntimeMode, WalletRpcMethod,
 };
+use crate::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
 use crate::sync::ReconstructionPlan;
 use crate::types::{
     Account, Address, AttestedIdentityRequest, Block, SignedTransaction, Transaction,
@@ -107,6 +108,10 @@ use rustls::pki_types::{
 use rustls::server::{ClientCertVerifier, WebPkiClientVerifier};
 use rustls::{RootCertStore, ServerConfig};
 use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
+
+#[path = "src/routes/mod.rs"]
+mod routes;
+pub use routes::state::{rebuild_snapshots, trigger_snapshot};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LightHeadSse {
@@ -193,17 +198,59 @@ pub trait StateSyncApi: Send + Sync {
     async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError>;
 }
 
+pub trait PruningServiceApi: Send + Sync {
+    fn rebuild_snapshots(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<SnapshotRebuildReceipt, PruningServiceError>>
+                + Send
+                + 'static,
+        >,
+    >;
+
+    fn trigger_snapshot(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<SnapshotTriggerReceipt, PruningServiceError>>
+                + Send
+                + 'static,
+        >,
+    >;
+}
+
+#[derive(Clone, Debug)]
+pub enum PruningServiceError {
+    Unavailable,
+    InvalidRequest(String),
+    Internal(String),
+}
+
+impl fmt::Display for PruningServiceError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PruningServiceError::Unavailable => f.write_str("pruning service unavailable"),
+            PruningServiceError::InvalidRequest(message) => f.write_str(message),
+            PruningServiceError::Internal(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for PruningServiceError {}
+
 #[derive(Clone)]
 pub struct ApiContext {
     mode: Arc<RwLock<RuntimeMode>>,
     node: Option<NodeHandle>,
     wallet: Option<Arc<Wallet>>,
-#[cfg(feature = "vendor_electrs")]
+    #[cfg(feature = "vendor_electrs")]
     tracker: Option<WalletTrackerHandle>,
     orchestrator: Option<Arc<PipelineOrchestrator>>,
     request_limit_per_minute: Option<NonZeroU64>,
     auth_token_enabled: bool,
     state_sync_api: Option<Arc<dyn StateSyncApi>>,
+    pruning_service: Option<Arc<dyn PruningServiceApi>>,
     metrics: Arc<RuntimeMetrics>,
     wallet_runtime_active: bool,
     pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
@@ -218,6 +265,7 @@ impl ApiContext {
         request_limit_per_minute: Option<NonZeroU64>,
         auth_token_enabled: bool,
         pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
+        pruning_service: Option<Arc<dyn PruningServiceApi>>,
         wallet_runtime_active: bool,
     ) -> Self {
         #[cfg(feature = "vendor_electrs")]
@@ -245,6 +293,7 @@ impl ApiContext {
             request_limit_per_minute,
             auth_token_enabled,
             state_sync_api,
+            pruning_service,
             metrics,
             wallet_runtime_active,
             pruning_status,
@@ -284,9 +333,7 @@ impl ApiContext {
         self.node_available() && self.current_mode().includes_node()
     }
 
-    fn pruning_status_stream(
-        &self,
-    ) -> Option<watch::Receiver<Option<PruningJobStatus>>> {
+    fn pruning_status_stream(&self) -> Option<watch::Receiver<Option<PruningJobStatus>>> {
         self.pruning_status.as_ref().map(Clone::clone)
     }
 
@@ -318,6 +365,22 @@ impl ApiContext {
         self.state_sync_api.as_ref().map(Arc::clone)
     }
 
+    fn pruning_service(&self) -> Option<Arc<dyn PruningServiceApi>> {
+        self.pruning_service.as_ref().map(Arc::clone)
+    }
+
+    fn require_pruning_service(
+        &self,
+    ) -> Result<Arc<dyn PruningServiceApi>, (StatusCode, Json<ErrorResponse>)> {
+        let Some(service) = self.pruning_service() else {
+            return Err(pruning_service_not_configured());
+        };
+        if !self.current_mode().includes_node() {
+            return Err(unavailable("node"));
+        }
+        Ok(service)
+    }
+
     pub fn metrics(&self) -> Arc<RuntimeMetrics> {
         Arc::clone(&self.metrics)
     }
@@ -336,6 +399,11 @@ impl ApiContext {
 
     pub fn with_state_sync_api(mut self, api: Arc<dyn StateSyncApi>) -> Self {
         self.state_sync_api = Some(api);
+        self
+    }
+
+    pub fn with_pruning_service(mut self, service: Arc<dyn PruningServiceApi>) -> Self {
+        self.pruning_service = Some(service);
         self
     }
 
@@ -1181,6 +1249,8 @@ where
         .route("/proofs/block/:height", get(block_proofs))
         .route("/snapshots/plan", get(snapshot_plan))
         .route("/snapshots/jobs", get(snapshot_jobs))
+        .route("/snapshots/rebuild", post(routes::state::rebuild_snapshots))
+        .route("/snapshots/snapshot", post(routes::state::trigger_snapshot))
         .route("/state-sync/plan", get(state_sync_plan))
         .route("/state-sync/head/stream", get(state_sync_head_stream))
         .route("/state-sync/chunk", get(state_sync_chunk))
@@ -2727,6 +2797,29 @@ fn not_started(component: &str) -> (StatusCode, Json<ErrorResponse>) {
     )
 }
 
+fn pruning_service_not_configured() -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse {
+            error: "pruning service not configured".into(),
+        }),
+    )
+}
+
+fn pruning_service_error_to_http(error: PruningServiceError) -> (StatusCode, Json<ErrorResponse>) {
+    match error {
+        PruningServiceError::Unavailable => pruning_service_not_configured(),
+        PruningServiceError::InvalidRequest(message) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error: message }),
+        ),
+        PruningServiceError::Internal(message) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: message }),
+        ),
+    }
+}
+
 #[cfg(feature = "vendor_electrs")]
 fn tracker_sync_pending() -> (StatusCode, Json<ErrorResponse>) {
     (
@@ -2884,6 +2977,7 @@ mod telemetry_tests {
             None,
             false,
             None,
+            None,
             false,
         )
         .with_metrics(metrics.clone());
@@ -2931,6 +3025,7 @@ mod telemetry_tests {
             None,
             None,
             false,
+            None,
             None,
             false,
         )

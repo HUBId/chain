@@ -35,7 +35,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 
-use rpp_chain::api::ApiContext;
+use rpp_chain::api::{ApiContext, PruningServiceApi};
 use rpp_chain::config::{NodeConfig, TelemetryConfig, WalletConfig};
 use rpp_chain::crypto::load_or_generate_keypair;
 use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
@@ -481,6 +481,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut node_handle: Option<NodeHandle> = None;
     let mut node_runtime: Option<JoinHandle<()>> = None;
     let mut pruning_service: Option<PruningService> = None;
+    let mut pruning_api: Option<Arc<dyn PruningServiceApi>> = None;
     let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
     let mut rpc_auth: Option<String> = None;
     let mut rpc_origin: Option<String> = None;
@@ -513,7 +514,10 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         info!(address = %handle.address(), "node runtime started");
 
         let service = PruningService::start(handle.clone(), &config);
-        pruning_status_stream = Some(service.subscribe_status());
+        let status_rx = service.subscribe_status();
+        let api_handle = service.handle();
+        pruning_status_stream = Some(status_rx);
+        pruning_api = Some(Arc::new(api_handle) as Arc<dyn PruningServiceApi>);
         pruning_service = Some(service);
 
         info!(
@@ -636,6 +640,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             rpc_requests_per_minute,
             rpc_auth.is_some(),
             pruning_status_stream.clone(),
+            pruning_api.clone(),
             false,
         );
         let auth_token = rpc_auth.clone();
@@ -698,6 +703,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             rpc_requests_per_minute,
             rpc_auth.is_some(),
             pruning_status_stream.clone(),
+            pruning_api.clone(),
             wallet_runtime_active,
         );
         let auth_token = rpc_auth.clone();

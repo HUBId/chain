@@ -1,3 +1,5 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,8 +10,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
+use rpp_chain::api::{PruningServiceApi, PruningServiceError};
 use rpp_chain::config::NodeConfig;
 use rpp_chain::node::{NodeHandle, PruningJobStatus, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_chain::storage::pruner::receipt::{SnapshotRebuildReceipt, SnapshotTriggerReceipt};
 
 const COMMAND_QUEUE_DEPTH: usize = 8;
 
@@ -249,6 +253,52 @@ impl PruningServiceHandle {
             .map_err(|_| PruningCommandError::ServiceUnavailable)?;
         self.inner.state.paused.store(paused, Ordering::SeqCst);
         Ok(())
+    }
+}
+
+impl PruningServiceApi for PruningServiceHandle {
+    fn rebuild_snapshots(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<SnapshotRebuildReceipt, PruningServiceError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        let handle = self.clone();
+        Box::pin(async move {
+            handle.queue_job().await.map_err(map_pruning_error)?;
+            Ok(SnapshotRebuildReceipt::accepted())
+        })
+    }
+
+    fn trigger_snapshot(
+        &self,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<SnapshotTriggerReceipt, PruningServiceError>>
+                + Send
+                + 'static,
+        >,
+    > {
+        let handle = self.clone();
+        Box::pin(async move {
+            handle.queue_job().await.map_err(map_pruning_error)?;
+            Ok(SnapshotTriggerReceipt::accepted())
+        })
+    }
+}
+
+fn map_pruning_error(error: PruningCommandError) -> PruningServiceError {
+    match error {
+        PruningCommandError::ServiceUnavailable => PruningServiceError::Unavailable,
+        PruningCommandError::InvalidCadence => {
+            PruningServiceError::InvalidRequest("pruning cadence must be greater than zero".into())
+        }
+        PruningCommandError::InvalidRetention => PruningServiceError::InvalidRequest(
+            "pruning retention depth must be greater than zero".into(),
+        ),
     }
 }
 

@@ -379,6 +379,7 @@ async fn start_runtime(args: StartArgs) -> Result<()> {
         rpc_requests_per_minute,
         rpc_auth_token.is_some(),
         None,
+        None,
         wallet_runtime_active,
     );
     let api_task = tokio::spawn(async move {

@@ -79,6 +79,7 @@ impl RpcTestHarness {
             None,
             false,
             None,
+            None,
             true,
         );
         let rpc_task = tokio::spawn(async move {
