@@ -1513,6 +1513,8 @@ impl Wallet {
     pub fn prove_transaction(&self, tx: &SignedTransaction) -> ChainResult<TransactionProofBundle> {
         let prover = self.stark_prover();
         let witness = prover.build_transaction_witness(tx)?;
+        #[cfg(feature = "prover-stwo")]
+        crate::proofs::validate_transaction_witness(&witness)?;
         let start = Instant::now();
         let proof = prover.prove_transaction(witness.clone())?;
         let duration = start.elapsed();

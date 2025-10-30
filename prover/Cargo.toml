@@ -1,5 +1,5 @@
 [workspace]
-members = ["prover_stwo_backend"]
+members = ["prover_stwo_backend", "stwo"]
 resolver = "2"
 
 [workspace.package]

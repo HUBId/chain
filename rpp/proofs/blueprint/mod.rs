@@ -148,7 +148,7 @@ impl Blueprint {
                         key: "wallet.stwo_circuits",
                         title: "STWO-Circuits erweitern",
                         detail: "Ownership-, Balance-, Double-Spend- und Reputation-Prüfungen implementieren.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "wallet.uptime_proofs",
