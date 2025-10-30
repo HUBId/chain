@@ -2,8 +2,9 @@
 
 Use this playbook when pruning automation needs to be adjusted or invoked manually. It covers
 feature gate toggles, runtime overrides, ad-hoc snapshot jobs, and how to confirm the receipts
-returned by the service. Pair it with the [startup](startup.md) and
-[observability](observability.md) runbooks for post-change validation.
+returned by the service. Pair it with the [startup](startup.md),
+[observability](observability.md), and [pruning operations](pruning_operations.md) runbooks for
+post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/pruning.rs†L25-L116】
 
 ## 1. Enable or pause the pruning service
 

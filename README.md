@@ -139,6 +139,9 @@ which enables maximum link time compiler optimizations.
 - [Deployment & Observability Playbook](docs/deployment_observability.md)
   summarises the dashboards, feature-gate policies, and telemetry options that
   keep validators healthy in production.
+- [Pruning operations runbook](docs/runbooks/pruning_operations.md) explains how
+  to monitor pruning telemetry, interpret dashboards, and recover from worker
+  failures.
 - [RPC CLI Operator Guide](docs/rpc_cli_operator_guide.md) covers authenticated
   maintenance commands, rate limits, and recovery workflows for node operators.
 
