@@ -25,6 +25,7 @@ pub mod bft_loop;
 pub mod evidence;
 pub mod leader;
 pub mod messages;
+pub mod reputation;
 pub mod rewards;
 pub mod state;
 pub mod validator;
@@ -37,6 +38,9 @@ pub use leader::{Leader, LeaderContext};
 pub use messages::{
     Block, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
     ProofVerificationError, Proposal, Signature,
+};
+pub use reputation::{
+    MalachiteReputationManager, SlashingTrigger, UptimeObservation, UptimeOutcome,
 };
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};
