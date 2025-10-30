@@ -15,8 +15,7 @@ use rpp_p2p::vendor::swarm::{NetworkBehaviour, SwarmEvent};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::vendor::{noise, tcp, yamux, Multiaddr, Swarm, SwarmBuilder};
 use rpp_p2p::{
-    GossipTopic, Network, NodeIdentity, NullSnapshotProvider, Peerstore, PeerstoreConfig,
-    ReputationHeuristics,
+    GossipTopic, Network, NodeIdentity, Peerstore, PeerstoreConfig, ReputationHeuristics,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -247,7 +246,7 @@ fn network_metrics_snapshot_records_outbound_bytes() {
         128,
         1_024,
         ReputationHeuristics::default(),
-        Arc::new(NullSnapshotProvider::default()),
+        None,
     )
     .expect("network");
 

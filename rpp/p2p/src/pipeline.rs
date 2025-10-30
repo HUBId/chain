@@ -978,7 +978,7 @@ impl ConsensusPipeline {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotChunk {
     pub root: Hash,
     pub index: u64,
