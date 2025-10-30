@@ -24,13 +24,10 @@ prover-mock = ["prover-backend-interface/prover-mock"]
 backend-rpp-stark = []
 vendor_electrs = [
     "dep:tokio",
-    "dep:serde",
-    "dep:serde_json",
     "dep:sha2",
     "dep:storage-firewood",
     "dep:rpp",
     "dep:rpp_p2p",
-    "dep:hex",
     "dep:parking_lot",
 ]
 vendor_electrs_telemetry = []
@@ -42,15 +39,16 @@ prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { workspace = true, optional = true }
 sha2 = { version = "0.10", optional = true }
 storage-firewood = { path = "../../storage-firewood", optional = true }
-serde = { version = "1.0", features = ["derive"], optional = true }
-serde_json = { version = "1.0", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 tokio = { version = "1.37", features = ["sync", "rt", "signal"], optional = true }
 rpp = { package = "firewood", path = "../../firewood", optional = true }
 rpp_p2p = { package = "rpp-p2p", path = "../../rpp/p2p", optional = true }
-hex = { version = "0.4", optional = true }
+hex = "0.4"
 parking_lot = { version = "0.12", optional = true }
 log = "0.4"
 tracing = "0.1"
+clap = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.10"
@@ -59,4 +57,5 @@ uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 opentelemetry = "=0.30.0"
 opentelemetry_sdk = "=0.30.0"
+prover_mock_backend = { path = "../zk/prover_mock_backend" }
 

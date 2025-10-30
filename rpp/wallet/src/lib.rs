@@ -30,3 +30,12 @@ pub mod config;
 
 /// Zugriff auf optionale Drittanbieter-Integrationen.
 pub mod vendor;
+
+/// Command-line helpers for wallet subsystems.
+pub mod cli;
+
+/// JSON-RPC facades exposed by the wallet runtime.
+pub mod rpc;
+
+/// Zero Sync identity lifecycle helpers.
+pub mod zsi;

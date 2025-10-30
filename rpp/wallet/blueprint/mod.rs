@@ -47,7 +47,7 @@ impl Blueprint {
                     key: "wallet.zsi_workflow",
                     title: "ZSI identity lifecycle",
                     detail: "Model end-to-end issuance and renewal of ZSI identities.",
-                    status: TaskStatus::Todo,
+                    status: TaskStatus::Done,
                 },
                 Task {
                     key: "wallet.stwo_circuits",
