@@ -3,6 +3,11 @@
 ## Zielsetzung
 Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-Bonus) in konkrete Architekturentscheidungen für die bestehende RPP-Blockchain-Codebasis. Sie dokumentiert die funktionalen und nicht-funktionalen Anforderungen, identifiziert Lücken gegenüber dem Ist-Zustand und beschreibt die daraus abgeleiteten Komponenten- und Schnittstellenerweiterungen.
 
+## Implementierungsstand (Update)
+* **Orchestrator & Streams:** `DistributedOrchestrator` stellt Proposal-, Vote- und Commit-Broadcasts für alle Validatoren bereit und koppelt sich über den `TopicRouter` automatisch an Witness-Themen an, womit der verteilte Loop blueprint-konform ausgeliefert wurde.【F:rpp/consensus/src/malachite/distributed.rs†L1-L120】【F:rpp/consensus/src/network/topics.rs†L1-L62】
+* **Evidence-Pipeline & Slashing:** Der Evidence-Pool priorisiert Double-Sign-, Availability-, Witness-, Censorship- und Inaktivitätsmeldungen, speist sie in die Slashing-Heuristiken und persistiert die Telemetrie über den Konsens-Status; Regressionstests halten die Priorisierung und Witness/Uptime-Trigger fest.【F:rpp/consensus/src/evidence/mod.rs†L10-L205】【F:rpp/consensus/src/state.rs†L928-L989】【F:tests/consensus/evidence_slashing.rs†L1-L205】
+* **Rewards & Penalties:** Konsens-Commits buchen Leader-Bonus, Validator-Anteile und Witness-Pools über die Reward-Engine, wenden Penalty-Flags an und dokumentieren das Ergebnis in der Distribution; Governance-Tests sichern die Splits ab.【F:rpp/consensus/src/rewards.rs†L1-L120】【F:rpp/consensus/src/state.rs†L948-L989】【F:tests/consensus/timetoke_rewards.rs†L1-L54】
+
 ## Überblick über Blueprint-Anforderungen
 * **Reputation, Timetoke & Tiers**: Teilnahmeberechtigung und Gewichtung der Konsensrollen basieren auf Reputation (Tier ≥ 3), Timetoke-Balance (Uptime) sowie VRF-Outputs.
 * **Validator-, Leader- und Witness-Rollen**: Auswahl über VRF + Timetoke, Leader nach Tier/Timetoke/VRF, Witnesses als zusätzliche Prüfer.
