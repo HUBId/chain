@@ -32,15 +32,23 @@ components on the host that will compile or update the node:
 ```sh
 # Clone and enter the repository
 git clone https://github.com/ava-labs/chain.git
-cd firewood
+cd chain
 
 # Verify the toolchain pin and compile the node
 rustup show active-toolchain
-cargo build --release -p rpp-node
+cargo build --release -p rpp-node --no-default-features --features prod,prover-stwo
+# If your hardware supports STWO's SIMD backend, swap `prover-stwo` with
+# `prover-stwo-simd` to enable the accelerated proving pipeline.
 ```
 
-The resulting binary lives at `target/release/rpp-node`. Keep the repository
-cloned on the host so future upgrades can pull new releases.
+Validator and hybrid launches must include the STWO prover backend. The runtime
+aborts during startup if the binary was compiled without `prover-stwo` (or the
+SIMD variant), emitting a bootstrap error that echoes the required `cargo
+build -p rpp-node --release --no-default-features --features prod,prover-stwo`
+command so proving keys are always available for block production and uptime
+proofs.【F:rpp/node/src/lib.rs†L506-L512】 The resulting binary lives at
+`target/release/rpp-node`. Keep the repository cloned on the host so future
+upgrades can pull new releases without rebuilding from scratch.
 
 ## 3. Configure validator, wallet, and hybrid templates
 
