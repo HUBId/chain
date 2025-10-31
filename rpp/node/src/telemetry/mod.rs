@@ -1,5 +1,5 @@
-pub mod pruning;
 pub mod pipeline;
+pub mod pruning;
 pub mod slashing;
 pub mod uptime;
-pub use rpp_crypto_vrf::telemetry as vrf;
+pub mod vrf;

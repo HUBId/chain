@@ -23,9 +23,14 @@ fn vrf_metrics_exporter_records_selection_rounds() -> std::result::Result<(), Me
     metrics.rejected_candidates = 1;
     metrics.fallback_selected = true;
     metrics.participation_rate = 0.5;
+    metrics.success_rate = 0.2;
     metrics.latest_epoch = Some(42);
     metrics.latest_round = Some(7);
     metrics.active_epoch_threshold = Some("1337".into());
+    metrics.active_threshold_ratio = Some(0.75);
+    metrics
+        .rejections_by_reason
+        .insert("threshold".into(), 1);
 
     telemetry.record_selection(&metrics);
 
@@ -46,9 +51,12 @@ fn vrf_metrics_exporter_records_selection_rounds() -> std::result::Result<(), Me
         "rpp.crypto_vrf.selection.target_validator_count",
         "rpp.crypto_vrf.selection.unique_addresses",
         "rpp.crypto_vrf.selection.participation_rate",
+        "rpp.crypto_vrf.selection.success_rate",
+        "rpp.crypto_vrf.selection.threshold_ratio",
         "rpp.crypto_vrf.selection.verified_total",
         "rpp.crypto_vrf.selection.accepted_total",
         "rpp.crypto_vrf.selection.rejected_total",
+        "rpp.crypto_vrf.selection.rejection_reason_total",
         "rpp.crypto_vrf.selection.fallback_total",
         "rpp.crypto_vrf.selection.latest_epoch",
         "rpp.crypto_vrf.selection.latest_round",

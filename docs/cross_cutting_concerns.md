@@ -11,8 +11,8 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 1.2 Relevante Parametergruppen
 1. **Validator- & Leader-Selektion**
-   * `validator_set_size`, `witness_count` – maximale Teilnehmer je Epoche.
-   * `vrf_threshold_curve` – Funktionsdefinition zur Ableitung der Schwelle aus der Timetoke-Balance.
+   * `validator.vrf.threshold.target_validator_count`, `witness_count` – maximale Teilnehmer je Epoche.
+   * `validator.vrf.threshold.curve` – Funktionsdefinition zur Ableitung der Schwelle aus der Timetoke-Balance.
    * `epoch_duration`, `round_timeout`, `max_round_extensions` – Steuerung des Konsens-Tempos.
 2. **Reputation & Timetoke**
    * `tier_thresholds` – Score-Grenzen für Tier 3+, konfigurierbar via

@@ -8,13 +8,14 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
-use rpp_chain::config::NodeConfig;
+use rpp_chain::config::{NodeConfig, VrfTelemetryThresholds};
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::NodeHandle;
 use rpp_chain::runtime::node_runtime::node::GossipTopic;
 use rpp_chain::wallet::Wallet;
 
 use crate::telemetry::uptime::{CycleOutcome, CyclePhase, UptimeMetrics};
+use crate::telemetry::vrf;
 
 const DEFAULT_CADENCE_SECS: u64 = 600;
 
@@ -67,9 +68,15 @@ pub struct UptimeScheduler {
 }
 
 impl UptimeScheduler {
-    pub fn start(node: NodeHandle, wallet: Arc<Wallet>, cadence: Duration) -> Self {
+    pub fn start(
+        node: NodeHandle,
+        wallet: Arc<Wallet>,
+        cadence: Duration,
+        thresholds: VrfTelemetryThresholds,
+    ) -> Self {
         let (tx, mut rx) = watch::channel(false);
         let metrics = UptimeMetrics::global().clone();
+        let thresholds = Arc::new(thresholds);
         let worker = tokio::spawn(async move {
             let mut ticker = time::interval(cadence);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -77,7 +84,7 @@ impl UptimeScheduler {
                 tokio::select! {
                     _ = ticker.tick() => {
                         let started = Instant::now();
-                        match run_cycle(&node, Arc::clone(&wallet)).await {
+                        match run_cycle(&node, Arc::clone(&wallet), thresholds.as_ref()).await {
                             Ok(report) => {
                                 metrics.record_pending_queue(report.pending_queue);
                                 metrics.record_cycle(
@@ -124,10 +131,13 @@ impl UptimeScheduler {
     }
 }
 
-async fn run_cycle(node: &NodeHandle, wallet: Arc<Wallet>) -> Result<CycleReport, CycleError> {
-    let status = node
-        .node_status()
-        .map_err(CycleError::node_status)?;
+async fn run_cycle(
+    node: &NodeHandle,
+    wallet: Arc<Wallet>,
+    thresholds: &VrfTelemetryThresholds,
+) -> Result<CycleReport, CycleError> {
+    let status = node.node_status().map_err(CycleError::node_status)?;
+    vrf::log_selection(&status.vrf_metrics, thresholds);
     let mut report = CycleReport {
         outcome: CycleOutcome::Success,
         credited_hours: None,
@@ -175,8 +185,8 @@ async fn run_cycle(node: &NodeHandle, wallet: Arc<Wallet>) -> Result<CycleReport
                 "banned_until": serde_json::Value::Null,
                 "label": "uptime_proof",
             });
-            let encoded = serde_json::to_vec(&payload)
-                .map_err(|err| CycleError::gossip(anyhow!(err)))?;
+            let encoded =
+                serde_json::to_vec(&payload).map_err(|err| CycleError::gossip(anyhow!(err)))?;
             handle
                 .publish_gossip(GossipTopic::Meta, encoded)
                 .await

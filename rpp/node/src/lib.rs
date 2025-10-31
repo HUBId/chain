@@ -42,7 +42,9 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 
 use rpp_chain::api::{ApiContext, PruningServiceApi};
-use rpp_chain::config::{NodeConfig, SecretsBackendConfig, TelemetryConfig, WalletConfig};
+use rpp_chain::config::{
+    NodeConfig, SecretsBackendConfig, TelemetryConfig, VrfTelemetryThresholds, WalletConfig,
+};
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, VrfKeyIdentifier,
 };
@@ -718,6 +720,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut rpc_requests_per_minute: Option<NonZeroU64> = None;
     let mut orchestrator_instance: Option<Arc<PipelineOrchestrator>> = None;
     let mut uptime_cadence: Option<Duration> = None;
+    let mut vrf_thresholds: Option<VrfTelemetryThresholds> = None;
 
     let node_rpc_addr = node_bundle
         .as_ref()
@@ -816,6 +819,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         orchestrator_instance = Some(orchestrator.clone());
 
         uptime_cadence = Some(cadence_from_config(&config));
+        vrf_thresholds = Some(config.rollout.telemetry.vrf_thresholds.clone());
         node_handle = Some(handle);
         node_runtime = Some(runtime);
     }
@@ -845,8 +849,13 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 uptime_cadence,
                 wallet_instance.as_ref(),
             ) {
-                let scheduler =
-                    UptimeScheduler::start(handle.clone(), Arc::clone(wallet_arc), cadence);
+                let thresholds = vrf_thresholds.clone().unwrap_or_default();
+                let scheduler = UptimeScheduler::start(
+                    handle.clone(),
+                    Arc::clone(wallet_arc),
+                    cadence,
+                    thresholds,
+                );
                 uptime_service = Some(scheduler);
             }
         }
