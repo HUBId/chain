@@ -16,7 +16,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -779,6 +779,7 @@ pub(crate) struct StateSyncSessionCache {
     served_chunks: HashSet<u64>,
     last_completed_step: Option<LightClientVerificationEvent>,
     progress_log: Vec<String>,
+    snapshot_store: Option<Arc<RwLock<SnapshotStore>>>,
     status: StateSyncVerificationStatus,
     error: Option<String>,
     error_kind: Option<VerificationErrorKind>,
@@ -794,6 +795,7 @@ impl Default for StateSyncSessionCache {
             served_chunks: HashSet::new(),
             last_completed_step: None,
             progress_log: Vec::new(),
+            snapshot_store: None,
             status: StateSyncVerificationStatus::Idle,
             error: None,
             error_kind: None,
@@ -813,12 +815,18 @@ impl StateSyncSessionCache {
         root: Option<Hash>,
     ) {
         if let Some(size) = chunk_size {
+            if self.chunk_size != Some(size) {
+                self.snapshot_store = None;
+            }
             self.chunk_size = Some(size);
         }
         if let Some(count) = total_chunks {
             self.total_chunks = Some(count);
         }
         if let Some(root) = root {
+            if self.snapshot_root != Some(root) {
+                self.snapshot_store = None;
+            }
             self.snapshot_root = Some(root);
         }
     }
@@ -828,6 +836,7 @@ impl StateSyncSessionCache {
     }
 
     fn set_report(&mut self, report: StateSyncVerificationReport) {
+        self.snapshot_store = None;
         if let Some(root_hex) = report.summary.snapshot_root.as_ref() {
             if let Some(root) = Self::decode_snapshot_root(root_hex) {
                 self.snapshot_root = Some(root);
@@ -928,6 +937,16 @@ impl StateSyncSessionCache {
             }
         }
     }
+}
+
+#[derive(Debug)]
+pub(crate) enum StateSyncChunkError {
+    NoActiveSession,
+    ChunkIndexOutOfRange { index: u32, total: u32 },
+    ChunkNotFound { index: u32, reason: String },
+    SnapshotRootMismatch { expected: Hash, actual: Hash },
+    Io(std::io::Error),
+    Internal(String),
 }
 
 pub(crate) struct NodeInner {
@@ -2653,6 +2672,13 @@ impl NodeHandle {
         self.inner.state_sync_chunk_by_index(store, root, index)
     }
 
+    pub(crate) fn state_sync_session_chunk(
+        &self,
+        index: u32,
+    ) -> Result<SnapshotChunk, StateSyncChunkError> {
+        self.inner.state_sync_session_chunk(index)
+    }
+
     pub(crate) fn reset_state_sync_session_cache(&self) {
         self.inner.reset_state_sync_session();
     }
@@ -3736,6 +3762,7 @@ impl NodeInner {
                 cache.snapshot_root = Some(derived_root);
                 cache.total_chunks = Some(chunk_count);
                 cache.chunk_size = Some(chunk_size);
+                cache.snapshot_store = None;
                 cache.served_chunks.clear();
                 cache.progress_log.clear();
                 cache.last_completed_step = None;
@@ -3762,6 +3789,7 @@ impl NodeInner {
                 cache.snapshot_root = Some(derived_root);
                 cache.total_chunks = Some(chunk_count);
                 cache.chunk_size = Some(chunk_size);
+                cache.snapshot_store = None;
                 cache.served_chunks.clear();
                 cache.progress_log = progress_log;
                 cache.last_completed_step = last_step;
@@ -3806,6 +3834,165 @@ impl NodeInner {
 
     fn state_sync_session_snapshot(&self) -> StateSyncSessionCache {
         self.state_sync_session.lock().clone()
+    }
+
+    fn parse_chunk_total(message: &str) -> Option<u32> {
+        let marker = "total ";
+        let start = message.find(marker)? + marker.len();
+        let end = message[start..].find(')')? + start;
+        message[start..end].trim().parse().ok()
+    }
+
+    fn load_snapshot_payload(&self, root: &Hash) -> Result<Option<Vec<u8>>, std::io::Error> {
+        let base = self.config.snapshot_dir.clone();
+        if base.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let mut stack = vec![base];
+        while let Some(path) = stack.pop() {
+            let entries = match fs::read_dir(&path) {
+                Ok(entries) => entries,
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
+            };
+            for entry in entries {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                if file_type.is_dir() {
+                    stack.push(entry.path());
+                    continue;
+                }
+                if !file_type.is_file() {
+                    continue;
+                }
+                let payload = fs::read(entry.path())?;
+                if &blake3::hash(&payload) == root {
+                    return Ok(Some(payload));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn state_sync_session_chunk(&self, index: u32) -> Result<SnapshotChunk, StateSyncChunkError> {
+        let (root, chunk_size, total_opt, cached_store) = {
+            let cache = self.state_sync_session.lock();
+            if cache.status != StateSyncVerificationStatus::Verified {
+                return Err(StateSyncChunkError::NoActiveSession);
+            }
+            let root = cache
+                .snapshot_root
+                .ok_or(StateSyncChunkError::NoActiveSession)?;
+            let chunk_size = cache
+                .chunk_size
+                .ok_or(StateSyncChunkError::NoActiveSession)?;
+            let total_opt = cache
+                .total_chunks
+                .map(|value| {
+                    u32::try_from(value).map_err(|_| {
+                        StateSyncChunkError::Internal(format!(
+                            "state sync chunk count {value} exceeds supported range"
+                        ))
+                    })
+                })
+                .transpose()?;
+            let store = cache.snapshot_store.clone();
+            (root, chunk_size, total_opt, store)
+        };
+
+        if let Some(total) = total_opt {
+            if index >= total {
+                return Err(StateSyncChunkError::ChunkIndexOutOfRange { index, total });
+            }
+        }
+
+        let store = if let Some(store) = cached_store {
+            store
+        } else {
+            let payload = match self.load_snapshot_payload(&root) {
+                Ok(Some(data)) => data,
+                Ok(None) => {
+                    let reason = format!(
+                        "snapshot payload for root {} not found",
+                        hex::encode(root.as_bytes())
+                    );
+                    return Err(StateSyncChunkError::ChunkNotFound { index, reason });
+                }
+                Err(err) => return Err(StateSyncChunkError::Io(err)),
+            };
+            let mut store = SnapshotStore::new(chunk_size);
+            let actual_root = store.insert(payload);
+            if actual_root != root {
+                return Err(StateSyncChunkError::SnapshotRootMismatch {
+                    expected: root,
+                    actual: actual_root,
+                });
+            }
+            let store = Arc::new(RwLock::new(store));
+            {
+                let mut cache = self.state_sync_session.lock();
+                if cache.status == StateSyncVerificationStatus::Verified
+                    && cache.snapshot_root == Some(root)
+                    && cache.chunk_size == Some(chunk_size)
+                    && cache.snapshot_store.is_none()
+                {
+                    cache.snapshot_store = Some(store.clone());
+                }
+            }
+            store
+        };
+
+        let chunk_result = {
+            let guard = store.read();
+            guard.chunk(&root, index as u64)
+        };
+
+        let chunk = match chunk_result {
+            Ok(chunk) => chunk,
+            Err(PipelineError::SnapshotNotFound) => {
+                let reason = format!(
+                    "snapshot payload for root {} missing",
+                    hex::encode(root.as_bytes())
+                );
+                return Err(StateSyncChunkError::ChunkNotFound { index, reason });
+            }
+            Err(PipelineError::SnapshotVerification(message)) => {
+                if message.contains("out of range") {
+                    let total = if let Some(total) = total_opt {
+                        total
+                    } else if let Some(total) = Self::parse_chunk_total(&message) {
+                        total
+                    } else {
+                        return Err(StateSyncChunkError::Internal(message));
+                    };
+                    return Err(StateSyncChunkError::ChunkIndexOutOfRange { index, total });
+                }
+                return Err(StateSyncChunkError::ChunkNotFound {
+                    index,
+                    reason: message,
+                });
+            }
+            Err(other) => return Err(StateSyncChunkError::Internal(other.to_string())),
+        };
+
+        let progress_message = format!("served chunk #{}", index);
+        let root_hex = hex::encode(root.as_bytes());
+        {
+            let mut cache = self.state_sync_session.lock();
+            if cache.status != StateSyncVerificationStatus::Verified
+                || cache.snapshot_root != Some(root)
+                || cache.chunk_size != Some(chunk_size)
+            {
+                return Err(StateSyncChunkError::NoActiveSession);
+            }
+            cache.served_chunks.insert(index as u64);
+            cache.progress_log.push(progress_message);
+            cache.last_completed_step = Some(LightClientVerificationEvent::VerificationCompleted {
+                snapshot_root: root_hex,
+            });
+        }
+
+        Ok(chunk)
     }
 
     /// Returns a clone of the light client head subscription channel for external observers.
