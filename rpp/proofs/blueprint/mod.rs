@@ -222,8 +222,8 @@ impl Blueprint {
                     Task {
                         key: "bft.evidence_slashing",
                         title: "Evidence & Slashing",
-                        detail: "Double-Sign- und Invalid-Proof-Evidence erfassen und Strafen anwenden.",
-                        status: TaskStatus::Todo,
+                        detail: "Double-Sign-, Availability- und Witness-Evidence priorisieren, Slashing-Heuristiken verknüpfen und Telemetrie freischalten (siehe docs/consensus/slashing.md).",
+                        status: TaskStatus::InProgress,
                     },
                     Task {
                         key: "bft.rewards",

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::bft_loop::ConsensusMessage;
-use crate::evidence::{slash, EvidenceRecord, EvidenceType};
+use crate::evidence::{slash, EvidencePipeline, EvidenceRecord, EvidenceType};
 use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{
     BlockId, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote, Proposal, Signature,
@@ -15,7 +15,8 @@ use crate::messages::{
 };
 use crate::proof_backend::ProofBackend;
 use crate::reputation::{
-    MalachiteReputationManager, SlashingTrigger, UptimeObservation, UptimeOutcome,
+    MalachiteReputationManager, SlashingHeuristics, SlashingTrigger, UptimeObservation,
+    UptimeOutcome,
 };
 use crate::rewards::{distribute_rewards, RewardDistribution};
 use crate::validator::{
@@ -308,10 +309,11 @@ pub struct ConsensusState {
     pub pending_precommit_messages: Vec<PreCommit>,
     pub pending_commits: VecDeque<Commit>,
     pub pending_proofs: Vec<ConsensusProof>,
-    pub pending_evidence: Vec<EvidenceRecord>,
+    pub pending_evidence: EvidencePipeline,
     pub pending_rewards: Vec<RewardDistribution>,
     pub reputation_root: String,
     pub reputation: MalachiteReputationManager,
+    pub slashing_heuristics: SlashingHeuristics,
     message_rx: Option<UnboundedReceiver<ConsensusMessage>>,
     _message_tx: UnboundedSender<ConsensusMessage>,
     pub last_activity: Instant,
@@ -355,10 +357,11 @@ impl ConsensusState {
             pending_precommit_messages: Vec::new(),
             pending_commits: VecDeque::new(),
             pending_proofs: Vec::new(),
-            pending_evidence: Vec::new(),
+            pending_evidence: EvidencePipeline::default(),
             pending_rewards: Vec::new(),
             reputation_root,
             reputation,
+            slashing_heuristics: SlashingHeuristics::new(),
             message_rx: Some(receiver),
             _message_tx: sender,
             last_activity: Instant::now(),
@@ -620,6 +623,7 @@ impl ConsensusState {
 
     pub fn record_evidence(&mut self, evidence: EvidenceRecord) {
         self.apply_witness_evidence(&evidence);
+        self.slashing_heuristics.observe_evidence(&evidence);
         self.pending_evidence.push(evidence);
     }
 
@@ -739,6 +743,7 @@ impl ConsensusState {
         }
 
         if let Some(trigger) = &outcome.slashing_trigger {
+            self.slashing_heuristics.observe_trigger(trigger);
             warn!(
                 validator = %trigger.validator,
                 reason = %trigger.reason,

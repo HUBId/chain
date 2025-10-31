@@ -4,6 +4,10 @@ use tracing::{info, warn};
 
 use crate::validator::{ValidatorId, ValidatorLedgerEntry};
 
+pub mod slashing;
+
+pub use slashing::{SlashingEvent, SlashingHeuristics, SlashingKind, SlashingSnapshot};
+
 const MAX_UPTIME_HOURS: u64 = 720;
 const TIER2_THRESHOLD: u64 = 24;
 const TIER3_THRESHOLD: u64 = 72;

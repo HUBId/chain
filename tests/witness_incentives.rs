@@ -58,6 +58,7 @@ fn sample_vrf_output(id: &str, output_byte: u8, tier: u8, score: f64, timetoken:
     VRFOutput {
         validator_id: id.to_string(),
         output: [output_byte; 32],
+        preoutput: vec![output_byte; 32],
         proof: vec![output_byte; 32],
         reputation_tier: tier,
         reputation_score: score,
