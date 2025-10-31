@@ -44,6 +44,7 @@ backend-plonky3 = [
     "dep:p3-mersenne-31",
     "dep:p3-poseidon",
     "dep:p3-util",
+    "dep:plonky3-backend",
     # Vendored via cargo/config.toml to keep the workspace buildable offline.
 ]
 backend-rpp-stark = ["dep:rpp-stark", "rpp-wallet?/backend-rpp-stark"]
@@ -111,6 +112,7 @@ p3-matrix = { workspace = true, optional = true }
 p3-mersenne-31 = { workspace = true, optional = true }
 p3-poseidon = { workspace = true, optional = true }
 p3-util = { workspace = true, optional = true }
+plonky3-backend = { path = "../../prover/plonky3_backend", optional = true }
 
 [dev-dependencies]
 rand = { version = "=0.8.5", features = ["std", "std_rng"] }

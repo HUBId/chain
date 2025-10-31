@@ -1,11 +1,13 @@
 //! Wallet integration for the Plonky3 backend.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 use serde_json::Value;
+
+use plonky3_backend::Circuit as BackendCircuit;
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
@@ -54,28 +56,41 @@ impl Hash for CircuitCacheKey {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Plonky3Backend {
-    compiled: Arc<Mutex<HashSet<CircuitCacheKey>>>,
+    compiled: Arc<Mutex<HashMap<CircuitCacheKey, BackendCircuit>>>,
 }
 
 impl Plonky3Backend {
-    fn ensure_compiled(&self, params: &Plonky3Parameters, circuit: &str) -> ChainResult<()> {
+    fn ensure_compiled(
+        &self,
+        params: &Plonky3Parameters,
+        circuit: &str,
+    ) -> ChainResult<BackendCircuit> {
         let key = CircuitCacheKey {
             circuit: circuit.to_string(),
             security_bits: params.security_bits,
             use_gpu: params.use_gpu_acceleration,
         };
-        {
-            let guard = self.compiled.lock();
-            if guard.contains(&key) {
-                return Ok(());
-            }
+        if let Some(compiled) = self.compiled.lock().get(&key).cloned() {
+            return Ok(compiled);
         }
 
-        crypto::verifying_key(circuit)?;
+        let (verifying_key, proving_key) = crypto::circuit_keys(circuit)?;
+        let compiled = BackendCircuit::keygen(
+            circuit.to_string(),
+            verifying_key,
+            proving_key,
+            params.security_bits,
+            params.use_gpu_acceleration,
+        )
+        .map_err(|err| {
+            ChainError::Crypto(format!(
+                "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
+            ))
+        })?;
 
         let mut guard = self.compiled.lock();
-        guard.insert(key);
-        Ok(())
+        guard.insert(key, compiled.clone());
+        Ok(compiled)
     }
 
     fn prove<W: Plonky3CircuitWitness>(
@@ -84,9 +99,21 @@ impl Plonky3Backend {
         witness: &W,
     ) -> ChainResult<Plonky3Proof> {
         let circuit = witness.circuit();
-        self.ensure_compiled(params, circuit)?;
+        let compiled = self.ensure_compiled(params, circuit)?;
         let public_inputs = witness.public_inputs()?;
-        Plonky3Proof::new(circuit, public_inputs)
+        let (commitment, encoded_inputs) = crypto::canonical_public_inputs(&public_inputs)?;
+        let proof_bytes = compiled
+            .prove(&commitment, &encoded_inputs)
+            .map_err(|err| {
+                ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
+            })?;
+        Ok(Plonky3Proof {
+            circuit: circuit.to_string(),
+            commitment,
+            public_inputs,
+            proof: proof_bytes,
+            verifying_key: compiled.verifying_key().to_vec(),
+        })
     }
 }
 

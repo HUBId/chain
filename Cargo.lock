@@ -4981,6 +4981,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "plonky3-backend"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "plotters"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5935,6 +5945,7 @@ dependencies = [
  "p3-mersenne-31",
  "p3-poseidon",
  "p3-util",
+ "plonky3-backend",
  "parking_lot",
  "proptest",
  "prover-backend-interface",

@@ -1,0 +1,11 @@
+[package]
+name = "plonky3-backend"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+blake3 = "=1.8.2"
+serde = { version = "=1.0.225", features = ["derive"] }
+serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
+thiserror = "=1.0.69"
