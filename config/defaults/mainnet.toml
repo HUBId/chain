@@ -1,0 +1,53 @@
+version = 1
+bundle = "mainnet-rollout"
+description = "Staged rollout configuration for promoting Malachite BFT to mainnet"
+node_template = "../validator.toml"
+wallet_template = "../wallet.toml"
+notes = [
+  "Feature gates graduate monotonically from development to mainnet.",
+  "Release checks reference the runbooks documented in docs/deployment/staged_rollout.md.",
+]
+
+[[stages]]
+name = "development"
+release_channel = "development"
+change_window = "daily"
+feature_gates = { pruning = true, recursive_proofs = true, reconstruction = true, consensus_enforcement = true, malachite_consensus = false, timetoke_rewards = false, witness_network = false }
+release_checks = [
+  "docs/deployment/staged_rollout.md#development-readiness",
+  "docs/deployment/staged_rollout.md#common-preflight-checks",
+]
+recovery_playbook = "docs/deployment/staged_rollout.md#development-recovery"
+
+[[stages]]
+name = "testnet"
+release_channel = "testnet"
+change_window = "twice-weekly"
+feature_gates = { pruning = true, recursive_proofs = true, reconstruction = true, consensus_enforcement = true, malachite_consensus = true, timetoke_rewards = false, witness_network = false }
+release_checks = [
+  "docs/deployment/staged_rollout.md#testnet-readiness",
+  "docs/deployment/staged_rollout.md#common-preflight-checks",
+]
+recovery_playbook = "docs/deployment/staged_rollout.md#testnet-recovery"
+
+[[stages]]
+name = "canary"
+release_channel = "canary"
+change_window = "weekly"
+feature_gates = { pruning = true, recursive_proofs = true, reconstruction = true, consensus_enforcement = true, malachite_consensus = true, timetoke_rewards = true, witness_network = false }
+release_checks = [
+  "docs/deployment/staged_rollout.md#canary-readiness",
+  "docs/deployment/staged_rollout.md#common-preflight-checks",
+]
+recovery_playbook = "docs/deployment/staged_rollout.md#canary-recovery"
+
+[[stages]]
+name = "mainnet"
+release_channel = "mainnet"
+change_window = "scheduled-maintenance"
+feature_gates = { pruning = true, recursive_proofs = true, reconstruction = true, consensus_enforcement = true, malachite_consensus = true, timetoke_rewards = true, witness_network = true }
+release_checks = [
+  "docs/deployment/staged_rollout.md#mainnet-readiness",
+  "docs/deployment/staged_rollout.md#common-preflight-checks",
+]
+recovery_playbook = "docs/deployment/staged_rollout.md#mainnet-recovery"
