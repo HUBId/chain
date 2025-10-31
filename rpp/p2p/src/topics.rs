@@ -3,6 +3,37 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "gossipsub")]
 use crate::vendor::gossipsub::{IdentTopic, TopicHash};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[repr(u8)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicPriority {
+    Low = 0,
+    Medium = 1,
+    High = 2,
+    Critical = 3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TopicQoS {
+    Realtime,
+    Throughput,
+    Background,
+    Telemetry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TopicMetadata {
+    pub priority: TopicPriority,
+    pub qos: TopicQoS,
+}
+
+impl TopicMetadata {
+    pub const fn new(priority: TopicPriority, qos: TopicQoS) -> Self {
+        Self { priority, qos }
+    }
+}
+
 /// Canonical GossipSub topics used by the RPP network backbone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +112,34 @@ impl GossipTopic {
             "/rpp/gossip/witness/meta/1.0.0" => Some(GossipTopic::WitnessMeta),
             _ => None,
         }
+    }
+
+    pub const fn metadata(&self) -> TopicMetadata {
+        match self {
+            GossipTopic::Blocks => TopicMetadata::new(TopicPriority::Critical, TopicQoS::Realtime),
+            GossipTopic::Votes => TopicMetadata::new(TopicPriority::Critical, TopicQoS::Realtime),
+            GossipTopic::Proofs => TopicMetadata::new(TopicPriority::High, TopicQoS::Throughput),
+            GossipTopic::VrfProofs => TopicMetadata::new(TopicPriority::High, TopicQoS::Throughput),
+            GossipTopic::Snapshots => {
+                TopicMetadata::new(TopicPriority::Medium, TopicQoS::Background)
+            }
+            GossipTopic::Meta => TopicMetadata::new(TopicPriority::Low, TopicQoS::Telemetry),
+            GossipTopic::VrfMeta => TopicMetadata::new(TopicPriority::Low, TopicQoS::Telemetry),
+            GossipTopic::WitnessProofs => {
+                TopicMetadata::new(TopicPriority::Critical, TopicQoS::Throughput)
+            }
+            GossipTopic::WitnessMeta => {
+                TopicMetadata::new(TopicPriority::High, TopicQoS::Telemetry)
+            }
+        }
+    }
+
+    pub const fn priority(&self) -> TopicPriority {
+        self.metadata().priority
+    }
+
+    pub const fn qos(&self) -> TopicQoS {
+        self.metadata().qos
     }
 }
 

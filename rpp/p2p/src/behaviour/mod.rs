@@ -1,4 +1,5 @@
 pub mod snapshots;
+pub mod witness;
 
 pub use snapshots::{
     SnapshotItemKind, SnapshotProvider, SnapshotResumeState, SnapshotSessionId, SnapshotsRequest,
