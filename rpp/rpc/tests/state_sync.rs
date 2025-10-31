@@ -16,6 +16,8 @@ use rpp_chain::api::{
     state_sync_chunk_by_id, state_sync_head_stream, ApiContext, StateSyncApi, StateSyncError,
     StateSyncErrorKind, StateSyncSessionInfo,
 };
+use rpp_chain::node::DEFAULT_STATE_SYNC_CHUNK;
+use blake3::Hash as Blake3Hash;
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{LightClientHead, SnapshotChunk};
 use serde_json::Value;
@@ -25,7 +27,8 @@ use tower::ServiceExt;
 struct FakeStateSyncApi {
     sender: watch::Sender<Option<LightClientHead>>,
     receiver: watch::Receiver<Option<LightClientHead>>,
-    session: Option<StateSyncSessionInfo>,
+    session: RwLock<Option<StateSyncSessionInfo>>,
+    chunk_size: RwLock<Option<usize>>,
     chunks: HashMap<u32, SnapshotChunk>,
 }
 
@@ -34,12 +37,14 @@ impl FakeStateSyncApi {
         sender: watch::Sender<Option<LightClientHead>>,
         receiver: watch::Receiver<Option<LightClientHead>>,
         session: Option<StateSyncSessionInfo>,
+        chunk_size: Option<usize>,
         chunks: HashMap<u32, SnapshotChunk>,
     ) -> Self {
         Self {
             sender,
             receiver,
-            session,
+            session: RwLock::new(session),
+            chunk_size: RwLock::new(chunk_size),
             chunks,
         }
     }
@@ -64,6 +69,7 @@ impl StateSyncApi for FakeStateSyncApi {
     fn ensure_state_sync_session(&self) -> Result<(), StateSyncError> {
         if self
             .session
+            .read()
             .as_ref()
             .map(|session| session.verified)
             .unwrap_or(false)
@@ -77,8 +83,37 @@ impl StateSyncApi for FakeStateSyncApi {
         }
     }
 
+    fn reset_state_sync_session(
+        &self,
+        root: Blake3Hash,
+        chunk_size: usize,
+        total_chunks: usize,
+    ) {
+        let mut session = self.session.write();
+        let mut cached_size = self.chunk_size.write();
+        let root_diverged = session
+            .as_ref()
+            .and_then(|info| info.root)
+            .map(|current| current != root)
+            .unwrap_or(false);
+        let chunk_count_diverged = session
+            .as_ref()
+            .and_then(|info| info.total_chunks)
+            .map(|count| count != total_chunks as u32)
+            .unwrap_or(false);
+        let chunk_size_diverged = cached_size
+            .map(|size| size != chunk_size)
+            .unwrap_or(false);
+
+        if root_diverged || chunk_count_diverged || chunk_size_diverged {
+            *session = None;
+        }
+
+        *cached_size = Some(chunk_size);
+    }
+
     fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError> {
-        self.session.clone().ok_or_else(|| {
+        self.session.read().clone().ok_or_else(|| {
             StateSyncError::new(
                 StateSyncErrorKind::NoActiveSession,
                 Some("no active session".into()),
@@ -117,6 +152,7 @@ async fn state_sync_head_stream_emits_events() {
     let api = Arc::new(FakeStateSyncApi::new(
         sender.clone(),
         receiver,
+        None,
         None,
         HashMap::new(),
     ));
@@ -191,6 +227,7 @@ async fn state_sync_chunk_by_id_returns_payload() {
         sender,
         receiver,
         Some(session),
+        None,
         chunks,
     ));
     let context = test_context(api.clone());
@@ -240,6 +277,7 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
         sender,
         receiver,
         Some(session),
+        None,
         HashMap::new(),
     ));
     let context = test_context(api.clone());
@@ -257,4 +295,35 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
     let info = api.state_sync_active_session().unwrap();
     assert!(info.verified);
     assert_eq!(info.total_chunks, Some(1));
+}
+
+#[tokio::test]
+async fn state_sync_session_reset_on_new_plan_metadata() {
+    let root = blake3::hash(b"initial");
+    let session = StateSyncSessionInfo {
+        root: Some(root),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: Some("verified".into()),
+        served_chunks: vec![0],
+        progress_log: vec!["complete".into()],
+    };
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        Some(session),
+        Some(DEFAULT_STATE_SYNC_CHUNK),
+        HashMap::new(),
+    ));
+
+    assert!(api.ensure_state_sync_session().is_ok());
+
+    let new_root = blake3::hash(b"next");
+    api.reset_state_sync_session(new_root, DEFAULT_STATE_SYNC_CHUNK, 2);
+
+    let err = api.ensure_state_sync_session().unwrap_err();
+    assert!(matches!(err.kind, StateSyncErrorKind::NoActiveSession));
+    assert!(api.state_sync_active_session().is_err());
 }

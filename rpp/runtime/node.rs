@@ -2679,6 +2679,16 @@ impl NodeHandle {
         self.inner.state_sync_session_chunk(index)
     }
 
+    pub(crate) fn maybe_reset_state_sync_session(
+        &self,
+        snapshot_root: &Hash,
+        chunk_size: usize,
+        total_chunks: usize,
+    ) {
+        self.inner
+            .maybe_reset_state_sync_session(snapshot_root, chunk_size, total_chunks);
+    }
+
     pub(crate) fn reset_state_sync_session_cache(&self) {
         self.inner.reset_state_sync_session();
     }
@@ -3636,7 +3646,11 @@ impl NodeInner {
             ));
         }
         let engine = ReconstructionEngine::new(self.storage.clone());
-        engine.state_sync_plan(chunk_size)
+        let plan = engine.state_sync_plan(chunk_size)?;
+        let expected_root = Hash::from(plan.snapshot.commitments.global_state_root);
+        let total_chunks = plan.chunks.len();
+        self.maybe_reset_state_sync_session(&expected_root, chunk_size, total_chunks);
+        Ok(plan)
     }
 
     fn network_state_sync_plan(&self, chunk_size: usize) -> ChainResult<NetworkStateSyncPlan> {
@@ -3803,6 +3817,31 @@ impl NodeInner {
 
     fn reset_state_sync_session(&self) {
         self.state_sync_session.lock().reset();
+    }
+
+    fn maybe_reset_state_sync_session(
+        &self,
+        expected_root: &Hash,
+        chunk_size: usize,
+        total_chunks: usize,
+    ) {
+        let mut cache = self.state_sync_session.lock();
+        let root_diverged = cache
+            .snapshot_root
+            .map(|root| root != *expected_root)
+            .unwrap_or(false);
+        let chunk_size_diverged = cache
+            .chunk_size
+            .map(|size| size != chunk_size)
+            .unwrap_or(false);
+        let total_chunks_diverged = cache
+            .total_chunks
+            .map(|count| count != total_chunks)
+            .unwrap_or(false);
+
+        if root_diverged || chunk_size_diverged || total_chunks_diverged {
+            cache.reset();
+        }
     }
 
     fn replace_state_sync_session(&self, cache: StateSyncSessionCache) {
