@@ -25,8 +25,12 @@ build\:nightly:
 test\:nightly:
         cargo $(NIGHTLY_TOOLCHAIN) test --manifest-path $(PROVER_MANIFEST) --workspace
 
-.PHONY: pruning-validation
+.PHONY: pruning-validation test\:matrix
 
 ## Run pruning receipt conformance checks to guard snapshot publication.
 pruning-validation:
-        cargo xtask pruning-validation
+	cargo xtask pruning-validation
+
+## Run the rpp-chain unit/integration suites across the prover-stwo feature matrix.
+test\:matrix:
+	cargo xtask test-matrix
