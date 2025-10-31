@@ -2,51 +2,51 @@
 
 ## 1. Motivation
 
-The Digital Value Network fork extends Electrum/Electrs principles to the RPP blockchain, keeping the stack lightweight while wiring in sovereign identity and recursive proofs. The existing binary already integrates storage, consensus, RPC and proof plumbing so node and wallet functionality can share the same runtime without external services.【F:README.md†L1-L99】【F:src/main.rs†L1-L160】
+The Digital Value Network fork extends Electrum/Electrs principles to the RPP blockchain, keeping the stack lightweight while wiring in sovereign identity and recursive proofs. The existing binary already integrates storage, consensus, RPC and proof plumbing so node and wallet functionality can share the same runtime without external services.【F:README.md†L1-L99】【F:rpp/runtime/mod.rs†L9-L64】【F:rpp/runtime/node.rs†L1-L68】
 
 ## 2. Architekturüberblick
 
-* **Wallet Modul (`rpp/wallet`)** – manages keys, transactions, uptime proofs and exposes tab-oriented view models (`History`, `Send`, `Receive`, `Node`) for CLI/GUI layers to consume.【F:src/wallet/wallet.rs†L25-L347】【F:src/wallet/tabs/mod.rs†L1-L9】
-* **Node Modul (`rpp/node`)** – orchestrates Malachite-BFT consensus, mempools, proof verification and telemetry while sharing storage and proof registries with the wallet logic.【F:src/node.rs†L1-L199】
-* **Frontend Hooks** – the wallet exposes tab data structures that back an Electrum-style interface: transaction history with proof metadata, send previews, derived receive addresses and node metrics.【F:src/wallet/wallet.rs†L161-L326】
-* **Unified RPC** – Axum routes expose JSON-RPC style endpoints for both wallet and node clients, including balance queries, proof submission and consensus introspection.【F:src/api.rs†L63-L200】
+* **Wallet Modul (`rpp/wallet`)** – manages keys, transactions, uptime proofs and exposes tab-oriented view models (`History`, `Send`, `Receive`, `Node`) for CLI/GUI layers to consume.【F:rpp/wallet/ui/wallet.rs†L445-L575】【F:rpp/wallet/ui/mod.rs†L20-L34】【F:rpp/wallet/ui/tabs/mod.rs†L1-L23】
+* **Node Modul (`rpp/node`)** – orchestrates Malachite-BFT consensus, mempools, proof verification and telemetry while sharing storage and proof registries with the wallet logic.【F:rpp/runtime/node.rs†L1-L200】
+* **Frontend Hooks** – the wallet exposes tab data structures that back an Electrum-style interface: transaction history with proof metadata, send previews, derived receive addresses and node metrics.【F:rpp/wallet/ui/wallet.rs†L1577-L1660】【F:rpp/wallet/ui/tabs/history.rs†L10-L49】【F:rpp/wallet/ui/tabs/send.rs†L5-L20】【F:rpp/wallet/ui/tabs/receive.rs†L5-L14】【F:rpp/wallet/ui/tabs/node.rs†L7-L29】
+* **Unified RPC** – Axum routes expose JSON-RPC style endpoints for both wallet and node clients, including balance queries, proof submission and consensus introspection.【F:rpp/rpc/api.rs†L60-L133】【F:rpp/rpc/api.rs†L1405-L1410】
 
 ## 3. Technische Defaults
 
-* **UTXO-Modell** – the RPP blueprint models explicit UTXO records and witnesses that feed the recursive proof system, keeping compatibility with Electrum’s design expectations.【F:src/rpp.rs†L360-L520】
-* **ZSI-ID** – identity genesis binds wallet keys, VRF tags and Merkle proofs, guaranteeing every wallet derives a sovereign identifier during setup.【F:src/types/identity.rs†L13-L173】
-* **Proofs via STWO** – the wallet-facing prover derives witnesses for identities, transactions, state, pruning, uptime and consensus directly from local RocksDB state before producing STARK proofs.【F:src/stwo/prover/mod.rs†L1-L200】
+* **UTXO-Modell** – the RPP blueprint models explicit UTXO records and witnesses that feed the recursive proof system, keeping compatibility with Electrum’s design expectations.【F:rpp/proofs/rpp.rs†L360-L520】
+* **ZSI-ID** – identity genesis binds wallet keys, VRF tags and Merkle proofs, guaranteeing every wallet derives a sovereign identifier during setup.【F:rpp/runtime/types/identity.rs†L17-L190】
+* **Proofs via STWO** – the wallet-facing prover derives witnesses for identities, transactions, state, pruning, uptime and consensus directly from local RocksDB state before producing STARK proofs.【F:rpp/proofs/stwo/prover/mod.rs†L1-L200】
 * **Storage** – the Firewood fork provides append-only KV, pruning logic and Merkle proofs as the default storage backend for local nodes and wallets.【F:storage-firewood/src/lib.rs†L1-L49】
 * **P2P** – a libp2p-inspired stack handles admission control, peer discovery and gossip channels dedicated to blocks, votes, proofs and snapshots.【F:rpp/p2p/src/lib.rs†L1-L13】
-* **RPC** – the Axum server exposes health, balance, proof submission and consensus telemetry endpoints consumable by light clients.【F:src/api.rs†L63-L200】
+* **RPC** – the Axum server exposes health, balance, proof submission and consensus telemetry endpoints consumable by light clients.【F:rpp/rpc/api.rs†L60-L133】
 
 ## 4. Moduldesign
 
 ### `wallet/`
 
-* **Key-Management** – wraps Ed25519 keypairs, derives wallet addresses and signs transactions; hooks for HSM/Yubi integration plug into the `sign_message` abstraction.【F:src/wallet/wallet.rs†L57-L191】
-* **ZSI-Setup** – constructs identity declarations with VRF tags and Merkle proofs, verifying commitments before broadcasting.【F:src/wallet/wallet.rs†L75-L116】
-* **Tx-Engine** – handles nonce management, balance checks, signature creation and STWO proof bundling for transactions.【F:src/wallet/wallet.rs†L133-L199】
-* **Timetoke** – generates hourly uptime proofs tied to recent block heads and epochs for reputation accrual.【F:src/wallet/wallet.rs†L200-L232】
-* **Reputation-Score & API** – surfaces audits, consensus receipts and node metrics for UI or RPC consumption.【F:src/wallet/wallet.rs†L233-L347】
-* **UI/CLI Tabs** – dedicated data structures power History, Send, Receive and Node tabs for an Electrum-style interface.【F:src/wallet/tabs/mod.rs†L1-L9】
+* **Key-Management** – wraps Ed25519 keypairs, derives wallet addresses and signs transactions; hooks for HSM/Yubi integration plug into the `sign_message` abstraction.【F:rpp/wallet/ui/wallet.rs†L445-L521】【F:rpp/wallet/ui/wallet.rs†L1508-L1516】
+* **ZSI-Setup** – constructs identity declarations with VRF tags and Merkle proofs, verifying commitments before broadcasting.【F:rpp/wallet/ui/wallet.rs†L1360-L1387】
+* **Tx-Engine** – handles nonce management, balance checks, signature creation and STWO proof bundling for transactions.【F:rpp/wallet/ui/wallet.rs†L1434-L1537】
+* **Timetoke** – generates hourly uptime proofs tied to recent block heads and epochs for reputation accrual.【F:rpp/wallet/ui/wallet.rs†L1540-L1574】
+* **Reputation-Score & API** – surfaces audits, consensus receipts and node metrics for UI or RPC consumption.【F:rpp/wallet/ui/wallet.rs†L1389-L1420】【F:rpp/wallet/ui/wallet.rs†L1589-L1660】
+* **UI/CLI Tabs** – dedicated data structures power History, Send, Receive and Node tabs for an Electrum-style interface.【F:rpp/wallet/ui/mod.rs†L20-L34】【F:rpp/wallet/ui/tabs/mod.rs†L1-L23】
 
 ### `node/`
 
-* **Consensus** – embeds Malachite-backed BFT vote aggregation, quorum tracking and validator classification.【F:src/consensus.rs†L1-L193】
-* **Storage** – reuses the shared RocksDB/Firewood-backed storage layer to persist blocks, accounts and metadata.【F:src/node.rs†L171-L199】
-* **Proof Verification** – leverages the proof registry to check transaction, identity, pruning, uptime and recursive proofs before import.【F:src/node.rs†L171-L199】【F:src/stwo/prover/mod.rs†L1-L200】
-* **Block Builder** – aggregates mempools, computes rewards and emits consensus certificates for every sealed block.【F:src/node.rs†L171-L199】
-* **Networking** – integrates the gossip stack for block, vote, proof and snapshot propagation.【F:rpp/p2p/src/lib.rs†L1-L13】【F:src/node.rs†L1-L68】
-* **RPC Surface** – the same Axum server serves wallet and node requests, providing balance, reputation, timetoke and block data.【F:src/api.rs†L63-L200】
+* **Consensus** – embeds Malachite-backed BFT vote aggregation, quorum tracking and validator classification.【F:rpp/consensus/src/lib.rs†L1-L90】
+* **Storage** – reuses the shared RocksDB/Firewood-backed storage layer to persist blocks, accounts and metadata.【F:rpp/runtime/node.rs†L1-L20】【F:rpp/runtime/node.rs†L4742-L4814】
+* **Proof Verification** – leverages the proof registry to check transaction, identity, pruning, uptime and recursive proofs before import.【F:rpp/runtime/node.rs†L4128-L4184】【F:rpp/proofs/stwo/prover/mod.rs†L1-L200】
+* **Block Builder** – aggregates mempools, computes rewards and emits consensus certificates for every sealed block.【F:rpp/runtime/node.rs†L5671-L5717】
+* **Networking** – integrates the gossip stack for block, vote, proof and snapshot propagation.【F:rpp/p2p/src/lib.rs†L1-L13】【F:rpp/runtime/node.rs†L702-L758】
+* **RPC Surface** – the same Axum server serves wallet and node requests, providing balance, reputation, timetoke and block data.【F:rpp/rpc/api.rs†L60-L133】【F:rpp/rpc/api.rs†L1824-L1899】【F:rpp/rpc/api.rs†L2661-L2692】
 
 ### `rpc/`
 
-* **Unified API** – JSON endpoints abstract wallet and node functionality: balance lookup, transaction building/proving, uptime submissions, reputation queries and block/state inspection.【F:src/api.rs†L63-L200】
+* **Unified API** – JSON endpoints abstract wallet and node functionality: balance lookup, transaction building/proving, uptime submissions, reputation queries and block/state inspection.【F:rpp/rpc/api.rs†L60-L133】【F:rpp/rpc/api.rs†L1824-L1899】【F:rpp/rpc/api.rs†L2661-L2692】
 
 ## 5. Node/Wallet Toggle
 
-The `rppd` binary exposes subcommands for node lifecycle (start, keygen, migrate) while wallet workflows link directly against the same library, enabling a single binary distribution for both roles. Library consumers can instantiate the `Wallet` with the same storage the node uses, providing a seamless hybrid runtime.【F:src/main.rs†L16-L160】【F:src/wallet/wallet.rs†L25-L347】【F:src/node.rs†L167-L199】
+The `rppd` binary exposes subcommands for node lifecycle (start, keygen, migrate) while wallet workflows link directly against the same library, enabling a single binary distribution for both roles. Library consumers can instantiate the `Wallet` with the same storage the node uses, providing a seamless hybrid runtime.【F:rpp/runtime/mod.rs†L9-L64】【F:rpp/bin/node.rs†L1-L23】【F:rpp/wallet/ui/wallet.rs†L445-L575】【F:rpp/runtime/node.rs†L761-L809】
 
 ### Wallet Runtime Configuration
 
@@ -171,25 +171,25 @@ verfügbar sind.【F:rpp/wallet/tests/vendor_electrs_tracker_scenario.rs†L96-L
 
 ## 6. ZSI-Genesis-Validierung
 
-Wallets derive ZSI IDs by hashing their keys, binding VRF tags to the current epoch and verifying vacant Merkle slots before emitting identity declarations and proofs. Verification enforces zero initial reputation and correct commitments, ensuring every identity enters consensus with a validated profile.【F:src/wallet/wallet.rs†L75-L116】【F:src/types/identity.rs†L50-L173】
+Wallets derive ZSI IDs by hashing their keys, binding VRF tags to the current epoch and verifying vacant Merkle slots before emitting identity declarations and proofs. Verification enforces zero initial reputation and correct commitments, ensuring every identity enters consensus with a validated profile.【F:rpp/wallet/ui/wallet.rs†L1360-L1387】【F:rpp/runtime/types/identity.rs†L17-L190】
 
 ## 7. Sicherheit
 
-* **Key-Rotation** – address commitments and Merkle proofs allow rotating keys without breaking identity bindings, enforced during identity verification.【F:src/types/identity.rs†L63-L173】
-* **Anti-Replay** – transaction witnesses enforce nonce progression and balance conservation inside the STWO circuits.【F:src/stwo/prover/mod.rs†L93-L178】
-* **Sandbox-Prover** – wallet proof generation operates entirely on local RocksDB state with deterministic circuits, enabling offline proving workflows.【F:src/stwo/prover/mod.rs†L42-L200】
-* **Fail-Safe** – signatures can be produced independently of proof generation; proofs are bundled afterwards via the prover hooks.【F:src/wallet/wallet.rs†L188-L199】
+* **Key-Rotation** – address commitments and Merkle proofs allow rotating keys without breaking identity bindings, enforced during identity verification.【F:rpp/runtime/types/identity.rs†L56-L189】
+* **Anti-Replay** – transaction witnesses enforce nonce progression and balance conservation inside the STWO circuits.【F:rpp/proofs/stwo/prover/mod.rs†L75-L181】
+* **Sandbox-Prover** – wallet proof generation operates entirely on local RocksDB state with deterministic circuits, enabling offline proving workflows.【F:rpp/proofs/stwo/prover/mod.rs†L1-L200】
+* **Fail-Safe** – signatures can be produced independently of proof generation; proofs are bundled afterwards via the prover hooks.【F:rpp/wallet/ui/wallet.rs†L1508-L1537】
 
 ## 8. Integration
 
-* **Consensus Promotion** – validator classification pulls reputation tiers and timetoke hours, advancing wallets into validator roles when thresholds are met.【F:src/consensus.rs†L130-L193】
-* **Proof Submission** – uptime, identity and transaction proofs flow through dedicated mempools and RPC endpoints, updating reputation and timetoke records.【F:src/node.rs†L171-L199】【F:src/api.rs†L63-L140】
+* **Consensus Promotion** – validator classification pulls reputation tiers and timetoke hours, advancing wallets into validator roles when thresholds are met.【F:rpp/consensus/src/lib.rs†L37-L64】
+* **Proof Submission** – uptime, identity and transaction proofs flow through dedicated mempools and RPC endpoints, updating reputation and timetoke records.【F:rpp/runtime/node.rs†L4128-L4184】【F:rpp/rpc/api.rs†L60-L133】
 * **P2P Publication** – gossip channels broadcast blocks, votes, proofs and snapshots so wallet-hybrid nodes participate from TL1 upwards.【F:rpp/p2p/src/lib.rs†L1-L13】
-* **History Visibility** – wallets reconstruct transaction and reputation history from local blocks, aligning on-chain state with UI displays.【F:src/wallet/wallet.rs†L233-L347】
+* **History Visibility** – wallets reconstruct transaction and reputation history from local blocks, aligning on-chain state with UI displays.【F:rpp/wallet/ui/wallet.rs†L1577-L1660】
 
 ## 9. Lizenz & Fork
 
-The project inherits Electrs’ MIT-friendly approach, keeping all integrations self-contained within the repository. Storage, consensus, P2P and proof systems are implemented locally without relying on upstream Electrum or Bitcoin binaries.【F:README.md†L1-L99】【F:src/main.rs†L1-L160】
+The project inherits Electrs’ MIT-friendly approach, keeping all integrations self-contained within the repository. Storage, consensus, P2P and proof systems are implemented locally without relying on upstream Electrum or Bitcoin binaries.【F:README.md†L1-L99】【F:rpp/runtime/mod.rs†L9-L64】
 
 ## 10. UI-RPC-Verträge & Tests
 
@@ -199,10 +199,10 @@ The project inherits Electrs’ MIT-friendly approach, keeping all integrations 
 
 ## 11. Ergebnis
 
-* ✅ Electrum-inspirierte Wallet- und Full-Node-Funktionalität teilen sich Bibliotheken und Speicher, was hybride Deployments ermöglicht.【F:src/wallet/wallet.rs†L25-L347】【F:src/node.rs†L167-L199】
-* ✅ Proofs, Reputation und ZSI sind vollständig integriert und lokal verifizierbar.【F:src/stwo/prover/mod.rs†L1-L200】【F:src/types/identity.rs†L50-L173】【F:src/consensus.rs†L130-L193】
-* ✅ Konsensus, Storage, P2P und RPC laufen ohne externe Abhängigkeiten innerhalb der Fork.【F:src/node.rs†L1-L199】【F:rpp/p2p/src/lib.rs†L1-L13】【F:storage-firewood/src/lib.rs†L1-L49】
-* ✅ Produktionsreife Grundlage für RPP: Konfiguration, Schlüsselmanagement, Migration und API werden vom selben Binary bedient.【F:src/main.rs†L16-L160】【F:README.md†L32-L99】
+* ✅ Electrum-inspirierte Wallet- und Full-Node-Funktionalität teilen sich Bibliotheken und Speicher, was hybride Deployments ermöglicht.【F:rpp/wallet/ui/wallet.rs†L445-L575】【F:rpp/runtime/node.rs†L761-L809】
+* ✅ Proofs, Reputation und ZSI sind vollständig integriert und lokal verifizierbar.【F:rpp/proofs/stwo/prover/mod.rs†L1-L200】【F:rpp/runtime/types/identity.rs†L17-L190】【F:rpp/consensus/src/lib.rs†L37-L64】
+* ✅ Konsensus, Storage, P2P und RPC laufen ohne externe Abhängigkeiten innerhalb der Fork.【F:rpp/runtime/node.rs†L1-L68】【F:rpp/p2p/src/lib.rs†L1-L13】【F:storage-firewood/src/lib.rs†L1-L49】
+* ✅ Produktionsreife Grundlage für RPP: Konfiguration, Schlüsselmanagement, Migration und API werden vom selben Binary bedient.【F:rpp/runtime/mod.rs†L9-L64】【F:README.md†L32-L99】
 
 ## 12. Blueprint-Status
 
