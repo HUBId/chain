@@ -5,6 +5,8 @@
 //! error types so that subsequent work can focus on integrating the actual
 //! cryptography and consensus wiring without reshaping interfaces again.
 
+pub mod telemetry;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
@@ -830,6 +832,7 @@ pub fn select_validators(
     if pool.is_empty() {
         result.metrics.total_weight = "0".into();
         result.metrics.entropy_beacon = hex::encode(default_entropy_state());
+        telemetry::VrfTelemetry::global().record_selection(&result.metrics);
         return result;
     }
 
@@ -904,6 +907,7 @@ pub fn select_validators(
         result.metrics.total_weight = "0".into();
         result.metrics.entropy_beacon = hex::encode(entropy_state);
         result.metrics.participation_rate = 0.0;
+        telemetry::VrfTelemetry::global().record_selection(&result.metrics);
         return result;
     }
 
@@ -996,6 +1000,7 @@ pub fn select_validators(
     };
     result.metrics.total_weight = total_weight.to_string();
     result.metrics.entropy_beacon = hex::encode(entropy_state);
+    telemetry::VrfTelemetry::global().record_selection(&result.metrics);
     result
 }
 

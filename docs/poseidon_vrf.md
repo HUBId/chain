@@ -102,11 +102,16 @@ pool size, verified/accepted counts, rejection totals, and whether a fallback
 validator was promoted in the last round. The payload also reports participation
 rate, the cumulative validator weight, and the epoch entropy beacon produced by
 the VRF epoch manager so operators can chart fairness and randomness drift
-alongside consensus and mempool health.
+alongside consensus and mempool health.【F:rpp/runtime/node.rs†L3921-L3936】
 
-Telemetry streaming is gated by `rollout.telemetry.*` in `config/node.toml`, and
-operators still rely on the troubleshooting runbook to wire alerts around the
-new metrics until automated dashboards land.【F:config/node.toml†L62-L76】【F:rpp/runtime/node.rs†L3921-L3936】【F:docs/validator_troubleshooting.md†L9-L38】
+Metrics are exported directly from `select_validators` through the
+`rpp.crypto_vrf.selection.*` instruments so dashboards can track pool health and
+threshold behaviour without polling RPCs.【F:rpp/crypto-vrf/src/telemetry.rs†L1-L123】【F:rpp/crypto-vrf/src/lib.rs†L821-L999】
+Telemetry streaming remains gated by `rollout.telemetry.*` in `config/node.toml`,
+and the VRF-specific alert thresholds can be tuned under
+`rollout.telemetry.vrf_thresholds`. The `docs/observability/vrf.md` blueprint
+packages recommended panels and alert rules for operators to adopt alongside the
+existing troubleshooting guide.【F:config/node.toml†L62-L88】【F:docs/observability/vrf.md†L1-L64】【F:docs/validator_troubleshooting.md†L9-L38】
 
 ## Testing Guidance
 Run `cargo test vrf::tests` to exercise the Poseidon digest helpers, VRF

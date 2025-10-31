@@ -1641,6 +1641,25 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_config_validation_rejects_invalid_vrf_thresholds() {
+        let mut config = TelemetryConfig::default();
+        config.vrf_thresholds.max_fallback_ratio = 1.2;
+        let error = config
+            .validate()
+            .expect_err("telemetry validation should fail for invalid VRF thresholds");
+        match error {
+            ChainError::Config(message) => {
+                assert!(
+                    message.contains("telemetry.vrf_thresholds.max_fallback_ratio"),
+                    "unexpected message: {}",
+                    message
+                );
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
     fn node_config_validation_rejects_mismatched_config_version() {
         let mut config = NodeConfig::default();
         config.config_version = "2.0".to_string();
@@ -2742,6 +2761,8 @@ pub struct TelemetryConfig {
     pub grpc_tls: Option<TelemetryTlsConfig>,
     #[serde(default)]
     pub http_tls: Option<TelemetryTlsConfig>,
+    #[serde(default)]
+    pub vrf_thresholds: VrfTelemetryThresholds,
 }
 
 impl Default for TelemetryConfig {
@@ -2761,6 +2782,7 @@ impl Default for TelemetryConfig {
             warn_on_drop: default_warn_on_drop(),
             grpc_tls: None,
             http_tls: None,
+            vrf_thresholds: VrfTelemetryThresholds::default(),
         }
     }
 }
@@ -2798,7 +2820,52 @@ impl TelemetryConfig {
 
         validate_tls_config("telemetry.grpc_tls", self.grpc_tls.as_ref())?;
         validate_tls_config("telemetry.http_tls", self.http_tls.as_ref())?;
+        self.vrf_thresholds.validate()?;
 
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VrfTelemetryThresholds {
+    pub min_participation_rate: f64,
+    pub max_rejection_rate: f64,
+    pub max_fallback_ratio: f64,
+}
+
+impl Default for VrfTelemetryThresholds {
+    fn default() -> Self {
+        Self {
+            min_participation_rate: 0.66,
+            max_rejection_rate: 0.25,
+            max_fallback_ratio: 0.10,
+        }
+    }
+}
+
+impl VrfTelemetryThresholds {
+    pub fn validate(&self) -> ChainResult<()> {
+        for (label, value) in [
+            (
+                "telemetry.vrf_thresholds.min_participation_rate",
+                self.min_participation_rate,
+            ),
+            (
+                "telemetry.vrf_thresholds.max_rejection_rate",
+                self.max_rejection_rate,
+            ),
+            (
+                "telemetry.vrf_thresholds.max_fallback_ratio",
+                self.max_fallback_ratio,
+            ),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                return Err(ChainError::Config(format!(
+                    "{label} must be between 0.0 and 1.0"
+                )));
+            }
+        }
         Ok(())
     }
 }
