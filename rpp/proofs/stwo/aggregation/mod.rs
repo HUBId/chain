@@ -503,6 +503,9 @@ mod tests {
             pre_votes: vec![vote.clone()],
             pre_commits: vec![vote.clone()],
             commit_votes: vec![vote],
+            vrf_outputs: Vec::new(),
+            witness_commitments: Vec::new(),
+            reputation_roots: Vec::new(),
         };
         make_proof(
             parameters,

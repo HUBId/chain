@@ -42,6 +42,12 @@ pub struct ConsensusWitness {
     pub pre_votes: Vec<VotePower>,
     pub pre_commits: Vec<VotePower>,
     pub commit_votes: Vec<VotePower>,
+    #[serde(default)]
+    pub vrf_outputs: Vec<String>,
+    #[serde(default)]
+    pub witness_commitments: Vec<String>,
+    #[serde(default)]
+    pub reputation_roots: Vec<String>,
 }
 
 impl ConsensusWitness {
@@ -84,6 +90,21 @@ impl ConsensusWitness {
             return Err(CircuitError::ConstraintViolation(format!(
                 "insufficient {label} voting power for quorum"
             )));
+        }
+        Ok(())
+    }
+
+    fn ensure_digest_set(&self, label: &str, values: &[String]) -> Result<(), CircuitError> {
+        for value in values {
+            Self::ensure_hex(value).map_err(|err| match err {
+                CircuitError::InvalidWitness(message) => {
+                    CircuitError::InvalidWitness(format!("{label}: {message}"))
+                }
+                CircuitError::ConstraintViolation(message) => {
+                    CircuitError::ConstraintViolation(format!("{label}: {message}"))
+                }
+                other => other,
+            })?;
         }
         Ok(())
     }
@@ -157,6 +178,12 @@ impl StarkCircuit for ConsensusCircuit {
         self.witness.verify_quorum(pre_vote_total, "pre-vote")?;
         self.witness.verify_quorum(pre_commit_total, "pre-commit")?;
         self.witness.verify_quorum(commit_total, "commit")?;
+        self.witness
+            .ensure_digest_set("vrf output", &self.witness.vrf_outputs)?;
+        self.witness
+            .ensure_digest_set("witness commitment", &self.witness.witness_commitments)?;
+        self.witness
+            .ensure_digest_set("reputation root", &self.witness.reputation_roots)?;
 
         if commit_total < pre_commit_total {
             return Err(CircuitError::ConstraintViolation(

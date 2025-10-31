@@ -256,6 +256,9 @@ impl ProofProver for Plonky3Prover {
             pre_votes,
             pre_commits,
             commit_votes,
+            certificate.metadata.vrf_outputs.clone(),
+            certificate.metadata.witness_commitments.clone(),
+            certificate.metadata.reputation_roots.clone(),
         ))
     }
 

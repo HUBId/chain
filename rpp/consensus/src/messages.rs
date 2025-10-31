@@ -7,8 +7,8 @@ use std::error::Error;
 use std::fmt;
 
 use crate::proof_backend::{
-    BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend, ProofBytes,
-    ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use crate::validator::ValidatorId;
 
@@ -222,6 +222,18 @@ pub struct ConsensusCertificate {
     pub commit_power: u64,
     pub prevotes: Vec<TalliedVote>,
     pub precommits: Vec<TalliedVote>,
+    #[serde(default)]
+    pub metadata: ConsensusProofMetadata,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusProofMetadata {
+    #[serde(default)]
+    pub vrf_outputs: Vec<String>,
+    #[serde(default)]
+    pub witness_commitments: Vec<String>,
+    #[serde(default)]
+    pub reputation_roots: Vec<String>,
 }
 
 impl ConsensusCertificate {
@@ -237,6 +249,7 @@ impl ConsensusCertificate {
             commit_power: 0,
             prevotes: Vec::new(),
             precommits: Vec::new(),
+            metadata: ConsensusProofMetadata::default(),
         }
     }
 
@@ -265,11 +278,28 @@ impl ConsensusCertificate {
 
         let block_hash = decode_hash("block hash", &self.block_hash.0)?;
         let leader_proposal = block_hash;
+        let decode_digests = |label: &str, values: &[String]| -> BackendResult<Vec<[u8; 32]>> {
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let bytes = decode_hash(&format!("{label} #{index}"), value)?;
+                    Ok(bytes)
+                })
+                .collect()
+        };
+
         Ok(ConsensusPublicInputs {
             block_hash,
             round: self.round,
             leader_proposal,
             quorum_threshold: self.quorum_threshold,
+            vrf_outputs: decode_digests("vrf output", &self.metadata.vrf_outputs)?,
+            witness_commitments: decode_digests(
+                "witness commitment",
+                &self.metadata.witness_commitments,
+            )?,
+            reputation_roots: decode_digests("reputation root", &self.metadata.reputation_roots)?,
         })
     }
 }

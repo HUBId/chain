@@ -18,6 +18,12 @@ pub struct ConsensusWitness {
     pub pre_votes: Vec<VotePower>,
     pub pre_commits: Vec<VotePower>,
     pub commit_votes: Vec<VotePower>,
+    #[serde(default)]
+    pub vrf_outputs: Vec<String>,
+    #[serde(default)]
+    pub witness_commitments: Vec<String>,
+    #[serde(default)]
+    pub reputation_roots: Vec<String>,
 }
 
 impl ConsensusWitness {
@@ -30,6 +36,9 @@ impl ConsensusWitness {
         pre_votes: Vec<VotePower>,
         pre_commits: Vec<VotePower>,
         commit_votes: Vec<VotePower>,
+        vrf_outputs: Vec<String>,
+        witness_commitments: Vec<String>,
+        reputation_roots: Vec<String>,
     ) -> Self {
         Self {
             block_hash: block_hash.into(),
@@ -39,6 +48,9 @@ impl ConsensusWitness {
             pre_votes,
             pre_commits,
             commit_votes,
+            vrf_outputs,
+            witness_commitments,
+            reputation_roots,
         }
     }
 }

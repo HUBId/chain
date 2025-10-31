@@ -404,6 +404,9 @@ pub mod circuit {
             pub pre_votes: Vec<VotePower>,
             pub pre_commits: Vec<VotePower>,
             pub commit_votes: Vec<VotePower>,
+            pub vrf_outputs: Vec<String>,
+            pub witness_commitments: Vec<String>,
+            pub reputation_roots: Vec<String>,
         }
 
         #[derive(Clone, Debug, Default)]
