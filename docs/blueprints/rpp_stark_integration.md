@@ -126,6 +126,7 @@ Beides prüfen: Default & `rpp-stark`-Backend—komplett auf 1.79.
 - `.github/workflows/*`:
   - Matrix: `features: ["", "backend-rpp-stark"]`
   - Toolchain: `1.79.0`; Jobs: `build`, `test`, `clippy -D warnings`, `fmt --check`.
+- `.github/workflows/ci.yml` ruft `cargo xtask test-matrix` auf (über `make test:matrix`) und blockiert den Merge, sobald die STWO-Unit-/Integrationstests (`cargo +stable test -p rpp-chain --all-targets --locked`, `cargo +nightly-2025-07-14 test -p rpp-chain --all-targets --features prover-stwo --locked`) scheitern.
 - Bei Submodule-Variante: checkout mit `submodules: true`.
 - Tests nur lesend; keine Artefakt-Mutation in CI.
 
