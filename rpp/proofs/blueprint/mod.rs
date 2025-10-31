@@ -242,7 +242,7 @@ impl Blueprint {
                         key: "electrs.modes",
                         title: "Betriebsmodi trennen",
                         detail: "Node-, Wallet- und Hybrid-Modus im Binary und in Configs abbilden.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "electrs.ui_rpc",
