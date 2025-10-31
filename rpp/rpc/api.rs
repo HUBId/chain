@@ -65,10 +65,11 @@ use crate::interfaces::WalletTrackerSnapshot;
 use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
-    BftMembership, BlockProofArtifactsView, ConsensusStatus, MempoolStatus, NodeHandle, NodeStatus,
-    P2pCensorshipReport, PendingUptimeSummary, PruningJobStatus, RolloutStatus, UptimeSchedulerRun,
-    UptimeSchedulerStatus, ValidatorConsensusTelemetry, ValidatorMempoolTelemetry,
-    ValidatorTelemetryView, VrfStatus, VrfThresholdStatus, DEFAULT_STATE_SYNC_CHUNK,
+    BftMembership, BlockProofArtifactsView, ConsensusStatus, LightClientVerificationEvent,
+    MempoolStatus, NodeHandle, NodeStatus, P2pCensorshipReport, PendingUptimeSummary,
+    PruningJobStatus, RolloutStatus, UptimeSchedulerRun, UptimeSchedulerStatus,
+    ValidatorConsensusTelemetry, ValidatorMempoolTelemetry, ValidatorTelemetryView, VrfStatus,
+    VrfThresholdStatus, DEFAULT_STATE_SYNC_CHUNK,
 };
 use crate::orchestration::{
     PipelineDashboardSnapshot, PipelineError, PipelineOrchestrator, PipelineStage,
@@ -151,8 +152,13 @@ impl From<LightClientHead> for LightHeadSse {
 
 #[derive(Clone, Debug)]
 pub struct StateSyncSessionInfo {
-    pub root: Blake3Hash,
-    pub total_chunks: u32,
+    pub root: Option<Blake3Hash>,
+    pub total_chunks: Option<u32>,
+    pub verified: bool,
+    pub last_completed_step: Option<LightClientVerificationEvent>,
+    pub message: Option<String>,
+    pub served_chunks: Vec<u64>,
+    pub progress_log: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1969,13 +1975,25 @@ pub async fn state_sync_chunk_by_id(
     let session = api
         .state_sync_active_session()
         .map_err(state_sync_error_to_http)?;
-    if path.id >= session.total_chunks {
+    let total_chunks = match session.total_chunks {
+        Some(total) => total,
+        None => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: "state sync chunk count unavailable".into(),
+                }),
+            ))
+        }
+    };
+
+    if path.id >= total_chunks {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!(
                     "chunk index {} out of range (total {})",
-                    path.id, session.total_chunks
+                    path.id, total_chunks
                 ),
             }),
         ));
@@ -3056,35 +3074,50 @@ impl StateSyncApi for NodeHandle {
 
     fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError> {
         let cache = self.state_sync_session_snapshot();
-        if cache.status != StateSyncVerificationStatus::Verified {
+        let has_session_data = cache.snapshot_root.is_some()
+            || cache.total_chunks.is_some()
+            || cache.report.is_some()
+            || cache.error.is_some()
+            || cache.last_completed_step.is_some()
+            || !cache.progress_log.is_empty()
+            || !cache.served_chunks.is_empty()
+            || cache.status != StateSyncVerificationStatus::Idle;
+
+        if !has_session_data {
             return Err(StateSyncError::new(
                 StateSyncErrorKind::NoActiveSession,
                 Some("state sync session unavailable".into()),
             ));
         }
 
-        let root = cache.snapshot_root.ok_or_else(|| {
-            StateSyncError::new(
-                StateSyncErrorKind::Internal,
-                Some("state sync snapshot root unavailable".into()),
-            )
-        })?;
+        let total_chunks = match cache.total_chunks {
+            Some(total) => Some(u32::try_from(total).map_err(|_| {
+                StateSyncError::new(
+                    StateSyncErrorKind::Internal,
+                    Some("state sync chunk count exceeds supported range".into()),
+                )
+            })?),
+            None => None,
+        };
 
-        let total = cache.total_chunks.ok_or_else(|| {
-            StateSyncError::new(
-                StateSyncErrorKind::Internal,
-                Some("state sync chunk count unavailable".into()),
-            )
-        })?;
+        let mut served_chunks: Vec<u64> = cache.served_chunks.iter().copied().collect();
+        served_chunks.sort_unstable();
 
-        let total_chunks = u32::try_from(total).map_err(|_| {
-            StateSyncError::new(
-                StateSyncErrorKind::Internal,
-                Some("state sync chunk count exceeds supported range".into()),
-            )
-        })?;
+        let message = cache
+            .report
+            .as_ref()
+            .and_then(|report| report.summary.failure.clone())
+            .or_else(|| cache.error.clone());
 
-        Ok(StateSyncSessionInfo { root, total_chunks })
+        Ok(StateSyncSessionInfo {
+            root: cache.snapshot_root,
+            total_chunks,
+            verified: cache.status == StateSyncVerificationStatus::Verified,
+            last_completed_step: cache.last_completed_step.clone(),
+            message,
+            served_chunks,
+            progress_log: cache.progress_log.clone(),
+        })
     }
 
     async fn state_sync_chunk_by_index(

@@ -3,18 +3,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
     routing::get,
+    Router,
 };
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use base64::Engine as _;
 use hyper::body::HttpBody;
 use parking_lot::RwLock;
 use rpp_chain::api::{
-    ApiContext, StateSyncApi, StateSyncError, StateSyncErrorKind, StateSyncSessionInfo,
-    state_sync_chunk_by_id, state_sync_head_stream,
+    state_sync_chunk_by_id, state_sync_head_stream, ApiContext, StateSyncApi, StateSyncError,
+    StateSyncErrorKind, StateSyncSessionInfo,
 };
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{LightClientHead, SnapshotChunk};
@@ -62,7 +62,12 @@ impl StateSyncApi for FakeStateSyncApi {
     }
 
     fn ensure_state_sync_session(&self) -> Result<(), StateSyncError> {
-        if self.session.is_some() {
+        if self
+            .session
+            .as_ref()
+            .map(|session| session.verified)
+            .unwrap_or(false)
+        {
             Ok(())
         } else {
             Err(StateSyncError::new(
@@ -160,6 +165,10 @@ async fn state_sync_head_stream_emits_events() {
 async fn state_sync_chunk_by_id_returns_payload() {
     let payload = vec![1u8, 2, 3, 4];
     let root = blake3::hash(&payload);
+    let progress_log = vec![
+        "Loaded plan".to_string(),
+        "Verification complete".to_string(),
+    ];
     let chunk = SnapshotChunk {
         root,
         index: 0,
@@ -169,8 +178,13 @@ async fn state_sync_chunk_by_id_returns_payload() {
     let mut chunks = HashMap::new();
     chunks.insert(0, chunk);
     let session = StateSyncSessionInfo {
-        root,
-        total_chunks: 1,
+        root: Some(root),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: Some("verification complete".to_string()),
+        served_chunks: vec![0],
+        progress_log: progress_log.clone(),
     };
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     let api = Arc::new(FakeStateSyncApi::new(
@@ -179,7 +193,7 @@ async fn state_sync_chunk_by_id_returns_payload() {
         Some(session),
         chunks,
     ));
-    let context = test_context(api);
+    let context = test_context(api.clone());
     let app = Router::new()
         .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
         .with_state(context);
@@ -197,14 +211,30 @@ async fn state_sync_chunk_by_id_returns_payload() {
     let encoded = json["payload"].as_str().unwrap();
     let decoded = BASE64_ENGINE.decode(encoded).unwrap();
     assert_eq!(decoded, payload);
+
+    let session_info = api.state_sync_active_session().unwrap();
+    assert_eq!(session_info.root, Some(root));
+    assert_eq!(session_info.total_chunks, Some(1));
+    assert!(session_info.verified);
+    assert_eq!(session_info.served_chunks, vec![0]);
+    assert_eq!(session_info.progress_log, progress_log);
+    assert_eq!(
+        session_info.message.as_deref(),
+        Some("verification complete")
+    );
 }
 
 #[tokio::test]
 async fn state_sync_chunk_by_id_out_of_range_returns_400() {
     let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
     let session = StateSyncSessionInfo {
-        root: blake3::hash(&[0u8]),
-        total_chunks: 1,
+        root: Some(blake3::hash(&[0u8])),
+        total_chunks: Some(1),
+        verified: true,
+        last_completed_step: None,
+        message: None,
+        served_chunks: Vec::new(),
+        progress_log: Vec::new(),
     };
     let api = Arc::new(FakeStateSyncApi::new(
         sender,
@@ -212,7 +242,7 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
         Some(session),
         HashMap::new(),
     ));
-    let context = test_context(api);
+    let context = test_context(api.clone());
     let app = Router::new()
         .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
         .with_state(context);
@@ -223,4 +253,8 @@ async fn state_sync_chunk_by_id_out_of_range_returns_400() {
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let info = api.state_sync_active_session().unwrap();
+    assert!(info.verified);
+    assert_eq!(info.total_chunks, Some(1));
 }
