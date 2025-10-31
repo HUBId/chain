@@ -78,8 +78,8 @@ network interfaces and observability hooks. For configuration precedence and tem
   launches the orchestrator, node, and wallet, and readiness additionally checks that the pipeline
   orchestrator is active.【F:rpp/node/src/main.rs†L48-L178】【F:rpp/runtime/orchestration.rs†L517-L608】【F:rpp/rpc/api.rs†L1132-L1145】
 * **Commands:** Run `rpp-node validator` (or `cargo run --bin validator`) for the runtime, or append
-  subcommands such as `validator vrf rotate` and `validator telemetry` for key management and RPC
-  diagnostics.【F:rpp/node/src/main.rs†L48-L178】【F:rpp/node/Cargo.toml†L53-L55】
+  subcommands such as `validator vrf rotate`, `validator setup`, and `validator telemetry`/
+  `validator uptime` for key management, preflight checks, and RPC diagnostics.【F:rpp/node/src/main.rs†L48-L409】【F:rpp/node/Cargo.toml†L53-L55】
 * **Configuration:** Validator nodes default to `config/validator.toml` with telemetry enabled,
   faster P2P heartbeats, and testnet rollout channel. Wallet defaults enable Electrs runtime, tracker,
   and telemetry endpoints tailored to validator operations.【F:rpp/runtime/mod.rs†L44-L47】【F:rpp/node/src/lib.rs†L993-L1043】【F:config/validator.toml†L1-L60】【F:rpp/runtime/config.rs†L1516-L1520】
