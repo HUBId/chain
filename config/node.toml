@@ -83,6 +83,11 @@ witness_network = false
 enabled = false
 sample_interval_secs = 30
 
+[rollout.telemetry.vrf_thresholds]
+min_participation_rate = 0.66
+max_rejection_rate = 0.25
+max_fallback_ratio = 0.10
+
 [reputation.tier_thresholds]
 tier2_min_uptime_hours = 24
 tier3_min_consensus_success = 10
