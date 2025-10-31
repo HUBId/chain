@@ -67,6 +67,12 @@ gossip_backpressure_threshold = 4
 priority = 0.7
 fee = 0.3
 
+[governance.timetoke_rewards]
+enabled = false
+leader_pool_weight = 0.6
+witness_pool_weight = 0.3
+minimum_balance_hours = 1
+
 [rollout]
 release_channel = "development"
 

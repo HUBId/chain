@@ -14,6 +14,7 @@ use rpp_p2p::{ReputationHeuristics, TierLevel};
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
 
+use crate::consensus_engine::governance::TimetokeRewardGovernance;
 use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
 use crate::crypto::{
     DynVrfKeyStore, FilesystemKeystoreConfig, FilesystemVrfKeyStore, HsmKeystoreConfig,
@@ -1076,6 +1077,8 @@ pub struct NodeConfig {
     pub storage: FirewoodStorageConfig,
     #[serde(default)]
     pub pruning: PruningConfig,
+    #[serde(default)]
+    pub governance: GovernanceConfig,
 }
 
 fn default_max_block_identity_registrations() -> usize {
@@ -1290,6 +1293,10 @@ impl NodeConfig {
         self.malachite.reputation.timetoke_params()
     }
 
+    pub fn timetoke_rewards_governance(&self) -> TimetokeRewardGovernance {
+        self.governance.timetoke_rewards_governance()
+    }
+
     pub fn load_or_generate_vrf_keypair(&self) -> ChainResult<VrfKeypair> {
         self.secrets
             .load_or_generate_vrf_keypair(&self.vrf_key_path)
@@ -1360,6 +1367,7 @@ impl NodeConfig {
         self.queue_weights.validate()?;
         self.secrets.validate_with_path(&self.vrf_key_path)?;
         self.pruning.validate()?;
+        self.governance.validate()?;
         Ok(())
     }
 }
@@ -1394,6 +1402,7 @@ impl Default for NodeConfig {
             malachite: MalachiteConfig::default(),
             storage: FirewoodStorageConfig::default(),
             pruning: PruningConfig::default(),
+            governance: GovernanceConfig::default(),
         }
     }
 }
@@ -1488,6 +1497,68 @@ impl Default for QueueWeightsConfig {
         Self {
             priority: 0.7,
             fee: 0.3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GovernanceConfig {
+    pub timetoke_rewards: TimetokeRewardsGovernanceConfig,
+}
+
+impl GovernanceConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        self.timetoke_rewards.validate()
+    }
+
+    pub fn timetoke_rewards_governance(&self) -> TimetokeRewardGovernance {
+        self.timetoke_rewards.to_governance()
+    }
+}
+
+impl Default for GovernanceConfig {
+    fn default() -> Self {
+        Self {
+            timetoke_rewards: TimetokeRewardsGovernanceConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TimetokeRewardsGovernanceConfig {
+    pub enabled: bool,
+    pub leader_pool_weight: f64,
+    pub witness_pool_weight: f64,
+    pub minimum_balance_hours: u64,
+}
+
+impl TimetokeRewardsGovernanceConfig {
+    fn validate(&self) -> ChainResult<()> {
+        let policy = self.to_governance();
+        policy
+            .validate()
+            .map_err(|err| ChainError::Config(format!("governance.timetoke_rewards {err}")))
+    }
+
+    pub fn to_governance(&self) -> TimetokeRewardGovernance {
+        TimetokeRewardGovernance::new(
+            self.enabled,
+            self.leader_pool_weight,
+            self.witness_pool_weight,
+            self.minimum_balance_hours,
+        )
+    }
+}
+
+impl Default for TimetokeRewardsGovernanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            leader_pool_weight: 0.6,
+            witness_pool_weight: 0.3,
+            minimum_balance_hours: 1,
         }
     }
 }
