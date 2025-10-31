@@ -12,6 +12,8 @@ pub enum EvidenceKind {
     DoubleSign,
     Availability,
     Witness,
+    Censorship,
+    Inactivity,
 }
 
 impl EvidenceKind {
@@ -20,15 +22,49 @@ impl EvidenceKind {
             EvidenceKind::DoubleSign => "double_sign",
             EvidenceKind::Availability => "availability",
             EvidenceKind::Witness => "witness",
+            EvidenceKind::Censorship => "censorship",
+            EvidenceKind::Inactivity => "inactivity",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum CensorshipStage {
+    Prevote,
+    Precommit,
+    Proof,
+}
+
+impl CensorshipStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CensorshipStage::Prevote => "prevote",
+            CensorshipStage::Precommit => "precommit",
+            CensorshipStage::Proof => "proof",
         }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum EvidenceType {
-    DoubleSign { height: u64 },
-    FalseProof { block_hash: String },
-    VoteWithholding { round: u64 },
+    DoubleSign {
+        height: u64,
+    },
+    FalseProof {
+        block_hash: String,
+    },
+    VoteWithholding {
+        round: u64,
+    },
+    Censorship {
+        round: u64,
+        stage: CensorshipStage,
+        consecutive_misses: u64,
+    },
+    Inactivity {
+        round: u64,
+        consecutive_misses: u64,
+    },
 }
 
 impl EvidenceType {
@@ -37,6 +73,8 @@ impl EvidenceType {
             EvidenceType::DoubleSign { .. } => EvidenceKind::DoubleSign,
             EvidenceType::FalseProof { .. } => EvidenceKind::Availability,
             EvidenceType::VoteWithholding { .. } => EvidenceKind::Witness,
+            EvidenceType::Censorship { .. } => EvidenceKind::Censorship,
+            EvidenceType::Inactivity { .. } => EvidenceKind::Inactivity,
         }
     }
 }
@@ -53,11 +91,22 @@ pub struct Evidence {
     pub record: EvidenceRecord,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvidenceCounts {
+    pub double_signs: usize,
+    pub availability: usize,
+    pub witness: usize,
+    pub censorship: usize,
+    pub inactivity: usize,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct EvidencePipeline {
     double_signs: VecDeque<EvidenceRecord>,
     availability: VecDeque<EvidenceRecord>,
     witness: VecDeque<EvidenceRecord>,
+    censorship: VecDeque<EvidenceRecord>,
+    inactivity: VecDeque<EvidenceRecord>,
 }
 
 impl EvidencePipeline {
@@ -66,6 +115,8 @@ impl EvidencePipeline {
             EvidenceKind::DoubleSign => self.double_signs.push_back(record),
             EvidenceKind::Availability => self.availability.push_back(record),
             EvidenceKind::Witness => self.witness.push_back(record),
+            EvidenceKind::Censorship => self.censorship.push_back(record),
+            EvidenceKind::Inactivity => self.inactivity.push_back(record),
         }
     }
 
@@ -76,30 +127,48 @@ impl EvidencePipeline {
         if let Some(record) = self.availability.pop_front() {
             return Some(record);
         }
-        self.witness.pop_front()
+        if let Some(record) = self.censorship.pop_front() {
+            return Some(record);
+        }
+        if let Some(record) = self.witness.pop_front() {
+            return Some(record);
+        }
+        self.inactivity.pop_front()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &EvidenceRecord> {
         self.double_signs
             .iter()
             .chain(self.availability.iter())
+            .chain(self.censorship.iter())
             .chain(self.witness.iter())
+            .chain(self.inactivity.iter())
     }
 
     pub fn is_empty(&self) -> bool {
-        self.double_signs.is_empty() && self.availability.is_empty() && self.witness.is_empty()
+        self.double_signs.is_empty()
+            && self.availability.is_empty()
+            && self.witness.is_empty()
+            && self.censorship.is_empty()
+            && self.inactivity.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.double_signs.len() + self.availability.len() + self.witness.len()
+        self.double_signs.len()
+            + self.availability.len()
+            + self.witness.len()
+            + self.censorship.len()
+            + self.inactivity.len()
     }
 
-    pub fn counts(&self) -> (usize, usize, usize) {
-        (
-            self.double_signs.len(),
-            self.availability.len(),
-            self.witness.len(),
-        )
+    pub fn counts(&self) -> EvidenceCounts {
+        EvidenceCounts {
+            double_signs: self.double_signs.len(),
+            availability: self.availability.len(),
+            witness: self.witness.len(),
+            censorship: self.censorship.len(),
+            inactivity: self.inactivity.len(),
+        }
     }
 
     pub fn drain(&mut self) -> Vec<EvidenceRecord> {

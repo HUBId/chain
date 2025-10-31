@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use tracing::{info, warn};
 
+use crate::evidence::CensorshipStage;
 use crate::validator::{ValidatorId, ValidatorLedgerEntry};
 
 pub mod slashing;
@@ -216,6 +217,60 @@ impl MalachiteReputationManager {
         );
 
         outcome
+    }
+
+    fn apply_penalty(
+        &mut self,
+        validator: &ValidatorId,
+        reason: String,
+        start: u64,
+        end: u64,
+        tier_penalty: u8,
+        score_factor: f64,
+    ) -> Option<SlashingTrigger> {
+        let record = self.records.get_mut(validator)?;
+        if score_factor.is_finite() && score_factor >= 0.0 && score_factor < 1.0 {
+            record.score = (record.score * score_factor).max(0.0);
+        }
+        if tier_penalty > 0 {
+            record.tier = record.tier.saturating_sub(tier_penalty);
+        }
+        if let Some(entry) = self.ledger.get_mut(validator) {
+            entry.reputation_score = record.score;
+            entry.reputation_tier = record.tier;
+        }
+        let trigger = SlashingTrigger::new(validator, reason, start, end);
+        self.slashing_triggers.push(trigger.clone());
+        Some(trigger)
+    }
+
+    pub fn record_censorship(
+        &mut self,
+        validator: &ValidatorId,
+        stage: CensorshipStage,
+        round: u64,
+        misses: u64,
+    ) -> Option<SlashingTrigger> {
+        let start = round.saturating_sub(misses.saturating_sub(1));
+        let reason = format!("consensus_censorship_{}", stage.as_str());
+        self.apply_penalty(validator, reason, start, round, 0, 0.9)
+    }
+
+    pub fn record_inactivity(
+        &mut self,
+        validator: &ValidatorId,
+        round: u64,
+        misses: u64,
+    ) -> Option<SlashingTrigger> {
+        let start = round.saturating_sub(misses.saturating_sub(1));
+        self.apply_penalty(
+            validator,
+            "consensus_inactivity".into(),
+            start,
+            round,
+            0,
+            0.8,
+        )
     }
 }
 

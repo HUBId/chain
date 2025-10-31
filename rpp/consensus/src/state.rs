@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use crate::bft_loop::ConsensusMessage;
-use crate::evidence::{slash, EvidencePipeline, EvidenceRecord, EvidenceType};
+use crate::evidence::{
+    slash, CensorshipStage, EvidenceKind, EvidencePipeline, EvidenceRecord, EvidenceType,
+};
 use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{
     BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreCommit,
@@ -48,6 +50,11 @@ pub struct ConsensusConfig {
     pub witness_reward: u64,
     pub false_proof_penalty: u64,
     pub censorship_penalty: u64,
+    pub inactivity_penalty: u64,
+    pub censorship_vote_threshold: u64,
+    pub censorship_proof_threshold: u64,
+    pub inactivity_threshold: u64,
+    pub monitor_id: ValidatorId,
     pub treasury_accounts: TreasuryAccounts,
     pub witness_pool_weights: WitnessPoolWeights,
 }
@@ -67,6 +74,11 @@ impl ConsensusConfig {
             witness_reward: base_reward.saturating_div(2),
             false_proof_penalty: base_reward,
             censorship_penalty: base_reward.saturating_div(2).max(1),
+            inactivity_penalty: base_reward.saturating_div(4).max(1),
+            censorship_vote_threshold: 3,
+            censorship_proof_threshold: 2,
+            inactivity_threshold: 4,
+            monitor_id: "consensus-monitor".to_string(),
             treasury_accounts: TreasuryAccounts::default(),
             witness_pool_weights: WitnessPoolWeights::default(),
         }
@@ -81,11 +93,36 @@ impl ConsensusConfig {
         self.witness_reward = witness_reward;
         self.false_proof_penalty = false_proof_penalty;
         self.censorship_penalty = censorship_penalty;
+        if self.inactivity_penalty == 0 {
+            self.inactivity_penalty = censorship_penalty;
+        }
         self
     }
 
     pub fn with_treasury_accounts(mut self, accounts: TreasuryAccounts) -> Self {
         self.treasury_accounts = accounts;
+        self
+    }
+
+    pub fn with_inactivity_penalty(mut self, penalty: u64) -> Self {
+        self.inactivity_penalty = penalty;
+        self
+    }
+
+    pub fn with_participation_thresholds(
+        mut self,
+        vote_threshold: u64,
+        proof_threshold: u64,
+        inactivity_threshold: u64,
+    ) -> Self {
+        self.censorship_vote_threshold = vote_threshold;
+        self.censorship_proof_threshold = proof_threshold;
+        self.inactivity_threshold = inactivity_threshold;
+        self
+    }
+
+    pub fn with_monitor_id(mut self, monitor_id: ValidatorId) -> Self {
+        self.monitor_id = monitor_id;
         self
     }
 
@@ -303,6 +340,54 @@ impl VoteTally {
     }
 }
 
+#[derive(Default, Clone, Debug)]
+struct RoundParticipation {
+    prevotes: HashSet<ValidatorId>,
+    precommits: HashSet<ValidatorId>,
+    proofs: HashSet<ValidatorId>,
+}
+
+impl RoundParticipation {
+    fn clear(&mut self) {
+        self.prevotes.clear();
+        self.precommits.clear();
+        self.proofs.clear();
+    }
+}
+
+#[derive(Default, Clone, Debug)]
+struct ParticipationCounters {
+    missed_prevotes: u64,
+    missed_precommits: u64,
+    missed_proofs: u64,
+    inactive_rounds: u64,
+}
+
+#[derive(Default, Clone, Debug)]
+struct PenaltyFlags {
+    censorship: bool,
+    inactivity: bool,
+}
+
+impl PenaltyFlags {
+    fn register(&mut self, reason: PenaltyReason) {
+        match reason {
+            PenaltyReason::Censorship => self.censorship = true,
+            PenaltyReason::Inactivity => self.inactivity = true,
+        }
+    }
+
+    fn should_withhold(&self) -> bool {
+        self.censorship || self.inactivity
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PenaltyReason {
+    Censorship,
+    Inactivity,
+}
+
 pub struct ConsensusState {
     pub config: ConsensusConfig,
     pub block_height: u64,
@@ -327,6 +412,9 @@ pub struct ConsensusState {
     pub last_activity: Instant,
     pub halted: bool,
     recorded_votes: HashMap<VoteKey, VoteFingerprint>,
+    round_participation: RoundParticipation,
+    participation_counters: HashMap<ValidatorId, ParticipationCounters>,
+    penalty_flags: HashMap<ValidatorId, PenaltyFlags>,
     witness_rewards: BTreeMap<ValidatorId, u64>,
     pub proof_backend: Arc<dyn ProofBackend>,
     latest_certificate: ConsensusCertificate,
@@ -375,6 +463,9 @@ impl ConsensusState {
             last_activity: Instant::now(),
             halted: false,
             recorded_votes: HashMap::new(),
+            round_participation: RoundParticipation::default(),
+            participation_counters: HashMap::new(),
+            penalty_flags: HashMap::new(),
             witness_rewards: BTreeMap::new(),
             proof_backend,
             latest_certificate: ConsensusCertificate::genesis(),
@@ -405,6 +496,10 @@ impl ConsensusState {
         let Some(validator) = self.validator_set.get(&vote.validator_id).cloned() else {
             return VoteRecordOutcome::UnknownValidator;
         };
+
+        self.round_participation
+            .prevotes
+            .insert(validator.id.clone());
 
         let key = VoteKey::new(
             vote.height,
@@ -452,6 +547,10 @@ impl ConsensusState {
         let Some(validator) = self.validator_set.get(&vote.validator_id).cloned() else {
             return VoteRecordOutcome::UnknownValidator;
         };
+
+        self.round_participation
+            .precommits
+            .insert(validator.id.clone());
 
         let key = VoteKey::new(
             vote.height,
@@ -600,6 +699,7 @@ impl ConsensusState {
     }
 
     pub fn next_round(&mut self) {
+        self.finalize_round_detectors();
         self.round = self.round.saturating_add(1);
         self.update_leader();
         self.pending_prevotes.clear();
@@ -624,10 +724,205 @@ impl ConsensusState {
 
     pub fn record_proof(&mut self, proof: ConsensusProof) {
         self.pending_proofs.push(proof);
+        if let Some(leader) = &self.current_leader {
+            self.round_participation.proofs.insert(leader.id.clone());
+        }
     }
 
     pub fn record_reward(&mut self, reward: RewardDistribution) {
         self.pending_rewards.push(reward);
+    }
+
+    fn flag_penalty(&mut self, validator: &ValidatorId, reason: PenaltyReason) {
+        self.penalty_flags
+            .entry(validator.clone())
+            .or_default()
+            .register(reason);
+    }
+
+    fn handle_censorship(
+        &mut self,
+        validator: &ValidatorId,
+        stage: CensorshipStage,
+        misses: u64,
+        round: u64,
+        generated: &mut Vec<EvidenceRecord>,
+    ) {
+        self.flag_penalty(validator, PenaltyReason::Censorship);
+        if let Some(trigger) = self
+            .reputation
+            .record_censorship(validator, stage, round, misses)
+        {
+            let event = self.slashing_heuristics.observe_trigger(&trigger);
+            warn!(
+                validator = %trigger.validator,
+                reason = %trigger.reason,
+                stage = stage.as_str(),
+                misses,
+                round,
+                detail = %event.detail,
+                "registered censorship trigger"
+            );
+        } else {
+            warn!(
+                validator = %validator,
+                stage = stage.as_str(),
+                misses,
+                round,
+                "detected censorship without reputation trigger"
+            );
+        }
+
+        generated.push(EvidenceRecord {
+            reporter: self.config.monitor_id.clone(),
+            accused: validator.clone(),
+            evidence: EvidenceType::Censorship {
+                round,
+                stage,
+                consecutive_misses: misses,
+            },
+        });
+    }
+
+    fn handle_inactivity(
+        &mut self,
+        validator: &ValidatorId,
+        misses: u64,
+        round: u64,
+        generated: &mut Vec<EvidenceRecord>,
+    ) {
+        self.flag_penalty(validator, PenaltyReason::Inactivity);
+        if let Some(trigger) = self.reputation.record_inactivity(validator, round, misses) {
+            let event = self.slashing_heuristics.observe_trigger(&trigger);
+            warn!(
+                validator = %trigger.validator,
+                reason = %trigger.reason,
+                misses,
+                round,
+                detail = %event.detail,
+                "registered inactivity trigger"
+            );
+        } else {
+            warn!(
+                validator = %validator,
+                misses,
+                round,
+                "detected inactivity without reputation trigger"
+            );
+        }
+
+        generated.push(EvidenceRecord {
+            reporter: self.config.monitor_id.clone(),
+            accused: validator.clone(),
+            evidence: EvidenceType::Inactivity {
+                round,
+                consecutive_misses: misses,
+            },
+        });
+    }
+
+    fn finalize_round_detectors(&mut self) {
+        if self.validator_set.validators.is_empty() {
+            self.round_participation.clear();
+            return;
+        }
+
+        let round = self.round;
+        let mut generated = Vec::new();
+        let leader_id = self.current_leader.as_ref().map(|leader| leader.id.clone());
+
+        for validator in &self.validator_set.validators {
+            let participated_prevote = self.round_participation.prevotes.contains(&validator.id);
+            let participated_precommit =
+                self.round_participation.precommits.contains(&validator.id);
+            let participated_proof = self.round_participation.proofs.contains(&validator.id);
+            let participated = participated_prevote || participated_precommit || participated_proof;
+
+            let counters = self
+                .participation_counters
+                .entry(validator.id.clone())
+                .or_default();
+
+            if self.config.censorship_vote_threshold > 0 {
+                if participated_prevote {
+                    counters.missed_prevotes = 0;
+                } else {
+                    counters.missed_prevotes = counters.missed_prevotes.saturating_add(1);
+                    let misses = counters.missed_prevotes;
+                    if misses >= self.config.censorship_vote_threshold {
+                        counters.missed_prevotes = 0;
+                        self.handle_censorship(
+                            &validator.id,
+                            CensorshipStage::Prevote,
+                            misses,
+                            round,
+                            &mut generated,
+                        );
+                    }
+                }
+            }
+
+            if self.config.censorship_vote_threshold > 0 {
+                if participated_precommit {
+                    counters.missed_precommits = 0;
+                } else {
+                    counters.missed_precommits = counters.missed_precommits.saturating_add(1);
+                    let misses = counters.missed_precommits;
+                    if misses >= self.config.censorship_vote_threshold {
+                        counters.missed_precommits = 0;
+                        self.handle_censorship(
+                            &validator.id,
+                            CensorshipStage::Precommit,
+                            misses,
+                            round,
+                            &mut generated,
+                        );
+                    }
+                }
+            }
+
+            if participated {
+                counters.inactive_rounds = 0;
+            } else if self.config.inactivity_threshold > 0 {
+                counters.inactive_rounds = counters.inactive_rounds.saturating_add(1);
+                let misses = counters.inactive_rounds;
+                if misses >= self.config.inactivity_threshold {
+                    counters.inactive_rounds = 0;
+                    self.handle_inactivity(&validator.id, misses, round, &mut generated);
+                }
+            }
+        }
+
+        if let Some(leader_id) = leader_id {
+            if self.config.censorship_proof_threshold > 0 {
+                let counters = self
+                    .participation_counters
+                    .entry(leader_id.clone())
+                    .or_default();
+                if self.round_participation.proofs.contains(&leader_id) {
+                    counters.missed_proofs = 0;
+                } else {
+                    counters.missed_proofs = counters.missed_proofs.saturating_add(1);
+                    let misses = counters.missed_proofs;
+                    if misses >= self.config.censorship_proof_threshold {
+                        counters.missed_proofs = 0;
+                        self.handle_censorship(
+                            &leader_id,
+                            CensorshipStage::Proof,
+                            misses,
+                            round,
+                            &mut generated,
+                        );
+                    }
+                }
+            }
+        }
+
+        self.round_participation.clear();
+
+        for record in generated {
+            self.record_evidence(record);
+        }
     }
 
     pub fn record_evidence(&mut self, evidence: EvidenceRecord) {
@@ -651,6 +946,7 @@ impl ConsensusState {
     }
 
     pub fn apply_commit(&mut self, commit: Commit) {
+        self.finalize_round_detectors();
         let committed_hash = commit.block.hash();
         self.block_height = commit.block.height;
         if let Some(certificate) = self.pending_certificate.take() {
@@ -670,6 +966,24 @@ impl ConsensusState {
                 self.config.treasury_accounts(),
                 self.config.witness_pool_weights(),
             );
+            let mut withheld_total = 0u64;
+            let penalty_flags = std::mem::take(&mut self.penalty_flags);
+            for (validator, flags) in penalty_flags {
+                if !flags.should_withhold() {
+                    continue;
+                }
+                let amount = rewards.rewards.get(&validator).copied().unwrap_or_default();
+                let withheld = rewards.apply_penalty(validator.clone(), amount);
+                if withheld > 0 {
+                    withheld_total = withheld_total.saturating_add(withheld);
+                }
+            }
+            if withheld_total > 0 {
+                rewards.total_reward = rewards.total_reward.saturating_sub(withheld_total);
+                rewards.validator_treasury_debit = rewards
+                    .validator_treasury_debit
+                    .saturating_sub(withheld_total);
+            }
             rewards.apply_witness_rewards(witness_rewards);
             self.record_reward(rewards);
         }
@@ -807,7 +1121,7 @@ impl ConsensusState {
     }
 
     fn apply_witness_evidence(&mut self, record: &EvidenceRecord) {
-        if self.config.witness_reward > 0 {
+        if record.evidence.kind() == EvidenceKind::Witness && self.config.witness_reward > 0 {
             let entry = self
                 .witness_rewards
                 .entry(record.reporter.clone())
@@ -830,6 +1144,16 @@ impl ConsensusState {
             EvidenceType::VoteWithholding { .. } => {
                 if self.config.censorship_penalty > 0 {
                     slash(&record.accused, self.config.censorship_penalty, self);
+                }
+            }
+            EvidenceType::Censorship { .. } => {
+                if self.config.censorship_penalty > 0 {
+                    slash(&record.accused, self.config.censorship_penalty, self);
+                }
+            }
+            EvidenceType::Inactivity { .. } => {
+                if self.config.inactivity_penalty > 0 {
+                    slash(&record.accused, self.config.inactivity_penalty, self);
                 }
             }
         }
