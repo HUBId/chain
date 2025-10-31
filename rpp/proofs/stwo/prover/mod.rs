@@ -401,6 +401,9 @@ impl<'a> WalletProver<'a> {
             pre_votes,
             pre_commits,
             commit_votes,
+            vrf_outputs: certificate.metadata.vrf_outputs.clone(),
+            witness_commitments: certificate.metadata.witness_commitments.clone(),
+            reputation_roots: certificate.metadata.reputation_roots.clone(),
         })
     }
 }

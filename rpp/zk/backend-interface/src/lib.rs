@@ -372,6 +372,12 @@ pub struct ConsensusPublicInputs {
     pub round: u64,
     pub leader_proposal: [u8; 32],
     pub quorum_threshold: u64,
+    #[serde(default)]
+    pub vrf_outputs: Vec<[u8; 32]>,
+    #[serde(default)]
+    pub witness_commitments: Vec<[u8; 32]>,
+    #[serde(default)]
+    pub reputation_roots: Vec<[u8; 32]>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

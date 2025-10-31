@@ -10,8 +10,8 @@ use crate::bft_loop::ConsensusMessage;
 use crate::evidence::{slash, EvidencePipeline, EvidenceRecord, EvidenceType};
 use crate::leader::{elect_leader, Leader, LeaderContext};
 use crate::messages::{
-    BlockId, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote, Proposal, Signature,
-    TalliedVote,
+    BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreCommit,
+    PreVote, Proposal, Signature, TalliedVote,
 };
 use crate::proof_backend::ProofBackend;
 use crate::reputation::{
@@ -578,6 +578,7 @@ impl ConsensusState {
             commit_power: precommit_power,
             prevotes,
             precommits,
+            metadata: ConsensusProofMetadata::default(),
         }
     }
 

@@ -1,8 +1,8 @@
 use libp2p::PeerId;
 use rpp_consensus::malachite::distributed::{DistributedOrchestrator, NodeStreams, VoteMessage};
 use rpp_consensus::messages::{
-    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote, Proposal,
-    Signature,
+    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreCommit,
+    PreVote, Proposal, Signature,
 };
 use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
@@ -35,6 +35,7 @@ fn sample_proof(round: u64) -> ConsensusProof {
             round,
             leader_proposal,
             quorum_threshold: 67,
+            ..Default::default()
         },
     )
 }
@@ -51,6 +52,7 @@ fn sample_certificate(block_hash: BlockId, height: u64, round: u64) -> Consensus
         commit_power: 100,
         prevotes: Vec::new(),
         precommits: Vec::new(),
+        metadata: ConsensusProofMetadata::default(),
     }
 }
 

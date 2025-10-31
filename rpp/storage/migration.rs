@@ -472,6 +472,9 @@ mod tests {
                     voter: "alice".into(),
                     weight: 1,
                 }],
+                vrf_outputs: Vec::new(),
+                witness_commitments: Vec::new(),
+                reputation_roots: Vec::new(),
             }),
             _ => ProofPayload::State(StateWitness {
                 prev_state_root: "11".repeat(32),

@@ -5,7 +5,9 @@ use crate::proof_backend::TxPublicInputs;
 use crate::rpp::ProofSystemKind;
 
 #[cfg(feature = "prover-stwo")]
-use crate::stwo::circuit::transaction::TransactionWitness;
+use crate::stwo::circuit::{
+    consensus::ConsensusWitness as CircuitConsensusWitness, transaction::TransactionWitness,
+};
 #[cfg(feature = "prover-stwo")]
 use crate::stwo::proof::{ProofPayload, StarkProof};
 
@@ -17,6 +19,13 @@ mod stwo_disabled {
     #[derive(Clone, Debug, Default, Serialize, Deserialize)]
     #[serde(transparent)]
     pub struct TransactionWitness {
+        #[serde(default)]
+        pub raw: Value,
+    }
+
+    #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+    #[serde(transparent)]
+    pub struct ConsensusWitness {
         #[serde(default)]
         pub raw: Value,
     }
@@ -37,7 +46,9 @@ mod stwo_disabled {
 }
 
 #[cfg(not(feature = "prover-stwo"))]
-use stwo_disabled::{ProofPayload, StarkProof, TransactionWitness};
+use stwo_disabled::{
+    ConsensusWitness as CircuitConsensusWitness, ProofPayload, StarkProof, TransactionWitness,
+};
 
 use super::transaction::SignedTransaction;
 
@@ -221,6 +232,23 @@ impl ChainProof {
                 "expected RPP-STARK proof, received PLONKY3 artifact".into(),
             )),
         }
+    }
+
+    #[cfg(feature = "prover-stwo")]
+    pub fn consensus_witness(&self) -> ChainResult<&CircuitConsensusWitness> {
+        let stark = self.expect_stwo()?;
+        match &stark.payload {
+            ProofPayload::Consensus(witness) => Ok(witness),
+            _ => Err(ChainError::Crypto(
+                "expected consensus witness payload in STWO proof".into(),
+            )),
+        }
+    }
+
+    #[cfg(not(feature = "prover-stwo"))]
+    pub fn consensus_witness(&self) -> ChainResult<&CircuitConsensusWitness> {
+        let _ = self;
+        Err(ChainError::Crypto("STWO prover disabled".into()))
     }
 }
 

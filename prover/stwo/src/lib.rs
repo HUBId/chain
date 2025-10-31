@@ -1,5 +1,7 @@
 //! Helper circuits modelling wallet-level invariants enforced before running
-//! the full STWO proving pipeline.
+//! the full STWO proving pipeline.  The consensus gadgets expose structured
+//! public inputs so that VRF outputs, witness commitments, and reputation roots
+//! are validated alongside the usual quorum signatures.
 
 pub mod circuits;
 

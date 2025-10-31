@@ -705,12 +705,22 @@ fn rebuild_consensus_public_inputs(
     parameters: &StarkParameters,
     inputs: &ConsensusPublicInputs,
 ) -> Vec<FieldElement> {
-    vec![
+    let mut fields = vec![
         element_from_bytes(parameters, &inputs.block_hash),
         parameters.element_from_u64(inputs.round),
         element_from_bytes(parameters, &inputs.leader_proposal),
         parameters.element_from_u64(inputs.quorum_threshold),
-    ]
+    ];
+    for digest in &inputs.vrf_outputs {
+        fields.push(element_from_bytes(parameters, digest));
+    }
+    for digest in &inputs.witness_commitments {
+        fields.push(element_from_bytes(parameters, digest));
+    }
+    for digest in &inputs.reputation_roots {
+        fields.push(element_from_bytes(parameters, digest));
+    }
+    fields
 }
 #[cfg(all(test, feature = "official"))]
 mod tests {
@@ -1326,6 +1336,9 @@ mod tests {
             pre_votes: votes.clone(),
             pre_commits: votes.clone(),
             commit_votes: votes,
+            vrf_outputs: Vec::new(),
+            witness_commitments: Vec::new(),
+            reputation_roots: Vec::new(),
         }
     }
 
@@ -1388,6 +1401,21 @@ mod tests {
             round: witness.round,
             leader_proposal: hex_to_array(&witness.leader_proposal),
             quorum_threshold: witness.quorum_threshold,
+            vrf_outputs: witness
+                .vrf_outputs
+                .iter()
+                .map(|value| hex_to_array(value))
+                .collect(),
+            witness_commitments: witness
+                .witness_commitments
+                .iter()
+                .map(|value| hex_to_array(value))
+                .collect(),
+            reputation_roots: witness
+                .reputation_roots
+                .iter()
+                .map(|value| hex_to_array(value))
+                .collect(),
         }
     }
 

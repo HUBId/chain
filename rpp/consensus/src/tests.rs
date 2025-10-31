@@ -13,8 +13,8 @@ use super::evidence::EvidenceType;
 #[cfg(feature = "prover-stwo")]
 use super::leader::{Leader, LeaderContext};
 use super::messages::{
-    Block, BlockId, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
-    ProofVerificationError, Proposal, TalliedVote,
+    Block, BlockId, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreCommit,
+    PreVote, ProofVerificationError, Proposal, TalliedVote,
 };
 #[cfg(feature = "prover-stwo")]
 use super::messages::{Commit, Signature};
@@ -278,6 +278,7 @@ fn certificate_for_block(block: &Block, round: u64) -> ConsensusCertificate {
         commit_power: total_power,
         prevotes,
         precommits,
+        metadata: ConsensusProofMetadata::default(),
     }
 }
 
@@ -390,6 +391,7 @@ fn certificate_with_block(label: &str) -> ConsensusCertificate {
         commit_power: total_power,
         prevotes,
         precommits,
+        metadata: ConsensusProofMetadata::default(),
     }
 }
 
