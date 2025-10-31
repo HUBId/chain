@@ -84,7 +84,7 @@ func TestRangeProofPartialRange(t *testing.T) {
 	// ensure the proofs are different
 	r.NotEqual(proof1, proof2)
 
-	// TODO(https://github.com/ava-labs/firewood/issues/738): verify the proofs
+	// TODO(https://github.com/ava-labs/chain/issues/738): verify the proofs
 }
 
 func TestRangeProofDiffersAfterUpdate(t *testing.T) {

@@ -26,7 +26,7 @@ fn test_missing_key_proof() {
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -69,7 +69,7 @@ fn test_range_proof() {
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_bad_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -167,7 +167,7 @@ fn test_bad_range_proof() {
 #[test]
 // Tests normal range proof with two non-existent proofs.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_range_proof_with_non_existent_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -245,7 +245,7 @@ fn test_range_proof_with_non_existent_proof() {
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_range_proof_with_invalid_non_existent_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -317,7 +317,7 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 #[test]
 // Tests the proof with only one element. The first edge proof can be existent one or
 // non-existent one.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_one_element_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -441,7 +441,7 @@ fn test_one_element_range_proof() {
 #[test]
 // Tests the range proof with all elements.
 // The edge proofs can be nil.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_all_elements_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -519,7 +519,7 @@ fn test_all_elements_proof() {
 #[test]
 // Tests the range proof with "no" element. The first edge proof must
 // be a non-existent proof.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_empty_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -558,7 +558,7 @@ fn test_empty_range_proof() {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_gapped_range_proof() {
     let mut items = Vec::new();
     // Sorted entries
@@ -607,7 +607,7 @@ fn test_gapped_range_proof() {
 
 #[test]
 // Tests the element is not in the range covered by proofs.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_same_side_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -663,7 +663,7 @@ fn test_same_side_proof() {
 
 #[test]
 // Tests the range starts from zero.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -704,7 +704,7 @@ fn test_single_side_range_proof() {
 
 #[test]
 // Tests the range ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_reverse_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -746,7 +746,7 @@ fn test_reverse_single_side_range_proof() {
 
 #[test]
 // Tests the range starts with zero and ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_both_sides_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -785,7 +785,7 @@ fn test_both_sides_range_proof() {
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -833,7 +833,7 @@ fn test_empty_value_range_proof() {
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_all_elements_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -876,7 +876,7 @@ fn test_all_elements_empty_value_range_proof() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_range_proof_keys_with_shared_prefix() {
     let items = vec![
         (
@@ -917,7 +917,7 @@ fn test_range_proof_keys_with_shared_prefix() {
 #[test]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+#[ignore = "https://github.com/ava-labs/chain/issues/738"]
 fn test_bloadted_range_proof() {
     // Use a small trie
     let mut items = Vec::new();

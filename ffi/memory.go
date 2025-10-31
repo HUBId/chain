@@ -3,7 +3,7 @@
 
 // Package ffi provides a Go wrapper around the [Firewood] database.
 //
-// [Firewood]: https://github.com/ava-labs/firewood
+// [Firewood]: https://github.com/ava-labs/chain
 package ffi
 
 // // Note that -lm is required on Linux but not on Mac.

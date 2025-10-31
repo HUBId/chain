@@ -15,7 +15,7 @@ Setup a dev-environment ([guide](https://docs.docker.com/desktop/dev-environment
 
 Here, you want to specifically pick a local-directory (the repo's directory)
 
-![image](https://github.com/ava-labs/firewood/assets/3286504/83d6b66d-19e3-4b59-bc73-f67cf68d7329)
+![image](https://github.com/ava-labs/chain/assets/3286504/83d6b66d-19e3-4b59-bc73-f67cf68d7329)
 
 This is best because you can still do all your `git` stuff from the host.
 
@@ -25,7 +25,7 @@ You will need the `Dev Containers` VSCODE extension, authored by Microsoft for t
 
 Open your dev-environment with VSCODE. Until you do this, the volume might not be properly mounted. If you (dear reader) know of a better way to do this, please open a PR. VSCODE is very useful for its step-by-step debugger, but other than that, you can run whatever IDE you would like in the host environment and just open a shell in the container to run the tests.
 
-![image](https://github.com/ava-labs/firewood/assets/3286504/88c981cb-42b9-4b99-acec-fbca31cca652)
+![image](https://github.com/ava-labs/chain/assets/3286504/88c981cb-42b9-4b99-acec-fbca31cca652)
 
 ### Step 4
 

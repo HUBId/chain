@@ -1,12 +1,12 @@
-module github.com/ava-labs/firewood/ffi/tests
+module github.com/ava-labs/chain/ffi/tests
 
 go 1.23.9
 
 toolchain go1.24.2
 
 require (
-	github.com/ava-labs/firewood-go/ffi v0.0.0 // this is replaced to use the parent folder
-	github.com/stretchr/testify v1.10.0
+github.com/ava-labs/firewood-go/ffi v0.0.0 // this is replaced to use the parent folder
+github.com/stretchr/testify v1.10.0
 )
 
 require github.com/ava-labs/avalanchego v1.13.1

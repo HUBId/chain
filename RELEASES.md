@@ -40,7 +40,7 @@ target. For every package the workflow must publish:
 
 Use `scripts/verify_checksums.sh` to validate manifests locally and
 `cosign verify-blob` to confirm the signatures reference the expected OIDC
-subject (`https://github.com/ava-labs/firewood/.+`).
+subject (`https://github.com/ava-labs/chain/.+`).
 
 ## Rollback and Hotfix Flow
 

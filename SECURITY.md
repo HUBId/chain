@@ -25,7 +25,7 @@ running:
 
 ```bash
 cosign verify-blob \
-  --certificate-identity-regexp 'https://github.com/ava-labs/firewood/.+' \
+  --certificate-identity-regexp 'https://github.com/ava-labs/chain/.+' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   --signature <artifact>.sig \
   <artifact>

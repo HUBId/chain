@@ -38,7 +38,7 @@ render_always = true
 # An array of regex based postprocessors to modify the changelog.
 postprocessors = [
     # Replace the placeholder <REPO> with a URL.
-    { pattern = '<REPO>', replace = "https://github.com/ava-labs/firewood" },
+    { pattern = '<REPO>', replace = "https://github.com/ava-labs/chain" },
 ]
 # render body even when there are no releases to process
 # render_always = true

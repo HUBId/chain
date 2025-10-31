@@ -16,7 +16,7 @@ if [ ! -d "$HOME/firewood" ]; then
 fi
 pushd "$HOME/firewood"
 
-git clone https://github.com/ava-labs/firewood.git .
+git clone https://github.com/ava-labs/chain.git .
 
 # build the firewood binary
 cargo build --profile maxperf

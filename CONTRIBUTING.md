@@ -15,7 +15,7 @@ guidelines for contributing to firewood.
 
 * [Setting up docker](README.docker.md)
 * [Auto-generated documentation](https://ava-labs.github.io/firewood/firewood/)
-* [Issue tracker](https://github.com/ava-labs/firewood/issues)
+* [Issue tracker](https://github.com/ava-labs/chain/issues)
 
 ## [Testing]
 
@@ -46,16 +46,16 @@ so you should expect a response during the week within 24 hours.
 
 ## [How to report a bug]
 
-Please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for reporting issues.
+Please use the [issue tracker](https://github.com/ava-labs/chain/issues) for reporting issues.
 
 ## [First time fixes for contributors]
 
-The [issue tracker](https://github.com/ava-labs/firewood/issues) typically has some issues tagged for first-time contributors. If not,
+The [issue tracker](https://github.com/ava-labs/chain/issues) typically has some issues tagged for first-time contributors. If not,
 please reach out. We hope you work on an easy task before tackling a harder one.
 
 ## [How to request an enhancement]
 
-Just like bugs, please use the [issue tracker](https://github.com/ava-labs/firewood/issues) for requesting enhancements. Please tag the issue with the "enhancement" tag.
+Just like bugs, please use the [issue tracker](https://github.com/ava-labs/chain/issues) for requesting enhancements. Please tag the issue with the "enhancement" tag.
 
 ## [Style Guide / Coding Conventions]
 

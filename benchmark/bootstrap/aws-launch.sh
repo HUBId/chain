@@ -290,7 +290,7 @@ runcmd:
     sh -s -- -y --no-modify-path
   - sudo -u ubuntu --login rustup default stable
   # install firewood
-  - git clone --depth 1 __FIREWOOD_BRANCH_ARG__ https://github.com/ava-labs/firewood.git /tmp/firewood
+  - git clone --depth 1 __FIREWOOD_BRANCH_ARG__ https://github.com/ava-labs/chain.git /tmp/firewood
   - bash /tmp/firewood/benchmark/setup-scripts/build-environment.sh
   - bash -c 'mkdir ~ubuntu/firewood; mv /tmp/firewood/{.[!.],}* ~ubuntu/firewood/'
   # fix up the directories so that anyone is group 'users' has r/w access

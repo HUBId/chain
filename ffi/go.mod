@@ -1,4 +1,4 @@
-module github.com/ava-labs/firewood/ffi
+module github.com/ava-labs/chain/ffi
 
 go 1.23
 
