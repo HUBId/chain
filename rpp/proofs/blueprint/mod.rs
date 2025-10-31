@@ -254,7 +254,7 @@ impl Blueprint {
                         key: "electrs.validator_mode",
                         title: "Validator-spezifische Funktionen",
                         detail: "VRF-Key-Management und Konsens-Telemetrie für Validatoren ergänzen.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                 ],
             },

@@ -216,10 +216,11 @@ bootstrap.
   off the host. Without them the node cannot rejoin the set after hardware
   failure.
 - **Use the validator tooling:** The `rpp-node validator` CLI rotates VRF keys,
-  exports backups, and exposes telemetry snapshots without restarting the
-  process, while the `rpp-node light-client` helpers stream heads and pull
+  exports backups, validates secrets/telemetry via `validator setup`, and
+  manages uptime proofs through `validator uptime submit`/`validator uptime status`
+  without restarting the process, while the `rpp-node light-client` helpers stream heads and pull
   individual snapshot chunks during state sync. See
-  [Validator Tooling](./validator_tooling.md) for detailed workflows.【F:rpp/node/src/main.rs†L92-L203】【F:docs/validator_tooling.md†L1-L140】
+  [Validator Tooling](./validator_tooling.md) for detailed workflows.【F:rpp/node/src/main.rs†L92-L409】【F:rpp/node/src/lib.rs†L90-L357】【F:docs/validator_tooling.md†L1-L140】
 - **Rotate snapshots:** Periodically prune old `snapshot_dir` entries only after
   confirming peers have advanced beyond the retained height. Keep multiple
   recent snapshots so new nodes can sync quickly.
