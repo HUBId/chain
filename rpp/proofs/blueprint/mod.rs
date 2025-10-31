@@ -123,7 +123,7 @@ impl Blueprint {
                         key: "state.pruning_jobs",
                         title: "Pruning-Proof-Automatisierung",
                         detail: "Hintergrundjobs für Generierung und Wiederaufbau historischer Zustände umsetzen.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                 ],
             },
