@@ -24,8 +24,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Json, Router};
-use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
-use base64::Engine as _;
 use futures::future::pending;
 use hex;
 use hyper::body::Incoming;
@@ -33,7 +31,6 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::convert::TryFrom;
 use tokio::fs;
 use tokio::net::TcpListener;
@@ -122,6 +119,11 @@ use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_key
 mod routes;
 pub use routes::p2p::{snapshot_stream_status, start_snapshot_stream};
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
+pub use routes::state_sync::{
+    chunk_by_id as state_sync_chunk_by_id, head_stream as state_sync_head_stream,
+    session_status as state_sync_session_status, SnapshotChunkJson, StateSyncChunkResponse,
+    StateSyncStatusResponse,
+};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LightHeadSse {
@@ -913,39 +915,6 @@ struct StateSyncChunkQuery {
 }
 
 #[derive(Deserialize)]
-struct ChunkIdPath {
-    id: u32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct SnapshotChunkJson {
-    root: String,
-    index: u32,
-    total: u32,
-    length: u32,
-    payload: String,
-    sha256: String,
-}
-
-impl SnapshotChunkJson {
-    fn from_chunk(chunk: SnapshotChunk) -> Self {
-        let index = u32::try_from(chunk.index).unwrap_or(u32::MAX);
-        let total = u32::try_from(chunk.total).unwrap_or(u32::MAX);
-        let length = u32::try_from(chunk.data.len()).unwrap_or(u32::MAX);
-        let payload = BASE64_ENGINE.encode(&chunk.data);
-        let sha256 = Sha256::digest(&chunk.data);
-        Self {
-            root: format!("0x{}", hex::encode(chunk.root.as_bytes())),
-            index,
-            total,
-            length,
-            payload,
-            sha256: format!("0x{}", hex::encode(sha256)),
-        }
-    }
-}
-
-#[derive(Deserialize)]
 struct SubmitUptimeRequest {
     proof: Option<UptimeProof>,
 }
@@ -1356,9 +1325,19 @@ where
         .route("/snapshots/rebuild", post(routes::state::rebuild_snapshots))
         .route("/snapshots/snapshot", post(routes::state::trigger_snapshot))
         .route("/state-sync/plan", get(state_sync_plan))
-        .route("/state-sync/head/stream", get(state_sync_head_stream))
+        .route(
+            "/state-sync/session",
+            get(routes::state_sync::session_status),
+        )
+        .route(
+            "/state-sync/head/stream",
+            get(routes::state_sync::head_stream),
+        )
         .route("/state-sync/chunk", get(state_sync_chunk))
-        .route("/state-sync/chunk/:id", get(state_sync_chunk_by_id))
+        .route(
+            "/state-sync/chunk/:id",
+            get(routes::state_sync::chunk_by_id),
+        )
         .route("/validator/status", get(validator_status))
         .route("/validator/proofs", get(validator_proofs))
         .route("/validator/peers", get(validator_peers))
@@ -1935,33 +1914,6 @@ async fn state_sync_plan(
     plan.to_network_plan().map(Json).map_err(to_http_error)
 }
 
-pub async fn state_sync_head_stream(
-    State(state): State<ApiContext>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, Json<ErrorResponse>)> {
-    let api = state.require_state_sync_api()?;
-    let receiver = api
-        .watch_light_client_heads()
-        .map_err(state_sync_error_to_http)?;
-
-    let stream = WatchStream::new(receiver)
-        .filter_map(|head| async move { head.map(LightHeadSse::from) })
-        .map(
-            |payload| match Event::default().event("head").json_data(&payload) {
-                Ok(event) => Ok(event),
-                Err(err) => {
-                    warn!(?err, "failed to encode light client head for SSE");
-                    Ok(Event::default().event("head"))
-                }
-            },
-        );
-
-    Ok(Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(10))
-            .comment("hb"),
-    ))
-}
-
 async fn state_sync_chunk(
     State(state): State<ApiContext>,
     Query(query): Query<StateSyncChunkQuery>,
@@ -1971,46 +1923,6 @@ async fn state_sync_chunk(
         .network_state_sync_chunk(DEFAULT_STATE_SYNC_CHUNK, query.start)
         .map(Json)
         .map_err(to_http_error)
-}
-
-pub async fn state_sync_chunk_by_id(
-    State(state): State<ApiContext>,
-    Path(path): Path<ChunkIdPath>,
-) -> Result<Json<SnapshotChunkJson>, (StatusCode, Json<ErrorResponse>)> {
-    let api = state.require_state_sync_api()?;
-    api.ensure_state_sync_session()
-        .map_err(state_sync_error_to_http)?;
-    let session = api
-        .state_sync_active_session()
-        .map_err(state_sync_error_to_http)?;
-    let total_chunks = match session.total_chunks {
-        Some(total) => total,
-        None => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "state sync chunk count unavailable".into(),
-                }),
-            ))
-        }
-    };
-
-    if path.id >= total_chunks {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "chunk index {} out of range (total {})",
-                    path.id, total_chunks
-                ),
-            }),
-        ));
-    }
-    let chunk = api
-        .state_sync_chunk_by_index(path.id)
-        .await
-        .map_err(state_sync_error_to_http)?;
-    Ok(Json(SnapshotChunkJson::from_chunk(chunk)))
 }
 
 async fn validator_status(
