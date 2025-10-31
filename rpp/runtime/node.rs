@@ -119,6 +119,7 @@ use prover_stwo_backend::backend::{
     decode_consensus_proof, decode_pruning_proof, decode_recursive_proof, decode_state_proof,
     StwoBackend,
 };
+use rpp::node::{LightClientVerificationEvent, StateSyncVerificationReport};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
@@ -757,6 +758,144 @@ pub struct Node {
     inner: Arc<NodeInner>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct StateSyncSessionCache {
+    report: Option<StateSyncVerificationReport>,
+    snapshot_root: Option<Hash>,
+    total_chunks: Option<usize>,
+    chunk_size: Option<usize>,
+    served_chunks: HashSet<u64>,
+    last_completed_step: Option<LightClientVerificationEvent>,
+    progress_log: Vec<String>,
+}
+
+impl Default for StateSyncSessionCache {
+    fn default() -> Self {
+        Self {
+            report: None,
+            snapshot_root: None,
+            total_chunks: None,
+            chunk_size: None,
+            served_chunks: HashSet::new(),
+            last_completed_step: None,
+            progress_log: Vec::new(),
+        }
+    }
+}
+
+impl StateSyncSessionCache {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn configure(
+        &mut self,
+        chunk_size: Option<usize>,
+        total_chunks: Option<usize>,
+        root: Option<Hash>,
+    ) {
+        if let Some(size) = chunk_size {
+            self.chunk_size = Some(size);
+        }
+        if let Some(count) = total_chunks {
+            self.total_chunks = Some(count);
+        }
+        if let Some(root) = root {
+            self.snapshot_root = Some(root);
+        }
+    }
+
+    fn mark_chunk_served(&mut self, index: u64) -> bool {
+        self.served_chunks.insert(index)
+    }
+
+    fn set_report(&mut self, report: StateSyncVerificationReport) {
+        if let Some(root_hex) = report.summary.snapshot_root.as_ref() {
+            if let Some(root) = Self::decode_snapshot_root(root_hex) {
+                self.snapshot_root = Some(root);
+            }
+        }
+        self.report = Some(report);
+    }
+
+    fn record_event(&mut self, event: LightClientVerificationEvent) {
+        if let LightClientVerificationEvent::PlanLoaded { chunk_count, .. }
+        | LightClientVerificationEvent::PlanIngested { chunk_count, .. } = &event
+        {
+            self.total_chunks = Some(*chunk_count);
+        }
+
+        if let LightClientVerificationEvent::VerificationCompleted { snapshot_root } = &event {
+            if let Some(root) = Self::decode_snapshot_root(snapshot_root) {
+                self.snapshot_root = Some(root);
+            }
+        }
+
+        let message = Self::render_event(&event);
+        self.progress_log.push(message);
+        self.last_completed_step = Some(event);
+    }
+
+    fn render_event(event: &LightClientVerificationEvent) -> String {
+        match event {
+            LightClientVerificationEvent::PlanLoaded {
+                snapshot_height,
+                chunk_count,
+                update_count,
+            } => format!(
+                "Loaded state sync plan for snapshot height {snapshot_height} with {chunk_count} chunks and {update_count} light client updates"
+            ),
+            LightClientVerificationEvent::PlanIngested {
+                chunk_count,
+                update_count,
+            } => format!(
+                "Ingested plan containing {chunk_count} chunks and {update_count} light client updates"
+            ),
+            LightClientVerificationEvent::SnapshotMetadataValidated {
+                dataset_label,
+                state_root,
+                state_commitment,
+            } => format!(
+                "Validated snapshot metadata '{dataset_label}' (state root {state_root}, commitment {state_commitment})"
+            ),
+            LightClientVerificationEvent::ReceiptsMatched {
+                dataset_label,
+                snapshot_count,
+            } => format!(
+                "Matched {snapshot_count} snapshot receipts for dataset '{dataset_label}'"
+            ),
+            LightClientVerificationEvent::MerkleRootConfirmed {
+                start_height,
+                end_height,
+            } => format!(
+                "Confirmed snapshot Merkle roots across blocks {start_height}..={end_height}"
+            ),
+            LightClientVerificationEvent::RecursiveProofVerified { height } => {
+                format!("Verified recursive proof at height {height}")
+            }
+            LightClientVerificationEvent::VerificationCompleted { snapshot_root } => {
+                format!("State sync verification completed for snapshot root {snapshot_root}")
+            }
+        }
+    }
+
+    fn decode_snapshot_root(root_hex: &str) -> Option<Hash> {
+        match hex::decode(root_hex) {
+            Ok(bytes) => match bytes.as_slice().try_into() {
+                Ok(array) => Some(Hash::from(array)),
+                Err(_) => {
+                    warn!(root = %root_hex, "snapshot root must decode to 32 bytes");
+                    None
+                }
+            },
+            Err(err) => {
+                warn!(%err, root = %root_hex, "unable to decode snapshot root");
+                None
+            }
+        }
+    }
+}
+
 pub(crate) struct NodeInner {
     config: NodeConfig,
     mempool_limit: AtomicUsize,
@@ -794,6 +933,7 @@ pub(crate) struct NodeInner {
     consensus_telemetry: Arc<ConsensusTelemetry>,
     audit_exporter: AuditExporter,
     runtime_metrics: Arc<RuntimeMetrics>,
+    state_sync_session: ParkingMutex<StateSyncSessionCache>,
 }
 
 #[cfg_attr(not(feature = "prover-stwo"), allow(dead_code))]
@@ -892,22 +1032,17 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         &self,
         session_id: SnapshotSessionId,
     ) -> Result<NetworkStateSyncPlan, Self::Error> {
-        let state_plan = self
-            .inner
-            .state_sync_plan(self.chunk_size)
-            .map_err(|err| PipelineError::SnapshotVerification(format!(
-                "failed to build state sync plan: {err}"
-            )))?;
-        let network_plan = state_plan
-            .to_network_plan()
-            .map_err(|err| PipelineError::SnapshotVerification(format!(
-                "failed to encode state sync plan: {err}"
-            )))?;
-        let updates = state_plan
-            .light_client_messages()
-            .map_err(|err| PipelineError::SnapshotVerification(format!(
+        let state_plan = self.inner.state_sync_plan(self.chunk_size).map_err(|err| {
+            PipelineError::SnapshotVerification(format!("failed to build state sync plan: {err}"))
+        })?;
+        let network_plan = state_plan.to_network_plan().map_err(|err| {
+            PipelineError::SnapshotVerification(format!("failed to encode state sync plan: {err}"))
+        })?;
+        let updates = state_plan.light_client_messages().map_err(|err| {
+            PipelineError::SnapshotVerification(format!(
                 "failed to encode light client updates: {err}"
-            )))?;
+            ))
+        })?;
         let snapshot_root = Self::decode_root(&network_plan)?;
         self.sessions.lock().insert(
             session_id,
@@ -936,21 +1071,24 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         let stream = self
             .inner
             .stream_state_sync_chunks(&*store, &snapshot_root)
-            .map_err(|err| PipelineError::SnapshotVerification(format!(
-                "failed to stream state sync chunks: {err}"
-            )))?;
+            .map_err(|err| {
+                PipelineError::SnapshotVerification(format!(
+                    "failed to stream state sync chunks: {err}"
+                ))
+            })?;
         let total = stream.total();
         if chunk_index >= total {
             return Err(PipelineError::SnapshotVerification(format!(
                 "state sync chunk {chunk_index} out of range (total {total})"
             )));
         }
-        self
-            .inner
+        self.inner
             .state_sync_chunk_by_index(&*store, &snapshot_root, chunk_index)
-            .map_err(|err| PipelineError::SnapshotVerification(format!(
-                "failed to fetch state sync chunk {chunk_index}: {err}"
-            )))
+            .map_err(|err| {
+                PipelineError::SnapshotVerification(format!(
+                    "failed to fetch state sync chunk {chunk_index}: {err}"
+                ))
+            })
     }
 
     fn fetch_update(
@@ -967,16 +1105,12 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         let session = sessions
             .get(&session_id)
             .ok_or(PipelineError::SnapshotNotFound)?;
-        session
-            .updates
-            .get(index)
-            .cloned()
-            .ok_or_else(|| {
-                PipelineError::SnapshotVerification(format!(
-                    "light client update index {update_index} out of range (total {})",
-                    session.updates.len()
-                ))
-            })
+        session.updates.get(index).cloned().ok_or_else(|| {
+            PipelineError::SnapshotVerification(format!(
+                "light client update index {update_index} out of range (total {})",
+                session.updates.len()
+            ))
+        })
     }
 
     fn resume_session(
@@ -1408,6 +1542,7 @@ impl Node {
             consensus_telemetry,
             audit_exporter,
             runtime_metrics: runtime_metrics.clone(),
+            state_sync_session: ParkingMutex::new(StateSyncSessionCache::default()),
         });
         {
             let weak_inner = Arc::downgrade(&inner);
@@ -2484,6 +2619,43 @@ impl NodeHandle {
         self.inner.state_sync_chunk_by_index(store, root, index)
     }
 
+    pub(crate) fn reset_state_sync_session_cache(&self) {
+        self.inner.reset_state_sync_session();
+    }
+
+    pub(crate) fn replace_state_sync_session_cache(&self, cache: StateSyncSessionCache) {
+        self.inner.replace_state_sync_session(cache);
+    }
+
+    pub(crate) fn configure_state_sync_session_cache(
+        &self,
+        chunk_size: Option<usize>,
+        total_chunks: Option<usize>,
+        snapshot_root: Option<Hash>,
+    ) {
+        self.inner
+            .configure_state_sync_session(chunk_size, total_chunks, snapshot_root);
+    }
+
+    pub(crate) fn record_state_sync_event(&self, event: LightClientVerificationEvent) {
+        self.inner.record_state_sync_event(event);
+    }
+
+    pub(crate) fn mark_state_sync_chunk_served(&self, index: u64) {
+        self.inner.mark_state_sync_chunk_served(index);
+    }
+
+    pub(crate) fn update_state_sync_verification_report(
+        &self,
+        report: StateSyncVerificationReport,
+    ) {
+        self.inner.update_state_sync_verification_report(report);
+    }
+
+    pub(crate) fn state_sync_session_snapshot(&self) -> StateSyncSessionCache {
+        self.inner.state_sync_session_snapshot()
+    }
+
     pub fn subscribe_light_client_heads(
         &self,
     ) -> ChainResult<watch::Receiver<Option<LightClientHead>>> {
@@ -3444,6 +3616,41 @@ impl NodeInner {
                 "failed to fetch state sync chunk {index} for snapshot {root:?}: {err}"
             ))
         })
+    }
+
+    fn reset_state_sync_session(&self) {
+        self.state_sync_session.lock().reset();
+    }
+
+    fn replace_state_sync_session(&self, cache: StateSyncSessionCache) {
+        let mut slot = self.state_sync_session.lock();
+        *slot = cache;
+    }
+
+    fn configure_state_sync_session(
+        &self,
+        chunk_size: Option<usize>,
+        total_chunks: Option<usize>,
+        snapshot_root: Option<Hash>,
+    ) {
+        let mut slot = self.state_sync_session.lock();
+        slot.configure(chunk_size, total_chunks, snapshot_root);
+    }
+
+    fn record_state_sync_event(&self, event: LightClientVerificationEvent) {
+        self.state_sync_session.lock().record_event(event);
+    }
+
+    fn mark_state_sync_chunk_served(&self, index: u64) {
+        self.state_sync_session.lock().mark_chunk_served(index);
+    }
+
+    fn update_state_sync_verification_report(&self, report: StateSyncVerificationReport) {
+        self.state_sync_session.lock().set_report(report);
+    }
+
+    fn state_sync_session_snapshot(&self) -> StateSyncSessionCache {
+        self.state_sync_session.lock().clone()
     }
 
     /// Returns a clone of the light client head subscription channel for external observers.
