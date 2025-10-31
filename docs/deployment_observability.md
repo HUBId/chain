@@ -116,7 +116,7 @@ network conditions:
 1. **Promote builds through rollout channels.** Nodes advertise their rollout
    channel at start-up, so stage binaries through `development → testnet →
    canary → mainnet` and use the status endpoint to confirm the active channel
-   after deployment.【F:src/node.rs†L455-L467】【F:README.md†L60-L95】
+   after deployment.【F:rpp/runtime/node.rs†L4817-L4827】【F:README.md†L60-L95】
 2. **Toggle blueprint capabilities with feature gates.** Keep pruning,
    recursive proofs, reconstruction, and consensus enforcement disabled until
    the deployment reaches the appropriate phase; these gates are controlled by
@@ -258,14 +258,14 @@ threaten block production.
    operators can validate staged rollouts at a glance.【F:README.md†L60-L95】
 2. **Proof pipeline health.** Alert when telemetry snapshots stall (no new
    height) or when proof cache utilization exceeds capacity, since recursive
-   proofs are required for block production.【F:src/node.rs†L489-L517】【F:src/node.rs†L823-L827】
+   proofs are required for block production.【F:rpp/node/src/pipeline/mod.rs†L73-L104】【F:rpp/node/src/lib.rs†L743-L818】
 3. **Verifier health.** Track `verifier_metrics.per_backend` counts and
    cumulative durations to catch spikes in rejection rates or verification
    latency regressions; notify operators when any backend reports sustained
    failures or multi-second runtimes.【F:rpp/runtime/node.rs†L220-L238】【F:rpp/proofs/proof_system/mod.rs†L150-L260】
 4. **Consensus availability.** Track uptime/consensus proof counts per block in
    telemetry to ensure validators continue submitting the expected auxiliary
-   proofs; deviations indicate failing wallets or byzantine participants.【F:src/node.rs†L489-L517】
+   proofs; deviations indicate failing wallets or byzantine participants.【F:rpp/runtime/node.rs†L535-L610】
 5. **Pipeline latency & error budget.** Import
    `docs/observability/pipeline_grafana.json` to chart stage percentile
    latency, gossip failures, and leader rotations directly from the Prometheus
@@ -275,13 +275,13 @@ threaten block production.
 
 1. **Blueprint parity validation.** Before enabling new channels, verify wallets
    and nodes agree on the `ProofSystemKind` and that verifier registries accept
-   the proofs being generated; mismatches block block import.【F:src/proof_system/mod.rs†L1-L130】
+   the proofs being generated; mismatches block block import.【F:rpp/proofs/proof_system/mod.rs†L1-L118】
 2. **Smoke tests after rollout.** Submit a transaction, run identity genesis,
    and confirm the recursive proof commitment advances to detect circuit or
-   witness regressions immediately after deployment.【F:src/stwo/prover/mod.rs†L210-L448】【F:src/stwo/verifier/mod.rs†L249-L360】
+   witness regressions immediately after deployment.【F:rpp/proofs/stwo/prover/mod.rs†L200-L460】【F:prover/prover_stwo_backend/src/official/verifier/mod.rs†L243-L377】
 3. **Telemetry regression alerts.** Fail the deployment if telemetry snapshots
    stop at the prior height or if encoded payloads cannot be emitted; both
-   symptoms surface via the telemetry loop warnings.【F:src/node.rs†L478-L517】
+   symptoms surface via the telemetry loop warnings.【F:rpp/runtime/node_runtime/node.rs†L2082-L2116】
 4. **Stage the storage recovery plan.** Keep the Firewood recovery runbook
    handy so operators can replay WALs, restore snapshots, and verify pruning
    checkpoints when a node requires manual repair.【F:docs/storage_recovery.md†L1-L53】
