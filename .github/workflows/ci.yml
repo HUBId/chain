@@ -13,9 +13,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Determine Rust toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\([^"]\+\)"/\1/p' rust-toolchain.toml)"
+          if [[ -z "${channel}" ]]; then
+            echo "::error::Failed to determine toolchain from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt
       - name: Run cargo fmt --check
         run: cargo fmt --all --check
@@ -26,9 +37,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Determine Rust toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\([^"]\+\)"/\1/p' rust-toolchain.toml)"
+          if [[ -z "${channel}" ]]; then
+            echo "::error::Failed to determine toolchain from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: clippy
       - name: Run cargo clippy
         run: cargo clippy --workspace --all-targets --all-features -D warnings
@@ -47,8 +69,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Determine Rust toolchain
+        id: toolchain
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel = "\([^"]\+\)"/\1/p' rust-toolchain.toml)"
+          if [[ -z "${channel}" ]]; then
+            echo "::error::Failed to determine toolchain from rust-toolchain.toml"
+            exit 1
+          fi
+          echo "channel=${channel}" >> "${GITHUB_OUTPUT}"
       - name: Install toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
       - name: Run ${{ matrix.command }}
         run: ${{ matrix.command }}
 
