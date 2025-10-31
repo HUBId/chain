@@ -3,38 +3,48 @@
   "$id": "https://schemas.rpp.dev/rpc/state_sync_chunk_response.json",
   "title": "StateSyncChunkResponse",
   "type": "object",
-  "description": "Snapshot chunk returned by the state-sync RPC endpoint.",
-  "required": ["root", "index", "total", "length", "payload", "sha256"],
+  "description": "Snapshot chunk payload plus verification status returned by the state-sync RPC endpoint.",
+  "required": ["chunk", "status"],
   "properties": {
-    "root": {
-      "type": "string",
-      "description": "Hex-encoded snapshot root commitment shared by all chunks in the session.",
-      "pattern": "^0x[0-9a-fA-F]+$"
+    "chunk": {
+      "type": "object",
+      "required": ["root", "index", "total", "length", "payload", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Hex-encoded snapshot root commitment shared by all chunks in the session.",
+          "pattern": "^0x[0-9a-fA-F]+$"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based chunk index within the session."
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total number of chunks required to reconstruct the snapshot."
+        },
+        "length": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Length in bytes of the decoded payload."
+        },
+        "payload": {
+          "type": "string",
+          "description": "Base64-encoded chunk payload.",
+          "contentEncoding": "base64"
+        },
+        "sha256": {
+          "type": "string",
+          "description": "Hex-encoded SHA-256 digest of the decoded chunk payload.",
+          "pattern": "^0x[0-9a-fA-F]+$"
+        }
+      }
     },
-    "index": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Zero-based chunk index within the session."
-    },
-    "total": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Total number of chunks required to reconstruct the snapshot."
-    },
-    "length": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "Length in bytes of the decoded payload."
-    },
-    "payload": {
-      "type": "string",
-      "description": "Base64url-encoded chunk payload.",
-      "contentEncoding": "base64"
-    },
-    "sha256": {
-      "type": "string",
-      "description": "Hex-encoded SHA-256 digest of the decoded chunk payload.",
-      "pattern": "^0x[0-9a-fA-F]+$"
+    "status": {
+      "$ref": "./state_sync_status_response.jsonschema"
     }
   },
   "additionalProperties": false

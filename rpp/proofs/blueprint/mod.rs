@@ -272,8 +272,8 @@ impl Blueprint {
                     Task {
                         key: "lifecycle.state_sync",
                         title: "State-Sync & Light-Clients",
-                        detail: "Snapshot-Download, Proof-Verifikation und Head-Abonnements umsetzen.",
-                        status: TaskStatus::Todo,
+                        detail: "Snapshot-Download, Proof-Verifikation und Head-Abonnements umsetzen (LightClientVerifier + Runtime-Session, Tests in tests/state_sync/*, Dokumentation in docs/state_sync.md & RPC-Schemas).",
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "lifecycle.observability",

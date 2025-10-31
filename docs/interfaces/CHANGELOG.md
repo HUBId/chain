@@ -1,6 +1,14 @@
 # Interface Schema Changelog
 
-# 2025-11-29
+## 2025-12-05
+
+- Added `state_sync_status_response.jsonschema` and updated
+  `state_sync_chunk_response.jsonschema` to include the aggregated verification
+  status returned by `/state-sync/session` and `/state-sync/chunk/:id`.
+- Documented the progress log, served chunk list, and error fields surfaced by
+  the new state sync RPC responses.
+
+## 2025-11-29
 
 - Added consolidated interface overview in `docs/interfaces/spec.md`, linking
   gossip topics, RPC endpoints, and state transition receipts to their schema
