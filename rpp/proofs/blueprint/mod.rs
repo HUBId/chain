@@ -267,7 +267,7 @@ impl Blueprint {
                         key: "lifecycle.pipeline",
                         title: "Pipeline orchestrieren",
                         detail: "Wallet → Node → VRF → BFT → Firewood/STWO Ablauf über Prozesse koppeln.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "lifecycle.state_sync",
@@ -279,7 +279,7 @@ impl Blueprint {
                         key: "lifecycle.observability",
                         title: "Observability",
                         detail: "Tracing, Metrics und Dashboards für jeden Pipeline-Schritt bereitstellen.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                 ],
             },
