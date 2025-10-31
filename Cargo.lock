@@ -5975,15 +5975,19 @@ name = "rpp-consensus"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "hex",
  "libp2p",
  "proptest",
  "prover-backend-interface",
  "prover_mock_backend",
  "prover_stwo_backend",
  "rpp-crypto-vrf",
+ "rpp-p2p",
+ "rpp-pruning",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -5992,6 +5996,7 @@ version = "0.0.12"
 dependencies = [
  "hex",
  "malachite 0.4.18",
+ "opentelemetry 0.30.0",
  "prover-backend-interface",
  "prover_stwo_backend",
  "schnorrkel",
@@ -6016,7 +6021,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "base64 0.21.7",
+ "bincode",
+ "blake2",
+ "blake3",
  "clap",
+ "firewood-storage",
+ "hex",
  "libc",
  "opentelemetry 0.30.0",
  "opentelemetry-otlp",
@@ -6024,9 +6035,13 @@ dependencies = [
  "parking_lot",
  "reqwest 0.12.24",
  "rpp-chain",
+ "rpp-p2p",
+ "rpp-pruning",
  "serde_json",
  "sha2",
+ "storage-firewood",
  "tempfile",
+ "thiserror 2.0.12",
  "time",
  "tokio",
  "tonic 0.11.0",
