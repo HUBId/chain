@@ -208,6 +208,8 @@ pub trait StateSyncApi: Send + Sync {
 
     fn ensure_state_sync_session(&self) -> Result<(), StateSyncError>;
 
+    fn reset_state_sync_session(&self, root: Blake3Hash, chunk_size: usize, total_chunks: usize);
+
     fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError>;
 
     async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError>;
@@ -1920,11 +1922,17 @@ async fn snapshot_jobs(
 async fn state_sync_plan(
     State(state): State<ApiContext>,
 ) -> Result<Json<NetworkStateSyncPlan>, (StatusCode, Json<ErrorResponse>)> {
-    state
-        .require_node()?
-        .network_state_sync_plan(DEFAULT_STATE_SYNC_CHUNK)
-        .map(Json)
-        .map_err(to_http_error)
+    let node = state.require_node()?;
+    let plan = node
+        .state_sync_plan(DEFAULT_STATE_SYNC_CHUNK)
+        .map_err(to_http_error)?;
+    let expected_root = Blake3Hash::from(plan.snapshot.commitments.global_state_root);
+    let total_chunks = plan.chunks.len();
+    node.maybe_reset_state_sync_session(&expected_root, DEFAULT_STATE_SYNC_CHUNK, total_chunks);
+    if let Some(api) = state.state_sync_api() {
+        api.reset_state_sync_session(expected_root, DEFAULT_STATE_SYNC_CHUNK, total_chunks);
+    }
+    plan.to_network_plan().map(Json).map_err(to_http_error)
 }
 
 pub async fn state_sync_head_stream(
@@ -3102,6 +3110,10 @@ impl StateSyncApi for NodeHandle {
                 Some("state sync verification ended in unexpected state".into()),
             )),
         }
+    }
+
+    fn reset_state_sync_session(&self, root: Blake3Hash, chunk_size: usize, total_chunks: usize) {
+        self.maybe_reset_state_sync_session(&root, chunk_size, total_chunks);
     }
 
     fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError> {
