@@ -1,8 +1,5 @@
 # RPP Blockchain
 
-![Github Actions](https://github.com/ava-labs/chain/actions/workflows/ci.yml/badge.svg?branch=main)
-[![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
-
 RPP is the reference implementation of the RPP blockchain stack. It packages the
 runtime node, consensus engine, libp2p networking, proof system, wallet
 orchestrator, and Firewood-backed storage that together power the network.
