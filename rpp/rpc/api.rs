@@ -82,7 +82,7 @@ use crate::runtime::config::{
     NetworkLimitsConfig, NetworkTlsConfig, P2pAllowlistEntry, QueueWeightsConfig,
     SecretsBackendConfig, SecretsConfig,
 };
-use crate::runtime::node::StateSyncVerificationStatus;
+use crate::runtime::node::{StateSyncChunkError, StateSyncVerificationStatus};
 use crate::runtime::node_runtime::node::{
     NodeError as P2pNodeError, NodeHandle as P2pRuntimeHandle, SnapshotSessionId,
     SnapshotStreamStatus,
@@ -3034,6 +3034,38 @@ fn verification_error_to_state_sync(kind: Option<&VerificationErrorKind>) -> Sta
     }
 }
 
+fn chunk_error_to_state_sync(err: StateSyncChunkError) -> StateSyncError {
+    match err {
+        StateSyncChunkError::NoActiveSession => StateSyncError::new(
+            StateSyncErrorKind::NoActiveSession,
+            Some("state sync session unavailable".into()),
+        ),
+        StateSyncChunkError::ChunkIndexOutOfRange { index, total } => StateSyncError::new(
+            StateSyncErrorKind::ChunkIndexOutOfRange { index, total },
+            Some(format!("chunk index {index} out of range (total {total})")),
+        ),
+        StateSyncChunkError::ChunkNotFound { index, reason } => {
+            StateSyncError::new(StateSyncErrorKind::ChunkNotFound { index }, Some(reason))
+        }
+        StateSyncChunkError::SnapshotRootMismatch { expected, actual } => {
+            let expected_hex = hex::encode(expected.as_bytes());
+            let actual_hex = hex::encode(actual.as_bytes());
+            StateSyncError::new(
+                StateSyncErrorKind::Internal,
+                Some(format!(
+                    "snapshot root mismatch: expected {expected_hex}, found {actual_hex}"
+                )),
+            )
+        }
+        StateSyncChunkError::Io(err) => {
+            StateSyncError::new(StateSyncErrorKind::Internal, Some(err.to_string()))
+        }
+        StateSyncChunkError::Internal(message) => {
+            StateSyncError::new(StateSyncErrorKind::Internal, Some(message))
+        }
+    }
+}
+
 #[async_trait]
 impl StateSyncApi for NodeHandle {
     fn watch_light_client_heads(
@@ -3120,14 +3152,9 @@ impl StateSyncApi for NodeHandle {
         })
     }
 
-    async fn state_sync_chunk_by_index(
-        &self,
-        _index: u32,
-    ) -> Result<SnapshotChunk, StateSyncError> {
-        Err(StateSyncError::new(
-            StateSyncErrorKind::NoActiveSession,
-            Some("state sync session unavailable".into()),
-        ))
+    async fn state_sync_chunk_by_index(&self, index: u32) -> Result<SnapshotChunk, StateSyncError> {
+        self.state_sync_session_chunk(index)
+            .map_err(chunk_error_to_state_sync)
     }
 }
 
