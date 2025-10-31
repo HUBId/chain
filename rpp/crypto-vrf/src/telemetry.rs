@@ -15,6 +15,8 @@ pub struct VrfTelemetry {
     target_validator_count: Histogram<u64>,
     unique_addresses: Histogram<u64>,
     participation_rate: Histogram<f64>,
+    success_rate: Histogram<f64>,
+    threshold_ratio: Histogram<f64>,
     verified_total: Counter<u64>,
     accepted_total: Counter<u64>,
     rejected_total: Counter<u64>,
@@ -22,6 +24,7 @@ pub struct VrfTelemetry {
     latest_epoch: Histogram<u64>,
     latest_round: Histogram<u64>,
     threshold_transitions: Counter<u64>,
+    rejection_reasons: Counter<u64>,
 }
 
 struct TelemetryState {
@@ -63,6 +66,18 @@ impl VrfTelemetry {
             .with_description("Participation rate of verified validators in the selection round")
             .with_unit("1")
             .build();
+        let success_rate = meter
+            .f64_histogram("rpp.crypto_vrf.selection.success_rate")
+            .with_description(
+                "Share of configured committee slots filled during the selection round",
+            )
+            .with_unit("1")
+            .build();
+        let threshold_ratio = meter
+            .f64_histogram("rpp.crypto_vrf.selection.threshold_ratio")
+            .with_description("Normalised ratio between the active VRF acceptance threshold and the randomness domain")
+            .with_unit("1")
+            .build();
         let verified_total = meter
             .u64_counter("rpp.crypto_vrf.selection.verified_total")
             .with_description("Total verified VRF submissions per selection round")
@@ -98,12 +113,19 @@ impl VrfTelemetry {
             .with_description("Number of epochs that published a VRF acceptance threshold")
             .with_unit("1")
             .build();
+        let rejection_reasons = meter
+            .u64_counter("rpp.crypto_vrf.selection.rejection_reason_total")
+            .with_description("Total rejected submissions grouped by reason")
+            .with_unit("1")
+            .build();
 
         Self {
             pool_entries,
             target_validator_count,
             unique_addresses,
             participation_rate,
+            success_rate,
+            threshold_ratio,
             verified_total,
             accepted_total,
             rejected_total,
@@ -111,6 +133,7 @@ impl VrfTelemetry {
             latest_epoch,
             latest_round,
             threshold_transitions,
+            rejection_reasons,
         }
     }
 
@@ -141,12 +164,25 @@ impl VrfTelemetry {
             let rate = metrics.participation_rate.clamp(0.0, 1.0);
             self.participation_rate.record(rate, &[]);
         }
+        if metrics.success_rate.is_finite() {
+            let rate = metrics.success_rate.clamp(0.0, 1.0);
+            self.success_rate.record(rate, &[]);
+        }
+        if let Some(ratio) = metrics.active_threshold_ratio {
+            if ratio.is_finite() {
+                self.threshold_ratio.record(ratio.clamp(0.0, 1.0), &[]);
+            }
+        }
         self.verified_total
             .add(to_u64(metrics.verified_submissions), &[]);
         self.accepted_total
             .add(to_u64(metrics.accepted_validators), &[]);
         self.rejected_total
             .add(to_u64(metrics.rejected_candidates), &[]);
+        for (reason, count) in &metrics.rejections_by_reason {
+            self.rejection_reasons
+                .add(to_u64(*count), &[KeyValue::new("reason", reason.clone())]);
+        }
         if metrics.fallback_selected {
             self.fallback_total.add(1, &[]);
         }

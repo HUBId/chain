@@ -8,18 +8,20 @@
 config_version = "1.0.0"
 
 [validator]
-# Maximum number of validators that take part in a round-robin epoch.
-validator_set_size = 100
 # Number of witnesses that accompany a proposal in each round.
 witness_count = 16
-# Identifier for the VRF threshold function (e.g. linear curve coefficients).
-vrf_threshold_curve = "linear:v0.6-b0.2"
 # Duration of a full epoch (in seconds) used to rotate validator sets.
 epoch_duration_secs = 86400
 # Timeout applied to each consensus round (in milliseconds).
 round_timeout_ms = 6000
 # Maximum number of allowed round extensions before forcing a reset.
 max_round_extensions = 3
+
+[validator.vrf.threshold]
+# Identifier for the VRF threshold function (e.g. linear curve coefficients).
+curve = "linear:v0.6-b0.2"
+# Target number of validators selected per epoch.
+target_validator_count = 100
 
 [reputation]
 # Interval (seconds) for applying blueprint decay to the global reputation score.

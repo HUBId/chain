@@ -228,9 +228,8 @@ impl Default for MalachiteConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ValidatorSelectionConfig {
-    pub validator_set_size: usize,
     pub witness_count: usize,
-    pub vrf_threshold_curve: String,
+    pub vrf: ValidatorVrfConfig,
     pub epoch_duration_secs: u64,
     pub round_timeout_ms: u64,
     pub max_round_extensions: u32,
@@ -238,21 +237,12 @@ pub struct ValidatorSelectionConfig {
 
 impl ValidatorSelectionConfig {
     fn validate(&self) -> ChainResult<()> {
-        if self.validator_set_size == 0 {
-            return Err(ChainError::Config(
-                "malachite validator.validator_set_size must be greater than 0".into(),
-            ));
-        }
         if self.witness_count == 0 {
             return Err(ChainError::Config(
                 "malachite validator.witness_count must be greater than 0".into(),
             ));
         }
-        if self.vrf_threshold_curve.trim().is_empty() {
-            return Err(ChainError::Config(
-                "malachite validator.vrf_threshold_curve must not be empty".into(),
-            ));
-        }
+        self.vrf.validate()?;
         if self.epoch_duration_secs == 0 {
             return Err(ChainError::Config(
                 "malachite validator.epoch_duration_secs must be greater than 0".into(),
@@ -275,12 +265,64 @@ impl ValidatorSelectionConfig {
 impl Default for ValidatorSelectionConfig {
     fn default() -> Self {
         Self {
-            validator_set_size: 100,
             witness_count: 16,
-            vrf_threshold_curve: "linear:v0.6-b0.2".to_string(),
+            vrf: ValidatorVrfConfig::default(),
             epoch_duration_secs: 86_400,
             round_timeout_ms: 6_000,
             max_round_extensions: 3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ValidatorVrfConfig {
+    pub threshold: VrfThresholdConfig,
+}
+
+impl ValidatorVrfConfig {
+    fn validate(&self) -> ChainResult<()> {
+        self.threshold.validate()
+    }
+}
+
+impl Default for ValidatorVrfConfig {
+    fn default() -> Self {
+        Self {
+            threshold: VrfThresholdConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VrfThresholdConfig {
+    pub curve: String,
+    pub target_validator_count: usize,
+}
+
+impl VrfThresholdConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.curve.trim().is_empty() {
+            return Err(ChainError::Config(
+                "malachite validator.vrf.threshold.curve must not be empty".into(),
+            ));
+        }
+        if self.target_validator_count == 0 {
+            return Err(ChainError::Config(
+                "malachite validator.vrf.threshold.target_validator_count must be greater than 0"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for VrfThresholdConfig {
+    fn default() -> Self {
+        Self {
+            curve: "linear:v0.6-b0.2".to_string(),
+            target_validator_count: 100,
         }
     }
 }
@@ -1286,7 +1328,11 @@ impl NodeConfig {
     }
 
     pub fn validator_set_size(&self) -> usize {
-        self.malachite.validator.validator_set_size
+        self.malachite
+            .validator
+            .vrf
+            .threshold
+            .target_validator_count
     }
 
     pub fn timetoke_params(&self) -> TimetokeParams {
@@ -2049,8 +2095,11 @@ mod tests {
         let missing = dir.path().join("missing.toml");
         let config = MalachiteConfig::load_from_path(&missing).expect("default malachite config");
         assert_eq!(
-            config.validator.validator_set_size,
-            ValidatorSelectionConfig::default().validator_set_size
+            config.validator.vrf.threshold.target_validator_count,
+            ValidatorSelectionConfig::default()
+                .vrf
+                .threshold
+                .target_validator_count
         );
     }
 
@@ -2063,12 +2112,14 @@ mod tests {
             r#"config_version = "2.0.0"
 
 [validator]
-validator_set_size = 100
 witness_count = 16
-vrf_threshold_curve = "curve"
 epoch_duration_secs = 3600
 round_timeout_ms = 1000
 max_round_extensions = 1
+
+[validator.vrf.threshold]
+curve = "curve"
+target_validator_count = 100
 "#,
         )
         .expect("write malachite config");
@@ -2100,12 +2151,14 @@ max_round_extensions = 1
             r#"config_version = "1.0.0"
 
 [validator]
-validator_set_size = 77
 witness_count = 16
-vrf_threshold_curve = "curve"
 epoch_duration_secs = 7200
 round_timeout_ms = 2000
 max_round_extensions = 2
+
+[validator.vrf.threshold]
+curve = "curve"
+target_validator_count = 77
 "#,
         )
         .expect("write malachite config");

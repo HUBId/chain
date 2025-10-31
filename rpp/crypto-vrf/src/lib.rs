@@ -7,7 +7,7 @@
 
 pub mod telemetry;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use malachite::base::num::arithmetic::traits::DivRem;
@@ -87,6 +87,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(feature = "nightly-prover"))]
 use stable_poseidon::{FieldElement, StarkParameters};
 use thiserror::Error;
+use tracing::{info, warn};
 
 /// Alias used for wallet addresses within the VRF module.
 pub type Address = String;
@@ -657,12 +658,17 @@ pub struct VrfSelectionMetrics {
     pub fallback_selected: bool,
     pub unique_addresses: usize,
     pub participation_rate: f64,
+    pub success_rate: f64,
     pub total_weight: String,
     pub entropy_beacon: String,
     pub latest_epoch: Option<u64>,
     pub latest_round: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_epoch_threshold: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_threshold_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rejections_by_reason: BTreeMap<String, usize>,
 }
 
 impl VrfSelectionMetrics {
@@ -674,8 +680,9 @@ impl VrfSelectionMetrics {
         self.accepted_validators = self.accepted_validators.saturating_add(1);
     }
 
-    fn record_rejection(&mut self) {
+    fn record_rejection(&mut self, reason: &RejectionReason) {
         self.rejected_candidates = self.rejected_candidates.saturating_add(1);
+        self.record_rejection_reason(reason);
     }
 
     fn record_fallback(&mut self) {
@@ -690,8 +697,17 @@ impl VrfSelectionMetrics {
         self.latest_round = Some(round);
     }
 
-    fn set_active_threshold(&mut self, threshold: &Natural) {
+    fn set_active_threshold(&mut self, threshold: &Natural, domain: &Natural) {
         self.active_epoch_threshold = Some(threshold.to_string());
+        self.active_threshold_ratio = natural_ratio(threshold, domain);
+    }
+
+    fn record_rejection_reason(&mut self, reason: &RejectionReason) {
+        let entry = self
+            .rejections_by_reason
+            .entry(reason.to_string())
+            .or_insert(0);
+        *entry = entry.saturating_add(1);
     }
 }
 
@@ -872,7 +888,7 @@ pub fn select_validators(
                     .push(verified);
             }
             Err(reason) => {
-                result.metrics.record_rejection();
+                result.metrics.record_rejection(&reason);
                 let reason_string = reason.to_string();
                 audit_records.push(VrfSelectionRecord {
                     epoch: submission.input.epoch,
@@ -930,7 +946,7 @@ pub fn select_validators(
         result.metrics.record_epoch(epoch);
         result
             .metrics
-            .set_active_threshold(strategy.base_threshold());
+            .set_active_threshold(strategy.base_threshold(), strategy.randomness_domain());
         for submission in submissions {
             let threshold = strategy.threshold_for_seed(&submission.input.tier_seed);
             if submission.weighted_randomness < threshold {
@@ -952,7 +968,7 @@ pub fn select_validators(
                 let reason = RejectionReason::ThresholdNotMet {
                     threshold: threshold.clone(),
                 };
-                result.metrics.record_rejection();
+                result.metrics.record_rejection(&reason);
                 if let Some(index) = audit_index.get(&submission.address) {
                     if let Some(entry) = audit_records.get_mut(*index) {
                         entry.threshold = Some(threshold.to_string());
@@ -998,8 +1014,51 @@ pub fn select_validators(
     } else {
         (accepted_count as f64) / (result.metrics.pool_entries as f64)
     };
+    result.metrics.success_rate = if result.metrics.target_validator_count == 0 {
+        0.0
+    } else {
+        (accepted_count as f64) / (result.metrics.target_validator_count as f64)
+    }
+    .clamp(0.0, 1.0);
     result.metrics.total_weight = total_weight.to_string();
     result.metrics.entropy_beacon = hex::encode(entropy_state);
+    let rejection_rate = if result.metrics.verified_submissions == 0 {
+        0.0
+    } else {
+        (result.metrics.rejected_candidates as f64) / (result.metrics.verified_submissions as f64)
+    };
+    let threshold_ratio = result.metrics.active_threshold_ratio.unwrap_or(0.0);
+    if result.metrics.fallback_selected {
+        warn!(
+            target = "vrf.selection",
+            epoch = result.metrics.latest_epoch.unwrap_or_default(),
+            round = result.metrics.latest_round.unwrap_or_default(),
+            pool_entries = result.metrics.pool_entries,
+            accepted = result.metrics.accepted_validators,
+            rejected = result.metrics.rejected_candidates,
+            "vrf fallback candidate required"
+        );
+    }
+    info!(
+        target = "vrf.selection",
+        epoch = result.metrics.latest_epoch.unwrap_or_default(),
+        round = result.metrics.latest_round.unwrap_or_default(),
+        pool_entries = result.metrics.pool_entries,
+        accepted = result.metrics.accepted_validators,
+        rejected = result.metrics.rejected_candidates,
+        participation_rate = result.metrics.participation_rate,
+        success_rate = result.metrics.success_rate,
+        rejection_rate,
+        threshold_ratio,
+        threshold_value = result
+            .metrics
+            .active_epoch_threshold
+            .as_deref()
+            .unwrap_or(""),
+        fallback_selected = result.metrics.fallback_selected,
+        ?result.metrics.rejections_by_reason,
+        "vrf selection completed"
+    );
     telemetry::VrfTelemetry::global().record_selection(&result.metrics);
     result
 }
@@ -1134,6 +1193,19 @@ fn natural_to_bytes(value: &Natural) -> [u8; 32] {
     buffer
 }
 
+fn natural_to_f64(value: &Natural) -> Option<f64> {
+    value.to_string().parse::<f64>().ok()
+}
+
+fn natural_ratio(numerator: &Natural, denominator: &Natural) -> Option<f64> {
+    let denominator = natural_to_f64(denominator)?;
+    if denominator == 0.0 {
+        return None;
+    }
+    let numerator = natural_to_f64(numerator)?;
+    Some((numerator / denominator).clamp(0.0, 1.0))
+}
+
 fn decode_address_bytes(address: &Address) -> [u8; 32] {
     if let Ok(bytes) = hex::decode(address) {
         if let Ok(array) = <[u8; 32]>::try_from(bytes.as_slice()) {
@@ -1244,6 +1316,10 @@ impl EpochThresholdStrategy {
 
     fn base_threshold(&self) -> &Natural {
         &self.base_threshold
+    }
+
+    fn randomness_domain(&self) -> &Natural {
+        &self.randomness_domain
     }
 
     #[cfg(test)]

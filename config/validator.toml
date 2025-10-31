@@ -24,6 +24,12 @@ epoch_length = 1440
 target_validator_count = 100
 max_proof_size_bytes = 4194304
 
+[malachite.validator.vrf.threshold]
+# Keep the validator defaults aligned with config/malachite.toml to simplify
+# blueprint overrides.
+curve = "linear:v0.6-b0.2"
+target_validator_count = 100
+
 [network.rpc]
 listen = "127.0.0.1:7070"
 

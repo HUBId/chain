@@ -27,7 +27,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 | --- | --- | --- | --- |
 | Reputation/Tiers | Tier ≥ 3 als Mindestanforderung; Reputation beeinflusst Eintritt | `select_validators` filtert Tier < 3 und aktualisiert Gewichte über Reputation/Stake; Ledger-Audits liefern Tierdaten | **TODO**: Tier-Gates auf P2P-Handshakes & Gossip Admission ausweiten |
 | Timetoke | Gewichtung/Thresholds, Decay, Synchronisation | Ledger pflegt Timetoke-State (`timetoke_snapshot`/`sync_timetoke_records`), Node kreditiert Uptime-Proofs und VRF-Seed nutzt Timetoke | **TODO**: Netzwerkweiter Sync-Plan (Snapshots, Replay-Schutz) finalisieren |
-| VRF & Validator-Set | VRF Input = (sk, epoch_nonce, timetoke) + Threshold aus Timetoke | VRF-Seed kombiniert Adresse & Timetoke; Validator-Gewichte berücksichtigen Reputation + Timetoke | **TODO**: Threshold-Parametrisierung & Monitoring der Erfolgsquoten dokumentieren |
+| VRF & Validator-Set | VRF Input = (sk, epoch_nonce, timetoke) + Threshold aus Timetoke | VRF-Seed kombiniert Adresse & Timetoke; Validator-Gewichte berücksichtigen Reputation + Timetoke | Parametrisierung der Schwellen über `[validator.vrf.threshold]` und Telemetrie-/Log-Ausgabe der Erfolgsquoten implementiert |
 | Leader-Selektion | Priorität: Tier → Timetoke → VRF | `select_leader` sortiert nach Tier, Timetoke, VRF-Ausgabe | ✅ |
 | Witness-Rolle | Externe Verifikation | Tier 1–2 werden als Observer/Witness geführt, Konsens-Witnesses werden erstellt, bepreist und über die Incentive-Pipeline geprüft ([tests/witness_incentives.rs](../tests/witness_incentives.rs)) | **TODO**: Dedizierte Witness-Kanäle (QoS/Topic-Isolation) und Treasury-Anbindung der Witness-Rewards finalisieren |
 | Rewards | Gleichmäßig + Leader-Bonus | Konsens-Rewards teilen Basis-Reward + Gebühren auf Validatoren mit 20 % Leader-Bonus. Treasury- und Gebühren-Pools sind konfigurierbar, Witness-Payouts folgen den in `rewards.witness_pool_weights` definierten Gewichten. | Governance-gesteuerte Timetoke-Leader/Witness-Pools inklusive Budget-Split und Regressionstests umgesetzt.【F:rpp/consensus/src/governance.rs†L1-L126】【F:rpp/consensus/src/timetoke/rewards.rs†L1-L89】【F:tests/consensus/timetoke_rewards.rs†L1-L40】【F:docs/consensus/rewards.md†L1-L25】 |
@@ -129,14 +129,14 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 ### Konfiguration & Parameter
 * Globales Config-File `config/malachite.toml` (Folgeiteration) mit Parametern:
   * `leader_bonus_pct`
-  * `validator_set_size`, `witness_count`
+  * `validator.vrf.threshold.curve`, `validator.vrf.threshold.target_validator_count`, `witness_count`
   * `timetoke_decay_rate`, `timetoke_threshold_curve`
   * `slash_penalties`
   * `proof_batch_size`
 
 ### Telemetrie & Observability
-* Metriken für Timetoke-Distribution, VRF-Erfolgsraten, Leader-Rotation, Slashing-Events.
-* Structured Logging für Konsensentscheidungen (Validator/Leader-Selektion).
+* Metriken für Timetoke-Distribution, VRF-Erfolgs- und Ablehnungsraten (inkl. Schwellenwerte), Leader-Rotation, Slashing-Events.
+* Structured Logging für Konsensentscheidungen (Validator/Leader-Selektion) inklusive aktiver VRF-Schwellen und Rejektionsgründe.
 * Audit-Log für Anti-Abuse-Aktionen.
 
 ## Risikoanalyse & Offene Fragen

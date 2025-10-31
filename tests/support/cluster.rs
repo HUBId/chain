@@ -108,7 +108,12 @@ impl PreparedCluster {
             config.block_time_ms = 200;
             config.mempool_limit = 256;
             config.target_validator_count = count;
-            config.malachite.validator.validator_set_size = count;
+            config
+                .malachite
+                .validator
+                .vrf
+                .threshold
+                .target_validator_count = count;
             config.network.rpc.listen = rpc_socket(index)?;
             let (listen_addr, _) = random_listen_addr()?;
             config.network.p2p.listen_addr = listen_addr.clone();

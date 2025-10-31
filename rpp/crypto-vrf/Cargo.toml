@@ -19,3 +19,4 @@ prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { path = "../../prover/prover_stwo_backend", default-features = false, features = ["official"], optional = true }
 sha2 = { workspace = true }
 opentelemetry = { version = "=0.30.0", features = ["metrics"] }
+tracing.workspace = true
