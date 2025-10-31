@@ -112,6 +112,7 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
    - Tests: Automatisiert in CI, Code-Coverage-Tracking.
 2. **Simulationsframework**
    - Deliverable: Szenarien mit ≥100 Wallets/20 Validatoren, parametrisiert für Latenzen.
+   - Status: `tools/simnet` orchestriert Nodes, Wallets und die bestehenden `rpp/sim`-Topologien; Nightly-CI (`.github/workflows/nightly.yml`) fährt die referenzierte Szenariobibliothek und wertet sie mit `scripts/analyze_simnet.py` aus.
    - Tests: Non-Regression-Reports, Reputation-Evolution-Analysen.
 3. **Security & Performance Audits**
    - Deliverable: Fuzzing, Key-Management-Review, Benchmark-Suite.
