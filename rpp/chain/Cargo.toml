@@ -149,5 +149,9 @@ path = "../../tests/consensus.rs"
 name = "deployment_feature_gates"
 path = "../../tests/deployment/feature_gates.rs"
 
+[[test]]
+name = "wallet_ui_contract"
+path = "rpp/rpc/tests/wallet_ui_contract.rs"
+
 [lints]
 workspace = true

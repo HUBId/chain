@@ -59,7 +59,11 @@ use crate::crypto::{
 use crate::errors::{ChainError, ChainResult};
 #[cfg(feature = "vendor_electrs")]
 use crate::interfaces::WalletTrackerSnapshot;
-use crate::interfaces::{WalletBalanceResponse, WalletHistoryResponse};
+use crate::interfaces::{
+    WalletBalanceResponse, WalletHistoryResponse, WalletUiHistoryContract, WalletUiNodeContract,
+    WalletUiReceiveContract, WalletUiSendContract, WALLET_UI_HISTORY_CONTRACT,
+    WALLET_UI_NODE_CONTRACT, WALLET_UI_RECEIVE_CONTRACT, WALLET_UI_SEND_CONTRACT,
+};
 use crate::ledger::{ReputationAudit, SlashingEvent};
 use crate::node::{
     BftMembership, BlockProofArtifactsView, ConsensusStatus, LightClientVerificationEvent,
@@ -94,8 +98,11 @@ use crate::types::{
     TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{PoseidonVrfInput, VrfProof, VrfSubmission};
+#[cfg(feature = "vendor_electrs")]
+use crate::wallet::ScriptStatusMetadata;
 use crate::wallet::{
-    ConsensusReceipt, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet, WalletAccountSummary,
+    ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, SendPreview, Wallet,
+    WalletAccountSummary,
 };
 #[cfg(feature = "vendor_electrs")]
 use crate::wallet::{TrackerState, WalletTrackerHandle};
@@ -856,6 +863,14 @@ struct ReceiveResponse {
     addresses: Vec<ReceiveTabAddress>,
 }
 
+struct WalletHistoryFragments {
+    entries: Vec<HistoryEntry>,
+    #[cfg(feature = "vendor_electrs")]
+    script_metadata: Option<Vec<ScriptStatusMetadata>>,
+    #[cfg(feature = "vendor_electrs")]
+    tracker: Option<WalletTrackerSnapshot>,
+}
+
 #[derive(Serialize)]
 struct WalletNodeResponse {
     metrics: NodeTabMetrics,
@@ -1033,7 +1048,7 @@ fn wallet_rpc_method(method: &Method, path: &str) -> Option<WalletRpcMethod> {
         return None;
     }
 
-    if path.starts_with("/wallet/history") {
+    if path.starts_with("/wallet/history") || path.starts_with("/wallet/ui/history") {
         return Some(WalletRpcMethod::GetHistory);
     }
 
@@ -1047,6 +1062,7 @@ fn wallet_rpc_method(method: &Method, path: &str) -> Option<WalletRpcMethod> {
     if path.starts_with("/wallet/tx/prove")
         || path.starts_with("/wallet/tx/build")
         || path.starts_with("/wallet/send/preview")
+        || path.starts_with("/wallet/ui/send/preview")
         || path.starts_with("/wallet/uptime/proof")
     {
         return Some(WalletRpcMethod::BuildProof);
@@ -1058,7 +1074,9 @@ fn wallet_rpc_method(method: &Method, path: &str) -> Option<WalletRpcMethod> {
             || path.starts_with("/wallet/reputation/")
             || path.starts_with("/wallet/tier/")
             || path.starts_with("/wallet/receive")
+            || path.starts_with("/wallet/ui/receive")
             || path.starts_with("/wallet/node")
+            || path.starts_with("/wallet/ui/node")
             || path.starts_with("/wallet/state/root"))
     {
         return Some(WalletRpcMethod::GetBalance);
@@ -1384,6 +1402,10 @@ where
             .route("/ui/history", get(ui_history))
             .route("/ui/send/preview", post(ui_send_preview))
             .route("/ui/receive", get(ui_receive))
+            .route("/wallet/ui/history", get(wallet_ui_history))
+            .route("/wallet/ui/send/preview", post(wallet_ui_send_preview))
+            .route("/wallet/ui/receive", get(wallet_ui_receive))
+            .route("/wallet/ui/node", get(wallet_ui_node))
             .route("/wallet/account", get(wallet_account))
             .route("/wallet/balance/:address", get(wallet_balance))
             .route("/wallet/reputation/:address", get(wallet_reputation))
@@ -1752,10 +1774,10 @@ async fn update_runtime_mode(
     Ok(Json(state.runtime_state()))
 }
 
-fn wallet_history_payload(
+fn wallet_history_fragments(
     state: &ApiContext,
     wallet: &Wallet,
-) -> Result<WalletHistoryResponse, (StatusCode, Json<ErrorResponse>)> {
+) -> Result<WalletHistoryFragments, (StatusCode, Json<ErrorResponse>)> {
     #[cfg(feature = "vendor_electrs")]
     let tracker_state = state.tracker_state();
 
@@ -1775,7 +1797,7 @@ fn wallet_history_payload(
         TrackerState::Pending | TrackerState::Disabled => None,
     });
 
-    Ok(WalletHistoryResponse {
+    Ok(WalletHistoryFragments {
         entries,
         #[cfg(feature = "vendor_electrs")]
         script_metadata,
@@ -1788,7 +1810,31 @@ async fn ui_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    wallet_history_payload(&state, wallet.as_ref()).map(Json)
+    wallet_history_fragments(&state, wallet.as_ref())
+        .map(|payload| WalletHistoryResponse {
+            entries: payload.entries,
+            #[cfg(feature = "vendor_electrs")]
+            script_metadata: payload.script_metadata,
+            #[cfg(feature = "vendor_electrs")]
+            tracker: payload.tracker,
+        })
+        .map(Json)
+}
+
+async fn wallet_ui_history(
+    State(state): State<ApiContext>,
+) -> Result<Json<WalletUiHistoryContract>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    wallet_history_fragments(&state, wallet.as_ref())
+        .map(|payload| WalletUiHistoryContract {
+            version: WALLET_UI_HISTORY_CONTRACT,
+            entries: payload.entries,
+            #[cfg(feature = "vendor_electrs")]
+            script_metadata: payload.script_metadata,
+            #[cfg(feature = "vendor_electrs")]
+            tracker: payload.tracker,
+        })
+        .map(Json)
 }
 
 async fn ui_send_preview(
@@ -1808,6 +1854,27 @@ async fn ui_send_preview(
         .map_err(to_http_error)
 }
 
+async fn wallet_ui_send_preview(
+    State(state): State<ApiContext>,
+    Json(request): Json<TxComposeRequest>,
+) -> Result<Json<WalletUiSendContract>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let TxComposeRequest {
+        to,
+        amount,
+        fee,
+        memo,
+    } = request;
+    wallet
+        .preview_send(to, amount, fee, memo)
+        .map(|preview| WalletUiSendContract {
+            version: WALLET_UI_SEND_CONTRACT,
+            preview,
+        })
+        .map(Json)
+        .map_err(to_http_error)
+}
+
 async fn ui_receive(
     State(state): State<ApiContext>,
     Query(query): Query<ReceiveQuery>,
@@ -1815,6 +1882,18 @@ async fn ui_receive(
     let wallet = state.require_wallet()?;
     let count = query.count.unwrap_or(10).min(256);
     Ok(Json(ReceiveResponse {
+        addresses: wallet.receive_addresses(count),
+    }))
+}
+
+async fn wallet_ui_receive(
+    State(state): State<ApiContext>,
+    Query(query): Query<ReceiveQuery>,
+) -> Result<Json<WalletUiReceiveContract>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let count = query.count.unwrap_or(10).min(256);
+    Ok(Json(WalletUiReceiveContract {
+        version: WALLET_UI_RECEIVE_CONTRACT,
         addresses: wallet.receive_addresses(count),
     }))
 }
@@ -2485,7 +2564,15 @@ async fn wallet_history(
     State(state): State<ApiContext>,
 ) -> Result<Json<WalletHistoryResponse>, (StatusCode, Json<ErrorResponse>)> {
     let wallet = state.require_wallet()?;
-    wallet_history_payload(&state, wallet.as_ref()).map(Json)
+    wallet_history_fragments(&state, wallet.as_ref())
+        .map(|payload| WalletHistoryResponse {
+            entries: payload.entries,
+            #[cfg(feature = "vendor_electrs")]
+            script_metadata: payload.script_metadata,
+            #[cfg(feature = "vendor_electrs")]
+            tracker: payload.tracker,
+        })
+        .map(Json)
 }
 
 async fn wallet_send_preview(
@@ -2581,6 +2668,23 @@ async fn wallet_node_view(
         .orchestrator_for_mode()
         .map(|orchestrator| wallet.pipeline_dashboard(orchestrator.as_ref()));
     Ok(Json(WalletNodeResponse {
+        metrics,
+        consensus,
+        pipeline,
+    }))
+}
+
+async fn wallet_ui_node(
+    State(state): State<ApiContext>,
+) -> Result<Json<WalletUiNodeContract>, (StatusCode, Json<ErrorResponse>)> {
+    let wallet = state.require_wallet()?;
+    let metrics = wallet.node_metrics().map_err(to_http_error)?;
+    let consensus = wallet.latest_consensus_receipt().map_err(to_http_error)?;
+    let pipeline = state
+        .orchestrator_for_mode()
+        .map(|orchestrator| wallet.pipeline_dashboard(orchestrator.as_ref()));
+    Ok(Json(WalletUiNodeContract {
+        version: WALLET_UI_NODE_CONTRACT,
         metrics,
         consensus,
         pipeline,

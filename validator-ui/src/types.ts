@@ -289,3 +289,112 @@ export interface PipelineErrorPayload {
 export type PipelineEvent =
   | { type: 'dashboard'; snapshot: PipelineDashboardSnapshot }
   | { type: 'error'; error: PipelineErrorPayload };
+
+// Wallet UI contracts
+
+export type WalletHistoryStatus =
+  | { Pending: { submitted_at: number } }
+  | { Confirmed: { height: number; timestamp: number } }
+  | { Pruned: { pruned_height: number } };
+
+export interface WalletPipelineHistoryStatus {
+  flow: PipelineFlowSnapshot;
+  timed_out?: boolean | null;
+}
+
+export interface WalletHistoryEntry {
+  tx_hash: string;
+  transaction?: unknown;
+  pending_summary?: unknown;
+  status: WalletHistoryStatus;
+  reputation_delta: number;
+  status_digest?: unknown;
+  proof_envelope?: string | null;
+  double_spend?: boolean | null;
+  conflict?: string | null;
+  pipeline?: WalletPipelineHistoryStatus | null;
+}
+
+export interface WalletScriptMetadata {
+  script_hash: string;
+  confirmed_balance: number;
+  mempool_delta: number;
+  status_digest?: unknown;
+  proof_envelopes: Array<string | null>;
+  vrf_audits?: Array<unknown | null>;
+}
+
+export interface WalletTrackerScript {
+  script_hash: string;
+  status_digest?: string | null;
+}
+
+export interface WalletTrackerSnapshot {
+  scripts: WalletTrackerScript[];
+  mempool_fingerprint?: string | null;
+}
+
+export interface WalletUiHistoryResponse {
+  version: string;
+  entries: WalletHistoryEntry[];
+  script_metadata?: WalletScriptMetadata[];
+  tracker?: WalletTrackerSnapshot | null;
+}
+
+export interface WalletSendPreview {
+  from: string;
+  to: string;
+  amount: number;
+  fee: number;
+  memo?: string | null;
+  nonce: number;
+  balance_before: number;
+  balance_after: number;
+}
+
+export interface WalletSendContract {
+  version: string;
+  preview: WalletSendPreview;
+}
+
+export interface WalletReceiveAddress {
+  derivation_index: number;
+  address: string;
+}
+
+export interface WalletReceiveContract {
+  version: string;
+  addresses: WalletReceiveAddress[];
+}
+
+export interface WalletNodeMetrics {
+  reputation_score: number;
+  tier: string;
+  uptime_hours: number;
+  latest_block_height: number;
+  latest_block_hash?: string | null;
+  total_blocks: number;
+  slashing_alerts: unknown[];
+  pipeline_errors: unknown[];
+}
+
+export interface WalletConsensusReceipt {
+  height: number;
+  block_hash: string;
+  proposer: string;
+  round: number;
+  total_power: string;
+  quorum_threshold: string;
+  pre_vote_power: string;
+  pre_commit_power: string;
+  commit_power: string;
+  observers: number;
+  quorum_reached: boolean;
+}
+
+export interface WalletNodeContract {
+  version: string;
+  metrics: WalletNodeMetrics;
+  consensus?: WalletConsensusReceipt | null;
+  pipeline?: PipelineDashboardSnapshot | null;
+}
