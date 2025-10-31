@@ -7,6 +7,51 @@ on:
   pull_request:
 
 jobs:
+  fmt:
+    name: Cargo fmt
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt
+      - name: Run cargo fmt --check
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          components: clippy
+      - name: Run cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -D warnings
+
+  tests:
+    name: Cargo tests (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: default features
+            command: cargo test --workspace --all-targets --locked
+          - profile: prover-stwo feature
+            command: cargo test --workspace --all-targets --features prover-stwo --locked
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install toolchain
+        uses: dtolnay/rust-toolchain@master
+      - name: Run ${{ matrix.command }}
+        run: ${{ matrix.command }}
+
   dashboards-json:
     name: Validate dashboard exports
     runs-on: ubuntu-latest

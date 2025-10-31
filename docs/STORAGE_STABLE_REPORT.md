@@ -15,7 +15,7 @@ No nightly-only compiler features or unstable Cargo flags remain in `storage-fir
 
 ## CI Status
 
-No storage-specific CI workflows were found in `.github/workflows/`. Existing workspace jobs (build, test, clippy, fmt) already pin `toolchain: 1.79.0`, so storage components are covered transitively. If a dedicated storage pipeline is added in the future, pin it to `1.79.0` as well.
+No storage-specific CI workflows were found in `.github/workflows/`. The shared `Cargo fmt`, `Cargo clippy`, and `Cargo tests` jobs (default features plus the `prover-stwo` lane) already pin to the repository toolchain from `rust-toolchain.toml`, so storage components are covered transitively. If a dedicated storage pipeline is added in the future, pin it to `1.79.0` as well.
 
 ## Follow-up To-dos
 
