@@ -22,6 +22,7 @@ use blake3::Hash as Blake3Hash;
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{LightClientHead, SnapshotChunk};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 use tower::ServiceExt;
 
@@ -250,6 +251,9 @@ async fn state_sync_chunk_by_id_returns_payload() {
     let encoded = chunk_json["payload"].as_str().unwrap();
     let decoded = BASE64_ENGINE.decode(encoded).unwrap();
     assert_eq!(decoded, payload);
+    assert_eq!(chunk_json["length"], Value::from(payload.len() as u32));
+    let expected_sha = format!("0x{}", encode(Sha256::digest(&payload)));
+    assert_eq!(chunk_json["sha256"], Value::String(expected_sha));
 
     let status = json.get("status").unwrap();
     assert_eq!(
@@ -337,6 +341,32 @@ async fn state_sync_session_status_returns_details() {
             "plan loaded: snapshot height 42, 4 chunks, 2 updates".to_string(),
         )
     );
+}
+
+#[tokio::test]
+async fn state_sync_session_status_returns_service_unavailable_without_session() {
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        None,
+        None,
+        HashMap::new(),
+    ));
+    let context = test_context(api);
+    let app = Router::new()
+        .route("/state-sync/session", get(state_sync_session_status))
+        .with_state(context);
+
+    let request = Request::builder()
+        .uri("/state-sync/session")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"], Value::String("no active session".into()));
 }
 
 #[tokio::test]
