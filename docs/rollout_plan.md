@@ -25,19 +25,27 @@ are ready for staging.
 
 ## 2. Channel Promotion Strategy
 
-1. **Development channel.** Deploy nightly builds to an internal cluster with
-   synthetic traffic. Validate consensus liveness, proof pipeline throughput,
-   telemetry integrity, and RPC compatibility.
+1. **Development channel.** Follow the procedures in
+   [`docs/deployment/staged_rollout.md`](deployment/staged_rollout.md) to deploy
+   nightly builds to an internal cluster with synthetic traffic. Validate
+   consensus liveness, proof pipeline throughput, telemetry integrity, and RPC
+   compatibility before recording the checklist entries called out in
+   `config/defaults/mainnet.toml`.
 2. **Testnet channel.** Promote builds that clear development testing. Rotate in
    community validators, enable snapshot sync, and exercise witness flows for
-   several epochs. Collect feedback on reward distribution and leader rotation.
+   several epochs while keeping reward distribution disabled. Confirm the
+   `malachite_consensus` gate is enabled and log the
+   `testnet-readiness`/`testnet-recovery` outcomes in the release issue.
 3. **Canary channel.** Select a small subset of mainnet validators to run the
    upcoming release in parallel with existing production binaries. Require
    regular reporting on consensus metrics, proof latencies, and resource
-   consumption.
+   consumption, and explicitly document canary reward and witness gate status so
+   they can be rolled back independently.
 4. **Mainnet channel.** Execute a scheduled maintenance window once canary shows
    no regressions. Announce the timeline, publish release notes, and cut the
-   final tag.
+   final tag. Run the `mainnet-readiness` checklist, verify every validator has
+   the mainnet feature gate profile, and capture the documented recovery plan
+   before activation.
 
 ## 3. Feature Gate Progression
 
@@ -58,7 +66,8 @@ are ready for staging.
 
 1. **Genesis & configuration parity.** Verify every validator uses identical
    genesis files, reputation tier thresholds, timetoke parameters, and feature
-   gates. Publish the canonical configuration bundle before rollout.
+   gates. Publish the canonical configuration bundle (`config/defaults/mainnet.toml`)
+   before rollout and attach the signed checksum to the release announcement.
 2. **Monitoring dashboards.** Stand up dashboards and alerts for release
    channel, feature gates, telemetry loops, consensus health, proof queue depth,
    and witness participation before promoting the build.
@@ -70,7 +79,8 @@ are ready for staging.
    procedures against staging nodes.
 5. **Publish the storage recovery runbook.** Link operators to the Firewood
    recovery steps for WAL replay, snapshot restoration, and pruning proof
-   validation so maintenance windows have a vetted rollback plan.【F:docs/storage_recovery.md†L1-L53】
+   validation so maintenance windows have a vetted rollback plan. Cross-reference
+   the recovery playbooks described in `docs/deployment/staged_rollout.md`.【F:docs/storage_recovery.md†L1-L53】
 
 ## 5. Communication Plan
 
