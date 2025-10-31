@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/state_sync_status_response.json",
+  "title": "StateSyncStatusResponse",
+  "type": "object",
+  "description": "Aggregated verification status returned by the state-sync RPC endpoints.",
+  "required": ["completed_chunks", "verified", "served_chunks", "progress_log"],
+  "properties": {
+    "root": {
+      "type": ["string", "null"],
+      "description": "Hex-encoded snapshot root commitment currently being served.",
+      "pattern": "^0x[0-9a-fA-F]+$"
+    },
+    "total_chunks": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "Total chunk count advertised by the active state-sync session."
+    },
+    "completed_chunks": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of chunks that have been requested at least once during the session."
+    },
+    "remaining_chunks": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Remaining chunk count derived from the total and completed values."
+    },
+    "verified": {
+      "type": "boolean",
+      "description": "Indicates whether all verification stages have completed successfully."
+    },
+    "last_completed_step": {
+      "type": ["string", "null"],
+      "description": "Human-readable description of the most recent verification event."
+    },
+    "served_chunks": {
+      "type": "array",
+      "description": "Chunk indexes that have been served to clients during the current session.",
+      "items": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "progress_log": {
+      "type": "array",
+      "description": "Chronological log entries summarizing verification milestones.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "last_error": {
+      "type": ["string", "null"],
+      "description": "Last verification error emitted by the runtime, if any."
+    }
+  },
+  "additionalProperties": false
+}
