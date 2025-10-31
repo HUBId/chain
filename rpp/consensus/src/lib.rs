@@ -23,6 +23,7 @@ pub use prover_stwo_backend;
 
 pub mod bft_loop;
 pub mod evidence;
+pub mod governance;
 pub mod leader;
 pub mod malachite;
 pub mod messages;
@@ -39,6 +40,7 @@ pub use bft_loop::{
 pub use evidence::{
     submit_evidence, Evidence, EvidenceKind, EvidencePipeline, EvidenceRecord, EvidenceType,
 };
+pub use governance::{TimetokeRewardBudgets, TimetokeRewardGovernance};
 pub use leader::{Leader, LeaderContext};
 pub use messages::{
     Block, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
@@ -51,7 +53,8 @@ pub use reputation::{
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};
 pub use timetoke::{
-    TimetokeRecord, TimetokeReplayError, TimetokeReplayValidator, TimetokeSnapshot,
+    distribute_timetoke_rewards, TimetokeRecord, TimetokeReplayError, TimetokeReplayValidator,
+    TimetokeRewardDistribution, TimetokeRewardPoolPayout, TimetokeSnapshot,
     TimetokeSnapshotConsumer, TimetokeSnapshotError, TimetokeSnapshotHandle,
     TimetokeSnapshotProducer,
 };
