@@ -7,7 +7,7 @@ configuration changes.
 | Symptom | Check | Action |
 | --- | --- | --- |
 | OTLP backend shows no traces or metrics | Inspect startup logs for `telemetry disabled` or `telemetry enabled without explicit endpoint` to confirm whether telemetry was activated.【F:rpp/node/src/lib.rs†L442-L481】 | Enable `rollout.telemetry.endpoint` (and optional HTTP mirror) in the active config or pass `--telemetry-endpoint` on the CLI; hybrid/validator templates ship with telemetry enabled for convenience.【F:rpp/runtime/config.rs†L894-L907】【F:config/hybrid.toml†L41-L46】【F:config/validator.toml†L41-L45】【F:rpp/node/src/lib.rs†L143-L208】 |
-| `/observability` dashboards lack pipeline data | Call `/wallet/pipeline/telemetry` or `/p2p/peers` on the RPC service to confirm the orchestrator is publishing snapshots.【F:rpp/rpc/api.rs†L984-L1067】【F:rpp/runtime/orchestration.rs†L611-L615】 | If the summary is empty, ensure the node runtime is running (see startup runbook) and that the pipeline orchestrator logged `pipeline orchestrator started`. Restart after resolving config or network issues.【F:rpp/node/src/lib.rs†L494-L552】 |
+| `/observability` dashboards lack pipeline data | Call `/wallet/pipeline/telemetry` or `/p2p/peers` on the RPC service to confirm the orchestrator is publishing snapshots.【F:rpp/rpc/api.rs†L984-L1067】【F:rpp/runtime/orchestration.rs†L611-L615】 | If the summary is empty, ensure the node runtime is running (see startup runbook) and that the pipeline orchestrator logged `pipeline orchestrator started`. Restart after resolving config or network issues and review the [pipeline telemetry dashboards](../observability/pipeline.md) for stalled phases.【F:rpp/node/src/lib.rs†L494-L552】 |
 | `pipeline_submissions_total` metrics report many `reason="tier_requirement"` rejections | Review the labelled counter from the metrics backend; the orchestrator records tier and gossip errors when rejecting workflows.【F:rpp/runtime/orchestration.rs†L623-L704】 | Investigate the submitting account’s reputation tier via `/wallet/reputation/:address` or adjust the workflow policy; see [modes](../modes.md) for role-specific submission expectations.【F:rpp/rpc/api.rs†L984-L1059】 |
 
 ## Telemetry exporter checklist
@@ -29,6 +29,9 @@ configuration changes.
 * Metrics counters such as `pipeline_submissions_total` emit reasons (`tier_requirement`,
   `gossip_publish`, etc.) when workflows are rejected, making it easier to correlate RPC clients with
   policy failures.【F:rpp/runtime/orchestration.rs†L623-L704】
+* Stage-level latency, throughput, and Firewood commit heights are documented in
+  [pipeline telemetry dashboards](../observability/pipeline.md); consult them when diagnosing gaps
+  between wallet intake, proof validation, BFT finality, and storage commits.
 
 If health probes fail, jump to the [startup runbook](startup.md); persistent issues should be logged
 for follow-up in the [operator checklist](../checklists/operator.md).

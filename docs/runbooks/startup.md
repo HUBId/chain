@@ -11,5 +11,6 @@ context.
 | Runtime starts but RPC is unreachable | Confirm `rpc endpoint configured` was logged and verify the configured `network.rpc.listen` socket is free of conflicts (hybrid/validator enforce identical node/wallet listeners).【F:rpp/node/src/lib.rs†L448-L530】【F:rpp/node/src/lib.rs†L722-L775】 | Adjust the listener ports in the config templates or CLI flags to remove clashes and restart. Use `--write-config` after a successful dry run to persist the updated settings.【F:rpp/node/src/lib.rs†L229-L357】 |
 
 Once the runtime is healthy, continue with the [observability runbook](observability.md) to verify
-telemetry and dashboards.
+telemetry and dashboards. Use the [pipeline telemetry dashboards](../observability/pipeline.md) to
+confirm wallet, proof, consensus, and storage phases recover after remediation.
 

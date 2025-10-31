@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use rpp_chain::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
+use crate::telemetry::pipeline::PipelineMetrics;
 use tokio::sync::{broadcast, watch, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};
@@ -137,6 +138,7 @@ fn publish_events(events: Vec<PipelineStageEvent>) {
     for event in events {
         let stage = event.stage;
         let hash = event.hash.clone();
+        PipelineMetrics::global().record_stage(stage, event.observed_ms, event.commit_height);
         let result = channel().send(event.clone());
         match result {
             Ok(_) => {
