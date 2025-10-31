@@ -1,0 +1,46 @@
+name: nightly-simnet
+
+on:
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+
+jobs:
+  simnet:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: small-world-smoke
+            scenario: tools/simnet/scenarios/small_world_smoke.ron
+            summary: summaries/small_world_smoke.json
+          - name: ring-latency-profile
+            scenario: tools/simnet/scenarios/ring_latency_profile.ron
+            summary: summaries/ring_poisson.json
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        run: rustup show
+
+      - name: Run simnet scenario
+        run: |
+          cargo run -p simnet -- --scenario "${{ matrix.scenario }}" --artifacts-dir "target/simnet/${{ matrix.name }}"
+        env:
+          RUSTFLAGS: "-C debuginfo=0"
+
+      - name: Analyze metrics
+        run: |
+          python3 scripts/analyze_simnet.py "target/simnet/${{ matrix.name }}/${{ matrix.summary }}"
+
+      - name: Package artifacts
+        run: |
+          tar -czf "simnet-${{ matrix.name }}.tar.gz" -C target/simnet/${{ matrix.name }} .
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-${{ matrix.name }}
+          path: simnet-${{ matrix.name }}.tar.gz

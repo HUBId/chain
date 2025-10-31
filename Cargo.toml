@@ -15,6 +15,7 @@ members = [
   "rpp/pruning",
   "rpp/node",
   "xtask",
+  "tools/simnet",
 ]
 default-members = [
   "benchmark",

@@ -1,0 +1,15 @@
+{
+  "name": "ring-latency-profile",
+  "description": "Profile ring topology propagation metrics",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/ring_poisson.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/ring_poisson.json"
+  }
+}
