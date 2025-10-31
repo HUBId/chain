@@ -1,0 +1,91 @@
+{
+  "title": "Pipeline Consensus Finality",
+  "uid": "pipeline-consensus-finality",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Consensus Stage Throughput",
+      "description": "Rate of consensus stage events compared with block production.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(rpp_node_pipeline_stage_total{phase=\"consensus\"}[5m]))",
+          "legendFormat": "Consensus"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(rpp_node_consensus_blocks_total[5m]))",
+          "legendFormat": "Blocks"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Recent Consensus Latency Quantiles",
+      "description": "Latency percentiles for consensus stage events over rolling windows.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(rpp_node_pipeline_stage_latency_ms_bucket{phase=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(rpp_node_pipeline_stage_latency_ms_bucket{phase=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum(rate(rpp_node_pipeline_stage_latency_ms_bucket{phase=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {
+            "mode": "columns"
+          }
+        }
+      ]
+    }
+  ]
+}

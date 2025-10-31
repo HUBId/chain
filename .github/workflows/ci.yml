@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  dashboards-json:
+    name: Validate dashboard exports
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Validate Grafana JSON exports
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1
+          files=(
+            "pipeline_overview.json"
+            "pipeline_wallet_intake.json"
+            "pipeline_proof_validation.json"
+            "pipeline_consensus_finality.json"
+            "pipeline_storage_commit.json"
+          )
+          missing=0
+          for file in "${files[@]}"; do
+            path="docs/dashboards/${file}"
+            if [[ ! -f "${path}" ]]; then
+              echo "::error file=${path}::Dashboard export is missing"
+              missing=1
+              continue
+            fi
+            jq empty "${path}"
+          done
+          if [[ ${missing} -ne 0 ]]; then
+            echo "One or more dashboard exports are missing."
+            exit 1
+          fi

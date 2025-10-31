@@ -35,9 +35,19 @@ scope.
    `stage_total{phase="storage"}` and overlaying the latest value from
    `commit_height` to confirm Firewood persistence is keeping up.
 
-Export rendered dashboards to `docs/dashboards/pipeline_*.json` (see
-`docs/observability/pipeline_grafana.json` for a starter layout) so operators can
-version-control recommended panels.
+Export rendered dashboards to the checked-in Grafana definitions under
+`docs/dashboards/`. The repository already contains:
+
+- `pipeline_overview.json`
+- `pipeline_wallet_intake.json`
+- `pipeline_proof_validation.json`
+- `pipeline_consensus_finality.json`
+- `pipeline_storage_commit.json`
+
+Each dashboard file can be imported into Grafana via **Dashboards → New → Import**
+by uploading the JSON file or pasting its contents. Use the
+`docs/observability/pipeline_grafana.json` layout as a reference when creating
+bespoke variants or extending panel coverage.
 
 ## Alerting Guidance
 - **Wallet Intake Stall** – fire when the 5-minute rate of

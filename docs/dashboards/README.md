@@ -38,6 +38,21 @@ their OTLP form; apply your collector's naming transforms as needed.
   `pipeline_gossip_events_total`, `pipeline_leader_rotations_total`—to ensure the
   wallet pipeline mirrors node health.【F:rpp/runtime/orchestration.rs†L359-L706】【F:rpp/runtime/orchestration.rs†L747-L940】
 
+## Pipeline orchestrator
+
+Dashboard blueprints for the orchestrator live alongside this guide:
+
+- [`pipeline_overview.json`](./pipeline_overview.json)
+- [`pipeline_wallet_intake.json`](./pipeline_wallet_intake.json)
+- [`pipeline_proof_validation.json`](./pipeline_proof_validation.json)
+- [`pipeline_consensus_finality.json`](./pipeline_consensus_finality.json)
+- [`pipeline_storage_commit.json`](./pipeline_storage_commit.json)
+
+Import them into Grafana via **Dashboards → New → Import**, then upload the JSON
+file or paste the contents into the dialog. Assign each dashboard to your
+preferred folder and Prometheus datasource (the definitions reference the
+default `prometheus` UID, which can be remapped during import).
+
 ## Storage
 
 - **WAL latency and throughput.** Pair
