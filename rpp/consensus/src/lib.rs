@@ -28,6 +28,7 @@ pub mod messages;
 pub mod reputation;
 pub mod rewards;
 pub mod state;
+pub mod timetoke;
 pub mod validator;
 
 pub use bft_loop::{
@@ -44,6 +45,11 @@ pub use reputation::{
 };
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};
+pub use timetoke::{
+    TimetokeRecord, TimetokeReplayError, TimetokeReplayValidator, TimetokeSnapshot,
+    TimetokeSnapshotConsumer, TimetokeSnapshotError, TimetokeSnapshotHandle,
+    TimetokeSnapshotProducer,
+};
 pub use validator::{
     select_leader, select_validators, StakeInfo, VRFOutput, Validator, ValidatorId,
     ValidatorLedgerEntry, ValidatorSet,
