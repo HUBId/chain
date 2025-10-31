@@ -1,0 +1,161 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`WalletTabs > renders snapshot once data is loaded 1`] = `
+<div>
+  <section
+    aria-labelledby="wallet-tabs-heading"
+    class="card wallet-card"
+  >
+    <div
+      class="wallet-header"
+    >
+      <h2
+        id="wallet-tabs-heading"
+      >
+        Wallet
+      </h2>
+      <nav
+        aria-label="Wallet tabs"
+        class="wallet-tablist"
+        role="tablist"
+      >
+        <button
+          aria-controls="wallet-panel-history"
+          aria-selected="true"
+          class="wallet-tab wallet-tab--active"
+          id="wallet-tab-history"
+          role="tab"
+          type="button"
+        >
+          History
+        </button>
+        <button
+          aria-controls="wallet-panel-send"
+          aria-selected="false"
+          class="wallet-tab"
+          id="wallet-tab-send"
+          role="tab"
+          type="button"
+        >
+          Send
+        </button>
+        <button
+          aria-controls="wallet-panel-receive"
+          aria-selected="false"
+          class="wallet-tab"
+          id="wallet-tab-receive"
+          role="tab"
+          type="button"
+        >
+          Receive
+        </button>
+        <button
+          aria-controls="wallet-panel-node"
+          aria-selected="false"
+          class="wallet-tab"
+          id="wallet-tab-node"
+          role="tab"
+          type="button"
+        >
+          Node
+        </button>
+      </nav>
+    </div>
+    <div
+      class="wallet-panels"
+    >
+      <div
+        aria-labelledby="wallet-tab-history"
+        class="wallet-panel"
+        id="wallet-panel-history"
+        role="tabpanel"
+      >
+        <div
+          class="wallet-history"
+        >
+          <p
+            class="wallet-contract-version"
+          >
+            Contract: 
+            wallet-ui.history.v1
+          </p>
+          <ul
+            class="wallet-history-list"
+          >
+            <li
+              class="wallet-history-entry wallet-history-entry--confirmed"
+            >
+              <div
+                class="wallet-history-header"
+              >
+                <span
+                  class="wallet-history-hash"
+                >
+                  0xabc
+                </span>
+                <span
+                  class="wallet-status badge badge-outline wallet-status-confirmed"
+                >
+                  Confirmed at height 42 on 11/14/2023, 10:13:20 PM
+                </span>
+              </div>
+              <div
+                class="wallet-history-body"
+              >
+                <span>
+                  Reputation: 
+                  +
+                  2
+                </span>
+              </div>
+            </li>
+          </ul>
+          <div
+            class="wallet-history-tracker"
+          >
+            <h3>
+              Tracked scripts
+            </h3>
+            <ul
+              class="wallet-tracker-list"
+            >
+              <li>
+                <span
+                  class="wallet-tracker-hash"
+                >
+                  script1
+                </span>
+                <span
+                  class="wallet-tracker-balance"
+                >
+                  Balance: 
+                  50
+                </span>
+                <span
+                  class="wallet-tracker-delta"
+                >
+                  Δ mempool: 
+                  0
+                </span>
+              </li>
+            </ul>
+          </div>
+          <div
+            class="wallet-history-tracker"
+          >
+            <h3>
+              Tracker snapshot
+            </h3>
+            <p
+              class="wallet-panel-status"
+            >
+              Scripts: 
+              1
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+`;

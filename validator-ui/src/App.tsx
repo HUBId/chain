@@ -4,6 +4,7 @@ import { PipelineTimelineCard } from './components/PipelineTimelineCard';
 import { PeerListCard } from './components/PeerListCard';
 import { ProofQueuePanel } from './components/ProofQueuePanel';
 import { TelemetryPanel } from './components/TelemetryPanel';
+import { WalletTabs } from './components/WalletTabs';
 import { useApiData } from './hooks/useApiData';
 import type {
   ValidatorPeerResponse,
@@ -72,6 +73,8 @@ export default function App() {
       ) : (
         <LoadingCard title="Telemetry" />
       )}
+
+      <WalletTabs />
     </main>
   );
 }

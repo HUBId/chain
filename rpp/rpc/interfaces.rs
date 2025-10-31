@@ -5,15 +5,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::consensus::SignedBftVote;
 use crate::errors::ChainResult;
+use crate::orchestration::PipelineDashboardSnapshot;
 use crate::reputation::{ReputationProfile, Tier};
 use crate::rpp::TimetokeRecord;
 use crate::types::{
     Address, Block, BlockProofBundle, SignedTransaction, TransactionProofBundle, UptimeProof,
 };
 use crate::vrf::{VrfProof, VrfSubmission};
-use crate::wallet::{HistoryEntry, ScriptStatusMetadata, Wallet};
+use crate::wallet::{
+    ConsensusReceipt, HistoryEntry, NodeTabMetrics, ReceiveTabAddress, ScriptStatusMetadata,
+    SendPreview, Wallet,
+};
 #[cfg(feature = "vendor_electrs")]
-use crate::wallet::{TrackerSnapshot, TrackedScriptSnapshot};
+use crate::wallet::{TrackedScriptSnapshot, TrackerSnapshot};
 
 /// Identifier used for epoch-specific consensus state.
 pub type EpochId = u64;
@@ -287,6 +291,47 @@ pub struct WalletHistoryResponse {
     #[cfg(feature = "vendor_electrs")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tracker: Option<WalletTrackerSnapshot>,
+}
+
+pub const WALLET_UI_HISTORY_CONTRACT: &str = "wallet-ui.history.v1";
+pub const WALLET_UI_SEND_CONTRACT: &str = "wallet-ui.send.v1";
+pub const WALLET_UI_RECEIVE_CONTRACT: &str = "wallet-ui.receive.v1";
+pub const WALLET_UI_NODE_CONTRACT: &str = "wallet-ui.node.v1";
+
+/// Versioned contract consumed by the wallet history tab.
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletUiHistoryContract {
+    pub version: &'static str,
+    pub entries: Vec<HistoryEntry>,
+    #[cfg(feature = "vendor_electrs")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script_metadata: Option<Vec<ScriptStatusMetadata>>,
+    #[cfg(feature = "vendor_electrs")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracker: Option<WalletTrackerSnapshot>,
+}
+
+/// Versioned contract consumed by the wallet send tab.
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletUiSendContract {
+    pub version: &'static str,
+    pub preview: SendPreview,
+}
+
+/// Versioned contract consumed by the wallet receive tab.
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletUiReceiveContract {
+    pub version: &'static str,
+    pub addresses: Vec<ReceiveTabAddress>,
+}
+
+/// Versioned contract consumed by the wallet node tab.
+#[derive(Clone, Debug, Serialize)]
+pub struct WalletUiNodeContract {
+    pub version: &'static str,
+    pub metrics: NodeTabMetrics,
+    pub consensus: Option<ConsensusReceipt>,
+    pub pipeline: Option<PipelineDashboardSnapshot>,
 }
 
 #[cfg(feature = "vendor_electrs")]

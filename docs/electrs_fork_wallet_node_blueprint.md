@@ -191,9 +191,21 @@ Wallets derive ZSI IDs by hashing their keys, binding VRF tags to the current ep
 
 The project inherits Electrs’ MIT-friendly approach, keeping all integrations self-contained within the repository. Storage, consensus, P2P and proof systems are implemented locally without relying on upstream Electrum or Bitcoin binaries.【F:README.md†L1-L99】【F:src/main.rs†L1-L160】
 
-## 10. Ergebnis
+## 10. UI-RPC-Verträge & Tests
+
+* Neue versionierte Wallet-Endpunkte liefern History-, Send-, Receive- und Node-Tab-Verträge unter `/wallet/ui/*`; jede Antwort trägt einen klaren `wallet-ui.*.v1`-Bezeichner, sodass Frontends Schema-Änderungen erkennen.【F:rpp/rpc/api.rs†L1384-L1400】【F:rpp/rpc/api.rs†L1798-L1864】【F:rpp/rpc/interfaces.rs†L294-L339】
+* Contract-Tests sichern die JSON-Formate und Versionen der Wallet-Tabs ab und verhindern Regressionen beim Serialisieren.【F:rpp/rpc/tests/wallet_ui_contract.rs†L1-L124】
+* Die Validator-UI erhält eine Wallet-Navigation mit Tabs für History, Send, Receive und Node, inklusive Snapshot- sowie Interaktionstest zum Abdecken der Grundfunktionen.【F:validator-ui/src/components/WalletTabs.tsx†L1-L260】【F:validator-ui/src/components/__tests__/WalletTabs.test.tsx†L1-L116】
+
+## 11. Ergebnis
 
 * ✅ Electrum-inspirierte Wallet- und Full-Node-Funktionalität teilen sich Bibliotheken und Speicher, was hybride Deployments ermöglicht.【F:src/wallet/wallet.rs†L25-L347】【F:src/node.rs†L167-L199】
 * ✅ Proofs, Reputation und ZSI sind vollständig integriert und lokal verifizierbar.【F:src/stwo/prover/mod.rs†L1-L200】【F:src/types/identity.rs†L50-L173】【F:src/consensus.rs†L130-L193】
 * ✅ Konsensus, Storage, P2P und RPC laufen ohne externe Abhängigkeiten innerhalb der Fork.【F:src/node.rs†L1-L199】【F:rpp/p2p/src/lib.rs†L1-L13】【F:storage-firewood/src/lib.rs†L1-L49】
 * ✅ Produktionsreife Grundlage für RPP: Konfiguration, Schlüsselmanagement, Migration und API werden vom selben Binary bedient.【F:src/main.rs†L16-L160】【F:README.md†L32-L99】
+
+## 12. Blueprint-Status
+
+| Blueprint Item    | Status |
+| ----------------- | ------ |
+| electrs.ui_rpc    | Done   |

@@ -249,3 +249,250 @@ a {
   font-size: 0.85rem;
   font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
 }
+
+.wallet-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.wallet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wallet-tablist {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.wallet-tab {
+  padding: 0.5rem 1rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.wallet-tab:hover,
+.wallet-tab:focus-visible {
+  border-color: rgba(148, 163, 184, 0.6);
+  background: rgba(148, 163, 184, 0.15);
+}
+
+.wallet-tab--active {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.6);
+}
+
+.wallet-panels {
+  display: block;
+}
+
+.wallet-panel {
+  display: block;
+}
+
+.wallet-panel-status {
+  margin: 0;
+  color: #94a3b8;
+}
+
+.wallet-contract-version {
+  margin: 0 0 0.75rem;
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.wallet-history-list,
+.wallet-tracker-list,
+.wallet-receive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wallet-history-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(30, 41, 59, 0.6);
+  border: 1px solid transparent;
+}
+
+.wallet-history-entry--pending {
+  border-color: rgba(250, 204, 21, 0.4);
+}
+
+.wallet-history-entry--confirmed {
+  border-color: rgba(34, 197, 94, 0.4);
+}
+
+.wallet-history-entry--pruned {
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+.wallet-history-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.wallet-history-hash {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.9rem;
+}
+
+.wallet-status {
+  font-size: 0.75rem;
+}
+
+.wallet-history-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  color: #cbd5f5;
+}
+
+.wallet-history-alert {
+  color: #f97316;
+  font-weight: 600;
+}
+
+.wallet-history-proof {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.wallet-history-tracker h3,
+.wallet-node-consensus h3,
+.wallet-node-pipeline h3,
+.wallet-send-preview h3 {
+  margin: 1rem 0 0.5rem;
+  font-size: 1rem;
+}
+
+.wallet-tracker-list li,
+.wallet-receive-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(30, 41, 59, 0.5);
+}
+
+.wallet-receive-qr {
+  font-family: 'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, monospace;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.wallet-send-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wallet-form-group,
+.wallet-form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.wallet-form-row {
+  flex-wrap: wrap;
+}
+
+.wallet-form-row input {
+  flex: 1 1 8rem;
+}
+
+.wallet-send-form label {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.wallet-send-form input {
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(15, 23, 42, 0.9);
+  color: inherit;
+  padding: 0.5rem;
+}
+
+.wallet-send-form input:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.6);
+  outline-offset: 2px;
+}
+
+.wallet-send-button {
+  align-self: flex-start;
+  padding: 0.6rem 1.2rem;
+  border-radius: 9999px;
+  border: none;
+  background: rgba(59, 130, 246, 0.7);
+  color: #f8fafc;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.wallet-send-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.wallet-send-button:not(:disabled):hover {
+  background: rgba(59, 130, 246, 0.9);
+}
+
+.wallet-send-preview dl {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.wallet-send-preview dt {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.wallet-send-preview dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.wallet-node-metrics {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.wallet-node-label {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.wallet-node-value {
+  font-size: 1rem;
+  font-weight: 600;
+}
