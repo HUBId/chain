@@ -7,7 +7,13 @@ use integer_encoding::VarInt;
 use test_case::test_case;
 
 use crate::{
-    proofs::{header::InvalidHeader, magic, proof_type::ProofType, reader::ReadError},
+    proofs::{
+        de::MAX_RANGE_PROOF_COLLECTION_LEN,
+        header::InvalidHeader,
+        magic,
+        proof_type::ProofType,
+        reader::ReadError,
+    },
     v2::api::FrozenRangeProof,
 };
 
@@ -197,6 +203,64 @@ fn test_invalid_item(
             );
         }
         other => panic!("Expected ReadError::InvalidItem, got: {other:?}"),
+    }
+}
+
+#[test]
+fn parses_range_proof_within_collection_limit() {
+    let (expected_proof, data) = create_valid_range_proof();
+
+    let parsed = FrozenRangeProof::from_slice(&data).expect("proof should parse");
+
+    assert_eq!(
+        parsed.start_proof().len(),
+        expected_proof.start_proof().len(),
+        "start proof length changed",
+    );
+    assert_eq!(
+        parsed.end_proof().len(),
+        expected_proof.end_proof().len(),
+        "end proof length changed",
+    );
+    assert_eq!(
+        parsed.key_values().len(),
+        expected_proof.key_values().len(),
+        "key/value collection length changed",
+    );
+}
+
+#[test]
+fn rejects_collections_exceeding_limit() {
+    let (proof, mut data) = create_valid_range_proof();
+
+    let start_offset = 32; // header length
+    let original_len_size = proof.start_proof().len().required_space();
+    let mut len_buf = [0u8; 10];
+    let new_len_size = (MAX_RANGE_PROOF_COLLECTION_LEN + 1)
+        .encode_var(&mut len_buf);
+    let new_len_bytes = len_buf[..new_len_size].to_vec();
+
+    data.splice(
+        start_offset..start_offset + original_len_size,
+        new_len_bytes,
+    );
+
+    match FrozenRangeProof::from_slice(&data) {
+        Err(ReadError::ItemExceedsLimit {
+            item,
+            limit,
+            found,
+            ..
+        }) => {
+            assert_eq!(item, "array length", "unexpected item name");
+            assert_eq!(limit, MAX_RANGE_PROOF_COLLECTION_LEN, "unexpected limit");
+            assert_eq!(
+                found,
+                MAX_RANGE_PROOF_COLLECTION_LEN + 1,
+                "unexpected found value",
+            );
+        }
+        other => panic!("Expected ReadError::ItemExceedsLimit, got: {other:?}"),
     }
 }
 
