@@ -1,6 +1,7 @@
 mod config;
 mod pipeline;
 mod services;
+mod state_sync;
 mod telemetry;
 
 use std::env;
@@ -56,6 +57,10 @@ use crate::services::pruning::PruningService;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
 pub use rpp_chain::runtime::RuntimeMode;
+pub use state_sync::light_client::{
+    LightClientVerificationEvent, LightClientVerifier, StateSyncVerificationReport,
+    StateSyncVerificationSummary, VerificationError, VerificationErrorKind, VerifiedChunkRange,
+};
 
 pub type BootstrapResult<T> = std::result::Result<T, BootstrapError>;
 
