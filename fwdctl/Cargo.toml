@@ -16,7 +16,7 @@ description = "Command-line tool for Firewood, an embedded key-value store optim
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
-rust-version = "1.79"
+rust-version = "1.83"
 
 [[bin]]
 name = "fwdctl"

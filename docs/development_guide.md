@@ -5,7 +5,7 @@
 The repository provides Make targets that wrap the appropriate toolchains for
 stable and nightly builds:
 
-- `make build:stable` compiles all stable workspace members with `cargo +1.79.0`
+- `make build:stable` compiles all stable workspace members with `cargo +1.83.0`
   and skips prover crates that require nightly-only features.
 - `make test:stable` runs the stable test suite under the same pinned toolchain
   and excludes the prover workspace crates.
@@ -43,8 +43,8 @@ new optional capability:
 To validate feature interactions locally, use:
 
 ```sh
-cargo +1.79.0 test --no-default-features
-cargo +1.79.0 test --all-features
+cargo +1.83.0 test --no-default-features
+cargo +1.83.0 test --all-features
 ```
 
 ## Nightly isolation
@@ -60,7 +60,7 @@ workspace dependency to both sides.
 ## Dependency update procedure
 
 1. Run `cargo update -p <crate>` to propose a new version.
-2. Verify the candidate still declares `rust-version = "1.79"` (or lower) and
+2. Verify the candidate still declares `rust-version = "1.83"` (or lower) and
    review the changelog for MSRV bumps.
 3. If the dependency is listed in [`docs/msrv_pins.md`](./msrv_pins.md), open a
    discussion with the release engineering team before submitting a pull request.

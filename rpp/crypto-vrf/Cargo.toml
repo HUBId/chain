@@ -2,7 +2,7 @@
 name = "rpp-crypto-vrf"
 version = "0.0.12"
 edition.workspace = true
-rust-version = "1.79"
+rust-version = "1.83"
 license = "MIT"
 
 [features]

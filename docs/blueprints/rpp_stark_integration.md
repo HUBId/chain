@@ -1,8 +1,8 @@
-# Blueprint: Integration rpp-stark in chain (Rust 1.79, stable-only)
+# Blueprint: Integration rpp-stark in chain (Rust 1.83, stable-only)
 
 ## 0) Leitplanken (gelten immer)
 
-- Toolchain: Rust 1.79 überall (Repo-Root `rust-toolchain.toml`, CI pinned).
+- Toolchain: Rust 1.83 überall (Repo-Root `rust-toolchain.toml`, CI pinned).
 - Kein `#![feature]`, keine `-Z` Flags, kein Nightly—auch nicht in Subcrates (inkl. DB/Storage).
 - Additiv integrieren: bestehendes Standard-Backend bleibt unverändert; `rpp-stark` ist optional.
 - Feature-Gate in chain: `backend-rpp-stark` (Default aus).
@@ -119,12 +119,12 @@ Beweise, dass `chain` den `rpp-stark`-Mini-Proof bitgenau verifizieren kann.
 
 **Ziel**
 
-Beides prüfen: Default & `rpp-stark`-Backend—komplett auf 1.79.
+Beides prüfen: Default & `rpp-stark`-Backend—komplett auf 1.83.
 
 **Aufgaben**
 
 - `.github/workflows/ci.yml`: Dashboard-Lint behalten; bei Submodule-Variante Checkout mit `submodules: true`.
-- `.github/workflows/release.yml` Job `checks` pinnt Rust 1.79, läuft `cargo fmt --check`, `cargo clippy --workspace --all-features -D warnings`, `cargo audit` und `./scripts/test.sh --all`.
+- `.github/workflows/release.yml` Job `checks` pinnt Rust 1.83, läuft `cargo fmt --check`, `cargo clippy --workspace --all-features -D warnings`, `cargo audit` und `./scripts/test.sh --all`.
 - `scripts/test.sh` belässt den Default-Backend-Lauf auf Matrix `default` & `rpp-stark`; keine Schreibzugriffe auf Vendor-Vektoren.
 
 **DoD**: Release-Workflow `checks` deckt beide Backends über `scripts/test.sh` ab, alle Qualitätsgates grün; keine Nightly-Jobs nötig.
@@ -139,7 +139,7 @@ Betreiber & Entwickler können `rpp-stark` aktivieren, testen, debuggen.
 
 - `docs/zk_backends.md`:
   - Abschnitt „rpp-stark (stable)“:
-    - Build: `--features backend-rpp-stark` (stable 1.79)
+    - Build: `--features backend-rpp-stark` (stable 1.83)
     - Interop-Test („Golden-Vector Verify“)
     - Public-Inputs-Encoding-Link ins `rpp-stark`-Repo
     - Size-Gate-Mapping Node ↔ Library
@@ -157,11 +157,11 @@ Sicherstellen, dass die DB-Schicht ohne Nightly läuft.
 **Aufgaben**
 
 - Grep auf `#![feature]`, `-Z` in `storage/` oder `firewood/` Unterprojekten.
-- `rust-version = "1.79"` in deren `Cargo.toml`.
-- CI baut Tests für Storage auf 1.79.
+- `rust-version = "1.83"` in deren `Cargo.toml`.
+- CI baut Tests für Storage auf 1.83.
 - (Wenn C/C++-Bindings: sicherstellen, dass nur Toolchain, nicht Nightly, benötigt wird.)
 
-**DoD**: Storage baut & läuft auf 1.79 (`storage-firewood/Cargo.toml`, `storage/Cargo.toml`), und die stabilen Storage-Regressionstests (`tests/storage_snapshot.rs`, `tests/storage_migration.rs`) bleiben grün; Node startet mit DB-Pfad in `data_dir`.
+**DoD**: Storage baut & läuft auf 1.83 (`storage-firewood/Cargo.toml`, `storage/Cargo.toml`), und die stabilen Storage-Regressionstests (`tests/storage_snapshot.rs`, `tests/storage_migration.rs`) bleiben grün; Node startet mit DB-Pfad in `data_dir`.
 
 ## 10) Risiken & Gegenmaßnahmen
 
@@ -172,11 +172,11 @@ Sicherstellen, dass die DB-Schicht ohne Nightly läuft.
 - **Matrix-Komplexität**
   - Gegenmaßnahme: Feature-Gate isoliert; Default-Spalte bleibt minimal.
 - **Versehentlicher Nightly-Leak**
-  - Gegenmaßnahme: Lint-Job, der auf `#![feature]`/`-Z` in allen Dateien prüft; Toolchain fix auf 1.79.
+  - Gegenmaßnahme: Lint-Job, der auf `#![feature]`/`-Z` in allen Dateien prüft; Toolchain fix auf 1.83.
 
 ## 11) Abnahme (Definition of Done — Integration abgeschlossen)
 
-- ✅ `backend-rpp-stark` Feature existiert; Workspace baut mit/ohne Feature (1.79) (`rpp/chain/Cargo.toml`, `scripts/test.sh`).
+- ✅ `backend-rpp-stark` Feature existiert; Workspace baut mit/ohne Feature (1.83) (`rpp/chain/Cargo.toml`, `scripts/test.sh`).
 - ✅ Adapter-Layer mappt Felt/Digest/Public-Inputs bytegenau; Unit-Tests belegen es (`rpp/chain/src/zk/rpp_adapter`, `tests/rpp_adapter_public_inputs.rs`).
 - ✅ Verifier-Fassade ruft `rpp_stark::verify()`; Report & Fehler sauber gemappt (`rpp/chain/src/zk/rpp_verifier/mod.rs`, `tests/rpp_verifier_smoke.rs`).
 - ✅ Node-Size-Gate & Public-Digest Kontrakt geprüft (`rpp/chain/src/zk/rpp_adapter/public_inputs.rs`, `tests/rpp_verifier_smoke.rs`).
@@ -184,4 +184,4 @@ Sicherstellen, dass die DB-Schicht ohne Nightly läuft.
 - ✅ Validierungs-Pipeline prüft `rpp-stark`-Proofs (separater Pfad, Feature-guarded) (`rpp/runtime/node.rs`, `tests/pipeline/end_to_end.rs`).
 - ✅ CI-Matrix (stable) deckt beide Pfade ab; Clippy/Format grün (`.github/workflows/release.yml`, `scripts/test.sh`).
 - ✅ Doku erklärt Aktivierung, Tests & Troubleshooting (`docs/zk_backends.md`, `README.md`).
-- ✅ Keine Nightly-Reste (grep-Check), DB/Storage bauen auf 1.79 (`Makefile` Ziel `build:stable`, `storage-firewood/Cargo.toml`).
+- ✅ Keine Nightly-Reste (grep-Check), DB/Storage bauen auf 1.83 (`Makefile` Ziel `build:stable`, `storage-firewood/Cargo.toml`).

@@ -6,7 +6,7 @@ description = "In-memory patricia trie operations"
 repository.workspace = true
 license = "MIT OR Apache-2.0"
 edition.workspace = true
-rust-version = "1.79"
+rust-version = "1.83"
 
 [dependencies]
 # Regular dependencies

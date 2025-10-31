@@ -2,7 +2,7 @@
 name = "rpp-node"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.79"
+rust-version = "1.83"
 description = "Executable entrypoint for running an RPP node"
 repository = "https://github.com/ava-labs/firewood"
 
