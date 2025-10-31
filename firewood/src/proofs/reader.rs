@@ -88,6 +88,21 @@ impl<'a> ProofReader<'a> {
             found: found.to_string(),
         }
     }
+
+    #[must_use]
+    pub const fn item_exceeds_limit(
+        &self,
+        item: &'static str,
+        limit: usize,
+        found: usize,
+    ) -> ReadError {
+        ReadError::ItemExceedsLimit {
+            item,
+            offset: self.offset,
+            limit,
+            found,
+        }
+    }
 }
 
 pub(super) struct V0Reader<'a> {
@@ -153,6 +168,18 @@ pub enum ReadError {
         /// Message indicating what was actually found.
         found: String,
     },
+    /// An item exceeded an imposed limit.
+    #[error("{item} at offset {offset} exceeds limit {limit}: found {found}")]
+    ItemExceedsLimit {
+        /// The item that exceeded the limit.
+        item: &'static str,
+        /// The offset in the byte stream where the error ocurred.
+        offset: usize,
+        /// The maximum allowed value.
+        limit: usize,
+        /// The value that was found in the byte stream.
+        found: usize,
+    },
     /// Failed to validate the header.
     #[error("invalid header: {0}")]
     InvalidHeader(InvalidHeader),
@@ -162,6 +189,9 @@ impl ReadError {
     pub(super) const fn set_item(mut self, item: &'static str) -> Self {
         match &mut self {
             Self::IncompleteItem { item: e_item, .. } | Self::InvalidItem { item: e_item, .. } => {
+                *e_item = item;
+            }
+            Self::ItemExceedsLimit { item: e_item, .. } => {
                 *e_item = item;
             }
             Self::InvalidHeader(_) => {}

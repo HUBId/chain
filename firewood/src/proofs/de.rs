@@ -17,6 +17,9 @@ use crate::{
     v2::api::FrozenRangeProof,
 };
 
+/// Maximum number of elements that can be decoded for range proof collections.
+pub(crate) const MAX_RANGE_PROOF_COLLECTION_LEN: usize = 4_096;
+
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice.
     ///
@@ -62,9 +65,14 @@ impl<T: Version0> Version0 for Box<[T]> {
             .read_item::<usize>()
             .map_err(|err| err.set_item("array length"))?;
 
-        // FIXME: we must somehow validate `num_items` matches what is expected
-        // An incorrect, or unexpectedly large value could lead to DoS via OOM
-        // or panicing
+        if num_items > MAX_RANGE_PROOF_COLLECTION_LEN {
+            return Err(reader.item_exceeds_limit(
+                "array length",
+                MAX_RANGE_PROOF_COLLECTION_LEN,
+                num_items,
+            ));
+        }
+
         (0..num_items).map(|_| reader.read_v0_item()).collect()
     }
 }
