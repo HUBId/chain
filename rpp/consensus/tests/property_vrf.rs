@@ -12,7 +12,8 @@ use rpp_consensus::proof_backend::{
 };
 use rpp_consensus::rewards::distribute_rewards;
 use rpp_consensus::state::{
-    register_message_sender, ConsensusConfig, ConsensusState, GenesisConfig,
+    register_message_sender, ConsensusConfig, ConsensusState, GenesisConfig, TreasuryAccounts,
+    WitnessPoolWeights,
 };
 use rpp_consensus::validator::{
     VRFOutput, Validator, ValidatorId, ValidatorLedgerEntry, ValidatorSet,
@@ -259,12 +260,20 @@ proptest! {
         let count = validator_set.validators.len();
         let leader_index = leader_selector % count;
         let leader = validator_set.validators[leader_index].clone();
+        let accounts = TreasuryAccounts::new(
+            "treasury-validator".into(),
+            "treasury-witness".into(),
+            "treasury-fees".into(),
+        );
+        let weights = WitnessPoolWeights::new(0.7, 0.3);
         let distribution = distribute_rewards(
             &validator_set,
             &leader,
             42,
             base_reward,
             leader_bonus,
+            &accounts,
+            &weights,
         );
 
         let leader_extra = ((base_reward as f64) * leader_bonus).round() as u64;

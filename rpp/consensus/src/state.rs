@@ -93,6 +93,14 @@ impl ConsensusConfig {
         self.witness_pool_weights = weights;
         self
     }
+
+    pub fn treasury_accounts(&self) -> &TreasuryAccounts {
+        &self.treasury_accounts
+    }
+
+    pub fn witness_pool_weights(&self) -> &WitnessPoolWeights {
+        &self.witness_pool_weights
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -650,6 +658,7 @@ impl ConsensusState {
             self.latest_certificate = commit.certificate.clone();
         }
         self.record_proof(commit.proof.clone());
+        let witness_rewards = self.drain_witness_rewards();
         if let Some(leader) = self.current_leader.clone() {
             let mut rewards = distribute_rewards(
                 &self.validator_set,
@@ -657,11 +666,11 @@ impl ConsensusState {
                 self.block_height,
                 self.config.base_reward,
                 self.config.leader_bonus,
+                self.config.treasury_accounts(),
+                self.config.witness_pool_weights(),
             );
-            rewards.witness_rewards = self.drain_witness_rewards();
+            rewards.apply_witness_rewards(witness_rewards);
             self.record_reward(rewards);
-        } else {
-            self.drain_witness_rewards();
         }
         self.pending_prevotes.clear();
         self.pending_precommits.clear();

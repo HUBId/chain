@@ -98,6 +98,13 @@ gossip_fanout = 12
 max_channel_buffer = 1024
 # Per-channel rate limit for outbound gossip messages.
 rate_limit_per_channel = 128
+# Dedicated witness gossip buffers and rate limits (messages per interval).
+witness_proof_buffer = 256
+witness_meta_buffer = 128
+witness_proof_rate_limit = 128
+witness_meta_rate_limit = 64
+# Interval (milliseconds) for replenishing witness gossip quotas.
+witness_rate_interval_ms = 250
 # Hard cap for block payload size (bytes).
 max_block_size_bytes = 2097152
 # Hard cap for vote count processed per round.

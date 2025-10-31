@@ -4,12 +4,13 @@ use std::io::ErrorKind;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use http::Uri;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
-use rpp_p2p::{ReputationHeuristics, TierLevel};
+use rpp_p2p::{ReputationHeuristics, TierLevel, WitnessChannelConfig, WitnessPipelineConfig};
 
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
@@ -660,6 +661,11 @@ pub struct MalachiteNetworkConfig {
     pub gossip_fanout: usize,
     pub max_channel_buffer: usize,
     pub rate_limit_per_channel: u64,
+    pub witness_proof_buffer: usize,
+    pub witness_meta_buffer: usize,
+    pub witness_proof_rate_limit: u64,
+    pub witness_meta_rate_limit: u64,
+    pub witness_rate_interval_ms: u64,
     pub max_block_size_bytes: usize,
     pub max_votes_per_round: usize,
 }
@@ -681,6 +687,31 @@ impl MalachiteNetworkConfig {
                 "malachite network.rate_limit_per_channel must be greater than 0".into(),
             ));
         }
+        if self.witness_proof_buffer == 0 {
+            return Err(ChainError::Config(
+                "malachite network.witness_proof_buffer must be greater than 0".into(),
+            ));
+        }
+        if self.witness_meta_buffer == 0 {
+            return Err(ChainError::Config(
+                "malachite network.witness_meta_buffer must be greater than 0".into(),
+            ));
+        }
+        if self.witness_proof_rate_limit == 0 {
+            return Err(ChainError::Config(
+                "malachite network.witness_proof_rate_limit must be greater than 0".into(),
+            ));
+        }
+        if self.witness_meta_rate_limit == 0 {
+            return Err(ChainError::Config(
+                "malachite network.witness_meta_rate_limit must be greater than 0".into(),
+            ));
+        }
+        if self.witness_rate_interval_ms == 0 {
+            return Err(ChainError::Config(
+                "malachite network.witness_rate_interval_ms must be greater than 0".into(),
+            ));
+        }
         if self.max_block_size_bytes == 0 {
             return Err(ChainError::Config(
                 "malachite network.max_block_size_bytes must be greater than 0".into(),
@@ -693,6 +724,22 @@ impl MalachiteNetworkConfig {
         }
         Ok(())
     }
+
+    pub fn witness_pipelines(&self) -> WitnessPipelineConfig {
+        let interval = Duration::from_millis(self.witness_rate_interval_ms);
+        WitnessPipelineConfig {
+            proofs: WitnessChannelConfig::new(
+                self.witness_proof_buffer,
+                interval,
+                self.witness_proof_rate_limit,
+            ),
+            meta: WitnessChannelConfig::new(
+                self.witness_meta_buffer,
+                interval,
+                self.witness_meta_rate_limit,
+            ),
+        }
+    }
 }
 
 impl Default for MalachiteNetworkConfig {
@@ -701,6 +748,11 @@ impl Default for MalachiteNetworkConfig {
             gossip_fanout: 12,
             max_channel_buffer: 1_024,
             rate_limit_per_channel: 128,
+            witness_proof_buffer: 256,
+            witness_meta_buffer: 128,
+            witness_proof_rate_limit: 128,
+            witness_meta_rate_limit: 64,
+            witness_rate_interval_ms: 250,
             max_block_size_bytes: 2_097_152,
             max_votes_per_round: 500,
         }

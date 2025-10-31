@@ -28,6 +28,10 @@ pub use behaviour::snapshots::{
 };
 #[cfg(feature = "request-response")]
 pub use behaviour::snapshots::{SnapshotProtocolError, SnapshotsBehaviour, SnapshotsEvent};
+pub use behaviour::witness::{
+    WitnessChannelConfig, WitnessGossipPipelines, WitnessMessage, WitnessPipelineConfig,
+    WitnessPipelineError,
+};
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
 pub use peerstore::{
