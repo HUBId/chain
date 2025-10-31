@@ -36,14 +36,17 @@ pub mod validator;
 pub use bft_loop::{
     finalize_block, run_bft_loop, shutdown, submit_precommit, submit_prevote, submit_proposal,
 };
-pub use evidence::{submit_evidence, Evidence, EvidenceRecord, EvidenceType};
+pub use evidence::{
+    submit_evidence, Evidence, EvidenceKind, EvidencePipeline, EvidenceRecord, EvidenceType,
+};
 pub use leader::{Leader, LeaderContext};
 pub use messages::{
     Block, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
     ProofVerificationError, Proposal, Signature,
 };
 pub use reputation::{
-    MalachiteReputationManager, SlashingTrigger, UptimeObservation, UptimeOutcome,
+    MalachiteReputationManager, SlashingEvent, SlashingHeuristics, SlashingKind, SlashingSnapshot,
+    SlashingTrigger, UptimeObservation, UptimeOutcome,
 };
 pub use rewards::{distribute_rewards, RewardDistribution};
 pub use state::{ConsensusConfig, ConsensusState, GenesisConfig};
