@@ -10,13 +10,14 @@ use axum::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
 use base64::Engine as _;
+use hex::encode;
 use hyper::body::HttpBody;
 use parking_lot::RwLock;
 use rpp_chain::api::{
-    state_sync_chunk_by_id, state_sync_head_stream, ApiContext, StateSyncApi, StateSyncError,
-    StateSyncErrorKind, StateSyncSessionInfo,
+    state_sync_chunk_by_id, state_sync_head_stream, state_sync_session_status, ApiContext,
+    StateSyncApi, StateSyncError, StateSyncErrorKind, StateSyncSessionInfo,
 };
-use rpp_chain::node::DEFAULT_STATE_SYNC_CHUNK;
+use rpp_chain::node::{LightClientVerificationEvent, DEFAULT_STATE_SYNC_CHUNK};
 use blake3::Hash as Blake3Hash;
 use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{LightClientHead, SnapshotChunk};
@@ -243,11 +244,28 @@ async fn state_sync_chunk_by_id_returns_payload() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
     let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["index"], 0);
-    assert_eq!(json["total"], 1);
-    let encoded = json["payload"].as_str().unwrap();
+    let chunk_json = json.get("chunk").unwrap();
+    assert_eq!(chunk_json["index"], 0);
+    assert_eq!(chunk_json["total"], 1);
+    let encoded = chunk_json["payload"].as_str().unwrap();
     let decoded = BASE64_ENGINE.decode(encoded).unwrap();
     assert_eq!(decoded, payload);
+
+    let status = json.get("status").unwrap();
+    assert_eq!(
+        status["root"],
+        Value::String(format!("0x{}", encode(root.as_bytes())))
+    );
+    assert_eq!(status["total_chunks"], 1);
+    assert_eq!(status["completed_chunks"], 1);
+    assert_eq!(status["remaining_chunks"], 0);
+    assert!(status["verified"].as_bool().unwrap());
+    assert!(status["last_completed_step"].is_null());
+    assert_eq!(status["last_error"], Value::String("verification complete".into()));
+    assert_eq!(status["served_chunks"], Value::Array(vec![Value::from(0)]));
+    let expected_log: Vec<Value> =
+        progress_log.iter().cloned().map(Value::String).collect();
+    assert_eq!(status["progress_log"], Value::Array(expected_log));
 
     let session_info = api.state_sync_active_session().unwrap();
     assert_eq!(session_info.root, Some(root));
@@ -258,6 +276,66 @@ async fn state_sync_chunk_by_id_returns_payload() {
     assert_eq!(
         session_info.message.as_deref(),
         Some("verification complete")
+    );
+}
+
+#[tokio::test]
+async fn state_sync_session_status_returns_details() {
+    let root = blake3::hash(b"session-root");
+    let progress_log = vec!["Plan loaded".to_string(), "Chunks served".to_string()];
+    let session = StateSyncSessionInfo {
+        root: Some(root),
+        total_chunks: Some(4),
+        verified: true,
+        last_completed_step: Some(LightClientVerificationEvent::PlanLoaded {
+            snapshot_height: 42,
+            chunk_count: 4,
+            update_count: 2,
+        }),
+        message: Some("ready".to_string()),
+        served_chunks: vec![0, 1],
+        progress_log: progress_log.clone(),
+    };
+    let (sender, receiver) = watch::channel::<Option<LightClientHead>>(None);
+    let api = Arc::new(FakeStateSyncApi::new(
+        sender,
+        receiver,
+        Some(session),
+        None,
+        HashMap::new(),
+    ));
+    let context = test_context(api);
+    let app = Router::new()
+        .route("/state-sync/session", get(state_sync_session_status))
+        .with_state(context);
+
+    let request = Request::builder()
+        .uri("/state-sync/session")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = hyper::body::to_bytes(response.into_body()).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["total_chunks"], 4);
+    assert_eq!(json["completed_chunks"], 2);
+    assert_eq!(json["remaining_chunks"], 2);
+    assert!(json["verified"].as_bool().unwrap());
+    assert_eq!(
+        json["root"],
+        Value::String(format!("0x{}", encode(root.as_bytes())))
+    );
+    assert_eq!(json["last_error"], Value::String("ready".into()));
+    assert_eq!(json["served_chunks"], Value::Array(vec![Value::from(0), Value::from(1)]));
+    let expected_log: Vec<Value> =
+        progress_log.iter().cloned().map(Value::String).collect();
+    assert_eq!(json["progress_log"], Value::Array(expected_log));
+    assert_eq!(
+        json["last_completed_step"],
+        Value::String(
+            "plan loaded: snapshot height 42, 4 chunks, 2 updates".to_string(),
+        )
     );
 }
 
