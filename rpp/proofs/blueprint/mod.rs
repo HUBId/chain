@@ -248,7 +248,7 @@ impl Blueprint {
                         key: "electrs.ui_rpc",
                         title: "UI & RPC erweitern",
                         detail: "History-, Send-, Receive- und Node-Status-Oberflächen implementieren.",
-                        status: TaskStatus::Todo,
+                        status: TaskStatus::Done,
                     },
                     Task {
                         key: "electrs.validator_mode",

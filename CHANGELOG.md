@@ -14,6 +14,7 @@ All notable changes to this project will be documented in this file.
 - Point operators to the VRF telemetry endpoints exposed by `/status/node` and
   the `target_validator_count` / `rollout.telemetry.*` configuration knobs so
   the new metrics surface alongside existing dashboards.【F:docs/poseidon_vrf.md†L55-L104】【F:config/node.toml†L8-L76】
+- Capture the wallet UI/RPC completion by linking maintainers to the Electrs-backed tab models and `/wallet/ui/*` handlers so dashboard status sheets reference the finished modules.【F:rpp/wallet/ui/wallet.rs†L736-L924】【F:rpp/rpc/api.rs†L1405-L1440】【F:rpp/rpc/tests/wallet_ui_contract.rs†L1-L120】
 
 ## [0.0.12] - 2025-08-26
 
