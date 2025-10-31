@@ -16,7 +16,7 @@
 )]
 #![expect(
     clippy::undocumented_unsafe_blocks,
-    reason = "https://github.com/ava-labs/firewood/pull/1158 will remove"
+    reason = "https://github.com/ava-labs/chain/pull/1158 will remove"
 )]
 #![cfg_attr(
     not(target_pointer_width = "64"),

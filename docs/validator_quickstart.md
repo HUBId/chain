@@ -31,7 +31,7 @@ components on the host that will compile or update the node:
 
 ```sh
 # Clone and enter the repository
-git clone https://github.com/ava-labs/firewood.git
+git clone https://github.com/ava-labs/chain.git
 cd firewood
 
 # Verify the toolchain pin and compile the node

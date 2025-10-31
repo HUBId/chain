@@ -1,6 +1,6 @@
 # Upstream dependency alignment
 
-The authoritative [`ffi/Cargo.toml`](https://github.com/ava-labs/firewood/blob/master/ffi/Cargo.toml)
+The authoritative [`ffi/Cargo.toml`](https://github.com/ava-labs/chain/blob/master/ffi/Cargo.toml)
 defines the dependency surface for Firewood's FFI crate. As of the latest
 sync, the expected versions/features for dependencies we mirror locally are:
 

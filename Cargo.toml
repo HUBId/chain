@@ -69,7 +69,7 @@ version = "0.0.12"
 edition = "2021"
 license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
-repository = "https://github.com/ava-labs/firewood"
+repository = "https://github.com/ava-labs/chain"
 readme = "README.md"
 rust-version = "1.79"
 

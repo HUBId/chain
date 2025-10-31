@@ -27,7 +27,7 @@ firewood-storage.workspace = true
 metrics.workspace = true
 metrics-util.workspace = true
 # Regular dependencies
-# Keep aligned with upstream https://github.com/ava-labs/firewood/blob/master/ffi/Cargo.toml
+# Keep aligned with upstream https://github.com/ava-labs/chain/blob/master/ffi/Cargo.toml
 chrono = "=0.4.42"
 oxhttp = "=0.3.1"
 # Optional dependencies

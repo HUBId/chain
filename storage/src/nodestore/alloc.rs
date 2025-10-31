@@ -555,7 +555,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
 }
 
 fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
-    // See https://github.com/ava-labs/firewood/issues/1146 for full details.
+    // See https://github.com/ava-labs/chain/issues/1146 for full details.
     // emulate this behavior: https://github.com/bincode-org/bincode/blob/c44b5e364e7084cdbabf9f94b63a3c7f32b8fb68/src/config/int.rs#L241-L258
 
     const SINGLE_BYTE_MAX: u8 = 250;

@@ -948,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "https://github.com/ava-labs/firewood/issues/1054"]
+    #[ignore = "https://github.com/ava-labs/chain/issues/1054"]
     #[should_panic(expected = "Node size 16777225 is too large")]
     fn giant_node() {
         let memstore = MemStore::new(vec![]);

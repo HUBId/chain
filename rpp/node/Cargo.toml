@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.79"
 description = "Executable entrypoint for running an RPP node"
-repository = "https://github.com/ava-labs/firewood"
+repository = "https://github.com/ava-labs/chain"
 
 [features]
 default = ["dev"]
