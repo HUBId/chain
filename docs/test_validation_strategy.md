@@ -31,15 +31,25 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 - **Telemetrie**: Erfassen von Metriken (Proof-Dauer, Verifikationszeit, Speicherbedarf) und Export zu Prometheus für Langzeitvergleiche.
 
 ## 4. CI/CD-Integration
-- **GitHub Actions Pipeline**:
-  - `scripts/test.sh --all --integration` (runs unit/integration/doc suites across default + RPP-STARK backends)
-  - `cargo fmt --all -- --check`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo test --all-targets`
-  - `cargo test --no-default-features --features backend-plonky3`
-  - Workflow `sim-smoke`, Job `interop-rpp-stark`: `cargo test --features backend-rpp-stark --test interop_rpp_stark`
-  - optionale Stufen: Benchmarks (nightly), Fuzzing (cron), Integrationstests (nightly).
+- **GitHub Actions Workflows**:
+  - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
+    um Syntaxfehler frühzeitig zu entdecken. **TODO:** Erweiterung um Format-, Lint- und Testläufe sobald Ressourcen für die
+    Rust-Builds reserviert sind.
+  - [`nightly-simnet`](../.github/workflows/nightly.yml): Führt eine Matrix von Simnet-Szenarien (`small_world_smoke`,
+    `ring_latency_profile`) aus, analysiert die Ergebnisse mit `scripts/analyze_simnet.py` und veröffentlicht die Artefakte
+    zur Regressionsanalyse. **TODO:** Automatisches Auswerten von Thresholds und Rückmelden kritischer Abweichungen.
+  - [`Nightly fuzzing`](../.github/workflows/nightly-fuzz.yml): Startet `cargo fuzz` für die P2P-Handler (`handle_meta`,
+    `handle_blocks`, `handle_votes`, `admission_evaluate_publish`) auf einem Nightly-Toolchain-Setup und archiviert die
+    Corpora. **TODO:** Auf Wallet- und Prover-Komponenten ausweiten.
+- **Manuelle Prüfpfade**:
+  - `scripts/run_hybrid_mode.sh`, `scripts/run_node_mode.sh`, `scripts/run_wallet_mode.sh`: Lokale Smoke-Tests für Node- und
+    Wallet-Modi, weiterhin manuell auszuführen bis eine automatisierte Umgebung bereitsteht. **TODO:** Automatisierte Ausführung
+    in einer dedizierten Workflow-Umgebung.
+  - `tools/simnet/scenarios/*.ron`: Zusätzliche Netzwerkszenarien können lokal per `cargo run -p simnet -- --scenario …`
+    getestet werden und sind in der Roadmap als Kandidaten für eine Workflow-Erweiterung vermerkt.
 - **Artefaktverwaltung**: Speicherung generierter Beispiel-Proofs und Logs zur Reproduktion fehlschlagender Runs.
+- **Planungs-Backlink**: Ergänzende CI-Erweiterungen werden im [Roadmap Implementation Plan](./roadmap_implementation_plan.md)
+  verfolgt, damit neue Suites konsistent dokumentiert und priorisiert werden.
 
 ## 5. Dokumentation & Review-Prozess
 - **Testprotokolle**: Jeder Release-Kandidat benötigt ein Protokoll mit ausgeführten Testläufen und Ergebnissen.
