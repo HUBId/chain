@@ -66,8 +66,9 @@
 - Runtime payload schemas (transactions, uptime, state transition receipts) are
   validated by unit tests in `rpp::runtime::types` and `rpp::storage`, while the
   RPC and gossip schemas are validated by their respective module tests. These
-  schema tests run in CI via the standard `cargo test` workflows, providing
-  automated drift detection for the published contracts.【F:rpp/runtime/types/mod.rs†L41-L124】【F:rpp/runtime/types/mod.rs†L125-L160】【F:rpp/storage/mod.rs†L664-L760】【F:rpp/storage/mod.rs†L842-L924】【F:rpp/rpc/api.rs†L2968-L3088】【F:rpp/p2p/src/pipeline.rs†L2204-L2339】
+  schema tests run in CI via the `Cargo tests` matrix (default features and the
+  `prover-stwo` lane), providing automated drift detection for the published
+  contracts.【F:rpp/runtime/types/mod.rs†L41-L124】【F:rpp/runtime/types/mod.rs†L125-L160】【F:rpp/storage/mod.rs†L664-L760】【F:rpp/storage/mod.rs†L842-L924】【F:rpp/rpc/api.rs†L2968-L3088】【F:rpp/p2p/src/pipeline.rs†L2204-L2339】
 
 ## 6. Updated Diagrams
 - `docs/architecture/wallet_node_sequence.drawio` and the derived SVG illustrate

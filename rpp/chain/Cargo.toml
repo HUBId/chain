@@ -2,7 +2,7 @@
 name = "rpp-chain"
 version.workspace = true
 edition.workspace = true
-rust-version = "1.79"
+rust-version = "1.83"
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true

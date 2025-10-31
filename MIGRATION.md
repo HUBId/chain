@@ -25,11 +25,11 @@ the node after editing configuration files to pick up changes.
 
 ## Maintaining the Stable Toolchain
 
-Use the following checklist to keep the `1.79.0` workflow healthy:
+Use the following checklist to keep the `1.83.0` workflow healthy:
 
 - [ ] **Toolchain**
-  - [ ] Run the full validation suite on the pinned stable compiler (`1.79.0`) whenever a release candidate is cut.
-  - [ ] Re-run the suite after upstream `1.79.x` patch releases and capture any deltas in [`docs/STABLE_MIGRATION_REPORT.md`](docs/STABLE_MIGRATION_REPORT.md).
+  - [ ] Run the full validation suite on the pinned stable compiler (`1.83.0`) whenever a release candidate is cut.
+  - [ ] Re-run the suite after upstream `1.83.x` patch releases and capture any deltas in [`docs/STABLE_MIGRATION_REPORT.md`](docs/STABLE_MIGRATION_REPORT.md).
   - [ ] Update `rust-toolchain.toml` if the minimum supported Rust version changes and communicate the date of enforcement.
 - [ ] **Feature flags & crates**
   - [ ] Audit `Cargo.toml` and workspace members for `#![feature(...)]` attributes or nightly-only dependencies before accepting upgrades.

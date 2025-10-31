@@ -1,13 +1,13 @@
 # Troubleshooting MSRV build errors
 
 When a crate fails to compile with an error similar to `requires rustc 1.8x+`,
-follow these steps to restore compatibility with the project MSRV (1.79.0).
+follow these steps to restore compatibility with the project MSRV (1.83.0).
 
 ## 1. Confirm the toolchain
 
-Run `rustc --version` or `cargo +1.79.0 build` to ensure the pinned toolchain is
+Run `rustc --version` or `cargo +1.83.0 build` to ensure the pinned toolchain is
 active. If the error appears while using a different compiler, switch back to
-`1.79.0` and re-run the build.
+`1.83.0` and re-run the build.
 
 ## 2. Check dependency metadata
 
@@ -22,8 +22,8 @@ Some MSRV bumps are triggered by enabling new default features. Try rebuilding
 with explicit feature selections:
 
 ```sh
-cargo +1.79.0 build --no-default-features
-cargo +1.79.0 build --features "<subset>"
+cargo +1.83.0 build --no-default-features
+cargo +1.83.0 build --features "<subset>"
 ```
 
 Adjust the crate's feature flags in the workspace if you can disable the
@@ -31,7 +31,7 @@ problematic capability without blocking required functionality.
 
 ## 4. Coordinate with release engineering
 
-If the dependency cannot be downgraded or configured to build on 1.79.0, open an
+If the dependency cannot be downgraded or configured to build on 1.83.0, open an
 issue or pull request describing the blocker. Include:
 
 - The full compiler error

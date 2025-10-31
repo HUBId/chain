@@ -85,7 +85,7 @@ In order to build firewood, the following dependencies must be installed:
 Use the provided Make targets to build the workspace with the correct
 toolchains:
 
-- `make build:stable` calls `cargo +1.79.0 build --workspace` while excluding
+- `make build:stable` calls `cargo +1.83.0 build --workspace` while excluding
   the prover crates that require nightly features.
 - `make build:nightly` runs `cargo +nightly-2025-07-14 build` in the `prover/`
   workspace so nightly-only components stay isolated.
@@ -193,7 +193,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 Use the Makefile helpers to run the appropriate test suites:
 
 ```sh
-make test:stable   # runs cargo +1.79.0 test for the stable workspace
+make test:stable   # runs cargo +1.83.0 test for the stable workspace
 make test:nightly  # runs cargo +nightly-2025-07-14 test inside prover/
 ```
 
