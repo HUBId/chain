@@ -1,10 +1,10 @@
 # Schrittweiser Implementierungsplan für den RPP End-to-End Blueprint
 
-Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Sequenz ein. Er verknüpft die bereits in `src/blueprint` katalogisierten Aufgaben mit konkreten Deliverables, Abhängigkeiten und Qualitätsnachweisen. Jeder Abschnitt endet mit klaren "Definition of Done"-Kriterien und Testanforderungen, damit der Fortschritt objektiv messbar bleibt.
+Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Sequenz ein. Er verknüpft die bereits in `rpp/proofs/blueprint` katalogisierten Aufgaben mit konkreten Deliverables, Abhängigkeiten und Qualitätsnachweisen. Jeder Abschnitt endet mit klaren "Definition of Done"-Kriterien und Testanforderungen, damit der Fortschritt objektiv messbar bleibt.
 
 ## 0. Vorbereitungsphase
 - **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module Stub-Implementierungen enthalten (z. B. VRF, BFT, libp2p).
-- **Tooling & CI**: Sicherstellen, dass Formatierung (`cargo fmt`), Lints (`cargo clippy`) und Tests (`cargo test --all`) in der CI verankert sind. Ziel: Jede Blaupausenaufgabe besitzt mindestens einen automatisierten Test.
+- **Tooling & CI**: Prüfen, welche Gates der aktuelle Workflow [`CI`](.github/workflows/ci.yml) bereits abdeckt (derzeit nur Dashboard-Validierung) und fehlende Formatierungs-, Lint- oder Test-Jobs (`cargo fmt`, `cargo clippy`, `cargo test --all`) als Folgeaufgaben einplanen. Ziel: Jede Blaupausenaufgabe besitzt mindestens einen automatisierten Test.
 - **Teamabstimmung**: Deliverables pro Phase mit Domain-Teams (Node, Wallet, Proofs, Networking) abklären, gemeinsame Definition-of-Done dokumentieren.
 
 ## 1. Architekturgrundlagen schärfen (Blueprint 2.0)
@@ -125,7 +125,7 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 - **Abschlusskriterien**: Erfolgreiche Simulationen, Public-Testnet mit Monitoring, vollständige Dokumentation.
 
 ## Tracking & Kommunikation
-- Jede Aufgabe verweist auf den entsprechenden Schlüssel in `src/blueprint::Blueprint`.
+- Jede Aufgabe verweist auf den entsprechenden Schlüssel in `rpp::proofs::blueprint::Blueprint`.
 - Fortschritt wird über ein zentrales Dashboard (z. B. `progress.json` + Grafana) transparent gemacht.
 - Wöchentliche Reviews pro Sektion, monatliche Milestone-Demos (A–C).
 
