@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::evidence::{EvidenceKind, EvidenceRecord, EvidenceType};
+use crate::evidence::{CensorshipStage, EvidenceKind, EvidenceRecord, EvidenceType};
 use crate::validator::ValidatorId;
 
 use super::SlashingTrigger;
@@ -10,6 +10,8 @@ pub enum SlashingKind {
     DoubleSign,
     Availability,
     Witness,
+    Censorship,
+    Inactivity,
 }
 
 impl SlashingKind {
@@ -18,6 +20,8 @@ impl SlashingKind {
             SlashingKind::DoubleSign => "double_sign",
             SlashingKind::Availability => "availability",
             SlashingKind::Witness => "witness",
+            SlashingKind::Censorship => "censorship",
+            SlashingKind::Inactivity => "inactivity",
         }
     }
 }
@@ -27,11 +31,17 @@ pub struct SlashingSnapshot {
     pub double_signs: u64,
     pub availability_failures: u64,
     pub witness_reports: u64,
+    pub censorship_events: u64,
+    pub inactivity_events: u64,
 }
 
 impl SlashingSnapshot {
     pub fn total(&self) -> u64 {
-        self.double_signs + self.availability_failures + self.witness_reports
+        self.double_signs
+            + self.availability_failures
+            + self.witness_reports
+            + self.censorship_events
+            + self.inactivity_events
     }
 }
 
@@ -84,6 +94,19 @@ impl SlashingHeuristics {
             EvidenceType::DoubleSign { height } => format!("height={height}"),
             EvidenceType::FalseProof { block_hash } => format!("block_hash={block_hash}"),
             EvidenceType::VoteWithholding { round } => format!("round={round}"),
+            EvidenceType::Censorship {
+                stage,
+                consecutive_misses,
+                round,
+            } => format!(
+                "stage={} misses={} round={round}",
+                stage.as_str(),
+                consecutive_misses
+            ),
+            EvidenceType::Inactivity {
+                consecutive_misses,
+                round,
+            } => format!("misses={} round={round}", consecutive_misses),
         };
         let event = SlashingEvent {
             kind: kind.into(),
@@ -100,8 +123,15 @@ impl SlashingHeuristics {
             "{}:{}-{}",
             trigger.reason, trigger.window_start, trigger.window_end
         );
+        let kind = if trigger.reason.starts_with("consensus_censorship") {
+            SlashingKind::Censorship
+        } else if trigger.reason.starts_with("consensus_inactivity") {
+            SlashingKind::Inactivity
+        } else {
+            SlashingKind::Witness
+        };
         let event = SlashingEvent {
-            kind: SlashingKind::Witness,
+            kind,
             accused: trigger.validator.clone(),
             reporter: None,
             detail,
@@ -123,6 +153,8 @@ impl SlashingHeuristics {
             SlashingKind::DoubleSign => self.snapshot.double_signs += 1,
             SlashingKind::Availability => self.snapshot.availability_failures += 1,
             SlashingKind::Witness => self.snapshot.witness_reports += 1,
+            SlashingKind::Censorship => self.snapshot.censorship_events += 1,
+            SlashingKind::Inactivity => self.snapshot.inactivity_events += 1,
         }
 
         if self.recent.len() == self.capacity {
@@ -144,6 +176,8 @@ impl From<EvidenceKind> for SlashingKind {
             EvidenceKind::DoubleSign => SlashingKind::DoubleSign,
             EvidenceKind::Availability => SlashingKind::Availability,
             EvidenceKind::Witness => SlashingKind::Witness,
+            EvidenceKind::Censorship => SlashingKind::Censorship,
+            EvidenceKind::Inactivity => SlashingKind::Inactivity,
         }
     }
 }

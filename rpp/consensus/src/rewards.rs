@@ -11,6 +11,7 @@ pub struct RewardDistribution {
     pub leader_bonus: u64,
     pub rewards: BTreeMap<ValidatorId, u64>,
     pub witness_rewards: BTreeMap<ValidatorId, u64>,
+    pub penalties: BTreeMap<ValidatorId, u64>,
     pub treasury_accounts: TreasuryAccounts,
     pub witness_pool_weights: WitnessPoolWeights,
     pub validator_treasury_debit: u64,
@@ -39,6 +40,23 @@ impl RewardDistribution {
         self.total_reward = self.total_reward.saturating_add(total);
     }
 
+    pub fn apply_penalty(&mut self, validator: ValidatorId, amount: u64) -> u64 {
+        if amount == 0 {
+            return 0;
+        }
+        let withheld = if let Some(entry) = self.rewards.get_mut(&validator) {
+            let withheld = amount.min(*entry);
+            *entry = entry.saturating_sub(withheld);
+            withheld
+        } else {
+            0
+        };
+        if withheld > 0 {
+            self.penalties.insert(validator, withheld);
+        }
+        withheld
+    }
+
     pub fn validator_total(&self) -> u64 {
         self.rewards.values().copied().sum()
     }
@@ -59,6 +77,7 @@ pub fn distribute_rewards(
         leader_bonus: 0,
         rewards: BTreeMap::new(),
         witness_rewards: BTreeMap::new(),
+        penalties: BTreeMap::new(),
         treasury_accounts: treasury_accounts.clone(),
         witness_pool_weights: *witness_pool_weights,
         validator_treasury_debit: 0,

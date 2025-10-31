@@ -60,19 +60,27 @@ impl SlashingMetrics {
 
     pub fn record_pipeline(&self, pipeline: &EvidencePipeline) {
         let total = pipeline.len() as u64;
-        let (double_signs, availability, witness) = pipeline.counts();
+        let counts = pipeline.counts();
         self.queue_depth.record(total, &[]);
         self.queue_segments.record(
-            double_signs as u64,
+            counts.double_signs as u64,
             &[KeyValue::new("kind", EvidenceKind::DoubleSign.as_str())],
         );
         self.queue_segments.record(
-            availability as u64,
+            counts.availability as u64,
             &[KeyValue::new("kind", EvidenceKind::Availability.as_str())],
         );
         self.queue_segments.record(
-            witness as u64,
+            counts.witness as u64,
             &[KeyValue::new("kind", EvidenceKind::Witness.as_str())],
+        );
+        self.queue_segments.record(
+            counts.censorship as u64,
+            &[KeyValue::new("kind", EvidenceKind::Censorship.as_str())],
+        );
+        self.queue_segments.record(
+            counts.inactivity as u64,
+            &[KeyValue::new("kind", EvidenceKind::Inactivity.as_str())],
         );
     }
 
@@ -88,6 +96,14 @@ impl SlashingMetrics {
         self.snapshot_totals.record(
             snapshot.witness_reports,
             &[KeyValue::new("kind", SlashingKind::Witness.as_str())],
+        );
+        self.snapshot_totals.record(
+            snapshot.censorship_events,
+            &[KeyValue::new("kind", SlashingKind::Censorship.as_str())],
+        );
+        self.snapshot_totals.record(
+            snapshot.inactivity_events,
+            &[KeyValue::new("kind", SlashingKind::Inactivity.as_str())],
         );
     }
 }

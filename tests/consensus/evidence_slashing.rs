@@ -121,7 +121,12 @@ fn evidence_pipeline_orders_records_by_priority() {
     });
 
     assert_eq!(pipeline.len(), 3);
-    assert_eq!(pipeline.counts(), (1, 1, 1));
+    let counts = pipeline.counts();
+    assert_eq!(counts.double_signs, 1);
+    assert_eq!(counts.availability, 1);
+    assert_eq!(counts.witness, 1);
+    assert_eq!(counts.censorship, 0);
+    assert_eq!(counts.inactivity, 0);
 
     let kinds: Vec<EvidenceKind> = pipeline
         .iter()
@@ -198,6 +203,8 @@ fn consensus_state_updates_slashing_heuristics_and_pipeline() {
     assert_eq!(snapshot.double_signs, 1);
     assert_eq!(snapshot.availability_failures, 1);
     assert_eq!(snapshot.witness_reports, 1);
+    assert_eq!(snapshot.censorship_events, 0);
+    assert_eq!(snapshot.inactivity_events, 0);
 
     // uptime observation overlap triggers an additional witness slashing event
     let validator = accused.clone();
