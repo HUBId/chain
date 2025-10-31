@@ -2,7 +2,7 @@
 
 Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Liefergegenstände mit definierten Abhängigkeiten, Qualitätskriterien und Tests. Jeder Abschnitt endet mit „Definition of Done“ (DoD), damit Fortschritt messbar bleibt.
 
-> **Aktueller Stand:** Die öffentliche RPC-Schnittstelle verwaltet keinen Libp2p-Knoten. Runtime-Handles werden ausschließlich innerhalb der Runtime verwendet und nicht via `ApiContext` exponiert. Operator-Steuerung des Netzwerks bleibt damit ausdrücklich Teil der nachstehenden Deliverables.
+> **Aktueller Stand:** Die Runtime betreibt den Libp2p-Swarm produktiv: Noise-XX-Handshakes signieren und verifizieren ZSI-/VRF-Nachweise, Admission-Hooks koppeln Topics an Tier-Policies, und das Snapshot-Control-Plane streamt Pläne, Chunks und Light-Client-Updates über `/rpp/snapshots/1.0.0` inklusive Resume-/Ack-Handling.【F:rpp/p2p/src/swarm.rs†L849-L1115】【F:rpp/p2p/src/admission.rs†L14-L210】【F:rpp/p2p/src/behaviour/snapshots.rs†L58-L520】【F:rpp/runtime/node_runtime/node.rs†L375-L503】【F:rpp/p2p/tests/access_control.rs†L423-L515】【F:rpp/p2p/tests/snapshot_stream.rs†L1-L200】 Operator-Steuerung des Netzwerks bleibt damit ausdrücklich Teil der nachstehenden Deliverables (Persistenz, Hardening, Simulation).
 
 ## Phase 0 – Grundlagen & Infrastruktur
 1. **Libp2p-Abhängigkeiten und Runtime integrieren**

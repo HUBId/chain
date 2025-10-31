@@ -44,14 +44,14 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 
 ## 4. Libp2p Netzwerk-Backbone (Blueprint 2.3)
 1. **Transport & Handshake**
-   - Deliverable: Libp2p mit Noise-XX, Peerstore, Identitätsprüfung (ZSI + VRF).
-   - Tests: Verbindungsmatrix-Test (Peers unterschiedlicher Reputation).
+   - Status: ✅ Abgeschlossen – `Network::new` setzt Noise-XX-Handshakes um, signiert die Payload mit dem Node-Keypair und verankert Peerstore-/Telemetry-Hooks, sodass authentifizierte Peers und ihre Tier-Attribute im Runtime-Event-Stream landen.【F:rpp/p2p/src/swarm.rs†L849-L1009】
+   - Tests: Integrationstests wie `access_control` fahren signierte Handshakes über das vendorte Libp2p-Stack und prüfen Tier- und Sperrlistenpfade.【F:rpp/p2p/tests/access_control.rs†L423-L515】
 2. **Gossip-Kanäle & Admission-Control**
-   - Deliverable: GossipSub-Kanäle (`blocks`, `votes`, `proofs`, `snapshots`, `meta`) mit Tier-Gating.
-   - Tests: Kanalzugriff je Tier-Level, Reputation-Update-Propagierung.
+   - Status: ✅ Abgeschlossen – `AdmissionControl` erzwingt pro Topic Publish-/Subscribe-Policies, vergibt Reputation und sperrt Peers bei Verstößen, während das Swarm-Hook-System Remote-Zugriffe unmittelbar ablehnt.【F:rpp/p2p/src/admission.rs†L14-L210】【F:rpp/p2p/src/swarm.rs†L1034-L1115】
+   - Tests: Tier-Gating, Reputation-Decay und Ban-Propagation werden durch die `access_control`-Suite abgedeckt.【F:rpp/p2p/tests/access_control.rs†L423-L515】
 3. **Snapshot-Sync & Telemetrie**
-   - Deliverable: Light-Client-Snapshots, Peer-Monitoring über `meta`.
-   - Tests: Sync eines Light-Clients aus Snapshot, Telemetrie-Roundtrip.
+   - Status: ✅ Abgeschlossen – `SnapshotsBehaviour` betreibt das `/rpp/snapshots/1.0.0` Request/Response-Protokoll, während der Runtime-`SnapshotStreamStatus` Fortschritt, Resume-Offsets und Fehler für RPC/Telemetry verfolgt.【F:rpp/p2p/src/behaviour/snapshots.rs†L58-L520】【F:rpp/runtime/node_runtime/node.rs†L375-L503】
+   - Tests: `snapshot_stream` validiert Plan-/Chunk-/Ack-Flows inklusive Resume-Gating über eine Mock-Provider-Implementierung.【F:rpp/p2p/tests/snapshot_stream.rs†L1-L200】
 
 ## 5. VRF Validator-Selektion (Blueprint 2.4)
 1. **Poseidon-VRF Implementation**
