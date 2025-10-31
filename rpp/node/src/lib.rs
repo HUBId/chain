@@ -1,4 +1,5 @@
 mod config;
+mod pipeline;
 mod services;
 mod telemetry;
 
@@ -50,6 +51,7 @@ use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 
 use crate::config::{PruningCliOverrides, PruningOverrides};
+use crate::pipeline::PipelineHookGuard;
 use crate::services::pruning::PruningService;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
@@ -586,6 +588,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         let orchestrator = Arc::new(orchestrator);
         orchestrator.spawn(shutdown_rx);
         info!("pipeline orchestrator started");
+        _pipeline_hooks = Some(pipeline::install_hooks(Arc::clone(&orchestrator)));
         orchestrator_instance = Some(orchestrator.clone());
 
         uptime_cadence = Some(cadence_from_config(&config));
@@ -594,6 +597,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     }
 
     let mut wallet_instance: Option<Arc<Wallet>> = None;
+    let mut _pipeline_hooks: Option<PipelineHookGuard> = None;
     if let Some(bundle) = wallet_bundle {
         let wallet_config = bundle.value;
         wallet_config

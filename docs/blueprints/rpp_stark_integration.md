@@ -113,7 +113,7 @@ Beweise, dass `chain` den `rpp-stark`-Mini-Proof bitgenau verifizieren kann.
   - Proof-Typ-Dispatch: wenn `rpp-stark` → `RppStarkVerifier`.
 - Telemetrie: Metriken (`valid`/`invalid`, `proof_bytes`, `verify_duration_ms`) mit Label `proof_backend="rpp-stark"`.
 
-**DoD**: E2E-Pfad läuft; Default-Backend unverändert.
+**DoD**: E2E-Pfad läuft; Default-Backend unverändert. ✅ Hooks publizieren Stufen via `rpp/node/src/pipeline/mod.rs`, Smoke-Test `tests/pipeline/end_to_end.rs` bestätigt Wallet → Proof → BFT → Firewood.
 
 ## 7) CI-Matrix (stable) & Quality Gates
 
