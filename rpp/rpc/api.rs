@@ -34,9 +34,11 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::convert::TryFrom;
 use tokio::fs;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, watch, Notify};
+
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
@@ -79,6 +81,7 @@ use crate::runtime::config::{
     NetworkLimitsConfig, NetworkTlsConfig, P2pAllowlistEntry, QueueWeightsConfig,
     SecretsBackendConfig, SecretsConfig,
 };
+use crate::runtime::node::StateSyncVerificationStatus;
 use crate::runtime::node_runtime::node::{
     NodeError as P2pNodeError, NodeHandle as P2pRuntimeHandle, SnapshotSessionId,
     SnapshotStreamStatus,
@@ -100,6 +103,7 @@ use crate::wallet::{
 use crate::wallet::{TrackerState, WalletTrackerHandle};
 use blake3::Hash as Blake3Hash;
 use parking_lot::{Mutex, RwLock};
+use rpp::node::VerificationErrorKind;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
@@ -2999,6 +3003,19 @@ fn chain_error_to_state_sync(err: ChainError) -> StateSyncError {
     }
 }
 
+fn verification_error_to_state_sync(kind: Option<&VerificationErrorKind>) -> StateSyncErrorKind {
+    match kind {
+        Some(VerificationErrorKind::Plan(_))
+        | Some(VerificationErrorKind::Encoding(_))
+        | Some(VerificationErrorKind::Metadata(_))
+        | Some(VerificationErrorKind::Incomplete(_)) => StateSyncErrorKind::BuildFailed,
+        Some(VerificationErrorKind::Pipeline(_)) | Some(VerificationErrorKind::PrunerState(_)) => {
+            StateSyncErrorKind::Internal
+        }
+        None => StateSyncErrorKind::Internal,
+    }
+}
+
 #[async_trait]
 impl StateSyncApi for NodeHandle {
     fn watch_light_client_heads(
@@ -3014,17 +3031,60 @@ impl StateSyncApi for NodeHandle {
     }
 
     fn ensure_state_sync_session(&self) -> Result<(), StateSyncError> {
-        Err(StateSyncError::new(
-            StateSyncErrorKind::NoActiveSession,
-            Some("state sync session unavailable".into()),
-        ))
+        match self
+            .prepare_state_sync_session(DEFAULT_STATE_SYNC_CHUNK)
+            .map_err(chain_error_to_state_sync)?
+        {
+            StateSyncVerificationStatus::Verified => Ok(()),
+            StateSyncVerificationStatus::Failed => {
+                let cache = self.state_sync_session_snapshot();
+                let message = cache
+                    .report
+                    .as_ref()
+                    .and_then(|report| report.summary.failure.clone())
+                    .or(cache.error.clone())
+                    .unwrap_or_else(|| "state sync verification failed".to_string());
+                let kind = verification_error_to_state_sync(cache.error_kind.as_ref());
+                Err(StateSyncError::new(kind, Some(message)))
+            }
+            _ => Err(StateSyncError::new(
+                StateSyncErrorKind::Internal,
+                Some("state sync verification ended in unexpected state".into()),
+            )),
+        }
     }
 
     fn state_sync_active_session(&self) -> Result<StateSyncSessionInfo, StateSyncError> {
-        Err(StateSyncError::new(
-            StateSyncErrorKind::NoActiveSession,
-            Some("state sync session unavailable".into()),
-        ))
+        let cache = self.state_sync_session_snapshot();
+        if cache.status != StateSyncVerificationStatus::Verified {
+            return Err(StateSyncError::new(
+                StateSyncErrorKind::NoActiveSession,
+                Some("state sync session unavailable".into()),
+            ));
+        }
+
+        let root = cache.snapshot_root.ok_or_else(|| {
+            StateSyncError::new(
+                StateSyncErrorKind::Internal,
+                Some("state sync snapshot root unavailable".into()),
+            )
+        })?;
+
+        let total = cache.total_chunks.ok_or_else(|| {
+            StateSyncError::new(
+                StateSyncErrorKind::Internal,
+                Some("state sync chunk count unavailable".into()),
+            )
+        })?;
+
+        let total_chunks = u32::try_from(total).map_err(|_| {
+            StateSyncError::new(
+                StateSyncErrorKind::Internal,
+                Some("state sync chunk count exceeds supported range".into()),
+            )
+        })?;
+
+        Ok(StateSyncSessionInfo { root, total_chunks })
     }
 
     async fn state_sync_chunk_by_index(

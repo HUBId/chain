@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::Keypair;
@@ -119,7 +120,10 @@ use prover_stwo_backend::backend::{
     decode_consensus_proof, decode_pruning_proof, decode_recursive_proof, decode_state_proof,
     StwoBackend,
 };
-use rpp::node::{LightClientVerificationEvent, StateSyncVerificationReport};
+use rpp::node::{
+    LightClientVerificationEvent, LightClientVerifier, StateSyncVerificationReport,
+    VerificationErrorKind,
+};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
@@ -758,6 +762,14 @@ pub struct Node {
     inner: Arc<NodeInner>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum StateSyncVerificationStatus {
+    Idle,
+    Verifying,
+    Verified,
+    Failed,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct StateSyncSessionCache {
     report: Option<StateSyncVerificationReport>,
@@ -767,6 +779,9 @@ pub(crate) struct StateSyncSessionCache {
     served_chunks: HashSet<u64>,
     last_completed_step: Option<LightClientVerificationEvent>,
     progress_log: Vec<String>,
+    status: StateSyncVerificationStatus,
+    error: Option<String>,
+    error_kind: Option<VerificationErrorKind>,
 }
 
 impl Default for StateSyncSessionCache {
@@ -779,6 +794,9 @@ impl Default for StateSyncSessionCache {
             served_chunks: HashSet::new(),
             last_completed_step: None,
             progress_log: Vec::new(),
+            status: StateSyncVerificationStatus::Idle,
+            error: None,
+            error_kind: None,
         }
     }
 }
@@ -816,6 +834,14 @@ impl StateSyncSessionCache {
             }
         }
         self.report = Some(report);
+    }
+
+    fn set_status(&mut self, status: StateSyncVerificationStatus) {
+        self.status = status;
+        if status != StateSyncVerificationStatus::Failed {
+            self.error = None;
+            self.error_kind = None;
+        }
     }
 
     fn record_event(&mut self, event: LightClientVerificationEvent) {
@@ -877,6 +903,14 @@ impl StateSyncSessionCache {
                 format!("State sync verification completed for snapshot root {snapshot_root}")
             }
         }
+    }
+
+    fn chunk_count_from_events(events: &[LightClientVerificationEvent]) -> Option<usize> {
+        events.iter().find_map(|event| match event {
+            LightClientVerificationEvent::PlanLoaded { chunk_count, .. }
+            | LightClientVerificationEvent::PlanIngested { chunk_count, .. } => Some(*chunk_count),
+            _ => None,
+        })
     }
 
     fn decode_snapshot_root(root_hex: &str) -> Option<Hash> {
@@ -2652,6 +2686,13 @@ impl NodeHandle {
         self.inner.update_state_sync_verification_report(report);
     }
 
+    pub(crate) fn prepare_state_sync_session(
+        &self,
+        chunk_size: usize,
+    ) -> ChainResult<StateSyncVerificationStatus> {
+        self.inner.ensure_state_sync_session(chunk_size)
+    }
+
     pub(crate) fn state_sync_session_snapshot(&self) -> StateSyncSessionCache {
         self.inner.state_sync_session_snapshot()
     }
@@ -3616,6 +3657,120 @@ impl NodeInner {
                 "failed to fetch state sync chunk {index} for snapshot {root:?}: {err}"
             ))
         })
+    }
+
+    fn ensure_state_sync_session(
+        &self,
+        chunk_size: usize,
+    ) -> ChainResult<StateSyncVerificationStatus> {
+        if !self.config.rollout.feature_gates.reconstruction {
+            return Err(ChainError::Config(
+                "reconstruction feature gate disabled".into(),
+            ));
+        }
+
+        let plan = self.state_sync_plan(chunk_size)?;
+        let expected_root = Hash::from(plan.snapshot.commitments.global_state_root);
+        let expected_chunks = plan.chunks.len();
+
+        loop {
+            {
+                let mut cache = self.state_sync_session.lock();
+                if cache.chunk_size == Some(chunk_size)
+                    && cache.snapshot_root == Some(expected_root)
+                {
+                    match cache.status {
+                        StateSyncVerificationStatus::Verified => {
+                            return Ok(StateSyncVerificationStatus::Verified);
+                        }
+                        StateSyncVerificationStatus::Failed => {
+                            return Ok(StateSyncVerificationStatus::Failed);
+                        }
+                        StateSyncVerificationStatus::Verifying => {
+                            drop(cache);
+                            thread::yield_now();
+                            continue;
+                        }
+                        StateSyncVerificationStatus::Idle => {}
+                    }
+                } else if cache.status == StateSyncVerificationStatus::Verifying {
+                    drop(cache);
+                    thread::yield_now();
+                    continue;
+                }
+
+                cache.set_status(StateSyncVerificationStatus::Verifying);
+                cache.chunk_size = Some(chunk_size);
+                cache.snapshot_root = Some(expected_root);
+                cache.total_chunks = Some(expected_chunks);
+                cache.served_chunks.clear();
+                cache.progress_log.clear();
+                cache.last_completed_step = None;
+            }
+            break;
+        }
+
+        let verifier = if self.config.snapshot_dir.as_os_str().is_empty() {
+            LightClientVerifier::new(self.storage.clone())
+        } else {
+            LightClientVerifier::with_snapshot_dir(
+                self.storage.clone(),
+                self.config.snapshot_dir.clone(),
+            )
+        };
+
+        let result = verifier.run(chunk_size);
+
+        let mut cache = self.state_sync_session.lock();
+        match result {
+            Ok(report) => {
+                let chunk_count = StateSyncSessionCache::chunk_count_from_events(&report.events)
+                    .unwrap_or(expected_chunks);
+                let derived_root = report
+                    .summary
+                    .snapshot_root
+                    .as_deref()
+                    .and_then(StateSyncSessionCache::decode_snapshot_root)
+                    .unwrap_or(expected_root);
+                cache.report = Some(report);
+                cache.snapshot_root = Some(derived_root);
+                cache.total_chunks = Some(chunk_count);
+                cache.chunk_size = Some(chunk_size);
+                cache.served_chunks.clear();
+                cache.progress_log.clear();
+                cache.last_completed_step = None;
+                cache.set_status(StateSyncVerificationStatus::Verified);
+                Ok(StateSyncVerificationStatus::Verified)
+            }
+            Err(err) => {
+                let report = err.report().clone();
+                let chunk_count = StateSyncSessionCache::chunk_count_from_events(&report.events)
+                    .unwrap_or(expected_chunks);
+                let derived_root = report
+                    .summary
+                    .snapshot_root
+                    .as_deref()
+                    .and_then(StateSyncSessionCache::decode_snapshot_root)
+                    .unwrap_or(expected_root);
+                let progress_log = report
+                    .events
+                    .iter()
+                    .map(StateSyncSessionCache::render_event)
+                    .collect();
+                let last_step = report.events.last().cloned();
+                cache.report = Some(report);
+                cache.snapshot_root = Some(derived_root);
+                cache.total_chunks = Some(chunk_count);
+                cache.chunk_size = Some(chunk_size);
+                cache.served_chunks.clear();
+                cache.progress_log = progress_log;
+                cache.last_completed_step = last_step;
+                cache.status = StateSyncVerificationStatus::Failed;
+                cache.error = Some(err.to_string());
+                cache.error_kind = Some(err.kind().clone());
+                Ok(StateSyncVerificationStatus::Failed)
+            }
+        }
     }
 
     fn reset_state_sync_session(&self) {
