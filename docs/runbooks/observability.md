@@ -33,6 +33,9 @@ configuration changes.
 * Stage-level latency, throughput, and Firewood commit heights are documented in
   [pipeline telemetry dashboards](../observability/pipeline.md); consult them when diagnosing gaps
   between wallet intake, proof validation, BFT finality, and storage commits.
+* Validiert Abweichungen mit dem Smoke-Test `tests/pipeline/end_to_end.rs` oder den in
+  [Pipeline Lifecycle](../lifecycle/pipeline.md) beschriebenen Hooks, um sicherzustellen, dass
+  Instrumentierung und Dashboards synchron zur Orchestrator-Pipeline laufen.【F:tests/pipeline/end_to_end.rs†L1-L122】【F:docs/lifecycle/pipeline.md†L1-L86】
 
 If health probes fail, jump to the [startup runbook](startup.md); persistent issues should be logged
 for follow-up in the [operator checklist](../checklists/operator.md).

@@ -23,6 +23,12 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   payload and the `target_validator_count` / `rollout.telemetry.*` knobs in
   `config/node.toml`, giving operators concrete endpoints and toggles for the
   new metrics.【F:docs/poseidon_vrf.md†L55-L104】【F:config/node.toml†L8-L76】
+- Documented den vollständigen Pipeline-Lifecycle inklusive Orchestrator-Hooks,
+  Telemetrie-Metriken und dem Smoke-Test `tests/pipeline/end_to_end.rs`, damit
+  Releases die Produktionstauglichkeit der Wallet→Firewood-Kette hervorheben.
+  Die zugehörigen Dashboards (`docs/observability/pipeline.md`) und das
+  Lifecycle-Dossier (`docs/lifecycle/pipeline.md`) sind als Referenz verlinkt
+  und verweisen auf die Blueprint-Abdeckung.【F:docs/lifecycle/pipeline.md†L1-L86】【F:tests/pipeline/end_to_end.rs†L1-L122】【F:docs/observability/pipeline.md†L1-L74】【F:docs/blueprint_coverage.md†L73-L121】
 
 ### Risks
 
