@@ -4,14 +4,16 @@ use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use blake3::Hasher;
 use once_cell::sync::OnceCell;
-use serde::ser::{SerializeMap, SerializeSeq};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
+pub use plonky3_backend::PROOF_BLOB_LEN;
+use plonky3_backend::{self as backend, Circuit};
+
+use super::params::Plonky3Parameters;
 
 #[derive(Clone)]
 struct CircuitArtifact {
@@ -20,8 +22,6 @@ struct CircuitArtifact {
     verifying_key_hash: [u8; 32],
     proving_key_hash: [u8; 32],
 }
-
-pub(crate) const PROOF_BLOB_LEN: usize = 96;
 
 #[derive(Deserialize)]
 struct CircuitArtifactConfig {
@@ -374,111 +374,50 @@ pub fn verifying_key(circuit: &str) -> ChainResult<Vec<u8>> {
     circuit_artifact(circuit).map(|artifact| artifact.verifying_key.clone())
 }
 
-pub fn compute_commitment(public_inputs: &Value) -> ChainResult<String> {
-    let encoded = encode_canonical_json(public_inputs).map_err(|err| {
+pub(crate) fn circuit_keys(circuit: &str) -> ChainResult<(Vec<u8>, Vec<u8>)> {
+    circuit_artifact(circuit)
+        .map(|artifact| (artifact.verifying_key.clone(), artifact.proving_key.clone()))
+}
+
+pub(crate) fn canonical_public_inputs(public_inputs: &Value) -> ChainResult<(String, Vec<u8>)> {
+    backend::compute_commitment_and_inputs(public_inputs).map_err(|err| {
         ChainError::Crypto(format!(
             "failed to encode Plonky3 public inputs for commitment: {err}"
         ))
-    })?;
-    let mut hasher = Hasher::new();
-    hasher.update(&encoded);
-    Ok(hasher.finalize().to_hex().to_string())
+    })
 }
 
-fn transcript_message_bytes(circuit: &str, commitment: &str, encoded_inputs: &[u8]) -> Vec<u8> {
-    let mut transcript = Vec::with_capacity(
-        circuit.len() + commitment.len() + encoded_inputs.len(),
-    );
-    transcript.extend_from_slice(circuit.as_bytes());
-    transcript.extend_from_slice(commitment.as_bytes());
-    transcript.extend_from_slice(encoded_inputs);
-    transcript
-}
-
-fn transcript_message_and_inputs(
-    circuit: &str,
-    commitment: &str,
-    public_inputs: &Value,
-) -> ChainResult<(Vec<u8>, Vec<u8>)> {
-    let encoded_inputs = encode_canonical_json(public_inputs).map_err(|err| {
-        ChainError::Crypto(format!(
-            "failed to encode Plonky3 public inputs for transcript: {err}"
-        ))
-    })?;
-    let message = transcript_message_bytes(circuit, commitment, &encoded_inputs);
-    Ok((message, encoded_inputs))
-}
-
-fn compute_proof(
-    circuit: &str,
-    commitment: &str,
-    public_inputs: &Value,
-    artifact: &CircuitArtifact,
-) -> ChainResult<Vec<u8>> {
-    let (message, encoded_inputs) = transcript_message_and_inputs(circuit, commitment, public_inputs)?;
-    let inputs_digest = blake3::hash(&encoded_inputs);
-    let mut fri_hasher = blake3::Hasher::new_keyed(&artifact.proving_key_hash);
-    fri_hasher.update(&message);
-
-    let mut proof = Vec::with_capacity(PROOF_BLOB_LEN);
-    proof.extend_from_slice(&artifact.verifying_key_hash);
-    proof.extend_from_slice(inputs_digest.as_bytes());
-    proof.extend_from_slice(fri_hasher.finalize().as_bytes());
-    Ok(proof)
-}
-
-fn encode_canonical_json(value: &Value) -> serde_json::Result<Vec<u8>> {
-    let canonical = CanonicalValue(value);
-    let mut buffer = Vec::new();
-    {
-        let mut serializer = serde_json::Serializer::new(&mut buffer);
-        canonical.serialize(&mut serializer)?;
-    }
-    Ok(buffer)
-}
-
-struct CanonicalValue<'a>(&'a Value);
-
-impl<'a> Serialize for CanonicalValue<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self.0 {
-            Value::Null => serializer.serialize_unit(),
-            Value::Bool(value) => serializer.serialize_bool(*value),
-            Value::Number(value) => value.serialize(serializer),
-            Value::String(value) => serializer.serialize_str(value),
-            Value::Array(values) => {
-                let mut seq = serializer.serialize_seq(Some(values.len()))?;
-                for value in values {
-                    seq.serialize_element(&CanonicalValue(value))?;
-                }
-                seq.end()
-            }
-            Value::Object(map) => {
-                let mut entries: Vec<_> = map.iter().collect();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                let mut object = serializer.serialize_map(Some(entries.len()))?;
-                for (key, value) in entries {
-                    object.serialize_entry(key, &CanonicalValue(value))?;
-                }
-                object.end()
-            }
-        }
-    }
+pub fn compute_commitment(public_inputs: &Value) -> ChainResult<String> {
+    canonical_public_inputs(public_inputs).map(|(commitment, _)| commitment)
 }
 
 pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::proof::Plonky3Proof> {
     let artifact = circuit_artifact(&circuit)?;
-    let commitment = compute_commitment(&public_inputs)?;
-    let proof = compute_proof(&circuit, &commitment, &public_inputs, artifact)?;
+    let (commitment, encoded_inputs) = canonical_public_inputs(&public_inputs)?;
+    let params = Plonky3Parameters::default();
+    let compiled = Circuit::keygen(
+        circuit.clone(),
+        artifact.verifying_key.clone(),
+        artifact.proving_key.clone(),
+        params.security_bits,
+        params.use_gpu_acceleration,
+    )
+    .map_err(|err| {
+        ChainError::Crypto(format!(
+            "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
+        ))
+    })?;
+    let proof = compiled
+        .prove(&commitment, &encoded_inputs)
+        .map_err(|err| {
+            ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
+        })?;
     Ok(super::proof::Plonky3Proof {
         circuit,
         commitment,
         public_inputs,
         proof,
-        verifying_key: artifact.verifying_key.clone(),
+        verifying_key: compiled.verifying_key().to_vec(),
     })
 }
 
@@ -491,45 +430,33 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
             BASE64_STANDARD.encode(&proof.verifying_key)
         )));
     }
-    let expected_commitment = compute_commitment(&proof.public_inputs)?;
+    let (expected_commitment, encoded_inputs) = canonical_public_inputs(&proof.public_inputs)?;
     if proof.commitment != expected_commitment {
         return Err(ChainError::Crypto(format!(
             "plonky3 proof commitment mismatch: expected {expected_commitment}, found {}",
             proof.commitment
         )));
     }
-    if proof.proof.len() != PROOF_BLOB_LEN {
-        return Err(ChainError::Crypto(format!(
-            "plonky3 proof blob must be {PROOF_BLOB_LEN} bytes, found {}",
-            proof.proof.len()
-        )));
-    }
-    let verifying_hash = blake3::hash(&artifact.verifying_key);
-    let (hash_segment, rest) = proof.proof.split_at(32);
-    if verifying_hash.as_bytes() != hash_segment {
-        return Err(ChainError::Crypto(format!(
-            "plonky3 proof verifying key hash mismatch for {} circuit",
+    let params = Plonky3Parameters::default();
+    let compiled = Circuit::keygen(
+        proof.circuit.clone(),
+        artifact.verifying_key.clone(),
+        artifact.proving_key.clone(),
+        params.security_bits,
+        params.use_gpu_acceleration,
+    )
+    .map_err(|err| {
+        ChainError::Crypto(format!(
+            "failed to prepare Plonky3 {} circuit for verification: {err}",
             proof.circuit
-        )));
-    }
-    let (inputs_segment, fri_segment) = rest.split_at(32);
-    let (message, encoded_inputs) =
-        transcript_message_and_inputs(&proof.circuit, &expected_commitment, &proof.public_inputs)?;
-    let expected_inputs_hash = blake3::hash(&encoded_inputs);
-    if expected_inputs_hash.as_bytes() != inputs_segment {
-        return Err(ChainError::Crypto(format!(
-            "plonky3 proof public input digest mismatch for {} circuit",
-            proof.circuit
-        )));
-    }
-    let mut fri_hasher = blake3::Hasher::new_keyed(&artifact.proving_key_hash);
-    fri_hasher.update(&message);
-    let expected_fri = fri_hasher.finalize();
-    if expected_fri.as_bytes() != fri_segment {
-        return Err(ChainError::Crypto(format!(
-            "plonky3 proof verification failed for {} circuit",
-            proof.circuit
-        )));
-    }
-    Ok(())
+        ))
+    })?;
+    compiled
+        .verify(&expected_commitment, &encoded_inputs, &proof.proof)
+        .map_err(|err| {
+            ChainError::Crypto(format!(
+                "plonky3 proof verification failed for {} circuit: {err}",
+                proof.circuit
+            ))
+        })
 }

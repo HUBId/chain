@@ -1,0 +1,24 @@
+{
+  "circuit": "transaction",
+  "commitment": "dc67354906a9b88ae30d62fa65079c794c18085b69a2f7134abe5fd5960d4b14",
+  "public_inputs": {
+    "witness": {
+      "transaction": {
+        "id": "00000000-0000-0000-0000-000000000001",
+        "payload": {
+          "from": "bc4e7908ec08920102e7faf0898e7f4f71b24a5cc1b812e88c390794d557fcfa",
+          "to": "bc4e7908ec08920102e7faf0898e7f4f71b24a5cc1b812e88c390794d557fcfa",
+          "amount": 42,
+          "fee": 1,
+          "nonce": 0,
+          "memo": null,
+          "timestamp": 1
+        },
+        "signature": "dc31c33a9c5b011a05281343f90bfd304d0e19f17d4929911eeddd6ee3f653f75e111d1c3cb66a03a234bce714d5b5f2bfb160fdbab5b12919046066116e0406",
+        "public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8"
+      }
+    }
+  },
+  "proof": "9Elaic3Xl01xRpUmsRHrpsOQ11Z/nWTyb+d3H/ua5wLcZzVJBqm4iuMNYvplB5x5TBgIW2mi9xNKvl/Vlg1LFOgnruWmSi55fjoH5slS3/Fdz+XWCiSYw3+qL6/gUOyl",
+  "verifying_key": "2H2xwQIbToG/jZ5ME461vMuw7Y3I3zg9yCKG3bxy6HskXiZlqrc5mn9X86+ErFVorWBtt/2Uan/yrXgtklXzK2BD8m/GWcAeYxCF/VxcHX32fZIEVxffx4oNAJKkfGeT"
+}

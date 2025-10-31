@@ -18,7 +18,7 @@ backend, and the remaining work required for production readiness.
 | Backend | Current integration | Production gaps |
 | --- | --- | --- |
 | **STWO (`official`)** | The [`StwoBackend`](../rpp/zk/prover_stwo_backend/src/backend.rs) now drives key generation, proving, and verification through the vendor crates when the `official` feature is enabled. The adapter wraps the official [`WalletProver`](../rpp/zk/prover_stwo_backend/src/official/prover.rs) for every circuit family and delegates verification to the [`NodeVerifier`](../rpp/zk/prover_stwo_backend/src/official/verifier/mod.rs). Feature wiring is captured in the crate manifest so production builds can opt into the vendor dependency.【F:rpp/zk/prover_stwo_backend/src/backend.rs†L35-L496】【F:rpp/zk/prover_stwo_backend/src/official/prover.rs†L18-L199】【F:rpp/zk/prover_stwo_backend/src/official/verifier/mod.rs†L1-L120】【F:rpp/zk/prover_stwo_backend/Cargo.toml†L1-L21】 | Runtime services still need to surface the proofs to Firewood, wallets, and pruning automation. The relevant blueprint tasks remain in `Todo`: lifecycle services, block metadata, pruning jobs, wallet workflows, and uptime propagation.【F:rpp/proofs/blueprint/mod.rs†L110-L157】 Operationally, operators must provision the nightly toolchain and vendor artifacts recorded in the integration log before enabling the feature in production.【F:docs/vendor_log.md†L20-L68】 |
-| **Plonky3 (mock)** | The mock backend continues to wrap witnesses in JSON and emit deterministic transcripts instead of real proofs, maintaining the blueprint plumbing without cryptographic soundness.【F:rpp/proofs/plonky3/prover/mod.rs†L154-L259】【F:rpp/proofs/plonky3/crypto.rs†L360-L436】 | The roadmap still tracks the work to replace the stub with a full Plonky3 integration, including setup artifact handling and verification coverage.【F:docs/roadmap_implementation_plan.md†L19-L77】 |
+| **Plonky3** | The dedicated [`plonky3_backend`](../prover/plonky3_backend/src/lib.rs) crate now drives circuit key generation, proof construction, and verification using the configured setup artifacts. Wallet-facing code compiles the circuits once per parameter set, commits to canonical public inputs, and hands the resulting proofs to the unified verifier registry.【F:prover/plonky3_backend/src/lib.rs†L1-L130】【F:rpp/proofs/plonky3/prover/mod.rs†L60-L135】【F:rpp/proofs/plonky3/crypto.rs†L1-L189】 End-to-end tests exercise the real backend against canonical fixtures so regressions in keygen/prove/verify behaviour are caught automatically.【F:rpp/proofs/plonky3/tests/mod.rs†L1-L120】【F:rpp/proofs/plonky3/tests/fixtures/transaction_roundtrip.json†L1-L24】 | Production enablement now focuses on pipeline integration (exposing proofs to Firewood and pruning automation) rather than backend plumbing, as tracked in the roadmap.【F:docs/roadmap_implementation_plan.md†L19-L77】 |
 
 ## Official STWO backend details
 
@@ -42,13 +42,18 @@ production builds.
 
 ## Plonky3 path status
 
-* The Plonky3 prover/verifier pair only exercises the JSON plumbing: witnesses
-  are wrapped, hashed, and converted into `ChainProof::Plonky3` values without
-  generating real proofs.【F:rpp/proofs/plonky3/prover/mod.rs†L154-L259】
-* Proof commitments are derived from canonical JSON, and the “proof” bytes are
-  a Blake3 transcript seeded by the mocked verifying key, confirming that the
-  backend still behaves as a deterministic stub rather than talking to a real
-  Plonky3 engine.【F:rpp/proofs/plonky3/crypto.rs†L360-L436】
+* `plonky3_backend` compiles each circuit once per `(security_bits, gpu)` pair
+  and caches the resulting proving/verifying keys so repeat proofs avoid
+  redundant setup work.【F:rpp/proofs/plonky3/prover/mod.rs†L60-L135】
+* Proof generation now feeds canonical public inputs into the backend crate,
+  which derives the commitment, transcript digests, and proof bytes alongside
+  the verifying key payload expected by the unified proof envelope.【F:prover/plonky3_backend/src/lib.rs†L1-L130】【F:rpp/proofs/plonky3/crypto.rs†L130-L189】
+* Verification rehydrates the backend circuit from the setup artifacts,
+  recomputes the commitment from the submitted public inputs, and delegates the
+  transcript checks to the backend so tampering is detected before proofs reach
+  the consensus or wallet layers.【F:rpp/proofs/plonky3/crypto.rs†L151-L189】
+* Regression tests load canonical fixtures for keygen/prove/verify paths to
+  guarantee deterministic output across releases.【F:rpp/proofs/plonky3/tests/mod.rs†L1-L120】【F:rpp/proofs/plonky3/tests/fixtures/transaction_roundtrip.json†L1-L24】
 
 ## Poseidon VRF coverage
 
@@ -70,9 +75,9 @@ The Poseidon-backed VRF stack that the blueprint scoped is now fully wired:
 These additions retire the `vrf.poseidon_impl`, `vrf.epoch_management`, and
 `vrf.monitoring` backlog items in the blueprint module.【F:rpp/proofs/blueprint/mod.rs†L190-L210】
 
-**Net result:** the Plonky3 pathway remains a mock that validates the plumbing
-but provides no cryptographic guarantees until real setup artifacts and prover
-executables are integrated.
+**Net result:** the Plonky3 pathway now produces and verifies structured
+proof artifacts via the backend crate, clearing the blueprint milestone for a
+feature-complete prover/verifier integration.
 
 ## Production backlog alignment
 
