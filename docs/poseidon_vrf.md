@@ -88,15 +88,40 @@ set through `register_vrf_tag` to guard against duplicated proofs entering the
 history or being reused during identity onboarding.
 
 ## CLI & Configuration
-`rpp-node validator vrf rotate --config config/validator.toml` rotiert sowohl
-das VRF-Schlüsselpaar als auch die Ablage im hinterlegten Secrets-Backend und
-zeigt das Ergebnis direkt im Terminal an. Nodes laden die VRF-Materialien über
-die Keystore-Abstraktion `NodeConfig::load_or_generate_vrf_keypair`; das
-Dateisystem unter `config.vrf_key_path` bleibt Standard, während Deployments
-`secrets.backend = "vault"` verwenden können, um Tokens und TLS-Anmeldedaten
-aus den Node-Logs herauszuhalten. Der Eintrag `target_validator_count`
-steuert weiterhin den dynamischen Schwellwert für die Validatorauswahl pro
-Epoche.【F:rpp/node/src/main.rs†L238-L317】【F:rpp/runtime/config.rs†L567-L574】【F:config/node.toml†L8-L21】
+Use the integrated validator CLI to rotate, audit, and export Poseidon VRF
+material. `rpp-node validator vrf rotate` provisions a fresh keypair through the
+secrets backend declared in the validator configuration, reports the resolved
+storage identifier, and overwrites any existing entry in the same location.【F:rpp/node/src/main.rs†L250-L288】
+
+Common invocations mirror the operator guide and pass an explicit configuration
+path when the node is not using the default `config/validator.toml` profile. The
+CLI automatically falls back to that path when `--config` is omitted.【F:rpp/node/src/main.rs†L22-L113】【F:docs/rpp_node_operator_guide.md†L40-L66】
+
+```sh
+# Rotate VRF keys in place using the filesystem-backed secrets store
+rpp-node validator vrf rotate --config config/validator.toml
+
+# Inspect the stored keypair after migrating to a Vault backend
+rpp-node validator vrf inspect --config /etc/rpp/validator.toml
+
+# Export the active keypair to a JSON bundle for backup procedures
+rpp-node validator vrf export --config /etc/rpp/validator.toml --output ./backups/validator-vrf.json
+```
+
+The CLI resolves the configured secrets backend, ensures the target directory or
+remote identifier exists, and then loads or persists the VRF material through
+the same abstraction that the runtime uses at startup.【F:rpp/node/src/main.rs†L264-L345】【F:rpp/node/src/main.rs†L555-L568】【F:rpp/runtime/config.rs†L1398-L1401】
+
+Tune VRF persistence and committee sizing directly in the validator
+configuration. `NodeConfig` exposes the `vrf_key_path` and `secrets` block that
+drive the keystore lookup, while `target_validator_count` continues to control
+the per-epoch selection threshold. The repository ships a reference profile in
+`config/node.toml` that illustrates the default filesystem layout and telemetry
+settings for operators to extend.【F:rpp/runtime/config.rs†L1131-L1175】【F:rpp/runtime/config.rs†L1350-L1401】【F:config/node.toml†L1-L24】
+
+For end-to-end runbooks—including how to stage Vault credentials, validate
+telemetry, and capture CLI output for audits—consult the `rpp-node` operator
+guide and the validator tooling companion reference.【F:docs/rpp_node_operator_guide.md†L46-L66】
 
 ## Telemetry & Metrics
 `GET /status/node` now surfaces a `vrf_metrics` payload containing the submission
