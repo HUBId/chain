@@ -4,9 +4,9 @@ Die Runtime exportiert Telemetriedaten in zwei Richtungen:
 
 * **Node-spezifische Laufzeitmetriken (`NodeMetrics`)** werden periodisch über Heartbeats
   an den Telemetrie-Worker gemeldet.
-* **Meta-Telemetrie (`MetaTelemetryReport`)** fasst Informationen über die aktuell
-  verbundenen Peers zusammen und wird sowohl intern als auch über die RPC-Schnittstelle
-  weitergereicht.
+* **Meta-Telemetrie (`MetaTelemetryReport`)** fasst Informationen über aktuell verbundene
+  Peers zusammen – inklusive Peer-Liste und aggregierter Zähler – und wird sowohl intern
+  als auch über die RPC-Schnittstelle weitergereicht.
 
 Die Implementierung der Strukturen und der Aktualisierungspfad befindet sich im
 [`rpp/runtime/node_runtime/node.rs`](../rpp/runtime/node_runtime/node.rs), der wiederum vom
@@ -34,34 +34,32 @@ Die Felder spiegeln exakt die Struktur in
 
 ## `MetaTelemetryReport`
 
-Meta-Telemetrie fasst Peerinformationen zusammen, die sowohl im Meta-Gossip als auch über
-RPC ausgegeben werden:
+`MetaTelemetryReport` stellt einen kompakten Überblick über den aktuellen Peer-Kontext
+bereit. Die Struktur wird direkt im
+[`node_runtime::Node`](../rpp/runtime/node_runtime/node.rs) gepflegt und enthält:
 
 * `local_peer_id` – PeerId des lokalen Nodes.
-* `peer_count` – Anzahl der zur Laufzeit bekannten Peers.
-* `peers` – Liste von `PeerTelemetry`-Einträgen (`peer`, `version`, `latency_ms`, `last_seen`).
+* `peers` – Liste der aktuell beobachteten Peers inklusive Version, Latenz- und
+  Sichtbarkeitsinformationen (`PeerTelemetry`).
+* `peer_count` – aggregierte Anzahl der Peers aus obiger Liste.
 
-Das RPC-Modul serialisiert die Struktur als `NetworkMetaTelemetryReport` für Clients; die
-Konvertierungen finden in `node_runtime/node.rs` statt. Für das Meta-Gossip wird derselbe
-Pfad genutzt, wodurch Konsistenz zwischen internem und externem Bericht sichergestellt ist.
+Die Definition und Ableitungen befinden sich in
+[`rpp/runtime/node_runtime/node.rs`](../rpp/runtime/node_runtime/node.rs), wodurch diese
+Dokumentation mit zukünftigen Strukturänderungen synchron gehalten werden kann. Das
+RPC-Modul serialisiert den Report als `NetworkMetaTelemetryReport`; derselbe Codepfad
+liefert auch den Meta-Gossip-Report, sodass interne und externe Konsumenten dieselben Daten
+erhalten.
 
 ## Netzwerkmetriken (libp2p)
 
-Bandwidth- und Peer-Metriken des libp2p-Stacks werden derzeit **nicht** automatisch in den
-oben beschriebenen Reports exportiert. Stattdessen bietet das P2P-Modul dedizierte Helper,
-insbesondere `NetworkMetricsSnapshot` aus
-[`rpp/p2p/src/swarm.rs`](../rpp/p2p/src/swarm.rs), der Byte-Volumina, Topic-Metriken und
-Peer-Scores aus der libp2p-Instrumentierung aggregiert.
+Bandwidth- und Peer-Metriken aus dem libp2p-Stack werden derzeit **nicht** automatisch in
+`NodeMetrics` oder `MetaTelemetryReport` aufgenommen. Stattdessen liefert – sofern das Modul
+gebaut wird – das P2P-Subsystem (`rpp/p2p`) dedizierte Helfer wie
+`NetworkMetricsSnapshot` in [`rpp/p2p/src/swarm.rs`](../rpp/p2p/src/swarm.rs). Diese Snapshots
+aggregieren Byte-Volumina, Topic-Metriken und Peer-Scores aus der libp2p-Instrumentierung
+und stehen lokalen Komponenten zur Verfügung.
 
-Die Runtime nutzt diesen Snapshot bislang nur intern; für externe Telemetrie-Dashboards
-müsste eine zusätzliche Serialisierungsschicht implementiert werden. Folgende Schritte
-bleiben offen, falls eine vollständige libp2p-Export-Pipeline gewünscht ist:
-
-1. Einbettung der `NetworkMetricsSnapshot`-Daten in einen neuen oder erweiterten Telemetrie-
-   Endpunkt (z. B. Ergänzung von `NodeMetrics` oder Bereitstellung eines separaten RPC).
-2. Sicherstellung, dass die Prometheus-Exporter dieselben Daten liefern, um Doppelarbeit zu vermeiden.
-3. Erweiterung der Dokumentation um die konkreten JSON- oder OpenAPI-Schemata, sobald die
-   Export-Pipeline steht.
-
-Bis dahin steht libp2p-Telemetrie ausschließlich über die Prometheus-Registry (Feature
-`metrics`) und den `NetworkMetricsSnapshot`-Helper zur Verfügung.
+Die Runtime nutzt diese Daten bislang nur intern. Für reichhaltigere Exporte (z. B. zusätzliche
+RPC-Endpunkte oder Prometheus-Metriken) ist ein nachgelagerter Ausbau geplant, der die
+libp2p-Snapshots mit den bestehenden Telemetrie-Strömen verknüpft und eine öffentliche
+Serialisierungsschicht definiert.
