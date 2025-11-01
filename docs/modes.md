@@ -35,7 +35,7 @@ network interfaces and observability hooks. For configuration precedence and tem
   `/health`, `/health/live`, and `/health/ready` for automation.【F:rpp/runtime/config.rs†L1057-L1088】【F:rpp/rpc/api.rs†L974-L1145】
 * **Shutdown and exits:** Graceful shutdown produces `node runtime exited cleanly`; error cases are
   encoded as configuration/startup/runtime exit codes 2/3/4 respectively.【F:rpp/node/src/lib.rs†L884-L895】【F:rpp/node/src/lib.rs†L48-L120】
-* **Helper script:** `scripts/run_node_mode.sh` launches the CLI with the stock template, polls `/health/live` and `/health/ready`, and forwards the runtime's exit codes (0 success, 2 configuration, 3 startup, 4 runtime) to automation.【F:scripts/run_node_mode.sh†L19-L74】【F:rpp/node/src/main.rs†L18-L24】
+* **Helper script:** `scripts/run_node_mode.sh` launches the CLI with the stock template, polls `/health/live` and `/health/ready`, and forwards the runtime's exit codes (0 success, 2 configuration, 3 startup, 4 runtime) to automation. Set `RPP_NODE_RPC_AUTH_TOKEN` (Bearer auth) or `RPP_NODE_HEALTH_HEADERS` (newline-separated headers) if the readiness probes must include authentication metadata.【F:scripts/run_node_mode.sh†L10-L64】【F:rpp/node/src/main.rs†L18-L24】
 
 ### Wallet runtime
 

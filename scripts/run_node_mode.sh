@@ -9,6 +9,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MODE="node"
 DEFAULT_CONFIG_PATH="${RPP_NODE_CONFIG_PATH:-${REPO_ROOT}/config/node.toml}"
 
+# Optional environment variables:
+#   RPP_NODE_RPC_AUTH_TOKEN - when set, send `Authorization: Bearer <token>` with
+#     every readiness probe (useful for RPC gateways that require auth).
+#   RPP_NODE_HEALTH_HEADERS - newline-separated list of additional headers to
+#     attach to readiness probes (e.g. `X-Api-Key: example`).
+
 if [[ ! -f "${DEFAULT_CONFIG_PATH}" ]]; then
   echo "error: default node config not found at ${DEFAULT_CONFIG_PATH}" >&2
   exit 1
