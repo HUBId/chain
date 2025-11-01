@@ -48,9 +48,9 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 * **Reorg-Schutz & Anti-Abuse**: `tests/reorg_regressions.rs` erzwingt, dass der Evidence-Pool konkurrierende Forks unterbindet und den Tip stabil hält.
 
 ### Offene Konsens-TODOs
-* P2P-Handshakes & Gossip Admission konsequent über Tier-Gates absichern, um Sybil-Einschleusung zu verhindern.
-* Netzwerkweite Timetoke-Snapshot-/Replay-Strategie fertigstellen (inkl. Witness-Distribution).
-* Monitoring & Parametrisierung der VRF-Thresholds dokumentieren und in Telemetrie einspeisen.
+* ✅ **Tier Admission abgesichert:** Peerstore-Handshakes verwerfen Allowlist-Downgrades und koppeln Telemetrie an die Tier-Prüfung, während die Admission-Control Gossip-Publishes unterhalb von Tier 3 blockiert.【F:rpp/p2p/src/peerstore.rs†L512-L588】【F:tests/network/admission_control.rs†L13-L74】
+* ✅ **Timetoke-Snapshots und Replay-Härtung ausgeliefert:** Snapshot-Produktion/-Konsum exportiert Ledger-Zustände über das Snapshot-Protokoll, und der Replay-Validator bindet Pruning-Digests sowie Domain-Tags, abgesichert durch Roundtrip- und Replay-Tests.【F:rpp/consensus/src/timetoke/snapshots.rs†L7-L200】【F:rpp/consensus/src/timetoke/replay.rs†L15-L186】【F:tests/consensus/timetoke_snapshots.rs†L48-L169】
+* ✅ **VRF-Schwellenwerte telemetriert:** Die VRF-Kryptobibliothek publiziert Histogramme/Zähler zu Schwellen, Erfolgsquoten und Fallbacks, die Observability-Tests über den OpenTelemetry-Exporter validieren.【F:rpp/crypto-vrf/src/telemetry.rs†L10-L205】【F:tests/observability/vrf_metrics.rs†L9-L69】
 
 ## Architekturentscheidungen & Komponenten
 ### Domänenmodelle
