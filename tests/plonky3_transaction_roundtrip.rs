@@ -1,5 +1,10 @@
 #![cfg(feature = "backend-plonky3")]
 
+//! End-to-end Plonky3 transaction tests that mirror wallet flows.
+//!
+//! Proofs are generated with deterministic RNG seeds so CI observes the same
+//! commitments and proof blobs across runs.
+
 use ed25519_dalek::{Keypair, Signer};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -11,6 +16,8 @@ use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::{ChainProof, SignedTransaction, Transaction};
 
+const TRANSACTION_SEED: [u8; 32] = [23u8; 32];
+
 fn enable_experimental_backend() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
@@ -18,7 +25,7 @@ fn enable_experimental_backend() {
 }
 
 fn deterministic_transaction() -> SignedTransaction {
-    let mut rng = StdRng::from_seed([23u8; 32]);
+    let mut rng = StdRng::from_seed(TRANSACTION_SEED);
     let keypair = Keypair::generate(&mut rng);
     let sender = address_from_public_key(&keypair.public);
     let tx = Transaction::new(sender.clone(), sender, 17, 5, 0, None);
@@ -114,4 +121,76 @@ fn transaction_roundtrip_rejects_truncated_proof() {
     }
 
     assert!(verifier.verify_transaction(&tampered).is_err());
+}
+
+#[test]
+fn transaction_roundtrip_rejects_wrong_verifying_key() {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+    let tx = deterministic_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut tampered = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.metadata.verifying_key_hash[0] ^= 0x40;
+        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+            *first ^= 0x02;
+        }
+        *value = parsed.into_value().unwrap();
+    }
+
+    let err = verifier.verify_transaction(&tampered).unwrap_err();
+    assert!(
+        err.to_string().contains("verifying key mismatch"),
+        "unexpected verifier error: {err:?}"
+    );
+}
+
+#[test]
+fn transaction_roundtrip_rejects_mismatched_commitment() {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+    let tx = deterministic_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut tampered = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("commitment".into(), serde_json::json!("deadbeef"));
+        }
+    }
+
+    let err = verifier.verify_transaction(&tampered).unwrap_err();
+    assert!(
+        err.to_string().contains("commitment mismatch"),
+        "unexpected verifier error: {err:?}"
+    );
+}
+
+#[test]
+fn transaction_roundtrip_rejects_oversized_proof() {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+    let tx = deterministic_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut tampered = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.proof_blob.push(0);
+        *value = parsed.into_value().unwrap();
+    }
+
+    let err = verifier.verify_transaction(&tampered).unwrap_err();
+    assert!(
+        err.to_string().contains("proof blob must be"),
+        "unexpected verifier error: {err:?}"
+    );
 }
