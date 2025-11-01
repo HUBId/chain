@@ -1,10 +1,22 @@
-name: CI
+name: Mainline CI
 
 on:
   push:
     branches:
       - main
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
 
 jobs:
   dashboards-json:
@@ -41,3 +53,271 @@ jobs:
             echo "One or more dashboard exports are missing."
             exit 1
           fi
+
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  lint:
+    name: clippy
+    runs-on: ubuntu-latest
+    needs:
+      - fmt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  security-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: security-audit
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      - name: Run cargo audit
+        run: cargo audit --deny warnings
+
+  sbom:
+    name: SBOM (CycloneDX)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: sbom
+      - name: Install cargo-cyclonedx
+        run: cargo install --locked cargo-cyclonedx
+      - name: Generate workspace SBOM
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/sbom
+          cargo cyclonedx --all-features --format json --output ci-artifacts/sbom/workspace.json
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: ci-artifacts/sbom
+
+  tests:
+    name: "tests (${{ matrix.stage }} • ${{ matrix.backend }} • ${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    needs:
+      - lint
+      - security-audit
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            backend: default
+            stage: unit
+          - os: ubuntu-latest
+            backend: default
+            stage: integration
+          - os: ubuntu-latest
+            backend: stwo
+            stage: unit
+          - os: ubuntu-latest
+            backend: stwo
+            stage: integration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Install nightly toolchain for STWO backend
+        if: ${{ matrix.backend == 'stwo' }}
+        run: rustup toolchain install nightly-2025-07-14 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests-${{ matrix.backend }}-${{ matrix.stage }}
+      - name: Install cargo2junit
+        run: cargo install --locked cargo2junit
+      - name: Run ${{ matrix.stage }} tests (${{ matrix.backend }})
+        run: |
+          set -euo pipefail
+          mkdir -p "ci-artifacts/tests/${{ matrix.stage }}-${{ matrix.backend }}"
+          log_dir="ci-artifacts/tests/${{ matrix.stage }}-${{ matrix.backend }}"
+
+          declare -a toolchain_args
+          declare -a backend_args
+          if [[ "${{ matrix.backend }}" == "stwo" ]]; then
+            toolchain_args=("+nightly-2025-07-14")
+            backend_args=("--no-default-features" "--features" "stwo")
+          else
+            toolchain_args=()
+            backend_args=()
+          fi
+
+          declare -a suite_args
+          if [[ "${{ matrix.stage }}" == "integration" ]]; then
+            suite_args=("--tests" "--features" "integration")
+          else
+            suite_args=("--lib" "--bins")
+          fi
+
+          attempt=1
+          max_attempts=2
+          while (( attempt <= max_attempts )); do
+            echo "Attempt ${attempt}/${max_attempts}: cargo ${toolchain_args[*]} test --message-format json ${backend_args[*]} ${suite_args[*]}"
+            set +e
+            cargo "${toolchain_args[@]}" test --message-format json "${backend_args[@]}" "${suite_args[@]}" | tee "${log_dir}/cargo-test-attempt-${attempt}.json"
+            status=$?
+            set -e
+            if (( status == 0 )); then
+              break
+            fi
+            if (( attempt == max_attempts )); then
+              exit "$status"
+            fi
+            echo "Flaky failure detected – retrying after 15 seconds" >&2
+            sleep 15
+            ((attempt++))
+          done
+
+          cargo2junit < "${log_dir}/cargo-test-attempt-${attempt}.json" > "${log_dir}/junit-${{ matrix.stage }}-${{ matrix.backend }}.xml"
+
+          if [[ "${{ matrix.stage }}" == "integration" ]]; then
+            focus_log="${log_dir}/cargo-test-reorg_regressions.json"
+            focus_attempt=1
+            while (( focus_attempt <= max_attempts )); do
+              echo "Attempt ${focus_attempt}/${max_attempts}: cargo ${toolchain_args[*]} test --message-format json ${backend_args[*]} --features integration --test reorg_regressions"
+              set +e
+              cargo "${toolchain_args[@]}" test --message-format json "${backend_args[@]}" --features integration --test reorg_regressions | tee "${focus_log%.json}-attempt-${focus_attempt}.json"
+              status=$?
+              set -e
+              if (( status == 0 )); then
+                focus_log="${focus_log%.json}-attempt-${focus_attempt}.json"
+                break
+              fi
+              if (( focus_attempt == max_attempts )); then
+                exit "$status"
+              fi
+              echo "Flaky failure detected in reorg_regressions – retrying after 15 seconds" >&2
+              sleep 15
+              ((focus_attempt++))
+            done
+            cargo2junit < "$focus_log" > "${log_dir}/junit-reorg_regressions-${{ matrix.backend }}.xml"
+          fi
+      - name: Upload test artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: "tests-${{ matrix.stage }}-${{ matrix.backend }}-${{ matrix.os }}"
+          path: ci-artifacts/tests/${{ matrix.stage }}-${{ matrix.backend }}
+
+  coverage:
+    name: coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    needs:
+      - tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: coverage
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov
+      - name: Generate coverage report
+        run: |
+          set -euo pipefail
+          mkdir -p ci-artifacts/coverage
+          cargo llvm-cov --workspace --lcov --output-path ci-artifacts/coverage/lcov.info --features integration
+      - name: Upload coverage artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: ci-artifacts/coverage
+
+  simnet:
+    name: simnet harness (stwo backend)
+    runs-on: ubuntu-latest
+    needs:
+      - tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install nightly toolchain for simulator
+        run: rustup toolchain install nightly-2025-07-14 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: simnet
+      - name: Run simulator smoke tests
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-07-14
+          CHAIN_SIM_BACKEND: stwo
+        run: |
+          set -euo pipefail
+          ./scripts/ci/sim_smoke.sh
+      - name: Upload simulator artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-smoke
+          path: ci-artifacts/sim-smoke
+
+  quality-gate:
+    name: mainline gate
+    runs-on: ubuntu-latest
+    needs:
+      - dashboards-json
+      - fmt
+      - lint
+      - security-audit
+      - sbom
+      - tests
+      - coverage
+      - simnet
+    if: ${{ always() }}
+    steps:
+      - name: Evaluate upstream results
+        run: |
+          set -euo pipefail
+          declare -A results=(
+            [dashboards-json]="${{ needs['dashboards-json'].result }}"
+            [fmt]="${{ needs.fmt.result }}"
+            [lint]="${{ needs.lint.result }}"
+            [security-audit]="${{ needs['security-audit'].result }}"
+            [sbom]="${{ needs.sbom.result }}"
+            [tests]="${{ needs.tests.result }}"
+            [coverage]="${{ needs.coverage.result }}"
+            [simnet]="${{ needs.simnet.result }}"
+          )
+          status=0
+          for job in "${!results[@]}"; do
+            result="${results[$job]}"
+            echo "${job}: ${result}"
+            if [[ "$result" != "success" ]]; then
+              status=1
+            fi
+          done
+          if [[ "$status" -ne 0 ]]; then
+            echo "One or more required jobs failed or were skipped." >&2
+            exit 1
+          fi
+          echo "All required jobs succeeded."
