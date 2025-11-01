@@ -74,6 +74,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - name: Install pinned nightly toolchain
+        run: rustup toolchain install nightly-2025-07-14 --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-checks
@@ -87,8 +89,8 @@ jobs:
           cargo install --locked git-cliff
       - name: Cargo audit
         run: cargo audit --deny warnings
-      - name: Test suite
-        run: ./scripts/test.sh --all
+      - name: Test suite (default, STWO, and RPP-Stark backends)
+        run: ./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark
       - name: Prepare release notes
         run: ./scripts/prepare_changelog.sh --tag "${{ steps.determine_tag.outputs.release_tag }}" --output dist/release-notes.md
       - uses: actions/upload-artifact@v4

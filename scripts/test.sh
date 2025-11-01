@@ -22,6 +22,7 @@ Test selection:
   --doc                     Run documentation tests
   --all                     Run all test suites (default if none selected)
   --backend <name>          Run the suites for a specific backend (default|stwo|plonky3|rpp-stark)
+                            (defaults to default, stwo, and rpp-stark)
 
 Build options:
   --release                 Test using the release profile
@@ -183,7 +184,7 @@ if [[ ${#SUITES_SELECTED[@]} -eq 0 ]]; then
 fi
 
 if [[ ${#BACKENDS[@]} -eq 0 ]]; then
-  BACKENDS=(default rpp-stark)
+  BACKENDS=(default stwo rpp-stark)
 fi
 
 run_suite() {
