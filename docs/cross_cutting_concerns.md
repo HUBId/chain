@@ -6,7 +6,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 1.1 Zentrale Parameterdatei
 * **Ziel**: Einfache Anpassung der Blueprint-Parameter ohne Codeänderung.
-* **Umsetzung**: Einführung einer dedizierten Konfigurationsdatei `config/malachite.toml` (oder YAML), die von Node- und Konsensdiensten geladen wird.
+* **Umsetzung**: Die dedizierte Konfigurationsdatei `config/malachite.toml` liegt im Repository und wird vom Loader in `NodeConfig::load` automatisch eingelesen, validiert und mit Defaultwerten ergänzt.【F:config/malachite.toml†L1-L82】【F:rpp/runtime/config.rs†L915-L964】
 * **Konfigurations-Layer**: Priorität `CLI-Flags → Umgebungsvariablen → Config-Datei → Default-Werte`.
 
 ### 1.2 Relevante Parametergruppen
@@ -56,7 +56,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 2.2 Logging & Tracing
 * **Structured Logging**: JSON/Protobuf-Logs mit Feldern `round_id`, `epoch`, `leader_id`, `validator_id`, `tier`, `timetoke_balance`, `event_type`.
-* **Tracing**: OpenTelemetry-Integration, Spans für VRF-Auswertung, Leader-Wahl, Proof-Building, Netzwerk-Dispatch.
+* **Tracing**: OpenTelemetry-Integration, Spans für VRF-Auswertung, Leader-Wahl, Proof-Building, Netzwerk-Dispatch; die VRF-Telemetrie wird inklusive Tests über `VrfTelemetry` abgedeckt.【F:rpp/crypto-vrf/src/telemetry.rs†L10-L205】【F:tests/observability/vrf_metrics.rs†L1-L69】
 * **Log-Level-Policy**: Debug für Testnet, Info/Warn für Produktion, Audit-relevante Events auf Warn oder höher.
 
 ### 2.3 Audit-Trail & Compliance
@@ -72,9 +72,9 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 * **Sequenzdiagramme**: BPMN/PlantUML-Diagramme für Konsensrunde, Timetoke-Sync und Rewards.
 
 ### 3.2 Entwicklerleitfäden
-* Quickstart-Guide für lokale Validator-Nodes inkl. Konfigurationsbeispiele.
-* Troubleshooting-Playbook für häufige Fehler (z. B. fehlende Timetoke-Snapshots, VRF-Mismatch).
-* Coding-Guidelines für neue Module (z. B. Fehlerbehandlung, Telemetrie-Hooks, Test-Patterns).
+* Quickstart-Guide für lokale Validator-Nodes inkl. Konfigurationsbeispiele steht unter `docs/validator_quickstart.md` bereit.【F:docs/validator_quickstart.md†L1-L212】
+* Troubleshooting-Playbook für häufige Fehler (z. B. fehlende Timetoke-Snapshots, VRF-Mismatch) ist als Runbook gepflegt.【F:docs/runbooks/observability.md†L1-L120】
+* Coding-Guidelines für neue Module (z. B. Fehlerbehandlung, Telemetrie-Hooks, Test-Patterns) sind im Entwickler-Tooling-Dokument zusammengefasst.【F:docs/development/tooling.md†L1-L120】
 
 ### 3.3 Kommunikationskanäle
 * Changelog-Struktur mit Fokus auf Konsensänderungen.
@@ -129,19 +129,20 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 | Bereich | Owner | Deliverable | Status |
 | --- | --- | --- | --- |
-| Konfigurationsdatei & Loader | Core Platform Team | `config/malachite.toml`, Parsing-Module | offen |
-| Telemetrie-Integration | SRE Team | Metrics-Exporter, Grafana-Dashboards | offen |
-| Dokumentationspaket | Developer Relations | API-Guides, Flowcharts, Changelog | offen |
-| Testautomatisierung | QA Team | CI-Pipeline mit Nightly-Fuzzing | offen |
+| Konfigurationsdatei & Loader | Core Platform Team | `config/malachite.toml`, Parsing-Module | ✅ geliefert – Node-Loader lädt Blueprint-Defaults und validiert Schema.【F:rpp/runtime/config.rs†L915-L990】 |
+| Telemetrie-Integration | SRE Team | Metrics-Exporter, Grafana-Dashboards | ✅ geliefert – VRF-Metriken + Dashboards unter `docs/dashboards/*.json`.【F:rpp/crypto-vrf/src/telemetry.rs†L10-L205】【F:docs/dashboards/README.md†L3-L51】 |
+| Dokumentationspaket | Developer Relations | API-Guides, Flowcharts, Changelog | ✅ geliefert – Guides & Diagramme im Dev-Portal gepflegt.【F:docs/validator_quickstart.md†L1-L212】【F:docs/malachite_bft_architecture.md†L1-L210】 |
+| Testautomatisierung | QA Team | CI-Pipeline mit Nightly-Fuzzing | ✅ geliefert – Nightly-Fuzz- und Simnet-Läufe automatisiert in GitHub Actions.【F:.github/workflows/nightly-fuzz.yml†L1-L36】【F:.github/workflows/nightly.yml†L1-L36】 |
 | Rollout-Planung | DevOps | Stufenplan & Runbooks | offen |
 | Sicherheitskonzept | Security Guild | Secrets-Policy, Audit-Plan | offen |
 
 ## 7. Nächste Schritte
 
-1. Config-Schema und Default-Werte finalisieren, anschließend Loader-Modul implementieren.
-2. Telemetrie-Schnittstellen in Konsens-, Reputation- und Netzwerkmodulen definieren.
-3. Dokumentationspaket strukturieren, Verantwortlichkeiten im Team bestätigen.
-4. CI/CD-Pipeline um Property- und Integrationstests erweitern.
-5. Rollout- und Sicherheitskonzepte mit Stakeholdern abstimmen.
+* Next steps (Konfigurationsdatei & Loader): Bei Schemaänderungen ein Migrations-Howto ergänzen und automatisierte Kompatibilitätsprüfungen in `NodeConfig::validate` ausweiten.
+* Next steps (Telemetrie-Integration): Dashboard-Alerts mit SLOs und PagerDuty-Routing ergänzen.
+* Next steps (Dokumentationspaket): Blueprint-Coverage-Index halbjährlich reviewen und veraltete Diagramme aktualisieren.
+* Next steps (Testautomatisierung): Laufzeiten der Nightly-Jobs monitoren und ggf. zusätzliche Szenarien (`simnet`) ergänzen.
+* Next steps (Rollout-Planung): Stufenplan mit Ops-Runbooks abstimmen und Pilot-Umgebungen terminieren.
+* Next steps (Sicherheitskonzept): Secrets-Policy mit aktuellen Keystore-Anforderungen abgleichen und Audit-Scope definieren.
 
 Diese Cross-Cutting-Übersicht bildet die Basis, um in weiteren Iterationen konkrete Implementierungen, Tests und Betriebskonzepte auszuarbeiten und die vollständige Blueprint-Umsetzung abzusichern.
