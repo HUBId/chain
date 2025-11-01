@@ -89,6 +89,11 @@ witness_network = false
 enabled = false
 sample_interval_secs = 30
 
+# Uncomment to expose Prometheus metrics locally.
+# [rollout.telemetry.metrics]
+# listen = "127.0.0.1:9797"
+# auth_token = "change-me"
+
 [rollout.telemetry.vrf_thresholds]
 min_participation_rate = 0.66
 max_rejection_rate = 0.25

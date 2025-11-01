@@ -42,7 +42,7 @@
   - Counter `rpp_stark_stage_checks_total` mit Labels `proof_backend`, `proof_kind`, `stage` (`params`, `public`, `merkle`, `fri`, `composition`) und `result` (`ok`/`fail`).
   - Fehlerpfade aktualisieren dieselben Byte-Histogramme, sodass Ausreißer sichtbar bleiben.
 - `TelemetrySnapshot` (`rpp/runtime/node_runtime/node.rs`) trägt die `verifier_metrics.per_backend`-Aggregationen weiter, womit Exporter den aktuellen Stand der Backend-Verifikationen ohne zusätzlichen RPC abrufen können.
-- Beispiel-`scrape_config` für Prometheus (bei aktivem `metrics-exporter-prometheus` auf Port `9797`):
+- Beispiel-`scrape_config` für Prometheus (wenn `rollout.telemetry.metrics.listen = "127.0.0.1:9797"` konfiguriert ist):
 
   ```yaml
   scrape_configs:
@@ -51,6 +51,9 @@
       static_configs:
         - targets: ["rpp-node:9797"]
       metrics_path: /metrics
+      # Optional, falls rollout.telemetry.metrics.auth_token gesetzt ist
+      authorization:
+        credentials: Bearer change-me
       relabel_configs:
         - source_labels: [__address__]
           target_label: instance

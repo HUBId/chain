@@ -4,11 +4,13 @@ mod services;
 mod state_sync;
 mod telemetry;
 
+use std::convert::Infallible;
 use std::env;
 use std::fmt;
 use std::fs;
 use std::future::Future;
 use std::io::Write;
+use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -17,6 +19,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
+use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
+use hyper::service::{make_service_fn, service_fn};
+use hyper::{Body, Method, Request, Response, Server};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use opentelemetry::global;
 use opentelemetry::KeyValue;
 #[cfg(test)]
@@ -476,9 +482,11 @@ fn telemetry_probe_client(
 }
 
 fn telemetry_auth_token(telemetry: &TelemetryConfig) -> Option<String> {
-    telemetry
-        .auth_token
-        .as_ref()
+    normalize_bearer_token(&telemetry.auth_token)
+}
+
+fn normalize_bearer_token(raw: &Option<String>) -> Option<String> {
+    raw.as_ref()
         .map(|token| token.trim())
         .filter(|token| !token.is_empty())
         .map(|token| {
@@ -1758,6 +1766,9 @@ fn init_tracing(
     };
 
     let telemetry_config = resolved_telemetry_config(config)?;
+    let prometheus_listen = telemetry_config.metrics.listen.map(|addr| addr.to_string());
+    let prometheus_listen_field = prometheus_listen.as_deref();
+    let prometheus_auth = telemetry_config.metrics.auth_token.is_some();
 
     let instance_id = resolve_instance_id(metadata, mode);
     let redact_logs = telemetry_config.redact_logs;
@@ -1777,6 +1788,8 @@ fn init_tracing(
             rpp.config_source = config_source,
             instance.id = instance_id.as_str(),
             otlp_enabled = false,
+            prometheus_listen = prometheus_listen_field,
+            prometheus_auth = prometheus_auth,
             dry_run = true,
             mode = mode.as_str(),
             config_source = config_source
@@ -1796,6 +1809,8 @@ fn init_tracing(
             dry_run = true,
             metrics_enabled = telemetry_config.enabled,
             metrics_endpoint = metrics_endpoint.as_deref(),
+            prometheus_listen = prometheus_listen_field,
+            prometheus_auth = prometheus_auth,
             mode = mode.as_str(),
             config_source = config_source,
             "tracing initialised"
@@ -1803,11 +1818,16 @@ fn init_tracing(
         return Ok(None);
     }
 
+    let prometheus_guard = install_prometheus_recorder(&telemetry_config)
+        .context("failed to initialise Prometheus recorder")?;
     let resource = telemetry_resource(config, metadata, mode, config_source, &instance_id);
     let (runtime_metrics, metrics_guard) =
         init_runtime_metrics(&telemetry_config, resource.clone())
             .context("failed to initialise runtime metrics")?;
     let mut guard = OtelGuard::new(metrics_guard);
+    if let Some(prometheus_guard) = prometheus_guard {
+        guard = guard.with_prometheus_guard(prometheus_guard);
+    }
     let metrics_endpoint = TelemetryExporterBuilder::new(&telemetry_config)
         .http_endpoint()
         .map(str::to_string);
@@ -1839,6 +1859,8 @@ fn init_tracing(
                 otlp_endpoint = endpoint.as_str(),
                 metrics_enabled = metrics_enabled,
                 metrics_endpoint = metrics_endpoint_field,
+                prometheus_listen = prometheus_listen_field,
+                prometheus_auth = prometheus_auth,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source
@@ -1855,6 +1877,8 @@ fn init_tracing(
                 otlp_endpoint = endpoint,
                 metrics_enabled = metrics_enabled,
                 metrics_endpoint = metrics_endpoint_field,
+                prometheus_listen = prometheus_listen_field,
+                prometheus_auth = prometheus_auth,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source,
@@ -1881,6 +1905,8 @@ fn init_tracing(
                 otlp_enabled = false,
                 metrics_enabled = metrics_enabled,
                 metrics_endpoint = metrics_endpoint_field,
+                prometheus_listen = prometheus_listen_field,
+                prometheus_auth = prometheus_auth,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source
@@ -1896,6 +1922,8 @@ fn init_tracing(
                 otlp_enabled = false,
                 metrics_enabled = metrics_enabled,
                 metrics_endpoint = metrics_endpoint_field,
+                prometheus_listen = prometheus_listen_field,
+                prometheus_auth = prometheus_auth,
                 dry_run = false,
                 mode = mode.as_str(),
                 config_source = config_source,
@@ -2156,9 +2184,23 @@ struct TelemetryHandles {
     runtime_metrics: Arc<RuntimeMetrics>,
 }
 
+fn install_prometheus_recorder(
+    telemetry: &TelemetryConfig,
+) -> Result<Option<PrometheusRecorderGuard>> {
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .context("failed to install Prometheus metrics recorder")?;
+    let listen = telemetry.metrics.listen;
+    let auth_token = normalize_bearer_token(&telemetry.metrics.auth_token);
+    let guard = PrometheusRecorderGuard::new(handle, listen, auth_token)
+        .context("failed to initialise Prometheus metrics endpoint")?;
+    Ok(Some(guard))
+}
+
 struct OtelGuard {
     metrics_guard: Option<RuntimeMetricsGuard>,
     tracer_shutdown: Option<Box<dyn FnOnce() + Send + Sync + 'static>>,
+    prometheus_guard: Option<PrometheusRecorderGuard>,
 }
 
 impl OtelGuard {
@@ -2166,6 +2208,7 @@ impl OtelGuard {
         Self {
             metrics_guard: Some(metrics_guard),
             tracer_shutdown: None,
+            prometheus_guard: None,
         }
     }
 
@@ -2173,10 +2216,16 @@ impl OtelGuard {
         self.tracer_shutdown = Some(Box::new(shutdown));
         self
     }
+
+    fn with_prometheus_guard(mut self, guard: PrometheusRecorderGuard) -> Self {
+        self.prometheus_guard = Some(guard);
+        self
+    }
 }
 
 impl Drop for OtelGuard {
     fn drop(&mut self) {
+        self.prometheus_guard.take();
         if let Some(mut metrics_guard) = self.metrics_guard.take() {
             metrics_guard.flush_and_shutdown();
         }
@@ -2184,6 +2233,180 @@ impl Drop for OtelGuard {
             shutdown();
         }
     }
+}
+
+struct PrometheusRecorderGuard {
+    #[allow(dead_code)]
+    handle: PrometheusHandle,
+    upkeep_shutdown: Option<oneshot::Sender<()>>,
+    upkeep_task: Option<JoinHandle<()>>,
+    server: Option<MetricsServerGuard>,
+}
+
+impl PrometheusRecorderGuard {
+    fn new(
+        handle: PrometheusHandle,
+        listen: Option<SocketAddr>,
+        auth_token: Option<String>,
+    ) -> Result<Self> {
+        let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+        let upkeep_handle = {
+            let upkeep_handle = handle.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => upkeep_handle.run_upkeep(),
+                        _ = &mut shutdown_rx => break,
+                    }
+                }
+            })
+        };
+
+        let server = if let Some(addr) = listen {
+            Some(spawn_prometheus_server(addr, handle.clone(), auth_token)?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            handle,
+            upkeep_shutdown: Some(shutdown_tx),
+            upkeep_task: Some(upkeep_handle),
+            server,
+        })
+    }
+}
+
+impl Drop for PrometheusRecorderGuard {
+    fn drop(&mut self) {
+        self.server.take();
+        if let Some(tx) = self.upkeep_shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(task) = self.upkeep_task.take() {
+            task.abort();
+        }
+    }
+}
+
+struct MetricsServerGuard {
+    shutdown: Option<oneshot::Sender<()>>,
+    task: JoinHandle<()>,
+}
+
+impl Drop for MetricsServerGuard {
+    fn drop(&mut self) {
+        if let Some(tx) = self.shutdown.take() {
+            let _ = tx.send(());
+        }
+        self.task.abort();
+    }
+}
+
+fn spawn_prometheus_server(
+    listen: SocketAddr,
+    handle: PrometheusHandle,
+    auth_token: Option<String>,
+) -> Result<MetricsServerGuard> {
+    let auth_required = auth_token.is_some();
+    let builder = Server::try_bind(&listen)
+        .with_context(|| format!("failed to bind Prometheus metrics endpoint on {listen}"))?;
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+
+    let service_handle = handle.clone();
+    let service_auth = auth_token.clone();
+    let make_service = make_service_fn(move |_conn| {
+        let handle = service_handle.clone();
+        let auth = service_auth.clone();
+        async move {
+            Ok::<_, Infallible>(service_fn(move |request| {
+                prometheus_http_handler(request, handle.clone(), auth.clone())
+            }))
+        }
+    });
+
+    let listen_for_task = listen;
+    let server = builder
+        .serve(make_service)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        });
+
+    let task = tokio::spawn(async move {
+        if let Err(err) = server.await {
+            error!(
+                target = "telemetry",
+                listen = %listen_for_task,
+                "prometheus metrics endpoint exited with error: {err}"
+            );
+        }
+    });
+
+    info!(
+        target = "telemetry",
+        listen = %listen,
+        auth = auth_required,
+        "prometheus metrics endpoint listening"
+    );
+
+    Ok(MetricsServerGuard {
+        shutdown: Some(shutdown_tx),
+        task,
+    })
+}
+
+async fn prometheus_http_handler(
+    request: Request<Body>,
+    handle: PrometheusHandle,
+    auth_token: Option<String>,
+) -> Result<Response<Body>, Infallible> {
+    if let Some(expected) = auth_token.as_ref() {
+        let provided = request
+            .headers()
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok());
+        if provided != Some(expected.as_str()) {
+            return Ok(unauthorized_response());
+        }
+    }
+
+    if request.uri().path() != "/metrics" {
+        return Ok(Response::builder()
+            .status(hyper::StatusCode::NOT_FOUND)
+            .body(Body::from("not found"))
+            .unwrap_or_else(|_| Response::new(Body::from("not found"))));
+    }
+
+    match *request.method() {
+        Method::GET => {
+            let body = handle.render();
+            Ok(Response::builder()
+                .status(hyper::StatusCode::OK)
+                .header(CONTENT_TYPE, "text/plain; version=0.0.4")
+                .header(CACHE_CONTROL, "no-cache")
+                .body(Body::from(body))
+                .unwrap_or_else(|_| Response::new(Body::empty())))
+        }
+        Method::HEAD => Ok(Response::builder()
+            .status(hyper::StatusCode::OK)
+            .header(CONTENT_TYPE, "text/plain; version=0.0.4")
+            .header(CACHE_CONTROL, "no-cache")
+            .body(Body::empty())
+            .unwrap_or_else(|_| Response::new(Body::empty()))),
+        _ => Ok(Response::builder()
+            .status(hyper::StatusCode::METHOD_NOT_ALLOWED)
+            .body(Body::from("method not allowed"))
+            .unwrap_or_else(|_| Response::new(Body::from("method not allowed")))),
+    }
+}
+
+fn unauthorized_response() -> Response<Body> {
+    Response::builder()
+        .status(hyper::StatusCode::UNAUTHORIZED)
+        .header(WWW_AUTHENTICATE, "Bearer")
+        .body(Body::from("unauthorized"))
+        .unwrap_or_else(|_| Response::new(Body::from("unauthorized")))
 }
 
 struct OtlpLayer {

@@ -252,6 +252,30 @@ threaten block production.
    migrate automation to the explicit probe paths to catch startup and shutdown
    transitions.【F:rpp/rpc/api.rs†L559-L583】
 
+## Metrics Scraping
+
+1. **Turn on the Prometheus listener.** Set `rollout.telemetry.metrics.listen`
+   to a free socket address (for example `127.0.0.1:9797`) so the runtime
+   exposes the aggregated `metrics::*` series over HTTP. Configure
+   `rollout.telemetry.metrics.auth_token` to require a bearer token and prevent
+   unauthenticated scrapes.
+2. **Scrape `/metrics`.** The endpoint serves the Prometheus text format with
+   `Cache-Control: no-cache`. A minimal scrape job looks as follows:
+
+   ```yaml
+   scrape_configs:
+     - job_name: rpp-node
+       static_configs:
+         - targets: ["validator-01:9797"]
+       metrics_path: /metrics
+       authorization:
+         credentials: Bearer change-me
+   ```
+3. **Reuse the series in dashboards.** Pipeline gauges (`pipeline_*`), storage
+   counters (`firewood_*`), and consensus latency histograms now arrive via the
+   scrape target as well as OTLP. Use the same label filters across pull- and
+   push-based panels so alerts stay consistent.
+
 ## Observability Dashboards
 
 1. **Rollout status.** Dashboards should surface `release_channel`, feature

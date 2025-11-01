@@ -63,3 +63,36 @@ Die Runtime nutzt diese Daten bislang nur intern. Für reichhaltigere Exporte (z
 RPC-Endpunkte oder Prometheus-Metriken) ist ein nachgelagerter Ausbau geplant, der die
 libp2p-Snapshots mit den bestehenden Telemetrie-Strömen verknüpft und eine öffentliche
 Serialisierungsschicht definiert.
+
+## Prometheus-Scrape-Endpunkt
+
+Zusätzlich zum OTLP-Export richtet die Runtime nun standardmäßig einen Prometheus-kompatiblen
+Recorder ein. Alle Aufrufe der `metrics::*`-Makros (Counter, Gauge, Histogramm) landen damit in einer
+prozessweiten Registry, die optional über HTTP exponiert wird. Operatoren aktivieren den Scrape-Port
+in der Knotenkonfiguration:
+
+```toml
+[rollout.telemetry.metrics]
+listen = "127.0.0.1:9797"          # Bind-Adresse des HTTP-Endpunkts
+auth_token = "change-me"           # optional; erwartet ein Bearer-Token im Authorization-Header
+```
+
+Wird `auth_token` gesetzt, muss jeder Abruf einen `Authorization: Bearer …`-Header mitsenden. Der
+Endpunkt liefert Metriken unter `/metrics` im Prometheus-Textformat und setzt `Cache-Control: no-cache`.
+Ohne explizite Konfiguration bleibt die Registry lokal (Makros produzieren trotzdem Messwerte, es
+existiert jedoch kein öffentlicher HTTP-Port).
+
+Beispiel-Scrape-Konfiguration in Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: rpp-node
+    static_configs:
+      - targets: ["validator-01:9797"]
+    metrics_path: /metrics
+    authorization:
+      credentials: Bearer change-me
+```
+
+Die Registry führt automatisch Upkeep-Ticks aus, sodass Histogramme und Counter auch bei geringer
+Scrape-Frequenz konsistente Werte liefern.

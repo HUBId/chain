@@ -6,7 +6,10 @@ submissions progress through the workflow. Each stage—wallet ingress, proof
 validation, BFT finality, and Firewood storage—is tagged so dashboards can
 separate delays and failure modes per subsystem. The instruments listed below
 are emitted as soon as `PipelineStageEvent`s are published by the node hooks
-and flow through the OTLP exporter.
+and flow through the OTLP exporter. Die gleichen Messreihen stehen – sofern der
+Prometheus-Scrape-Endpunkt (`rollout.telemetry.metrics`) aktiviert ist – auch
+unter `/metrics` bereit und tragen die Präfixe `pipeline_*` beziehungsweise
+`pipeline_gossip_*`.
 
 ## Metric Inventory
 | Metric | Type | Labels | Description |

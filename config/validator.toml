@@ -87,6 +87,11 @@ witness_network = false
 enabled = true # validator override: telemetry required for fleet visibility
 sample_interval_secs = 15 # validator override: higher-frequency sampling
 
+# Uncomment to expose Prometheus metrics to your monitoring stack.
+# [rollout.telemetry.metrics]
+# listen = "127.0.0.1:9797"
+# auth_token = "change-me"
+
 [reputation.tier_thresholds]
 tier2_min_uptime_hours = 24
 tier3_min_consensus_success = 10

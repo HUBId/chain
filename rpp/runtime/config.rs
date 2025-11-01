@@ -2939,6 +2939,8 @@ pub struct TelemetryConfig {
     pub http_tls: Option<TelemetryTlsConfig>,
     #[serde(default)]
     pub vrf_thresholds: VrfTelemetryThresholds,
+    #[serde(default)]
+    pub metrics: PrometheusMetricsConfig,
 }
 
 impl Default for TelemetryConfig {
@@ -2959,6 +2961,7 @@ impl Default for TelemetryConfig {
             grpc_tls: None,
             http_tls: None,
             vrf_thresholds: VrfTelemetryThresholds::default(),
+            metrics: PrometheusMetricsConfig::default(),
         }
     }
 }
@@ -2997,6 +3000,37 @@ impl TelemetryConfig {
         validate_tls_config("telemetry.grpc_tls", self.grpc_tls.as_ref())?;
         validate_tls_config("telemetry.http_tls", self.http_tls.as_ref())?;
         self.vrf_thresholds.validate()?;
+        self.metrics.validate()?;
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrometheusMetricsConfig {
+    pub listen: Option<SocketAddr>,
+    pub auth_token: Option<String>,
+}
+
+impl Default for PrometheusMetricsConfig {
+    fn default() -> Self {
+        Self {
+            listen: None,
+            auth_token: None,
+        }
+    }
+}
+
+impl PrometheusMetricsConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if let Some(token) = self.auth_token.as_ref() {
+            if token.trim().is_empty() {
+                return Err(ChainError::Config(
+                    "telemetry.metrics.auth_token must not be empty".into(),
+                ));
+            }
+        }
 
         Ok(())
     }
