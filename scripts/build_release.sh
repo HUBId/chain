@@ -165,6 +165,9 @@ if [[ ! -d "$TARGET_DIR" ]]; then
   exit 1
 fi
 
+echo "Verifying release feature set for target $TARGET (profile $PROFILE_DIR)"
+"$(dirname "$0")/verify_release_features.sh" --target "$TARGET" --profile "$PROFILE_DIR"
+
 BINARIES=("rpp-node" "node" "wallet" "hybrid" "validator")
 mkdir -p "$OUT_DIR/$TARGET"
 

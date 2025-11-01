@@ -6,6 +6,7 @@
 
 #![allow(dead_code)]
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use blake3::Hash;
@@ -74,6 +75,7 @@ pub struct StateSyncFixture {
     _storage: Storage,
     plan: StateSyncPlan,
     chunk_size: usize,
+    snapshot_dir: PathBuf,
 }
 
 impl StateSyncFixture {
@@ -81,6 +83,7 @@ impl StateSyncFixture {
     pub fn new() -> Self {
         let chunk_size = DEFAULT_STATE_SYNC_CHUNK;
         let (config, temp_dir) = prepare_config();
+        let snapshot_dir = config.snapshot_dir.clone();
         let node = Node::new(config, RuntimeMetrics::noop()).expect("node");
         let handle = node.handle();
         let storage = handle.storage();
@@ -102,12 +105,29 @@ impl StateSyncFixture {
             _storage: storage,
             plan: artifacts.plan,
             chunk_size,
+            snapshot_dir,
         }
     }
 
     /// Returns a clone of the runtime handle for the bootstrapped node.
     pub fn handle(&self) -> NodeHandle {
         self.handle.clone()
+    }
+
+    pub fn snapshot_dir(&self) -> &Path {
+        &self.snapshot_dir
+    }
+
+    pub fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
+
+    pub fn chunk_count(&self) -> usize {
+        self.plan.chunks.len()
+    }
+
+    pub fn snapshot_root(&self) -> [u8; 32] {
+        self.plan.snapshot.commitments.global_state_root
     }
 
     /// Constructs a state-sync cache whose chunk retrievals always surface a proof IO error.

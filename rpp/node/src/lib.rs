@@ -535,6 +535,27 @@ pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
         )));
     }
 
+    #[cfg(feature = "backend-plonky3")]
+    {
+        if matches!(mode, RuntimeMode::Validator | RuntimeMode::Hybrid) {
+            let mode_name = mode.as_str();
+            error!(
+                target = "telemetry",
+                runtime = mode_name,
+                backend = "backend-plonky3",
+                "refusing to start {mode_name} runtime with experimental Plonky3 prover backend"
+            );
+            error!(
+                runtime = mode_name,
+                backend = "backend-plonky3",
+                "refusing to start {mode_name} runtime with experimental Plonky3 prover backend"
+            );
+            return Err(BootstrapError::configuration(anyhow!(
+                "the {mode_name} runtime cannot start with the experimental `backend-plonky3` feature enabled. rebuild with a production prover backend such as `prover-stwo`."
+            )));
+        }
+    }
+
     Ok(())
 }
 
