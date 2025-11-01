@@ -60,6 +60,18 @@ Merkle traversals. Helper functions such as `Merkle::try_root` bubble the
 `FileIoError` rather than masking it, ensuring that snapshot ingestion or proof
 verification halts when the committed root is unreadable.【F:firewood/src/merkle.rs†L127-L138】
 
+State-sync consumers extend the behaviour by mapping any `ProofError::IO`
+messages from the pipeline into explicit `IoProof` responses and incrementing the
+`rpp_node_pipeline_root_io_errors_total` counter so operators can correlate API
+failures with Firewood storage symptoms. The light-client verifier records the
+counter whenever snapshot verification, validation, or persistence surfaces the
+marker, and the runtime replays the message in the `/state-sync/chunk/:id`
+payload.【F:rpp/node/src/state_sync/light_client.rs†L360-L401】【F:rpp/node/src/telemetry/pipeline.rs†L1-L88】【F:rpp/runtime/node.rs†L4029-L4075】
+The observability runbook points auditors to the corresponding Prometheus
+queries and log markers, while dedicated regression tests confirm the API
+response, telemetry increments, and safeguards against corrupted snapshot
+payloads.【F:docs/runbooks/observability.md†L1-L38】【F:tests/state_sync/proof_error_io.rs†L1-L111】【F:tests/state_sync/root_corruption.rs†L1-L53】
+
 Two new metrics aid incident response:
 
 - `firewood.nodestore.root.read_errors` counts committed or immutable root reads
