@@ -17,10 +17,12 @@ The `rpp-node validator` namespace bundles two feature areas:
 
 1. **VRF key management**
    * Rotate the VRF keypair and persist it through the configured secrets
-     backend:
+     backend. Pass `--auth-token $RPP_RPC_TOKEN` to mirror the bearer token used
+     by the REST examples; omit the flag if RPC auth is disabled:
 
      ```sh
-     rpp-node validator vrf rotate --config config/validator.toml
+     rpp-node validator vrf rotate --config config/validator.toml \
+       --auth-token $RPP_RPC_TOKEN
      ```
 
      The command prints the backend, resolved identifier, and new public key so
@@ -28,10 +30,12 @@ The `rpp-node validator` namespace bundles two feature areas:
      material is overwritten atomically.【F:rpp/node/src/main.rs†L92-L122】
 
    * Inspect the stored key (both public and secret components) to confirm that
-     a rotation succeeded or to sanity-check a bootstrap install:
+     a rotation succeeded or to sanity-check a bootstrap install. Supply the
+     same optional `--auth-token` flag when RPC auth is enabled:
 
      ```sh
-     rpp-node validator vrf inspect --config config/validator.toml
+     rpp-node validator vrf inspect --config config/validator.toml \
+       --auth-token $RPP_RPC_TOKEN
      ```
 
    * Export the keypair as JSON. By default the payload is written to stdout;
@@ -40,10 +44,12 @@ The `rpp-node validator` namespace bundles two feature areas:
 
 2. **Telemetry snapshots**
    * Query the RPC server for the latest meta telemetry report and print the
-     JSON response. Use `--pretty` to format the payload:
+     JSON response. Use `--pretty` to format the payload and reuse the optional
+     auth token flag when RPC authentication is turned on:
 
      ```sh
-     rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --pretty
+     rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --pretty \
+       --auth-token $RPP_RPC_TOKEN
      ```
 
      The command transparently forwards any RPC authentication token supplied
