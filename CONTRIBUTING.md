@@ -30,6 +30,13 @@ These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-de
 
 Running `cargo doc --no-deps` is still encouraged before landing user-facing API changes to catch documentation regressions early.
 
+**Maintainer note.** Whenever a workflow file is renamed or a new CI job is
+introduced, confirm that branch protection still enforces the `fmt`, `clippy`,
+and `tests-stwo` checks on `<PRIMARY_BRANCH_OR_COMMIT>`. Navigate to
+`Settings → Branches → Branch protection rules` in the GitHub UI or run the
+`gh api repos/:owner/:repo/branches/<PRIMARY_BRANCH_OR_COMMIT>/protection` query
+to verify the status-check list before merging follow-up changes.
+
 Property-based tests in the workspace respect the `PROPTEST_CASES` environment
 variable so CI can run a smaller, deterministic sample. When a failure occurs,
 re-run the suite locally with the provided seed to reproduce it:
