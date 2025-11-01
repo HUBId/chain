@@ -14,6 +14,7 @@ use rpp_chain::runtime::sync::{
 use rpp_chain::storage::Storage;
 use rpp_p2p::{
     LightClientSync, NetworkLightClientUpdate, NetworkStateSyncChunk, NetworkStateSyncPlan,
+    PipelineError,
 };
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 use storage::snapshots::{known_snapshot_sets, SnapshotSet};
@@ -22,6 +23,7 @@ use thiserror::Error;
 
 const PRUNER_STATE_KEY: &[u8] = b"pruner_state";
 const SNAPSHOT_PREFIX: &[u8] = b"fw-pruning-snapshot";
+const PROOF_IO_MARKER: &str = "ProofError::IO";
 
 /// Verifies state sync plans by reusing the existing LightClientSync pipeline.
 pub struct LightClientVerifier {
@@ -97,7 +99,7 @@ impl LightClientVerifier {
 
         let verified = light_client
             .verify()
-            .map_err(|err| builder.fail(VerificationErrorKind::Pipeline(err.to_string())))?;
+            .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
         if !verified {
             return Err(builder.fail(VerificationErrorKind::Incomplete(
                 "light client verification incomplete".to_string(),
@@ -141,7 +143,7 @@ fn ingest_plan(
     })?;
     light_client
         .ingest_plan(&payload)
-        .map_err(|err| builder.fail(VerificationErrorKind::Pipeline(err.to_string())))?;
+        .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
     builder.record_event(LightClientVerificationEvent::PlanIngested {
         chunk_count: plan.chunks.len(),
         update_count: plan.light_client_updates.len(),
@@ -164,7 +166,7 @@ fn ingest_chunks(
         })?;
         light_client
             .ingest_chunk(&payload)
-            .map_err(|err| builder.fail(VerificationErrorKind::Pipeline(err.to_string())))?;
+            .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
 
         let mut leaves = Vec::with_capacity(chunk.proofs.len());
         for proof in &chunk.proofs {
@@ -197,7 +199,7 @@ fn ingest_light_client_updates(
         })?;
         light_client
             .ingest_light_client_update(&payload)
-            .map_err(|err| builder.fail(VerificationErrorKind::Pipeline(err.to_string())))?;
+            .map_err(|err| builder.fail(classify_pipeline_error(err)))?;
         builder.note_update(update.height);
         builder.record_event(LightClientVerificationEvent::RecursiveProofVerified {
             height: update.height,
@@ -380,6 +382,23 @@ fn decode_commitment_base64(value: &str) -> Result<[u8; DIGEST_LENGTH], Verifica
     Ok(digest)
 }
 
+fn classify_pipeline_error(err: PipelineError) -> VerificationErrorKind {
+    match err {
+        PipelineError::SnapshotVerification(message)
+            if message.contains(PROOF_IO_MARKER) =>
+        {
+            VerificationErrorKind::Io(message)
+        }
+        PipelineError::Validation(message) if message.contains(PROOF_IO_MARKER) => {
+            VerificationErrorKind::Io(message)
+        }
+        PipelineError::Persistence(message) if message.contains(PROOF_IO_MARKER) => {
+            VerificationErrorKind::Io(message)
+        }
+        other => VerificationErrorKind::Pipeline(other.to_string()),
+    }
+}
+
 fn compute_merkle_root(leaves: &mut Vec<[u8; DIGEST_LENGTH]>) -> [u8; DIGEST_LENGTH] {
     if leaves.is_empty() {
         let mut hasher = Blake2s256::new();
@@ -496,6 +515,8 @@ pub enum VerificationErrorKind {
     Encoding(String),
     #[error("light client pipeline error: {0}")]
     Pipeline(String),
+    #[error("{0}")]
+    Io(String),
     #[error("persisted pruning state error: {0}")]
     PrunerState(String),
     #[error("snapshot metadata mismatch: {0}")]

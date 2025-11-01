@@ -2898,7 +2898,10 @@ fn to_http_error(err: ChainError) -> (StatusCode, Json<ErrorResponse>) {
 
 fn state_sync_error_to_http(err: StateSyncError) -> (StatusCode, Json<ErrorResponse>) {
     let kind = err.kind.clone();
-    let message = err.to_string();
+    let message = err
+        .message
+        .clone()
+        .unwrap_or_else(|| format!("state sync error: {:?}", err.kind));
     let status = match kind {
         StateSyncErrorKind::MissingRuntime
         | StateSyncErrorKind::NoActiveSession
@@ -3051,7 +3054,9 @@ fn verification_error_to_state_sync(kind: Option<&VerificationErrorKind>) -> Sta
         | Some(VerificationErrorKind::Encoding(_))
         | Some(VerificationErrorKind::Metadata(_))
         | Some(VerificationErrorKind::Incomplete(_)) => StateSyncErrorKind::BuildFailed,
-        Some(VerificationErrorKind::Pipeline(_)) | Some(VerificationErrorKind::PrunerState(_)) => {
+        Some(VerificationErrorKind::Pipeline(_))
+        | Some(VerificationErrorKind::PrunerState(_))
+        | Some(VerificationErrorKind::Io(_)) => {
             StateSyncErrorKind::Internal
         }
         None => StateSyncErrorKind::Internal,
@@ -3084,9 +3089,32 @@ fn chunk_error_to_state_sync(err: StateSyncChunkError) -> StateSyncError {
         StateSyncChunkError::Io(err) => {
             StateSyncError::new(StateSyncErrorKind::Internal, Some(err.to_string()))
         }
+        StateSyncChunkError::IoProof { message, .. } => {
+            StateSyncError::new(StateSyncErrorKind::Internal, Some(message))
+        }
         StateSyncChunkError::Internal(message) => {
             StateSyncError::new(StateSyncErrorKind::Internal, Some(message))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verification_error_to_state_sync_preserves_io_classification() {
+        let io_kind = VerificationErrorKind::Io("ProofError::IO(failure)".into());
+        assert_eq!(
+            super::verification_error_to_state_sync(Some(&io_kind)),
+            StateSyncErrorKind::Internal
+        );
+
+        let build_kind = VerificationErrorKind::Metadata("mismatch".into());
+        assert_eq!(
+            super::verification_error_to_state_sync(Some(&build_kind)),
+            StateSyncErrorKind::BuildFailed
+        );
     }
 }
 

@@ -138,6 +138,7 @@ use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
 const BASE_BLOCK_REWARD: u64 = 5;
 const LEADER_BONUS_PERCENT: u8 = 20;
 pub const DEFAULT_STATE_SYNC_CHUNK: usize = 16;
+const PROOF_IO_MARKER: &str = "ProofError::IO";
 #[derive(Clone)]
 struct ChainTip {
     height: u64,
@@ -966,6 +967,7 @@ pub(crate) enum StateSyncChunkError {
     ChunkNotFound { index: u32, reason: String },
     SnapshotRootMismatch { expected: Hash, actual: Hash },
     Io(std::io::Error),
+    IoProof { index: u32, message: String },
     Internal(String),
 }
 
@@ -3831,7 +3833,10 @@ impl NodeInner {
                 cache.snapshot_root = Some(derived_root);
                 cache.total_chunks = Some(chunk_count);
                 cache.chunk_size = Some(chunk_size);
-                cache.snapshot_store = None;
+                let is_io = matches!(err.kind(), VerificationErrorKind::Io(_));
+                if !is_io {
+                    cache.snapshot_store = None;
+                }
                 cache.served_chunks.clear();
                 cache.progress_log = progress_log;
                 cache.last_completed_step = last_step;
@@ -4023,6 +4028,11 @@ impl NodeInner {
                 );
                 return Err(StateSyncChunkError::ChunkNotFound { index, reason });
             }
+            Err(PipelineError::SnapshotVerification(message))
+                if message.contains(PROOF_IO_MARKER) =>
+            {
+                return Err(StateSyncChunkError::IoProof { index, message });
+            }
             Err(PipelineError::SnapshotVerification(message)) => {
                 if message.contains("out of range") {
                     let total = if let Some(total) = total_opt {
@@ -4038,6 +4048,12 @@ impl NodeInner {
                     index,
                     reason: message,
                 });
+            }
+            Err(PipelineError::Validation(message)) if message.contains(PROOF_IO_MARKER) => {
+                return Err(StateSyncChunkError::IoProof { index, message });
+            }
+            Err(PipelineError::Persistence(message)) if message.contains(PROOF_IO_MARKER) => {
+                return Err(StateSyncChunkError::IoProof { index, message });
             }
             Err(other) => return Err(StateSyncChunkError::Internal(other.to_string())),
         };
