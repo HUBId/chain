@@ -1,7 +1,5 @@
 //! Node-side verification plumbing for Plonky3 proof artifacts.
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use base64::Engine;
 use blake3::Hasher;
 use serde_json::Value;
 use thiserror::Error;
@@ -78,11 +76,6 @@ impl Plonky3Verifier {
         }
     }
 
-    fn load_verifying_key(circuit: &str) -> Result<Vec<u8>, Plonky3VerificationError> {
-        crypto::verifying_key(circuit)
-            .map_err(|err| Plonky3VerificationError::misconfigured(circuit, err.to_string()))
-    }
-
     fn decode_proof(
         proof: &ChainProof,
         expected: &str,
@@ -108,16 +101,6 @@ impl Plonky3Verifier {
                 "commitment mismatch: expected {expected_commitment}, found {}",
                 parsed.commitment
             );
-            error!("plonky3 {expected} proof verification failed: {message}");
-            return Err(Plonky3VerificationError::verification(expected, message));
-        }
-
-        let verifying_key = Self::load_verifying_key(expected)?;
-        if parsed.verifying_key != verifying_key {
-            let expected_key = BASE64_STANDARD.encode(&verifying_key);
-            let provided = BASE64_STANDARD.encode(&parsed.verifying_key);
-            let message =
-                format!("verifying key mismatch: expected {expected_key}, found {provided}");
             error!("plonky3 {expected} proof verification failed: {message}");
             return Err(Plonky3VerificationError::verification(expected, message));
         }

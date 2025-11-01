@@ -7,7 +7,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use plonky3_backend::Circuit as BackendCircuit;
+use plonky3_backend::ProverContext as BackendProverContext;
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
@@ -56,7 +56,7 @@ impl Hash for CircuitCacheKey {
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct Plonky3Backend {
-    compiled: Arc<Mutex<HashMap<CircuitCacheKey, BackendCircuit>>>,
+    compiled: Arc<Mutex<HashMap<CircuitCacheKey, BackendProverContext>>>,
 }
 
 impl Plonky3Backend {
@@ -64,7 +64,7 @@ impl Plonky3Backend {
         &self,
         params: &Plonky3Parameters,
         circuit: &str,
-    ) -> ChainResult<BackendCircuit> {
+    ) -> ChainResult<BackendProverContext> {
         let key = CircuitCacheKey {
             circuit: circuit.to_string(),
             security_bits: params.security_bits,
@@ -75,7 +75,7 @@ impl Plonky3Backend {
         }
 
         let (verifying_key, proving_key) = crypto::circuit_keys(circuit)?;
-        let compiled = BackendCircuit::keygen(
+        let compiled = BackendProverContext::new(
             circuit.to_string(),
             verifying_key,
             proving_key,
@@ -102,29 +102,17 @@ impl Plonky3Backend {
         let compiled = self.ensure_compiled(params, circuit)?;
         let public_inputs = witness.public_inputs()?;
         let (commitment, encoded_inputs) = crypto::canonical_public_inputs(&public_inputs)?;
-        let proof_bundle = compiled
+        let backend_proof = compiled
             .prove(&commitment, &encoded_inputs)
             .map_err(|err| {
                 ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
             })?;
-        let (verifying_key, backend_inputs, proof_blob) = proof_bundle.into_parts();
-        if verifying_key != compiled.verifying_key() {
-            return Err(ChainError::Crypto(format!(
-                "failed to generate Plonky3 {circuit} proof: backend returned mismatched verifying key",
-            )));
-        }
-        if backend_inputs != encoded_inputs {
-            return Err(ChainError::Crypto(format!(
-                "failed to generate Plonky3 {circuit} proof: backend returned mismatched public inputs"
-            )));
-        }
-        Ok(Plonky3Proof {
-            circuit: circuit.to_string(),
+        Plonky3Proof::from_backend(
+            circuit.to_string(),
             commitment,
             public_inputs,
-            proof: proof_blob,
-            verifying_key,
-        })
+            backend_proof,
+        )
     }
 }
 

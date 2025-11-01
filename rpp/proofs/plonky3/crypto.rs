@@ -11,16 +11,14 @@ use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
 pub use plonky3_backend::PROOF_BLOB_LEN;
-use plonky3_backend::{self as backend, Circuit};
+use plonky3_backend::{self as backend};
 
 use super::params::Plonky3Parameters;
 
 #[derive(Clone)]
 struct CircuitArtifact {
-    verifying_key: Vec<u8>,
-    proving_key: Vec<u8>,
-    verifying_key_hash: [u8; 32],
-    proving_key_hash: [u8; 32],
+    verifying_key: backend::VerifyingKey,
+    proving_key: backend::ProvingKey,
 }
 
 #[derive(Deserialize)]
@@ -308,24 +306,34 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
                 file_path.display()
             )));
         }
-        let verifying_key = decode_artifact_bytes(
+        let verifying_key_bytes = decode_artifact_bytes(
             &path,
             &config.verifying_key,
             &config.circuit,
             "verifying key",
         )?;
-        let proving_key =
+        let proving_key_bytes =
             decode_artifact_bytes(&path, &config.proving_key, &config.circuit, "proving key")?;
-        let verifying_key_hash: [u8; 32] = *blake3::hash(&verifying_key).as_bytes();
-        let proving_key_hash: [u8; 32] = *blake3::hash(&proving_key).as_bytes();
+        let verifying_key = backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit)
+            .map_err(|err| {
+                ChainError::Crypto(format!(
+                    "failed to decode Plonky3 verifying key for {} circuit: {err}",
+                    config.circuit
+                ))
+            })?;
+        let proving_key = backend::ProvingKey::from_bytes(proving_key_bytes, &config.circuit)
+            .map_err(|err| {
+                ChainError::Crypto(format!(
+                    "failed to decode Plonky3 proving key for {} circuit: {err}",
+                    config.circuit
+                ))
+            })?;
         if artifacts
             .insert(
                 config.circuit.clone(),
                 CircuitArtifact {
                     verifying_key,
                     proving_key,
-                    verifying_key_hash,
-                    proving_key_hash,
                 },
             )
             .is_some()
@@ -371,10 +379,12 @@ fn circuit_artifact(circuit: &str) -> ChainResult<&'static CircuitArtifact> {
 }
 
 pub fn verifying_key(circuit: &str) -> ChainResult<Vec<u8>> {
-    circuit_artifact(circuit).map(|artifact| artifact.verifying_key.clone())
+    circuit_artifact(circuit).map(|artifact| artifact.verifying_key.bytes().to_vec())
 }
 
-pub(crate) fn circuit_keys(circuit: &str) -> ChainResult<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn circuit_keys(
+    circuit: &str,
+) -> ChainResult<(backend::VerifyingKey, backend::ProvingKey)> {
     circuit_artifact(circuit)
         .map(|artifact| (artifact.verifying_key.clone(), artifact.proving_key.clone()))
 }
@@ -395,7 +405,7 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
     let artifact = circuit_artifact(&circuit)?;
     let (commitment, encoded_inputs) = canonical_public_inputs(&public_inputs)?;
     let params = Plonky3Parameters::default();
-    let compiled = Circuit::keygen(
+    let context = backend::ProverContext::new(
         circuit.clone(),
         artifact.verifying_key.clone(),
         artifact.proving_key.clone(),
@@ -407,29 +417,10 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
             "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
         ))
     })?;
-    let proof_bundle = compiled
-        .prove(&commitment, &encoded_inputs)
-        .map_err(|err| {
-            ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
-        })?;
-    let (verifying_key, backend_inputs, proof_blob) = proof_bundle.into_parts();
-    if verifying_key != artifact.verifying_key {
-        return Err(ChainError::Crypto(format!(
-            "failed to generate Plonky3 {circuit} proof: backend returned mismatched verifying key",
-        )));
-    }
-    if backend_inputs != encoded_inputs {
-        return Err(ChainError::Crypto(format!(
-            "failed to generate Plonky3 {circuit} proof: backend returned mismatched public inputs",
-        )));
-    }
-    Ok(super::proof::Plonky3Proof {
-        circuit,
-        commitment,
-        public_inputs,
-        proof: proof_blob,
-        verifying_key,
-    })
+    let backend_proof = context.prove(&commitment, &encoded_inputs).map_err(|err| {
+        ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
+    })?;
+    super::proof::Plonky3Proof::from_backend(circuit, commitment, public_inputs, backend_proof)
 }
 
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
@@ -442,10 +433,9 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         )));
     }
     let params = Plonky3Parameters::default();
-    let compiled = Circuit::keygen(
+    let verifier = backend::VerifierContext::new(
         proof.circuit.clone(),
         artifact.verifying_key.clone(),
-        artifact.proving_key.clone(),
         params.security_bits,
         params.use_gpu_acceleration,
     )
@@ -455,13 +445,14 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
             proof.circuit
         ))
     })?;
-    compiled
-        .verify(
-            &expected_commitment,
-            &proof.verifying_key,
-            &encoded_inputs,
-            &proof.proof,
-        )
+    let backend_proof = proof.payload.to_backend(&proof.circuit).map_err(|err| {
+        ChainError::Crypto(format!(
+            "failed to decode Plonky3 {} proof payload: {err}",
+            proof.circuit
+        ))
+    })?;
+    verifier
+        .verify(&expected_commitment, &encoded_inputs, &backend_proof)
         .map_err(|err| {
             ChainError::Crypto(format!(
                 "plonky3 proof verification failed for {} circuit: {err}",
