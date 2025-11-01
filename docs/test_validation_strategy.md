@@ -21,9 +21,12 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
 
 ## 2. Cross-Backend-Parität
-- **Feature-Matrix**: Jeder Testfall wird sowohl mit Standard-Features (STWO) als auch mit `--no-default-features --features backend-plonky3` sowie gesetztem Experimental-Opt-In ausgeführt.
+- **Feature-Matrix**: Plonky3-Läufe sind aktuell kein Bestandteil der Standard-Matrix; sie werden ausschließlich nach explizitem Opt-in ausgeführt. Standardmäßig decken die Pipelines weiterhin die STWO- und RPP-Stark-Backends ab.
 - **Kompatibilitäts-Vektoren**: Gemeinsame Testvektoren (bincode-Dateien) stellen sicher, dass beide Backends identische öffentliche Inputs erzeugen.
 - **Regression**: Bei Fehlern in einem Backend wird der Testfall dupliziert, um Backend-spezifische Regressionen nachvollziehbar zu machen.
+
+### 2.1 Manuelle Aktivierung von Plonky3
+- **Opt-in-Schritt**: Plonky3-Tests werden manuell per `scripts/test.sh --backend plonky3` (ggf. kombiniert mit weiteren Flags wie `--all`) gestartet. Zusätzlich muss weiterhin `CHAIN_PLONKY3_EXPERIMENTAL=1` gesetzt oder das CLI mit `--experimental-plonky3` ausgeführt werden, damit die Läufe nicht mit dem erwarteten Hinweis auf fehlende kryptographische Sicherheit abbrechen. Dieser Schritt ist verpflichtend, bis der produktionsreife Plonky3-Prover verfügbar ist.
 
 ## 3. Performance- und Ressourcenanalyse
 - **Benchmark-Suite**: Nutzung von `criterion`-Benchmarks für Prover- und Verifier-Laufzeiten; getrennt nach Circuit-Typ und Backend.
@@ -33,7 +36,9 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 ## 4. CI/CD-Integration
 - **GitHub Actions Workflows**:
   - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend
-    rpp-stark` aus, sodass Standard-, STWO- und RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden.
+    rpp-stark` aus, sodass Standard-, STWO- und RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden. Plonky3
+    ist bewusst nicht Bestandteil dieser Matrix, bis der produktive Prover vorliegt und die Pipeline wieder auf Opt-out
+    wechseln kann.
   - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
     um Syntaxfehler frühzeitig zu entdecken. **TODO:** Erweiterung um Format-, Lint- und Testläufe sobald Ressourcen für die
     Rust-Builds reserviert sind.
@@ -52,6 +57,8 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 - **Artefaktverwaltung**: Speicherung generierter Beispiel-Proofs und Logs zur Reproduktion fehlschlagender Runs.
 - **Planungs-Backlink**: Ergänzende CI-Erweiterungen werden im [Roadmap Implementation Plan](./roadmap_implementation_plan.md)
   verfolgt, damit neue Suites konsistent dokumentiert und priorisiert werden.
+- **Geplanter CI-Task**: Nach Abschluss der Plonky3-Backend-Arbeiten wird ein dedizierter Workflow-Task (`ci-plonky3-matrix`)
+  wieder sämtliche Backends inklusive Plonky3 parallel ausführen und damit die vollständige Matrix reaktivieren.
 
 ## 5. Dokumentation & Review-Prozess
 - **Testprotokolle**: Jeder Release-Kandidat benötigt ein Protokoll mit ausgeführten Testläufen und Ergebnissen.
