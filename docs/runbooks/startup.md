@@ -4,6 +4,16 @@ Follow this guide when a runtime fails to start or health probes remain unhealth
 [configuration](../configuration.md) reference and [observability](observability.md) runbook for full
 context.
 
+> **Note:** Authenticated deployments must send an `Authorization: Bearer …` header when polling the
+> health endpoints. For example:
+>
+> ```sh
+> curl -H "Authorization: Bearer ${RPP_HEALTH_TOKEN}" https://rpc.example.org/health/ready
+> ```
+>
+> See the [API security hardening guide](../API_SECURITY.md) for details on retrieving or rotating the
+> health probe token.
+
 | Symptom | Check | Action |
 | --- | --- | --- |
 | CLI exits quickly with code 2 or the message `configuration error` | Inspect the stderr output from `rpp-node` and confirm the reported exit code (2 indicates configuration failures).【F:rpp/node/src/main.rs†L18-L24】【F:rpp/node/src/lib.rs†L48-L133】 | Run the binary with `--dry-run` to surface loader errors without starting the runtime, fix the indicated configuration key (see configuration guide), and retry.【F:rpp/node/src/lib.rs†L258-L359】 |
