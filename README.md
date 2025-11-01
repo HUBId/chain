@@ -70,7 +70,7 @@ Additional development workflow details live in [`docs/development_guide.md`](./
 
 ## Running a local node
 
-1. Build the node binary with `cargo +1.79.0 build -p rpp-node --release`.
+1. Build the node binary with `cargo +1.79.0 build -p rpp-node --release --no-default-features --features prod,prover-stwo` (or swap in `prover-stwo-simd` on hosts that support the SIMD-accelerated prover backend).
 2. Copy `config/node.toml` and adjust keys, networking, and gossip settings as
 needed.【F:config/node.toml†L1-L84】
 3. Launch the node directly or through the helper script:
@@ -87,6 +87,9 @@ logs.【F:scripts/run_node_mode.sh†L10-L57】
 `config/hybrid.toml` and `scripts/run_hybrid_mode.sh` start a combined node and
 wallet process, while `scripts/run_wallet_mode.sh` launches the wallet-only
 pipeline.【F:scripts/run_hybrid_mode.sh†L10-L66】【F:scripts/run_wallet_mode.sh†L10-L54】
+Validator and hybrid modes require the STWO prover backend and abort during
+startup when the corresponding feature (`prover-stwo` or `prover-stwo-simd`) is
+missing.
 
 ## Wallet and Electrs integration
 
