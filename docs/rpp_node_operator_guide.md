@@ -62,11 +62,11 @@ Common tasks include:
 rpp-node validator vrf rotate --config config/validator.toml
 
 # Inspect collector health by querying the validator telemetry endpoint
-rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --pretty
+rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --pretty
 
 # Submit and inspect uptime proofs via the validator RPC
-rpp-node validator uptime submit --wallet-config config/wallet.toml
-rpp-node validator uptime status --rpc-url http://127.0.0.1:7070 --json
+rpp-node validator uptime submit --wallet-config config/wallet.toml --auth-token $RPP_RPC_TOKEN
+rpp-node validator uptime status --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --json
 ```
 
 State-sync and head monitoring rely on the public `/state-sync` RPC endpoints;
@@ -78,9 +78,10 @@ snapshot chunks as outlined in the validator tooling guide.【F:docs/validator_t
 Node RPC endpoints support optional bearer-token authentication and per-client
 rate limiting. Supply the configured token with the `--auth-token` flag when
 using CLI helpers or add an `Authorization: Bearer <token>` header to curl
-requests.【F:docs/API_SECURITY.md†L10-L37】【F:rpp/node/src/main.rs†L101-L178】 Secure
-configurations should rotate tokens alongside other secrets and audit usage via
-reverse-proxy logs.
+requests.【F:docs/API_SECURITY.md†L10-L37】【F:rpp/node/src/main.rs†L101-L178】 The
+flag must match the token configured for the active RPC endpoint; omit it only
+when authentication is disabled. Secure configurations should rotate tokens
+alongside other secrets and audit usage via reverse-proxy logs.
 
 Expose the RPC to browser dashboards by setting `network.rpc.allowed_origin` in
 configuration. Use `--rpc-allowed-origin` for one-off overrides (pass an empty
