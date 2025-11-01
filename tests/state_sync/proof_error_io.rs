@@ -6,21 +6,21 @@
 use std::sync::Arc;
 
 use axum::{
+    Router,
     body::Body,
     http::{Method, Request as HttpRequest, StatusCode},
     routing::get,
-    Router,
 };
 use hyper::body::to_bytes;
-use opentelemetry::Value;
+use opentelemetry::{Value, global};
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use opentelemetry_sdk::metrics::{
     InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
 };
 use parking_lot::RwLock;
-use rpp_chain::api::{routes, ApiContext, ErrorResponse, RpcMetricsLayer};
-use rpp_chain::runtime::metrics::RuntimeMetrics;
+use rpp_chain::api::{ApiContext, ErrorResponse, RpcMetricsLayer, routes};
 use rpp_chain::runtime::RuntimeMode;
+use rpp_chain::runtime::metrics::RuntimeMetrics;
 #[path = "support/mod.rs"]
 mod support;
 
@@ -90,6 +90,11 @@ async fn state_sync_chunk_surfaces_proof_error_io() -> Result<(), MetricError> {
         "other",
         "server_error",
     ));
+    assert!(metric_has_value(
+        &exported,
+        "rpp_node_pipeline_root_io_errors_total",
+        1,
+    ));
 
     Ok(())
 }
@@ -102,6 +107,7 @@ fn setup_metrics() -> (
     let exporter = InMemoryMetricExporter::default();
     let reader = PeriodicReader::builder(exporter.clone()).build();
     let provider = Arc::new(SdkMeterProvider::builder().with_reader(reader).build());
+    global::set_meter_provider(provider.clone());
     let meter = provider.meter("rpc-test");
     let metrics = Arc::new(RuntimeMetrics::from_meter(&meter));
     (metrics, exporter, provider)
@@ -125,6 +131,20 @@ fn metric_has_attributes(
             AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
                 .data_points()
                 .any(|point| data_point_matches(point.attributes(), method, result)),
+            _ => false,
+        })
+}
+
+fn metric_has_value(exported: &[ResourceMetrics], name: &str, expected: u64) -> bool {
+    exported
+        .iter()
+        .flat_map(|resource| resource.scope_metrics())
+        .flat_map(|scope| scope.metrics())
+        .filter(|metric| metric.name() == name)
+        .any(|metric| match metric.data() {
+            AggregatedMetrics::U64(MetricData::Sum(sum)) => {
+                sum.data_points().any(|point| point.value() >= expected)
+            }
             _ => false,
         })
 }
