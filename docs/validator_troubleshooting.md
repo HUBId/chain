@@ -6,8 +6,9 @@ configuration relevant to the failure. Review the
 [Validator Quickstart](./validator_quickstart.md) to validate baseline
 configuration before diving into incident-specific steps. The quickstart also
 includes an endpoint quick-reference table covering `/p2p/peers`,
-`/snapshots/*`, and `/state-sync/session` (bearer token required when RPC auth is
-enabled) so you can quickly locate data sources mentioned below.
+`/snapshots/*`, and `/state-sync/session` so you can quickly locate data sources
+mentioned below. Note that all RPC calls in this quick-reference require the
+configured bearer token when RPC auth is enabled.
 
 ## VRF Mismatch or Invalid Proofs
 
