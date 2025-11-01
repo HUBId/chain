@@ -5,7 +5,7 @@ runbooks for bringing the STWO/Plonky3 chain online and keeping it observable in
 production. Pair it with the [Validator Quickstart](./validator_quickstart.md)
 for provisioning steps, the [Validator Troubleshooting](./validator_troubleshooting.md)
 runbook for incident response, and the
-[RPC CLI Operator Guide](./rpc_cli_operator_guide.md) for authentication,
+[`rpp-node` operator guide](./rpp_node_operator_guide.md) for authentication,
 throttling, and recovery procedures that apply to operator-driven RPC
 workflows. The new telemetry stack ships with dedicated
 [incident runbooks](./runbooks/observability.md) and
