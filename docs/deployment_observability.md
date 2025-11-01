@@ -204,10 +204,9 @@ threaten block production.
   observe block production, WAL pressure, RPC health, and slashing
   outcomes.【F:rpp/runtime/telemetry/metrics.rs†L63-L205】【F:rpp/runtime/telemetry/metrics.rs†L214-L319】
 - **Proof systems.** Proof generation and verification telemetry is partitioned
-  by backend so production STWO, Plonky3, and mock flows can be
-  monitored separately. Alert on spikes in `rpp.runtime.proof.*` and
-  `rpp_stark_*` metrics to catch failing provers or verifier regressions before
-  they impact consensus.【F:rpp/runtime/telemetry/metrics.rs†L360-L453】
+  by backend so STWO, der Plonky3-Stub und mock flows getrennt sichtbar sind.
+  Alerts für Plonky3 sollten erst aktiviert werden, sobald echte Vendor-Proofs
+  integriert sind.【F:rpp/runtime/telemetry/metrics.rs†L360-L453】
 - **Pipeline orchestrator.** Wallet pipelines emit latency histograms, error and
   gossip counters, leader rotation totals, active flow gauges, and per-stage
   telemetry summaries that can be streamed via the RPC surface for

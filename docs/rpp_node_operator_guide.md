@@ -50,20 +50,20 @@ are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Add `--dry-run` t
 validate configuration without starting long-running tasks; the CLI exits after
 bootstrap so operators can gate deployments in CI.【F:docs/validator_quickstart.md†L195-L210】
 
-### Plonky3 production backend
+### Plonky3 backend scaffolding
 
-Plonky3 is now a production-grade backend. Enabling the feature flag
-(`--features backend-plonky3`) automatically wires the prover, verifier, and
-runtime telemetry without additional CLI acknowledgements.【F:rpp/proofs/plonky3/prover/mod.rs†L214-L230】【F:rpp/proofs/plonky3/verifier/mod.rs†L215-L240】【F:rpp/node/src/lib.rs†L240-L360】
-The `/status/node` RPC surface replaces the old warning banner with a
-`backend_health` map that exposes verifier counters for every backend and the
-Plonky3 prover health snapshot (cached circuit count, total proofs, last
-failure timestamps).【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/examples/validator_status_response.json†L1-L120】
-Dashboards and alerting should ingest those metrics to detect unhealthy prover
-state (e.g., consecutive failures or empty circuit caches) before block
-production stalls.【F:validator-ui/src/types.ts†L140-L220】 Test pipelines run
-Plonky3 suites alongside STWO and RPP-STARK by default so regressions surface in
-the standard CI lanes.【F:scripts/test.sh†L1-L220】
+Das Flag `--features backend-plonky3` aktiviert derzeit weiterhin das Stub-
+Backend, das deterministische Fixtures und Telemetrie-Pfade bereitstellt, aber
+noch keine vendor Plonky3-Proofs erzeugt oder verifiziert.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】【F:rpp/proofs/plonky3/README.md†L1-L34】
+Nutze diese Konfiguration, um die Runtime-/CLI-Flows und Dashboards gegen das
+spätere Backend zu testen; produktive Rollouts bleiben blockiert, bis der
+Vendor-Prover/-Verifier integriert ist. Das `/status/node` RPC exponiert bereits
+`backend_health.plonky3.*`, jedoch basieren die Werte auf Stub-Läufen und
+sollten nicht für Produktionsalarme herangezogen werden.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/examples/validator_status_response.json†L1-L120】
+Validator-UI und Metriken spiegeln dieselben Felder wider, dienen aktuell aber
+als Vertragstests.【F:validator-ui/src/types.ts†L140-L220】 Der Plonky3-Lauf in
+`scripts/test.sh` bleibt Teil der Matrix, verifiziert aber ausschließlich die
+Stub-Implementierung, bis die echten Artefakte verfügbar sind.【F:scripts/test.sh†L1-L220】
 
 ## Validator tooling
 

@@ -1,6 +1,6 @@
 # Test- und Validierungsstrategie
 
-Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig überprüft werden. Sie kombiniert klassische Unit-Tests, umfangreiche Integrationstests, deterministische Rekursionsprüfungen und Performance-Analysen. Alle Schritte adressieren die produktionsreifen Backends; Plonky3 wird wie STWO in denselben Pipelines verifiziert und liefert identische Telemetrie-Hooks.
+Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wird und welche Lücken beim aktuellen Plonky3-Stub verbleiben. Die Plonky3-Schritte validieren heute nur das Stub-Backend (Fixtures, Commitment-Checks, Telemetrie-Hooks) und dienen als Vorbereitung für die spätere vendor Integration.
 
 ## 1. Testebenen
 
@@ -11,7 +11,7 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 
 ### 1.2 Integrationstests
 - **Wallet-Prover**: Szenarien vom Bau eines Blocks bis zum Generieren aller Teilbeweise. Enthält Varianten für Identitäts-Genesis, normale Transaktionen, Uptime- und Konsensus-Proofs sowie den rekursiven Block-Proof. Für Plonky3 werden die gleichen Szenarien mit aktiviertem Feature `backend-plonky3` ausgeführt.
-- **Backend-Parität**: Plonky3-Suites laufen ohne zusätzliche Flags; `scripts/test.sh` beinhaltet den Backend-Lauf standardmäßig neben STWO und RPP-STARK.【F:scripts/test.sh†L1-L220】
+- **Backend-Parität (Stub)**: Plonky3-Suites laufen ohne zusätzliche Flags; `scripts/test.sh` beinhaltet den Backend-Lauf standardmäßig neben STWO und RPP-STARK, prüft aber nur die Stub-Artefakte.【F:scripts/test.sh†L1-L220】【F:rpp/proofs/plonky3/README.md†L1-L34】
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
 
@@ -21,7 +21,7 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
 
 ## 2. Cross-Backend-Parität
-- **Feature-Matrix**: Plonky3-Läufe sind Bestandteil der Standard-Matrix; `scripts/test.sh` führt STWO-, Plonky3- und RPP-Stark-Suites parallel aus.
+- **Feature-Matrix (Stub)**: Plonky3-Läufe sind Bestandteil der Standard-Matrix; `scripts/test.sh` führt STWO-, Plonky3- und RPP-Stark-Suites parallel aus, wobei Plonky3 weiterhin den Stub nutzt, bis Vendor-Artefakte bereitstehen.
 - **Kompatibilitäts-Vektoren**: Gemeinsame Testvektoren (bincode-Dateien) stellen sicher, dass beide Backends identische öffentliche Inputs erzeugen.
 - **Regression**: Bei Fehlern in einem Backend wird der Testfall dupliziert, um Backend-spezifische Regressionen nachvollziehbar zu machen.
 
