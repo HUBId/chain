@@ -18,14 +18,17 @@ guidelines for contributing to ztate (the chain repository).
 
 ## [Testing]
 
-After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
+After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To mirror the branch-protection status checks and catch issues before opening a PR, run the following commands locally:
 
-    cargo fmt
-    cargo test
-    cargo clippy
-    cargo doc --no-deps
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    ./scripts/test.sh --backend default --unit --integration
+    ./scripts/test.sh --backend stwo --unit --integration
+    ./scripts/test.sh --backend rpp-stark --unit --integration
 
-Resolve any warnings or errors before making your PR.
+These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-default`, `tests-stwo`, `tests-rpp-stark`). The test harness applies `RUSTFLAGS=-D warnings`, selects the correct feature flags, and switches to the pinned nightly toolchain automatically when the STWO backend is involved, so local iterations match CI results.【F:.github/workflows/release.yml†L82-L103】【F:scripts/test.sh†L4-L210】
+
+Running `cargo doc --no-deps` is still encouraged before landing user-facing API changes to catch documentation regressions early.
 
 Property-based tests in the workspace respect the `PROPTEST_CASES` environment
 variable so CI can run a smaller, deterministic sample. When a failure occurs,

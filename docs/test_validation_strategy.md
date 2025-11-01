@@ -34,6 +34,19 @@ Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wi
 - **Telemetrie**: Erfassen von Metriken (Proof-Dauer, Verifikationszeit, Speicherbedarf) und Export zu Prometheus für Langzeitvergleiche.
 
 ## 4. CI/CD-Integration
+### 4.1 Verpflichtende GitHub-Status-Checks
+Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführten Status-Namen – sobald GitHub andere Namen erwartet, schlagen Merges fehl. Die Checks spiegeln exakt die Schritte wider, die im Release-Workflow laufen und werden für jede Pull-Request-Ausführung der Validierung wiederverwendet.【F:.github/workflows/release.yml†L82-L103】
+
+| Check-Name | Zweck | Lokale Reproduktion |
+| --- | --- | --- |
+| `fmt` | Rustfmt stellt konsistente Formatierung im gesamten Workspace sicher. | `cargo fmt --all -- --check` |
+| `clippy` | `cargo clippy` lints alle Targets und Features mit aktivierten Warnungen als Fehler. | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| `tests-default` | Führt Unit- und Integrationstests gegen die Standard-Backend-Konfiguration aus. | `./scripts/test.sh --backend default --unit --integration` |
+| `tests-stwo` | Prüft den STWO-Prover mit dem gepinnten Nightly-Toolchain (`+nightly-2025-07-14`). | `./scripts/test.sh --backend stwo --unit --integration` |
+| `tests-rpp-stark` | Deckt das RPP-Stark-Backend in denselben Suiten ab. | `./scripts/test.sh --backend rpp-stark --unit --integration` |
+
+> **Hinweis:** `scripts/test.sh` setzt `RUSTFLAGS=-D warnings`, aktiviert automatisch das passende Feature-Set und wählt für STWO den gepinnten Nightly-Toolchain, damit lokale Läufe die CI-Ergebnisse widerspiegeln.【F:scripts/test.sh†L4-L8】【F:scripts/test.sh†L81-L210】
+
 - **GitHub Actions Workflows**:
   - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark` aus und deckt damit die stabile Matrix ab; Plonky3 bleibt aufgrund des Stub-Status außen vor.【F:.github/workflows/release.yml†L55-L86】
   - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
