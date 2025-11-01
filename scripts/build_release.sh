@@ -84,9 +84,14 @@ if [[ ! -f Cargo.toml ]]; then
 fi
 
 COMMAND=("$BUILD_TOOL" "build" "--locked" "--package" "rpp-node" "--bins" "--profile" "$PROFILE" "--target" "$TARGET")
+
 if [[ -n "${RPP_RELEASE_FEATURES:-}" ]]; then
-  COMMAND+=("--features" "$RPP_RELEASE_FEATURES")
+  read -r -a FEATURE_ARGS <<<"$RPP_RELEASE_FEATURES"
+else
+  FEATURE_ARGS=(--no-default-features --features prod,prover-stwo)
 fi
+
+COMMAND+=("${FEATURE_ARGS[@]}")
 
 echo "Running ${COMMAND[*]}"
 "${COMMAND[@]}"
