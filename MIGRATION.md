@@ -9,8 +9,10 @@ Use the following checklist when the `NodeConfig` schema changes:
 - [ ] Document operator-facing changes and migration steps in `docs/` and the
       release notes.
 - [ ] Provide an upgrade procedure that includes backing up the previous
-      configuration and running validation via `rpp-chain config validate` (or
-      the equivalent CLI entry point).
+      configuration and running validation via `rpp-node <mode> --dry-run --config <path>`
+      (or the equivalent CLI entry point) before restarting.
+      Reference the [`rpp-node` operator guide](docs/rpp_node_operator_guide.md) and the
+      [validator quickstart](docs/validator_quickstart.md) for CLI usage details.
 - [ ] Communicate the new version to validators and ensure automation or
       orchestration scripts fail-fast on mismatches.
 
