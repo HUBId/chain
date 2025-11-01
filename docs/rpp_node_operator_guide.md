@@ -20,11 +20,16 @@ The automated release pipeline exports
 `RPP_RELEASE_BASE_FEATURES="prod,prover-stwo"` before invoking
 `scripts/build_release.sh`, and the script always forces
 `--no-default-features --features "$RPP_RELEASE_BASE_FEATURES"` so every
-published artifact includes the STWO prover.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L1-L87】
+published artifact includes the STWO prover.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L1-L104】
 Local builds should mirror the same flag set shown in
 `scripts/build_release.sh` (or swap in `prover-stwo-simd` on hosts that support
 SIMD acceleration) to avoid shipping binaries that fail at runtime due to a
-missing production backend.【F:scripts/build_release.sh†L1-L87】
+missing production backend.【F:scripts/build_release.sh†L1-L87】 Release builds
+also enforce a guardrail that rejects the experimental Plonky3 backend and the
+`prover-mock` feature so production artefacts never link the deterministic
+stubs.【F:scripts/build_release.sh†L105-L145】 The script aborts with an explicit
+error if `backend-plonky3` (or any alias such as `plonky3-backend`) appears in
+the requested feature set.
 
 Keep the repository cloned on the host to rebuild quickly when upgrades ship.
 
