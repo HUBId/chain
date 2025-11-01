@@ -19,9 +19,10 @@ triaged quickly and release qualification can re-use the same signals.
 | `simnet harness (stwo backend)` | Executes the deterministic libp2p simulator via `scripts/ci/sim_smoke.sh` using the pinned STWO nightly. | Artefacts uploaded under `simnet-smoke`. |
 | `mainline gate` | Aggregates upstream job results and fails if any prerequisite job failed, was cancelled, or skipped. | Configure as the required status check for branch protection. |
 
-All jobs share the global environment `RUSTFLAGS=-D warnings` and
-`CARGO_TERM_COLOR=always`. Rust builds use `Swatinem/rust-cache` to persist
-incremental artefacts between jobs.
+All jobs share the global environment `CARGO_TERM_COLOR=always`. Workspace
+builds and tests set `RUSTFLAGS=-D warnings` locally so that first-party code
+fails on new warnings without breaking third-party cargo installs. Rust builds
+use `Swatinem/rust-cache` to persist incremental artefacts between jobs.
 
 ### Test matrix details
 

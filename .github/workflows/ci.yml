@@ -16,7 +16,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
   dashboards-json:
@@ -156,6 +155,8 @@ jobs:
       - name: Install cargo2junit
         run: cargo install --locked cargo2junit
       - name: Run ${{ matrix.stage }} tests (${{ matrix.backend }})
+        env:
+          RUSTFLAGS: -D warnings
         run: |
           set -euo pipefail
           mkdir -p "ci-artifacts/tests/${{ matrix.stage }}-${{ matrix.backend }}"
@@ -244,6 +245,8 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install --locked cargo-llvm-cov
       - name: Generate coverage report
+        env:
+          RUSTFLAGS: -D warnings
         run: |
           set -euo pipefail
           mkdir -p ci-artifacts/coverage
@@ -271,6 +274,7 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: nightly-2025-07-14
           CHAIN_SIM_BACKEND: stwo
+          RUSTFLAGS: -D warnings
         run: |
           set -euo pipefail
           ./scripts/ci/sim_smoke.sh
