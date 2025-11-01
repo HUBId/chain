@@ -14,14 +14,14 @@ rollout tasks.
 3. **Mode defaults:** Fallback templates are selected per runtime mode: `config/node.toml`,
    `config/hybrid.toml`, `config/validator.toml`, or `config/wallet.toml` as appropriate.【F:rpp/runtime/mod.rs†L35-L47】【F:rpp/node/src/lib.rs†L993-L1007】
 4. **Adjacent blueprints:** When a node config loads, the runtime also pulls in the sibling
-   `malachite.toml` (defaulting to the template in `config/`).【F:rpp/runtime/config.rs†L915-L923】【F:config/malachite.toml†L1-L40】【73ba76†L1-L1】
+   `malachite.toml` (defaulting to the template in `config/`).【F:rpp/runtime/config.rs†L1329-L1335】【F:rpp/runtime/config.rs†L164-L185】【F:config/malachite.toml†L1-L40】
 
 The loader records the source (CLI, environment, default) alongside the parsed TOML so later conflict
 checks can emit precise error messages.【F:rpp/node/src/lib.rs†L960-L1007】
 
 ## Template catalogue
 
-The repository ships profile-specific templates under `config/` for quick bootstrapping.【73ba76†L1-L1】
+The repository ships profile-specific templates under `config/` for quick bootstrapping.【F:config/node.toml†L1-L33】【F:config/hybrid.toml†L1-L52】
 
 * `config/node.toml` – single-role node defaults with telemetry disabled and RPC on 7070.【F:config/node.toml†L1-L37】
 * `config/hybrid.toml` – combined node+wallet profile enabling telemetry and tuning gossip/heartbeat
