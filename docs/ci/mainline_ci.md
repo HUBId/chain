@@ -12,7 +12,7 @@ triaged quickly and release qualification can re-use the same signals.
 | `Validate dashboard exports` | Ensures Grafana JSON exports remain valid. | Runs on `ubuntu-latest`. |
 | `rustfmt` | Enforces `cargo fmt --check` on stable. | Uses shared cache key `fmt`. |
 | `clippy` | Runs `cargo clippy --workspace --all-targets --all-features -D warnings`. | Blocks until formatting succeeds. |
-| `cargo audit` | Executes the advisory scan via `cargo audit --deny warnings`. | Cache key `security-audit`. |
+| `cargo audit` | Executes the advisory scan via `cargo audit --deny warnings` (pinned to 0.21.1 for Rust 1.79 compatibility). | Cache key `security-audit`. |
 | `SBOM (CycloneDX)` | Generates a workspace SBOM (`ci-artifacts/sbom/workspace.json`). | Uploads artefact `sbom`. |
 | `tests (stage • backend • os)` | Matrix job covering unit/integration suites across backends. | Currently runs on `ubuntu-latest` for `default` and `stwo` backends. Generates JUnit + JSON logs per run with retry-once logic. |
 | `coverage (llvm-cov)` | Produces an `lcov.info` report using `cargo llvm-cov`. | Artefacts uploaded under `coverage`. |
@@ -70,7 +70,8 @@ from the internal runbook.
 
 ## Release parity
 
-The `Release` workflow’s `checks` job now runs the same linters, advisory scans,
+The `Release` workflow’s `checks` job now runs the same linters, advisory scans
+(pinning `cargo-audit` to 0.21.1 for the Rust 1.79 toolchain),
 and backend test suites as `Mainline CI`. It additionally executes the simulator
 smoke tests under the STWO nightly toolchain before generating release artefacts
 and release notes. Because release builds already invoke `cargo cyclonedx` while
