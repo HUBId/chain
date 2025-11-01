@@ -6,8 +6,8 @@ configuration relevant to the failure. Review the
 [Validator Quickstart](./validator_quickstart.md) to validate baseline
 configuration before diving into incident-specific steps. The quickstart also
 includes an endpoint quick-reference table covering `/p2p/peers`,
-`/snapshots/*`, and `/state-sync/status` so you can quickly locate data sources
-mentioned below.
+`/snapshots/*`, and `/state-sync/session` (bearer token required when RPC auth is
+enabled) so you can quickly locate data sources mentioned below.
 
 ## VRF Mismatch or Invalid Proofs
 
@@ -111,8 +111,8 @@ hundreds of blocks.
 1. Copy recent `snapshot_dir` and `proof_cache_dir` contents from another
    healthy validator.
 2. Start the node with `--config` pointing to the restored directories and
-   monitor `/snapshots/jobs` or `/state-sync/status` to ensure chunks stream
-   successfully.
+   monitor `/snapshots/jobs` or `/state-sync/session` (include the bearer token
+   when RPC auth is configured) to ensure chunks stream successfully.
 3. Keep `rollout.feature_gates.pruning` enabled so old state is trimmed only
    after the validator catches up, preventing disk exhaustion.
 
