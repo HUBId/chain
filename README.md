@@ -85,7 +85,9 @@ needed.【F:config/node.toml†L1-L84】
 logs. When the node RPC runs behind an authenticated gateway, set
 `RPP_NODE_RPC_AUTH_TOKEN` (for `Authorization: Bearer …`) or provide additional
 newline-separated headers via `RPP_NODE_HEALTH_HEADERS` so the readiness probes
-include the required metadata.【F:scripts/run_node_mode.sh†L10-L64】
+include the required metadata.【F:scripts/run_node_mode.sh†L10-L64】 Wallet
+pipelines accept the analogous `RPP_WALLET_RPC_AUTH_TOKEN` and
+`RPP_WALLET_HEALTH_HEADERS` variables for their health checks.【F:scripts/run_wallet_mode.sh†L1-L63】
 
 `config/hybrid.toml` and `scripts/run_hybrid_mode.sh` start a combined node and
 wallet process, while `scripts/run_wallet_mode.sh` launches the wallet-only
