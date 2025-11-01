@@ -16,7 +16,9 @@ Options:
   --help                   Show this help message and exit
 
 Environment variables:
-  RPP_RELEASE_FEATURES     Additional feature flags passed to cargo
+  RPP_RELEASE_BASE_FEATURES  Comma-delimited feature set that is always enabled (default: prod,prover-stwo)
+  RPP_RELEASE_FEATURES       Additional feature flags passed to cargo (legacy string form)
+  RPP_RELEASE_ARGS           Additional cargo args passed verbatim (supports arrays)
 USAGE
 }
 
@@ -85,13 +87,48 @@ fi
 
 COMMAND=("$BUILD_TOOL" "build" "--locked" "--package" "rpp-node" "--bins" "--profile" "$PROFILE" "--target" "$TARGET")
 
-if [[ -n "${RPP_RELEASE_FEATURES:-}" ]]; then
-  read -r -a FEATURE_ARGS <<<"$RPP_RELEASE_FEATURES"
-else
-  FEATURE_ARGS=(--no-default-features --features prod,prover-stwo)
+BASE_FEATURES="${RPP_RELEASE_BASE_FEATURES:-prod,prover-stwo}"
+BASE_FEATURE_ARGS=(--no-default-features --features "$BASE_FEATURES")
+
+ADDITIONAL_ARGS=()
+if RPP_RELEASE_ARGS_DECL=$(declare -p RPP_RELEASE_ARGS 2>/dev/null); then
+  if [[ "$RPP_RELEASE_ARGS_DECL" == declare\ -a* ]]; then
+    # shellcheck disable=SC2034 # referenced via indirect expansion
+    eval 'ADDITIONAL_ARGS=("${RPP_RELEASE_ARGS[@]}")'
+  else
+    read -r -a ADDITIONAL_ARGS <<<"$RPP_RELEASE_ARGS"
+  fi
+elif [[ -n "${RPP_RELEASE_FEATURES:-}" ]]; then
+  read -r -a ADDITIONAL_ARGS <<<"$RPP_RELEASE_FEATURES"
 fi
 
-COMMAND+=("${FEATURE_ARGS[@]}")
+check_forbidden_features() {
+  local -n _args=$1
+  local i
+  for ((i = 0; i < ${#_args[@]}; i++)); do
+    local arg="${_args[i]}"
+    if [[ "$arg" == "--features" ]]; then
+      if (( i + 1 < ${#_args[@]} )); then
+        local value="${_args[i+1]}"
+        if [[ "$value" == *"prover-mock"* ]]; then
+          echo "error: prover-mock feature is not allowed for release builds" >&2
+          exit 1
+        fi
+      fi
+    elif [[ "$arg" == *"prover-mock"* ]]; then
+      echo "error: prover-mock feature is not allowed for release builds" >&2
+      exit 1
+    fi
+  done
+}
+
+check_forbidden_features BASE_FEATURE_ARGS
+check_forbidden_features ADDITIONAL_ARGS
+
+COMMAND+=("${BASE_FEATURE_ARGS[@]}")
+if [[ ${#ADDITIONAL_ARGS[@]} -gt 0 ]]; then
+  COMMAND+=("${ADDITIONAL_ARGS[@]}")
+fi
 
 echo "Running ${COMMAND[*]}"
 "${COMMAND[@]}"

@@ -110,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
-      RPP_RELEASE_FEATURES: "--no-default-features --features prod,prover-stwo"
+      RPP_RELEASE_BASE_FEATURES: prod,prover-stwo
     steps:
       - uses: actions/checkout@v4
         with:
@@ -147,7 +147,7 @@ jobs:
     runs-on: macos-latest
     env:
       RELEASE_TAG: ${{ needs.checks.outputs.release_tag }}
-      RPP_RELEASE_FEATURES: "--no-default-features --features prod,prover-stwo"
+      RPP_RELEASE_BASE_FEATURES: prod,prover-stwo
     steps:
       - uses: actions/checkout@v4
         with:
