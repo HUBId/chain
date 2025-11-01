@@ -112,15 +112,26 @@ The endpoints return structured JSON documented under `docs/interfaces/rpc/`:
 
 Example requests:
 
+> **Note:** Export `RPP_RPC_TOKEN` from your node configuration or CLI
+> overrides before issuing RPC calls so the bearer header resolves to the
+> correct token.
+
 ```sh
 # Fetch the current VRF state
-curl -s http://127.0.0.1:7070/validator/vrf | jq
+curl -s \
+  -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+  http://127.0.0.1:7070/validator/vrf | jq
 
 # Rotate the VRF key; errors propagate as JSON (403 if tier gating fails)
-curl -sX POST http://127.0.0.1:7070/validator/vrf/rotate | jq
+curl -sX POST \
+  -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+  http://127.0.0.1:7070/validator/vrf/rotate | jq
 
 # Inspect validator telemetry highlights
-curl -s http://127.0.0.1:7070/validator/telemetry | jq '{height: .node.height, uptime: .mempool.uptime_proofs}'
+curl -s \
+  -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+  http://127.0.0.1:7070/validator/telemetry \
+  | jq '{height: .node.height, uptime: .mempool.uptime_proofs}'
 ```
 
 When a request violates the auth policy the server responds with HTTP 403 and a
