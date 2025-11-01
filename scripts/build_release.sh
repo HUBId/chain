@@ -95,8 +95,13 @@ fi
 
 COMMAND=("$BUILD_TOOL" "build" "--locked" "--package" "rpp-node" "--bins" "--profile" "$PROFILE" "--target" "$TARGET")
 
-BASE_FEATURES="${RPP_RELEASE_BASE_FEATURES:-prod,prover-stwo}"
-BASE_FEATURE_ARGS=(--no-default-features --features "$BASE_FEATURES")
+BASE_FEATURES_RAW="${RPP_RELEASE_BASE_FEATURES:---no-default-features --features prod,prover-stwo}"
+BASE_FEATURE_ARGS=()
+if [[ "$BASE_FEATURES_RAW" == *$' '* ]] || [[ "$BASE_FEATURES_RAW" == -* ]]; then
+  read -r -a BASE_FEATURE_ARGS <<<"$BASE_FEATURES_RAW"
+else
+  BASE_FEATURE_ARGS=(--no-default-features --features "$BASE_FEATURES_RAW")
+fi
 
 ADDITIONAL_ARGS=()
 if RPP_RELEASE_ARGS_DECL=$(declare -p RPP_RELEASE_ARGS 2>/dev/null); then

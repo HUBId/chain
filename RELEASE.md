@@ -38,7 +38,10 @@ same steps can be replicated locally:
   feature list, emitting `error: backend-plonky3 is experimental and cannot be
   enabled for release builds`. After the build completes, the script invokes
   `scripts/verify_release_features.sh` to guarantee that production artifacts do
-  not link the mock prover backends.
+  not link the mock prover backends. Set
+  `RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo"`
+  (append `,simd` to the feature list if you need SIMD locally) before calling
+  the script to mirror the CI release workflow.
 - `scripts/checksums.sh` – generates a sorted SHA256 manifest for a set of
   artifacts and writes it to the path supplied via `--output`.
 - `scripts/verify_checksums.sh` – replays the manifest created by
@@ -59,7 +62,8 @@ rehearse a Linux aarch64 release package you can execute:
 
 ```bash
 cargo install --locked cargo-cyclonedx
-./scripts/build_release.sh --target aarch64-unknown-linux-gnu --tool cross
+RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo" \
+  ./scripts/build_release.sh --target aarch64-unknown-linux-gnu --tool cross
 ./scripts/checksums.sh --output dist/SHA256SUMS.txt dist/artifacts/aarch64-unknown-linux-gnu/*.tar.gz dist/artifacts/aarch64-unknown-linux-gnu/*.json
 ./scripts/verify_checksums.sh --manifest dist/SHA256SUMS.txt
 ```
@@ -77,10 +81,11 @@ Before publishing release artifacts, double-check the following guardrails:
    integrity regression passes before tagging a release. The automated workflow
    and `scripts/build_release.sh` will both exit early with an explicit error if
    this test fails.【F:.github/workflows/release.yml†L65-L91】【F:scripts/build_release.sh†L77-L102】
-2. Build the workspace via `scripts/build_release.sh`, which enforces the
-   default production feature set (`--no-default-features --features
-   prod,prover-stwo`) and immediately exits if any `backend-plonky3` alias or the
-   mock prover is requested via flags or environment variables.【F:scripts/build_release.sh†L80-L159】
+2. Build the workspace via `scripts/build_release.sh` with
+   `RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo"`
+   (append `,simd` if required) so the manual invocation matches CI. The script
+   immediately exits if any `backend-plonky3` alias or the mock prover is
+   requested via flags or environment variables.【F:scripts/build_release.sh†L80-L162】
 3. Let the script run its automatic post-build verification. The bundled
    `scripts/verify_release_features.sh` inspects the generated metadata and
    fingerprints to ensure the resulting binaries did not link forbidden prover
