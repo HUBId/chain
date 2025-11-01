@@ -222,10 +222,10 @@ dashboards and alerts operators should wire up immediately after bootstrap.
 
 | Endpoint | Purpose | Notes |
 | --- | --- | --- |
-| `GET /p2p/peers` | Lists connected peers and their libp2p identities. | Combine with `GET /p2p/peers/self` to validate the local peer ID and advertised addresses. |
-| `GET /snapshots/plan` | Shows the snapshot heights and digests this validator is ready to serve. | Use to confirm fresh snapshots are published after pruning. |
-| `GET /snapshots/jobs` | Displays active snapshot ingestion or export jobs. | Helpful during rebuilds to watch chunking progress. |
-| `GET /state-sync/session` | Returns the active state-sync session including chunk totals, served indexes, verification stage, progress log, and last error. | Useful when diagnosing catch-up or reconstruction issues; requires an `Authorization` header when RPC auth is enabled. |
+| `GET /p2p/peers` | Lists connected peers and their libp2p identities. | Combine with `GET /p2p/peers/self` to validate the local peer ID and advertised addresses; requires an `Authorization` header when an RPC token is configured. |
+| `GET /snapshots/plan` | Shows the snapshot heights and digests this validator is ready to serve. | Use to confirm fresh snapshots are published after pruning; requires an `Authorization` header when an RPC token is configured. |
+| `GET /snapshots/jobs` | Displays active snapshot ingestion or export jobs. | Helpful during rebuilds to watch chunking progress; requires an `Authorization` header when an RPC token is configured. |
+| `GET /state-sync/session` | Returns the active state-sync session including chunk totals, served indexes, verification stage, progress log, and last error. | Useful when diagnosing catch-up or reconstruction issues; requires an `Authorization` header when an RPC token is configured. |
 
 ## 5. Keep the Node Healthy
 
