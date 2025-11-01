@@ -136,9 +136,10 @@ network conditions:
 3. **Calibrate reputation tiers.** Tune `reputation.tier_thresholds` to match
    the promotion/demotion policy for your environment; higher values slow tier
    ascension while lower values welcome new validators faster.【F:config/node.toml†L39-L43】【F:rpp/runtime/config.rs†L40-L204】
-4. **Run storage migrations prior to rollout.** Execute `cargo run -- migrate`
-   against production data before switching binaries to guarantee the RocksDB
-   schema matches the proof bundle format.【F:README.md†L96-L107】
+4. **Run storage migrations prior to rollout.** Execute the storage migration
+   tooling documented in [MIGRATION.md](../MIGRATION.md) against production data
+   before switching binaries to guarantee the RocksDB schema matches the proof
+   bundle format.【F:README.md†L96-L107】
 5. **Throttle gossip explicitly.** Adjust `p2p.gossip_rate_limit_per_sec` to cap
    how many messages a peer may forward every second and set
    `p2p.replay_window_size` to the number of recent digests tracked by the

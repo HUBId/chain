@@ -14,7 +14,7 @@ pub enum ChainError {
     #[error("configuration error: {0}")]
     Config(String),
     #[error(
-        "storage schema is outdated (found version {found}, requires {required}); run `cargo run -- migrate` to upgrade"
+        "storage schema is outdated (found version {found}, requires {required}); run the documented storage migration tooling to upgrade"
     )]
     MigrationRequired { found: u32, required: u32 },
     #[error("cryptography error: {0}")]
