@@ -44,15 +44,21 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
 ## 3. Trigger on-demand pruning work
 
 1. **Snapshot rebuild (full rescan).** Issue a POST to the RPC endpoint to enqueue a rebuild of the
-   persisted snapshot set:
+   persisted snapshot set. Export the bearer token from the operator guide’s configuration-managed
+   secret (preferred) or the CLI helper into `RPP_RPC_TOKEN`, then include it in the request:
    ```bash
-   curl -sS -X POST http://<rpc-host>:<port>/snapshots/rebuild
+   curl -sS -X POST \
+     -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+     http://<rpc-host>:<port>/snapshots/rebuild
    ```
    The handler requires the pruning service to be configured; otherwise it returns `503` with an
    error explaining that pruning is unavailable.【F:rpp/rpc/api.rs†L1250-L1253】【F:rpp/rpc/tests/pruning.rs†L91-L138】
-2. **Snapshot capture (single run).** Trigger an immediate pruning job without clearing history via:
+2. **Snapshot capture (single run).** Trigger an immediate pruning job without clearing history.
+   Use the same bearer token requirements as above:
    ```bash
-   curl -sS -X POST http://<rpc-host>:<port>/snapshots/snapshot
+   curl -sS -X POST \
+     -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+     http://<rpc-host>:<port>/snapshots/snapshot
    ```
    Both RPCs enqueue work through the pruning service handle, which validates the request and
    returns a receipt. Calls that pass validation respond with `accepted=true`; invalid cadence or
