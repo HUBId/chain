@@ -130,6 +130,11 @@ Key tips while editing the configuration:
   `rollout.feature_gates` map. Keep optional backends like `malachite_consensus`
   and `witness_network` disabled until their circuits are deployed, but leave
   the base proof and pruning gates enabled so block production succeeds.
+- **Consensus metadata:** Populate `consensus.metadata` with the epoch/slot
+  context, Merkle roots for the quorum bitmap and signature aggregate, and the
+  paired VRF output/proof lists described in the
+  [finality proof story](./consensus/finality_proof_story.md). Missing or
+  mismatched fields lead to rejected consensus proofs during verification.
 - **Telemetry (node runtime):** Enabling `rollout.telemetry.enabled` without
   providing an OTLP endpoint keeps telemetry in structured logs. Set both
   `endpoint` (for gRPC traces) and `http_endpoint` (for OTLP/HTTP metrics) or

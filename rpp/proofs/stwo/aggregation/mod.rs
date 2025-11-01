@@ -498,12 +498,17 @@ mod tests {
         let witness = CircuitConsensusWitness {
             block_hash: "bb".repeat(32),
             round: 1,
+            epoch: 0,
+            slot: 1,
             leader_proposal: "bb".repeat(32),
             quorum_threshold: 1,
             pre_votes: vec![vote.clone()],
             pre_commits: vec![vote.clone()],
             commit_votes: vec![vote],
+            quorum_bitmap_root: "bb".repeat(32),
+            quorum_signature_root: "cc".repeat(32),
             vrf_outputs: Vec::new(),
+            vrf_proofs: Vec::new(),
             witness_commitments: Vec::new(),
             reputation_roots: Vec::new(),
         };

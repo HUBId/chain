@@ -66,6 +66,22 @@ the active node configuration.【F:rpp/node/src/main.rs†L48-L183】 Detailed
 workflows—including sample invocations and expected output—live in the
 [validator tooling guide](./validator_tooling.md).【F:docs/validator_tooling.md†L14-L137】
 
+### Consensus proof metadata expectations
+
+Finality proofs now encode the epoch/slot context, VRF proofs, and quorum
+evidence roots inside the public inputs. Operators must ensure that
+`consensus.metadata` in block production includes:
+
+- `epoch`/`slot` counters that match the fork-choice state machine.
+- Hex-encoded `quorum_bitmap_root` and `quorum_signature_root` digests from the
+  aggregated vote sets.
+- Matching pairs of `vrf_outputs` and `vrf_proofs` for each validator included
+  in the certificate.
+
+Missing or inconsistent values cause the verifier to reject the consensus proof
+bundle, so double-check the witness payload when diagnosing failed block
+imports.【F:docs/consensus/finality_proof_story.md†L1-L38】
+
 Common tasks include:
 
 ```sh

@@ -5,8 +5,13 @@ use rpp_consensus::proof_backend::ProofSystemKind;
 fn sample_metadata() -> ConsensusProofMetadata {
     ConsensusProofMetadata {
         vrf_outputs: vec!["11".repeat(32)],
+        vrf_proofs: vec!["22".repeat(64)],
         witness_commitments: vec!["22".repeat(32), "33".repeat(32)],
         reputation_roots: vec!["44".repeat(32)],
+        epoch: 3,
+        slot: 9,
+        quorum_bitmap_root: "55".repeat(32),
+        quorum_signature_root: "66".repeat(32),
     }
 }
 
@@ -45,10 +50,23 @@ fn consensus_public_inputs_include_structured_metadata() {
         .expect("public inputs");
 
     assert_eq!(inputs.vrf_outputs.len(), 1);
+    assert_eq!(inputs.vrf_proofs.len(), 1);
     assert_eq!(inputs.witness_commitments.len(), 2);
     assert_eq!(inputs.reputation_roots.len(), 1);
+    assert_eq!(inputs.epoch, sample_metadata().epoch);
+    assert_eq!(inputs.slot, sample_metadata().slot);
+    assert_eq!(
+        inputs.quorum_bitmap_root,
+        hex_to_array(&sample_metadata().quorum_bitmap_root)
+    );
 
     let mut buffer = [0u8; 32];
     buffer.copy_from_slice(&hex::decode(&certificate.metadata.vrf_outputs[0]).unwrap());
     assert_eq!(inputs.vrf_outputs[0], buffer);
+}
+
+fn hex_to_array(value: &str) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hex::decode(value).unwrap());
+    bytes
 }
