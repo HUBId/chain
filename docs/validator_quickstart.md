@@ -225,7 +225,7 @@ dashboards and alerts operators should wire up immediately after bootstrap.
 | `GET /p2p/peers` | Lists connected peers and their libp2p identities. | Combine with `GET /p2p/peers/self` to validate the local peer ID and advertised addresses. |
 | `GET /snapshots/plan` | Shows the snapshot heights and digests this validator is ready to serve. | Use to confirm fresh snapshots are published after pruning. |
 | `GET /snapshots/jobs` | Displays active snapshot ingestion or export jobs. | Helpful during rebuilds to watch chunking progress. |
-| `GET /state-sync/status` | Reports the state-sync pipeline status and last applied chunk. | Useful when diagnosing catch-up or reconstruction issues. |
+| `GET /state-sync/session` | Returns the active state-sync session including chunk totals, served indexes, verification stage, progress log, and last error. | Useful when diagnosing catch-up or reconstruction issues; requires an `Authorization` header when RPC auth is enabled. |
 
 ## 5. Keep the Node Healthy
 
@@ -235,8 +235,9 @@ dashboards and alerts operators should wire up immediately after bootstrap.
 - **Use the validator tooling:** The `rpp-node validator` CLI rotates VRF keys,
   exports backups, validates secrets/telemetry via `validator setup`, and
   manages uptime proofs through `validator uptime submit`/`validator uptime status`
-  without restarting the process. Pair the CLI with the `/state-sync` RPC
-  endpoints to stream light-client heads and download snapshot chunks using
+  without restarting the process. Pair the CLI with the `/state-sync/session` RPC
+  endpoint (bearer token required when RPC auth is enabled) and related `/state-sync`
+  routes to stream light-client heads and download snapshot chunks using
   tools like `curl` or `wget`. See [Validator Tooling](./validator_tooling.md)
   for detailed workflows.【F:rpp/node/src/main.rs†L92-L409】【F:rpp/node/src/lib.rs†L90-L357】【F:docs/validator_tooling.md†L1-L140】
 - **Rotate snapshots:** Periodically prune old `snapshot_dir` entries only after
