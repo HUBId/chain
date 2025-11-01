@@ -17,11 +17,39 @@ unter `/metrics` bereit und tragen die Präfixe `pipeline_*` beziehungsweise
 | `rpp.node.pipeline.stage_latency_ms` | Histogram (f64) | `phase` (`wallet`, `proof`, `consensus`, `storage`) | End-to-end latency in milliseconds from bundle ingestion until the stage was first observed. |
 | `rpp.node.pipeline.stage_total` | Counter (u64) | `phase` (`wallet`, `proof`, `consensus`, `storage`) | Total number of stage observations. Useful for rate panels and alert ratios. |
 | `rpp.node.pipeline.commit_height` | Histogram (u64) | `phase="storage"` | Firewood commit height reported once the storage stage completes. Confirms persistence progress. |
+| `rpp_node_pipeline_root_io_errors_total` | Counter (u64) | _none_ | Total Firewood root IO errors surfaced by the state-sync verifier. Alerts operators to snapshot corruption or storage outages. |
 
 The latency and count instruments apply to every stage; the commit height bucket
 is only populated when Firewood commits the block. Metrics share the
 `rpp-node.pipeline` meter scope so they can be grouped in Grafana by resource or
 scope.
+
+### Sample Grafana Panel
+
+```json
+{
+  "type": "stat",
+  "title": "Firewood Root IO Errors (5m)",
+  "targets": [
+    {
+      "expr": "sum(increase(rpp_node_pipeline_root_io_errors_total[5m]))",
+      "legendFormat": "IO errors"
+    }
+  ],
+  "options": {
+    "colorMode": "value",
+    "graphMode": "none",
+    "justifyMode": "auto"
+  },
+  "thresholds": {
+    "mode": "absolute",
+    "steps": [
+      { "color": "green", "value": null },
+      { "color": "red", "value": 1 }
+    ]
+  }
+}
+```
 
 ## Dashboard Blueprint
 1. **Wallet Intake Heatmap** – plot `stage_latency_ms{phase="wallet"}` as a
@@ -65,6 +93,9 @@ bespoke variants or extending panel coverage.
 - **Storage Backlog** – raise severity when the derivative of
   `commit_height` flattens while new `stage_total{phase="storage"}` events
   continue to arrive, suggesting Firewood persistence is stuck.
+- **Firewood Root IO Errors** – alert when `sum(increase(rpp_node_pipeline_root_io_errors_total[5m]))`
+  is greater than zero for more than one scrape interval, signalling a recurring
+  snapshot read failure along the state-sync path.
 
 ### Runbook Links
 Attach this document to observability and startup runbooks so operators can

@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
+use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::metrics::{Counter, Histogram, Meter};
-use opentelemetry::KeyValue;
 use rpp_runtime::orchestration::PipelineStage;
 
 static METRICS: OnceLock<PipelineMetrics> = OnceLock::new();
@@ -12,6 +12,7 @@ pub struct PipelineMetrics {
     stage_latency_ms: Histogram<f64>,
     stage_total: Counter<u64>,
     commit_height: Histogram<u64>,
+    root_io_errors_total: Counter<u64>,
 }
 
 impl PipelineMetrics {
@@ -33,11 +34,19 @@ impl PipelineMetrics {
             .with_description("Firewood commit height recorded when the storage stage completes")
             .with_unit("1")
             .build();
+        let root_io_errors_total = meter
+            .u64_counter("rpp_node_pipeline_root_io_errors_total")
+            .with_description(
+                "Total number of Firewood snapshot root IO errors encountered during state sync verification",
+            )
+            .with_unit("1")
+            .build();
 
         Self {
             stage_latency_ms,
             stage_total,
             commit_height,
+            root_io_errors_total,
         }
     }
 
@@ -61,6 +70,10 @@ impl PipelineMetrics {
                 self.commit_height.record(height, &attrs);
             }
         }
+    }
+
+    pub fn record_root_io_error(&self) {
+        self.root_io_errors_total.add(1, &[]);
     }
 }
 
