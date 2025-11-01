@@ -3,7 +3,7 @@
   "$id": "https://schemas.rpp.dev/rpc/state_sync_chunk_response.json",
   "title": "StateSyncChunkResponse",
   "type": "object",
-  "description": "Snapshot chunk payload plus verification status returned by the state-sync RPC endpoint.",
+  "description": "Snapshot chunk payload plus verification status returned by the `/state-sync/chunk/:id` RPC endpoint.",
   "required": ["chunk", "status"],
   "properties": {
     "chunk": {
