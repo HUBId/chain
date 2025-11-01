@@ -31,7 +31,9 @@ same steps can be replicated locally:
 - `scripts/build_release.sh` – builds and packages the binaries for a given
   target. It accepts `--target`, `--profile`, and `--tool` (either `cargo` or
   `cross`) flags and emits tarballs under `dist/artifacts/<target>/` together
-  with an optional CycloneDX SBOM (`sbom-rpp-node-<target>.json`).
+  with an optional CycloneDX SBOM (`sbom-rpp-node-<target>.json`). After the
+  build completes, the script invokes `scripts/verify_release_features.sh` to
+  guarantee that production artifacts do not link the mock prover backends.
 - `scripts/checksums.sh` – generates a sorted SHA256 manifest for a set of
   artifacts and writes it to the path supplied via `--output`.
 - `scripts/verify_checksums.sh` – replays the manifest created by
@@ -43,6 +45,9 @@ same steps can be replicated locally:
 - `scripts/provenance_attest.sh` – emits a SLSA v1 in-toto statement for the
   artifact, binds the active GitHub workflow as the builder, and signs the
   statement via cosign using GitHub OIDC credentials.
+- `scripts/verify_release_features.sh` – inspects the cargo metadata and build
+  fingerprints for a target triple to ensure the `backend-plonky3` and
+  `prover-mock` features are never enabled when producing release binaries.
 
 Running the scripts locally mirrors the CI packaging process. For example, to
 rehearse a Linux aarch64 release package you can execute:

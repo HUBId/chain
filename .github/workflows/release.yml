@@ -134,6 +134,9 @@ jobs:
       - name: Build ${{ matrix.target }}
         shell: bash
         run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool "${{ matrix.tool }}"
+      - name: Verify release feature set
+        shell: bash
+        run: ./scripts/verify_release_features.sh --target "${{ matrix.target }}" --profile release
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
@@ -165,6 +168,9 @@ jobs:
       - name: Build ${{ matrix.target }}
         shell: bash
         run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool cargo
+      - name: Verify release feature set
+        shell: bash
+        run: ./scripts/verify_release_features.sh --target "${{ matrix.target }}" --profile release
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}

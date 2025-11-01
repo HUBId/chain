@@ -63,6 +63,13 @@ cryptographic soundness`. The flag only unlocks development/testing flows and
 emits a warning banner in `/status/node` so automation can detect the
 experimental mode.【F:rpp/node/src/lib.rs†L347-L383】【F:rpp/proofs/plonky3/experimental.rs†L1-L76】【F:rpp/runtime/node.rs†L140-L188】【F:rpp/runtime/node.rs†L4719-L4741】
 
+Validator and hybrid deployments now abort during bootstrap if the binary was
+compiled with the experimental Plonky3 backend. The guard emits a telemetry
+error explaining that `backend-plonky3` is unsupported in production, allowing
+operators to immediately spot the misconfiguration. Testnet rollouts that
+deliberately exercise the mock backend must stick to the non-validator modes or
+rebuild with a production prover feature set before promoting the artifacts.
+
 ## Validator tooling
 
 Invoke validator-specific helpers through `rpp-node validator`. Subcommands cover

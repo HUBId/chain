@@ -144,6 +144,10 @@ name = "proof_error_io"
 path = "../../tests/state_sync/proof_error_io.rs"
 
 [[test]]
+name = "root_corruption"
+path = "../../tests/state_sync/root_corruption.rs"
+
+[[test]]
 name = "p2p"
 path = "rpp/rpc/tests/p2p.rs"
 
