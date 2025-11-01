@@ -2,7 +2,7 @@
 
 We are eager for contributions and happy you found yourself here.
 Please read through this document to familiarize yourself with our
-guidelines for contributing to firewood.
+guidelines for contributing to ztate (the chain repository).
 
 ## Table of Contents
 
@@ -14,7 +14,6 @@ guidelines for contributing to firewood.
 ## [Quick Links]
 
 * [Setting up docker](README.docker.md)
-* [Auto-generated documentation](https://ava-labs.github.io/firewood/firewood/)
 * [Issue tracker](https://github.com/ava-labs/chain/issues)
 
 ## [Testing]
@@ -41,7 +40,7 @@ those code paths so the new invariants see additional coverage.
 
 ## [How to submit changes]
 
-To create a PR, fork firewood, and use github to create the PR. We typically prioritize reviews in the middle of our the next work day,
+To create a PR, fork the ztate repository on GitHub and open the PR from your fork. We typically prioritize reviews in the middle of our next work day,
 so you should expect a response during the week within 24 hours.
 
 ## [How to report a bug]
