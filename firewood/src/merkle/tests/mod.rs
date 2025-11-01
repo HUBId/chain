@@ -16,7 +16,8 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash, noop_storage_metrics,
+    Committed, FileIoError, LinearAddress, MaybePersistedNode, MemStore, MutableProposal,
+    NodeReader, NodeStore, RootReader, SharedNode, TrieHash, noop_storage_metrics,
 };
 
 // Returns n random key-value pairs.
@@ -110,6 +111,44 @@ where
     }
 
     merkle
+}
+
+#[derive(Debug)]
+struct FailingRootReader {
+    root: MaybePersistedNode,
+}
+
+impl FailingRootReader {
+    fn new() -> Self {
+        Self {
+            root: MaybePersistedNode::from(
+                LinearAddress::new(1).expect("failing reader requires non-zero address"),
+            ),
+        }
+    }
+
+    fn io_error(&self) -> FileIoError {
+        FileIoError::from_generic_no_file(
+            std::io::Error::new(std::io::ErrorKind::Other, "failing root read"),
+            "failing root read",
+        )
+    }
+}
+
+impl NodeReader for FailingRootReader {
+    fn read_node(&self, _: LinearAddress) -> Result<SharedNode, FileIoError> {
+        Err(self.io_error())
+    }
+}
+
+impl RootReader for FailingRootReader {
+    fn root_node(&self) -> Option<SharedNode> {
+        panic!("root_node should not be called for failing reader");
+    }
+
+    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
+        Some(self.root.clone())
+    }
 }
 
 // generate pseudorandom data, but prefix it with some known data
@@ -390,6 +429,22 @@ fn remove_many() {
         assert!(got.is_none());
     }
     assert!(merkle.nodestore.root_node().is_none());
+}
+
+#[test]
+fn prove_surfaces_io_error_when_root_read_fails() {
+    let merkle = Merkle::from(FailingRootReader::new());
+
+    let err = merkle.prove(b"any-key").unwrap_err();
+    assert!(matches!(err, ProofError::IO(_)), "unexpected error: {err:?}");
+}
+
+#[test]
+fn get_node_surfaces_io_error_when_root_read_fails() {
+    let merkle = Merkle::from(FailingRootReader::new());
+
+    let err = merkle.get_node(b"any-key").unwrap_err();
+    assert!(err.to_string().contains("failing root read"), "{err}");
 }
 
 #[test]

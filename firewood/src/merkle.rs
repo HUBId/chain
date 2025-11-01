@@ -127,8 +127,12 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    pub(crate) fn root(&self) -> Option<SharedNode> {
-        self.nodestore.root_node()
+    pub(crate) fn try_root(&self) -> Result<Option<SharedNode>, FileIoError> {
+        self
+            .nodestore
+            .root_as_maybe_persisted_node()
+            .map(|root| root.as_shared_node(&self.nodestore))
+            .transpose()
     }
 
     #[cfg(test)]
@@ -143,7 +147,7 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// Returns an error if the trie is empty or an error occurs while reading from storage.
     pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
-        let Some(root) = self.root() else {
+        let Some(root) = self.try_root().map_err(ProofError::from)? else {
             return Err(ProofError::Empty);
         };
 
@@ -441,7 +445,7 @@ impl<T: TrieReader> Merkle<T> {
     }
 
     pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, FileIoError> {
-        let Some(root) = self.root() else {
+        let Some(root) = self.try_root()? else {
             return Ok(None);
         };
 
