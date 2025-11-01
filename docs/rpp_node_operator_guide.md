@@ -16,11 +16,15 @@ validator functionality required in staging and production deployments.【F:docs
 cargo build --release -p rpp-node --no-default-features --features prod,prover-stwo
 ```
 
-The automated release pipeline exports `RPP_RELEASE_FEATURES="--no-default-features --features prod,prover-stwo"` before
-invoking the build script so every published artifact includes the STWO prover.
-Local builds should mirror these flags (or swap in `prover-stwo-simd` on hosts
-that support SIMD acceleration) to avoid shipping binaries that fail at runtime
-due to a missing production backend.【F:.github/workflows/release.yml†L102-L155】
+The automated release pipeline exports
+`RPP_RELEASE_BASE_FEATURES="prod,prover-stwo"` before invoking
+`scripts/build_release.sh`, and the script always forces
+`--no-default-features --features "$RPP_RELEASE_BASE_FEATURES"` so every
+published artifact includes the STWO prover.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L1-L87】
+Local builds should mirror the same flag set shown in
+`scripts/build_release.sh` (or swap in `prover-stwo-simd` on hosts that support
+SIMD acceleration) to avoid shipping binaries that fail at runtime due to a
+missing production backend.【F:scripts/build_release.sh†L1-L87】
 
 Keep the repository cloned on the host to rebuild quickly when upgrades ship.
 
