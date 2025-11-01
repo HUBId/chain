@@ -204,9 +204,12 @@ threaten block production.
   outcomes.【F:rpp/runtime/telemetry/metrics.rs†L63-L205】【F:rpp/runtime/telemetry/metrics.rs†L214-L319】
 - **Proof systems.** Proof generation and verification telemetry is partitioned
   by backend so production STWO, experimental Plonky3, and mock flows can be
-  monitored separately. Alert on spikes in `rpp.runtime.proof.*` and
-  `rpp_stark_*` metrics to catch failing provers or verifier regressions before
-  they impact consensus.【F:rpp/runtime/telemetry/metrics.rs†L360-L453】
+  monitored separately. Because the Plonky3 wiring still feeds the Blake3-based
+  mock that lives in `plonky3_backend::Circuit::prove/verify`, expect the
+  counters to reflect placeholder timings until the real prover lands (tracked
+  in the blueprint backlog).【F:prover/plonky3_backend/src/lib.rs†L49-L118】【F:rpp/proofs/blueprint/mod.rs†L130-L157】 Alert on
+  spikes in `rpp.runtime.proof.*` and `rpp_stark_*` metrics to catch failing
+  provers or verifier regressions before they impact consensus.【F:rpp/runtime/telemetry/metrics.rs†L360-L453】
 - **Pipeline orchestrator.** Wallet pipelines emit latency histograms, error and
   gossip counters, leader rotation totals, active flow gauges, and per-stage
   telemetry summaries that can be streamed via the RPC surface for

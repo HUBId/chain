@@ -3,8 +3,14 @@
 The Plonky3 integration that ships with this repository focuses on the
 plumbing required by the chain services (typed public inputs, witness encoders
 and deterministic proof blobs).  The actual constraint systems are still under
-active development, but the workspace can already be built and tested without
-network access thanks to the vendored Plonky3 shims under `vendor/`.
+active development, and the current backend is a Blake3-based mock: the
+`plonky3_backend::Circuit::prove` helper hashes the verifying key, canonical
+public inputs, and transcript metadata to synthesise a fixed 96-byte blob while
+`Circuit::verify` replays the same digests instead of running the real
+Plonky3 verifier.【F:prover/plonky3_backend/src/lib.rs†L1-L120】 The workspace can
+already be built and tested without network access thanks to the vendored
+Plonky3 shims under `vendor/`. **TODO:** Update this guide once the real prover
+and verifier are threaded through the backend and wallet bridge.【F:rpp/proofs/plonky3/prover/mod.rs†L96-L176】
 
 ## Prerequisites
 
