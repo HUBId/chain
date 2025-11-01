@@ -4,7 +4,7 @@
 | --- | --- | --- | --- | --- |
 | `base64ct` | 2021 | 1.60 | keine (Default-Features deaktiviert) | Explizit auf `=1.6.0` fixiert, um die Edition-2024-Anforderung von `1.8.0` zu vermeiden. Beobachten, bis eine Edition-2021-konforme 1.x-Version verfügbar ist. |
 | `malachite` | 2021 | 1.74 | `enable_serde`, `serde` | Auf `=0.4.18` zurückgesetzt; diese Version deklariert Rust 1.74/Edition 2021, während Veröffentlichungen ab `0.5.x` Rust ≥1.83 und Edition 2024 voraussetzen. Kompilation auf Rust 1.79 scheitert weiter an `char::MIN` (Upstream nutzt noch Nightly-Feature) – Workaround/Fork nötig, sobald verfügbar. |
-| `prover_stwo_backend` (`stwo`) | 2021 | Nightly (`vendor/stwo-dev/rust-toolchain.toml`) | Feature `prover-stwo` (Baseline) / optional `prover-stwo-simd` (SIMD-Pfade) | Neues Vendoring (`rpp/zk/prover_stwo_backend/stwo-dev.zip`) bindet das STWO-Workspace 0.1.1 ein; Backend-Builds erfordern das dokumentierte Nightly-Toolchain-Pinning. |
+| `prover_stwo_backend` (`stwo`) | 2021 | Nightly (`vendor/stwo-dev/rust-toolchain.toml`) | Feature `prover-stwo` (Baseline) / optional `prover-stwo-simd` (SIMD-Pfade) | Neues Vendoring (`prover/prover_stwo_backend/stwo-dev.zip`) bindet das STWO-Workspace 0.1.1 ein; Backend-Builds erfordern das dokumentierte Nightly-Toolchain-Pinning. |
 | `stwo-official` | 2021 | — | `std` (Default-Feature über `prover-stwo`) | Keine Aktion – vendored Quelle bereits Edition 2021; MSRV nicht angegeben. |
 | `storage-firewood` | 2021 | 1.79 | — | Keine Aktion erforderlich. |
 | `rpp-stark` | 2021 | 1.79 | optionale Auditing-/Parallel-Features ungenutzt | Keine Aktion erforderlich. |
