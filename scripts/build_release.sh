@@ -102,23 +102,63 @@ elif [[ -n "${RPP_RELEASE_FEATURES:-}" ]]; then
   read -r -a ADDITIONAL_ARGS <<<"$RPP_RELEASE_FEATURES"
 fi
 
+declare -A FORBIDDEN_FEATURE_CANONICAL=(
+  ["prover-mock"]="prover-mock"
+  ["backend-plonky3"]="backend-plonky3"
+  ["backend_plonky3"]="backend-plonky3"
+  ["plonky3-backend"]="backend-plonky3"
+  ["plonky3_backend"]="backend-plonky3"
+)
+
+declare -A FORBIDDEN_FEATURE_MESSAGES=(
+  ["prover-mock"]="error: prover-mock feature is not allowed for release builds"
+  ["backend-plonky3"]="error: backend-plonky3 is experimental and cannot be enabled for release builds"
+)
+
+report_forbidden_feature() {
+  local alias="$1"
+  local canonical="${FORBIDDEN_FEATURE_CANONICAL[$alias]}"
+  local message="${FORBIDDEN_FEATURE_MESSAGES[$canonical]}"
+  if [[ -n "$canonical" && -n "$message" ]]; then
+    echo "$message (requested via '$alias')" >&2
+  else
+    echo "error: forbidden feature '$alias' detected in release build" >&2
+  fi
+  exit 1
+}
+
+check_value_forbidden_feature() {
+  local value="$1"
+  local alias
+  for alias in "${!FORBIDDEN_FEATURE_CANONICAL[@]}"; do
+    if [[ "$value" == *"$alias"* ]]; then
+      report_forbidden_feature "$alias"
+    fi
+  done
+}
+
 check_forbidden_features() {
   local -n _args=$1
   local i
   for ((i = 0; i < ${#_args[@]}; i++)); do
     local arg="${_args[i]}"
-    if [[ "$arg" == "--features" ]]; then
-      if (( i + 1 < ${#_args[@]} )); then
-        local value="${_args[i+1]}"
-        if [[ "$value" == *"prover-mock"* ]]; then
-          echo "error: prover-mock feature is not allowed for release builds" >&2
-          exit 1
+    case "$arg" in
+      --features|-F)
+        if (( i + 1 < ${#_args[@]} )); then
+          check_value_forbidden_feature "${_args[i+1]}"
         fi
-      fi
-    elif [[ "$arg" == *"prover-mock"* ]]; then
-      echo "error: prover-mock feature is not allowed for release builds" >&2
-      exit 1
-    fi
+        ((i++))
+        ;;
+      --features=*)
+        check_value_forbidden_feature "${arg#*=}"
+        ;;
+      -F*)
+        check_value_forbidden_feature "${arg#-F}"
+        ;;
+      *)
+        check_value_forbidden_feature "$arg"
+        ;;
+    esac
   done
 }
 
