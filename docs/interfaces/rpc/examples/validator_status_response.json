@@ -35,6 +35,9 @@
       "pool_entries": 42,
       "target_validator_count": 21
     },
+    "backend_warnings": [
+      "Plonky3 backend is experimental and provides no cryptographic soundness."
+    ],
     "tip": {
       "height": 1024,
       "hash": "0xabc123",

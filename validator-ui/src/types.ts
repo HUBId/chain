@@ -165,6 +165,7 @@ export interface NodeStatus {
   pending_uptime_proofs: number;
   vrf_metrics: Record<string, unknown>;
   tip: BlockMetadata | null;
+  backend_warnings?: string[];
 }
 
 export interface ValidatorStatusResponse {

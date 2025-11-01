@@ -6,6 +6,7 @@
 
 pub mod aggregation;
 pub mod circuit;
+pub mod experimental;
 pub mod crypto;
 pub mod params;
 pub mod proof;

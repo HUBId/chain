@@ -204,6 +204,8 @@ run_suite() {
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")
+      export CHAIN_PLONKY3_EXPERIMENTAL=1
+      echo "warning: plonky3 backend selected – running in experimental mode without cryptographic guarantees" >&2
       ;;
     rpp-stark)
       backend_args=("--features" "backend-rpp-stark")

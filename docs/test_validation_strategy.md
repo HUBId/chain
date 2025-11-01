@@ -1,17 +1,17 @@
 # Test- und Validierungsstrategie
 
-Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überprüft wird. Sie kombiniert klassische Unit-Tests, umfangreiche Integrationstests, deterministische Rekursionsprüfungen und Performance-Analysen. Alle Schritte sind so formuliert, dass sie sowohl für das bestehende STWO-Backend als auch für das geplante Plonky3-Backend gelten.
+Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überprüft wird. Sie kombiniert klassische Unit-Tests, umfangreiche Integrationstests, deterministische Rekursionsprüfungen und Performance-Analysen. Alle Schritte sind so formuliert, dass sie das produktionsreife STWO-Backend abdecken und gleichzeitig die Plonky3-Stubs in einem klar markierten Experimentalmodus halten.
 
 ## 1. Testebenen
 
 ### 1.1 Unit-Tests
 - **Kern-Circuits**: Für jeden Circuit (`transaction`, `identity`, `state`, `pruning`, `uptime`, `consensus`, `recursive`) werden Constraints und Witness-Generatoren mit gezielten Testfällen abgedeckt. Spezialfälle (z. B. doppelte Votes im Consensus-Circuit oder negative Gebühren in Transaktionen) erhalten dedizierte Regressionstests.
 - **Aggregations- und Snapshot-Helfer**: Die Hash-Pfade und StateCommitment-Snapshots in `stwo::aggregation` werden gegen deterministische Referenzvektoren getestet.
-- **Hilfsstrukturen**: Parser für Witness-Daten (`types::proofs`, `plonky3::proof`) und das Serialisierungsformat `ChainProof` erhalten Roundtrip-Tests.
 - **Hilfsstrukturen**: Parser für Witness-Daten (`types::proofs`, `plonky3::proof`) und das Serialisierungsformat `ChainProof` erhalten Roundtrip-Tests. Commitments für Plonky3 prüfen zusätzlich eine kanonische JSON-Kodierung, bei der Objekt-Schlüssel vor der Serialisierung sortiert werden.
 
 ### 1.2 Integrationstests
 - **Wallet-Prover**: Szenarien vom Bau eines Blocks bis zum Generieren aller Teilbeweise. Enthält Varianten für Identitäts-Genesis, normale Transaktionen, Uptime- und Konsensus-Proofs sowie den rekursiven Block-Proof. Für Plonky3 werden die gleichen Szenarien mit aktiviertem Feature `backend-plonky3` ausgeführt.
+- **Experimentelle Absicherung**: Plonky3-Suites setzen vor Prover-/Verifier-Aufrufen `CHAIN_PLONKY3_EXPERIMENTAL=1` oder starten den Runtime-CLI-Aufruf mit `--experimental-plonky3`, andernfalls brechen die Tests mit der erwarteten Fehlermeldung "no cryptographic soundness" ab.【F:rpp/proofs/plonky3/experimental.rs†L1-L76】【F:scripts/test.sh†L195-L205】
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
 
@@ -21,7 +21,7 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
 
 ## 2. Cross-Backend-Parität
-- **Feature-Matrix**: Jeder Testfall wird sowohl mit Standard-Features (STWO) als auch mit `--no-default-features --features backend-plonky3` ausgeführt.
+- **Feature-Matrix**: Jeder Testfall wird sowohl mit Standard-Features (STWO) als auch mit `--no-default-features --features backend-plonky3` sowie gesetztem Experimental-Opt-In ausgeführt.
 - **Kompatibilitäts-Vektoren**: Gemeinsame Testvektoren (bincode-Dateien) stellen sicher, dass beide Backends identische öffentliche Inputs erzeugen.
 - **Regression**: Bei Fehlern in einem Backend wird der Testfall dupliziert, um Backend-spezifische Regressionen nachvollziehbar zu machen.
 

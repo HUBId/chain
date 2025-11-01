@@ -47,6 +47,17 @@ are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Add `--dry-run` t
 validate configuration without starting long-running tasks; the CLI exits after
 bootstrap so operators can gate deployments in CI.【F:docs/validator_quickstart.md†L195-L210】
 
+### Plonky3 experimental mode
+
+The Plonky3 backend ships as a deterministic stub and must never be enabled in
+production without explicit acknowledgement. To start a runtime that links the
+Plonky3 feature (`--features backend-plonky3`), pass `--experimental-plonky3`
+or set `CHAIN_PLONKY3_EXPERIMENTAL=1`. Otherwise the prover/verifier
+construction panics with `plonky3 backend is experimental and provides no
+cryptographic soundness`. The flag only unlocks development/testing flows and
+emits a warning banner in `/status/node` so automation can detect the
+experimental mode.【F:rpp/node/src/lib.rs†L347-L383】【F:rpp/proofs/plonky3/experimental.rs†L1-L76】【F:rpp/runtime/node.rs†L140-L188】【F:rpp/runtime/node.rs†L4719-L4741】
+
 ## Validator tooling
 
 Invoke validator-specific helpers through `rpp-node validator`. Subcommands cover

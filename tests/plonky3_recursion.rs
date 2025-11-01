@@ -18,6 +18,12 @@ use rpp_chain::types::{
     pruning_from_previous,
 };
 
+fn enable_experimental_backend() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| rpp_chain::plonky3::experimental::force_enable_for_tests());
+}
+
 fn canonical_pruning_header() -> BlockHeader {
     BlockHeader::new(
         0,
@@ -51,6 +57,7 @@ fn sample_transaction() -> SignedTransaction {
 
 #[test]
 fn plonky3_recursive_flow_roundtrip() {
+    enable_experimental_backend();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
 

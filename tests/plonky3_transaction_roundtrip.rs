@@ -11,6 +11,12 @@ use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::{ChainProof, SignedTransaction, Transaction};
 
+fn enable_experimental_backend() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| rpp_chain::plonky3::experimental::force_enable_for_tests());
+}
+
 fn deterministic_transaction() -> SignedTransaction {
     let mut rng = StdRng::from_seed([23u8; 32]);
     let keypair = Keypair::generate(&mut rng);
@@ -22,6 +28,7 @@ fn deterministic_transaction() -> SignedTransaction {
 
 #[test]
 fn transaction_roundtrip_produces_stable_commitment() {
+    enable_experimental_backend();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();

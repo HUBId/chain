@@ -59,6 +59,8 @@ use crate::ledger::{
 };
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
+#[cfg(feature = "backend-plonky3")]
+use crate::plonky3::experimental as plonky3_experimental;
 use crate::proof_backend::{Blake2sHasher, ProofBytes};
 #[cfg(feature = "prover-stwo")]
 use crate::proof_backend::{
@@ -163,6 +165,8 @@ pub struct NodeStatus {
     pub pending_uptime_proofs: usize,
     pub vrf_metrics: crate::vrf::VrfSelectionMetrics,
     pub tip: Option<BlockMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backend_warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -4732,6 +4736,16 @@ impl NodeInner {
             pending_uptime_proofs: self.uptime_mempool.read().len(),
             vrf_metrics: self.vrf_metrics.read().clone(),
             tip: metadata,
+            backend_warnings: {
+                #[cfg(feature = "backend-plonky3")]
+                {
+                    plonky3_experimental::warnings()
+                }
+                #[cfg(not(feature = "backend-plonky3"))]
+                {
+                    Vec::new()
+                }
+            },
         })
     }
 

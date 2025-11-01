@@ -101,7 +101,7 @@ impl ProofBlob {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Plonky3Verifier;
 
 impl Plonky3Verifier {
@@ -287,6 +287,15 @@ impl Plonky3Verifier {
             Self::decode_proof(&bundle.recursive_proof, "recursive").map_err(ChainError::from)?;
         Self::check_recursive_inputs(&recursive, &commitments, expected_previous_commitment)
             .map_err(ChainError::from)
+    }
+}
+
+impl Default for Plonky3Verifier {
+    fn default() -> Self {
+        if let Err(err) = crate::plonky3::experimental::require_acknowledgement() {
+            panic!("{err}");
+        }
+        Self
     }
 }
 
