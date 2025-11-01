@@ -20,8 +20,10 @@ The loader records the source (CLI, environment, default) alongside the parsed T
 checks can emit precise error messages.【F:rpp/node/src/lib.rs†L960-L1007】
 
 Runtime CLI overrides cover networking and telemetry knobs, including
-`--rpc-listen`, `--rpc-auth-token`, and `--rpc-allowed-origin` for temporarily
-adjusting RPC exposure without editing files.【F:rpp/node/src/lib.rs†L229-L337】
+`--rpc-listen` and `--rpc-auth-token` for temporarily adjusting RPC exposure
+without editing files. Configure browser access by setting
+`network.rpc.allowed_origin` in the TOML profile; there is currently no CLI
+flag for rotating the allow-list.【F:config/validator.toml†L1-L48】【F:rpp/node/src/lib.rs†L229-L337】
 
 ## Template catalogue
 
