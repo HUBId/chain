@@ -18,17 +18,18 @@ jobs:
           set -euo pipefail
           command -v jq >/dev/null 2>&1
           files=(
-            "pipeline_overview.json"
-            "pipeline_wallet_intake.json"
-            "pipeline_proof_validation.json"
-            "pipeline_consensus_finality.json"
-            "pipeline_storage_commit.json"
-            "vrf_overview.json"
-            "vrf_thresholds.json"
+            "dashboards/pipeline_overview.json"
+            "dashboards/pipeline_wallet_intake.json"
+            "dashboards/pipeline_proof_validation.json"
+            "dashboards/pipeline_consensus_finality.json"
+            "dashboards/pipeline_storage_commit.json"
+            "dashboards/vrf_overview.json"
+            "dashboards/vrf_thresholds.json"
+            "observability/pipeline_grafana.json"
           )
           missing=0
           for file in "${files[@]}"; do
-            path="docs/dashboards/${file}"
+            path="docs/${file}"
             if [[ ! -f "${path}" ]]; then
               echo "::error file=${path}::Dashboard export is missing"
               missing=1
