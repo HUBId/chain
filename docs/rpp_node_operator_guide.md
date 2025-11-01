@@ -6,6 +6,22 @@ validator maintenance subcommands. No standalone `rpc-cli` tool exists in this
 workspace—the shipped operator interface is the `rpp-node` CLI and the REST/RPC
 workflows exposed by the running node.
 
+> **⚠️ Production warning:** The `backend-plonky3` feature remains an
+> experimental stub and is not supported in production. The crate now emits a
+> hard compile error whenever `backend-plonky3` is combined with the `prod` or
+> `validator` feature sets, and the release packaging scripts abort if any
+> Plonky3 alias appears in the requested feature list or the compiled metadata.
+> Runtime launches for validator or hybrid roles additionally fail fast when the
+> binary lacks the STWO backend, so production builds must continue to use the
+> official STWO feature set (`--no-default-features --features
+> prod,prover-stwo` or `prover-stwo-simd`). Use the release pipeline checklist
+> to double-check these guards before publishing artefacts.
+> [`feature_guard.rs`](../rpp/node/src/feature_guard.rs) ·
+> [`build_release.sh`](../scripts/build_release.sh) ·
+> [`verify_release_features.sh`](../scripts/verify_release_features.sh) ·
+> [`ensure_prover_backend`](../rpp/node/src/lib.rs) ·
+> [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist)
+
 ## Build and install the CLI
 
 Compile the binary with the release profile and the production feature set. The

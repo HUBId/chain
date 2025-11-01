@@ -20,6 +20,9 @@ All notable changes to this project will be documented in this file.
 - Refresh the Electrs wallet/node blueprint to mirror the post-refactor crate layout and verify every inline citation targets the new module tree.【F:docs/electrs_fork_wallet_node_blueprint.md†L1-L210】
 - Clarify that the STWO backend now lives under `prover/prover_stwo_backend/` and retarget inline citations in the prover docs to the new module path.【F:docs/architecture/prover-backends.md†L8-L55】【F:docs/blueprint_coverage.md†L5-L22】【F:docs/vendor_log.md†L24-L75】【F:docs/DEPS_COMPAT_REPORT.md†L7-L11】
 - Extend the observability runbook with `ProofError::IO` diagnostics for state-sync chunk RPCs, including Prometheus/Log markers and regression coverage pointers.【F:docs/runbooks/observability.md†L7-L26】【F:docs/runbooks/observability.md†L88-L92】
+- Add production callouts that block `backend-plonky3`, reiterate the STWO feature
+  requirements, and link the release pipeline checklist so operators understand
+  the new compile-, packaging-, and runtime guards.【F:docs/rpp_node_operator_guide.md†L7-L23】【F:docs/poseidon_vrf.md†L9-L25】【F:RELEASE.md†L88-L123】
 
 ## [0.0.12] - 2025-08-26
 

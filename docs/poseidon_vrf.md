@@ -7,6 +7,20 @@ tier-specific seed. The resulting digest is signed with the node's VRF secret
 key to produce both the verifiable proof bytes and a 32-byte randomness value
 that consensus routines can rank deterministically.
 
+> **⚠️ Production warning:** Validator deployments must continue to ship with the
+> STWO prover backend (`--no-default-features --features prod,prover-stwo` or
+> `prover-stwo-simd`). The experimental `backend-plonky3` feature is blocked in
+> production: the crate refuses to compile when the stub is paired with the
+> `prod` or `validator` feature sets, the release scripts halt if any Plonky3
+> alias slips into the build, and runtime bootstrap rejects validator or hybrid
+> modes unless the STWO backend is present. Review the release pipeline
+> checklist before promoting binaries so these guardrails are always verified.
+> [`feature_guard.rs`](../rpp/node/src/feature_guard.rs) ·
+> [`build_release.sh`](../scripts/build_release.sh) ·
+> [`verify_release_features.sh`](../scripts/verify_release_features.sh) ·
+> [`ensure_prover_backend`](../rpp/node/src/lib.rs) ·
+> [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist)
+
 ## Poseidon Input Tuple
 The `PoseidonVrfInput` struct captures the blueprint-mandated tuple and exposes
 helpers for digest construction:
