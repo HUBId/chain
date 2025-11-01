@@ -1,0 +1,24 @@
+{
+  "scenarios": {
+    "create": {
+      "avg_tps": 150000.0,
+      "avg_p99_ms": 120.0,
+      "samples": 1
+    },
+    "tenk-random": {
+      "avg_tps": 90000.0,
+      "avg_p99_ms": 180.0,
+      "samples": 1
+    },
+    "zipf": {
+      "avg_tps": 110000.0,
+      "avg_p99_ms": 200.0,
+      "samples": 1
+    },
+    "single": {
+      "avg_tps": 60000.0,
+      "avg_p99_ms": 150.0,
+      "samples": 1
+    }
+  }
+}

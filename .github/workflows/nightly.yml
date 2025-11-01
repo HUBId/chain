@@ -44,3 +44,60 @@ jobs:
         with:
           name: simnet-${{ matrix.name }}
           path: simnet-${{ matrix.name }}.tar.gz
+
+  perf-benchmarks:
+    runs-on: ubuntu-latest
+    needs: simnet
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            batch_size: "1000"
+            number_of_batches: "60"
+            duration_minutes: "2"
+            cache_size: "1500000"
+            update_baseline: "1"
+          - name: stress
+            batch_size: "1500"
+            number_of_batches: "90"
+            duration_minutes: "3"
+            cache_size: "2000000"
+            update_baseline: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Restore baseline cache
+        uses: actions/cache/restore@v4
+        with:
+          path: logs/perf/baseline.json
+          key: perf-baseline
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-perf-${{ matrix.name }}
+          workspaces: |
+            . -> target
+      - name: Run performance benchmarks (${{ matrix.name }})
+        env:
+          PERF_BATCH_SIZE: ${{ matrix.batch_size }}
+          PERF_NUMBER_OF_BATCHES: ${{ matrix.number_of_batches }}
+          PERF_DURATION_MINUTES: ${{ matrix.duration_minutes }}
+          PERF_CACHE_SIZE: ${{ matrix.cache_size }}
+          PERF_UPDATE_BASELINE: ${{ matrix.update_baseline }}
+          PERF_BASELINE_PATH: logs/perf/baseline.json
+        run: ./scripts/ci/run_benchmarks.sh
+      - name: Save baseline cache
+        if: ${{ matrix.update_baseline == '1' }}
+        uses: actions/cache/save@v4
+        with:
+          path: logs/perf/baseline.json
+          key: perf-baseline
+      - name: Package artifacts
+        run: |
+          tar -czf "perf-${{ matrix.name }}.tar.gz" -C logs/perf/${{ github.sha }} .
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ matrix.name }}
+          path: perf-${{ matrix.name }}.tar.gz

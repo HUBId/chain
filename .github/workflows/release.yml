@@ -91,6 +91,24 @@ jobs:
         run: cargo audit --deny warnings
       - name: Test suite (default, STWO, and RPP-Stark backends)
         run: ./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark
+      - name: Restore performance baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: logs/perf/baseline.json
+          key: perf-baseline
+      - name: Performance regression gate
+        env:
+          PERF_BATCH_SIZE: "750"
+          PERF_NUMBER_OF_BATCHES: "30"
+          PERF_DURATION_MINUTES: "1"
+          PERF_CACHE_SIZE: "1000000"
+          PERF_BASELINE_PATH: logs/perf/baseline.json
+        run: ./scripts/ci/run_benchmarks.sh
+      - name: Upload performance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ github.sha }}
+          path: logs/perf/${{ github.sha }}
       - name: Prepare release notes
         run: ./scripts/prepare_changelog.sh --tag "${{ steps.determine_tag.outputs.release_tag }}" --output dist/release-notes.md
       - uses: actions/upload-artifact@v4

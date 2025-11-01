@@ -1,0 +1,82 @@
+{
+  "title": "Performance Capacity",
+  "uid": "performance-capacity",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "5m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "table",
+      "title": "SLO deltas",
+      "description": "Comparison between the latest CI summary (logs/perf/<git_sha>/summary.json) and documented budgets.",
+      "datasource": {
+        "type": "grafana-json-datasource",
+        "uid": "perf-artifacts"
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "center" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "data": {
+            "urlPath": "/firewood/perf/summary",
+            "method": "GET",
+            "queryParams": {
+              "limit": "90"
+            }
+          },
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Resource headroom",
+      "description": "CPU and memory utilisation captured alongside benchmark runs.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 10 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "firewood_benchmark_cpu_utilisation_pct",
+          "legendFormat": "CPU {{scenario}}"
+        },
+        {
+          "refId": "B",
+          "expr": "firewood_benchmark_memory_utilisation_pct",
+          "legendFormat": "Memory {{scenario}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

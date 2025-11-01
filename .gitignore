@@ -2,7 +2,10 @@ target/
 **/*.rs.bk
 data/
 keys/
-logs/
+logs/*
+!logs/perf/
+logs/perf/*
+!logs/perf/baseline.json
 ci-artifacts/
 rpp/*/Cargo.lock
 storage-firewood/Cargo.lock

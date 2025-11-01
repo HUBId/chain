@@ -10,22 +10,23 @@ use std::error::Error;
 use std::time::Instant;
 
 use fastrace::prelude::SpanContext;
-use fastrace::{Span, func_path};
+use fastrace::{func_path, Span};
 use firewood::db::Db;
 use firewood::v2::api::{Db as _, Proposal as _};
 use log::info;
 
 use pretty_duration::pretty_duration;
 
-use crate::{Args, TestRunner};
+use crate::{Args, ScenarioMetrics, ScenarioSummary, TestRunner};
 
 #[derive(Clone)]
 pub struct Create;
 
 impl TestRunner for Create {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db, args: &Args) -> Result<ScenarioSummary, Box<dyn Error>> {
         let keys = args.global_opts.batch_size;
-        let start = Instant::now();
+        let scenario_start = Instant::now();
+        let mut metrics = ScenarioMetrics::new("create", args.global_opts.batch_size);
 
         for key in 0..args.global_opts.number_of_batches {
             let root = Span::root(func_path!(), SpanContext::random());
@@ -33,16 +34,18 @@ impl TestRunner for Create {
 
             let batch = Self::generate_inserts(key * keys, args.global_opts.batch_size);
 
+            let iteration_start = Instant::now();
             let proposal = db.propose(batch).expect("proposal should succeed");
             proposal.commit()?;
+            metrics.record_batch(iteration_start.elapsed());
         }
-        let duration = start.elapsed();
+        let duration = scenario_start.elapsed();
         info!(
             "Generated and inserted {} batches of size {keys} in {}",
             args.global_opts.number_of_batches,
             pretty_duration(&duration, None)
         );
 
-        Ok(())
+        Ok(metrics.finish(duration))
     }
 }

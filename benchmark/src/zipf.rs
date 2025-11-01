@@ -18,7 +18,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use crate::TestRunner;
+use crate::{ScenarioMetrics, ScenarioSummary, TestRunner};
 use firewood::db::{BatchOp, Db};
 use firewood::v2::api::{Db as _, Proposal as _};
 use log::{debug, trace};
@@ -39,7 +39,7 @@ pub struct Args {
 pub struct Zipf;
 
 impl TestRunner for Zipf {
-    fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db, args: &crate::Args) -> Result<ScenarioSummary, Box<dyn Error>> {
         let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
             args.exponent
         } else {
@@ -47,11 +47,12 @@ impl TestRunner for Zipf {
         };
         let rows = (args.global_opts.number_of_batches * args.global_opts.batch_size) as f64;
         let zipf = rand_distr::Zipf::new(rows, exponent).unwrap();
-        let start = Instant::now();
+        let scenario_start = Instant::now();
         let mut batch_id = 0;
+        let mut metrics = ScenarioMetrics::new("zipf", args.global_opts.batch_size);
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
-        while start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
+        while scenario_start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
             let batch: Vec<BatchOp<_, _>> =
                 generate_updates(&rng, batch_id, args.global_opts.batch_size as usize, zipf)
                     .collect();
@@ -71,19 +72,21 @@ impl TestRunner for Zipf {
                     distinct.len()
                 );
             }
+            let iteration_start = Instant::now();
             let proposal = db.propose(batch).expect("proposal should succeed");
             proposal.commit()?;
+            metrics.record_batch(iteration_start.elapsed());
 
             if log::log_enabled!(log::Level::Debug) {
                 debug!(
                     "completed batch {} in {}",
                     batch_id,
-                    pretty_duration(&start.elapsed(), None)
+                    pretty_duration(&scenario_start.elapsed(), None)
                 );
             }
             batch_id += 1;
         }
-        Ok(())
+        Ok(metrics.finish(scenario_start.elapsed()))
     }
 }
 fn generate_updates(

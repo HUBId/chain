@@ -16,12 +16,15 @@ use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use log::LevelFilter;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
+use std::fs;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
@@ -158,7 +161,7 @@ enum TestName {
 }
 
 trait TestRunner {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>>;
+    fn run(&self, db: &Db, args: &Args) -> Result<ScenarioSummary, Box<dyn Error>>;
 
     fn generate_inserts(
         start: u64,
@@ -244,24 +247,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     let db = Db::new(args.global_opts.dbname.clone(), cfg, noop_storage_metrics())
         .expect("db initiation should succeed");
 
-    match args.test_name {
+    let summary = match args.test_name {
         TestName::Create => {
             let runner = create::Create;
-            runner.run(&db, &args)?;
+            runner.run(&db, &args)?
         }
         TestName::TenKRandom => {
             let runner = tenkrandom::TenKRandom;
-            runner.run(&db, &args)?;
+            runner.run(&db, &args)?
         }
         TestName::Zipf(_) => {
             let runner = zipf::Zipf;
-            runner.run(&db, &args)?;
+            runner.run(&db, &args)?
         }
         TestName::Single => {
             let runner = single::Single;
-            runner.run(&db, &args)?;
+            runner.run(&db, &args)?
         }
-    }
+    };
+
+    write_summary(&summary)?;
 
     #[cfg(feature = "prometheus")]
     if args.global_opts.stats_dump {
@@ -271,6 +276,115 @@ fn main() -> Result<(), Box<dyn Error>> {
     fastrace::flush();
 
     Ok(())
+}
+
+fn write_summary(summary: &ScenarioSummary) -> Result<(), Box<dyn Error>> {
+    let mut output_path = PathBuf::from("target/perf-results");
+    fs::create_dir_all(&output_path)?;
+    output_path.push(format!("{}.json", summary.scenario));
+    let writer = fs::File::create(output_path)?;
+    serde_json::to_writer_pretty(writer, summary)?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ScenarioSummary {
+    scenario: &'static str,
+    started_at_unix: u64,
+    total_batches: u64,
+    total_operations: u64,
+    total_duration_seconds: f64,
+    throughput_tps: f64,
+    latency_ms: LatencyPercentiles,
+    latency_samples: usize,
+}
+
+#[derive(Debug, Serialize, Default)]
+struct LatencyPercentiles {
+    p50: f64,
+    p95: f64,
+    p99: f64,
+}
+
+#[derive(Debug)]
+pub(crate) struct ScenarioMetrics {
+    scenario: &'static str,
+    batch_size: u64,
+    latencies_ms: Vec<f64>,
+    total_batches: u64,
+    started_at: SystemTime,
+}
+
+impl ScenarioMetrics {
+    fn new(scenario: &'static str, batch_size: u64) -> Self {
+        Self {
+            scenario,
+            batch_size,
+            latencies_ms: Vec::new(),
+            total_batches: 0,
+            started_at: SystemTime::now(),
+        }
+    }
+
+    fn record_batch(&mut self, duration: Duration) {
+        self.total_batches += 1;
+        self.latencies_ms
+            .push((duration.as_secs_f64() * 1_000.0).max(0.0));
+    }
+
+    fn finish(self, total_duration: Duration) -> ScenarioSummary {
+        let total_ops = self.total_batches.saturating_mul(self.batch_size);
+        let duration_secs = total_duration.as_secs_f64();
+        let throughput = if duration_secs > 0.0 {
+            total_ops as f64 / duration_secs
+        } else {
+            0.0
+        };
+
+        let mut percentiles = LatencyPercentiles::default();
+        if !self.latencies_ms.is_empty() {
+            let mut latencies = self.latencies_ms.clone();
+            latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            percentiles.p50 = percentile(&latencies, 50.0);
+            percentiles.p95 = percentile(&latencies, 95.0);
+            percentiles.p99 = percentile(&latencies, 99.0);
+        }
+
+        let started_at_unix = self
+            .started_at
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        ScenarioSummary {
+            scenario: self.scenario,
+            started_at_unix,
+            total_batches: self.total_batches,
+            total_operations: total_ops,
+            total_duration_seconds: duration_secs,
+            throughput_tps: throughput,
+            latency_ms: percentiles,
+            latency_samples: self.latencies_ms.len(),
+        }
+    }
+}
+
+fn percentile(sorted_latencies: &[f64], percentile: f64) -> f64 {
+    if sorted_latencies.is_empty() {
+        return 0.0;
+    }
+    let clamped = percentile.clamp(0.0, 100.0);
+    let rank = clamped / 100.0 * (sorted_latencies.len() - 1) as f64;
+    let lower_index = rank.floor() as usize;
+    let upper_index = rank.ceil() as usize;
+    if lower_index == upper_index {
+        sorted_latencies[lower_index]
+    } else {
+        let lower = sorted_latencies[lower_index];
+        let upper = sorted_latencies[upper_index];
+        let weight = rank - rank.floor();
+        lower + (upper - lower) * weight
+    }
 }
 
 #[cfg(feature = "prometheus")]

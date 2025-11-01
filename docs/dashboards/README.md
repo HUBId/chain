@@ -53,6 +53,17 @@ file or paste the contents into the dialog. Assign each dashboard to your
 preferred folder and Prometheus datasource (the definitions reference the
 default `prometheus` UID, which can be remapped during import).
 
+## Performance benchmarks
+
+- [`performance_overview.json`](./performance_overview.json)
+- [`performance_capacity.json`](./performance_capacity.json)
+- [Performance dashboard guidance](./performance_trends.md)
+
+The overview dashboard focuses on throughput and latency derived from the CI
+artifacts, while the capacity dashboard overlays SLO deltas with CPU and memory
+utilisation. Follow the linked guidance document to wire the JSON datasource
+that serves the `logs/perf/<git_sha>/summary.json` payloads.
+
 ## VRF selection
 
 Validator operators can import the VRF dashboards described in
