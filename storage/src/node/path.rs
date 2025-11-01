@@ -18,8 +18,9 @@
 use bitflags::bitflags;
 use smallvec::SmallVec;
 use std::fmt::{self, Debug, LowerHex};
-use std::iter::{once, FusedIterator};
+use std::iter::{ExactSizeIterator, FusedIterator};
 use std::ops::Add;
+use std::slice::Iter;
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
@@ -80,7 +81,7 @@ bitflags! {
 
 impl Path {
     /// Return an iterator over the encoded bytes
-    pub fn iter_encoded(&self) -> impl Iterator<Item = u8> {
+    pub fn iter_encoded(&self) -> EncodedPathIter<'_> {
         let mut flags = Flags::empty();
 
         let has_odd_len = self.0.len() & 1 == 1;
@@ -93,9 +94,7 @@ impl Path {
             Some(0)
         };
 
-        once(flags.bits())
-            .chain(extra_byte)
-            .chain(self.0.iter().copied())
+        EncodedPathIter::new(flags.bits(), extra_byte, self.0.iter())
     }
 
     /// Creates a Path from a [Iterator] or other iterator that returns
@@ -139,6 +138,48 @@ impl Path {
         }
     }
 }
+
+#[derive(Debug)]
+pub struct EncodedPathIter<'a> {
+    prefix: Option<u8>,
+    extra: Option<u8>,
+    bytes: Iter<'a, u8>,
+}
+
+impl<'a> EncodedPathIter<'a> {
+    fn new(prefix: u8, extra: Option<u8>, bytes: Iter<'a, u8>) -> Self {
+        Self {
+            prefix: Some(prefix),
+            extra,
+            bytes,
+        }
+    }
+}
+
+impl Iterator for EncodedPathIter<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(prefix) = self.prefix.take() {
+            return Some(prefix);
+        }
+        if let Some(extra) = self.extra.take() {
+            return Some(extra);
+        }
+        self.bytes.next().copied()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.bytes.len()
+            + usize::from(self.prefix.is_some())
+            + usize::from(self.extra.is_some());
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for EncodedPathIter<'_> {}
+
+impl FusedIterator for EncodedPathIter<'_> {}
 
 /// Returns the nibbles in `nibbles_iter` as compressed bytes.
 /// That is, each two nibbles are combined into a single byte.
@@ -205,7 +246,7 @@ impl Iterator for NibblesIterator<'_> {
         if self.is_empty() {
             return None;
         }
-        let result = if self.head.is_multiple_of(2) {
+        let result = if self.head % 2 == 0 {
             #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.head / 2] >> 4) as usize]
         } else {
@@ -256,7 +297,7 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
             return None;
         }
 
-        let result = if self.tail.is_multiple_of(2) {
+        let result = if self.tail % 2 == 0 {
             #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.tail / 2 - 1] & 0xf) as usize]
         } else {

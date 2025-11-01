@@ -69,6 +69,18 @@ def main(argv: List[str]) -> int:
         default=500.0,
         help="Fail if the propagation p95 exceeds this threshold (ms)",
     )
+    parser.add_argument(
+        "--max-duplicate-ratio",
+        type=float,
+        default=0.15,
+        help="Fail if duplicates / receives exceeds this ratio",
+    )
+    parser.add_argument(
+        "--max-mesh-change-ratio",
+        type=float,
+        default=0.2,
+        help="Fail if mesh change events / receives exceeds this ratio",
+    )
     args = parser.parse_args(argv)
 
     failures: List[str] = []
@@ -82,6 +94,30 @@ def main(argv: List[str]) -> int:
         if p95 is not None and p95 > args.max_propagation_p95:
             failures.append(
                 f"{path} propagation p95 {p95:.2f}ms exceeds threshold {args.max_propagation_p95:.2f}ms"
+            )
+
+        total_receives = summary.get("total_receives", 0)
+        duplicates = summary.get("duplicates", 0)
+        if total_receives > 0:
+            duplicate_ratio = duplicates / total_receives
+            if duplicate_ratio > args.max_duplicate_ratio:
+                failures.append(
+                    f"{path} duplicate ratio {duplicate_ratio:.3f} exceeds threshold {args.max_duplicate_ratio:.3f}"
+                )
+
+            mesh_changes = summary.get("mesh_changes") or []
+            mesh_ratio = len(mesh_changes) / total_receives
+            if mesh_ratio > args.max_mesh_change_ratio:
+                failures.append(
+                    f"{path} mesh change ratio {mesh_ratio:.3f} exceeds threshold {args.max_mesh_change_ratio:.3f}"
+                )
+
+        faults = summary.get("faults") or []
+        partition_starts = sum(1 for fault in faults if fault.get("kind") == "partition_start")
+        partition_ends = sum(1 for fault in faults if fault.get("kind") == "partition_end")
+        if partition_starts != partition_ends:
+            failures.append(
+                f"{path} recorded {partition_starts} partition_start faults but {partition_ends} partition_end faults"
             )
 
     if failures:

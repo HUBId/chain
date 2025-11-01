@@ -15,15 +15,17 @@ jobs:
           - name: small-world-smoke
             scenario: tools/simnet/scenarios/small_world_smoke.ron
             summary: summaries/small_world_smoke.json
+            analyze_args: ""
           - name: ring-latency-profile
             scenario: tools/simnet/scenarios/ring_latency_profile.ron
             summary: summaries/ring_poisson.json
+            analyze_args: "--max-propagation-p95 700"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        run: rustup show
+        run: rustup toolchain install 1.83.0 --profile minimal
 
       - name: Run simnet scenario
         run: |
@@ -33,7 +35,7 @@ jobs:
 
       - name: Analyze metrics
         run: |
-          python3 scripts/analyze_simnet.py "target/simnet/${{ matrix.name }}/${{ matrix.summary }}"
+          python3 scripts/analyze_simnet.py "target/simnet/${{ matrix.name }}/${{ matrix.summary }}" ${{ matrix.analyze_args }}
 
       - name: Package artifacts
         run: |
@@ -44,3 +46,37 @@ jobs:
         with:
           name: simnet-${{ matrix.name }}
           path: simnet-${{ matrix.name }}.tar.gz
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1500
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        run: rustup toolchain install 1.83.0 --profile minimal
+
+      - name: Run multinode soak
+        run: |
+          cargo run -p simnet -- --scenario tools/simnet/scenarios/multinode_soak.ron --artifacts-dir target/simnet/multinode-soak
+        env:
+          RUSTFLAGS: "-C debuginfo=0"
+
+      - name: Analyze soak metrics
+        run: |
+          python3 scripts/analyze_simnet.py \
+            --max-propagation-p95 1400 \
+            --max-duplicate-ratio 0.12 \
+            --max-mesh-change-ratio 0.12 \
+            target/simnet/multinode-soak/summaries/multinode_soak.json
+
+      - name: Package soak artifacts
+        run: |
+          tar -czf simnet-multinode-soak.tar.gz -C target/simnet/multinode-soak .
+
+      - name: Upload soak results
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-multinode-soak
+          path: simnet-multinode-soak.tar.gz

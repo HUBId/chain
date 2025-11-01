@@ -41,3 +41,45 @@ jobs:
             echo "One or more dashboard exports are missing."
             exit 1
           fi
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        run: rustup toolchain install 1.83.0 --profile minimal
+
+      - name: Run workspace tests
+        run: cargo test --workspace --exclude prover_stwo_backend --exclude prover
+
+  coverage:
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install toolchain and components
+        run: |
+          rustup toolchain install 1.83.0 --profile minimal
+          rustup component add llvm-tools-preview --toolchain 1.83.0
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Generate coverage report
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --exclude prover_stwo_backend --exclude prover --lcov --output-path coverage/lcov.info
+          cargo llvm-cov report --json --output-path coverage/summary.json
+
+      - name: Enforce coverage thresholds
+        run: python3 tools/ci/check_coverage.py coverage/summary.json
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-artifacts
+          path: coverage
