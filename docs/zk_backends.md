@@ -61,23 +61,28 @@
 - Bei blockbezogenen Prüfungen werden Berichte ausgewertet, Size-Gates geprüft und ungültige Proofs sanktioniert (`punish_invalid_proof`).
 - `RppStarkProofVerifier` mappt Backend-Fehler (`VerificationFailed`, Size-Mismatch) auf `ChainError::Crypto` und hängt den strukturierten Report an die Log-Nachricht an.
 
-## plonky3 (stable)
+## plonky3 (stub scaffolding)
 
 ### Aktivierung
 
-- Optionales Feature `backend-plonky3` aktivieren, z. B. `cargo build --features backend-plonky3` oder `scripts/build.sh --backend plonky3`.
-- Der Prover cached kompakte `BackendProverContext`-Instanzen pro Circuit und aktualisiert bei jedem Lauf die Telemetrie über Cache-Größe, Erfolgs-/Fehlerzähler und Zeitstempel.【F:rpp/proofs/plonky3/prover/mod.rs†L1-L230】
-- Keine zusätzliche CLI-Anerkennung notwendig; Plonky3 verhält sich wie STWO innerhalb derselben Runtime-Profile.【F:rpp/node/src/lib.rs†L240-L360】
+- Optionales Feature `backend-plonky3` aktivieren, z. B. `cargo build --features backend-plonky3` oder `scripts/build.sh --backend plonky3`. Die aktuelle Implementierung nutzt weiterhin das Stub-Backend aus `rpp/proofs/plonky3`, das deterministische Fixtures liefert und keine echten Plonky3-Proofs erzeugt.【F:rpp/proofs/plonky3/README.md†L1-L34】
+- Der Prover cached Platzhalter-Kontexte und aktualisiert Telemetrie-Zähler, damit die Runtime-/UI-Oberflächen bereits strukturiert testen können.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】
+- Keine zusätzliche CLI-Anerkennung notwendig; die Feature-Flags spiegeln die spätere Produktionsverdrahtung wider, obwohl noch keine Vendor-Artefakte eingebunden sind.【F:rpp/node/src/lib.rs†L240-L360】
 
 ### Test- und Interop-Abdeckung
 
-- Unit- und Integrationstests laufen über `scripts/test.sh` (Standard-Matrix). Das Script deckt `--unit` und `--integration` für alle Backends ab.【F:scripts/test.sh†L1-L220】
-- Spezifische Regressionen: `cargo test --features backend-plonky3 --test plonky3_transaction_roundtrip` prüft deterministische Wallet-Flows, `cargo test --features backend-plonky3 --test plonky3_recursion` validiert rekursive Bundles und Tamperingschutz.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】【F:tests/plonky3_recursion.rs†L1-L360】
-- CI-Pipelines (`release`, `nightly`) führen die Plonky3-Suites automatisch mit, sodass Regressionen parallel zu STWO/RPP-Stark auftauchen.【F:.github/workflows/release.yml†L1-L160】
+- Unit- und Integrationstests prüfen das Stub-Backend über `scripts/test.sh`; echte Plonky3-Proofs können ohne Vendor-Artefakte noch nicht erzeugt oder verifiziert werden.【F:scripts/test.sh†L1-L220】【F:rpp/proofs/plonky3/tests.rs†L1-L220】
+- Spezifische Regressionen (`plonky3_transaction_roundtrip`, `plonky3_recursion`) validieren die JSON-/Commitment-Checks des Stubs und dokumentieren offene Validierungen für die spätere echte Integration.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】【F:tests/plonky3_recursion.rs†L1-L360】
+- Der dedizierte Plonky3-CI-Job bleibt deaktiviert, bis die Vendor-Prover/Verifier verfügbar sind und eine reale Proof-Matrix aufgebaut werden kann.
 
 ### Telemetrie & API-Oberfläche
 
-- `Plonky3Prover` aktualisiert eine globale Telemetrie (`cached_circuits`, `proofs_generated`, `failed_proofs`, Zeitstempel), die über RPC abrufbar ist.【F:rpp/proofs/plonky3/prover/mod.rs†L1-L230】
-- `/status/node` liefert diese Daten unter `backend_health.plonky3.prover`; parallel werden die Verifier-Zähler pro Backend ausgewiesen.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/validator_status_response.jsonschema†L1-L220】
-- Die Validator-UI mapped die Felder und zeigt sie in Dashboards an, sodass Operator:innen Proof-Erfolge, Cache-Größe und letzte Fehler nachvollziehen können.【F:validator-ui/src/types.ts†L140-L220】
-- Logs und Metriken nutzen das bestehende `proof_backend="plonky3"`-Labeling, sodass bestehende Telemetrie-Dashboards automatisch aggregieren.【F:rpp/runtime/telemetry/metrics.rs†L760-L900】
+- `Plonky3Prover` aktualisiert weiterhin die Telemetrie (`cached_circuits`, `proofs_generated`, `failed_proofs`, Zeitstempel), damit Operator:innen API-/Dashboard-Pfade testen können, obwohl die Werte aus Stub-Läufen stammen.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】
+- `/status/node` liefert diese Daten unter `backend_health.plonky3.prover`; Verifier-Zähler spiegeln derzeit nur Stub-Verifikationen wider.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/validator_status_response.jsonschema†L1-L220】
+- Die Validator-UI mapped die Felder weiterhin, dient aktuell aber primär zur Verifikation der Telemetrie-Verträge, bis echte Plonky3-Daten verfügbar sind.【F:validator-ui/src/types.ts†L140-L220】
+- Logs und Metriken nutzen das bestehende `proof_backend="plonky3"`-Labeling; Produktionsalarme sollten erst nach Integration der echten Backend-Artefakte aktiviert werden.【F:rpp/runtime/telemetry/metrics.rs†L760-L900】
+
+### Offene Aufgaben
+
+- Vendor-Prover und -Verifier einbinden und die Stub-Implementierung ablösen.
+- CI-Matrix erweitern (`ci-plonky3-matrix`), sobald echte Artefakte vorliegen und reproduzierbare Proof-Läufe möglich sind.【F:rpp/proofs/plonky3/tests.rs†L58-L74】
