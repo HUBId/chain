@@ -4,7 +4,7 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 
 ## 0. Vorbereitungsphase
 - **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module Stub-Implementierungen enthalten (z. B. VRF, BFT, libp2p).
-- **Tooling & CI**: Prüfen, welche Gates der aktuelle Workflow [`CI`](.github/workflows/ci.yml) bereits abdeckt (derzeit nur Dashboard-Validierung) und fehlende Formatierungs-, Lint- oder Test-Jobs (`cargo fmt`, `cargo clippy`, `cargo test --all`) als Folgeaufgaben einplanen. Ziel: Jede Blaupausenaufgabe besitzt mindestens einen automatisierten Test.
+- **Tooling & CI**: Der Workflow [`CI`](.github/workflows/ci.yml) führt neben der Dashboard-Validierung nun `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -D warnings` sowie `cargo test` (inklusive `--no-default-features --features prod,prover-stwo`) aus und ist als erforderliche Statusprüfung hinterlegt. Ziel: Jede Blaupausenaufgabe besitzt mindestens einen automatisierten Test.
 - **Teamabstimmung**: Deliverables pro Phase mit Domain-Teams (Node, Wallet, Proofs, Networking) abklären, gemeinsame Definition-of-Done dokumentieren.
 
 ## 1. Architekturgrundlagen schärfen (Blueprint 2.0)
