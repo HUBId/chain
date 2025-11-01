@@ -23,6 +23,8 @@ jobs:
             "pipeline_proof_validation.json"
             "pipeline_consensus_finality.json"
             "pipeline_storage_commit.json"
+            "vrf_overview.json"
+            "vrf_thresholds.json"
           )
           missing=0
           for file in "${files[@]}"; do

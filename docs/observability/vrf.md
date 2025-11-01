@@ -42,6 +42,16 @@ long-term trend panels.
 5. **Threshold Timeline** – table panel showing `threshold_ratio` alongside
    `threshold_transitions` to audit curve adjustments.
 
+Pre-rendered Grafana dashboards covering these panels live under
+`docs/dashboards/`:
+
+- [`vrf_overview.json`](../dashboards/vrf_overview.json)
+- [`vrf_thresholds.json`](../dashboards/vrf_thresholds.json)
+
+Import them via **Dashboards → New → Import**, then upload the JSON definition
+and map it to your Prometheus datasource (the exports default to the
+`prometheus` UID).
+
 Dashboards should be published under `docs/dashboards/` when rendered. The JSON
 export can be sourced directly from these metrics without additional transforms
 because every instrument already normalises the units and tags.
