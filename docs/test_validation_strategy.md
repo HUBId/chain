@@ -11,7 +11,7 @@ Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wi
 
 ### 1.2 Integrationstests
 - **Wallet-Prover**: Szenarien vom Bau eines Blocks bis zum Generieren aller Teilbeweise. Enthält Varianten für Identitäts-Genesis, normale Transaktionen, Uptime- und Konsensus-Proofs sowie den rekursiven Block-Proof. Für Plonky3 werden die gleichen Szenarien mit aktiviertem Feature `backend-plonky3` ausgeführt.
-- **Backend-Parität (Stub)**: Plonky3-Suites laufen ohne zusätzliche Flags; `scripts/test.sh` beinhaltet den Backend-Lauf standardmäßig neben STWO und RPP-STARK, prüft aber nur die Stub-Artefakte.【F:scripts/test.sh†L1-L220】【F:rpp/proofs/plonky3/README.md†L1-L34】
+- **Backend-Parität (Stub)**: Die Standardläufe von `scripts/test.sh` decken `default`, `stwo` und `rpp-stark` ab; Plonky3 wird nur via Opt-in (`--backend plonky3`) gegen das Stub-Backend ausgeführt und prüft ausschließlich Fixtures sowie Commitment-Hooks.【F:.github/workflows/release.yml†L55-L86】【F:scripts/test.sh†L15-L121】【F:rpp/proofs/plonky3/README.md†L1-L34】
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
 
@@ -21,12 +21,12 @@ Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wi
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
 
 ## 2. Cross-Backend-Parität
-- **Feature-Matrix (Stub)**: Plonky3-Läufe sind Bestandteil der Standard-Matrix; `scripts/test.sh` führt STWO-, Plonky3- und RPP-Stark-Suites parallel aus, wobei Plonky3 weiterhin den Stub nutzt, bis Vendor-Artefakte bereitstehen.
+- **Feature-Matrix (Stub)**: Die Standard-Matrix umfasst `default`, `stwo` und `rpp-stark`; Plonky3 bleibt ein manueller Opt-in-Lauf gegen das Stub-Backend, bis Vendor-Artefakte bereitstehen.【F:.github/workflows/release.yml†L55-L86】【F:scripts/test.sh†L15-L121】
 - **Kompatibilitäts-Vektoren**: Gemeinsame Testvektoren (bincode-Dateien) stellen sicher, dass beide Backends identische öffentliche Inputs erzeugen.
 - **Regression**: Bei Fehlern in einem Backend wird der Testfall dupliziert, um Backend-spezifische Regressionen nachvollziehbar zu machen.
 
-### 2.1 Plonky3 in der Standard-Matrix
-- **Automatischer Lauf**: Plonky3-Tests laufen in der Standard-Matrix (`scripts/test.sh --unit --integration`), sodass neue Regressionen automatisch neben STWO und RPP-STARK auffallen.【F:scripts/test.sh†L1-L220】
+### 2.1 Plonky3 als manueller Opt-in
+- **Ad-hoc-Läufe**: Plonky3-Tests werden bei Bedarf mit `scripts/test.sh --backend plonky3 --unit --integration` oder den gezielten `cargo test`-Kommandos aus dem Stub-Testplan gestartet und laufen weiterhin ausschließlich gegen das Stub-Backend.【F:scripts/test.sh†L15-L210】【F:docs/testing/plonky3_experimental_testplan.md†L13-L35】
 
 ## 3. Performance- und Ressourcenanalyse
 - **Benchmark-Suite**: Nutzung von `criterion`-Benchmarks für Prover- und Verifier-Laufzeiten; getrennt nach Circuit-Typ und Backend.
@@ -35,8 +35,7 @@ Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wi
 
 ## 4. CI/CD-Integration
 - **GitHub Actions Workflows**:
-  - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all` aus, sodass Standard-, STWO-, Plonky3- und
-    RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden.【F:.github/workflows/release.yml†L1-L160】【F:scripts/test.sh†L1-L220】
+  - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark` aus und deckt damit die stabile Matrix ab; Plonky3 bleibt aufgrund des Stub-Status außen vor.【F:.github/workflows/release.yml†L55-L86】
   - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
     um Syntaxfehler frühzeitig zu entdecken. **TODO:** Erweiterung um Format-, Lint- und Testläufe sobald Ressourcen für die
     Rust-Builds reserviert sind.
@@ -52,11 +51,14 @@ Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wi
     in einer dedizierten Workflow-Umgebung.
   - `tools/simnet/scenarios/*.ron`: Zusätzliche Netzwerkszenarien können lokal per `cargo run -p simnet -- --scenario …`
     getestet werden und sind in der Roadmap als Kandidaten für eine Workflow-Erweiterung vermerkt.
+  - `scripts/test.sh --backend plonky3 --unit --integration`: Manuelle Stub-Läufe zur Absicherung von Fixtures,
+    Commitment-Checks und Telemetrie-Hooks, solange kein echter Plonky3-Prover verfügbar ist.【F:scripts/test.sh†L15-L210】【F:docs/testing/plonky3_experimental_testplan.md†L13-L35】
 - **Artefaktverwaltung**: Speicherung generierter Beispiel-Proofs und Logs zur Reproduktion fehlschlagender Runs.
 - **Planungs-Backlink**: Ergänzende CI-Erweiterungen werden im [Roadmap Implementation Plan](./roadmap_implementation_plan.md)
   verfolgt, damit neue Suites konsistent dokumentiert und priorisiert werden.
 - **Geplanter CI-Task**: Nach Abschluss der Plonky3-Backend-Arbeiten wird ein dedizierter Workflow-Task (`ci-plonky3-matrix`)
-  wieder sämtliche Backends inklusive Plonky3 parallel ausführen und damit die vollständige Matrix reaktivieren.
+  wieder sämtliche Backends inklusive Plonky3 parallel ausführen und damit die vollständige Matrix reaktivieren. Tracking siehe
+  [Ticket `ci-plonky3-matrix`](./testing/plonky3_experimental_testplan.md#offene-arbeitsschritte).
 
 ## 5. Dokumentation & Review-Prozess
 - **Testprotokolle**: Jeder Release-Kandidat benötigt ein Protokoll mit ausgeführten Testläufen und Ergebnissen.
