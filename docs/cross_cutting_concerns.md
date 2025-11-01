@@ -84,7 +84,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 
 ### 4.1 Testpyramide
 1. **Unit-Tests**: Deterministische Tests für VRF-Thresholds, Reward-Berechnung, Reputation-/Timetoke-Funktionen.
-2. **Property-Based Tests**: Proptest-Szenarien decken `ConsensusRound::new` (Quorum, Fallback-Pfade), Reward-Distribution (`distribute_rewards`) und Evidence-Slashings (`submit_evidence`/`slash`) ab. Die Suites laufen mit den Standard-Features (`prover-stwo`) sowie der Minimal-Feature-Matrix über `scripts/test.sh --integration`.
+2. **Property-Based Tests**: Proptest-Szenarien decken `ConsensusRound::new` (Quorum, Fallback-Pfade), Reward-Distribution (`distribute_rewards`) und Evidence-Slashings (`submit_evidence`/`slash`) ab. Die Suites laufen mit der Standard-Feature-Matrix (Mock-Backend über `prover-mock`) sowie dem `backend-rpp-stark`-Pfad, ausgelöst durch den Default-Backendlauf von `scripts/test.sh --integration`.【F:scripts/test.sh†L24-L109】【F:scripts/test.sh†L176-L273】
 3. **Integrationstests**: Simulierte Konsensrunden mit Mock-Netzwerk, um Quorum und Proof-Embedding zu verifizieren.
 4. **Systemtests / Testnet**: Mehrknoten-Simulation mit realem Netzwerkstack und Telemetrie-Sammlung.
 5. **Fuzzing**: Eingabe-Fuzzing für Netzwerk-Nachrichten und Proof-Verifizierer.
@@ -98,7 +98,7 @@ Dieses Dokument fasst übergreifende Anforderungen für die vollständige Umsetz
 ### 4.3 Testdaten & Fixtures
 * Generierung deterministischer Seeds für VRF-Tests, Reputationsprofile, Timetoke-Snapshots.
 * Nutzung synthetischer Netzwerkevents (z. B. Delay, Packet Loss) für Stabilitätsprüfungen.
-* Dummy-Recursive-Proofs zur Validierung der Einbettung, bevor echte STWO-Proofs vorliegen.
+* Dummy-Recursive-Proofs zur Validierung der Einbettung, bevor echte STWO-Proofs vorliegen. STWO-basierte Läufe müssen explizit über `scripts/test.sh --backend stwo --integration` oder die entsprechenden Cargo-Feature-Flags optiert werden, da der Default-Backend-Matrixlauf nur Mock- und RPP-STARK-Pfade abdeckt.【F:scripts/test.sh†L24-L109】【F:scripts/test.sh†L176-L273】
 
 ## 5. Betriebs- & Rollout-Aspekte
 
