@@ -44,3 +44,31 @@ the request was accepted and why.【F:rpp/rpc/src/routes/state.rs†L1-L26】【
 The pruning runbooks document how to adjust cadence, inspect receipts, and
 monitor the status stream, rounding out the operational story for the automated
 worker.【F:docs/runbooks/pruning.md†L1-L120】【F:docs/runbooks/pruning_operations.md†L1-L120】
+
+## Root integrity and failure handling
+
+NodeStore accessors now differentiate between an intentionally empty trie and a
+root that could not be fetched from disk. `NodeStore<Committed>::root_node`
+returns `Ok(None)` when the revision is empty and propagates any `FileIoError`
+from the underlying storage backend instead of silently returning
+`None`.【F:storage/src/nodestore/mod.rs†L642-L701】 The mutable and immutable
+variants retain the same behaviour, with immutable readers re-emitting storage
+errors so callers can react accordingly.【F:storage/src/nodestore/mod.rs†L669-L701】
+
+The trie utilities rely on this guarantee to surface corruption during proofs or
+Merkle traversals. Helper functions such as `Merkle::try_root` bubble the
+`FileIoError` rather than masking it, ensuring that snapshot ingestion or proof
+verification halts when the committed root is unreadable.【F:firewood/src/merkle.rs†L127-L138】
+
+Two new metrics aid incident response:
+
+- `firewood.nodestore.root.read_errors` counts committed or immutable root reads
+  that failed with I/O errors.【F:storage/src/nodestore/mod.rs†L661-L701】
+- `firewood.snapshot.ingest.failures{reason="…"}` records missing proofs,
+  checksum mismatches, or verification failures observed during snapshot
+  ingestion.【F:storage-firewood/src/lifecycle.rs†L18-L37】【F:storage-firewood/src/lifecycle.rs†L238-L276】
+
+Operators should treat any increment of these counters as a hard failure. The
+observability runbook documents how to correlate the metrics with WAL recovery
+attempts (`firewood.recovery.runs` / `firewood.recovery.active`) and which
+manual checks to perform before resuming ingestion.【F:docs/runbooks/observability.md†L9-L38】【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】

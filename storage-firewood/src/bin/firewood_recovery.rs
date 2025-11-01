@@ -15,6 +15,14 @@ use storage_firewood::{
 };
 use tempfile::TempDir;
 
+struct RecoveryGuard;
+
+impl Drop for RecoveryGuard {
+    fn drop(&mut self) {
+        metrics::gauge!("firewood.recovery.active").decrement(1.0);
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct RecoveryReport {
     wal_corruption_detected: bool,
@@ -55,6 +63,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let report_path = parse_report_path();
 
     println!("🔥 Starting Firewood recovery drill");
+
+    metrics::describe_counter!(
+        "firewood.recovery.runs",
+        "count of Firewood recovery workflows"
+    );
+    metrics::counter!("firewood.recovery.runs", "phase" => "start").increment(1);
+    metrics::describe_gauge!(
+        "firewood.recovery.active",
+        "number of active Firewood recovery workflows"
+    );
+    metrics::gauge!("firewood.recovery.active").increment(1.0);
+    let _guard = RecoveryGuard;
 
     let workspace = TempDir::new()?;
     let data_dir = workspace.path().join("data");
@@ -145,6 +165,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         "📄 Recovery drill report written to {}",
         report_path.display()
     );
+
+    metrics::counter!("firewood.recovery.runs", "phase" => "complete").increment(1);
 
     Ok(())
 }

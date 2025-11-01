@@ -12,6 +12,15 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
 
 - `rpp/node`, `rpp/wallet`, and `rpp/consensus` now enable the `prover/prover_stwo_backend` crate whenever the `prover-stwo` feature is active, replacing their previous interface-only relationship. The `prover-mock` feature continues to keep the backend disabled.
 
+## Storage
+
+- Committed and immutable nodestore readers now surface `FileIoError` on root
+  reads instead of treating them as empty tries. Snapshot ingestion reports the
+  exact failure reason via `firewood.snapshot.ingest.failures`, and recovery
+  cycles advertise their lifecycle using the new `firewood.recovery.*`
+  telemetry, backed by regression tests that reject missing proofs or checksum
+  mismatches.【F:storage/src/nodestore/mod.rs†L642-L701】【F:storage-firewood/src/lifecycle.rs†L238-L276】【F:storage-firewood/src/bin/firewood_recovery.rs†L62-L110】【F:storage-firewood/src/lifecycle.rs†L310-L352】【F:storage/src/nodestore/mod.rs†L909-L942】
+
 ## Documentation
 
 - Added [Validator Quickstart](docs/validator_quickstart.md) and
