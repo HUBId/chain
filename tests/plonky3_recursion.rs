@@ -14,8 +14,8 @@ use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::rpp::GlobalStateCommitments;
 use rpp_chain::types::{
-    BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
-    pruning_from_previous,
+    pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
+    SignedTransaction, Transaction,
 };
 
 fn enable_experimental_backend() {
@@ -138,10 +138,12 @@ fn plonky3_recursive_flow_roundtrip() {
     // Recursive proof must embed the same sub-proofs inside its witness payload.
     if let ChainProof::Plonky3(value) = &bundle.recursive_proof {
         let parsed = Plonky3Proof::from_value(value).unwrap();
-        assert!(!parsed.proof.is_empty());
+        assert!(!parsed.payload.proof_blob.is_empty());
+        let verifying_key = crypto::verifying_key("recursive").unwrap();
+        let verifying_hash = blake3::hash(&verifying_key);
         assert_eq!(
-            parsed.verifying_key,
-            crypto::verifying_key("recursive").unwrap()
+            parsed.payload.metadata.verifying_key_hash,
+            *verifying_hash.as_bytes()
         );
         let public_inputs = value
             .get("public_inputs")

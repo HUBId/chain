@@ -25,87 +25,102 @@ pub enum BackendError {
     PublicInputDigestMismatch(String),
     #[error("FRI transcript digest mismatch for {0} circuit")]
     FriDigestMismatch(String),
+    #[error("proof metadata security bits mismatch for {0} circuit")]
+    SecurityParameterMismatch(String),
+    #[error("proof metadata GPU flag mismatch for {0} circuit")]
+    GpuModeMismatch(String),
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;
 
 #[derive(Clone, Debug)]
-pub struct ProofBundle {
-    verifying_key: Vec<u8>,
-    public_inputs: Vec<u8>,
-    proof_blob: Vec<u8>,
+pub struct VerifyingKey {
+    bytes: Vec<u8>,
+    hash: [u8; 32],
 }
 
-impl ProofBundle {
-    pub fn verifying_key(&self) -> &[u8] {
-        &self.verifying_key
+impl VerifyingKey {
+    pub fn from_bytes(bytes: Vec<u8>, circuit: &str) -> BackendResult<Self> {
+        if bytes.is_empty() {
+            return Err(BackendError::MissingVerifyingKey(circuit.to_string()));
+        }
+        Ok(Self {
+            hash: *blake3::hash(&bytes).as_bytes(),
+            bytes,
+        })
     }
 
-    pub fn public_inputs(&self) -> &[u8] {
-        &self.public_inputs
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
-    pub fn proof_blob(&self) -> &[u8] {
-        &self.proof_blob
-    }
-
-    pub fn into_parts(self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-        (self.verifying_key, self.public_inputs, self.proof_blob)
+    pub fn hash(&self) -> [u8; 32] {
+        self.hash
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct Circuit {
-    name: String,
-    verifying_key: Vec<u8>,
-    proving_key: Vec<u8>,
+pub struct ProvingKey {
+    bytes: Vec<u8>,
+    hash: [u8; 32],
+}
+
+impl ProvingKey {
+    pub fn from_bytes(bytes: Vec<u8>, circuit: &str) -> BackendResult<Self> {
+        if bytes.is_empty() {
+            return Err(BackendError::MissingProvingKey(circuit.to_string()));
+        }
+        Ok(Self {
+            hash: *blake3::hash(&bytes).as_bytes(),
+            bytes,
+        })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn hash(&self) -> [u8; 32] {
+        self.hash
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ProofMetadata {
     verifying_key_hash: [u8; 32],
-    proving_key_hash: [u8; 32],
+    public_inputs_hash: [u8; 32],
+    fri_digest: [u8; 32],
     security_bits: u32,
     use_gpu: bool,
 }
 
-impl Circuit {
-    pub fn keygen(
-        name: impl Into<String>,
-        verifying_key: Vec<u8>,
-        proving_key: Vec<u8>,
+impl ProofMetadata {
+    pub fn new(
+        verifying_key_hash: [u8; 32],
+        public_inputs_hash: [u8; 32],
+        fri_digest: [u8; 32],
         security_bits: u32,
         use_gpu: bool,
-    ) -> BackendResult<Self> {
-        let name = name.into();
-        if name.is_empty() {
-            return Err(BackendError::EmptyCircuit);
-        }
-        if verifying_key.is_empty() {
-            return Err(BackendError::MissingVerifyingKey(name.clone()));
-        }
-        if proving_key.is_empty() {
-            return Err(BackendError::MissingProvingKey(name.clone()));
-        }
-        let verifying_key_hash = *blake3::hash(&verifying_key).as_bytes();
-        let proving_key_hash = *blake3::hash(&proving_key).as_bytes();
-        Ok(Self {
-            name,
-            verifying_key,
-            proving_key,
+    ) -> Self {
+        Self {
             verifying_key_hash,
-            proving_key_hash,
+            public_inputs_hash,
+            fri_digest,
             security_bits,
             use_gpu,
-        })
+        }
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn verifying_key_hash(&self) -> &[u8; 32] {
+        &self.verifying_key_hash
     }
 
-    pub fn verifying_key(&self) -> &[u8] {
-        &self.verifying_key
+    pub fn public_inputs_hash(&self) -> &[u8; 32] {
+        &self.public_inputs_hash
     }
 
-    pub fn proving_key(&self) -> &[u8] {
-        &self.proving_key
+    pub fn fri_digest(&self) -> &[u8; 32] {
+        &self.fri_digest
     }
 
     pub fn security_bits(&self) -> u32 {
@@ -114,6 +129,117 @@ impl Circuit {
 
     pub fn use_gpu(&self) -> bool {
         self.use_gpu
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Proof {
+    proof_blob: Vec<u8>,
+    fri_transcript: Vec<u8>,
+    openings: Vec<u8>,
+    metadata: ProofMetadata,
+}
+
+impl Proof {
+    pub fn from_parts(
+        circuit: &str,
+        proof_blob: Vec<u8>,
+        fri_transcript: Vec<u8>,
+        openings: Vec<u8>,
+        metadata: ProofMetadata,
+    ) -> BackendResult<Self> {
+        if proof_blob.len() != PROOF_BLOB_LEN {
+            return Err(BackendError::InvalidProofLength {
+                circuit: circuit.to_string(),
+                expected: PROOF_BLOB_LEN,
+                actual: proof_blob.len(),
+            });
+        }
+        let (key_segment, rest) = proof_blob.split_at(32);
+        if key_segment != metadata.verifying_key_hash() {
+            return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
+        }
+        let (inputs_segment, fri_segment) = rest.split_at(32);
+        if inputs_segment != metadata.public_inputs_hash() {
+            return Err(BackendError::PublicInputDigestMismatch(circuit.to_string()));
+        }
+        if fri_segment != metadata.fri_digest() {
+            return Err(BackendError::FriDigestMismatch(circuit.to_string()));
+        }
+        Ok(Self {
+            proof_blob,
+            fri_transcript,
+            openings,
+            metadata,
+        })
+    }
+
+    pub fn proof_blob(&self) -> &[u8] {
+        &self.proof_blob
+    }
+
+    pub fn fri_transcript(&self) -> &[u8] {
+        &self.fri_transcript
+    }
+
+    pub fn openings(&self) -> &[u8] {
+        &self.openings
+    }
+
+    pub fn metadata(&self) -> &ProofMetadata {
+        &self.metadata
+    }
+
+    pub fn into_parts(self) -> (Vec<u8>, Vec<u8>, Vec<u8>, ProofMetadata) {
+        (
+            self.proof_blob,
+            self.fri_transcript,
+            self.openings,
+            self.metadata,
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ProverContext {
+    name: String,
+    verifying_key: VerifyingKey,
+    proving_key: ProvingKey,
+    security_bits: u32,
+    use_gpu: bool,
+}
+
+impl ProverContext {
+    pub fn new(
+        name: impl Into<String>,
+        verifying_key: VerifyingKey,
+        proving_key: ProvingKey,
+        security_bits: u32,
+        use_gpu: bool,
+    ) -> BackendResult<Self> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(BackendError::EmptyCircuit);
+        }
+        Ok(Self {
+            name,
+            verifying_key,
+            proving_key,
+            security_bits,
+            use_gpu,
+        })
+    }
+
+    pub fn circuit(&self) -> &str {
+        &self.name
+    }
+
+    pub fn parameters(&self) -> (u32, bool) {
+        (self.security_bits, self.use_gpu)
+    }
+
+    pub fn verifying_key(&self) -> &VerifyingKey {
+        &self.verifying_key
     }
 
     fn transcript_message(&self, commitment: &str, encoded_inputs: &[u8]) -> Vec<u8> {
@@ -125,55 +251,122 @@ impl Circuit {
         transcript
     }
 
-    pub fn prove(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<ProofBundle> {
+    pub fn prove(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<Proof> {
         let message = self.transcript_message(commitment, encoded_inputs);
-        let mut proof = Vec::with_capacity(PROOF_BLOB_LEN);
-        proof.extend_from_slice(&self.verifying_key_hash);
         let inputs_digest = blake3::hash(encoded_inputs);
-        proof.extend_from_slice(inputs_digest.as_bytes());
-        let mut fri_hasher = Hasher::new_keyed(&self.proving_key_hash);
+        let mut fri_hasher = Hasher::new_keyed(&self.verifying_key.hash);
         fri_hasher.update(&message);
         let fri_digest = fri_hasher.finalize();
-        proof.extend_from_slice(fri_digest.as_bytes());
-        Ok(ProofBundle {
+
+        let metadata = ProofMetadata::new(
+            self.verifying_key.hash(),
+            *inputs_digest.as_bytes(),
+            *fri_digest.as_bytes(),
+            self.security_bits,
+            self.use_gpu,
+        );
+
+        let mut proof_blob = Vec::with_capacity(PROOF_BLOB_LEN);
+        proof_blob.extend_from_slice(metadata.verifying_key_hash());
+        proof_blob.extend_from_slice(metadata.public_inputs_hash());
+        proof_blob.extend_from_slice(metadata.fri_digest());
+
+        let mut fri_transcript = Vec::with_capacity(message.len() + self.proving_key.bytes().len());
+        fri_transcript.extend_from_slice(&message);
+        fri_transcript.extend_from_slice(self.proving_key.bytes());
+
+        let mut openings_hasher = Hasher::new_keyed(metadata.public_inputs_hash());
+        openings_hasher.update(self.proving_key.bytes());
+        openings_hasher.update(&fri_transcript);
+        let openings_digest = openings_hasher.finalize();
+        let openings = openings_digest.as_bytes().to_vec();
+
+        Proof::from_parts(&self.name, proof_blob, fri_transcript, openings, metadata)
+    }
+
+    pub fn verifier(&self) -> VerifierContext {
+        VerifierContext {
+            name: self.name.clone(),
             verifying_key: self.verifying_key.clone(),
-            public_inputs: encoded_inputs.to_vec(),
-            proof_blob: proof,
+            security_bits: self.security_bits,
+            use_gpu: self.use_gpu,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifierContext {
+    name: String,
+    verifying_key: VerifyingKey,
+    security_bits: u32,
+    use_gpu: bool,
+}
+
+impl VerifierContext {
+    pub fn new(
+        name: impl Into<String>,
+        verifying_key: VerifyingKey,
+        security_bits: u32,
+        use_gpu: bool,
+    ) -> BackendResult<Self> {
+        let name = name.into();
+        if name.is_empty() {
+            return Err(BackendError::EmptyCircuit);
+        }
+        Ok(Self {
+            name,
+            verifying_key,
+            security_bits,
+            use_gpu,
         })
+    }
+
+    pub fn circuit(&self) -> &str {
+        &self.name
+    }
+
+    pub fn verifying_key(&self) -> &VerifyingKey {
+        &self.verifying_key
     }
 
     pub fn verify(
         &self,
         commitment: &str,
-        verifying_key: &[u8],
         encoded_inputs: &[u8],
-        proof: &[u8],
+        proof: &Proof,
     ) -> BackendResult<()> {
-        if verifying_key != self.verifying_key {
+        if proof.metadata().security_bits() != self.security_bits {
+            return Err(BackendError::SecurityParameterMismatch(self.name.clone()));
+        }
+        if proof.metadata().use_gpu() != self.use_gpu {
+            return Err(BackendError::GpuModeMismatch(self.name.clone()));
+        }
+        if proof.metadata().verifying_key_hash() != &self.verifying_key.hash {
             return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
         }
-        if proof.len() != PROOF_BLOB_LEN {
+        if proof.proof_blob().len() != PROOF_BLOB_LEN {
             return Err(BackendError::InvalidProofLength {
                 circuit: self.name.clone(),
                 expected: PROOF_BLOB_LEN,
-                actual: proof.len(),
+                actual: proof.proof_blob().len(),
             });
         }
-        let (key_hash_segment, rest) = proof.split_at(32);
-        let expected_key_hash = blake3::hash(verifying_key);
-        if key_hash_segment != expected_key_hash.as_bytes() {
-            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
-        }
-        let (inputs_segment, fri_segment) = rest.split_at(32);
-        let expected_inputs = blake3::hash(encoded_inputs);
-        if inputs_segment != expected_inputs.as_bytes() {
+        let inputs_digest = blake3::hash(encoded_inputs);
+        if proof.metadata().public_inputs_hash() != inputs_digest.as_bytes() {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
         }
-        let message = self.transcript_message(commitment, encoded_inputs);
-        let mut fri_hasher = Hasher::new_keyed(&self.proving_key_hash);
+        let message = {
+            let mut transcript =
+                Vec::with_capacity(self.name.len() + commitment.len() + encoded_inputs.len());
+            transcript.extend_from_slice(self.name.as_bytes());
+            transcript.extend_from_slice(commitment.as_bytes());
+            transcript.extend_from_slice(encoded_inputs);
+            transcript
+        };
+        let mut fri_hasher = Hasher::new_keyed(&self.verifying_key.hash);
         fri_hasher.update(&message);
         let expected_fri = fri_hasher.finalize();
-        if fri_segment != expected_fri.as_bytes() {
+        if proof.metadata().fri_digest() != expected_fri.as_bytes() {
             return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
         Ok(())

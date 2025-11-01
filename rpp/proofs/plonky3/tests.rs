@@ -7,14 +7,15 @@ use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
 use crate::plonky3::circuit::pruning::PruningWitness;
+use crate::plonky3::params::Plonky3Parameters;
 use crate::plonky3::prover::Plonky3Prover;
 use crate::plonky3::verifier::Plonky3Verifier;
 use crate::plonky3::{crypto, proof::Plonky3Proof};
 use crate::proof_system::{ProofProver, ProofVerifier};
 use crate::rpp::GlobalStateCommitments;
 use crate::types::{
-    BlockHeader, BlockProofBundle, ChainProof, PruningProof, SignedTransaction, Transaction,
-    pruning_from_previous,
+    pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
+    SignedTransaction, Transaction,
 };
 use rpp_pruning::Envelope;
 
@@ -169,13 +170,23 @@ fn transaction_proof_roundtrip() {
         ChainProof::Plonky3(value) => Plonky3Proof::from_value(value).unwrap(),
         ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
     };
+    let verifying_key = crypto::verifying_key("transaction").unwrap();
+    let verifying_hash = blake3_hash(&verifying_key);
+    assert_eq!(parsed.payload.proof_blob.len(), crypto::PROOF_BLOB_LEN);
+    assert_eq!(&parsed.payload.proof_blob[..32], verifying_hash.as_bytes());
     assert_eq!(
-        parsed.verifying_key,
-        crypto::verifying_key("transaction").unwrap()
+        parsed.payload.metadata.verifying_key_hash,
+        *verifying_hash.as_bytes()
     );
-    assert_eq!(parsed.proof.len(), crypto::PROOF_BLOB_LEN);
-    let verifying_hash = blake3_hash(&parsed.verifying_key);
-    assert_eq!(&parsed.proof[..32], verifying_hash.as_bytes());
+    let (_, encoded_inputs) = crypto::canonical_public_inputs(&parsed.public_inputs).unwrap();
+    let inputs_hash = blake3_hash(&encoded_inputs);
+    assert_eq!(
+        parsed.payload.metadata.public_inputs_hash,
+        *inputs_hash.as_bytes()
+    );
+    let params = Plonky3Parameters::default();
+    assert_eq!(parsed.payload.metadata.security_bits, params.security_bits);
+    assert_eq!(parsed.payload.metadata.use_gpu, params.use_gpu_acceleration);
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.commitment, computed);
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(
@@ -293,7 +304,11 @@ fn recursive_bundle_verification_detects_tampering() {
     let mut bad_key_bundle = bundle.clone();
     if let ChainProof::Plonky3(value) = &mut bad_key_bundle.recursive_proof {
         if let Some(object) = value.as_object_mut() {
-            object.insert("verifying_key".into(), json!("AA=="));
+            if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+                if let Some(metadata) = payload.get_mut("metadata").and_then(Value::as_object_mut) {
+                    metadata.insert("verifying_key_hash".into(), json!("00".repeat(32)));
+                }
+            }
         }
     }
     assert!(verifier.verify_bundle(&bad_key_bundle, None).is_err());
@@ -370,7 +385,9 @@ fn recursive_roundtrip_spans_state_and_transactions() {
     let mut broken_state = state_proof.clone();
     if let ChainProof::Plonky3(value) = &mut broken_state {
         if let Some(object) = value.as_object_mut() {
-            object.insert("proof".into(), json!("ZG9nZ29nb28="));
+            if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+                payload.insert("proof_blob".into(), json!("ZG9nZ29nb28="));
+            }
         }
     }
     let broken_bundle = BlockProofBundle::new(

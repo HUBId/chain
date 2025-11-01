@@ -43,11 +43,13 @@ fn transaction_roundtrip_produces_stable_commitment() {
     };
     let parsed = Plonky3Proof::from_value(value).unwrap();
     assert_eq!(parsed.circuit, "transaction");
+    let verifying_key = crypto::verifying_key("transaction").unwrap();
+    let verifying_hash = blake3::hash(&verifying_key);
+    assert!(!parsed.payload.proof_blob.is_empty());
     assert_eq!(
-        parsed.verifying_key,
-        crypto::verifying_key("transaction").unwrap()
+        parsed.payload.metadata.verifying_key_hash,
+        *verifying_hash.as_bytes()
     );
-    assert!(!parsed.proof.is_empty());
 
     let commitment = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(commitment, parsed.commitment);
@@ -104,7 +106,10 @@ fn transaction_roundtrip_rejects_truncated_proof() {
     let mut tampered = proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.proof.truncate(parsed.proof.len().saturating_sub(1));
+        parsed
+            .payload
+            .proof_blob
+            .truncate(parsed.payload.proof_blob.len().saturating_sub(1));
         *value = parsed.into_value().unwrap();
     }
 
