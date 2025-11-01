@@ -64,11 +64,11 @@ mod tests {
     use rand::{rngs::StdRng, SeedableRng};
     use tempfile::tempdir;
 
-    use crate::runtime::RuntimeMetrics;
     use crate::proof_system::ProofVerifierRegistry;
     use crate::proofs::stwo::tests::official_integration::{
         populate_wallet_state, recorded_transaction_proof,
     };
+    use crate::runtime::RuntimeMetrics;
     use crate::storage::Storage;
 
     #[test]

@@ -361,9 +361,9 @@ mod tests {
         use crate::stwo::proof::{
             CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
         };
+        use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
         #[cfg(feature = "prover-stwo")]
         use uuid::Uuid;
-        use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
 
         fn sample_stwo_proof() -> StarkProof {
             let pruning_binding_digest =
@@ -383,9 +383,11 @@ mod tests {
                 zsi_root: "66".repeat(32),
                 proof_root: "77".repeat(32),
                 pruning_binding_digest,
-                pruning_segment_commitments: vec![
-                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x34u8; DIGEST_LENGTH]).prefixed_bytes(),
-                ],
+                pruning_segment_commitments: vec![TaggedDigest::new(
+                    PROOF_SEGMENT_TAG,
+                    [0x34u8; DIGEST_LENGTH],
+                )
+                .prefixed_bytes()],
                 block_height: 1,
             };
             StarkProof {

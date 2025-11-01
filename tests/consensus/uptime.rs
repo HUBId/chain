@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use blake3::Hasher;
 use rpp_consensus::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend, ProofBytes,
-    VerifyingKey,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    ProofBytes, VerifyingKey,
 };
 use rpp_consensus::reputation::{MalachiteReputationManager, UptimeObservation};
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
@@ -93,11 +93,8 @@ fn uptime_manager_credits_observations() {
     let ledger = build_ledger(&[(validator.as_str(), 10, 3, 0.4)]);
     let mut manager = MalachiteReputationManager::new(ledger);
 
-    let outcome = manager.ingest_observation(UptimeObservation::new(
-        validator.clone(),
-        0,
-        6 * 3_600,
-    ));
+    let outcome =
+        manager.ingest_observation(UptimeObservation::new(validator.clone(), 0, 6 * 3_600));
 
     assert_eq!(outcome.credited_hours, Some(6));
     assert!(outcome.slashing_trigger.is_none());
@@ -119,19 +116,12 @@ fn uptime_manager_rejects_overlapping_windows() {
     let ledger = build_ledger(&[(validator.as_str(), 15, 2, 0.2)]);
     let mut manager = MalachiteReputationManager::new(ledger);
 
-    let first = manager.ingest_observation(UptimeObservation::new(
-        validator.clone(),
-        0,
-        3_600,
-    ));
+    let first = manager.ingest_observation(UptimeObservation::new(validator.clone(), 0, 3_600));
     assert_eq!(first.credited_hours, Some(1));
     assert!(first.slashing_trigger.is_none());
 
-    let second = manager.ingest_observation(UptimeObservation::new(
-        validator.clone(),
-        1_800,
-        5_400,
-    ));
+    let second =
+        manager.ingest_observation(UptimeObservation::new(validator.clone(), 1_800, 5_400));
     assert!(second.slashing_trigger.is_some());
 
     let triggers = manager.take_slashing_triggers();
@@ -149,11 +139,8 @@ fn consensus_state_applies_uptime_observations() {
     let backend = consensus_backend();
     let mut state = ConsensusState::new(genesis, backend).expect("state init");
 
-    let outcome = state.ingest_uptime_observation(UptimeObservation::new(
-        validator.clone(),
-        0,
-        12 * 3_600,
-    ));
+    let outcome =
+        state.ingest_uptime_observation(UptimeObservation::new(validator.clone(), 0, 12 * 3_600));
 
     assert_eq!(outcome.credited_hours, Some(12));
     assert!(outcome.slashing_trigger.is_none());
@@ -180,18 +167,12 @@ fn consensus_state_tracks_slashing_triggers() {
     let backend = consensus_backend();
     let mut state = ConsensusState::new(genesis, backend).expect("state init");
 
-    let first = state.ingest_uptime_observation(UptimeObservation::new(
-        validator.clone(),
-        0,
-        3_600,
-    ));
+    let first =
+        state.ingest_uptime_observation(UptimeObservation::new(validator.clone(), 0, 3_600));
     assert_eq!(first.credited_hours, Some(1));
 
-    let second = state.ingest_uptime_observation(UptimeObservation::new(
-        validator.clone(),
-        1_800,
-        5_400,
-    ));
+    let second =
+        state.ingest_uptime_observation(UptimeObservation::new(validator.clone(), 1_800, 5_400));
     assert!(second.slashing_trigger.is_some());
 
     let triggers = state.take_slashing_triggers();

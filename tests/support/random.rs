@@ -17,7 +17,9 @@ const ENV_VAR: &str = "RPP_TEST_SEED";
 /// in the environment for subsequent calls, and logged for debugging.
 pub fn seeded_rng(test_name: &str) -> StdRng {
     let seed = match env::var(ENV_VAR) {
-        Ok(value) => value.parse::<u64>().expect("RPP_TEST_SEED must be a valid u64"),
+        Ok(value) => value
+            .parse::<u64>()
+            .expect("RPP_TEST_SEED must be a valid u64"),
         Err(_) => {
             let mut os_rng = OsRng;
             let seed = os_rng.next_u64();

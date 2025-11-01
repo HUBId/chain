@@ -13,8 +13,8 @@
 
 use crate::logger::warn;
 use crate::{
-    BranchNode, HashType, Hashable, Preimage, TrieHash, ValueDigest, hashednode::HasUpdate,
-    logger::trace,
+    hashednode::HasUpdate, logger::trace, BranchNode, HashType, Hashable, Preimage, TrieHash,
+    ValueDigest,
 };
 use bitfield::bitfield;
 use bytes::BytesMut;

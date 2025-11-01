@@ -27,19 +27,11 @@ use rpp_pruning::Envelope;
 
 const TRANSACTION_SEED: [u8; 32] = [7u8; 32];
 
-fn enable_experimental_backend() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| crate::plonky3::experimental::force_enable_for_tests());
-}
-
 fn test_prover() -> Plonky3Prover {
-    enable_experimental_backend();
     Plonky3Prover::new()
 }
 
 fn test_verifier() -> Plonky3Verifier {
-    enable_experimental_backend();
     Plonky3Verifier::default()
 }
 

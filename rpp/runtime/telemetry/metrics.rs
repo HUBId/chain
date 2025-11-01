@@ -3,21 +3,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use firewood_storage::{
+    StorageMetrics as StorageMetricsFacade, WalFlushOutcome as StorageWalFlushOutcome,
+};
+use http::StatusCode;
 use log::warn;
 use opentelemetry::global;
 use opentelemetry::metrics::noop::NoopMeterProvider;
-use firewood_storage::{
-    StorageMetrics as StorageMetricsFacade,
-    WalFlushOutcome as StorageWalFlushOutcome,
-};
-use http::StatusCode;
 use opentelemetry::metrics::{Counter, Histogram, Meter};
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::Resource;
 
-use crate::config::TelemetryConfig;
 use super::exporter::TelemetryExporterBuilder;
+use crate::config::TelemetryConfig;
 
 const METER_NAME: &str = "rpp-runtime";
 const MILLIS_PER_SECOND: f64 = 1_000.0;
@@ -116,9 +115,7 @@ impl RuntimeMetrics {
             rpc_request_total: RpcCounter::new(
                 meter
                     .u64_counter("rpp.runtime.rpc.request.total")
-                    .with_description(
-                        "Total RPC handler invocations grouped by method and result",
-                    )
+                    .with_description("Total RPC handler invocations grouped by method and result")
                     .with_unit("1")
                     .build(),
             ),
@@ -231,7 +228,8 @@ impl RuntimeMetrics {
 
     /// Record the latency and result of an RPC handler invocation.
     pub fn record_rpc_request(&self, method: RpcMethod, result: RpcResult, duration: Duration) {
-        self.rpc_request_latency.record_duration(method, result, duration);
+        self.rpc_request_latency
+            .record_duration(method, result, duration);
         self.rpc_request_total.add(method, result, 1);
     }
 
@@ -584,8 +582,7 @@ impl MetricLabel for ConsensusStage {
 }
 
 /// Wallet RPC surface area that is traced via metrics.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum WalletRpcMethod {
     /// Fetches account or balance data.
     GetBalance,
@@ -712,11 +709,7 @@ impl StorageMetricsFacade for RuntimeMetrics {
         RuntimeMetrics::increment_header_flushes(self);
     }
 
-    fn record_wal_flush_duration(
-        &self,
-        outcome: StorageWalFlushOutcome,
-        duration: Duration,
-    ) {
+    fn record_wal_flush_duration(&self, outcome: StorageWalFlushOutcome, duration: Duration) {
         let outcome = WalFlushOutcome::from(outcome);
         RuntimeMetrics::record_wal_flush_duration(self, outcome, duration);
     }
@@ -770,7 +763,7 @@ impl MetricLabel for WalFlushOutcome {
 pub enum ProofKind {
     /// Production STWO proving backend.
     Stwo,
-    /// Experimental Plonky3 proving backend.
+    /// Production Plonky3 proving backend.
     Plonky3,
     /// Deterministic mock backend for tests.
     Mock,

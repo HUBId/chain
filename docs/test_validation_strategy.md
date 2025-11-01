@@ -1,6 +1,6 @@
 # Test- und Validierungsstrategie
 
-Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überprüft wird. Sie kombiniert klassische Unit-Tests, umfangreiche Integrationstests, deterministische Rekursionsprüfungen und Performance-Analysen. Alle Schritte sind so formuliert, dass sie das produktionsreife STWO-Backend abdecken und gleichzeitig die Plonky3-Stubs in einem klar markierten Experimentalmodus halten.
+Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig überprüft werden. Sie kombiniert klassische Unit-Tests, umfangreiche Integrationstests, deterministische Rekursionsprüfungen und Performance-Analysen. Alle Schritte adressieren die produktionsreifen Backends; Plonky3 wird wie STWO in denselben Pipelines verifiziert und liefert identische Telemetrie-Hooks.
 
 ## 1. Testebenen
 
@@ -11,7 +11,7 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 
 ### 1.2 Integrationstests
 - **Wallet-Prover**: Szenarien vom Bau eines Blocks bis zum Generieren aller Teilbeweise. Enthält Varianten für Identitäts-Genesis, normale Transaktionen, Uptime- und Konsensus-Proofs sowie den rekursiven Block-Proof. Für Plonky3 werden die gleichen Szenarien mit aktiviertem Feature `backend-plonky3` ausgeführt.
-- **Experimentelle Absicherung**: Plonky3-Suites setzen vor Prover-/Verifier-Aufrufen `CHAIN_PLONKY3_EXPERIMENTAL=1` oder starten den Runtime-CLI-Aufruf mit `--experimental-plonky3`, andernfalls brechen die Tests mit der erwarteten Fehlermeldung "no cryptographic soundness" ab.【F:rpp/proofs/plonky3/experimental.rs†L1-L76】【F:scripts/test.sh†L195-L205】
+- **Backend-Parität**: Plonky3-Suites laufen ohne zusätzliche Flags; `scripts/test.sh` beinhaltet den Backend-Lauf standardmäßig neben STWO und RPP-STARK.【F:scripts/test.sh†L1-L220】
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
 
@@ -21,12 +21,12 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
 
 ## 2. Cross-Backend-Parität
-- **Feature-Matrix**: Plonky3-Läufe sind aktuell kein Bestandteil der Standard-Matrix; sie werden ausschließlich nach explizitem Opt-in ausgeführt. Standardmäßig decken die Pipelines weiterhin die STWO- und RPP-Stark-Backends ab.
+- **Feature-Matrix**: Plonky3-Läufe sind Bestandteil der Standard-Matrix; `scripts/test.sh` führt STWO-, Plonky3- und RPP-Stark-Suites parallel aus.
 - **Kompatibilitäts-Vektoren**: Gemeinsame Testvektoren (bincode-Dateien) stellen sicher, dass beide Backends identische öffentliche Inputs erzeugen.
 - **Regression**: Bei Fehlern in einem Backend wird der Testfall dupliziert, um Backend-spezifische Regressionen nachvollziehbar zu machen.
 
-### 2.1 Manuelle Aktivierung von Plonky3
-- **Opt-in-Schritt**: Plonky3-Tests werden manuell per `scripts/test.sh --backend plonky3` (ggf. kombiniert mit weiteren Flags wie `--all`) gestartet. Zusätzlich muss weiterhin `CHAIN_PLONKY3_EXPERIMENTAL=1` gesetzt oder das CLI mit `--experimental-plonky3` ausgeführt werden, damit die Läufe nicht mit dem erwarteten Hinweis auf fehlende kryptographische Sicherheit abbrechen. Dieser Schritt ist verpflichtend, bis der produktionsreife Plonky3-Prover verfügbar ist.
+### 2.1 Plonky3 in der Standard-Matrix
+- **Automatischer Lauf**: Plonky3-Tests laufen in der Standard-Matrix (`scripts/test.sh --unit --integration`), sodass neue Regressionen automatisch neben STWO und RPP-STARK auffallen.【F:scripts/test.sh†L1-L220】
 
 ## 3. Performance- und Ressourcenanalyse
 - **Benchmark-Suite**: Nutzung von `criterion`-Benchmarks für Prover- und Verifier-Laufzeiten; getrennt nach Circuit-Typ und Backend.
@@ -35,10 +35,8 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 
 ## 4. CI/CD-Integration
 - **GitHub Actions Workflows**:
-  - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend
-    rpp-stark` aus, sodass Standard-, STWO- und RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden. Plonky3
-    ist bewusst nicht Bestandteil dieser Matrix, bis der produktive Prover vorliegt und die Pipeline wieder auf Opt-out
-    wechseln kann.
+  - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all` aus, sodass Standard-, STWO-, Plonky3- und
+    RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden.【F:.github/workflows/release.yml†L1-L160】【F:scripts/test.sh†L1-L220】
   - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
     um Syntaxfehler frühzeitig zu entdecken. **TODO:** Erweiterung um Format-, Lint- und Testläufe sobald Ressourcen für die
     Rust-Builds reserviert sind.

@@ -188,11 +188,7 @@ impl Ledger {
         ledger
     }
 
-    pub fn configure_reward_pools(
-        &self,
-        accounts: TreasuryAccounts,
-        weights: WitnessPoolWeights,
-    ) {
+    pub fn configure_reward_pools(&self, accounts: TreasuryAccounts, weights: WitnessPoolWeights) {
         *self.treasury_accounts.write() = accounts;
         *self.witness_pool_weights.write() = weights;
     }
@@ -957,10 +953,7 @@ impl Ledger {
         self.reward_with_source(address, reward, RewardSource::Validator)
     }
 
-    pub fn distribute_witness_payouts(
-        &self,
-        payouts: &BTreeMap<Address, u64>,
-    ) -> ChainResult<()> {
+    pub fn distribute_witness_payouts(&self, payouts: &BTreeMap<Address, u64>) -> ChainResult<()> {
         for (address, reward) in payouts {
             self.reward_with_source(address, *reward, RewardSource::Witness)?;
         }
@@ -1427,7 +1420,10 @@ mod tests {
         use crate::consensus_engine::state::{TreasuryAccounts, WitnessPoolWeights};
         use std::collections::BTreeMap;
 
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/rpp/storage/tests/rewards.rs"));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/rpp/storage/tests/rewards.rs"
+        ));
     }
     use crate::consensus::{evaluate_vrf, BftVote, BftVoteKind, SignedBftVote};
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};

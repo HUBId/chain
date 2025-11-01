@@ -1,11 +1,11 @@
+use crate::proof_backend::Blake2sHasher;
 use hex;
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 
 use crate::errors::{ChainError, ChainResult};
 
-use super::Address;
 use super::proofs::ChainProof;
+use super::Address;
 
 /// Metadata describing the uptime observation a wallet wants to attest to.
 #[derive(Clone, Debug, Serialize, Deserialize)]

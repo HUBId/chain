@@ -8,22 +8,22 @@
 //! backpressure on gossip ingress, and all spawned tasks are tracked so they can
 //! be cancelled during shutdown via [`NodeHandle`].
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hex;
 use serde_json;
-use tokio::sync::{Mutex, broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch, Mutex};
 use tokio::time;
 use tracing::field::display;
-use tracing::{Span, debug, info, info_span, warn};
 use tracing::Instrument;
+use tracing::{debug, info, info_span, warn, Span};
 
 use crate::errors::{ChainError, ChainResult};
 use crate::node::{NodeHandle, PipelineObservation};
 use crate::reputation::Tier;
-use crate::runtime::node_runtime::{NodeEvent, NodeHandle as P2pHandle, node::MetaTelemetryReport};
+use crate::runtime::node_runtime::{node::MetaTelemetryReport, NodeEvent, NodeHandle as P2pHandle};
 use crate::types::{Address, Block, TransactionProofBundle};
 use crate::wallet::workflows::TransactionWorkflow;
 use rpp_p2p::GossipTopic;
@@ -555,41 +555,48 @@ impl PipelineOrchestrator {
         let ingest_shutdown = shutdown_rx.clone();
         let submissions_rx = self.submissions_rx.clone();
         let ingest_span = pipeline_task_span("ingest");
-        tokio::spawn(async move {
-            let receiver = submissions_rx
-                .lock()
-                .await
-                .take()
-                .expect("pipeline orchestrator already running");
-            PipelineOrchestrator::ingest_loop(node, metrics, receiver, ingest_shutdown).await;
-        }
-        .instrument(ingest_span));
+        tokio::spawn(
+            async move {
+                let receiver = submissions_rx
+                    .lock()
+                    .await
+                    .take()
+                    .expect("pipeline orchestrator already running");
+                PipelineOrchestrator::ingest_loop(node, metrics, receiver, ingest_shutdown).await;
+            }
+            .instrument(ingest_span),
+        );
 
         let observe_node = self.node.clone();
         let observe_metrics = self.metrics.clone();
         let observe_shutdown = shutdown_rx.clone();
         let observe_errors = self.errors.clone();
         let observe_span = pipeline_task_span("observe");
-        tokio::spawn(async move {
-            PipelineOrchestrator::observe_loop(
-                observe_node,
-                observe_metrics,
-                observe_shutdown,
-                observe_errors,
-            )
-            .await;
-        }
-        .instrument(observe_span));
+        tokio::spawn(
+            async move {
+                PipelineOrchestrator::observe_loop(
+                    observe_node,
+                    observe_metrics,
+                    observe_shutdown,
+                    observe_errors,
+                )
+                .await;
+            }
+            .instrument(observe_span),
+        );
 
         if let Some(handle) = self.p2p.clone() {
             let gossip_metrics = self.metrics.clone();
             let gossip_shutdown = shutdown_rx;
             let gossip_span = pipeline_task_span("gossip");
-            tokio::spawn(async move {
-                let events = handle.subscribe();
-                PipelineOrchestrator::gossip_loop(gossip_metrics, events, gossip_shutdown).await;
-            }
-            .instrument(gossip_span));
+            tokio::spawn(
+                async move {
+                    let events = handle.subscribe();
+                    PipelineOrchestrator::gossip_loop(gossip_metrics, events, gossip_shutdown)
+                        .await;
+                }
+                .instrument(gossip_span),
+            );
         }
     }
 

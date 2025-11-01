@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use assert_cmd::Command;
 use predicates::prelude::*;
 use serial_test::serial;
@@ -566,7 +566,7 @@ fn fwdctl_check_empty_db() -> Result<()> {
 #[test]
 #[serial]
 fn fwdctl_check_db_with_data() -> Result<()> {
-    use rand::{Rng, distr::Alphanumeric};
+    use rand::{distr::Alphanumeric, Rng};
     let rng = firewood_storage::SeededRng::from_env_or_random();
     let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
 

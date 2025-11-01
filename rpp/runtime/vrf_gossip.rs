@@ -5,7 +5,7 @@ use thiserror::Error;
 use crate::errors::ChainError;
 use crate::types::Address;
 use crate::vrf::{
-    self, PoseidonVrfInput, VrfProof, VrfSubmission, vrf_public_key_from_hex, vrf_public_key_to_hex,
+    self, vrf_public_key_from_hex, vrf_public_key_to_hex, PoseidonVrfInput, VrfProof, VrfSubmission,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,10 +31,7 @@ pub enum GossipVrfError {
     #[error("vrf gossip missing public key")]
     MissingPublicKey,
     #[error("invalid vrf gossip hex encoding for {field}: {reason}")]
-    InvalidHex {
-        field: &'static str,
-        reason: String,
-    },
+    InvalidHex { field: &'static str, reason: String },
     #[error("invalid vrf gossip length for {field}")]
     InvalidLength { field: &'static str },
     #[error("invalid vrf gossip proof: {0}")]
@@ -51,10 +48,7 @@ impl From<GossipVrfError> for ChainError {
 
 impl GossipVrfSubmission {
     pub fn from_submission(submission: &VrfSubmission) -> Self {
-        let public_key = submission
-            .public_key
-            .as_ref()
-            .map(vrf_public_key_to_hex);
+        let public_key = submission.public_key.as_ref().map(vrf_public_key_to_hex);
         Self {
             address: submission.address.clone(),
             public_key,
@@ -70,18 +64,20 @@ impl GossipVrfSubmission {
     }
 
     pub fn into_submission(self) -> Result<VrfSubmission, GossipVrfError> {
-        let last_block_header = decode_hex_array(&self.input.last_block_header, "last_block_header")?;
+        let last_block_header =
+            decode_hex_array(&self.input.last_block_header, "last_block_header")?;
         let tier_seed = decode_hex_array(&self.input.tier_seed, "tier_seed")?;
         let input = PoseidonVrfInput::new(last_block_header, self.input.epoch, tier_seed);
-        let public_key = match self.public_key {
-            Some(hex) => Some(
-                vrf_public_key_from_hex(&hex).map_err(|err| GossipVrfError::InvalidHex {
-                    field: "public_key",
-                    reason: err.to_string(),
-                })?,
-            ),
-            None => None,
-        };
+        let public_key =
+            match self.public_key {
+                Some(hex) => Some(vrf_public_key_from_hex(&hex).map_err(|err| {
+                    GossipVrfError::InvalidHex {
+                        field: "public_key",
+                        reason: err.to_string(),
+                    }
+                })?),
+                None => None,
+            };
         Ok(VrfSubmission {
             address: self.address,
             public_key,
@@ -114,7 +110,10 @@ pub fn gossip_to_submission(payload: GossipVrfSubmission) -> Result<VrfSubmissio
     payload.into_submission()
 }
 
-fn decode_hex_array<const N: usize>(value: &str, field: &'static str) -> Result<[u8; N], GossipVrfError> {
+fn decode_hex_array<const N: usize>(
+    value: &str,
+    field: &'static str,
+) -> Result<[u8; N], GossipVrfError> {
     let bytes = Vec::from_hex(value).map_err(|err| GossipVrfError::InvalidHex {
         field,
         reason: err.to_string(),

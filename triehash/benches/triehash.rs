@@ -15,7 +15,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Criterion};
 use ethereum_types::H256;
 use firewood_triehash::trie_root;
 use keccak_hasher::KeccakHasher;

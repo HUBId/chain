@@ -34,11 +34,11 @@ mod proofs;
 mod value;
 
 use std::collections::HashMap;
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{c_char, CStr, CString};
 use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::RwLock;
 
 use firewood::db::{Db, Proposal};
 use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, Proposal as _};

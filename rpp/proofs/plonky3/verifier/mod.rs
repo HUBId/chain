@@ -222,9 +222,6 @@ impl Plonky3Verifier {
 
 impl Default for Plonky3Verifier {
     fn default() -> Self {
-        if let Err(err) = crate::plonky3::experimental::require_acknowledgement() {
-            panic!("{err}");
-        }
         Self
     }
 }

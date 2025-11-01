@@ -161,8 +161,6 @@ case "$BACKEND" in
   plonky3)
     BACKEND_ARGS=("--features" "backend-plonky3")
     TOOLCHAIN_ARGS=()
-    export CHAIN_PLONKY3_EXPERIMENTAL=1
-    echo "warning: plonky3 backend selected – running in experimental mode without cryptographic guarantees" >&2
     ;;
   rpp-stark)
     BACKEND_ARGS=("--features" "backend-rpp-stark")

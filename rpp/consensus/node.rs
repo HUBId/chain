@@ -11,14 +11,14 @@
 //!   proposer randomness is both unbiased and replay-safe across epochs.
 use std::collections::{HashMap, HashSet};
 
-use malachite::Natural;
-use malachite::base::num::arithmetic::traits::DivRem;
-use serde::{Deserialize, Serialize};
 use crate::proof_backend::Blake2sHasher;
+use malachite::base::num::arithmetic::traits::DivRem;
+use malachite::Natural;
+use serde::{Deserialize, Serialize};
 
 use crate::crypto::{
-    VrfPublicKey, VrfSecretKey, address_from_public_key, public_key_from_hex, signature_from_hex,
-    verify_signature, vrf_public_key_to_hex,
+    address_from_public_key, public_key_from_hex, signature_from_hex, verify_signature,
+    vrf_public_key_to_hex, VrfPublicKey, VrfSecretKey,
 };
 use crate::errors::{ChainError, ChainResult};
 use crate::reputation::Tier;

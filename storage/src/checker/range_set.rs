@@ -591,7 +591,7 @@ mod test_range_set {
 #[expect(clippy::unwrap_used)]
 mod test_linear_address_range_set {
 
-    use crate::{FreeListParent, TrieNodeParent, area_index};
+    use crate::{area_index, FreeListParent, TrieNodeParent};
 
     use super::*;
     use test_case::test_case;

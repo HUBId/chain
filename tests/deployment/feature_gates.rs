@@ -32,7 +32,10 @@ fn mainnet_bundle_progression_is_monotonic() -> Result<(), Box<dyn Error>> {
     let bundle: RolloutBundle = toml::from_str(&contents)?;
 
     assert_eq!(bundle.version, 1, "unexpected config bundle version");
-    assert_eq!(bundle.bundle, "mainnet-rollout", "bundle identifier drifted");
+    assert_eq!(
+        bundle.bundle, "mainnet-rollout",
+        "bundle identifier drifted"
+    );
     assert!(
         bundle.description.contains("Staged rollout"),
         "bundle description should explain staged rollout purpose"

@@ -1,7 +1,7 @@
 #![cfg(feature = "backend-rpp-stark")]
 
-pub mod felt;
 pub mod digest;
+pub mod felt;
 pub mod hash;
 pub mod public_inputs;
 

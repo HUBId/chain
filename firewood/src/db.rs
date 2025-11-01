@@ -16,9 +16,9 @@ use crate::v2::api::{
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
-    CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, StorageMetricsHandle, TrieReader,
-    noop_storage_metrics,
+    noop_storage_metrics, CheckOpt, CheckerReport, Committed, FileBacked, FileIoError,
+    HashedNodeReader, ImmutableProposal, NodeStore, Parentable, ReadableStorage,
+    StorageMetricsHandle, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;

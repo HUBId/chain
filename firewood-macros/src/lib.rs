@@ -6,7 +6,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{ItemFn, Lit, ReturnType, Token, parse_macro_input};
+use syn::{parse_macro_input, ItemFn, Lit, ReturnType, Token};
 
 /// Arguments for the metrics macro
 struct MetricsArgs {
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn test_generated_code_structure() {
         // Test that the proc macro generates the expected code structure
-        use syn::{ItemFn, parse_quote};
+        use syn::{parse_quote, ItemFn};
 
         let input: ItemFn = parse_quote! {
             fn test_function() -> Result<(), &'static str> {

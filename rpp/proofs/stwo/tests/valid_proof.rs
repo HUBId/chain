@@ -1,8 +1,8 @@
 #![cfg(feature = "prover-stwo")]
 
 use crate::stwo::air::AirDefinition;
-use crate::stwo::circuit::{ExecutionTrace, StarkCircuit};
 use crate::stwo::circuit::transaction::TransactionCircuit;
+use crate::stwo::circuit::{ExecutionTrace, StarkCircuit};
 use crate::stwo::params::{FieldElement, StarkParameters};
 use crate::stwo::proof::{
     CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
@@ -191,7 +191,10 @@ fn invalid_proof_of_work_is_rejected() {
         .fri_proof
         .to_official()
         .expect("fixture should contain a fri proof");
-    assert_ne!(commitment_proof.proof_of_work, 0, "fixture should include non-zero pow");
+    assert_ne!(
+        commitment_proof.proof_of_work, 0,
+        "fixture should include non-zero pow"
+    );
     commitment_proof.proof_of_work = 0;
     corrupted.commitment_proof = CommitmentSchemeProofData::from_official(&commitment_proof);
 
@@ -200,8 +203,7 @@ fn invalid_proof_of_work_is_rejected() {
         .check_fri(&corrupted, &public_inputs, &trace, &air)
         .expect_err("proof of work verification should fail after corruption");
     assert!(
-        err
-            .to_string()
+        err.to_string()
             .contains("proof of work verification failed"),
         "unexpected error message: {err}"
     );

@@ -97,10 +97,7 @@ impl<'a> TelemetryExporterBuilder<'a> {
     }
 
     pub fn trace_sampler(&self) -> Sampler {
-        let ratio = self
-            .config
-            .trace_sample_ratio
-            .clamp(0.0, 1.0);
+        let ratio = self.config.trace_sample_ratio.clamp(0.0, 1.0);
 
         if ratio <= 0.0 {
             Sampler::AlwaysOff
@@ -129,8 +126,7 @@ impl<'a> TelemetryExporterBuilder<'a> {
         };
 
         let mut metadata = MetadataMap::new();
-        let value = MetadataValue::from_str(&token)
-            .context("invalid telemetry auth token")?;
+        let value = MetadataValue::from_str(&token).context("invalid telemetry auth token")?;
         metadata.insert("authorization", value);
         Ok(Some(metadata))
     }
@@ -167,8 +163,9 @@ impl<'a> TelemetryExporterBuilder<'a> {
         }
 
         if let Some(ca) = tls.ca_certificate.as_ref() {
-            let pem = fs::read(ca)
-                .with_context(|| format!("failed to read telemetry CA certificate {}", ca.display()))?;
+            let pem = fs::read(ca).with_context(|| {
+                format!("failed to read telemetry CA certificate {}", ca.display())
+            })?;
             let certificate = reqwest::Certificate::from_pem(&pem)
                 .context("failed to parse telemetry CA certificate")?;
             builder = builder.add_root_certificate(certificate);
@@ -178,10 +175,15 @@ impl<'a> TelemetryExporterBuilder<'a> {
             tls.client_certificate.as_ref(),
             tls.client_private_key.as_ref(),
         ) {
-            let mut identity_bytes = fs::read(cert)
-                .with_context(|| format!("failed to read telemetry client certificate {}", cert.display()))?;
-            let key_bytes = fs::read(key)
-                .with_context(|| format!("failed to read telemetry client key {}", key.display()))?;
+            let mut identity_bytes = fs::read(cert).with_context(|| {
+                format!(
+                    "failed to read telemetry client certificate {}",
+                    cert.display()
+                )
+            })?;
+            let key_bytes = fs::read(key).with_context(|| {
+                format!("failed to read telemetry client key {}", key.display())
+            })?;
             identity_bytes.extend_from_slice(&key_bytes);
             let identity = reqwest::Identity::from_pem(&identity_bytes)
                 .context("failed to parse telemetry client identity")?;
@@ -210,8 +212,9 @@ impl<'a> TelemetryExporterBuilder<'a> {
         }
 
         if let Some(ca) = tls.ca_certificate.as_ref() {
-            let pem = fs::read(ca)
-                .with_context(|| format!("failed to read telemetry CA certificate {}", ca.display()))?;
+            let pem = fs::read(ca).with_context(|| {
+                format!("failed to read telemetry CA certificate {}", ca.display())
+            })?;
             config = config.ca_certificate(Certificate::from_pem(pem));
         }
 
@@ -219,10 +222,15 @@ impl<'a> TelemetryExporterBuilder<'a> {
             tls.client_certificate.as_ref(),
             tls.client_private_key.as_ref(),
         ) {
-            let mut identity_bytes = fs::read(cert)
-                .with_context(|| format!("failed to read telemetry client certificate {}", cert.display()))?;
-            let key_bytes = fs::read(key)
-                .with_context(|| format!("failed to read telemetry client key {}", key.display()))?;
+            let mut identity_bytes = fs::read(cert).with_context(|| {
+                format!(
+                    "failed to read telemetry client certificate {}",
+                    cert.display()
+                )
+            })?;
+            let key_bytes = fs::read(key).with_context(|| {
+                format!("failed to read telemetry client key {}", key.display())
+            })?;
             identity_bytes.extend_from_slice(&key_bytes);
             config = config.identity(Identity::from_pem(identity_bytes));
         }

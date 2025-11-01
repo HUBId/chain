@@ -4,13 +4,13 @@
 // hash benchmarks; run with 'cargo bench'
 
 use criterion::profiler::Profiler;
-use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::merkle::Merkle;
 use firewood::v2::api::{Db as _, Proposal as _};
-use firewood_storage::{MemStore, NodeStore, noop_storage_metrics};
+use firewood_storage::{noop_storage_metrics, MemStore, NodeStore};
 use pprof::ProfilerGuard;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{distr::Alphanumeric, Rng};
 use std::fs::File;
 use std::iter::repeat_with;
 use std::os::raw::c_int;

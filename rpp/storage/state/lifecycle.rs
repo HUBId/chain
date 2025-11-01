@@ -15,7 +15,7 @@ pub trait StateLifecycleService {
     /// Apply the account snapshot for the provided block height to Firewood and
     /// return the resulting state transition receipt.
     fn apply_block(&self, height: u64, accounts: &[Account])
-    -> ChainResult<StateTransitionReceipt>;
+        -> ChainResult<StateTransitionReceipt>;
 
     /// Produce a STWO state transition proof linking the supplied roots and
     /// witness data.

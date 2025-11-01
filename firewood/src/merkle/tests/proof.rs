@@ -1,8 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::Preimage;
 use firewood_storage::logger::debug;
+use firewood_storage::Preimage;
 
 use super::*;
 

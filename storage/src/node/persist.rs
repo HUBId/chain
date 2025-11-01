@@ -215,7 +215,7 @@ enum MaybePersisted {
 mod test {
     use nonzero_ext::nonzero;
 
-    use crate::{LeafNode, MemStore, Node, NodeStore, Path, noop_storage_metrics};
+    use crate::{noop_storage_metrics, LeafNode, MemStore, Node, NodeStore, Path};
 
     use super::*;
 

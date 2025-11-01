@@ -27,7 +27,7 @@ use std::{
 };
 
 pub use connecting::Connecting;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use libp2p_core::muxing::{StreamMuxer, StreamMuxerEvent};
 pub use stream::Stream;
 

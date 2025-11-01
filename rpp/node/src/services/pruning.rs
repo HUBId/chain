@@ -392,10 +392,20 @@ async fn run_worker(
         let started_at = Instant::now();
         match run_pruning_cycle(&node, chunk_size, retention_depth, &status_tx) {
             Ok(status) => {
-                metrics.record_cycle(cycle_reason, CycleOutcome::Success, started_at.elapsed(), status.as_ref());
+                metrics.record_cycle(
+                    cycle_reason,
+                    CycleOutcome::Success,
+                    started_at.elapsed(),
+                    status.as_ref(),
+                );
             }
             Err(err) => {
-                metrics.record_cycle(cycle_reason, CycleOutcome::Failure, started_at.elapsed(), None);
+                metrics.record_cycle(
+                    cycle_reason,
+                    CycleOutcome::Failure,
+                    started_at.elapsed(),
+                    None,
+                );
                 warn!(?err, "pruning cycle failed");
             }
         }

@@ -153,6 +153,31 @@ export interface PruningJobStatus {
   last_updated: number;
 }
 
+export interface BackendVerificationMetrics {
+  accepted: number;
+  rejected: number;
+  bypassed: number;
+  total_duration_ms: number;
+}
+
+export interface Plonky3BackendError {
+  message: string;
+  at_ms: number;
+}
+
+export interface Plonky3BackendHealth {
+  cached_circuits: number;
+  proofs_generated: number;
+  failed_proofs: number;
+  last_success_ms?: number | null;
+  last_error?: Plonky3BackendError | null;
+}
+
+export interface BackendHealthReport {
+  verifier: BackendVerificationMetrics;
+  prover?: Plonky3BackendHealth | null;
+}
+
 export interface NodeStatus {
   address: string;
   height: number;
@@ -165,7 +190,7 @@ export interface NodeStatus {
   pending_uptime_proofs: number;
   vrf_metrics: Record<string, unknown>;
   tip: BlockMetadata | null;
-  backend_warnings?: string[];
+  backend_health?: Record<string, BackendHealthReport>;
 }
 
 export interface ValidatorStatusResponse {

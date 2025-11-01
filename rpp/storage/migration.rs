@@ -6,14 +6,14 @@ use storage_firewood::kv::FirewoodKv;
 use crate::consensus::{ConsensusCertificate, SignedBftVote};
 use crate::errors::{ChainError, ChainResult};
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
-use crate::storage::{PRUNING_PROOF_PREFIX, STORAGE_SCHEMA_VERSION, Storage};
+use crate::storage::{Storage, PRUNING_PROOF_PREFIX, STORAGE_SCHEMA_VERSION};
 use crate::stwo::params::{FieldElement, StarkParameters};
-use crate::types::{
-    AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle, CanonicalPruningEnvelope,
-    IdentityDeclaration, ProofSystem, PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate,
-    SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof, pruning_from_previous,
-};
 use crate::types::serde_pruning_proof;
+use crate::types::{
+    pruning_from_previous, AttestedIdentityRequest, Block, BlockHeader, BlockProofBundle,
+    CanonicalPruningEnvelope, IdentityDeclaration, ProofSystem, PruningProof, PruningProofExt,
+    RecursiveProof, ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
+};
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Outcome of executing storage migrations.
@@ -145,7 +145,8 @@ fn migrate_pruning_proofs(kv: &mut FirewoodKv, dry_run: bool) -> ChainResult<usi
             Legacy(rpp_pruning::Envelope),
         }
 
-        let stored: StoredEnvelope = rpp_pruning::canonical_bincode_options().deserialize(&value)?;
+        let stored: StoredEnvelope =
+            rpp_pruning::canonical_bincode_options().deserialize(&value)?;
         let canonical = match stored {
             StoredEnvelope::Canonical(envelope) => envelope,
             StoredEnvelope::Legacy(legacy) => CanonicalPruningEnvelope::from(&legacy),
@@ -324,22 +325,22 @@ mod tests {
     use crate::rpp::ProofModule;
     use crate::storage::SCHEMA_VERSION_KEY;
     use crate::stwo::circuit::{
-        ExecutionTrace, TraceSegment,
         consensus::{ConsensusWitness, VotePower},
         pruning::PruningWitness,
         recursive::RecursiveWitness,
         state::StateWitness,
         uptime::UptimeWitness,
+        ExecutionTrace, TraceSegment,
     };
     use crate::stwo::proof::{
         CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
     };
     use crate::types::ChainProof;
     use ed25519_dalek::Signer;
-    use tempfile::tempdir;
     use rpp_pruning::{
         TaggedDigest, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
     };
+    use tempfile::tempdir;
 
     fn dummy_recursive_chain_proof(
         header: &BlockHeader,
@@ -401,13 +402,14 @@ mod tests {
                 let zero = FieldElement::zero(parameters.modulus());
                 let pruning_binding_digest =
                     TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-                let pruning_segment_commitments = vec![
-                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-                ];
+                let pruning_segment_commitments =
+                    vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH])
+                        .prefixed_bytes()];
                 let pruning_fold = {
                     let mut accumulator = zero.clone();
                     let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
-                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    accumulator =
+                        hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
                     for digest in &pruning_segment_commitments {
                         let element = parameters.element_from_bytes(digest);
                         accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
@@ -438,8 +440,8 @@ mod tests {
                 timetoke_root: "ff".repeat(32),
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
-                pruning_binding_digest:
-                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes(),
+                pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH])
+                    .prefixed_bytes(),
                 pruning_segment_commitments: vec![
                     TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
                     TaggedDigest::new(PROOF_SEGMENT_TAG, [0x66; DIGEST_LENGTH]).prefixed_bytes(),

@@ -3056,9 +3056,7 @@ fn verification_error_to_state_sync(kind: Option<&VerificationErrorKind>) -> Sta
         | Some(VerificationErrorKind::Incomplete(_)) => StateSyncErrorKind::BuildFailed,
         Some(VerificationErrorKind::Pipeline(_))
         | Some(VerificationErrorKind::PrunerState(_))
-        | Some(VerificationErrorKind::Io(_)) => {
-            StateSyncErrorKind::Internal
-        }
+        | Some(VerificationErrorKind::Io(_)) => StateSyncErrorKind::Internal,
         None => StateSyncErrorKind::Internal,
     }
 }

@@ -24,8 +24,8 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    StorageMetricsHandle, TrieHash, noop_storage_metrics,
+    noop_storage_metrics, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
+    NodeStore, StorageMetricsHandle, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]

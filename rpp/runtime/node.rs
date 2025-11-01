@@ -13,7 +13,7 @@
 //!
 //! Public status/reporting structs are defined alongside the runtime to expose
 //! snapshot views without leaking internal locks.
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::convert::{TryFrom, TryInto};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Write};
@@ -60,14 +60,18 @@ use crate::ledger::{
 #[cfg(feature = "backend-plonky3")]
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 #[cfg(feature = "backend-plonky3")]
-use crate::plonky3::experimental as plonky3_experimental;
+use crate::plonky3::prover::{
+    telemetry_snapshot as plonky3_prover_telemetry, Plonky3BackendHealth,
+};
 use crate::proof_backend::{Blake2sHasher, ProofBytes};
 #[cfg(feature = "prover-stwo")]
 use crate::proof_backend::{
     ConsensusCircuitDef, PruningCircuitDef, RecursiveCircuitDef, StateCircuitDef, WitnessBytes,
     WitnessHeader,
 };
-use crate::proof_system::{ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot};
+use crate::proof_system::{
+    BackendVerificationMetrics, ProofProver, ProofVerifierRegistry, VerifierMetricsSnapshot,
+};
 use crate::reputation::{Tier, TimetokeParams};
 use crate::rpp::{
     GlobalStateCommitments, ModuleWitnessBundle, ProofArtifact, ProofModule, ProofSystemKind,
@@ -153,6 +157,20 @@ struct ConsensusLockState {
     block_hash: String,
 }
 
+#[cfg(not(feature = "backend-plonky3"))]
+#[derive(Clone, Debug, Serialize)]
+struct BackendProverHealthSnapshot;
+
+#[cfg(feature = "backend-plonky3")]
+type BackendProverHealthSnapshot = Plonky3BackendHealth;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BackendHealthReport {
+    pub verifier: BackendVerificationMetrics,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prover: Option<BackendProverHealthSnapshot>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct NodeStatus {
     pub address: Address,
@@ -166,8 +184,8 @@ pub struct NodeStatus {
     pub pending_uptime_proofs: usize,
     pub vrf_metrics: crate::vrf::VrfSelectionMetrics,
     pub tip: Option<BlockMetadata>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub backend_warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub backend_health: BTreeMap<String, BackendHealthReport>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2720,10 +2738,7 @@ impl NodeHandle {
     }
 
     #[cfg(any(test, feature = "integration"))]
-    pub fn install_state_sync_session_cache_for_tests(
-        &self,
-        cache: StateSyncSessionCache,
-    ) {
+    pub fn install_state_sync_session_cache_for_tests(&self, cache: StateSyncSessionCache) {
         self.replace_state_sync_session_cache(cache);
     }
 
@@ -4764,6 +4779,27 @@ impl NodeInner {
         let tip = self.chain_tip.read().clone();
         let epoch_info: EpochInfo = self.ledger.epoch_info();
         let metadata = self.storage.tip()?;
+        let verifier_metrics = self.verifiers.metrics_snapshot();
+        let mut backend_health = BTreeMap::new();
+        for (backend, metrics) in verifier_metrics.per_backend {
+            backend_health.insert(
+                backend,
+                BackendHealthReport {
+                    verifier: metrics,
+                    prover: None,
+                },
+            );
+        }
+        #[cfg(feature = "backend-plonky3")]
+        {
+            let entry = backend_health
+                .entry("plonky3".to_string())
+                .or_insert_with(|| BackendHealthReport {
+                    verifier: BackendVerificationMetrics::default(),
+                    prover: None,
+                });
+            entry.prover = Some(plonky3_prover_telemetry());
+        }
         Ok(NodeStatus {
             address: self.address.clone(),
             height: tip.height,
@@ -4776,16 +4812,7 @@ impl NodeInner {
             pending_uptime_proofs: self.uptime_mempool.read().len(),
             vrf_metrics: self.vrf_metrics.read().clone(),
             tip: metadata,
-            backend_warnings: {
-                #[cfg(feature = "backend-plonky3")]
-                {
-                    plonky3_experimental::warnings()
-                }
-                #[cfg(not(feature = "backend-plonky3"))]
-                {
-                    Vec::new()
-                }
-            },
+            backend_health,
         })
     }
 

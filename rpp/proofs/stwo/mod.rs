@@ -10,9 +10,7 @@ pub use stwo::official::{
 };
 
 #[cfg(not(feature = "prover-stwo"))]
-pub use crate::stwo::{
-    air, circuit, conversions, fri, official_adapter, params, proof, verifier,
-};
+pub use crate::stwo::{air, circuit, conversions, fri, official_adapter, params, proof, verifier};
 
 #[cfg(test)]
 mod tests;

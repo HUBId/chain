@@ -277,7 +277,6 @@ impl FirewoodState {
         }
         Ok(())
     }
-
 }
 
 impl From<bincode::Error> for StateError {

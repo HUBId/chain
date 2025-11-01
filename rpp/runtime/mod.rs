@@ -141,13 +141,12 @@ pub mod supervisor;
 pub mod telemetry;
 pub mod wallet;
 
-pub use telemetry::TelemetryExporterBuilder;
 pub use telemetry::metrics::{
-    init_runtime_metrics, ConsensusStage, ProofKind, ProofVerificationBackend,
-    ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, ProofRpcMethod,
-    RpcMethod, RpcResult, RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome,
-    WalletRpcMethod,
+    init_runtime_metrics, ConsensusStage, ProofKind, ProofRpcMethod, ProofVerificationBackend,
+    ProofVerificationKind, ProofVerificationOutcome, ProofVerificationStage, RpcMethod, RpcResult,
+    RuntimeMetrics, RuntimeMetricsGuard, WalFlushOutcome, WalletRpcMethod,
 };
+pub use telemetry::TelemetryExporterBuilder;
 pub mod vrf_gossip;
 
 #[cfg(test)]

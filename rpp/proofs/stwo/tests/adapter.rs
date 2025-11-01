@@ -15,23 +15,23 @@ use stwo::stwo_official::core::circle::CirclePoint;
 #[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::core::constraints::point_vanishing;
 #[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::core::fields::FieldExpOps;
-#[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::core::fields::m31::BaseField;
 #[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::core::fields::qm31::SecureField;
 #[cfg(feature = "prover-stwo")]
+use stwo::stwo_official::core::fields::FieldExpOps;
+#[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::core::poly::circle::CanonicCoset;
-#[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::prover::DomainEvaluationAccumulator;
-#[cfg(feature = "prover-stwo")]
-use stwo::stwo_official::prover::Trace;
 #[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::prover::backend::cpu::{CpuBackend, CpuCircleEvaluation, CpuCirclePoly};
 #[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::prover::poly::circle::PolyOps;
 #[cfg(feature = "prover-stwo")]
 use stwo::stwo_official::prover::poly::{BitReversedOrder, NaturalOrder};
+#[cfg(feature = "prover-stwo")]
+use stwo::stwo_official::prover::DomainEvaluationAccumulator;
+#[cfg(feature = "prover-stwo")]
+use stwo::stwo_official::prover::Trace;
 
 fn constant_segment(
     parameters: &StarkParameters,
@@ -209,9 +209,7 @@ fn domain_quotients_align_with_blueprint_trace() {
     }
 
     let evaluations = air.evaluate(&trace, &parameters).expect("air evaluation");
-    assert!(
-        evaluations
-            .iter()
-            .all(|evaluation| evaluation.is_satisfied())
-    );
+    assert!(evaluations
+        .iter()
+        .all(|evaluation| evaluation.is_satisfied()));
 }

@@ -638,10 +638,7 @@ impl ProofVerifierRegistry {
     }
 
     #[cfg(feature = "backend-rpp-stark")]
-    pub fn verify_rpp_stark_block_bundle(
-        &self,
-        bundle: &BlockProofBundle,
-    ) -> ChainResult<()> {
+    pub fn verify_rpp_stark_block_bundle(&self, bundle: &BlockProofBundle) -> ChainResult<()> {
         self.record_backend(ProofSystemKind::RppStark, "rpp-stark-block-bundle", || {
             self.rpp_stark.verify_block_bundle(bundle)
         })
@@ -693,12 +690,16 @@ impl ProofVerifierRegistry {
 
     /// Verify a state transition proof using the appropriate backend.
     pub fn verify_state(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics("state", proof, |verifier, proof| verifier.verify_state(proof))
+        self.verify_with_metrics("state", proof, |verifier, proof| {
+            verifier.verify_state(proof)
+        })
     }
 
     /// Verify a pruning proof using the appropriate backend.
     pub fn verify_pruning(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics("pruning", proof, |verifier, proof| verifier.verify_pruning(proof))
+        self.verify_with_metrics("pruning", proof, |verifier, proof| {
+            verifier.verify_pruning(proof)
+        })
     }
 
     /// Verify a recursive aggregation proof using the appropriate backend.
@@ -710,7 +711,9 @@ impl ProofVerifierRegistry {
 
     /// Verify an uptime proof using the appropriate backend.
     pub fn verify_uptime(&self, proof: &ChainProof) -> ChainResult<()> {
-        self.verify_with_metrics("uptime", proof, |verifier, proof| verifier.verify_uptime(proof))
+        self.verify_with_metrics("uptime", proof, |verifier, proof| {
+            verifier.verify_uptime(proof)
+        })
     }
 
     /// Verify a consensus proof using the appropriate backend.
@@ -979,14 +982,18 @@ mod tests {
                 required_tier: crate::reputation::Tier::Tl0,
                 reputation_weights: crate::reputation::ReputationWeights::default(),
             }),
-            trace: crate::stwo::circuit::ExecutionTrace { segments: Vec::new() },
+            trace: crate::stwo::circuit::ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         }
     }
 
     use crate::stwo::circuit::state::StateWitness;
-    use crate::stwo::proof::{CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof};
+    use crate::stwo::proof::{
+        CommitmentSchemeProofData, FriProof, ProofKind, ProofPayload, StarkProof,
+    };
 
     #[test]
     fn verify_state_emits_runtime_span() {
@@ -1040,7 +1047,9 @@ mod bypass_tests {
             commitment: String::new(),
             public_inputs: Vec::new(),
             payload: ProofPayload::Recursive(witness),
-            trace: ExecutionTrace { segments: Vec::new() },
+            trace: ExecutionTrace {
+                segments: Vec::new(),
+            },
             commitment_proof: CommitmentSchemeProofData::default(),
             fri_proof: FriProof::default(),
         };

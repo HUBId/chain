@@ -11,9 +11,9 @@ use rpp_chain::runtime::sync::{
     PayloadProvider, ReconstructionEngine, ReconstructionRequest, StateSyncPlan,
 };
 use rpp_chain::runtime::types::{
-    pruning_from_previous, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata, BlockPayload,
-    BlockProofBundle, ChainProof, PruningProof, PruningProofExt, RecursiveProof, ReputationUpdate,
-    SignedBftVote, SignedTransaction, TimetokeUpdate, UptimeProof,
+    pruning_from_previous, AttestedIdentityRequest, Block, BlockHeader, BlockMetadata,
+    BlockPayload, BlockProofBundle, ChainProof, PruningProof, PruningProofExt, RecursiveProof,
+    ReputationUpdate, SignedBftVote, SignedTransaction, TimetokeUpdate, UptimeProof,
 };
 use rpp_chain::state::merkle::compute_merkle_root;
 use rpp_chain::storage::Storage;
@@ -53,19 +53,10 @@ impl InMemoryPayloadProvider {
 }
 
 impl PayloadProvider for InMemoryPayloadProvider {
-    fn fetch_payload(
-        &self,
-        request: &ReconstructionRequest,
-    ) -> ChainResult<BlockPayload> {
-        self.payloads
-            .get(&request.height)
-            .cloned()
-            .ok_or_else(|| {
-                ChainError::Config(format!(
-                    "missing payload for height {}",
-                    request.height
-                ))
-            })
+    fn fetch_payload(&self, request: &ReconstructionRequest) -> ChainResult<BlockPayload> {
+        self.payloads.get(&request.height).cloned().ok_or_else(|| {
+            ChainError::Config(format!("missing payload for height {}", request.height))
+        })
     }
 }
 
@@ -227,7 +218,9 @@ pub fn dummy_state_proof() -> StarkProof {
             required_tier: Tier::Tl0,
             reputation_weights: ReputationWeights::default(),
         }),
-        trace: ExecutionTrace { segments: Vec::new() },
+        trace: ExecutionTrace {
+            segments: Vec::new(),
+        },
         commitment_proof: CommitmentSchemeProofData::default(),
         fri_proof: FriProof::default(),
     }
@@ -240,9 +233,8 @@ pub fn dummy_pruning_proof() -> StarkProof {
     let zero = FieldElement::zero(parameters.modulus());
     let pruning_binding_digest =
         TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-    let pruning_segment_commitments = vec![
-        TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-    ];
+    let pruning_segment_commitments =
+        vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes()];
     let pruning_fold = {
         let mut accumulator = zero.clone();
         let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
@@ -267,7 +259,9 @@ pub fn dummy_pruning_proof() -> StarkProof {
             pruning_segment_commitments,
             pruning_fold,
         }),
-        trace: ExecutionTrace { segments: Vec::new() },
+        trace: ExecutionTrace {
+            segments: Vec::new(),
+        },
         commitment_proof: CommitmentSchemeProofData::default(),
         fri_proof: FriProof::default(),
     }
@@ -309,7 +303,9 @@ pub fn dummy_recursive_proof(
             pruning_segment_commitments,
             block_height: header.height,
         }),
-        trace: ExecutionTrace { segments: Vec::new() },
+        trace: ExecutionTrace {
+            segments: Vec::new(),
+        },
         commitment_proof: CommitmentSchemeProofData::default(),
         fri_proof: FriProof::default(),
     }
@@ -366,7 +362,8 @@ pub fn corrupt_chunk_commitment(chunk: &NetworkStateSyncChunk) -> NetworkStateSy
             .aggregate_commitment
             .as_str()
             .to_owned();
-        request.pruning.commitment.aggregate_commitment = NetworkTaggedDigestHex::from(mutate_hex(&current));
+        request.pruning.commitment.aggregate_commitment =
+            NetworkTaggedDigestHex::from(mutate_hex(&current));
     }
     corrupted
 }
