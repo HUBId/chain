@@ -4,7 +4,8 @@
 
 - Added `state_sync_status_response.jsonschema` and updated
   `state_sync_chunk_response.jsonschema` to include the aggregated verification
-  status returned by `/state-sync/session` and `/state-sync/chunk/:id`.
+  status returned by `/state-sync/session` and embedded within
+  `/state-sync/chunk/:id` responses.
 - Documented the progress log, served chunk list, and error fields surfaced by
   the new state sync RPC responses.
 
