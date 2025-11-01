@@ -18,6 +18,22 @@ use crate::types::{
 };
 use rpp_pruning::Envelope;
 
+fn enable_experimental_backend() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| crate::plonky3::experimental::force_enable_for_tests());
+}
+
+fn test_prover() -> Plonky3Prover {
+    enable_experimental_backend();
+    Plonky3Prover::new()
+}
+
+fn test_verifier() -> Plonky3Verifier {
+    enable_experimental_backend();
+    Plonky3Verifier::default()
+}
+
 fn canonical_pruning_header() -> BlockHeader {
     BlockHeader::new(
         0,
@@ -141,8 +157,8 @@ fn compute_commitment_is_stable_for_map_ordering() {
 
 #[test]
 fn transaction_proof_roundtrip() {
-    let prover = Plonky3Prover::new();
-    let verifier = Plonky3Verifier::default();
+    let prover = test_prover();
+    let verifier = test_verifier();
     let tx = sample_transaction();
     let witness = prover.build_transaction_witness(&tx).unwrap();
     let proof = prover.prove_transaction(witness).unwrap();
@@ -175,7 +191,7 @@ fn transaction_proof_roundtrip() {
 
 #[test]
 fn recursive_aggregator_rejects_tampered_inputs() {
-    let prover = Plonky3Prover::new();
+    let prover = test_prover();
     let tx = sample_transaction();
     let transaction_proof = prover
         .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
@@ -234,8 +250,8 @@ fn recursive_aggregator_rejects_tampered_inputs() {
 
 #[test]
 fn recursive_bundle_verification_detects_tampering() {
-    let prover = Plonky3Prover::new();
-    let verifier = Plonky3Verifier::default();
+    let prover = test_prover();
+    let verifier = test_verifier();
     let tx = sample_transaction();
     let transaction_proof = prover
         .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
@@ -299,8 +315,8 @@ fn recursive_bundle_verification_detects_tampering() {
 
 #[test]
 fn recursive_roundtrip_spans_state_and_transactions() {
-    let prover = Plonky3Prover::new();
-    let verifier = Plonky3Verifier::default();
+    let prover = test_prover();
+    let verifier = test_verifier();
 
     let tx = sample_transaction();
     let transaction_proof = prover

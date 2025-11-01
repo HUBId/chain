@@ -23,6 +23,22 @@ use plonky3_backend::Circuit;
 
 const FIXTURE_DIR: &str = "rpp/proofs/plonky3/tests/fixtures";
 
+fn enable_experimental_backend() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| crate::plonky3::experimental::force_enable_for_tests());
+}
+
+fn test_prover() -> Plonky3Prover {
+    enable_experimental_backend();
+    Plonky3Prover::new()
+}
+
+fn test_verifier() -> Plonky3Verifier {
+    enable_experimental_backend();
+    Plonky3Verifier::default()
+}
+
 fn load_fixture(name: &str) -> Value {
     let path = Path::new(FIXTURE_DIR).join(name);
     let data = fs::read_to_string(&path)
@@ -33,6 +49,7 @@ fn load_fixture(name: &str) -> Value {
 
 #[test]
 fn keygen_uses_setup_artifacts() {
+    enable_experimental_backend();
     let params = Plonky3Parameters::default();
     for circuit in [
         "identity",
@@ -61,7 +78,7 @@ fn keygen_uses_setup_artifacts() {
 
 #[test]
 fn transaction_proof_matches_fixture() {
-    let prover = Plonky3Prover::new();
+    let prover = test_prover();
     let tx = sample_transaction();
     let witness = prover.build_transaction_witness(&tx).unwrap();
     let proof = prover.prove_transaction(witness).unwrap();
@@ -76,7 +93,7 @@ fn transaction_proof_matches_fixture() {
 
 #[test]
 fn transaction_fixture_verifies() {
-    let verifier = Plonky3Verifier::default();
+    let verifier = test_verifier();
     let value = load_fixture("transaction_roundtrip.json");
     let proof = ChainProof::Plonky3(value.clone());
 
@@ -88,7 +105,7 @@ fn transaction_fixture_verifies() {
 
 #[test]
 fn transaction_fixture_rejects_tampered_verifying_key() {
-    let verifier = Plonky3Verifier::default();
+    let verifier = test_verifier();
     let value = load_fixture("transaction_roundtrip.json");
     let mut parsed = Plonky3Proof::from_value(&value).unwrap();
     assert!(!parsed.verifying_key.is_empty(), "fixture verifying key must not be empty");
@@ -247,8 +264,8 @@ fn compute_commitment_is_stable_for_map_ordering() {
 
 #[test]
 fn transaction_proof_roundtrip() {
-    let prover = Plonky3Prover::new();
-    let verifier = Plonky3Verifier::default();
+    let prover = test_prover();
+    let verifier = test_verifier();
     let tx = sample_transaction();
     let witness = prover.build_transaction_witness(&tx).unwrap();
     let proof = prover.prove_transaction(witness).unwrap();
@@ -281,7 +298,7 @@ fn transaction_proof_roundtrip() {
 
 #[test]
 fn recursive_aggregator_rejects_tampered_inputs() {
-    let prover = Plonky3Prover::new();
+    let prover = test_prover();
     let tx = sample_transaction();
     let transaction_proof = prover
         .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
@@ -340,8 +357,8 @@ fn recursive_aggregator_rejects_tampered_inputs() {
 
 #[test]
 fn recursive_bundle_verification_detects_tampering() {
-    let prover = Plonky3Prover::new();
-    let verifier = Plonky3Verifier::default();
+    let prover = test_prover();
+    let verifier = test_verifier();
     let tx = sample_transaction();
     let transaction_proof = prover
         .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
@@ -405,8 +422,8 @@ fn recursive_bundle_verification_detects_tampering() {
 
 #[test]
 fn recursive_roundtrip_spans_state_and_transactions() {
-    let prover = Plonky3Prover::new();
-    let verifier = Plonky3Verifier::default();
+    let prover = test_prover();
+    let verifier = test_verifier();
 
     let tx = sample_transaction();
     let transaction_proof = prover

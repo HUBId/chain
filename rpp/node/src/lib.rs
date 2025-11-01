@@ -56,6 +56,8 @@ use rpp_chain::crypto::{
 };
 use rpp_chain::node::{Node, NodeHandle, PruningJobStatus};
 use rpp_chain::orchestration::PipelineOrchestrator;
+#[cfg(feature = "backend-plonky3")]
+use rpp_chain::plonky3::experimental as plonky3_experimental;
 use rpp_chain::runtime::{
     init_runtime_metrics, RuntimeMetrics, RuntimeMetricsGuard, RuntimeMode,
     TelemetryExporterBuilder,
@@ -285,6 +287,11 @@ pub struct RuntimeOptions {
     #[arg(long)]
     pub write_config: bool,
 
+    /// Acknowledge the experimental Plonky3 backend (no cryptographic soundness)
+    #[cfg(feature = "backend-plonky3")]
+    #[arg(long = "experimental-plonky3", default_value_t = false)]
+    pub experimental_plonky3: bool,
+
     #[command(flatten)]
     pub pruning: PruningCliOverrides,
 }
@@ -305,6 +312,8 @@ impl RuntimeOptions {
             log_json,
             dry_run,
             write_config,
+            #[cfg(feature = "backend-plonky3")]
+                experimental_plonky3: _,
             pruning,
         } = self;
 
@@ -529,8 +538,16 @@ pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
     Ok(())
 }
 
-pub async fn run(mode: RuntimeMode, options: RuntimeOptions) -> BootstrapResult<()> {
+pub async fn run(mode: RuntimeMode, mut options: RuntimeOptions) -> BootstrapResult<()> {
     ensure_prover_backend(mode)?;
+
+    #[cfg(feature = "backend-plonky3")]
+    {
+        if options.experimental_plonky3 {
+            plonky3_experimental::acknowledge_via_cli();
+        }
+        plonky3_experimental::require_acknowledgement().map_err(BootstrapError::configuration)?;
+    }
 
     let bootstrap_mode = mode;
     let dry_run = options.dry_run;

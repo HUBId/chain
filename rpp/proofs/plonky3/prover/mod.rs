@@ -127,6 +127,9 @@ pub struct Plonky3Prover {
 
 impl Plonky3Prover {
     pub fn new() -> Self {
+        if let Err(err) = crate::plonky3::experimental::require_acknowledgement() {
+            panic!("{err}");
+        }
         Self {
             params: Plonky3Parameters::default(),
             backend: Plonky3Backend::default(),
