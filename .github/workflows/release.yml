@@ -85,12 +85,16 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Install test helpers
         run: |
-          cargo install --locked cargo-audit
+          cargo install --locked cargo-audit --version 0.21.1
           cargo install --locked git-cliff
       - name: Cargo audit
         run: cargo audit --deny warnings
       - name: Test suite (default, STWO, and RPP-Stark backends)
         run: ./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark
+      - name: Simulator smoke tests (STWO backend)
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2025-07-14
+        run: ./scripts/ci/sim_smoke.sh
       - name: Prepare release notes
         run: ./scripts/prepare_changelog.sh --tag "${{ steps.determine_tag.outputs.release_tag }}" --output dist/release-notes.md
       - uses: actions/upload-artifact@v4
