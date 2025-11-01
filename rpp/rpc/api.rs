@@ -1102,12 +1102,12 @@ fn proof_rpc_method(path: &str) -> Option<ProofRpcMethod> {
 }
 
 #[derive(Clone)]
-struct RpcMetricsLayer {
+pub struct RpcMetricsLayer {
     metrics: Arc<RuntimeMetrics>,
 }
 
 impl RpcMetricsLayer {
-    fn new(metrics: Arc<RuntimeMetrics>) -> Self {
+    pub fn new(metrics: Arc<RuntimeMetrics>) -> Self {
         Self { metrics }
     }
 }

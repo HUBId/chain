@@ -775,7 +775,7 @@ pub(crate) enum StateSyncVerificationStatus {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct StateSyncSessionCache {
+pub struct StateSyncSessionCache {
     report: Option<StateSyncVerificationReport>,
     snapshot_root: Option<Hash>,
     total_chunks: Option<usize>,
@@ -847,6 +847,22 @@ impl StateSyncSessionCache {
             }
         }
         self.report = Some(report);
+    }
+
+    #[cfg(any(test, feature = "integration"))]
+    pub fn verified_for_tests(
+        snapshot_root: Hash,
+        chunk_size: usize,
+        total_chunks: usize,
+        store: Arc<RwLock<SnapshotStore>>,
+    ) -> Self {
+        let mut cache = Self::default();
+        cache.snapshot_root = Some(snapshot_root);
+        cache.chunk_size = Some(chunk_size);
+        cache.total_chunks = Some(total_chunks);
+        cache.snapshot_store = Some(store);
+        cache.status = StateSyncVerificationStatus::Verified;
+        cache
     }
 
     fn set_status(&mut self, status: StateSyncVerificationStatus) {
@@ -2699,6 +2715,14 @@ impl NodeHandle {
 
     pub(crate) fn replace_state_sync_session_cache(&self, cache: StateSyncSessionCache) {
         self.inner.replace_state_sync_session(cache);
+    }
+
+    #[cfg(any(test, feature = "integration"))]
+    pub fn install_state_sync_session_cache_for_tests(
+        &self,
+        cache: StateSyncSessionCache,
+    ) {
+        self.replace_state_sync_session_cache(cache);
     }
 
     pub(crate) fn configure_state_sync_session_cache(

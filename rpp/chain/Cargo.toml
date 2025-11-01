@@ -140,6 +140,10 @@ name = "pruning_validation"
 path = "../../tests/state_sync/pruning_validation.rs"
 
 [[test]]
+name = "proof_error_io"
+path = "../../tests/state_sync/proof_error_io.rs"
+
+[[test]]
 name = "p2p"
 path = "rpp/rpc/tests/p2p.rs"
 
