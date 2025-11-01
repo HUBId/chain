@@ -69,6 +69,7 @@ Operators trigger streaming through the RPC service:
 ```bash
 curl -sS -X POST \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $RPP_RPC_TOKEN" \
   -d '{"peer":"<provider-peer-id>","chunk_size":32768}' \
   http://<consumer-host>:<port>/p2p/snapshots
 ```
@@ -78,8 +79,16 @@ The POST request allocates or resumes a session (include
 initial `SnapshotStreamStatus`. Poll status updates via:
 
 ```bash
-curl -sS http://<consumer-host>:<port>/p2p/snapshots/<session>
+curl -sS \
+  -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+  http://<consumer-host>:<port>/p2p/snapshots/<session>
 ```
+
+The `$RPP_RPC_TOKEN` environment variable should contain the bearer token
+issued by the RPC service during deployment or operator onboarding.
+
+> **Note:** Authenticated deployments must include the bearer token header with
+> every snapshot control-plane request to avoid `401 Unauthorized` responses.
 
 The handler parses the peer ID, synthesises a new session ID when one is not
 provided, forwards the command to the runtime, and serialises the status back to
