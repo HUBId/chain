@@ -53,6 +53,17 @@ file or paste the contents into the dialog. Assign each dashboard to your
 preferred folder and Prometheus datasource (the definitions reference the
 default `prometheus` UID, which can be remapped during import).
 
+## VRF selection
+
+Validator operators can import the VRF dashboards described in
+[`docs/observability/vrf.md`](../observability/vrf.md):
+
+- [`vrf_overview.json`](./vrf_overview.json)
+- [`vrf_thresholds.json`](./vrf_thresholds.json)
+
+Use the same Grafana import flow as above, mapping the dashboards to your
+Prometheus datasource or adjusting the datasource UID during import.
+
 ## Storage
 
 - **WAL latency and throughput.** Pair
