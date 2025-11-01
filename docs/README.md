@@ -10,6 +10,7 @@ configuration specifics, checklists, and runbooks as needed:
 - [Runbook: upgrade](runbooks/upgrade.md)
 - [Runbook: pruning](runbooks/pruning.md)
 - [Runbook: pruning operations](runbooks/pruning_operations.md)
+- [Checklist: Phase-1 Guard Verification](runbooks/startup.md#phase-1-guard-verification)
 - [`rpp-node` operator guide](rpp_node_operator_guide.md)
 - [Snapshot streaming protocol](network/snapshots.md)
 

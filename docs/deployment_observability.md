@@ -10,7 +10,9 @@ throttling, and recovery procedures that apply to operator-driven RPC
 workflows. The new telemetry stack ships with dedicated
 [incident runbooks](./runbooks/observability.md) and
 [dashboard blueprints](./dashboards/README.md); reference them when wiring the
-collector and during on-call response.
+collector and during on-call response. Treat the Phase 1 guard checklist as part of the on-call
+handover by running the [Phase-1 Guard Verification checklist](./runbooks/startup.md#phase-1-guard-verification)
+before declaring a recovery complete.
 
 ## Runtime Modes & Telemetry Matrix
 
