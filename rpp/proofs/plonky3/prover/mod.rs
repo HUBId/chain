@@ -102,17 +102,28 @@ impl Plonky3Backend {
         let compiled = self.ensure_compiled(params, circuit)?;
         let public_inputs = witness.public_inputs()?;
         let (commitment, encoded_inputs) = crypto::canonical_public_inputs(&public_inputs)?;
-        let proof_bytes = compiled
+        let proof_bundle = compiled
             .prove(&commitment, &encoded_inputs)
             .map_err(|err| {
                 ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
             })?;
+        let (verifying_key, backend_inputs, proof_blob) = proof_bundle.into_parts();
+        if verifying_key != compiled.verifying_key() {
+            return Err(ChainError::Crypto(format!(
+                "failed to generate Plonky3 {circuit} proof: backend returned mismatched verifying key",
+            )));
+        }
+        if backend_inputs != encoded_inputs {
+            return Err(ChainError::Crypto(format!(
+                "failed to generate Plonky3 {circuit} proof: backend returned mismatched public inputs"
+            )));
+        }
         Ok(Plonky3Proof {
             circuit: circuit.to_string(),
             commitment,
             public_inputs,
-            proof: proof_bytes,
-            verifying_key: compiled.verifying_key().to_vec(),
+            proof: proof_blob,
+            verifying_key,
         })
     }
 }

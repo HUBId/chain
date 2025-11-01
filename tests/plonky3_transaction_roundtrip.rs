@@ -64,3 +64,49 @@ fn transaction_roundtrip_produces_stable_commitment() {
     assert!(matches!(parsed.public_inputs.get("block_height"), None));
     assert!(matches!(parsed.public_inputs.get("commitments"), None));
 }
+
+#[test]
+fn transaction_roundtrip_rejects_tampered_public_inputs() {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+    let tx = deterministic_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut tampered = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        if let serde_json::Value::Object(ref mut root) = parsed.public_inputs {
+            if let Some(serde_json::Value::Object(witness)) = root.get_mut("witness") {
+                if let Some(serde_json::Value::Object(tx)) = witness.get_mut("transaction") {
+                    if let Some(serde_json::Value::Object(payload)) = tx.get_mut("payload") {
+                        payload.insert("amount".to_string(), serde_json::json!(404));
+                    }
+                }
+            }
+        }
+        *value = parsed.into_value().unwrap();
+    }
+
+    assert!(verifier.verify_transaction(&tampered).is_err());
+}
+
+#[test]
+fn transaction_roundtrip_rejects_truncated_proof() {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+    let tx = deterministic_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut tampered = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.proof.truncate(parsed.proof.len().saturating_sub(1));
+        *value = parsed.into_value().unwrap();
+    }
+
+    assert!(verifier.verify_transaction(&tampered).is_err());
+}

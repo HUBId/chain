@@ -131,6 +131,56 @@ fn transaction_fixture_rejects_tampered_verifying_key() {
     );
 }
 
+#[test]
+fn transaction_fixture_rejects_tampered_public_inputs() {
+    let verifier = test_verifier();
+    let value = load_fixture("transaction_roundtrip.json");
+    let mut parsed = Plonky3Proof::from_value(&value).unwrap();
+    if let Value::Object(ref mut root) = parsed.public_inputs {
+        if let Some(Value::Object(witness)) = root.get_mut("witness") {
+            if let Some(Value::Object(tx)) = witness.get_mut("transaction") {
+                if let Some(Value::Object(payload)) = tx.get_mut("payload") {
+                    payload.insert("amount".to_string(), json!(1337));
+                }
+            }
+        }
+    }
+    let tampered_value = parsed.into_value().unwrap();
+    let proof = ChainProof::Plonky3(tampered_value.clone());
+
+    let verify_err = verifier.verify_transaction(&proof).unwrap_err();
+    assert!(verify_err
+        .to_string()
+        .contains("commitment mismatch"), "unexpected verifier error: {verify_err:?}");
+
+    let parsed_tampered = Plonky3Proof::from_value(&tampered_value).unwrap();
+    let crypto_err = crypto::verify_proof(&parsed_tampered).unwrap_err();
+    assert!(crypto_err
+        .to_string()
+        .contains("commitment mismatch"), "unexpected crypto verification error: {crypto_err:?}");
+}
+
+#[test]
+fn transaction_fixture_rejects_truncated_proof_blob() {
+    let verifier = test_verifier();
+    let value = load_fixture("transaction_roundtrip.json");
+    let mut parsed = Plonky3Proof::from_value(&value).unwrap();
+    parsed.proof.truncate(parsed.proof.len().saturating_sub(1));
+    let tampered_value = parsed.into_value().unwrap();
+    let proof = ChainProof::Plonky3(tampered_value.clone());
+
+    let verify_err = verifier.verify_transaction(&proof).unwrap_err();
+    assert!(verify_err
+        .to_string()
+        .contains("proof blob must be"), "unexpected verifier error: {verify_err:?}");
+
+    let parsed_tampered = Plonky3Proof::from_value(&tampered_value).unwrap();
+    let crypto_err = crypto::verify_proof(&parsed_tampered).unwrap_err();
+    assert!(crypto_err
+        .to_string()
+        .contains("proof blob must be"), "unexpected crypto verification error: {crypto_err:?}");
+}
+
 fn canonical_pruning_header() -> BlockHeader {
     BlockHeader::new(
         0,
