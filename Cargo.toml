@@ -193,15 +193,16 @@ unsigned-varint = "=0.8.0"
 web-time = "=1.1.0"
 
 # plonky3 proof system dependencies
-p3-air = { version = "=0.3.0", default-features = false }
-p3-baby-bear = { version = "=0.3.0", default-features = false }
-p3-challenger = { version = "=0.3.0", default-features = false }
-p3-commit = { version = "=0.3.0", default-features = false }
-p3-field = { version = "=0.3.0", default-features = false }
-p3-mersenne-31 = { version = "=0.3.0", default-features = false }
-p3-matrix = { version = "=0.3.0", default-features = false }
-p3-poseidon = { version = "=0.3.0", default-features = false }
-p3-util = { version = "=0.3.0", default-features = false }
+p3-air = { version = "=0.3.0" }
+p3-baby-bear = { version = "=0.3.0" }
+p3-challenger = { version = "=0.3.0" }
+p3-commit = { version = "=0.3.0" }
+p3-field = { version = "=0.3.0" }
+p3-mersenne-31 = { version = "=0.3.0" }
+p3-matrix = { version = "=0.3.0" }
+p3-mds = { version = "=0.3.0" }
+p3-poseidon = { version = "=0.3.0" }
+p3-util = { version = "=0.3.0" }
 
 
 [patch.crates-io]
@@ -210,7 +211,6 @@ yamux = { path = "rpp/p2p/vendor/yamux/0.13.7" }
 yamux-old = { package = "yamux", path = "rpp/p2p/vendor/yamux/0.12.1" }
 base64ct = { version = "1.6.0", path = "vendor/base64ct/1.6.0" }
 hex-literal = { version = "1.0.0", path = "vendor/hex-literal/1.0.0" }
-p3-mds = { version = "0.3.0", path = "vendor/p3-mds/0.3.0" }
 fastrace = { version = "0.7.14", path = "vendor/fastrace/0.7.14" }
 fastrace-macro = { version = "0.7.14", path = "vendor/fastrace-macro/0.7.14" }
 

@@ -1,4 +1,5 @@
 use blake3::Hasher;
+use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 

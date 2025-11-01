@@ -7,6 +7,12 @@
 [alias]
 xtask = "run --package xtask --"
 
+[unstable]
+edition2024 = true
+
+[env]
+CARGO_UNSTABLE_EDITION2024 = "1"
+
 [[patch.crates-io]]
 name = "anyhow"
 version = "1.0.100"
@@ -107,52 +113,3 @@ name = "stwo-official"
 version = "0.1.1"
 path = "../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
 
-[[patch.crates-io]]
-name = "p3-air"
-version = "0.3.0"
-path = "../vendor/p3-air/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-baby-bear"
-version = "0.3.0"
-path = "../vendor/p3-baby-bear/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-challenger"
-version = "0.3.0"
-path = "../vendor/p3-challenger/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-commit"
-version = "0.3.0"
-path = "../vendor/p3-commit/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-field"
-version = "0.3.0"
-path = "../vendor/p3-field/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-matrix"
-version = "0.3.0"
-path = "../vendor/p3-matrix/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-mersenne-31"
-version = "0.3.0"
-path = "../vendor/p3-mersenne-31/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-mds"
-version = "0.3.0"
-path = "../vendor/p3-mds/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-poseidon"
-version = "0.3.0"
-path = "../vendor/p3-poseidon/0.3.0"
-
-[[patch.crates-io]]
-name = "p3-util"
-version = "0.3.0"
-path = "../vendor/p3-util/0.3.0"
