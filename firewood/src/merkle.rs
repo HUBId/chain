@@ -17,9 +17,10 @@ use metrics::counter;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Error;
-use std::iter::once;
+use std::iter::{once, ExactSizeIterator, FusedIterator};
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::slice::ChunksExact;
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -128,8 +129,7 @@ impl<T> From<T> for Merkle<T> {
 
 impl<T: TrieReader> Merkle<T> {
     pub(crate) fn try_root(&self) -> Result<Option<SharedNode>, FileIoError> {
-        self
-            .nodestore
+        self.nodestore
             .root_as_maybe_persisted_node()
             .map(|root| root.as_shared_node(&self.nodestore))
             .transpose()
@@ -1182,11 +1182,42 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 /// Returns an iterator where each element is the result of combining
 /// 2 nibbles of `nibbles`. If `nibbles` is odd length, panics in
 /// debug mode and drops the final nibble in release mode.
-pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> {
-    debug_assert_eq!(nibbles.len() & 1, 0);
-    #[expect(clippy::indexing_slicing)]
-    nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
+pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> NibblesToBytes<'_> {
+    NibblesToBytes::new(nibbles)
 }
+
+#[derive(Debug)]
+pub struct NibblesToBytes<'a> {
+    chunks: ChunksExact<'a, u8>,
+}
+
+impl<'a> NibblesToBytes<'a> {
+    fn new(nibbles: &'a [u8]) -> Self {
+        debug_assert_eq!(nibbles.len() & 1, 0);
+        Self {
+            chunks: nibbles.chunks_exact(2),
+        }
+    }
+}
+
+impl Iterator for NibblesToBytes<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.chunks
+            .next()
+            .map(|pair| (pair[0] << 4) | pair[1])
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.chunks.len();
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for NibblesToBytes<'_> {}
+
+impl FusedIterator for NibblesToBytes<'_> {}
 
 /// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
 /// As the type-name implies, the `shared` property only constitues a shared *prefix*.

@@ -1,0 +1,14 @@
+{
+  "name": "multinode-soak",
+  "description": "Long-running harness with churn, clock-skew jitter, and reorg storms",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info",
+    "RPP_SIM_REQUIRE_DETERMINISTIC": "1"
+  },
+  "p2p": {
+    "scenario_path": "../../scenarios/multinode_soak.toml",
+    "mode": "compare",
+    "summary_path": "summaries/multinode_soak.json"
+  }
+}

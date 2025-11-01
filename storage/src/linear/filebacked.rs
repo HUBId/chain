@@ -33,6 +33,7 @@ use std::os::windows::fs::FileExt;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use fs2::FileExt as _;
 use lru::LruCache;
 use metrics::counter;
 
@@ -67,14 +68,11 @@ impl FileBacked {
     /// Acquire an advisory lock on the underlying file to prevent multiple processes
     /// from accessing it simultaneously
     pub fn lock(&self) -> Result<(), FileIoError> {
-        self.fd.try_lock().map_err(|e| {
-            let context =
-                "unable to obtain advisory lock: database may be opened by another instance"
-                    .to_string();
-            // Convert TryLockError to a generic IO error for our FileIoError
-            let io_error = std::io::Error::new(std::io::ErrorKind::WouldBlock, e);
-            self.file_io_error(io_error, 0, Some(context))
-        })
+        let context = "unable to obtain advisory lock: database may be opened by another instance"
+            .to_string();
+        self.fd
+            .try_lock_exclusive()
+            .map_err(|e| self.file_io_error(e, 0, Some(context)))
     }
 
     /// Make a write operation from a raw data buffer for this file

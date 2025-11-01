@@ -11,6 +11,7 @@
 )]
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -25,7 +26,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    StorageMetricsHandle, TrieHash, noop_storage_metrics,
+    StorageMetricsHandle, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -65,7 +66,6 @@ pub struct ConfigManager {
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
-#[derive(Debug)]
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
@@ -76,7 +76,15 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
-    metrics: StorageMetricsHandle,
+    _metrics: StorageMetricsHandle,
+}
+
+impl fmt::Debug for RevisionManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RevisionManager")
+            .field("max_revisions", &self.max_revisions)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -121,7 +129,7 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
-            metrics,
+            _metrics: metrics,
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -322,6 +330,7 @@ impl RevisionManager {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use firewood_storage::noop_storage_metrics;
     use tempfile::NamedTempFile;
 
     #[test]

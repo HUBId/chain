@@ -6,7 +6,7 @@ pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
-use crate::nodestore::primitives::{AreaIndex, area_size_iter};
+use crate::nodestore::primitives::{area_size_iter, AreaIndex};
 use crate::{
     CheckerError, Committed, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, Path,
@@ -47,7 +47,7 @@ fn is_valid_key(key: &Path) -> bool {
 
 #[cfg(not(feature = "ethhash"))]
 fn is_valid_key(key: &Path) -> bool {
-    key.0.len().is_multiple_of(2)
+    key.0.len() % 2 == 0
 }
 
 /// Options for the checker
@@ -647,14 +647,19 @@ where
     NodeStore<T, S>: NodeReader,
 {
     /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
-    fn split_all_leaked_ranges<'a>(
+    fn split_all_leaked_ranges<'a, I>(
         &self,
-        leaked_ranges: impl IntoIterator<Item = Range<&'a LinearAddress>>,
+        leaked_ranges: I,
         progress_bar: Option<&ProgressBar>,
-    ) -> impl Iterator<Item = (LinearAddress, AreaIndex)> {
-        leaked_ranges
-            .into_iter()
-            .flat_map(move |range| self.split_range_into_leaked_areas(range, progress_bar))
+    ) -> Vec<(LinearAddress, AreaIndex)>
+    where
+        I: IntoIterator<Item = Range<&'a LinearAddress>>,
+    {
+        let mut leaked = Vec::new();
+        for range in leaked_ranges {
+            leaked.extend(self.split_range_into_leaked_areas(range, progress_bar));
+        }
+        leaked
     }
 
     /// Split a range of addresses into leaked areas that can be stored in the free list.
@@ -753,15 +758,15 @@ mod test {
 
     use super::*;
     use crate::linear::memory::MemStore;
-    use crate::nodestore::NodeStoreHeader;
-    use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
+    use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::primitives::area_size_iter;
+    use crate::nodestore::NodeStoreHeader;
     use crate::{
-        BranchNode, Child, FreeListParent, LeafNode, NodeStore, Path, area_index, hash_node,
-        noop_storage_metrics,
+        area_index, hash_node, noop_storage_metrics, BranchNode, Child, FreeListParent, LeafNode,
+        NodeStore, Path,
     };
 
     #[derive(Debug)]
