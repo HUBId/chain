@@ -4,6 +4,7 @@ use std::fmt;
 pub enum SectionId {
     Architecture,
     FirewoodStwo,
+    ProofBackends,
     WalletWorkflows,
     Libp2p,
     Vrf,
@@ -18,6 +19,7 @@ impl fmt::Display for SectionId {
         let name = match self {
             SectionId::Architecture => "architecture",
             SectionId::FirewoodStwo => "firewood-stwo",
+            SectionId::ProofBackends => "proof-backends",
             SectionId::WalletWorkflows => "wallet-workflows",
             SectionId::Libp2p => "libp2p",
             SectionId::Vrf => "vrf",
@@ -124,6 +126,31 @@ impl Blueprint {
                         title: "Pruning-Proof-Automatisierung",
                         detail: "Hintergrundjobs für Generierung und Wiederaufbau historischer Zustände umsetzen.",
                         status: TaskStatus::Done,
+                    },
+                ],
+            },
+            Section {
+                id: SectionId::ProofBackends,
+                title: "Beweissystem-Backends",
+                description: "Vendor-Backends für STWO und Plonky3 integrieren und betrieblich absichern.",
+                tasks: vec![
+                    Task {
+                        key: "proofs.stwo_vendor_backend",
+                        title: "STWO-Vendor-Backend verankern",
+                        detail: "Offizielles STWO-Backend in Node-, Wallet- und Firewood-Pipelines aktivieren und CI-Abdeckung sicherstellen.",
+                        status: TaskStatus::Done,
+                    },
+                    Task {
+                        key: "proofs.plonky3_vendor_backend",
+                        title: "Plonky3-Vendor-Backend anbinden",
+                        detail: "Stub-Prover/Verifier durch die vendor Plonky3-Bibliotheken ersetzen und Telemetrie gegen echte Beweise verdrahten.",
+                        status: TaskStatus::InProgress,
+                    },
+                    Task {
+                        key: "proofs.plonky3_ci_matrix",
+                        title: "Plonky3-CI-Matrix reaktivieren",
+                        detail: "CI-Workflows auf das vendor Backend umstellen, reproduzierbare Artefakte einspeisen und Release-Gates erneuern.",
+                        status: TaskStatus::InProgress,
                     },
                 ],
             },
@@ -387,9 +414,9 @@ mod tests {
     fn blueprint_contains_all_sections() {
         let plan = Blueprint::rpp_end_to_end();
         let section_ids: Vec<SectionId> = plan.sections.iter().map(|section| section.id).collect();
-        assert_eq!(section_ids.len(), 9);
+        assert_eq!(section_ids.len(), 10);
         assert_eq!(section_ids[0], SectionId::Architecture);
-        assert_eq!(section_ids[8], SectionId::Testing);
+        assert_eq!(section_ids[9], SectionId::Testing);
     }
 
     #[test]

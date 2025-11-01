@@ -15,6 +15,10 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
   Plonky3 backend (including aliases such as `plonky3-backend`) or the
   `prover-mock` feature, emitting an explicit error so production builds cannot
   link the deterministic stub.【F:scripts/build_release.sh†L105-L145】
+- Reopened the Plonky3 backend milestone: the blueprint now tracks
+  `proofs.plonky3_vendor_backend` and `proofs.plonky3_ci_matrix` as
+  `InProgress` until the vendor prover/verifier is integrated, mirroring the
+  roadmap in [`docs/testing/plonky3_experimental_testplan.md`](docs/testing/plonky3_experimental_testplan.md).
 
 ## Storage
 
