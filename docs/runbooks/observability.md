@@ -4,6 +4,27 @@ Use this runbook to diagnose gaps in telemetry, metrics, and health reporting. P
 [startup](startup.md) and [configuration](../configuration.md) guides when remediation requires
 configuration changes.
 
+## Phase-1 Guard Verification
+
+Re-run these guard checks whenever telemetry gaps or snapshot alerts occur to ensure the compile-time
+and runtime protections remain enforced alongside the CI gates.
+
+- [ ] **Compile guard blocks `backend-plonky3` in production builds.** Run
+      `cargo check --features backend-plonky3,prod` from the repository root. Compilation must abort
+      with `The experimental Plonky3 backend cannot be enabled together with the \`prod\` or \`validator\`
+      features.`, confirming the guard in `rpp-node` still fires and the feature-matrix tests continue to
+      cover it.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/tests/feature_matrix.rs†L6-L29】
+- [ ] **Runtime guard raises root-integrity signals.** Temporarily corrupt a snapshot payload (see the
+      Python helper in the [startup checklist](startup.md#phase-1-guard-verification)) and request a
+      state-sync chunk before polling `curl -i http://localhost:26600/health/ready`. The readiness probe
+      should drop to `503` while the chunk endpoint returns a `snapshot root mismatch` error and the
+      pipeline counter `rpp_node_pipeline_root_io_errors_total` increments, matching the Firewood
+      telemetry contract and the regression tests.【F:rpp/runtime/node.rs†L4007-L4043】【F:rpp/rpc/api.rs†L3027-L3070】【F:tests/state_sync/root_corruption.rs†L1-L53】【F:docs/storage/firewood.md†L58-L76】
+- [ ] **CI dashboards and guardrails pass.** Confirm the GitHub `CI` workflow (fmt, clippy, full
+      `scripts/test.sh` matrix, and dashboard/alert validation) is green via
+      `gh run watch --exit-status --workflow ci.yml` or the pull-request status view before declaring
+      telemetry healthy.【F:.github/workflows/ci.yml†L1-L80】【F:docs/test_validation_strategy.md†L41-L83】
+
 | Symptom | Check | Action |
 | --- | --- | --- |
 | Alert `root_io_error_rate` fires | Confirm the trigger by querying `sum(increase(rpp_node_pipeline_root_io_errors_total[5m]))` in Prometheus or inspecting the dedicated Grafana stat panel for spikes. Validate that related dashboards still receive pipeline updates and correlate with recent Firewood lifecycle logs containing `root read failed` markers.【F:rpp/node/src/telemetry/pipeline.rs†L12-L73】【F:storage/src/nodestore/mod.rs†L661-L701】 | Treat the incident as a Firewood storage fault: pause snapshot ingestion, audit the underlying object store or block device for I/O errors, then run `firewood_recovery` to rebuild or validate the affected roots before re-enabling peers. Escalate if the counter keeps climbing after recovery or if the WAL drill reports persistent corruption.【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】【F:storage-firewood/src/lifecycle.rs†L18-L37】 |
