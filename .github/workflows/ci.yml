@@ -37,6 +37,75 @@ jobs:
             fi
             jq empty "${path}"
           done
+          python -m pip install --quiet 'pyyaml>=6'
+          python - <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+files = [
+    Path("docs/observability/alerts/root_integrity.yaml"),
+]
+
+error = False
+
+for path in files:
+    if not path.exists():
+        print(f"::error file={path}::Alert definition is missing", file=sys.stderr)
+        error = True
+        continue
+
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as exc:  # pragma: no cover - CI linting
+        print(f"::error file={path}::Failed to parse YAML: {exc}", file=sys.stderr)
+        error = True
+        continue
+
+    if not isinstance(data, dict):
+        print(f"::error file={path}::Alert definition must be a mapping", file=sys.stderr)
+        error = True
+        continue
+
+    for key in ("apiVersion", "kind", "metadata", "spec"):
+        if key not in data:
+            print(f"::error file={path}::Missing required top-level key '{key}'", file=sys.stderr)
+            error = True
+
+    spec = data.get("spec", {})
+    groups = spec.get("groups") if isinstance(spec, dict) else None
+    if not isinstance(groups, list) or not groups:
+        print(f"::error file={path}::spec.groups must be a non-empty list", file=sys.stderr)
+        error = True
+        continue
+
+    for group in groups:
+        if not isinstance(group, dict):
+            print(f"::error file={path}::Each group must be a mapping", file=sys.stderr)
+            error = True
+            continue
+        rules = group.get("rules")
+        if not isinstance(rules, list) or not rules:
+            print(f"::error file={path}::Each group must define non-empty rules", file=sys.stderr)
+            error = True
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                print(f"::error file={path}::Each rule must be a mapping", file=sys.stderr)
+                error = True
+                continue
+            for required in ("alert", "expr"):
+                if required not in rule:
+                    print(
+                        f"::error file={path}::Rule missing required key '{required}'",
+                        file=sys.stderr,
+                    )
+                    error = True
+
+if error:
+    sys.exit(1)
+PY
           if [[ ${missing} -ne 0 ]]; then
             echo "One or more dashboard exports are missing."
             exit 1
