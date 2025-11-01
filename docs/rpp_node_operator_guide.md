@@ -31,6 +31,14 @@ fails immediately with `error: backend-plonky3 is experimental and cannot be
 enabled for release builds`, and the GitHub release workflow halts before any
 artifacts are published.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L70-L160】
 
+The crate mirrors that protection at compile time. Any attempt to combine the
+experimental Plonky3 backend with the `prod` or `validator` features now emits a
+hard compile error so production builds cannot accidentally depend on the stub
+backend. Local experiments should target non-production profiles, for example
+`cargo check -p rpp-node --no-default-features --features backend-plonky3` or
+`cargo build -p rpp-node --features dev,backend-plonky3` when pairing the stub
+with the developer toolchain.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】
+
 Keep the repository cloned on the host to rebuild quickly when upgrades ship.
 
 ## Runtime launchers
@@ -66,6 +74,9 @@ Validator-UI und Metriken spiegeln dieselben Felder wider, dienen aktuell aber
 als Vertragstests.【F:validator-ui/src/types.ts†L140-L220】 Der Plonky3-Lauf in
 `scripts/test.sh` bleibt Teil der Matrix, verifiziert aber ausschließlich die
 Stub-Implementierung, bis die echten Artefakte verfügbar sind.【F:scripts/test.sh†L1-L220】
+Kompiliere die Stub-Pfade ausschließlich ohne die `prod`- oder `validator`-
+Features, ansonsten schlägt der Build jetzt mit dem oben beschriebenen
+Sicherheitsnetz fehl.【F:rpp/node/src/feature_guard.rs†L1-L7】
 
 ## Validator tooling
 
