@@ -24,6 +24,17 @@ All notable changes to this project will be documented in this file.
 - Add production callouts that block `backend-plonky3`, reiterate the STWO feature
   requirements, and link the release pipeline checklist so operators understand
   the new compile-, packaging-, and runtime guards.【F:docs/rpp_node_operator_guide.md†L7-L23】【F:docs/poseidon_vrf.md†L9-L25】【F:RELEASE.md†L88-L123】
+- Summarize the compile-time, runtime, and release guardrails that keep the
+  experimental `backend-plonky3` feature out of production builds, and document
+  the failure modes operators should expect. The notes call out the
+  `compile_error!` emitted by [`feature_guard.rs`](rpp/node/src/feature_guard.rs)
+  when `backend-plonky3` is paired with `prod`/`validator`, the runtime launch
+  failure raised by `ensure_prover_backend` when validator or hybrid roles miss
+  the STWO prover, and the release tooling errors from
+  `scripts/build_release.sh`/`scripts/verify_release_features.sh` that surface as
+  `error: backend-plonky3 is experimental and cannot be enabled for release
+  builds` or `error: forbidden prover features enabled for rpp-node`.
+  【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/src/lib.rs†L520-L532】【F:scripts/build_release.sh†L115-L126】【F:scripts/verify_release_features.sh†L1-L108】
 
 ## [0.0.12] - 2025-08-26
 
