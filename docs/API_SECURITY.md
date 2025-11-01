@@ -36,11 +36,21 @@ The RPC server can enforce a global requests-per-minute limit via the
 ## Cross-origin access
 
 Set `network.rpc.allowed_origin` in the active node configuration to enable CORS for
-browser dashboards. The runtime currently only honours the value baked into the
-TOML profile—there is no CLI flag for temporary overrides—so adjust the
-configuration and restart nodes when rotating the allow-list. The middleware
-whitelists the provided origin, mirrors it on responses, and handles preflight
-OPTIONS requests.【F:config/validator.toml†L1-L48】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L780-L829】
+browser dashboards. Operators can temporarily override (or clear) the setting with
+`--rpc-allowed-origin`, which trims the provided value and persists the override only
+for the current process; restarting without the flag restores the value from the TOML
+profile.【F:config/validator.toml†L1-L48】【F:rpp/node/src/lib.rs†L229-L327】【F:rpp/node/src/lib.rs†L1647-L1668】
+The middleware whitelists the resolved origin, mirrors it on responses, and handles
+preflight OPTIONS requests.【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L780-L829】
+
+For example, to grant a dashboard temporary access during a maintenance window:
+
+```sh
+rpp-node validator --rpc-allowed-origin https://dash.example --dry-run
+```
+
+Passing an empty string (`--rpc-allowed-origin ""`) clears the allow-list until the
+next restart.
 
 Avoid using `*`; Axum requires a concrete origin, which matches the goal of
 restricting access to trusted dashboards.

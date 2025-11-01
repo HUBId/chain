@@ -83,8 +83,9 @@ configurations should rotate tokens alongside other secrets and audit usage via
 reverse-proxy logs.
 
 Expose the RPC to browser dashboards by setting `network.rpc.allowed_origin` in
-configuration and restarting the node; the allow-list is only sourced from the
-TOML profile.【F:docs/API_SECURITY.md†L38-L45】
+configuration. Use `--rpc-allowed-origin` for one-off overrides (pass an empty
+string to clear the allow-list) and restart without the flag to fall back to the
+profile defaults.【F:docs/API_SECURITY.md†L38-L58】
 
 When automation calls the REST endpoints directly, reuse the same tokens and
 respect the configured request limits. A `429` response indicates that the node's
