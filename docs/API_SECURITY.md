@@ -35,10 +35,12 @@ The RPC server can enforce a global requests-per-minute limit via the
 
 ## Cross-origin access
 
-Set `network.rpc.allowed_origin` in the node configuration (or pass `--rpc-allowed-origin`
-via CLI) to enable CORS for browser dashboards. The middleware whitelists the
-provided origin, mirrors it on responses, and handles preflight OPTIONS
-requests.【F:rpp/node/src/lib.rs†L541-L563】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L780-L829】
+Set `network.rpc.allowed_origin` in the active node configuration to enable CORS for
+browser dashboards. When you need a temporary override, pass
+`--rpc-allowed-origin <ORIGIN>` to `rpp-node`; provide an empty string to clear the
+allowance without editing files. The middleware whitelists the provided origin,
+mirrors it on responses, and handles preflight OPTIONS
+requests.【F:rpp/node/src/lib.rs†L541-L563】【F:rpp/node/src/lib.rs†L229-L337】【F:rpp/rpc/api.rs†L400-L520】【F:rpp/rpc/api.rs†L780-L829】
 
 Avoid using `*`; Axum requires a concrete origin, which matches the goal of
 restricting access to trusted dashboards.

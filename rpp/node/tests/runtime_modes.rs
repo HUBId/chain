@@ -187,6 +187,7 @@ fn base_runtime_options() -> RuntimeOptions {
         data_dir: None,
         rpc_listen: None,
         rpc_auth_token: None,
+        rpc_allowed_origin: None,
         telemetry_endpoint: None,
         telemetry_auth_token: None,
         telemetry_sample_interval: None,
