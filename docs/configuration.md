@@ -19,6 +19,10 @@ rollout tasks.
 The loader records the source (CLI, environment, default) alongside the parsed TOML so later conflict
 checks can emit precise error messages.【F:rpp/node/src/lib.rs†L960-L1007】
 
+Runtime CLI overrides cover networking and telemetry knobs, including
+`--rpc-listen`, `--rpc-auth-token`, and `--rpc-allowed-origin` for temporarily
+adjusting RPC exposure without editing files.【F:rpp/node/src/lib.rs†L229-L337】
+
 ## Template catalogue
 
 The repository ships profile-specific templates under `config/` for quick bootstrapping.【F:config/node.toml†L1-L33】【F:config/hybrid.toml†L1-L52】

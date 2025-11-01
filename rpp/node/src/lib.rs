@@ -247,6 +247,10 @@ pub struct RuntimeOptions {
     #[arg(long, value_name = "TOKEN")]
     pub rpc_auth_token: Option<String>,
 
+    /// Override the RPC allowed origin defined in the node configuration
+    #[arg(long, value_name = "ORIGIN")]
+    pub rpc_allowed_origin: Option<String>,
+
     /// Override the telemetry endpoint defined in the node configuration
     #[arg(long, value_name = "URL")]
     pub telemetry_endpoint: Option<String>,
@@ -287,6 +291,7 @@ impl RuntimeOptions {
             data_dir,
             rpc_listen,
             rpc_auth_token,
+            rpc_allowed_origin,
             telemetry_endpoint,
             telemetry_auth_token,
             telemetry_sample_interval,
@@ -318,6 +323,7 @@ impl RuntimeOptions {
             data_dir,
             rpc_listen,
             rpc_auth_token,
+            rpc_allowed_origin,
             telemetry_endpoint,
             telemetry_auth_token,
             telemetry_sample_interval,
@@ -491,6 +497,7 @@ pub struct BootstrapOptions {
     pub data_dir: Option<PathBuf>,
     pub rpc_listen: Option<std::net::SocketAddr>,
     pub rpc_auth_token: Option<String>,
+    pub rpc_allowed_origin: Option<String>,
     pub telemetry_endpoint: Option<String>,
     pub telemetry_auth_token: Option<String>,
     pub telemetry_sample_interval: Option<u64>,
@@ -567,8 +574,19 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     if let Some(bundle) = node_bundle.as_mut() {
         apply_overrides(&mut bundle.value, &options);
     }
-    let wallet_bundle =
+    let mut wallet_bundle =
         load_wallet_configuration(mode, &options).map_err(BootstrapError::configuration)?;
+
+    if let Some(bundle) = wallet_bundle.as_mut() {
+        if let Some(origin) = options.rpc_allowed_origin.as_ref() {
+            let origin = origin.trim();
+            if origin.is_empty() {
+                bundle.value.wallet.rpc.allowed_origin = None;
+            } else {
+                bundle.value.wallet.rpc.allowed_origin = Some(origin.to_string());
+            }
+        }
+    }
 
     ensure_listener_conflicts(mode, node_bundle.as_ref(), wallet_bundle.as_ref())
         .map_err(BootstrapError::configuration)?;
@@ -1641,6 +1659,14 @@ fn apply_overrides(config: &mut NodeConfig, options: &BootstrapOptions) {
             config.network.rpc.auth_token = Some(token.to_string());
         }
     }
+    if let Some(origin) = options.rpc_allowed_origin.as_ref() {
+        let origin = origin.trim();
+        if origin.is_empty() {
+            config.network.rpc.allowed_origin = None;
+        } else {
+            config.network.rpc.allowed_origin = Some(origin.to_string());
+        }
+    }
     if let Some(endpoint) = options.telemetry_endpoint.as_ref() {
         let endpoint = endpoint.trim();
         if endpoint.is_empty() {
@@ -2347,6 +2373,7 @@ mod tests {
             data_dir: None,
             rpc_listen: None,
             rpc_auth_token: None,
+            rpc_allowed_origin: None,
             telemetry_endpoint: None,
             telemetry_auth_token: None,
             telemetry_sample_interval: None,

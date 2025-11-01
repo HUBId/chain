@@ -78,6 +78,10 @@ requests.【F:docs/API_SECURITY.md†L10-L37】【F:rpp/node/src/main.rs†L101-
 configurations should rotate tokens alongside other secrets and audit usage via
 reverse-proxy logs.
 
+Expose the RPC to browser dashboards by setting `network.rpc.allowed_origin` in
+configuration or passing `--rpc-allowed-origin <ORIGIN>` to the runtime for
+temporary overrides.【F:docs/API_SECURITY.md†L38-L45】【F:rpp/node/src/lib.rs†L229-L337】
+
 When automation calls the REST endpoints directly, reuse the same tokens and
 respect the configured request limits. A `429` response indicates that the node's
 rate limiter rejected the request; retry with exponential backoff or throttle
