@@ -88,13 +88,15 @@ set through `register_vrf_tag` to guard against duplicated proofs entering the
 history or being reused during identity onboarding.
 
 ## CLI & Configuration
-`cargo run -- keygen` now emits both the Ed25519 identity keypair and a VRF
-keypair. Nodes load VRF material through the configurable keystore abstraction
-exposed by `NodeConfig::load_or_generate_vrf_keypair`; filesystem storage at
-`config.vrf_key_path` remains the default, while production deployments can
-switch to `secrets.backend = "vault"` to keep tokens and TLS credentials
-outside of the node logs. The `target_validator_count` configuration entry
-drives the dynamic threshold used for per-epoch validator selection.【F:rpp/runtime/config.rs†L567-L574】【F:config/node.toml†L8-L21】
+`rpp-node validator vrf rotate --config config/validator.toml` rotiert sowohl
+das VRF-Schlüsselpaar als auch die Ablage im hinterlegten Secrets-Backend und
+zeigt das Ergebnis direkt im Terminal an. Nodes laden die VRF-Materialien über
+die Keystore-Abstraktion `NodeConfig::load_or_generate_vrf_keypair`; das
+Dateisystem unter `config.vrf_key_path` bleibt Standard, während Deployments
+`secrets.backend = "vault"` verwenden können, um Tokens und TLS-Anmeldedaten
+aus den Node-Logs herauszuhalten. Der Eintrag `target_validator_count`
+steuert weiterhin den dynamischen Schwellwert für die Validatorauswahl pro
+Epoche.【F:rpp/node/src/main.rs†L238-L317】【F:rpp/runtime/config.rs†L567-L574】【F:config/node.toml†L8-L21】
 
 ## Telemetry & Metrics
 `GET /status/node` now surfaces a `vrf_metrics` payload containing the submission
