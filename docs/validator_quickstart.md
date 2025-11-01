@@ -212,11 +212,20 @@ bootstrap completes, making it safe for CI and change-management gates.【F:rpp/
 The CLI also supports `--log-json`, RPC overrides, and other telemetry
 shortcuts when you need to override defaults at launch time.【F:rpp/node/src/lib.rs†L35-L111】
 
-Verify the node has joined the gossip network via `/status/p2p` and confirm the
-release channel, feature-gate state, and telemetry health via
-`/status/rollout`. The [Deployment & Observability Playbook](./deployment_observability.md)
-lists the dashboards and alerts operators should wire up immediately after
-bootstrap.
+Verify the node has joined the gossip network via `/p2p/peers` (and
+`/p2p/peers/self` for the local identity) and confirm the release channel,
+feature-gate state, and telemetry health via `/status/rollout`. The
+[Deployment & Observability Playbook](./deployment_observability.md) lists the
+dashboards and alerts operators should wire up immediately after bootstrap.
+
+### Validator endpoint quick-reference
+
+| Endpoint | Purpose | Notes |
+| --- | --- | --- |
+| `GET /p2p/peers` | Lists connected peers and their libp2p identities. | Combine with `GET /p2p/peers/self` to validate the local peer ID and advertised addresses. |
+| `GET /snapshots/plan` | Shows the snapshot heights and digests this validator is ready to serve. | Use to confirm fresh snapshots are published after pruning. |
+| `GET /snapshots/jobs` | Displays active snapshot ingestion or export jobs. | Helpful during rebuilds to watch chunking progress. |
+| `GET /state-sync/status` | Reports the state-sync pipeline status and last applied chunk. | Useful when diagnosing catch-up or reconstruction issues. |
 
 ## 5. Keep the Node Healthy
 
