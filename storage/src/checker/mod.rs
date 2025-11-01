@@ -6,7 +6,7 @@ pub(crate) use range_set::LinearAddressRangeSet;
 
 use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
-use crate::nodestore::primitives::{AreaIndex, area_size_iter};
+use crate::nodestore::primitives::{area_size_iter, AreaIndex};
 use crate::{
     CheckerError, Committed, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, Path,
@@ -753,15 +753,15 @@ mod test {
 
     use super::*;
     use crate::linear::memory::MemStore;
-    use crate::nodestore::NodeStoreHeader;
-    use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
+    use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::primitives::area_size_iter;
+    use crate::nodestore::NodeStoreHeader;
     use crate::{
-        BranchNode, Child, FreeListParent, LeafNode, NodeStore, Path, area_index, hash_node,
-        noop_storage_metrics,
+        area_index, hash_node, noop_storage_metrics, BranchNode, Child, FreeListParent, LeafNode,
+        NodeStore, Path,
     };
 
     #[derive(Debug)]

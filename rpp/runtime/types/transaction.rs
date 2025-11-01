@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::proof_backend::Blake2sHasher;
 use ed25519_dalek::{PublicKey, Signature};
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 use uuid::Uuid;
 
 use crate::crypto::{

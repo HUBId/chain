@@ -15,7 +15,11 @@ pub(crate) trait TryExtend<T>: Extend<T> {
             error: &mut error,
         });
 
-        if let Some(e) = error { Err(e) } else { Ok(()) }
+        if let Some(e) = error {
+            Err(e)
+        } else {
+            Ok(())
+        }
     }
 }
 

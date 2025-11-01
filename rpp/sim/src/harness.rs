@@ -4,9 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use rpp_p2p::vendor::gossipsub::IdentTopic;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rpp_p2p::vendor::gossipsub::IdentTopic;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
@@ -77,7 +77,10 @@ pub(crate) async fn run_in_process(scenario: Scenario) -> Result<SimulationSumma
     let harness_event_tx = event_tx.clone();
     let mut forwarders = Vec::new();
 
-    for Node { handle, mut events, .. } in nodes.into_iter() {
+    for Node {
+        handle, mut events, ..
+    } in nodes.into_iter()
+    {
         let tx_clone = event_tx.clone();
         forwarders.push(tokio::spawn(async move {
             while let Some(event) = events.recv().await {

@@ -3,9 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::CircuitError;
 
 /// Tier levels recognised by the attestation circuit.
-#[derive(
-    Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy,
-)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub enum TierLevel {
     Tl0,
     Tl1,
@@ -68,7 +66,9 @@ impl TierAttestationCircuit {
             return Err(CircuitError::invalid("wallet address must not be empty"));
         }
         if witness.attestation_digest.is_empty() {
-            return Err(CircuitError::invalid("attestation digest must not be empty"));
+            return Err(CircuitError::invalid(
+                "attestation digest must not be empty",
+            ));
         }
         Ok(Self { witness })
     }

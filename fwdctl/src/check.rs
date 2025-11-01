@@ -9,7 +9,7 @@ use askama::Template;
 use clap::Args;
 use firewood::v2::api;
 use firewood_storage::{
-    CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore, noop_storage_metrics,
+    noop_storage_metrics, CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore,
 };
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;

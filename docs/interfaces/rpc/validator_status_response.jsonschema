@@ -118,17 +118,75 @@
             }
           ]
         },
-        "backend_warnings": {
-          "type": "array",
-          "items": {"type": "string"},
-          "description": "Experimental backend warnings exposed by the node",
-          "default": []
+        "backend_health": {
+          "type": "object",
+          "description": "Per-backend verifier and prover health metrics",
+          "additionalProperties": {"$ref": "#/$defs/BackendHealthReport"},
+          "default": {}
         }
       },
       "additionalProperties": false
     }
   },
   "$defs": {
+    "BackendVerificationMetrics": {
+      "type": "object",
+      "required": [
+        "accepted",
+        "rejected",
+        "bypassed",
+        "total_duration_ms"
+      ],
+      "properties": {
+        "accepted": {"type": "integer", "minimum": 0},
+        "rejected": {"type": "integer", "minimum": 0},
+        "bypassed": {"type": "integer", "minimum": 0},
+        "total_duration_ms": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "Plonky3BackendError": {
+      "type": "object",
+      "required": ["message", "at_ms"],
+      "properties": {
+        "message": {"type": "string"},
+        "at_ms": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "Plonky3BackendHealth": {
+      "type": "object",
+      "required": ["cached_circuits", "proofs_generated", "failed_proofs"],
+      "properties": {
+        "cached_circuits": {"type": "integer", "minimum": 0},
+        "proofs_generated": {"type": "integer", "minimum": 0},
+        "failed_proofs": {"type": "integer", "minimum": 0},
+        "last_success_ms": {"type": ["integer", "null"], "minimum": 0},
+        "last_error": {
+          "description": "Most recent prover error, if any",
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/Plonky3BackendError"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "BackendHealthReport": {
+      "type": "object",
+      "required": ["verifier"],
+      "properties": {
+        "verifier": {"$ref": "#/$defs/BackendVerificationMetrics"},
+        "prover": {
+          "description": "Health information for the prover backend, when available",
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/Plonky3BackendHealth"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "TaggedDigestHex": {
       "type": "string",
       "pattern": "^[0-9a-fA-F]{96}$"

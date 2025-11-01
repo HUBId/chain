@@ -16,8 +16,8 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    Committed, FileIoError, LinearAddress, MaybePersistedNode, MemStore, MutableProposal,
-    NodeReader, NodeStore, RootReader, SharedNode, TrieHash, noop_storage_metrics,
+    noop_storage_metrics, Committed, FileIoError, LinearAddress, MaybePersistedNode, MemStore,
+    MutableProposal, NodeReader, NodeStore, RootReader, SharedNode, TrieHash,
 };
 
 // Returns n random key-value pairs.
@@ -436,7 +436,10 @@ fn prove_surfaces_io_error_when_root_read_fails() {
     let merkle = Merkle::from(FailingRootReader::new());
 
     let err = merkle.prove(b"any-key").unwrap_err();
-    assert!(matches!(err, ProofError::IO(_)), "unexpected error: {err:?}");
+    assert!(
+        matches!(err, ProofError::IO(_)),
+        "unexpected error: {err:?}"
+    );
 }
 
 #[test]

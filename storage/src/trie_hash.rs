@@ -1,8 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
+use crate::node::ExtendableBytes;
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 use std::fmt::{self, Debug, Display, Formatter};

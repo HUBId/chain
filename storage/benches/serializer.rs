@@ -15,7 +15,7 @@ use std::fs::File;
 use std::os::raw::c_int;
 
 use criterion::profiler::Profiler;
-use criterion::{Bencher, Criterion, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, Bencher, Criterion};
 use firewood_storage::{LeafNode, Node, Path};
 use pprof::ProfilerGuard;
 use smallvec::SmallVec;

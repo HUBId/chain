@@ -35,9 +35,31 @@
       "pool_entries": 42,
       "target_validator_count": 21
     },
-    "backend_warnings": [
-      "Plonky3 backend is experimental and provides no cryptographic soundness."
-    ],
+    "backend_health": {
+      "plonky3": {
+        "verifier": {
+          "accepted": 128,
+          "rejected": 0,
+          "bypassed": 0,
+          "total_duration_ms": 4200
+        },
+        "prover": {
+          "cached_circuits": 6,
+          "proofs_generated": 64,
+          "failed_proofs": 1,
+          "last_success_ms": 1700000000456,
+          "last_error": null
+        }
+      },
+      "rpp-stark": {
+        "verifier": {
+          "accepted": 512,
+          "rejected": 2,
+          "bypassed": 0,
+          "total_duration_ms": 9123
+        }
+      }
+    },
     "tip": {
       "height": 1024,
       "hash": "0xabc123",

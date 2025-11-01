@@ -8,6 +8,6 @@
 //! that depend on `firewood-storage` continue to compile without code changes.
 
 pub use rpp_identity_tree::{
-    IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError,
-    IdentityTreeResult,
+    IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError, IdentityTreeResult,
+    IDENTITY_TREE_DEPTH,
 };

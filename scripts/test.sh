@@ -184,7 +184,7 @@ if [[ ${#SUITES_SELECTED[@]} -eq 0 ]]; then
 fi
 
 if [[ ${#BACKENDS[@]} -eq 0 ]]; then
-  BACKENDS=(default stwo rpp-stark)
+  BACKENDS=(default stwo plonky3 rpp-stark)
 fi
 
 run_suite() {
@@ -204,8 +204,6 @@ run_suite() {
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")
-      export CHAIN_PLONKY3_EXPERIMENTAL=1
-      echo "warning: plonky3 backend selected – running in experimental mode without cryptographic guarantees" >&2
       ;;
     rpp-stark)
       backend_args=("--features" "backend-rpp-stark")

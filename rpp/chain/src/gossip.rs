@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use libp2p::PeerId;
 use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;

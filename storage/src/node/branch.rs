@@ -192,8 +192,8 @@ mod ethhash {
         io::Read,
     };
 
-    use crate::TrieHash;
     use crate::node::ExtendableBytes;
+    use crate::TrieHash;
 
     use super::Serializable;
 

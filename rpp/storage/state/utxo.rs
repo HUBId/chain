@@ -267,11 +267,9 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected_order
         );
-        assert!(
-            account_snapshot
-                .iter()
-                .all(|(_, stored)| !stored.is_spent())
-        );
+        assert!(account_snapshot
+            .iter()
+            .all(|(_, stored)| !stored.is_spent()));
 
         assert_eq!(
             deterministic_inputs
@@ -294,12 +292,10 @@ mod tests {
         assert_eq!(peer_records[0].outpoint, peer_outpoint);
 
         let snapshot: BTreeMap<_, _> = state.snapshot().into_iter().collect();
-        assert!(
-            snapshot
-                .get(&spent_outpoint)
-                .expect("spent entry present in snapshot")
-                .is_spent()
-        );
+        assert!(snapshot
+            .get(&spent_outpoint)
+            .expect("spent entry present in snapshot")
+            .is_spent());
     }
 
     #[test]

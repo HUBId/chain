@@ -8,10 +8,7 @@ use test_case::test_case;
 
 use crate::{
     proofs::{
-        de::MAX_RANGE_PROOF_COLLECTION_LEN,
-        header::InvalidHeader,
-        magic,
-        proof_type::ProofType,
+        de::MAX_RANGE_PROOF_COLLECTION_LEN, header::InvalidHeader, magic, proof_type::ProofType,
         reader::ReadError,
     },
     v2::api::FrozenRangeProof,
@@ -236,8 +233,7 @@ fn rejects_collections_exceeding_limit() {
     let start_offset = 32; // header length
     let original_len_size = proof.start_proof().len().required_space();
     let mut len_buf = [0u8; 10];
-    let new_len_size = (MAX_RANGE_PROOF_COLLECTION_LEN + 1)
-        .encode_var(&mut len_buf);
+    let new_len_size = (MAX_RANGE_PROOF_COLLECTION_LEN + 1).encode_var(&mut len_buf);
     let new_len_bytes = len_buf[..new_len_size].to_vec();
 
     data.splice(
@@ -247,10 +243,7 @@ fn rejects_collections_exceeding_limit() {
 
     match FrozenRangeProof::from_slice(&data) {
         Err(ReadError::ItemExceedsLimit {
-            item,
-            limit,
-            found,
-            ..
+            item, limit, found, ..
         }) => {
             assert_eq!(item, "array length", "unexpected item name");
             assert_eq!(limit, MAX_RANGE_PROOF_COLLECTION_LEN, "unexpected limit");

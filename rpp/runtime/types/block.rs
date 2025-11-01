@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::convert::TryInto;
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use blake3::Hasher as Blake3Hasher;
@@ -31,11 +31,11 @@ use serde_json;
 
 use storage_firewood::pruning::FirewoodPruner;
 
+use self::pruning_ext::PruningProofExt;
 use super::{
     identity::{IDENTITY_ATTESTATION_GOSSIP_MIN, IDENTITY_ATTESTATION_QUORUM},
     Address, AttestedIdentityRequest, BlockProofBundle, ChainProof, SignedTransaction, UptimeProof,
 };
-use self::pruning_ext::PruningProofExt;
 
 use rpp_pruning::{
     BlockHeight, Commitment, DomainTag, FirewoodEnvelope, ParameterVersion, ProofSegment,
@@ -211,7 +211,7 @@ impl CanonicalPruningEnvelope {
 
 pub(crate) mod serde_pruning_proof {
     use super::{
-        pruning_from_metadata, pruning_ext::PruningProofExt, CanonicalPruningEnvelope,
+        pruning_ext::PruningProofExt, pruning_from_metadata, CanonicalPruningEnvelope,
         PruningEnvelopeMetadata, PruningProof,
     };
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -245,9 +245,9 @@ pub(crate) mod serde_pruning_proof {
             }
 
             let envelope = match CanonicalOrLegacy::deserialize(deserializer)? {
-                CanonicalOrLegacy::Canonical(canonical) => {
-                    canonical.into_envelope().map_err(serde::de::Error::custom)?
-                }
+                CanonicalOrLegacy::Canonical(canonical) => canonical
+                    .into_envelope()
+                    .map_err(serde::de::Error::custom)?,
                 CanonicalOrLegacy::Legacy(legacy) => legacy,
             };
             Ok(Arc::new(envelope))
@@ -408,9 +408,7 @@ impl TaggedDigestHex {
         label: &str,
         expected_tag: DomainTag,
     ) -> ChainResult<PrefixedDigest> {
-        Ok(self
-            .to_tagged_digest(label, expected_tag)?
-            .prefixed_bytes())
+        Ok(self.to_tagged_digest(label, expected_tag)?.prefixed_bytes())
     }
 
     pub fn parse(expected_tag: DomainTag, label: &str, value: &str) -> ChainResult<TaggedDigest> {
@@ -472,17 +470,18 @@ pub struct PruningEnvelopeMetadata {
 mod pruning_ext {
     use super::{
         compute_pruning_aggregate, compute_pruning_binding, decode_hex_digest,
-        decode_tagged_digest, encode_tagged_digest_hex, Block, BlockHeader,
-        ChainError, ChainResult, PruningCommitmentMetadata, PruningEnvelopeMetadata,
-        PruningSegmentMetadata, PruningSnapshotMetadata, TaggedDigestHex, ZERO_DIGEST_HEX,
-        PRUNING_PARAMETER_VERSION, PRUNING_SCHEMA_VERSION, PRUNING_SEGMENT_INDEX,
+        decode_tagged_digest, encode_tagged_digest_hex, Block, BlockHeader, ChainError,
+        ChainResult, PruningCommitmentMetadata, PruningEnvelopeMetadata, PruningSegmentMetadata,
+        PruningSnapshotMetadata, TaggedDigestHex, PRUNING_PARAMETER_VERSION,
+        PRUNING_SCHEMA_VERSION, PRUNING_SEGMENT_INDEX, ZERO_DIGEST_HEX,
     };
     use crate::PruningProof;
-    use std::sync::Arc;
     use rpp_pruning::{
         BlockHeight, Commitment, ParameterVersion, ProofSegment, SchemaVersion, SegmentIndex,
-        Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG, SNAPSHOT_STATE_TAG,
+        Snapshot, TaggedDigest, COMMITMENT_TAG, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
+        SNAPSHOT_STATE_TAG,
     };
+    use std::sync::Arc;
     use storage_firewood::pruning::FirewoodPruner;
 
     #[derive(Clone, Debug)]
@@ -500,10 +499,7 @@ mod pruning_ext {
             Ok(Self { envelope })
         }
 
-        pub fn genesis(
-            envelope: PruningProof,
-            current_header: &BlockHeader,
-        ) -> ChainResult<Self> {
+        pub fn genesis(envelope: PruningProof, current_header: &BlockHeader) -> ChainResult<Self> {
             Self::new(envelope, current_header, None)
         }
 
@@ -751,7 +747,8 @@ mod pruning_ext {
                 block_height: snapshot.block_height().as_u64(),
                 state_commitment: TaggedDigestHex::from(&snapshot.state_commitment()),
             };
-            let segment_metadata = self.segments()
+            let segment_metadata = self
+                .segments()
                 .iter()
                 .map(|segment| PruningSegmentMetadata {
                     schema_version: u16::from(segment.schema_version()),
@@ -936,18 +933,11 @@ mod pruning_ext {
     }
 
     pub fn pruning_genesis(state_root: &str) -> PruningProof {
-        canonical_pruning_genesis(state_root)
-            .expect("genesis pruning envelope must be valid")
+        canonical_pruning_genesis(state_root).expect("genesis pruning envelope must be valid")
     }
 
     pub fn canonical_pruning_genesis(state_root: &str) -> ChainResult<PruningProof> {
-        canonical_pruning_from_parts(
-            0,
-            ZERO_DIGEST_HEX,
-            state_root,
-            ZERO_DIGEST_HEX,
-            state_root,
-        )
+        canonical_pruning_from_parts(0, ZERO_DIGEST_HEX, state_root, ZERO_DIGEST_HEX, state_root)
     }
 
     pub fn pruning_from_previous(
@@ -1041,20 +1031,20 @@ mod pruning_ext {
                 .map_err(|err| ChainError::Crypto(format!("invalid pruning commitment: {err}")))?;
 
         let resulting_state = decode_hex_digest("resulting state root", resulting_state_root)?;
-        let binding = super::compute_pruning_binding(
-            &commitment.aggregate_commitment(),
-            &resulting_state,
-        );
+        let binding =
+            super::compute_pruning_binding(&commitment.aggregate_commitment(), &resulting_state);
 
-        Ok(Arc::new(rpp_pruning::Envelope::new(
-            PRUNING_SCHEMA_VERSION,
-            PRUNING_PARAMETER_VERSION,
-            snapshot,
-            vec![segment],
-            commitment,
-            binding,
-        )
-        .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?))
+        Ok(Arc::new(
+            rpp_pruning::Envelope::new(
+                PRUNING_SCHEMA_VERSION,
+                PRUNING_PARAMETER_VERSION,
+                snapshot,
+                vec![segment],
+                commitment,
+                binding,
+            )
+            .map_err(|err| ChainError::Crypto(format!("invalid pruning envelope: {err}")))?,
+        ))
     }
 }
 
@@ -1806,15 +1796,8 @@ impl Block {
         Ok(())
     }
 
-    fn verify_pruning(
-        &self,
-        previous: Option<&Block>,
-    ) -> ChainResult<ValidatedPruningEnvelope> {
-        ValidatedPruningEnvelope::new(
-            self.pruning_proof.clone(),
-            &self.header,
-            previous,
-        )
+    fn verify_pruning(&self, previous: Option<&Block>) -> ChainResult<ValidatedPruningEnvelope> {
+        ValidatedPruningEnvelope::new(self.pruning_proof.clone(), &self.header, previous)
     }
 
     fn verify_full_payload(
@@ -2670,13 +2653,14 @@ mod tests {
                 let zero = FieldElement::zero(parameters.modulus());
                 let pruning_binding_digest =
                     TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-                let pruning_segment_commitments = vec![
-                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-                ];
+                let pruning_segment_commitments =
+                    vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH])
+                        .prefixed_bytes()];
                 let pruning_fold = {
                     let mut accumulator = zero.clone();
                     let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
-                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    accumulator =
+                        hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
                     for digest in &pruning_segment_commitments {
                         let element = parameters.element_from_bytes(digest);
                         accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
@@ -2707,8 +2691,8 @@ mod tests {
                 timetoke_root: "ff".repeat(32),
                 zsi_root: "11".repeat(32),
                 proof_root: "22".repeat(32),
-                pruning_binding_digest:
-                    TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes(),
+                pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH])
+                    .prefixed_bytes(),
                 pruning_segment_commitments: vec![
                     TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
                     TaggedDigest::new(PROOF_SEGMENT_TAG, [0x66; DIGEST_LENGTH]).prefixed_bytes(),
@@ -2752,13 +2736,14 @@ mod tests {
                 let zero = FieldElement::zero(parameters.modulus());
                 let pruning_binding_digest =
                     TaggedDigest::new(ENVELOPE_TAG, [0x44; DIGEST_LENGTH]).prefixed_bytes();
-                let pruning_segment_commitments = vec![
-                    TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH]).prefixed_bytes(),
-                ];
+                let pruning_segment_commitments =
+                    vec![TaggedDigest::new(PROOF_SEGMENT_TAG, [0x55; DIGEST_LENGTH])
+                        .prefixed_bytes()];
                 let pruning_fold = {
                     let mut accumulator = zero.clone();
                     let binding_element = parameters.element_from_bytes(&pruning_binding_digest);
-                    accumulator = hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
+                    accumulator =
+                        hasher.hash(&[accumulator.clone(), binding_element, zero.clone()]);
                     for digest in &pruning_segment_commitments {
                         let element = parameters.element_from_bytes(digest);
                         accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
@@ -3280,13 +3265,8 @@ impl From<BlockMetadata> for BlockMetadataSerde {
                     .get(0)
                     .map(|segment| segment.segment_commitment.as_str().to_owned());
                 let pruning_commitment = Some(metadata.binding_digest.as_str().to_owned());
-                let pruning_aggregate_commitment = Some(
-                    metadata
-                        .commitment
-                        .aggregate_commitment
-                        .as_str()
-                        .to_owned(),
-                );
+                let pruning_aggregate_commitment =
+                    Some(metadata.commitment.aggregate_commitment.as_str().to_owned());
                 let pruning_schema_version = Some(metadata.schema_version);
                 let pruning_parameter_version = Some(metadata.parameter_version);
                 (
@@ -3396,11 +3376,7 @@ impl BlockMetadata {
             .iter()
             .map(|segment| segment.segment_commitment().prefixed_bytes())
             .collect();
-        let previous_state_root = pruning
-            .snapshot
-            .state_commitment
-            .as_str()
-            .to_owned();
+        let previous_state_root = pruning.snapshot.state_commitment.as_str().to_owned();
 
         Self {
             height: block.header.height,
@@ -3440,7 +3416,8 @@ impl BlockMetadata {
     }
 
     pub fn pruning_schema_version(&self) -> Option<u16> {
-        self.pruning_metadata().map(|pruning| pruning.schema_version)
+        self.pruning_metadata()
+            .map(|pruning| pruning.schema_version)
     }
 
     pub fn pruning_parameter_version(&self) -> Option<u16> {

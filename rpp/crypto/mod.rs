@@ -13,7 +13,7 @@ use reqwest::blocking::Client;
 use reqwest::{Certificate, Identity, StatusCode};
 use rpp_crypto_vrf::{self};
 pub use rpp_crypto_vrf::{
-    Tier, VrfKeypair, VrfPublicKey, VrfSecretKey, vrf_public_key_to_hex, vrf_secret_key_to_hex,
+    vrf_public_key_to_hex, vrf_secret_key_to_hex, Tier, VrfKeypair, VrfPublicKey, VrfSecretKey,
 };
 use serde::{Deserialize, Serialize};
 

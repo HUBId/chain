@@ -40,9 +40,7 @@ pub mod invariants {
     use std::sync::Arc;
 
     use crate::errors::{ChainError, ChainResult};
-    use crate::types::{
-        Block, BlockMetadata, PruningProof, PruningProofExt, RecursiveProof,
-    };
+    use crate::types::{Block, BlockMetadata, PruningProof, PruningProofExt, RecursiveProof};
 
     /// Invariant I1: Commitment consistency across block header, metadata, and proofs.
     pub fn check_i1_commitment_consistency(
@@ -246,9 +244,7 @@ pub mod invariants {
         }
 
         if let Some(proof) = pruning_proof {
-            if metadata.previous_state_root
-                != proof.snapshot_metadata().state_commitment.as_str()
-            {
+            if metadata.previous_state_root != proof.snapshot_metadata().state_commitment.as_str() {
                 return Err(ChainError::SnapshotReplayFailed(format!(
                     "snapshot state root mismatch at height {}",
                     metadata.height

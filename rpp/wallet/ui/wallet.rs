@@ -34,6 +34,9 @@ use crate::reputation::{
     minimum_transaction_tier, transaction_tier_requirement, Tier, TierRequirementError,
 };
 use crate::rpp::{UtxoOutpoint, UtxoRecord};
+#[cfg(feature = "vendor_electrs")]
+use crate::runtime::node::PendingTransactionSummary;
+use crate::runtime::{ProofKind, RuntimeMetrics};
 use crate::state::StoredUtxo;
 use crate::storage::ledger::SlashingEvent;
 use crate::storage::Storage;
@@ -43,9 +46,6 @@ use crate::types::{
     Account, Address, ChainProof, IdentityDeclaration, IdentityGenesis, IdentityProof,
     SignedTransaction, Transaction, TransactionProofBundle, UptimeClaim, UptimeProof,
 };
-use crate::runtime::{ProofKind, RuntimeMetrics};
-#[cfg(feature = "vendor_electrs")]
-use crate::runtime::node::PendingTransactionSummary;
 #[cfg(feature = "vendor_electrs")]
 use log::debug;
 use log::warn;
@@ -1749,8 +1749,7 @@ impl Wallet {
         if let Some(kind) = Self::metrics_proof_kind(proof) {
             self.metrics
                 .record_proof_generation_duration(kind, duration);
-            let size = payload_bytes
-                .or_else(|| Self::proof_payload_size_from_proof(proof));
+            let size = payload_bytes.or_else(|| Self::proof_payload_size_from_proof(proof));
             if let Some(bytes) = size {
                 self.metrics.record_proof_generation_size(kind, bytes);
             }
@@ -1771,7 +1770,9 @@ impl Wallet {
         match proof {
             ChainProof::Stwo(stark) => Self::proof_payload_size_from_payload(&stark.payload),
             #[cfg(feature = "backend-plonky3")]
-            ChainProof::Plonky3(value) => serde_json::to_vec(value).ok().map(|bytes| bytes.len() as u64),
+            ChainProof::Plonky3(value) => serde_json::to_vec(value)
+                .ok()
+                .map(|bytes| bytes.len() as u64),
             #[cfg(feature = "backend-rpp-stark")]
             ChainProof::RppStark(proof) => Some(proof.total_len() as u64),
         }
@@ -1880,9 +1881,9 @@ mod tests {
         InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
     };
     use rand::rngs::OsRng;
+    use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
     use std::{collections::HashSet, sync::Arc, time::Duration};
     use tempfile::tempdir;
-    use rpp_pruning::{TaggedDigest, DIGEST_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG};
 
     fn setup_metrics() -> (
         Arc<RuntimeMetrics>,
@@ -1912,11 +1913,13 @@ mod tests {
             timetoke_root: "55".repeat(32),
             zsi_root: "66".repeat(32),
             proof_root: "77".repeat(32),
-            pruning_binding_digest:
-                TaggedDigest::new(ENVELOPE_TAG, [0x12; DIGEST_LENGTH]).prefixed_bytes(),
-            pruning_segment_commitments: vec![
-                TaggedDigest::new(PROOF_SEGMENT_TAG, [0x34; DIGEST_LENGTH]).prefixed_bytes(),
-            ],
+            pruning_binding_digest: TaggedDigest::new(ENVELOPE_TAG, [0x12; DIGEST_LENGTH])
+                .prefixed_bytes(),
+            pruning_segment_commitments: vec![TaggedDigest::new(
+                PROOF_SEGMENT_TAG,
+                [0x34; DIGEST_LENGTH],
+            )
+            .prefixed_bytes()],
             block_height: 1,
         };
         ChainProof::Stwo(StarkProof {

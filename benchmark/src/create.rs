@@ -10,7 +10,7 @@ use std::error::Error;
 use std::time::Instant;
 
 use fastrace::prelude::SpanContext;
-use fastrace::{Span, func_path};
+use fastrace::{func_path, Span};
 use firewood::db::Db;
 use firewood::v2::api::{Db as _, Proposal as _};
 use log::info;

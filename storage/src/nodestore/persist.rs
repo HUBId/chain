@@ -33,7 +33,7 @@ use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{WalFlushOutcome, firewood_gauge};
+use crate::{firewood_gauge, WalFlushOutcome};
 use coarsetime::Instant;
 
 #[cfg(feature = "io-uring")]
@@ -547,12 +547,11 @@ impl NodeStore<Committed, FileBacked> {
 mod tests {
     use super::*;
     use crate::{
-        Child, HashType, ImmutableProposal, LinearAddress, NodeStore, Path, SharedNode,
-        StorageMetrics, StorageMetricsHandle, WalFlushOutcome,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
-        noop_storage_metrics,
+        noop_storage_metrics, Child, HashType, ImmutableProposal, LinearAddress, NodeStore, Path,
+        SharedNode, StorageMetrics, StorageMetricsHandle, WalFlushOutcome,
     };
     use std::sync::{Arc, Mutex};
     use std::time::Duration;

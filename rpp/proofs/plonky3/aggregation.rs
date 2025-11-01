@@ -4,10 +4,10 @@ use crate::errors::{ChainError, ChainResult};
 use crate::types::ChainProof;
 
 use super::circuit::recursive::RecursiveWitness;
+use super::crypto;
 use super::params::Plonky3Parameters;
 use super::proof::Plonky3Proof;
 use super::prover::Plonky3Backend;
-use super::crypto;
 
 pub(super) struct RecursiveAggregator {
     backend: Plonky3Backend,

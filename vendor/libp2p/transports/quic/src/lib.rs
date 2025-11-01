@@ -70,9 +70,9 @@ use std::net::SocketAddr;
 
 pub use config::Config;
 pub use connection::{Connecting, Connection, Stream};
-pub use provider::Provider;
 #[cfg(feature = "tokio")]
 pub use provider::tokio;
+pub use provider::Provider;
 pub use transport::GenTransport;
 
 /// Errors that may happen on the [`GenTransport`] or a single [`Connection`].

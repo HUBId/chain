@@ -27,7 +27,7 @@ use std::{
 };
 
 use futures::{
-    future::{Either, FutureExt, Select, select},
+    future::{select, Either, FutureExt, Select},
     prelude::*,
 };
 use futures_timer::Delay;

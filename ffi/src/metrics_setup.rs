@@ -7,13 +7,13 @@ use std::error::Error;
 use std::fmt::Write;
 use std::net::Ipv6Addr;
 use std::ops::Deref;
-use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use oxhttp::Server;
 use oxhttp::model::{Body, Response, StatusCode};
+use oxhttp::Server;
 use std::net::Ipv4Addr;
 use std::time::Duration;
 

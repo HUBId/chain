@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use futures::{StreamExt, channel::oneshot};
+use futures::{channel::oneshot, StreamExt};
 use libp2p_core::{
-    Endpoint, Transport,
     transport::{DialOpts, ListenerId, PortUse},
+    Endpoint, Transport,
 };
 use libp2p_quic as quic;
 

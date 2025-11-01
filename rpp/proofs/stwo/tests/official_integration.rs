@@ -23,7 +23,7 @@ use crate::stwo::verifier::NodeVerifier;
 use crate::types::{Account, ChainProof, SignedTransaction, Stake, Transaction};
 use ed25519_dalek::{Keypair, Signer};
 use once_cell::sync::Lazy;
-use rand::{SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, SeedableRng};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;

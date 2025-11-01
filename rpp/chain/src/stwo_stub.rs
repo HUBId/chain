@@ -200,52 +200,31 @@ pub mod prover {
             disabled()
         }
 
-        fn prove_transaction(
-            &self,
-            _witness: Self::TransactionWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_transaction(&self, _witness: Self::TransactionWitness) -> ChainResult<ChainProof> {
             disabled()
         }
 
-        fn prove_identity(
-            &self,
-            _witness: Self::IdentityWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_identity(&self, _witness: Self::IdentityWitness) -> ChainResult<ChainProof> {
             disabled()
         }
 
-        fn prove_state_transition(
-            &self,
-            _witness: Self::StateWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_state_transition(&self, _witness: Self::StateWitness) -> ChainResult<ChainProof> {
             disabled()
         }
 
-        fn prove_pruning(
-            &self,
-            _witness: Self::PruningWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_pruning(&self, _witness: Self::PruningWitness) -> ChainResult<ChainProof> {
             disabled()
         }
 
-        fn prove_recursive(
-            &self,
-            _witness: Self::RecursiveWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_recursive(&self, _witness: Self::RecursiveWitness) -> ChainResult<ChainProof> {
             disabled()
         }
 
-        fn prove_uptime(
-            &self,
-            _witness: Self::UptimeWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_uptime(&self, _witness: Self::UptimeWitness) -> ChainResult<ChainProof> {
             disabled()
         }
 
-        fn prove_consensus(
-            &self,
-            _witness: Self::ConsensusWitness,
-        ) -> ChainResult<ChainProof> {
+        fn prove_consensus(&self, _witness: Self::ConsensusWitness) -> ChainResult<ChainProof> {
             disabled()
         }
     }
@@ -384,7 +363,7 @@ pub mod circuit {
     use crate::types::{Account, AttestedIdentityRequest, SignedTransaction};
 
     use super::params::{Modulus, StarkParameters};
-    use super::{FieldElement};
+    use super::FieldElement;
 
     pub mod consensus {
         use serde::{Deserialize, Serialize};
@@ -505,7 +484,10 @@ pub mod circuit {
             use serde::{Deserialize, Deserializer, Serializer};
             use std::fmt;
 
-            pub fn serialize<S>(values: &Vec<PrefixedDigest>, serializer: S) -> Result<S::Ok, S::Error>
+            pub fn serialize<S>(
+                values: &Vec<PrefixedDigest>,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error>
             where
                 S: Serializer,
             {
@@ -614,7 +596,10 @@ pub mod circuit {
             pub mod prefixed_digest {
                 use super::*;
 
-                pub fn serialize<S>(value: &PrefixedDigest, serializer: S) -> Result<S::Ok, S::Error>
+                pub fn serialize<S>(
+                    value: &PrefixedDigest,
+                    serializer: S,
+                ) -> Result<S::Ok, S::Error>
                 where
                     S: Serializer,
                 {
@@ -626,8 +611,8 @@ pub mod circuit {
                     D: Deserializer<'de>,
                 {
                     let encoded = String::deserialize(deserializer)?;
-                    let bytes = hex::decode(&encoded)
-                        .map_err(|err| D::Error::custom(err.to_string()))?;
+                    let bytes =
+                        hex::decode(&encoded).map_err(|err| D::Error::custom(err.to_string()))?;
                     decode_prefixed_digest(&bytes).map_err(D::Error::custom)
                 }
             }
@@ -635,7 +620,10 @@ pub mod circuit {
             pub mod prefixed_digest_vec {
                 use super::*;
 
-                pub fn serialize<S>(values: &Vec<PrefixedDigest>, serializer: S) -> Result<S::Ok, S::Error>
+                pub fn serialize<S>(
+                    values: &Vec<PrefixedDigest>,
+                    serializer: S,
+                ) -> Result<S::Ok, S::Error>
                 where
                     S: Serializer,
                 {
@@ -667,8 +655,8 @@ pub mod circuit {
                             while let Some(encoded) = seq.next_element::<String>()? {
                                 let bytes = hex::decode(&encoded)
                                     .map_err(|err| A::Error::custom(err.to_string()))?;
-                                let digest = decode_prefixed_digest(&bytes)
-                                    .map_err(A::Error::custom)?;
+                                let digest =
+                                    decode_prefixed_digest(&bytes).map_err(A::Error::custom)?;
                                 values.push(digest);
                             }
                             Ok(values)
@@ -805,7 +793,10 @@ pub mod circuit {
     pub trait StarkCircuit {
         fn name(&self) -> &'static str;
         fn evaluate_constraints(&self) -> Result<(), CircuitError>;
-        fn generate_trace(&self, _parameters: &StarkParameters) -> Result<ExecutionTrace, CircuitError>;
+        fn generate_trace(
+            &self,
+            _parameters: &StarkParameters,
+        ) -> Result<ExecutionTrace, CircuitError>;
         fn define_air(
             &self,
             _parameters: &StarkParameters,
@@ -866,7 +857,9 @@ pub mod official_adapter {
             _trace: &ExecutionTrace,
             _params: &StarkParameters,
         ) -> Result<Self, &'static str> {
-            Ok(Self { _marker: PhantomData })
+            Ok(Self {
+                _marker: PhantomData,
+            })
         }
     }
 
@@ -895,7 +888,9 @@ pub mod fri {
 
     impl<'a> FriProver<'a> {
         pub fn new(_parameters: &'a StarkParameters) -> Self {
-            Self { _marker: std::marker::PhantomData }
+            Self {
+                _marker: std::marker::PhantomData,
+            }
         }
 
         pub fn prove(

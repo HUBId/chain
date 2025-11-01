@@ -16,16 +16,13 @@ fn snapshot_map(receipts: &[PersistedPrunerSnapshot]) -> HashMap<u64, [u8; 32]> 
         .collect()
 }
 
-fn assert_snapshot_present(
-    expected: &SnapshotEntry,
-    recorded: &mut HashMap<u64, [u8; 32]>,
-) {
-    let actual = recorded
-        .remove(&expected.block_height)
-        .unwrap_or_else(|| panic!(
+fn assert_snapshot_present(expected: &SnapshotEntry, recorded: &mut HashMap<u64, [u8; 32]>) {
+    let actual = recorded.remove(&expected.block_height).unwrap_or_else(|| {
+        panic!(
             "missing pruning receipt for block {}",
             expected.block_height
-        ));
+        )
+    });
     assert_eq!(
         actual, expected.state_commitment,
         "state commitment mismatch for block {}",
@@ -47,7 +44,8 @@ fn pruning_receipts_align_with_snapshot_metadata() {
     let matching_set = metadata_sets
         .iter()
         .find(|set| {
-            set.schema_digest == receipts.schema_digest && set.parameter_digest == receipts.parameter_digest
+            set.schema_digest == receipts.schema_digest
+                && set.parameter_digest == receipts.parameter_digest
         })
         .expect("recorded receipts must match a known snapshot dataset");
 

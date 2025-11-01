@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use blake3::Hasher;
-use malachite::Natural;
 use malachite::base::num::arithmetic::traits::DivRem;
+use malachite::Natural;
 use proptest::prelude::*;
 
 use rpp_chain::consensus::{ConsensusRound, ObserverProfile, ValidatorCandidate};

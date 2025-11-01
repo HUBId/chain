@@ -571,7 +571,7 @@ mod tests {
     use super::*;
     use crate::merkle::Merkle;
     use firewood_storage::{
-        ImmutableProposal, MemStore, MutableProposal, NodeStore, noop_storage_metrics,
+        noop_storage_metrics, ImmutableProposal, MemStore, MutableProposal, NodeStore,
     };
     use std::sync::Arc;
     use test_case::test_case;

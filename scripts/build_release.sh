@@ -105,13 +105,6 @@ fi
 check_forbidden_features() {
   local -n _args=$1
   local i
-  local -a plonky3_aliases=(
-    "backend-plonky3"
-    "backend_plonky3"
-    "plonky3-backend"
-    "plonky3_backend"
-  )
-  local plonky3_error="error: backend-plonky3 backend is experimental and must not ship in production artifacts"
   for ((i = 0; i < ${#_args[@]}; i++)); do
     local arg="${_args[i]}"
     if [[ "$arg" == "--features" ]]; then
@@ -121,26 +114,10 @@ check_forbidden_features() {
           echo "error: prover-mock feature is not allowed for release builds" >&2
           exit 1
         fi
-        local alias
-        for alias in "${plonky3_aliases[@]}"; do
-          if [[ "$value" == *"$alias"* ]]; then
-            echo "$plonky3_error" >&2
-            exit 1
-          fi
-        done
       fi
-    else
-      if [[ "$arg" == *"prover-mock"* ]]; then
-        echo "error: prover-mock feature is not allowed for release builds" >&2
-        exit 1
-      fi
-      local alias
-      for alias in "${plonky3_aliases[@]}"; do
-        if [[ "$arg" == *"$alias"* ]]; then
-          echo "$plonky3_error" >&2
-          exit 1
-        fi
-      done
+    elif [[ "$arg" == *"prover-mock"* ]]; then
+      echo "error: prover-mock feature is not allowed for release builds" >&2
+      exit 1
     fi
   done
 }

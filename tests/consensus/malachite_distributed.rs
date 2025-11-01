@@ -1,8 +1,8 @@
 use libp2p::PeerId;
 use rpp_consensus::malachite::distributed::{DistributedOrchestrator, NodeStreams, VoteMessage};
 use rpp_consensus::messages::{
-    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreCommit,
-    PreVote, Proposal, Signature,
+    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata,
+    PreCommit, PreVote, Proposal, Signature,
 };
 use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
@@ -105,7 +105,10 @@ fn sample_commit(proposal: &Proposal, round: u64) -> Commit {
 
 #[test]
 fn distributed_streams_propagate_across_nodes() {
-    let runtime = Builder::new_current_thread().enable_all().build().expect("runtime");
+    let runtime = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
     runtime.block_on(async {
         let orchestrator = DistributedOrchestrator::default();
         let NodeStreams {
@@ -149,11 +152,7 @@ fn distributed_streams_propagate_across_nodes() {
         orchestrator
             .publish_vote(precommit.clone().into())
             .expect("precommit propagated");
-        match mut_b_votes
-            .recv()
-            .await
-            .expect("node B receives precommit")
-        {
+        match mut_b_votes.recv().await.expect("node B receives precommit") {
             VoteMessage::PreCommit(vote) => {
                 assert_eq!(vote.validator_id, precommit.validator_id);
                 assert_eq!(vote.round, precommit.round);
@@ -165,26 +164,17 @@ fn distributed_streams_propagate_across_nodes() {
         orchestrator
             .publish_commit(commit.clone())
             .expect("commit propagated");
-        let received_commit = mut_b_commits
-            .recv()
-            .await
-            .expect("node B receives commit");
+        let received_commit = mut_b_commits.recv().await.expect("node B receives commit");
         assert_eq!(received_commit.block.height, commit.block.height);
         assert!(mut_b_commits.try_recv().expect("commit drained").is_none());
 
         // Node A should still be able to drain the remaining vote and commit traffic.
-        mut_a_votes
-            .recv()
-            .await
-            .expect("node A backfills prevote");
+        mut_a_votes.recv().await.expect("node A backfills prevote");
         mut_a_votes
             .recv()
             .await
             .expect("node A backfills precommit");
-        mut_a_commits
-            .recv()
-            .await
-            .expect("node A backfills commit");
+        mut_a_commits.recv().await.expect("node A backfills commit");
     });
 }
 
@@ -202,4 +192,3 @@ fn topic_router_fans_out_commits_to_witnesses() {
     assert!(!disabled_route.contains(GossipTopic::WitnessMeta));
     assert!(disabled_route.contains(GossipTopic::Meta));
 }
-

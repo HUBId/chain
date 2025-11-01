@@ -45,12 +45,16 @@ impl PipelineMetrics {
         METRICS.get_or_init(|| Self::new(global::meter(Self::METER_NAME)))
     }
 
-    pub fn record_stage(&self, stage: PipelineStage, observed_ms: u128, commit_height: Option<u64>) {
+    pub fn record_stage(
+        &self,
+        stage: PipelineStage,
+        observed_ms: u128,
+        commit_height: Option<u64>,
+    ) {
         if let Some(phase) = PipelinePhase::from_stage(stage) {
             let attrs = [KeyValue::new("phase", phase.as_str())];
 
-            self.stage_latency_ms
-                .record(observed_ms as f64, &attrs);
+            self.stage_latency_ms.record(observed_ms as f64, &attrs);
             self.stage_total.add(1, &attrs);
 
             if let Some(height) = commit_height {

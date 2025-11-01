@@ -28,7 +28,7 @@ use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind};
 
 use super::alloc::FreeLists;
-use super::primitives::{LinearAddress, area_size_hash};
+use super::primitives::{area_size_hash, LinearAddress};
 use crate::logger::{debug, trace};
 
 /// Can be used by filesystem tooling such as "file" to identify
@@ -308,8 +308,8 @@ impl NodeStoreHeader {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::linear::ReadableStorage;
     use crate::linear::memory::MemStore;
+    use crate::linear::ReadableStorage;
     use crate::nodestore::NodeStore;
     use std::io::Read;
     use test_case::test_case;

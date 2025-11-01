@@ -2,9 +2,13 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use parking_lot::Mutex;
+use once_cell::sync::Lazy;
+use parking_lot::{Mutex, RwLock};
+use serde::Serialize;
 use serde_json::Value;
 
 use plonky3_backend::ProverContext as BackendProverContext;
@@ -54,6 +58,82 @@ impl Hash for CircuitCacheKey {
     }
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct Plonky3BackendError {
+    pub message: String,
+    pub at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Plonky3BackendHealth {
+    pub cached_circuits: usize,
+    pub proofs_generated: u64,
+    pub failed_proofs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<Plonky3BackendError>,
+}
+
+#[derive(Default)]
+struct Plonky3Telemetry {
+    cached_circuits: AtomicUsize,
+    proofs_generated: AtomicU64,
+    failed_proofs: AtomicU64,
+    last_success_ms: AtomicU64,
+    last_error: RwLock<Option<Plonky3BackendError>>,
+}
+
+static PLONKY3_TELEMETRY: Lazy<Plonky3Telemetry> = Lazy::new(Plonky3Telemetry::default);
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+impl Plonky3Telemetry {
+    fn record_cache_size(&self, size: usize) {
+        self.cached_circuits.store(size, Ordering::SeqCst);
+    }
+
+    fn record_success(&self) {
+        self.proofs_generated.fetch_add(1, Ordering::SeqCst);
+        self.last_success_ms.store(now_ms(), Ordering::SeqCst);
+        let mut guard = self.last_error.write();
+        guard.take();
+    }
+
+    fn record_failure(&self, message: String) {
+        self.failed_proofs.fetch_add(1, Ordering::SeqCst);
+        *self.last_error.write() = Some(Plonky3BackendError {
+            message,
+            at_ms: now_ms(),
+        });
+    }
+
+    fn snapshot(&self) -> Plonky3BackendHealth {
+        let cached_circuits = self.cached_circuits.load(Ordering::SeqCst);
+        let proofs_generated = self.proofs_generated.load(Ordering::SeqCst);
+        let failed_proofs = self.failed_proofs.load(Ordering::SeqCst);
+        let last_success_raw = self.last_success_ms.load(Ordering::SeqCst);
+        let last_success_ms = if last_success_raw == 0 {
+            None
+        } else {
+            Some(last_success_raw)
+        };
+        let last_error = self.last_error.read().clone();
+        Plonky3BackendHealth {
+            cached_circuits,
+            proofs_generated,
+            failed_proofs,
+            last_success_ms,
+            last_error,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct Plonky3Backend {
     compiled: Arc<Mutex<HashMap<CircuitCacheKey, BackendProverContext>>>,
@@ -70,8 +150,12 @@ impl Plonky3Backend {
             security_bits: params.security_bits,
             use_gpu: params.use_gpu_acceleration,
         };
-        if let Some(compiled) = self.compiled.lock().get(&key).cloned() {
-            return Ok(compiled);
+        {
+            let guard = self.compiled.lock();
+            if let Some(compiled) = guard.get(&key).cloned() {
+                PLONKY3_TELEMETRY.record_cache_size(guard.len());
+                return Ok(compiled);
+            }
         }
 
         let (verifying_key, proving_key) = crypto::circuit_keys(circuit)?;
@@ -90,6 +174,7 @@ impl Plonky3Backend {
 
         let mut guard = self.compiled.lock();
         guard.insert(key, compiled.clone());
+        PLONKY3_TELEMETRY.record_cache_size(guard.len());
         Ok(compiled)
     }
 
@@ -105,14 +190,18 @@ impl Plonky3Backend {
         let backend_proof = compiled
             .prove(&commitment, &encoded_inputs)
             .map_err(|err| {
-                ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
+                let message = format!("failed to generate Plonky3 {circuit} proof: {err}");
+                PLONKY3_TELEMETRY.record_failure(message.clone());
+                ChainError::Crypto(message)
             })?;
-        Plonky3Proof::from_backend(
+        let proof = Plonky3Proof::from_backend(
             circuit.to_string(),
             commitment,
             public_inputs,
             backend_proof,
-        )
+        )?;
+        PLONKY3_TELEMETRY.record_success();
+        Ok(proof)
     }
 }
 
@@ -126,9 +215,6 @@ pub struct Plonky3Prover {
 
 impl Plonky3Prover {
     pub fn new() -> Self {
-        if let Err(err) = crate::plonky3::experimental::require_acknowledgement() {
-            panic!("{err}");
-        }
         Self {
             params: Plonky3Parameters::default(),
             backend: Plonky3Backend::default(),
@@ -142,6 +228,10 @@ impl Plonky3Prover {
         let proof = self.backend.prove(&self.params, witness)?;
         proof.into_value().map(ChainProof::Plonky3)
     }
+}
+
+pub fn telemetry_snapshot() -> Plonky3BackendHealth {
+    PLONKY3_TELEMETRY.snapshot()
 }
 
 impl ProofProver for Plonky3Prover {

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::proof_backend::Blake2sHasher;
+use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::state::merkle::compute_merkle_root;
 use crate::types::{Account, Address, Stake};

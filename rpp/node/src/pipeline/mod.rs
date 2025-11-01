@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
-use rpp_chain::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use crate::telemetry::pipeline::PipelineMetrics;
+use rpp_chain::orchestration::{PipelineDashboardSnapshot, PipelineOrchestrator, PipelineStage};
 use tokio::sync::{broadcast, watch, RwLock};
 use tokio::task::JoinHandle;
 use tracing::{info, trace};

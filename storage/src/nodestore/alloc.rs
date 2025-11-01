@@ -21,7 +21,7 @@
 //! - **`NodeData`** - Serialized node content
 
 use super::area_index_and_size;
-use super::primitives::{AreaIndex, LinearAddress, index_name};
+use super::primitives::{index_name, AreaIndex, LinearAddress};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
@@ -33,7 +33,7 @@ use std::iter::FusedIterator;
 
 use crate::node::ExtendableBytes;
 use crate::{
-    FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage, firewood_counter,
+    firewood_counter, FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage,
 };
 
 /// Returns the maximum size needed to encode a `VarInt`.

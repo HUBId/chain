@@ -204,7 +204,7 @@ threaten block production.
   observe block production, WAL pressure, RPC health, and slashing
   outcomes.【F:rpp/runtime/telemetry/metrics.rs†L63-L205】【F:rpp/runtime/telemetry/metrics.rs†L214-L319】
 - **Proof systems.** Proof generation and verification telemetry is partitioned
-  by backend so production STWO, experimental Plonky3, and mock flows can be
+  by backend so production STWO, Plonky3, and mock flows can be
   monitored separately. Alert on spikes in `rpp.runtime.proof.*` and
   `rpp_stark_*` metrics to catch failing provers or verifier regressions before
   they impact consensus.【F:rpp/runtime/telemetry/metrics.rs†L360-L453】

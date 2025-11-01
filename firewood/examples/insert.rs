@@ -15,7 +15,7 @@ use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
 use firewood::v2::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
 use firewood_storage::noop_storage_metrics;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{distr::Alphanumeric, Rng};
 
 #[derive(Parser, Debug)]
 struct Args {

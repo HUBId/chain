@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
 use crate::proof_backend::Blake2sHasher;
+use serde::{Deserialize, Serialize};
 
 use crate::consensus::{BftVoteKind, SignedBftVote};
-use crate::crypto::{VrfPublicKey, vrf_public_key_from_hex};
+use crate::crypto::{vrf_public_key_from_hex, VrfPublicKey};
 use crate::errors::{ChainError, ChainResult};
-use crate::identity_tree::{IDENTITY_TREE_DEPTH, IdentityCommitmentProof};
+use crate::identity_tree::{IdentityCommitmentProof, IDENTITY_TREE_DEPTH};
 use crate::stwo::circuit::identity::IdentityWitness;
 use crate::stwo::circuit::string_to_field;
 use crate::stwo::params::StarkParameters;

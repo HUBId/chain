@@ -68,12 +68,12 @@ pub mod stwo;
 #[cfg(not(feature = "prover-stwo"))]
 #[path = "stwo_stub.rs"]
 pub mod stwo;
-#[cfg(feature = "backend-rpp-stark")]
-pub mod zk;
 #[path = "../../runtime/sync.rs"]
 pub mod sync;
 #[path = "../../runtime/types/mod.rs"]
 pub mod types;
+#[cfg(feature = "backend-rpp-stark")]
+pub mod zk;
 pub use rpp_crypto_vrf as vrf;
 #[path = "../../wallet/ui/mod.rs"]
 pub mod wallet;

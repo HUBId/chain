@@ -29,15 +29,8 @@ fn witness_rewards_split_between_treasury_and_fees() {
     );
     let weights = WitnessPoolWeights::new(0.7, 0.3);
 
-    let mut distribution = distribute_rewards(
-        &validator_set,
-        &leader,
-        10,
-        100,
-        0.2,
-        &accounts,
-        &weights,
-    );
+    let mut distribution =
+        distribute_rewards(&validator_set, &leader, 10, 100, 0.2, &accounts, &weights);
 
     let mut witness = BTreeMap::new();
     witness.insert(validators[1].id.clone(), 40);
@@ -51,10 +44,7 @@ fn witness_rewards_split_between_treasury_and_fees() {
 
     let expected_total = validator_total + 40;
     assert_eq!(distribution.total_reward, expected_total);
-    assert_eq!(
-        distribution.witness_reward_for(&validators[1].id),
-        40
-    );
+    assert_eq!(distribution.witness_reward_for(&validators[1].id), 40);
     assert_eq!(
         distribution.treasury_accounts.witness_account(),
         "treasury-witness"

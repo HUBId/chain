@@ -112,7 +112,8 @@ impl PruningMetrics {
 
     pub fn record_pause_state(&self, paused: bool) {
         let state = if paused { "paused" } else { "resumed" };
-        self.pause_transitions.add(1, &[KeyValue::new("state", state)]);
+        self.pause_transitions
+            .add(1, &[KeyValue::new("state", state)]);
     }
 }
 

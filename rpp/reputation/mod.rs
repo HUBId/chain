@@ -5,10 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::rpp::TimetokeRecord;
 use crate::types::Address;
 
+use crate::proof_backend::Blake2sHasher;
 use hex;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Serialize};
-use crate::proof_backend::Blake2sHasher;
 use thiserror::Error;
 
 /// Configuration weights used to evaluate the reputation score. The values

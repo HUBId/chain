@@ -33,15 +33,15 @@ use futures::{
     prelude::*,
     ready,
     stream::Fuse,
-    task::{ArcWake, AtomicWaker, WakerRef, waker_ref},
+    task::{waker_ref, ArcWake, AtomicWaker, WakerRef},
 };
 use nohash_hasher::{IntMap, IntSet};
 use parking_lot::Mutex;
 use smallvec::SmallVec;
 
 use crate::{
-    Config, MaxBufferBehaviour,
     codec::{Codec, Frame, LocalStreamId, RemoteStreamId},
+    Config, MaxBufferBehaviour,
 };
 /// A connection identifier.
 ///

@@ -26,12 +26,6 @@ use rpp_chain::types::{
     SignedTransaction, Transaction,
 };
 
-fn enable_experimental_backend() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| rpp_chain::plonky3::experimental::force_enable_for_tests());
-}
-
 const TRANSACTION_SEED: [u8; 32] = [13u8; 32];
 
 fn canonical_pruning_header() -> BlockHeader {
@@ -99,7 +93,6 @@ fn recursive_artifacts_for_tests() -> (
     ChainProof,
     ChainProof,
 ) {
-    enable_experimental_backend();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
 
@@ -147,7 +140,6 @@ fn recursive_artifacts_for_tests() -> (
 
 #[test]
 fn plonky3_recursive_flow_roundtrip() {
-    enable_experimental_backend();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
 
@@ -334,7 +326,6 @@ fn recursive_bundle_rejects_oversized_proof_blob() {
 
 #[test]
 fn consensus_proof_roundtrip_catches_tampering() {
-    enable_experimental_backend();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
 

@@ -45,19 +45,19 @@ pub mod logger;
 pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
-pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use hashednode::{hash_node, hash_preimage, Hashable, Preimage, ValueDigest};
 pub use identity_tree::{
-    IDENTITY_TREE_DEPTH, IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError,
-    IdentityTreeResult,
+    IdentityCommitmentProof, IdentityCommitmentTree, IdentityTreeError, IdentityTreeResult,
+    IDENTITY_TREE_DEPTH,
 };
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use metrics::{
-    StorageMetrics, StorageMetricsHandle, WalFlushOutcome, noop as noop_storage_metrics,
+    noop as noop_storage_metrics, StorageMetrics, StorageMetricsHandle, WalFlushOutcome,
 };
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
+    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
 };
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,

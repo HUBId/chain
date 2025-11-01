@@ -23,11 +23,11 @@
 
 use std::{pin::Pin, time::Duration};
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use futures::{channel::oneshot, future::poll_fn, prelude::*};
 use libp2p_core::{
-    Endpoint, Multiaddr, Transport, multiaddr::multiaddr, muxing, muxing::StreamMuxerExt,
-    transport, transport::ListenerId, upgrade,
+    multiaddr::multiaddr, muxing, muxing::StreamMuxerExt, transport, transport::ListenerId,
+    upgrade, Endpoint, Multiaddr, Transport,
 };
 use libp2p_identity as identity;
 use libp2p_identity::PeerId;

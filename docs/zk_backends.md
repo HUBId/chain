@@ -60,3 +60,24 @@
   ```
 - Bei blockbezogenen Prüfungen werden Berichte ausgewertet, Size-Gates geprüft und ungültige Proofs sanktioniert (`punish_invalid_proof`).
 - `RppStarkProofVerifier` mappt Backend-Fehler (`VerificationFailed`, Size-Mismatch) auf `ChainError::Crypto` und hängt den strukturierten Report an die Log-Nachricht an.
+
+## plonky3 (stable)
+
+### Aktivierung
+
+- Optionales Feature `backend-plonky3` aktivieren, z. B. `cargo build --features backend-plonky3` oder `scripts/build.sh --backend plonky3`.
+- Der Prover cached kompakte `BackendProverContext`-Instanzen pro Circuit und aktualisiert bei jedem Lauf die Telemetrie über Cache-Größe, Erfolgs-/Fehlerzähler und Zeitstempel.【F:rpp/proofs/plonky3/prover/mod.rs†L1-L230】
+- Keine zusätzliche CLI-Anerkennung notwendig; Plonky3 verhält sich wie STWO innerhalb derselben Runtime-Profile.【F:rpp/node/src/lib.rs†L240-L360】
+
+### Test- und Interop-Abdeckung
+
+- Unit- und Integrationstests laufen über `scripts/test.sh` (Standard-Matrix). Das Script deckt `--unit` und `--integration` für alle Backends ab.【F:scripts/test.sh†L1-L220】
+- Spezifische Regressionen: `cargo test --features backend-plonky3 --test plonky3_transaction_roundtrip` prüft deterministische Wallet-Flows, `cargo test --features backend-plonky3 --test plonky3_recursion` validiert rekursive Bundles und Tamperingschutz.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】【F:tests/plonky3_recursion.rs†L1-L360】
+- CI-Pipelines (`release`, `nightly`) führen die Plonky3-Suites automatisch mit, sodass Regressionen parallel zu STWO/RPP-Stark auftauchen.【F:.github/workflows/release.yml†L1-L160】
+
+### Telemetrie & API-Oberfläche
+
+- `Plonky3Prover` aktualisiert eine globale Telemetrie (`cached_circuits`, `proofs_generated`, `failed_proofs`, Zeitstempel), die über RPC abrufbar ist.【F:rpp/proofs/plonky3/prover/mod.rs†L1-L230】
+- `/status/node` liefert diese Daten unter `backend_health.plonky3.prover`; parallel werden die Verifier-Zähler pro Backend ausgewiesen.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/validator_status_response.jsonschema†L1-L220】
+- Die Validator-UI mapped die Felder und zeigt sie in Dashboards an, sodass Operator:innen Proof-Erfolge, Cache-Größe und letzte Fehler nachvollziehen können.【F:validator-ui/src/types.ts†L140-L220】
+- Logs und Metriken nutzen das bestehende `proof_backend="plonky3"`-Labeling, sodass bestehende Telemetrie-Dashboards automatisch aggregieren.【F:rpp/runtime/telemetry/metrics.rs†L760-L900】

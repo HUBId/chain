@@ -25,7 +25,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 
 use crate::GenTransport;
 

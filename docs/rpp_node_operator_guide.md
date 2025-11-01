@@ -25,11 +25,9 @@ Local builds should mirror the same flag set shown in
 `scripts/build_release.sh` (or swap in `prover-stwo-simd` on hosts that support
 SIMD acceleration) to avoid shipping binaries that fail at runtime due to a
 missing production backend.【F:scripts/build_release.sh†L1-L87】 Release builds
-also enforce a guardrail that rejects the experimental Plonky3 backend and the
-`prover-mock` feature so production artefacts never link the deterministic
-stubs.【F:scripts/build_release.sh†L105-L145】 The script aborts with an explicit
-error if `backend-plonky3` (or any alias such as `plonky3-backend`) appears in
-the requested feature set.
+still block the deterministic mock prover but now accept Plonky3 alongside the
+STWO feature set, so production artefacts can target any supported backend
+without manual overrides.【F:scripts/build_release.sh†L100-L160】
 
 Keep the repository cloned on the host to rebuild quickly when upgrades ship.
 
@@ -52,23 +50,20 @@ are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Add `--dry-run` t
 validate configuration without starting long-running tasks; the CLI exits after
 bootstrap so operators can gate deployments in CI.【F:docs/validator_quickstart.md†L195-L210】
 
-### Plonky3 experimental mode
+### Plonky3 production backend
 
-The Plonky3 backend ships as a deterministic stub and must never be enabled in
-production without explicit acknowledgement. To start a runtime that links the
-Plonky3 feature (`--features backend-plonky3`), pass `--experimental-plonky3`
-or set `CHAIN_PLONKY3_EXPERIMENTAL=1`. Otherwise the prover/verifier
-construction panics with `plonky3 backend is experimental and provides no
-cryptographic soundness`. The flag only unlocks development/testing flows and
-emits a warning banner in `/status/node` so automation can detect the
-experimental mode.【F:rpp/node/src/lib.rs†L347-L383】【F:rpp/proofs/plonky3/experimental.rs†L1-L76】【F:rpp/runtime/node.rs†L140-L188】【F:rpp/runtime/node.rs†L4719-L4741】
-
-Validator and hybrid deployments now abort during bootstrap if the binary was
-compiled with the experimental Plonky3 backend. The guard emits a telemetry
-error explaining that `backend-plonky3` is unsupported in production, allowing
-operators to immediately spot the misconfiguration. Testnet rollouts that
-deliberately exercise the mock backend must stick to the non-validator modes or
-rebuild with a production prover feature set before promoting the artifacts.
+Plonky3 is now a production-grade backend. Enabling the feature flag
+(`--features backend-plonky3`) automatically wires the prover, verifier, and
+runtime telemetry without additional CLI acknowledgements.【F:rpp/proofs/plonky3/prover/mod.rs†L214-L230】【F:rpp/proofs/plonky3/verifier/mod.rs†L215-L240】【F:rpp/node/src/lib.rs†L240-L360】
+The `/status/node` RPC surface replaces the old warning banner with a
+`backend_health` map that exposes verifier counters for every backend and the
+Plonky3 prover health snapshot (cached circuit count, total proofs, last
+failure timestamps).【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/examples/validator_status_response.json†L1-L120】
+Dashboards and alerting should ingest those metrics to detect unhealthy prover
+state (e.g., consecutive failures or empty circuit caches) before block
+production stalls.【F:validator-ui/src/types.ts†L140-L220】 Test pipelines run
+Plonky3 suites alongside STWO and RPP-STARK by default so regressions surface in
+the standard CI lanes.【F:scripts/test.sh†L1-L220】
 
 ## Validator tooling
 

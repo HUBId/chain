@@ -128,8 +128,7 @@ impl<T> From<T> for Merkle<T> {
 
 impl<T: TrieReader> Merkle<T> {
     pub(crate) fn try_root(&self) -> Result<Option<SharedNode>, FileIoError> {
-        self
-            .nodestore
+        self.nodestore
             .root_as_maybe_persisted_node()
             .map(|root| root.as_shared_node(&self.nodestore))
             .transpose()

@@ -384,9 +384,7 @@ fn decode_commitment_base64(value: &str) -> Result<[u8; DIGEST_LENGTH], Verifica
 
 fn classify_pipeline_error(err: PipelineError) -> VerificationErrorKind {
     match err {
-        PipelineError::SnapshotVerification(message)
-            if message.contains(PROOF_IO_MARKER) =>
-        {
+        PipelineError::SnapshotVerification(message) if message.contains(PROOF_IO_MARKER) => {
             VerificationErrorKind::Io(message)
         }
         PipelineError::Validation(message) if message.contains(PROOF_IO_MARKER) => {
