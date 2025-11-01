@@ -32,6 +32,8 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
 
 ## 4. CI/CD-Integration
 - **GitHub Actions Workflows**:
+  - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend
+    rpp-stark` aus, sodass Standard-, STWO- und RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden.
   - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
     um Syntaxfehler frühzeitig zu entdecken. **TODO:** Erweiterung um Format-, Lint- und Testläufe sobald Ressourcen für die
     Rust-Builds reserviert sind.
