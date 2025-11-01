@@ -1,15 +1,15 @@
 # Validator Tooling
 
 The validator CLI and RPC server expose a toolkit for managing VRF secrets,
-inspecting gossip telemetry, and now monitoring light-client state-sync
-progress without restarting the node. The CLI wraps the new RPC endpoints so
-operators can automate key rotations, incident response, or snapshot recovery
-directly from the host.
+inspecting gossip telemetry, and monitoring light-client state-sync progress
+without restarting the node. Operators can automate key rotations, incident
+response, or snapshot recovery directly from the host by combining the CLI with
+the documented REST endpoints.
 
 ## CLI subcommands
 
-The CLI offers dedicated namespaces for validator operations and the
-light-client helpers that drive state sync.
+The CLI offers a dedicated namespace for validator operations while the
+light-client state-sync workflows are exercised through the public RPC API.
 
 ### `rpp-node validator`
 
@@ -50,44 +50,45 @@ The `rpp-node validator` namespace bundles two feature areas:
      via `--auth-token` and surfaces HTTP errors verbatim so operators can spot
      tier-gating failures or connectivity issues.【F:rpp/node/src/main.rs†L160-L203】
 
-### `rpp-node light-client`
+### State-sync via RPC
 
-State-sync operations for light clients and snapshot mirroring now ship as
-first-class CLI helpers. All light-client commands require the RPC base URL;
-pass `--rpc-url http://host:port` (defaults to `http://127.0.0.1:7070`) and
-forward any bearer token via `--auth-token <token>` to satisfy secured
-deployments.
+State-sync operations for light clients and snapshot mirroring are driven by
+the `/state-sync` RPC endpoints. Use standard HTTP tooling to follow heads or
+pull individual chunks, authenticating with the same bearer tokens consumed by
+the CLI.
 
 * Follow the latest verified light-client head and stream subsequent updates as
   newline-delimited JSON (one event per line) rendered from the
   [`/state-sync/head` payload schema](./interfaces/rpc/state_sync_head_response.jsonschema):
 
   ```sh
-  rpp-node light-client head-follow \
-    --rpc-url http://127.0.0.1:7070 \
-    --auth-token "$RPP_RPC_TOKEN"
+  curl -sN -H "Accept: text/event-stream" \
+    -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+    http://127.0.0.1:7070/state-sync/head/stream \
+    | jq --unbuffered '.height'
   ```
 
-  The command establishes an SSE connection to `/state-sync/head/stream` and
-  prints the decoded event payload. Use standard UNIX tooling such as
-  `jq --unbuffered` or `awk` to alert on height gaps or stale timestamps.
+  The request establishes an SSE connection to `/state-sync/head/stream` and
+  prints each decoded event payload. Swap the `jq` filter for custom health
+  checks or alerting rules.
 
 * Retrieve an individual snapshot chunk and persist the decoded payload, with a
   JSON summary that matches the
   [`/state-sync/chunk/:id` schema](./interfaces/rpc/state_sync_chunk_response.jsonschema):
 
   ```sh
-  rpp-node light-client fetch-chunk \
-    --rpc-url http://127.0.0.1:7070 \
-    --chunk-id 12 \
-    --output chunk-12.bin
+  curl -s \
+    -H "Authorization: Bearer $RPP_RPC_TOKEN" \
+    http://127.0.0.1:7070/state-sync/chunk/12 \
+    | tee chunk-12.json \
+    | jq -r '.payload' | base64 -d > chunk-12.bin
   ```
 
-  When `--output` is provided the tool base64-decodes the payload into the
-  chosen file and echoes the chunk metadata (root, index, total, checksum) to
-  stdout so operators can script integrity checks before applying the chunk.
+  The snippet writes the chunk metadata to `chunk-12.json`, decodes the base64
+  payload into `chunk-12.bin`, and surfaces checksum fields so operators can
+  script integrity checks before applying the chunk.
 
-Both commands fail fast if the node rejects the request (for example, because a
+Both workflows fail fast if the node rejects the request (for example, because a
 state-sync session has not been prepared) and bubble up the structured error
 payload emitted by the RPC server.
 
