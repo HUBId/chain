@@ -3,7 +3,6 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::Hasher;
-use hex::encode as hex_encode;
 use serde_json::Value;
 use thiserror::Error;
 use tracing::error;
@@ -58,46 +57,6 @@ impl From<Plonky3VerificationError> for ChainError {
                 ChainError::Crypto(message)
             }
         }
-    }
-}
-
-#[derive(Debug)]
-struct ProofBlob {
-    verifying_key_hash: [u8; 32],
-    inputs_digest: [u8; 32],
-    fri_digest: [u8; 32],
-}
-
-impl ProofBlob {
-    fn parse(bytes: &[u8], circuit: &str) -> Result<Self, Plonky3VerificationError> {
-        if bytes.len() != super::crypto::PROOF_BLOB_LEN {
-            let detail = format!("proof blob must be {} bytes, found {}", super::crypto::PROOF_BLOB_LEN, bytes.len());
-            error!("plonky3 {circuit} proof decode failure: {detail}");
-            return Err(Plonky3VerificationError::malformed(circuit, detail));
-        }
-        let mut verifying_key_hash = [0u8; 32];
-        verifying_key_hash.copy_from_slice(&bytes[..32]);
-        let mut inputs_digest = [0u8; 32];
-        inputs_digest.copy_from_slice(&bytes[32..64]);
-        let mut fri_digest = [0u8; 32];
-        fri_digest.copy_from_slice(&bytes[64..]);
-        Ok(Self {
-            verifying_key_hash,
-            inputs_digest,
-            fri_digest,
-        })
-    }
-
-    fn verifying_key_hash(&self) -> &[u8; 32] {
-        &self.verifying_key_hash
-    }
-
-    fn inputs_digest(&self) -> &[u8; 32] {
-        &self.inputs_digest
-    }
-
-    fn fri_digest(&self) -> &[u8; 32] {
-        &self.fri_digest
     }
 }
 
@@ -159,18 +118,6 @@ impl Plonky3Verifier {
             let provided = BASE64_STANDARD.encode(&parsed.verifying_key);
             let message =
                 format!("verifying key mismatch: expected {expected_key}, found {provided}");
-            error!("plonky3 {expected} proof verification failed: {message}");
-            return Err(Plonky3VerificationError::verification(expected, message));
-        }
-
-        let blob = ProofBlob::parse(&parsed.proof, expected)?;
-        let expected_hash = blake3::hash(&verifying_key);
-        if blob.verifying_key_hash() != expected_hash.as_bytes() {
-            let message = format!(
-                "verifying key hash mismatch: expected {}, found {}",
-                hex_encode(expected_hash.as_bytes()),
-                hex_encode(blob.verifying_key_hash())
-            );
             error!("plonky3 {expected} proof verification failed: {message}");
             return Err(Plonky3VerificationError::verification(expected, message));
         }

@@ -18,7 +18,7 @@ pub enum BackendError {
         expected: usize,
         actual: usize,
     },
-    #[error("verifying key hash mismatch for {0} circuit")]
+    #[error("verifying key mismatch for {0} circuit")]
     VerifyingKeyMismatch(String),
     #[error("public input digest mismatch for {0} circuit")]
     PublicInputDigestMismatch(String),
@@ -27,6 +27,31 @@ pub enum BackendError {
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;
+
+#[derive(Clone, Debug)]
+pub struct ProofBundle {
+    verifying_key: Vec<u8>,
+    public_inputs: Vec<u8>,
+    proof_blob: Vec<u8>,
+}
+
+impl ProofBundle {
+    pub fn verifying_key(&self) -> &[u8] {
+        &self.verifying_key
+    }
+
+    pub fn public_inputs(&self) -> &[u8] {
+        &self.public_inputs
+    }
+
+    pub fn proof_blob(&self) -> &[u8] {
+        &self.proof_blob
+    }
+
+    pub fn into_parts(self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        (self.verifying_key, self.public_inputs, self.proof_blob)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Circuit {
@@ -99,7 +124,7 @@ impl Circuit {
         transcript
     }
 
-    pub fn prove(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<Vec<u8>> {
+    pub fn prove(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<ProofBundle> {
         let message = self.transcript_message(commitment, encoded_inputs);
         let mut proof = Vec::with_capacity(PROOF_BLOB_LEN);
         proof.extend_from_slice(&self.verifying_key_hash);
@@ -109,15 +134,23 @@ impl Circuit {
         fri_hasher.update(&message);
         let fri_digest = fri_hasher.finalize();
         proof.extend_from_slice(fri_digest.as_bytes());
-        Ok(proof)
+        Ok(ProofBundle {
+            verifying_key: self.verifying_key.clone(),
+            public_inputs: encoded_inputs.to_vec(),
+            proof_blob: proof,
+        })
     }
 
     pub fn verify(
         &self,
         commitment: &str,
+        verifying_key: &[u8],
         encoded_inputs: &[u8],
         proof: &[u8],
     ) -> BackendResult<()> {
+        if verifying_key != self.verifying_key {
+            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
+        }
         if proof.len() != PROOF_BLOB_LEN {
             return Err(BackendError::InvalidProofLength {
                 circuit: self.name.clone(),
@@ -126,7 +159,8 @@ impl Circuit {
             });
         }
         let (key_hash_segment, rest) = proof.split_at(32);
-        if key_hash_segment != self.verifying_key_hash {
+        let expected_key_hash = blake3::hash(verifying_key);
+        if key_hash_segment != expected_key_hash.as_bytes() {
             return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
         }
         let (inputs_segment, fri_segment) = rest.split_at(32);

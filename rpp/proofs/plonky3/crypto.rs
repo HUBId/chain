@@ -407,29 +407,33 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
             "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
         ))
     })?;
-    let proof = compiled
+    let proof_bundle = compiled
         .prove(&commitment, &encoded_inputs)
         .map_err(|err| {
             ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
         })?;
+    let (verifying_key, backend_inputs, proof_blob) = proof_bundle.into_parts();
+    if verifying_key != artifact.verifying_key {
+        return Err(ChainError::Crypto(format!(
+            "failed to generate Plonky3 {circuit} proof: backend returned mismatched verifying key",
+        )));
+    }
+    if backend_inputs != encoded_inputs {
+        return Err(ChainError::Crypto(format!(
+            "failed to generate Plonky3 {circuit} proof: backend returned mismatched public inputs",
+        )));
+    }
     Ok(super::proof::Plonky3Proof {
         circuit,
         commitment,
         public_inputs,
-        proof,
-        verifying_key: compiled.verifying_key().to_vec(),
+        proof: proof_blob,
+        verifying_key,
     })
 }
 
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
     let artifact = circuit_artifact(&proof.circuit)?;
-    if proof.verifying_key != artifact.verifying_key {
-        return Err(ChainError::Crypto(format!(
-            "plonky3 verifying key mismatch: expected {}, found {}",
-            BASE64_STANDARD.encode(&artifact.verifying_key),
-            BASE64_STANDARD.encode(&proof.verifying_key)
-        )));
-    }
     let (expected_commitment, encoded_inputs) = canonical_public_inputs(&proof.public_inputs)?;
     if proof.commitment != expected_commitment {
         return Err(ChainError::Crypto(format!(
@@ -452,7 +456,12 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         ))
     })?;
     compiled
-        .verify(&expected_commitment, &encoded_inputs, &proof.proof)
+        .verify(
+            &expected_commitment,
+            &proof.verifying_key,
+            &encoded_inputs,
+            &proof.proof,
+        )
         .map_err(|err| {
             ChainError::Crypto(format!(
                 "plonky3 proof verification failed for {} circuit: {err}",
