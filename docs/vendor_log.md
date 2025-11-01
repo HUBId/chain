@@ -21,7 +21,7 @@ Folgeschritte:
 
 * Mehr-PR-Prozess: STWO-Integration wird über mehrere PRs mit einem Diff-Limit von ca. 25 000 geänderten Zeilen gestaffelt.
 * Toolchain-Vorgabe: Das vendorte Backend benötigt die Nightly-Toolchain `nightly-2025-07-14` laut `vendor/stwo-dev/rust-toolchain.toml`.
-* Quellenreferenz: Ausgangspunkt ist das Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
+* Quellenreferenz: Ausgangspunkt ist das Archiv `prover/prover_stwo_backend/stwo-dev.zip`, welches den Workspace 0.1.1 inklusive aller Mitglieder bereitstellt.
 * Runtime-Gating: Validator- und Hybrid-Läufe brechen nun sofort mit einem Hinweis auf das fehlende Feature ab, wenn der Build ohne `--features prod,prover-stwo` (oder `prover-stwo-simd`) erfolgt. Produktions-Builds müssen daher `cargo +nightly-2025-07-14 build -p rpp-node --release --no-default-features --features prod,prover-stwo` (bzw. `prover-stwo-simd`) ausführen.
 * Verifikation vor Deployments: Nach dem Build `cargo +nightly-2025-07-14 run -p rpp-node --bin validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Der Lauf muss ohne den neuen Fehler „requires the `prover-stwo` feature“ zurückkehren, andernfalls ist das Backend nicht aktiv.
 
@@ -29,7 +29,7 @@ Folgeschritte:
 
 * `vendor/stwo-dev/0.1.1/staging/crates/constraint-framework/` enthält nun die vollständigen Quellen (u. a. `expr/`, `prover/`, `info.rs`, `logup.rs`) aus dem Workspace-Archiv.
 * `scripts/vendor_stwo/update_manifest.py` aktualisiert `manifest/chunks.json`, die Prüfsummenliste `manifest/final_file_list.txt` sowie das Log `logs/update_manifest.log` für den neuen Staging-Bestand.
-* Prover-Module, die auf dem Framework aufsetzen: die Komponenten-Implementierungen in `crates/examples/src/blake/`, `crates/examples/src/poseidon/` und `crates/examples/src/wide_fibonacci/` nutzen `FrameworkComponent`, LogUp-Generatoren und Relation-Tracker aus dem Framework zur Zeugen-Erzeugung.【F:rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/blake/mod.rs†L14-L156】【F:rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/poseidon/mod.rs†L25-L351】【F:rpp/zk/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/wide_fibonacci/mod.rs†L11-L246】
+* Prover-Module, die auf dem Framework aufsetzen: die Komponenten-Implementierungen in `crates/examples/src/blake/`, `crates/examples/src/poseidon/` und `crates/examples/src/wide_fibonacci/` nutzen `FrameworkComponent`, LogUp-Generatoren und Relation-Tracker aus dem Framework zur Zeugen-Erzeugung.【F:prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/blake/mod.rs†L14-L156】【F:prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/poseidon/mod.rs†L25-L351】【F:prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/examples/src/wide_fibonacci/mod.rs†L11-L246】
 
 #### Import – core (Felder, Kanal, Proof) (2025-10-17)
 
@@ -72,7 +72,7 @@ Folgeschritte:
 
 ### Initiale Artefaktplanung (2025-10-17)
 
-* Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `rpp/zk/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
+* Segmentierung: `vendor/stwo-dev/0.1.1/manifest/chunk_plan.json` beschreibt neun Zielsegmente (pro Workspace-Ordner ein Eintrag) und hält die Segmentgrenze bei 50 MiB. Grundlage ist das entpackte Archiv `prover/prover_stwo_backend/stwo-dev.zip`; alle Crate-Verzeichnisse bleiben deutlich unterhalb der Grenze.
 * Manifest-Initialisierung: Ein Lauf von `scripts/vendor_stwo/update_manifest.py` gegen den leeren Zielbaum erzeugte ein leeres `manifest/chunks.json` sowie eine leere `manifest/final_file_list.txt` zur Vorbereitung der Folgeimporte.
 * Log-Ablage: Das Manifest-Log liegt unter `vendor/stwo-dev/0.1.1/logs/update_manifest.log` und dokumentiert den Initiallauf ohne erkannte Segmente.
 
