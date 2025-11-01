@@ -1,39 +1,51 @@
-# Releasing firewood
+# Releasing the RPP workspace
 
-Releasing firewood is straightforward and can mostly be done in CI. Updating the
-Cargo.toml file is currently manual. Review the companion
+The RPP workspace bundles the runtime (`rpp-node`, `rpp-chain`, `rpp-consensus`,
+`rpp-p2p`, `rpp-pruning`), supporting cryptography crates (`rpp-crypto-vrf`,
+`rpp-identity-tree`), prover backends (`prover-backend-interface`,
+`plonky3-backend`, `prover_stwo_backend`), and the storage stack. This document
+explains how to cut a release of that workspace. Review the companion
 [secure release runbook](RELEASES.md) and [security policy](SECURITY.md) for the
 CI/CD gates, signing requirements, and advisory coordination expectations that
 apply to every tagged release.
 
 ## Automated release pipeline
 
-The release workflow defined in [.github/workflows/release.yml](.github/workflows/release.yml) now orchestrates tagging
-builds. It executes whenever a SemVer tag (`vMAJOR.MINOR.PATCH`) is pushed or when manually triggered via the
-`workflow_dispatch` input. The pipeline reruns formatting, clippy, the full integration test suite, and `cargo audit`
-before producing platform-specific artifacts. Optimised binaries for Linux (x86_64 and aarch64) and macOS (x86_64 and
-Apple Silicon) are packaged into tarballs for the main `rpp-node` CLI as well as the dedicated runtime entry points
-(`node`, `wallet`, `hybrid`, and `validator`). SBOMs, SHA256 manifests, cosign signatures, and provenance attestations are
-published alongside the release assets.
+The release workflow defined in
+[.github/workflows/release.yml](.github/workflows/release.yml) orchestrates
+version tagging and artifact builds. It executes whenever a SemVer tag
+(`vMAJOR.MINOR.PATCH`) is pushed or when manually triggered via the
+`workflow_dispatch` input. The pipeline reruns formatting, clippy, the full
+integration test suite, and `cargo audit` before producing platform-specific
+artifacts. Optimised binaries for Linux (x86_64 and aarch64) and macOS (x86_64
+and Apple Silicon) are packaged into tarballs for the main `rpp-node` CLI as
+well as the dedicated runtime entry points (`node`, `wallet`, `hybrid`, and
+`validator`). SBOMs, SHA256 manifests, cosign signatures, and provenance
+attestations are published alongside the release assets.
 
 ### Helper scripts
 
-The workflow calls into helper utilities committed under `scripts/` so that the same steps can be replicated locally:
+The workflow calls into helper utilities committed under `scripts/` so that the
+same steps can be replicated locally:
 
-- `scripts/build_release.sh` – builds and packages the binaries for a given target. It accepts `--target`, `--profile`, and
-  `--tool` (either `cargo` or `cross`) flags and emits tarballs under `dist/artifacts/<target>/` together with an optional
-  CycloneDX SBOM (`sbom-rpp-node-<target>.json`).
-- `scripts/checksums.sh` – generates a sorted SHA256 manifest for a set of artifacts and writes it to the path supplied via
-  `--output`.
-- `scripts/verify_checksums.sh` – replays the manifest created by `scripts/checksums.sh` to guarantee the recorded hashes.
-- `scripts/prepare_changelog.sh` – shells out to `git-cliff` for the requested tag and assembles release notes with required
-  sections (features, fixes, breaking changes, security, upgrade notes). The script exits non-zero if the changelog data is
-  missing or the tag is not SemVer compliant.
-- `scripts/provenance_attest.sh` – emits a SLSA v1 in-toto statement for the artifact, binds the active GitHub workflow as the
-  builder, and signs the statement via cosign using GitHub OIDC credentials.
+- `scripts/build_release.sh` – builds and packages the binaries for a given
+  target. It accepts `--target`, `--profile`, and `--tool` (either `cargo` or
+  `cross`) flags and emits tarballs under `dist/artifacts/<target>/` together
+  with an optional CycloneDX SBOM (`sbom-rpp-node-<target>.json`).
+- `scripts/checksums.sh` – generates a sorted SHA256 manifest for a set of
+  artifacts and writes it to the path supplied via `--output`.
+- `scripts/verify_checksums.sh` – replays the manifest created by
+  `scripts/checksums.sh` to guarantee the recorded hashes.
+- `scripts/prepare_changelog.sh` – shells out to `git-cliff` for the requested
+  tag and assembles release notes with required sections (features, fixes,
+  breaking changes, security, upgrade notes). The script exits non-zero if the
+  changelog data is missing or the tag is not SemVer compliant.
+- `scripts/provenance_attest.sh` – emits a SLSA v1 in-toto statement for the
+  artifact, binds the active GitHub workflow as the builder, and signs the
+  statement via cosign using GitHub OIDC credentials.
 
-Running the scripts locally mirrors the CI packaging process. For example, to rehearse a Linux aarch64 release package you
-can execute:
+Running the scripts locally mirrors the CI packaging process. For example, to
+rehearse a Linux aarch64 release package you can execute:
 
 ```bash
 cargo install --locked cargo-cyclonedx
@@ -42,111 +54,126 @@ cargo install --locked cargo-cyclonedx
 ./scripts/verify_checksums.sh --manifest dist/SHA256SUMS.txt
 ```
 
-The release workflow consumes these same outputs, signs every artifact and manifest with cosign, generates provenance via
-`scripts/provenance_attest.sh`, and assembles the release notes generated by `scripts/prepare_changelog.sh` into the GitHub
-release body.
+The release workflow consumes these same outputs, signs every artifact and
+manifest with cosign, generates provenance via `scripts/provenance_attest.sh`,
+and assembles the release notes generated by `scripts/prepare_changelog.sh` into
+the GitHub release body.
 
-Firewood is made up of several sub-projects in a workspace. Each project is in
-its own crate and has an independent version.
+## Branching and tagging
 
-## Git Branch
-
-Start off by crating a new branch:
+Start each release by creating a dedicated branch from `main` and naming it
+with the target version. For example:
 
 ```console
 $ git fetch
-$ git switch -c release/v0.0.13 origin/main
-branch 'release/v0.0.13' set up to track 'origin/main'.
-Switched to a new branch 'release/v0.0.13'
+$ git switch -c release/v0.1.0 origin/main
+branch 'release/v0.1.0' set up to track 'origin/main'.
+Switched to a new branch 'release/v0.1.0'
 ```
 
-## Package Version
+Tags must continue to follow the `vMAJOR.MINOR.PATCH` pattern so the release
+workflow accepts them. The tag name should match the versions written to the
+crates below.
 
-Next, update the workspace version and ensure all crates within the firewood
-project are using the version of the new release. The root [Cargo.toml](Cargo.toml)
-file uses the [`[workspace.package]`](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-package-table)
-table to define the version for all subpackages.
+## Version management
 
-```toml
-[workspace.package]
-version = "0.0.13"
-```
+All workspace crates shipped in the RPP release must agree on the new version.
+Use the checklist below before cutting a tag:
 
-Each package inherits this version by setting `package.version.workspace = true`.
+1. Update the workspace package version in the root [`Cargo.toml`](Cargo.toml):
 
-```toml
-[package]
-name = "firewood"
-version.workspace = true
-```
+   ```toml
+   [workspace.package]
+   version = "0.1.0"
+   ```
 
-Therefore, updating only the version defined in the root config is needed.
+   Crates that set `version.workspace = true` (for example `rpp-chain`,
+   `rpp-pruning`, the storage crates, and the legacy firewood utilities) inherit
+   this value automatically.
 
-## Dependency Version
+2. Bump the standalone crates that declare their own versions:
 
-The next step is to bump the dependency declarations to the new version. Packages
-within the workspace that are used as libraries are also defined within the
-[`[workspace.dependencies]`](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-dependencies-table)
-table. E.g.,:
+   - `rpp/node/Cargo.toml`
+   - `rpp/consensus/Cargo.toml`
+   - `rpp/p2p/Cargo.toml`
+   - `rpp/crypto-vrf/Cargo.toml`
+   - `rpp/identity-tree/Cargo.toml`
+   - `prover/plonky3_backend/Cargo.toml`
+   - `prover/prover_stwo_backend/Cargo.toml`
+   - `rpp/zk/backend-interface/Cargo.toml`
 
-```toml
-[workspace.dependencies]
-# workspace local packages
-firewood = { path = "firewood", version = "0.0.13" }
-```
+   These crates currently target the same SemVer line as the tag (e.g.
+   `0.1.0`) except for `prover_stwo_backend`, which tracks the vendored STWO
+   version and only changes when that dependency is updated. Adjust that version
+   only when the vendor update requires it.
 
-This allows packages within the workspace to inherit the dependency,
-including path, version, and workspace-level features by adding `workspace = true`
-to the dependency table (note: using `cargo add -p firewood-fwdctl firewood-metrics`
-would automatically add the dependency with `workspace = true`).
+3. Refresh the shared dependency declarations in the workspace table so other
+   crates pick up the new versions via `workspace = true`:
 
-```toml
-[dependencies]
-firewood-macros.workspace = true
+   ```toml
+   [workspace.dependencies]
+   # Workspace crates published with each release
+   rpp-chain = { path = "rpp/chain", version = "0.1.0", default-features = false }
+   rpp-crypto-vrf = { path = "rpp/crypto-vrf", version = "0.1.0" }
+   rpp-identity-tree = { path = "rpp/identity-tree", version = "0.1.0" }
+   rpp-pruning = { path = "rpp/pruning", version = "0.1.0" }
+   prover-backend-interface = { path = "rpp/zk/backend-interface", version = "0.1.0" }
+   plonky3-backend = { path = "prover/plonky3_backend", version = "0.1.0", default-features = false }
+   prover_stwo_backend = { path = "prover/prover_stwo_backend", version = "1.0.0", default-features = false }
+   ```
 
-# more complex example
-[target.'cfg(target_os = "linux")'.dependencies]
-firewood-storage = { workspace = true, features = ["io-uring"] }
+   When adding new workspace crates, ensure they appear in this table with the
+   correct path and any required feature overrides so releases remain
+   reproducible.
 
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-firewood-storage.workspace = true
-```
+4. Verify the consuming crates inherit from the workspace table instead of
+   hard-coding versions. For example `rpp-chain` illustrates the recommended
+   `[package]` stanza:
 
-Thefefore, after updating the `workspace.package.version` value, we must update
-the dependency versions to match.
+   ```toml
+   [package]
+   name = "rpp-chain"
+   version.workspace = true
+   edition.workspace = true
+   license-file.workspace = true
+   repository.workspace = true
+   ```
+
+   This keeps downstream consumers aligned with the top-level release number and
+   avoids drift.
 
 ## Changelog
 
-To build the changelog, see git-cliff.org. Short version:
+To build the changelog, run `git-cliff` using the pending tag. The helper script
+used by CI can also be run locally:
 
 ```sh
 cargo install --locked git-cliff
-git cliff --tag v0.0.13 > CHANGELOG.md
+./scripts/prepare_changelog.sh --tag v0.1.0 --output dist/release-notes.md
 ```
 
-## Review
+## Review checklist
 
-> ❗ Be sure to update the versions of all sub-projects before creating a new
-> release. Open a PR with the updated versions and merge it before continuing to
-> the next step.
+> ❗ Ensure the workspace version, crate versions, dependency entries, and
+> changelog are updated before creating a new release. Open a PR with these
+> changes and merge it before tagging.
 
-## Publish
+## Publish the tag
 
-To trigger a release, push a tag to the main branch matching the new version,
+Trigger the release by pushing a signed tag that matches the updated versions:
 
 ```sh
-git tag -s -a v0.0.13 -m 'Release v0.0.13'
-git push origin v0.0.13
+git tag -s -a v0.1.0 -m 'Release v0.1.0'
+git push origin v0.1.0
 ```
 
-for `v0.0.13` for the merged version change. The CI will automatically publish a
-draft release which consists of release notes and changes (see
-[.github/workflows/release.yml](.github/workflows/release.yml)).
+The CI release workflow will automatically publish a draft GitHub release that
+includes the notes generated by `scripts/prepare_changelog.sh`, packaged
+artifacts, SBOMs, and signatures.
 
-## Milestone
+## Post-release follow-up
 
-> NOTE: this should be automated as well.
-
-Close the GitHub milestone for the version that was released. Be sure to create
-a new milestone for the next version if one does not already exist. Carry over
-any incomplete tasks to the next milestone.
+Close the GitHub milestone for the version that was released. Create a new
+milestone for the next version if one does not already exist and move any open
+work forward. Coordinate staged roll-outs and monitoring according to the
+[deployment runbooks](docs/deployment/staged_rollout.md).
