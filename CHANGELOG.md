@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - Capture the wallet UI/RPC completion by linking maintainers to the Electrs-backed tab models and `/wallet/ui/*` handlers so dashboard status sheets reference the finished modules.【F:rpp/wallet/ui/wallet.rs†L736-L924】【F:rpp/rpc/api.rs†L1405-L1440】【F:rpp/rpc/tests/wallet_ui_contract.rs†L1-L120】
 - Refresh the Electrs wallet/node blueprint to mirror the post-refactor crate layout and verify every inline citation targets the new module tree.【F:docs/electrs_fork_wallet_node_blueprint.md†L1-L210】
 - Clarify that the STWO backend now lives under `prover/prover_stwo_backend/` and retarget inline citations in the prover docs to the new module path.【F:docs/architecture/prover-backends.md†L8-L55】【F:docs/blueprint_coverage.md†L5-L22】【F:docs/vendor_log.md†L24-L75】【F:docs/DEPS_COMPAT_REPORT.md†L7-L11】
+- Extend the observability runbook with `ProofError::IO` diagnostics for state-sync chunk RPCs, including Prometheus/Log markers and regression coverage pointers.【F:docs/runbooks/observability.md†L7-L26】【F:docs/runbooks/observability.md†L88-L92】
 
 ## [0.0.12] - 2025-08-26
 
