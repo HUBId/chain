@@ -184,7 +184,11 @@ fn get_iterator_intial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
 ) -> Result<NodeIterState, FileIoError> {
-    let Some(root) = merkle.root_node() else {
+    let Some(root) = merkle
+        .root_as_maybe_persisted_node()
+        .map(|root| root.as_shared_node(merkle))
+        .transpose()?
+    else {
         // This merkle is empty.
         return Ok(NodeIterState::Iterating { iter_stack: vec![] });
     };
@@ -351,7 +355,11 @@ pub struct PathIterator<'a, 'b, T> {
 
 impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
     pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, FileIoError> {
-        let Some(root) = merkle.root_node() else {
+        let Some(root) = merkle
+            .root_as_maybe_persisted_node()
+            .map(|root| root.as_shared_node(merkle))
+            .transpose()?
+        else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
                 merkle,
