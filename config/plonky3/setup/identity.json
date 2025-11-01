@@ -2,10 +2,14 @@
   "circuit": "identity",
   "verifying_key": {
     "encoding": "base64",
-    "value": "Nuw9nBLpCj9xekNilnLzgX0nGmPDPvmVc4/lDZ1pCwjn9ejqjCOKAMpmpmR9MdbgBMSsq6AFZXYe4ne38dgbugMLpoF60MRhY2O/TR3GIWk+8j7bXM4TTAU4x+u0wE6N"
+    "byte_length": 96,
+    "value": "H4sIAHJjBmkC/wFgAJ//Nuw9nBLpCj9xekNilnLzgX0nGmPDPvmVc4/lDZ1pCwjn9ejqjCOKAMpmpmR9MdbgBMSsq6AFZXYe4ne38dgbugMLpoF60MRhY2O/TR3GIWk+8j7bXM4TTAU4x+u0wE6NGYDyUGAAAAA=",
+    "compression": "gzip"
   },
   "proving_key": {
     "encoding": "base64",
-    "value": "i1jD9W5aYyeC4ZzSCG/Oqs+Pp1Ll5gSZNwzN7czpIuo5e+3gkt4bR+VeelBtdYnmDWcS2LpNRiFhxNuSqR/5yJCvPGNhSOit2Z39ntlyZ9lLP75MPrdrCF6D6SHDFjCxLomQ7J8qTrvA26fwfxc0LXIwwYsQuT4mBc2o/M2ms9i7oJqOiXq6TMCvX0NwTpr2mAWml9ZgSmUFzgJCVizC9bXM14gySjzxbqBU2fxTlXD2t6ZfryK16gNjxhBpoFsJ"
+    "byte_length": 192,
+    "value": "H4sIAHJjBmkC/wHAAD//i1jD9W5aYyeC4ZzSCG/Oqs+Pp1Ll5gSZNwzN7czpIuo5e+3gkt4bR+VeelBtdYnmDWcS2LpNRiFhxNuSqR/5yJCvPGNhSOit2Z39ntlyZ9lLP75MPrdrCF6D6SHDFjCxLomQ7J8qTrvA26fwfxc0LXIwwYsQuT4mBc2o/M2ms9i7oJqOiXq6TMCvX0NwTpr2mAWml9ZgSmUFzgJCVizC9bXM14gySjzxbqBU2fxTlXD2t6ZfryK16gNjxhBpoFsJ2C6ggcAAAAA=",
+    "compression": "gzip"
   }
 }

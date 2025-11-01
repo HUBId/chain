@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use flate2::read::GzDecoder;
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serde_json::Value;
@@ -53,6 +55,12 @@ struct ArtifactDescriptor {
     base64: Option<String>,
     #[serde(default)]
     hex: Option<String>,
+    #[serde(default)]
+    compression: Option<String>,
+    #[serde(default)]
+    byte_length: Option<u64>,
+    #[serde(default)]
+    hash_blake3: Option<String>,
 }
 
 const REQUIRED_CIRCUITS: &[&str] = &[
@@ -86,6 +94,44 @@ fn normalize_encoding<'a>(encoding: Option<&'a str>) -> Option<&'a str> {
     encoding
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
+}
+
+fn normalize_compression(compression: Option<&str>) -> Option<String> {
+    compression
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn decompress_bytes(
+    bytes: Vec<u8>,
+    compression: Option<&str>,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<Vec<u8>> {
+    let Some(compression) = normalize_compression(compression) else {
+        return Ok(bytes);
+    };
+    match compression.as_str() {
+        "gzip" | "gz" => {
+            let mut decoder = GzDecoder::new(bytes.as_slice());
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).map_err(|err| {
+                ChainError::Crypto(format!(
+                    "failed to decompress {kind} for {circuit} circuit: {err}"
+                ))
+            })?;
+            if decompressed.is_empty() {
+                return Err(ChainError::Crypto(format!(
+                    "{kind} for {circuit} circuit decompressed to zero bytes"
+                )));
+            }
+            Ok(decompressed)
+        }
+        other => Err(ChainError::Crypto(format!(
+            "unsupported compression '{other}' for {kind} in {circuit} circuit"
+        ))),
+    }
 }
 
 fn decode_blob(value: &str, encoding: Option<&str>) -> Option<Vec<u8>> {
@@ -230,6 +276,8 @@ fn decode_artifact_descriptor(
     circuit: &str,
     kind: &str,
 ) -> ChainResult<Vec<u8>> {
+    let mut candidate: Option<Vec<u8>> = None;
+
     if let Some(path) = descriptor
         .path
         .as_ref()
@@ -237,39 +285,49 @@ fn decode_artifact_descriptor(
         .map(|path| path.as_str())
     {
         if let Some(bytes) = decode_from_path(base, path, circuit, kind)? {
-            return Ok(bytes);
+            candidate = Some(bytes);
         }
     }
 
-    if let Some(value) = descriptor.base64.as_ref() {
-        if let Some(bytes) = decode_blob(value, Some("base64")) {
-            return Ok(bytes);
+    if candidate.is_none() {
+        if let Some(value) = descriptor.base64.as_ref() {
+            if let Some(bytes) = decode_blob(value, Some("base64")) {
+                candidate = Some(bytes);
+            }
         }
     }
 
-    if let Some(value) = descriptor.hex.as_ref() {
-        if let Some(bytes) = decode_blob(value, Some("hex")) {
-            return Ok(bytes);
+    if candidate.is_none() {
+        if let Some(value) = descriptor.hex.as_ref() {
+            if let Some(bytes) = decode_blob(value, Some("hex")) {
+                candidate = Some(bytes);
+            }
         }
     }
 
-    if let Some(value) = descriptor.value.as_ref() {
-        if let Some(bytes) = decode_blob(
-            value,
-            normalize_encoding(
-                descriptor
-                    .encoding
-                    .as_deref()
-                    .or(descriptor.format.as_deref()),
-            ),
-        ) {
-            return Ok(bytes);
+    if candidate.is_none() {
+        if let Some(value) = descriptor.value.as_ref() {
+            if let Some(bytes) = decode_blob(
+                value,
+                normalize_encoding(
+                    descriptor
+                        .encoding
+                        .as_deref()
+                        .or(descriptor.format.as_deref()),
+                ),
+            ) {
+                candidate = Some(bytes);
+            }
         }
     }
 
-    Err(ChainError::Crypto(format!(
-        "{kind} for {circuit} circuit must provide a file path or an encoded value",
-    )))
+    let bytes = candidate.ok_or_else(|| {
+        ChainError::Crypto(format!(
+            "{kind} for {circuit} circuit must provide a file path or an encoded value",
+        ))
+    })?;
+
+    decompress_bytes(bytes, descriptor.compression.as_deref(), circuit, kind)
 }
 fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

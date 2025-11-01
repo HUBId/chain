@@ -2,10 +2,14 @@
   "circuit": "pruning",
   "verifying_key": {
     "encoding": "base64",
-    "value": "BIQ5awJEILAZRdiq4OQUgNM8utFTk5dM6QSK0a1GQHhkN/VzhfHsjogeEL8NWtRuCOlUg1Ng2X0btqR6xLIMLWLomLfu+0g0ighhVfFUZCeDIkKx1kYKJcw+LqXF0mGF"
+    "byte_length": 96,
+    "value": "H4sIAHJjBmkC/wFgAJ//BIQ5awJEILAZRdiq4OQUgNM8utFTk5dM6QSK0a1GQHhkN/VzhfHsjogeEL8NWtRuCOlUg1Ng2X0btqR6xLIMLWLomLfu+0g0ighhVfFUZCeDIkKx1kYKJcw+LqXF0mGFpN9RH2AAAAA=",
+    "compression": "gzip"
   },
   "proving_key": {
     "encoding": "base64",
-    "value": "4IxytKnyh71lw4tyjn9RN9K8GfxtmAacws3tq64AUvJwC2GVedKouw58ggaBb24H7pIXbdge5c5FRh7UJVUc2XOu2yp42EcYR7Izbbxs300QaMnqB3TRr0hgUT9ce7J4ihpHcb5BjkrYg6aTxhnss6WEO8MXFVYCsgjY178Z+FVJILuDq7Kwk/3iTkYOkDmKDYA9AByGLVJ7gRCI8Pl65g=="
+    "byte_length": 160,
+    "value": "H4sIAHJjBmkC/wGgAF//4IxytKnyh71lw4tyjn9RN9K8GfxtmAacws3tq64AUvJwC2GVedKouw58ggaBb24H7pIXbdge5c5FRh7UJVUc2XOu2yp42EcYR7Izbbxs300QaMnqB3TRr0hgUT9ce7J4ihpHcb5BjkrYg6aTxhnss6WEO8MXFVYCsgjY178Z+FVJILuDq7Kwk/3iTkYOkDmKDYA9AByGLVJ7gRCI8Pl65mz/zaqgAAAA",
+    "compression": "gzip"
   }
 }
