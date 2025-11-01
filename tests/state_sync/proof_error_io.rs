@@ -69,7 +69,11 @@ async fn state_sync_chunk_surfaces_proof_error_io() -> Result<(), MetricError> {
 
     let bytes = to_bytes(response.into_body()).await.unwrap();
     let error: ErrorResponse = serde_json::from_slice(&bytes).unwrap();
-    assert!(error.error.contains("ProofError::IO"));
+    assert!(
+        error.error.starts_with("ProofError::IO("),
+        "unexpected error message: {}",
+        error.error
+    );
 
     provider.force_flush()?;
     let exported = exporter.get_finished_metrics()?;

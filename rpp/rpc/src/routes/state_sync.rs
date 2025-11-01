@@ -149,37 +149,12 @@ pub(super) async fn chunk_by_id(
     api.ensure_state_sync_session()
         .map_err(state_sync_error_to_http)?;
 
-    let session = api
-        .state_sync_active_session()
-        .map_err(state_sync_error_to_http)?;
-
-    let total_chunks = match session.total_chunks {
-        Some(total) => total,
-        None => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: "state sync chunk count unavailable".into(),
-                }),
-            ))
-        }
-    };
-
-    if path.id >= total_chunks {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: format!(
-                    "chunk index {} out of range (total {})",
-                    path.id, total_chunks
-                ),
-            }),
-        ));
-    }
-
     let chunk = api
         .state_sync_chunk_by_index(path.id)
         .await
+        .map_err(state_sync_error_to_http)?;
+    let session = api
+        .state_sync_active_session()
         .map_err(state_sync_error_to_http)?;
     let status = StateSyncStatusResponse::from(&session);
 
