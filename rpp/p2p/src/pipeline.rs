@@ -987,9 +987,15 @@ pub struct SnapshotChunk {
 }
 
 #[derive(Debug)]
+#[cfg(any(test, feature = "integration"))]
+type ChunkOverride =
+    Box<dyn Fn(&Hash, u64) -> Result<SnapshotChunk, PipelineError> + Send + Sync + 'static>;
+
 pub struct SnapshotStore {
     snapshots: HashMap<Hash, Arc<[u8]>>,
     chunk_size: usize,
+    #[cfg(any(test, feature = "integration"))]
+    chunk_override: Option<ChunkOverride>,
 }
 
 impl SnapshotStore {
@@ -997,6 +1003,20 @@ impl SnapshotStore {
         Self {
             snapshots: HashMap::new(),
             chunk_size: chunk_size.max(1),
+            #[cfg(any(test, feature = "integration"))]
+            chunk_override: None,
+        }
+    }
+
+    #[cfg(any(test, feature = "integration"))]
+    pub fn with_chunk_override<F>(chunk_size: usize, override_fn: F) -> Self
+    where
+        F: Fn(&Hash, u64) -> Result<SnapshotChunk, PipelineError> + Send + Sync + 'static,
+    {
+        Self {
+            snapshots: HashMap::new(),
+            chunk_size: chunk_size.max(1),
+            chunk_override: Some(Box::new(override_fn)),
         }
     }
 
@@ -1020,6 +1040,10 @@ impl SnapshotStore {
     }
 
     pub fn chunk(&self, root: &Hash, index: u64) -> Result<SnapshotChunk, PipelineError> {
+        #[cfg(any(test, feature = "integration"))]
+        if let Some(override_fn) = &self.chunk_override {
+            return override_fn(root, index);
+        }
         let data = self
             .snapshots
             .get(root)
