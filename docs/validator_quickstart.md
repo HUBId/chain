@@ -226,9 +226,10 @@ bootstrap.
 - **Use the validator tooling:** The `rpp-node validator` CLI rotates VRF keys,
   exports backups, validates secrets/telemetry via `validator setup`, and
   manages uptime proofs through `validator uptime submit`/`validator uptime status`
-  without restarting the process, while the `rpp-node light-client` helpers stream heads and pull
-  individual snapshot chunks during state sync. See
-  [Validator Tooling](./validator_tooling.md) for detailed workflows.【F:rpp/node/src/main.rs†L92-L409】【F:rpp/node/src/lib.rs†L90-L357】【F:docs/validator_tooling.md†L1-L140】
+  without restarting the process. Pair the CLI with the `/state-sync` RPC
+  endpoints to stream light-client heads and download snapshot chunks using
+  tools like `curl` or `wget`. See [Validator Tooling](./validator_tooling.md)
+  for detailed workflows.【F:rpp/node/src/main.rs†L92-L409】【F:rpp/node/src/lib.rs†L90-L357】【F:docs/validator_tooling.md†L1-L140】
 - **Rotate snapshots:** Periodically prune old `snapshot_dir` entries only after
   confirming peers have advanced beyond the retained height. Keep multiple
   recent snapshots so new nodes can sync quickly.

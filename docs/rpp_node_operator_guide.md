@@ -65,9 +65,9 @@ rpp-node validator uptime submit --wallet-config config/wallet.toml
 rpp-node validator uptime status --rpc-url http://127.0.0.1:7070 --json
 ```
 
-The light-client helpers (`rpp-node light-client ...`) documented alongside the
-validator utilities assist with state-sync and head monitoring for downstream
-operators.【F:docs/validator_tooling.md†L53-L105】
+State-sync and head monitoring rely on the public `/state-sync` RPC endpoints;
+use `curl`/`wget` or similar tooling to consume the SSE stream and fetch
+snapshot chunks as outlined in the validator tooling guide.【F:docs/validator_tooling.md†L53-L118】
 
 ## RPC authentication & rate limiting
 
