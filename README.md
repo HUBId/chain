@@ -107,8 +107,10 @@ tracker status into the UI.【F:rpp/wallet/ui/wallet.rs†L945-L1197】
 
 Comprehensive operator runbooks, telemetry guides, architecture diagrams, and
 interface specifications are published under `docs/`. Start with the operator
-guidebook in [`docs/README.md`](docs/README.md), then dive into specialized
-sections such as consensus, pruning, runtime, or telemetry as needed.【F:docs/README.md†L1-L18】【F:docs/malachite_bft_architecture.md†L9-L116】
+guidebook in [`docs/README.md`](docs/README.md), review the [`rpp-node`
+operator guide](docs/rpp_node_operator_guide.md) for CLI-focused workflows, and
+then dive into specialized sections such as consensus, pruning, runtime, or
+telemetry as needed.【F:docs/README.md†L1-L18】【F:docs/rpp_node_operator_guide.md†L1-L88】【F:docs/malachite_bft_architecture.md†L9-L116】
 
 For development questions see [`CONTRIBUTING.md`](CONTRIBUTING.md) and the
 project changelog (`CHANGELOG.md`). Security-sensitive reports should follow the

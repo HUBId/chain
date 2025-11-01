@@ -23,8 +23,8 @@ cargo check -p rpp-p2p --features "noise tcp yamux quic"
 
 to ensure the additional transport compiles alongside the default TCP stack.
 
-For operational guidance on the RPC CLI—including authentication, rate limits, and
-recovery procedures—consult the [RPC CLI Operator Guide](../rpc_cli_operator_guide.md).
+For operational guidance on the runtime CLI—including authentication, rate limits,
+and recovery procedures—consult the [`rpp-node` operator guide](../rpp_node_operator_guide.md).
 
 ## Fehlersuche
 

@@ -59,9 +59,9 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    retention overrides surface as `400 Bad Request` with details propagated from the service.
    【F:rpp/node/src/services/pruning.rs†L259-L303】
 3. **Authenticated tooling.** Automation or wrapper CLIs must include the RPC bearer token described
-   in the [RPC CLI operator guide](../rpc_cli_operator_guide.md) so that the POST requests above pass
+   in the [`rpp-node` operator guide](../rpp_node_operator_guide.md) so that the POST requests above pass
    gateway authentication and rate limiting. Reuse the guide’s credential rotation and diagnostics
-   steps if the calls return `401` or `429`.【F:docs/rpc_cli_operator_guide.md†L1-L69】
+   steps if the calls return `401` or `429`.【F:docs/rpp_node_operator_guide.md†L1-L88】
 
 ## 4. Interpret receipts and watch job status
 
