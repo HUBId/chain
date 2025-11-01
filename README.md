@@ -1,6 +1,6 @@
-# Ztate
+# ZTATE
 
-Ztate is the reference implementation of the RPP blockchain stack. It packages the
+ZTATE is the reference implementation of the RPP blockchain stack. It packages the
 runtime node, consensus engine, libp2p networking, proof system, wallet
 orchestrator, and Firewood-backed storage that together power the network.
 Storage, proofs, and networking crates live in this repository so operators and
