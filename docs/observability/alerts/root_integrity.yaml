@@ -1,0 +1,23 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: root-integrity
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: root-integrity
+      rules:
+        - alert: RootIOErrorRate
+          expr: increase(rpp_node_pipeline_root_io_errors_total[5m]) > 0
+          for: 5m
+          labels:
+            severity: page
+            service: pipeline
+          annotations:
+            summary: Firewood pipeline root I/O errors detected
+            description: |
+              The Firewood pipeline reported root snapshot I/O failures in the last 5 minutes.
+              Investigate the backing snapshot store and Firewood recovery tooling before
+              re-enabling state sync peers.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#root-io-error-rate
