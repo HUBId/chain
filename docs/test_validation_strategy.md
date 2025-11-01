@@ -35,8 +35,9 @@ Diese Strategie beschreibt, wie die STWO/Plonky3-Integration vollständig überp
   - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend
     rpp-stark` aus, sodass Standard-, STWO- und RPP-Stark-Backends in jedem Release-Gate gleichzeitig validiert werden.
   - [`CI`](../.github/workflows/ci.yml): Validiert die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` mithilfe von `jq`,
-    um Syntaxfehler frühzeitig zu entdecken. **TODO:** Erweiterung um Format-, Lint- und Testläufe sobald Ressourcen für die
-    Rust-Builds reserviert sind.
+    führt `cargo fmt --check`, `cargo clippy --workspace --all-targets --all-features -D warnings` sowie `cargo test` (inklusive
+    `--no-default-features --features prod,prover-stwo`) aus und ist als erforderliche Statusprüfung für Pull Requests
+    konfiguriert.
   - [`nightly-simnet`](../.github/workflows/nightly.yml): Führt eine Matrix von Simnet-Szenarien (`small_world_smoke`,
     `ring_latency_profile`) aus, analysiert die Ergebnisse mit `scripts/analyze_simnet.py` und veröffentlicht die Artefakte
     zur Regressionsanalyse. **TODO:** Automatisches Auswerten von Thresholds und Rückmelden kritischer Abweichungen.
