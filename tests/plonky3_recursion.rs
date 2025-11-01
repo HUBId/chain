@@ -1,10 +1,18 @@
 #![cfg(feature = "backend-plonky3")]
 
+//! Recursive Plonky3 proof flows backed by deterministic fixtures.
+//!
+//! The tests emulate wallet and node workflows spanning transaction, state,
+//! pruning, consensus, and recursive proofs while covering negative cases such
+//! as tampered witnesses and malformed proof blobs. Deterministic RNG seeds
+//! keep the generated witnesses stable across CI runs.
+
 use ed25519_dalek::{Keypair, Signer};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde_json::Value;
 
+use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
 use rpp_chain::crypto::address_from_public_key;
 use rpp_chain::plonky3::circuit::pruning::PruningWitness;
 use rpp_chain::plonky3::crypto;
@@ -23,6 +31,8 @@ fn enable_experimental_backend() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| rpp_chain::plonky3::experimental::force_enable_for_tests());
 }
+
+const TRANSACTION_SEED: [u8; 32] = [13u8; 32];
 
 fn canonical_pruning_header() -> BlockHeader {
     BlockHeader::new(
@@ -47,12 +57,92 @@ fn canonical_pruning_header() -> BlockHeader {
 }
 
 fn sample_transaction() -> SignedTransaction {
-    let mut rng = StdRng::from_seed([13u8; 32]);
+    let mut rng = StdRng::from_seed(TRANSACTION_SEED);
     let keypair = Keypair::generate(&mut rng);
     let from = address_from_public_key(&keypair.public);
     let tx = Transaction::new(from.clone(), from, 5, 1, 0, None);
     let signature = keypair.sign(&tx.canonical_bytes());
     SignedTransaction::new(tx, signature, &keypair.public)
+}
+
+fn sample_consensus_certificate() -> ConsensusCertificate {
+    let block_hash = "11".repeat(32);
+    let mut metadata = ConsensusProofMetadata::default();
+    metadata.epoch = 5;
+    metadata.slot = 7;
+    metadata.quorum_bitmap_root = "22".repeat(32);
+    metadata.quorum_signature_root = "33".repeat(32);
+    metadata.vrf_outputs = vec!["44".repeat(32)];
+    metadata.vrf_proofs = vec!["55".repeat(32)];
+    metadata.witness_commitments = vec!["66".repeat(32)];
+    metadata.reputation_roots = vec!["77".repeat(32)];
+
+    ConsensusCertificate {
+        block_hash: block_hash.clone().into(),
+        height: 3,
+        round: 2,
+        total_power: 100,
+        quorum_threshold: 67,
+        prevote_power: 67,
+        precommit_power: 67,
+        commit_power: 80,
+        prevotes: Vec::new(),
+        precommits: Vec::new(),
+        metadata,
+    }
+}
+
+fn recursive_artifacts_for_tests() -> (
+    Plonky3Verifier,
+    ChainProof,
+    ChainProof,
+    ChainProof,
+    ChainProof,
+) {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+
+    let tx = sample_transaction();
+    let transaction_proof = prover
+        .prove_transaction(prover.build_transaction_witness(&tx).unwrap())
+        .unwrap();
+
+    let state_witness = prover
+        .build_state_witness("prev", "next", &[], &[tx.clone()])
+        .unwrap();
+    let state_proof = prover.prove_state_transition(state_witness).unwrap();
+
+    let header = canonical_pruning_header();
+    let pruning_envelope = pruning_from_previous(None, &header);
+    let pruning_witness = prover
+        .build_pruning_witness(None, &[], &[], pruning_envelope.as_ref(), Vec::new())
+        .unwrap();
+    let pruning_proof = prover.prove_pruning(pruning_witness).unwrap();
+
+    let recursive_witness = prover
+        .build_recursive_witness(
+            None,
+            &[],
+            &[transaction_proof.clone()],
+            &[],
+            &[],
+            &GlobalStateCommitments::default(),
+            &state_proof,
+            pruning_envelope.as_ref(),
+            &pruning_proof,
+            9,
+        )
+        .unwrap();
+    let recursive_proof = prover.prove_recursive(recursive_witness).unwrap();
+
+    (
+        verifier,
+        transaction_proof,
+        state_proof,
+        pruning_proof,
+        recursive_proof,
+    )
 }
 
 #[test]
@@ -168,4 +258,119 @@ fn plonky3_recursive_flow_roundtrip() {
         assert_eq!(recorded.state_proof, bundle.state_proof);
         assert_eq!(recorded.pruning_proof, bundle.pruning_proof);
     }
+}
+
+#[test]
+fn recursive_bundle_rejects_wrong_verifying_key() {
+    let (verifier, transaction_proof, state_proof, pruning_proof, recursive_proof) =
+        recursive_artifacts_for_tests();
+
+    let mut tampered = recursive_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.metadata.verifying_key_hash[0] ^= 0x08;
+        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+            *first ^= 0x01;
+        }
+        *value = parsed.into_value().unwrap();
+    }
+
+    let bundle = BlockProofBundle::new(
+        vec![transaction_proof.clone()],
+        state_proof.clone(),
+        pruning_proof.clone(),
+        tampered.clone(),
+    );
+
+    assert!(verifier.verify_recursive(&tampered).is_err());
+    assert!(verifier.verify_bundle(&bundle, None).is_err());
+}
+
+#[test]
+fn recursive_bundle_rejects_commitment_mismatch() {
+    let (verifier, transaction_proof, state_proof, pruning_proof, recursive_proof) =
+        recursive_artifacts_for_tests();
+
+    let mut tampered = recursive_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("commitment".into(), serde_json::json!("deadbeef"));
+        }
+    }
+
+    let bundle = BlockProofBundle::new(
+        vec![transaction_proof.clone()],
+        state_proof.clone(),
+        pruning_proof.clone(),
+        tampered.clone(),
+    );
+
+    assert!(verifier.verify_recursive(&tampered).is_err());
+    assert!(verifier.verify_bundle(&bundle, None).is_err());
+}
+
+#[test]
+fn recursive_bundle_rejects_oversized_proof_blob() {
+    let (verifier, transaction_proof, state_proof, pruning_proof, recursive_proof) =
+        recursive_artifacts_for_tests();
+
+    let mut oversized = recursive_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut oversized {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.proof_blob.push(0);
+        *value = parsed.into_value().unwrap();
+    }
+
+    let bundle = BlockProofBundle::new(
+        vec![transaction_proof.clone()],
+        state_proof.clone(),
+        pruning_proof.clone(),
+        oversized.clone(),
+    );
+
+    assert!(verifier.verify_recursive(&oversized).is_err());
+    assert!(verifier.verify_bundle(&bundle, None).is_err());
+}
+
+#[test]
+fn consensus_proof_roundtrip_catches_tampering() {
+    enable_experimental_backend();
+    let prover = Plonky3Prover::new();
+    let verifier = Plonky3Verifier::default();
+
+    let certificate = sample_consensus_certificate();
+    let block_hash = certificate.block_hash.0.clone();
+    let witness = prover
+        .build_consensus_witness(&block_hash, &certificate)
+        .unwrap();
+    let proof = prover.prove_consensus(witness).unwrap();
+
+    verifier.verify_consensus(&proof).unwrap();
+
+    let mut wrong_key = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut wrong_key {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.metadata.verifying_key_hash[0] ^= 0x04;
+        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+            *first ^= 0x01;
+        }
+        *value = parsed.into_value().unwrap();
+    }
+    assert!(verifier.verify_consensus(&wrong_key).is_err());
+
+    let mut mismatched_commitment = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut mismatched_commitment {
+        if let Some(object) = value.as_object_mut() {
+            object.insert("commitment".into(), serde_json::json!("deadbeef"));
+        }
+    }
+    assert!(verifier.verify_consensus(&mismatched_commitment).is_err());
+
+    let mut oversized = proof;
+    if let ChainProof::Plonky3(value) = &mut oversized {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.proof_blob.push(0);
+        *value = parsed.into_value().unwrap();
+    }
+    assert!(verifier.verify_consensus(&oversized).is_err());
 }

@@ -1,3 +1,9 @@
+//! Regression tests for the experimental Plonky3 backend.
+//!
+//! The prover shims are deterministic when fed the same witnesses, so each
+//! helper below seeds `StdRng` with fixed byte arrays to keep CI runs
+//! reproducible without depending on JSON fixtures.
+
 use blake3::hash as blake3_hash;
 use ed25519_dalek::{Keypair, Signer};
 use rand::rngs::StdRng;
@@ -18,6 +24,8 @@ use crate::types::{
     SignedTransaction, Transaction,
 };
 use rpp_pruning::Envelope;
+
+const TRANSACTION_SEED: [u8; 32] = [7u8; 32];
 
 fn enable_experimental_backend() {
     use std::sync::Once;
@@ -58,7 +66,7 @@ fn canonical_pruning_header() -> BlockHeader {
 }
 
 fn sample_transaction() -> SignedTransaction {
-    let mut rng = StdRng::from_seed([7u8; 32]);
+    let mut rng = StdRng::from_seed(TRANSACTION_SEED);
     let keypair = Keypair::generate(&mut rng);
     let from = address_from_public_key(&keypair.public);
     let tx = Transaction::new(from.clone(), from.clone(), 42, 1, 0, None);
@@ -201,6 +209,120 @@ fn transaction_proof_roundtrip() {
 }
 
 #[test]
+fn transaction_proof_rejects_tampered_verifying_key() {
+    let prover = test_prover();
+    let verifier = test_verifier();
+    let tx = sample_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut tampered = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut tampered {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.metadata.verifying_key_hash[0] ^= 0x80;
+        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+            *first ^= 0x01;
+        }
+        *value = parsed.into_value().unwrap();
+    }
+
+    let verify_err = verifier.verify_transaction(&tampered).unwrap_err();
+    assert!(
+        verify_err.to_string().contains("verifying key mismatch"),
+        "unexpected verifier error: {verify_err:?}"
+    );
+
+    if let ChainProof::Plonky3(value) = &tampered {
+        let parsed = Plonky3Proof::from_value(value).unwrap();
+        let backend_err = crypto::verify_proof(&parsed).unwrap_err();
+        assert!(
+            backend_err.to_string().contains("verifying key mismatch"),
+            "unexpected backend error: {backend_err:?}"
+        );
+    }
+}
+
+#[test]
+fn transaction_proof_rejects_malformed_witness() {
+    let prover = test_prover();
+    let verifier = test_verifier();
+    let tx = sample_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut malformed = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut malformed {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        if let Value::Object(ref mut root) = parsed.public_inputs {
+            root.insert("witness".to_string(), json!({"transaction": "oops"}));
+        }
+        *value = parsed.into_value().unwrap();
+    }
+
+    let verify_err = verifier.verify_transaction(&malformed).unwrap_err();
+    assert!(
+        verify_err.to_string().contains("commitment mismatch"),
+        "unexpected verifier error: {verify_err:?}"
+    );
+
+    if let ChainProof::Plonky3(value) = &malformed {
+        let parsed = Plonky3Proof::from_value(value).unwrap();
+        let backend_err = crypto::verify_proof(&parsed).unwrap_err();
+        assert!(
+            backend_err.to_string().contains("commitment mismatch"),
+            "unexpected backend error: {backend_err:?}"
+        );
+    }
+}
+
+#[test]
+fn transaction_proof_rejects_truncated_blob() {
+    let prover = test_prover();
+    let verifier = test_verifier();
+    let tx = sample_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut truncated = proof.clone();
+    if let ChainProof::Plonky3(value) = &mut truncated {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed
+            .payload
+            .proof_blob
+            .truncate(parsed.payload.proof_blob.len().saturating_sub(1));
+        *value = parsed.into_value().unwrap();
+    }
+
+    let verify_err = verifier.verify_transaction(&truncated).unwrap_err();
+    assert!(
+        verify_err.to_string().contains("proof blob must be"),
+        "unexpected verifier error: {verify_err:?}"
+    );
+}
+
+#[test]
+fn transaction_proof_rejects_oversized_blob() {
+    let prover = test_prover();
+    let verifier = test_verifier();
+    let tx = sample_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let mut oversized = proof;
+    if let ChainProof::Plonky3(value) = &mut oversized {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.proof_blob.push(0);
+        *value = parsed.into_value().unwrap();
+    }
+
+    let verify_err = verifier.verify_transaction(&oversized).unwrap_err();
+    assert!(
+        verify_err.to_string().contains("proof blob must be"),
+        "unexpected verifier error: {verify_err:?}"
+    );
+}
+
+#[test]
 fn recursive_aggregator_rejects_tampered_inputs() {
     let prover = test_prover();
     let tx = sample_transaction();
@@ -320,12 +442,26 @@ fn recursive_bundle_verification_detects_tampering() {
         }
     }
     let tampered_bundle = BlockProofBundle::new(
-        vec![transaction_proof],
-        state_proof,
-        pruning_proof,
+        vec![transaction_proof.clone()],
+        state_proof.clone(),
+        pruning_proof.clone(),
         tampered,
     );
     assert!(verifier.verify_bundle(&tampered_bundle, None).is_err());
+
+    let mut oversized = recursive_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut oversized {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        parsed.payload.proof_blob.push(0);
+        *value = parsed.into_value().unwrap();
+    }
+    let oversized_bundle = BlockProofBundle::new(
+        vec![transaction_proof],
+        state_proof,
+        pruning_proof,
+        oversized,
+    );
+    assert!(verifier.verify_bundle(&oversized_bundle, None).is_err());
 }
 
 #[test]
@@ -391,10 +527,29 @@ fn recursive_roundtrip_spans_state_and_transactions() {
         }
     }
     let broken_bundle = BlockProofBundle::new(
-        vec![transaction_proof],
+        vec![transaction_proof.clone()],
         broken_state,
-        pruning_proof,
-        recursive_proof,
+        pruning_proof.clone(),
+        recursive_proof.clone(),
     );
     assert!(verifier.verify_bundle(&broken_bundle, None).is_err());
+
+    let mut broken_links = recursive_proof.clone();
+    if let ChainProof::Plonky3(value) = &mut broken_links {
+        let mut parsed = Plonky3Proof::from_value(value).unwrap();
+        if let Value::Object(ref mut root) = parsed.public_inputs {
+            if let Some(Value::Object(witness)) = root.get_mut("witness") {
+                witness.insert("transaction_proofs".into(), json!([]));
+            }
+        }
+        *value = parsed.into_value().unwrap();
+    }
+    assert!(verifier.verify_recursive(&broken_links).is_err());
+    let broken_link_bundle = BlockProofBundle::new(
+        vec![transaction_proof],
+        state_proof,
+        pruning_proof,
+        broken_links,
+    );
+    assert!(verifier.verify_bundle(&broken_link_bundle, None).is_err());
 }

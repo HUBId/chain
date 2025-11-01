@@ -30,4 +30,7 @@ cargo test -p rpp-chain plonky3
 The tests construct witnesses for the transaction, state, pruning and recursive
 circuits, generate Plonky3 proof blobs and verify them using the node-side
 verifier.  The proofs are deterministic to keep the artefacts reproducible
-across CI runs.
+across CI runs.  Each test seeds `StdRng` with a fixed 32-byte array (see
+`tests.rs` and the `tests/plonky3_*` suites) so that transaction payloads,
+signatures, and consensus certificates remain stable even as the backend
+evolves.
