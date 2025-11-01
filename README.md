@@ -96,6 +96,13 @@ Validator and hybrid modes require the STWO prover backend and abort during
 startup when the corresponding feature (`prover-stwo` or `prover-stwo-simd`) is
 missing.
 
+The experimental Plonky3 backend remains available for non-production testing.
+Build or check the crate with `--features backend-plonky3` (optionally paired
+with `dev`) to exercise the stubbed prover while keeping production profiles
+clean. The workspace now fails compilation if `backend-plonky3` is combined with
+the `prod` or `validator` features so the experimental backend cannot leak into
+release artifacts.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】
+
 ## Wallet and Electrs integration
 
 The sample wallet configuration at `config/wallet.toml` describes RPC, embedded

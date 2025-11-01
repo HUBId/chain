@@ -6134,6 +6134,7 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk 0.30.0",
  "parking_lot",
+ "predicates",
  "reqwest 0.12.24",
  "rpp-chain",
  "rpp-p2p",

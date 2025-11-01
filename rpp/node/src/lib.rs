@@ -1,4 +1,5 @@
 mod config;
+mod feature_guard;
 mod pipeline;
 mod services;
 mod state_sync;

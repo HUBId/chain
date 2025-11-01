@@ -10,6 +10,8 @@ repository = "https://github.com/ava-labs/chain"
 default = ["dev"]
 dev = ["prover-mock"]
 prod = []
+validator = []
+backend-plonky3 = ["rpp-chain/backend-plonky3"]
 nightly-prover = ["rpp-chain/nightly-prover"]
 prover-stwo = ["nightly-prover", "rpp-chain/prover-stwo"]
 stwo = ["prover-stwo"]
@@ -55,6 +57,7 @@ storage-firewood = { path = "../../storage-firewood" }
 assert_cmd = "2.0.17"
 libc = "0.2"
 tempfile = "3.10"
+predicates = "3.1"
 
 [[bin]]
 name = "node"
