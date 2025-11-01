@@ -33,8 +33,9 @@ Open a terminal in vscode OR exec into the container directly as follows
 
 ```sh
 # you don't need to do this if you open the terminal from vscode
-# the container name here is "firewood-app-1", you should be able to see this in docker-desktop
-docker exec -it --privileged -u root firewood-app-1 zsh
+# replace `chain-app-1` with the container name reported by `docker ps` or Docker Desktop
+# for example, if `docker ps` lists `chain-app-1`, run the following command
+docker exec -it --privileged -u root chain-app-1 zsh
 ```
 
 Once you're in the terminal you'll want to install the Rust toolset. You can [find instructions here](https://rustup.rs/)
