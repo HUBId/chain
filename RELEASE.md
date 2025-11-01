@@ -31,9 +31,12 @@ same steps can be replicated locally:
 - `scripts/build_release.sh` – builds and packages the binaries for a given
   target. It accepts `--target`, `--profile`, and `--tool` (either `cargo` or
   `cross`) flags and emits tarballs under `dist/artifacts/<target>/` together
-  with an optional CycloneDX SBOM (`sbom-rpp-node-<target>.json`). After the
-  build completes, the script invokes `scripts/verify_release_features.sh` to
-  guarantee that production artifacts do not link the mock prover backends.
+  with an optional CycloneDX SBOM (`sbom-rpp-node-<target>.json`). Before the
+  build starts the script aborts if `backend-plonky3` (or any alias) is present
+  in the feature list, emitting `error: backend-plonky3 is experimental and
+  cannot be enabled for release builds`. After the build completes, the script
+  invokes `scripts/verify_release_features.sh` to guarantee that production
+  artifacts do not link the mock prover backends.
 - `scripts/checksums.sh` – generates a sorted SHA256 manifest for a set of
   artifacts and writes it to the path supplied via `--output`.
 - `scripts/verify_checksums.sh` – replays the manifest created by

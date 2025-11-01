@@ -25,9 +25,11 @@ Local builds should mirror the same flag set shown in
 `scripts/build_release.sh` (or swap in `prover-stwo-simd` on hosts that support
 SIMD acceleration) to avoid shipping binaries that fail at runtime due to a
 missing production backend.【F:scripts/build_release.sh†L1-L87】 Release builds
-still block the deterministic mock prover but now accept Plonky3 alongside the
-STWO feature set, so production artefacts can target any supported backend
-without manual overrides.【F:scripts/build_release.sh†L100-L160】
+reject both the deterministic mock prover and the experimental Plonky3 stub: if
+any `backend-plonky3` alias leaks into the feature list, `scripts/build_release.sh`
+fails immediately with `error: backend-plonky3 is experimental and cannot be
+enabled for release builds`, and the GitHub release workflow halts before any
+artifacts are published.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L70-L160】
 
 Keep the repository cloned on the host to rebuild quickly when upgrades ship.
 
