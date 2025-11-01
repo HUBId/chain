@@ -158,6 +158,10 @@ cargo install --locked git-cliff
 > changelog are updated before creating a new release. Open a PR with these
 > changes and merge it before tagging.
 
+- Confirm the [performance dashboards](docs/dashboards/performance_trends.md)
+  reflect the most recent CI run and show no SLO regressions beyond the budgets
+  documented in [`docs/observability/performance_slos.md`](docs/observability/performance_slos.md).
+
 ## Publish the tag
 
 Trigger the release by pushing a signed tag that matches the updated versions:

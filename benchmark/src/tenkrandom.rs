@@ -13,31 +13,34 @@ use firewood::db::{BatchOp, Db};
 use firewood::logger::debug;
 use firewood::v2::api::{Db as _, Proposal as _};
 
-use crate::{Args, TestRunner};
+use crate::{Args, ScenarioMetrics, ScenarioSummary, TestRunner};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Default)]
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db, args: &Args) -> Result<ScenarioSummary, Box<dyn Error>> {
         let mut low = 0;
         let mut high = args.global_opts.number_of_batches * args.global_opts.batch_size;
         let twenty_five_pct = args.global_opts.batch_size / 4;
 
-        let start = Instant::now();
+        let scenario_start = Instant::now();
+        let mut metrics = ScenarioMetrics::new("tenk-random", args.global_opts.batch_size);
 
-        while start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
+        while scenario_start.elapsed().as_secs() / 60 < args.global_opts.duration_minutes {
             let batch: Vec<BatchOp<_, _>> = Self::generate_inserts(high, twenty_five_pct)
                 .chain(generate_deletes(low, twenty_five_pct))
                 .chain(generate_updates(low + high / 2, twenty_five_pct * 2, low))
                 .collect();
+            let iteration_start = Instant::now();
             let proposal = db.propose(batch).expect("proposal should succeed");
             proposal.commit()?;
+            metrics.record_batch(iteration_start.elapsed());
             low += twenty_five_pct;
             high += twenty_five_pct;
         }
-        Ok(())
+        Ok(metrics.finish(scenario_start.elapsed()))
     }
 }
 fn generate_updates(

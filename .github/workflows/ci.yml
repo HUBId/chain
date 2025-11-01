@@ -26,6 +26,8 @@ jobs:
             "dashboards/vrf_overview.json"
             "dashboards/vrf_thresholds.json"
             "observability/pipeline_grafana.json"
+            "dashboards/performance_overview.json"
+            "dashboards/performance_capacity.json"
           )
           missing=0
           for file in "${files[@]}"; do
@@ -41,3 +43,34 @@ jobs:
             echo "One or more dashboard exports are missing."
             exit 1
           fi
+
+  performance-benchmarks:
+    name: Performance regression check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Restore performance baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: logs/perf/baseline.json
+          key: perf-baseline
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf-benchmarks
+          workspaces: |
+            . -> target
+      - name: Run Firewood benchmarks
+        env:
+          PERF_BATCH_SIZE: "500"
+          PERF_NUMBER_OF_BATCHES: "25"
+          PERF_DURATION_MINUTES: "1"
+          PERF_CACHE_SIZE: "750000"
+          PERF_BASELINE_PATH: logs/perf/baseline.json
+        run: ./scripts/ci/run_benchmarks.sh
+      - name: Upload performance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ github.sha }}
+          path: logs/perf/${{ github.sha }}
