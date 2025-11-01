@@ -396,12 +396,17 @@ impl<'a> WalletProver<'a> {
         Ok(ConsensusWitness {
             block_hash: block_hash.to_string(),
             round: certificate.round,
+            epoch: certificate.metadata.epoch,
+            slot: certificate.metadata.slot,
             leader_proposal: block_hash.to_string(),
             quorum_threshold,
             pre_votes,
             pre_commits,
             commit_votes,
+            quorum_bitmap_root: certificate.metadata.quorum_bitmap_root.clone(),
+            quorum_signature_root: certificate.metadata.quorum_signature_root.clone(),
             vrf_outputs: certificate.metadata.vrf_outputs.clone(),
+            vrf_proofs: certificate.metadata.vrf_proofs.clone(),
             witness_commitments: certificate.metadata.witness_commitments.clone(),
             reputation_roots: certificate.metadata.reputation_roots.clone(),
         })

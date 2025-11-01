@@ -709,10 +709,17 @@ fn rebuild_consensus_public_inputs(
         element_from_bytes(parameters, &inputs.block_hash),
         parameters.element_from_u64(inputs.round),
         element_from_bytes(parameters, &inputs.leader_proposal),
+        parameters.element_from_u64(inputs.epoch),
+        parameters.element_from_u64(inputs.slot),
         parameters.element_from_u64(inputs.quorum_threshold),
+        element_from_bytes(parameters, &inputs.quorum_bitmap_root),
+        element_from_bytes(parameters, &inputs.quorum_signature_root),
     ];
     for digest in &inputs.vrf_outputs {
         fields.push(element_from_bytes(parameters, digest));
+    }
+    for proof in &inputs.vrf_proofs {
+        fields.push(element_from_bytes(parameters, proof));
     }
     for digest in &inputs.witness_commitments {
         fields.push(element_from_bytes(parameters, digest));
@@ -1018,6 +1025,49 @@ mod tests {
                 &consensus_public_inputs(&witness),
             )
             .expect("consensus verification succeeds");
+    }
+
+    #[test]
+    fn consensus_verification_rejects_vrf_tampering() {
+        let backend = StwoBackend::new();
+        let mut witness = sample_consensus_witness();
+        witness.vrf_outputs = vec!["22".repeat(32)];
+        witness.vrf_proofs = vec!["33".repeat(crate::vrf::VRF_PROOF_LENGTH)];
+
+        let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
+        let witness_bytes =
+            WitnessBytes::encode(&header, &witness).expect("consensus witness encodes");
+        let (proof_bytes, verifying_key, circuit) = backend
+            .prove_consensus(&witness_bytes)
+            .expect("consensus proving succeeds");
+
+        let mut public_inputs = consensus_public_inputs(&witness);
+        public_inputs.vrf_outputs[0][0] ^= 0xff;
+
+        let err = backend
+            .verify_consensus(&verifying_key, &proof_bytes, &circuit, &public_inputs)
+            .expect_err("tampered vrf output should fail");
+        assert!(matches!(err, BackendError::Failure(_)));
+    }
+
+    #[test]
+    fn consensus_verification_rejects_quorum_bitmap_tampering() {
+        let backend = StwoBackend::new();
+        let witness = sample_consensus_witness();
+        let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
+        let witness_bytes =
+            WitnessBytes::encode(&header, &witness).expect("consensus witness encodes");
+        let (proof_bytes, verifying_key, circuit) = backend
+            .prove_consensus(&witness_bytes)
+            .expect("consensus proving succeeds");
+
+        let mut public_inputs = consensus_public_inputs(&witness);
+        public_inputs.quorum_bitmap_root[0] ^= 0x01;
+
+        let err = backend
+            .verify_consensus(&verifying_key, &proof_bytes, &circuit, &public_inputs)
+            .expect_err("tampered quorum bitmap root should fail");
+        assert!(matches!(err, BackendError::Failure(_)));
     }
 
     #[test]
@@ -1331,12 +1381,17 @@ mod tests {
         ConsensusWitness {
             block_hash: block_hash.clone(),
             round: 5,
+            epoch: 2,
+            slot: 11,
             leader_proposal: block_hash,
             quorum_threshold: 12,
             pre_votes: votes.clone(),
             pre_commits: votes.clone(),
             commit_votes: votes,
+            quorum_bitmap_root: "aa".repeat(32),
+            quorum_signature_root: "bb".repeat(32),
             vrf_outputs: Vec::new(),
+            vrf_proofs: Vec::new(),
             witness_commitments: Vec::new(),
             reputation_roots: Vec::new(),
         }
@@ -1399,12 +1454,21 @@ mod tests {
         ConsensusPublicInputs {
             block_hash: hex_to_array(&witness.block_hash),
             round: witness.round,
+            epoch: witness.epoch,
+            slot: witness.slot,
             leader_proposal: hex_to_array(&witness.leader_proposal),
             quorum_threshold: witness.quorum_threshold,
+            quorum_bitmap_root: hex_to_array(&witness.quorum_bitmap_root),
+            quorum_signature_root: hex_to_array(&witness.quorum_signature_root),
             vrf_outputs: witness
                 .vrf_outputs
                 .iter()
                 .map(|value| hex_to_array(value))
+                .collect(),
+            vrf_proofs: witness
+                .vrf_proofs
+                .iter()
+                .map(|value| hex_to_vec(value))
                 .collect(),
             witness_commitments: witness
                 .witness_commitments
@@ -1529,5 +1593,9 @@ mod tests {
         let mut array = [0u8; N];
         array.copy_from_slice(&bytes);
         array
+    }
+
+    fn hex_to_vec(value: &str) -> Vec<u8> {
+        hex::decode(value).expect("hex decodes")
     }
 }

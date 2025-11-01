@@ -226,14 +226,40 @@ pub struct ConsensusCertificate {
     pub metadata: ConsensusProofMetadata,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusProofMetadata {
     #[serde(default)]
     pub vrf_outputs: Vec<String>,
     #[serde(default)]
+    pub vrf_proofs: Vec<String>,
+    #[serde(default)]
     pub witness_commitments: Vec<String>,
     #[serde(default)]
     pub reputation_roots: Vec<String>,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub slot: u64,
+    #[serde(default)]
+    pub quorum_bitmap_root: String,
+    #[serde(default)]
+    pub quorum_signature_root: String,
+}
+
+impl Default for ConsensusProofMetadata {
+    fn default() -> Self {
+        let zero_digest = "00".repeat(32);
+        Self {
+            vrf_outputs: Vec::new(),
+            vrf_proofs: Vec::new(),
+            witness_commitments: Vec::new(),
+            reputation_roots: Vec::new(),
+            epoch: 0,
+            slot: 0,
+            quorum_bitmap_root: zero_digest.clone(),
+            quorum_signature_root: zero_digest,
+        }
+    }
 }
 
 impl ConsensusCertificate {
@@ -289,12 +315,42 @@ impl ConsensusCertificate {
                 .collect()
         };
 
+        let decode_proofs = |values: &[String]| -> BackendResult<Vec<Vec<u8>>> {
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| {
+                    let bytes = hex::decode(value).map_err(|err| {
+                        BackendError::Failure(format!("invalid vrf proof #{index} encoding: {err}"))
+                    })?;
+                    if bytes.is_empty() {
+                        return Err(BackendError::Failure(format!(
+                            "vrf proof #{index} must not be empty"
+                        )));
+                    }
+                    Ok(bytes)
+                })
+                .collect()
+        };
+
+        let quorum_bitmap_root =
+            decode_hash("quorum bitmap root", &self.metadata.quorum_bitmap_root)?;
+        let quorum_signature_root = decode_hash(
+            "quorum signature root",
+            &self.metadata.quorum_signature_root,
+        )?;
+
         Ok(ConsensusPublicInputs {
             block_hash,
             round: self.round,
             leader_proposal,
+            epoch: self.metadata.epoch,
+            slot: self.metadata.slot,
             quorum_threshold: self.quorum_threshold,
+            quorum_bitmap_root,
+            quorum_signature_root,
             vrf_outputs: decode_digests("vrf output", &self.metadata.vrf_outputs)?,
+            vrf_proofs: decode_proofs(&self.metadata.vrf_proofs)?,
             witness_commitments: decode_digests(
                 "witness commitment",
                 &self.metadata.witness_commitments,

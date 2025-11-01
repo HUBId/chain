@@ -37,13 +37,19 @@ impl VotePower {
 pub struct ConsensusWitness {
     pub block_hash: String,
     pub round: u64,
+    pub epoch: u64,
+    pub slot: u64,
     pub leader_proposal: String,
     pub quorum_threshold: u64,
     pub pre_votes: Vec<VotePower>,
     pub pre_commits: Vec<VotePower>,
     pub commit_votes: Vec<VotePower>,
+    pub quorum_bitmap_root: String,
+    pub quorum_signature_root: String,
     #[serde(default)]
     pub vrf_outputs: Vec<String>,
+    #[serde(default)]
+    pub vrf_proofs: Vec<String>,
     #[serde(default)]
     pub witness_commitments: Vec<String>,
     #[serde(default)]
@@ -108,6 +114,26 @@ impl ConsensusWitness {
         }
         Ok(())
     }
+
+    fn ensure_vrf_proofs(&self) -> Result<(), CircuitError> {
+        if self.vrf_outputs.len() != self.vrf_proofs.len() {
+            return Err(CircuitError::ConstraintViolation(
+                "vrf output/proof count mismatch".into(),
+            ));
+        }
+        for (index, proof) in self.vrf_proofs.iter().enumerate() {
+            let bytes = hex::decode(proof).map_err(|err| {
+                CircuitError::InvalidWitness(format!("invalid vrf proof #{index} encoding: {err}"))
+            })?;
+            if bytes.len() != crate::vrf::VRF_PROOF_LENGTH {
+                return Err(CircuitError::ConstraintViolation(format!(
+                    "vrf proof #{index} must encode {} bytes",
+                    crate::vrf::VRF_PROOF_LENGTH
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -160,6 +186,8 @@ impl StarkCircuit for ConsensusCircuit {
                 "leader proposal must match block hash".into(),
             ));
         }
+        ConsensusWitness::ensure_hex(&self.witness.quorum_bitmap_root)?;
+        ConsensusWitness::ensure_hex(&self.witness.quorum_signature_root)?;
         if self.witness.quorum_threshold == 0 {
             return Err(CircuitError::ConstraintViolation(
                 "quorum threshold must be positive".into(),
@@ -180,6 +208,7 @@ impl StarkCircuit for ConsensusCircuit {
         self.witness.verify_quorum(commit_total, "commit")?;
         self.witness
             .ensure_digest_set("vrf output", &self.witness.vrf_outputs)?;
+        self.witness.ensure_vrf_proofs()?;
         self.witness
             .ensure_digest_set("witness commitment", &self.witness.witness_commitments)?;
         self.witness
@@ -224,7 +253,11 @@ impl StarkCircuit for ConsensusCircuit {
             vec![
                 "block_hash".to_string(),
                 "round".to_string(),
+                "epoch".to_string(),
+                "slot".to_string(),
                 "quorum".to_string(),
+                "quorum_bitmap_root".to_string(),
+                "quorum_signature_root".to_string(),
                 "pre_vote_total".to_string(),
                 "pre_commit_total".to_string(),
                 "commit_total".to_string(),
@@ -232,7 +265,11 @@ impl StarkCircuit for ConsensusCircuit {
             vec![vec![
                 string_to_field(parameters, &self.witness.block_hash),
                 parameters.element_from_u64(self.witness.round),
+                parameters.element_from_u64(self.witness.epoch),
+                parameters.element_from_u64(self.witness.slot),
                 parameters.element_from_u64(self.witness.quorum_threshold),
+                string_to_field(parameters, &self.witness.quorum_bitmap_root),
+                string_to_field(parameters, &self.witness.quorum_signature_root),
                 parameters.element_from_u128(pre_vote_total),
                 parameters.element_from_u128(pre_commit_total),
                 parameters.element_from_u128(commit_total),

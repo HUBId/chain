@@ -281,12 +281,17 @@ impl ProofProver for Plonky3Prover {
         Ok(ConsensusWitness::new(
             block_hash,
             certificate.round,
+            certificate.metadata.epoch,
+            certificate.metadata.slot,
             block_hash,
             quorum,
             pre_votes,
             pre_commits,
             commit_votes,
+            certificate.metadata.quorum_bitmap_root.clone(),
+            certificate.metadata.quorum_signature_root.clone(),
             certificate.metadata.vrf_outputs.clone(),
+            certificate.metadata.vrf_proofs.clone(),
             certificate.metadata.witness_commitments.clone(),
             certificate.metadata.reputation_roots.clone(),
         ))
