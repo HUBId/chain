@@ -12,6 +12,13 @@ use crate::pruning::{FirewoodPruner, SnapshotManifest};
 use crate::state::{FirewoodState, StateError, STORAGE_LAYOUT_VERSION};
 
 const META_PROGRESS_KEY: &str = "lifecycle_progress.json";
+const SNAPSHOT_FAILURE_METRIC: &str = "firewood.snapshot.ingest.failures";
+const SNAPSHOT_FAILURE_DESC: &str = "count of snapshot ingestion or verification failures";
+
+fn record_snapshot_failure(reason: &'static str) {
+    metrics::describe_counter!(SNAPSHOT_FAILURE_METRIC, SNAPSHOT_FAILURE_DESC);
+    metrics::counter!(SNAPSHOT_FAILURE_METRIC, "reason" => reason).increment(1);
+}
 
 #[derive(Debug, Error)]
 pub enum LifecycleError {
@@ -204,6 +211,7 @@ fn verify_proof(bundle: &SnapshotBundle, manifest_path: &Path) -> Result<(), Lif
     if valid {
         Ok(())
     } else {
+        record_snapshot_failure("proof_rejected");
         Err(LifecycleError::ProofVerificationFailed {
             path: manifest_path.to_path_buf(),
         })
@@ -231,8 +239,12 @@ impl SnapshotBundle {
             .parent()
             .map(|dir| dir.join(&manifest.proof_file))
             .unwrap_or_else(|| PathBuf::from(&manifest.proof_file));
-        let proof_bytes = fs::read(&proof_path)?;
+        let proof_bytes = fs::read(&proof_path).map_err(|err| {
+            record_snapshot_failure("missing_proof");
+            LifecycleError::Io(err)
+        })?;
         if !manifest.checksum_matches(&proof_bytes) {
+            record_snapshot_failure("checksum_mismatch");
             return Err(LifecycleError::ChecksumMismatch { path: proof_path });
         }
         let proof: Envelope = bincode::deserialize(&proof_bytes)?;
@@ -264,7 +276,10 @@ fn decode_hash(value: &str) -> Result<Hash, LifecycleError> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_hash;
+    use super::{decode_hash, SnapshotBundle, SnapshotManifest};
+    use rpp_pruning::COMMITMENT_TAG;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn decode_hash_rejects_invalid_length() {
@@ -273,5 +288,66 @@ mod tests {
             super::LifecycleError::ChecksumMismatch { .. } => {}
             other => panic!("unexpected error: {other}"),
         }
+    }
+
+    fn hex_digest(byte: u8) -> String {
+        hex::encode([byte; 32])
+    }
+
+    fn manifest_template() -> SnapshotManifest {
+        SnapshotManifest {
+            layout_version: 1,
+            block_height: 42,
+            state_root: hex_digest(1),
+            schema_digest: hex_digest(2),
+            parameter_digest: hex_digest(3),
+            schema_version: 0,
+            parameter_version: 0,
+            proof_file: "proof.bin".into(),
+            proof_checksum: hex::encode([0u8; 32]),
+        }
+    }
+
+    #[test]
+    fn snapshot_bundle_load_fails_when_proof_missing() {
+        let temp = tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("snapshot.json");
+        let manifest = manifest_template();
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let err = match SnapshotBundle::load(&manifest_path) {
+            Ok(_) => panic!("missing proof should fail"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, super::LifecycleError::Io(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn snapshot_bundle_load_detects_checksum_mismatch() {
+        let temp = tempdir().expect("tempdir");
+        let manifest_path = temp.path().join("snapshot.json");
+        let proof_path = temp.path().join("proof.bin");
+        let mut manifest = manifest_template();
+        manifest.proof_file = proof_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        manifest.proof_checksum = hex_digest(4);
+
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        fs::write(&proof_path, COMMITMENT_TAG.as_bytes()).unwrap();
+
+        let err = match SnapshotBundle::load(&manifest_path) {
+            Ok(_) => panic!("checksum mismatch expected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            super::LifecycleError::ChecksumMismatch { .. }
+        ));
     }
 }

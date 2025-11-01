@@ -47,9 +47,9 @@ pub(crate) mod primitives;
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
-use crate::{StorageMetricsHandle, firewood_gauge};
-use arc_swap::ArcSwap;
+use crate::{firewood_counter, firewood_gauge, StorageMetricsHandle};
 use arc_swap::access::DynAccess;
+use arc_swap::ArcSwap;
 use smallvec::SmallVec;
 use std::fmt;
 use std::io::{Error, ErrorKind, Read};
@@ -89,8 +89,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::hashednode::hash_node;
-use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
+use crate::node::Node;
 use crate::{CacheReadStrategy, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
 
 use super::linear::WritableStorage;
@@ -341,7 +341,7 @@ where
     T: Deref,
     T::Target: RootReader,
 {
-    fn root_node(&self) -> Option<SharedNode> {
+    fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
         self.deref().root_node()
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
@@ -355,7 +355,11 @@ where
 pub trait RootReader {
     /// Returns the root of the trie.
     /// Callers that just need the node at the root should use this function.
-    fn root_node(&self) -> Option<SharedNode>;
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the root node cannot be read from storage.
+    fn root_node(&self) -> Result<Option<SharedNode>, FileIoError>;
 
     /// Returns the root of the trie as a `MaybePersistedNode`.
     /// Callers that might want to modify the root or know how it is stored
@@ -657,8 +661,12 @@ impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
-    fn root_node(&self) -> Option<SharedNode> {
-        self.kind.root.as_ref().map(|node| node.clone().into())
+    fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
+        Ok(self
+            .kind
+            .root
+            .as_ref()
+            .map(|node| SharedNode::new(node.clone())))
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.kind
@@ -669,9 +677,23 @@ impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
-    fn root_node(&self) -> Option<SharedNode> {
-        // TODO: If the read_node fails, we just say there is no root; this is incorrect
-        self.kind.root.as_ref()?.as_shared_node(self).ok()
+    fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
+        let Some(root) = self.kind.root.as_ref() else {
+            return Ok(None);
+        };
+
+        match root.as_shared_node(self) {
+            Ok(node) => Ok(Some(node)),
+            Err(err) => {
+                firewood_counter!(
+                    "firewood.nodestore.root.read_errors",
+                    "count of IO failures while reading committed roots",
+                    "state" => "committed"
+                )
+                .increment(1);
+                Err(err)
+            }
+        }
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.kind.root.clone()
@@ -679,9 +701,23 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
-    fn root_node(&self) -> Option<SharedNode> {
-        // Use the MaybePersistedNode's as_shared_node method to get the root
-        self.kind.root.as_ref()?.as_shared_node(self).ok()
+    fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
+        let Some(root) = self.kind.root.as_ref() else {
+            return Ok(None);
+        };
+
+        match root.as_shared_node(self) {
+            Ok(node) => Ok(Some(node)),
+            Err(err) => {
+                firewood_counter!(
+                    "firewood.nodestore.root.read_errors",
+                    "count of IO failures while reading committed roots",
+                    "state" => "immutable"
+                )
+                .increment(1);
+                Err(err)
+            }
+        }
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.kind.root.clone()
@@ -873,12 +909,35 @@ where
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 
-    use crate::LeafNode;
     use crate::linear::memory::MemStore;
+    use crate::LeafNode;
     use arc_swap::access::DynGuard;
+    use std::sync::Arc;
 
     use super::*;
     use primitives::area_size_iter;
+
+    #[derive(Debug)]
+    struct FailingStorage;
+
+    impl ReadableStorage for FailingStorage {
+        fn stream_from(&self, _addr: u64) -> Result<impl OffsetReader, FileIoError> {
+            Err(FileIoError::from_generic_no_file(
+                std::io::Error::new(std::io::ErrorKind::Other, "forced failure"),
+                "test failing root read",
+            ))
+        }
+
+        fn size(&self) -> Result<u64, FileIoError> {
+            Ok(0)
+        }
+    }
+
+    impl WritableStorage for FailingStorage {
+        fn write(&self, _offset: u64, _object: &[u8]) -> Result<usize, FileIoError> {
+            Ok(0)
+        }
+    }
 
     #[test]
     fn area_sizes_aligned() {
@@ -966,5 +1025,22 @@ mod tests {
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
+    }
+
+    #[test]
+    fn committed_root_propagates_io_error() {
+        let storage = Arc::new(FailingStorage);
+        let mut store =
+            NodeStore::new_empty_committed(storage, crate::noop_storage_metrics()).unwrap();
+
+        store.kind.root = Some(MaybePersistedNode::from(
+            LinearAddress::new(LinearAddress::MIN_AREA_SIZE).expect("non-zero address"),
+        ));
+
+        let err = store.root_node().expect_err("expected forced IO failure");
+        assert_eq!(
+            err.to_string(),
+            "forced failure at offset 0 of file '[unknown]' test failing root read"
+        );
     }
 }

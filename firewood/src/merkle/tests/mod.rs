@@ -142,7 +142,7 @@ impl NodeReader for FailingRootReader {
 }
 
 impl RootReader for FailingRootReader {
-    fn root_node(&self) -> Option<SharedNode> {
+    fn root_node(&self) -> Result<Option<SharedNode>, FileIoError> {
         panic!("root_node should not be called for failing reader");
     }
 
@@ -352,7 +352,7 @@ fn remove_root() {
     assert!(merkle.get_value(&key3).unwrap().is_none());
     assert!(merkle.remove(&key3).unwrap().is_none());
 
-    assert!(merkle.nodestore.root_node().is_none());
+    assert!(merkle.nodestore.root_node().unwrap().is_none());
 }
 
 #[test]
@@ -428,7 +428,7 @@ fn remove_many() {
         let got = merkle.get_value(&key).unwrap();
         assert!(got.is_none());
     }
-    assert!(merkle.nodestore.root_node().is_none());
+    assert!(merkle.nodestore.root_node().unwrap().is_none());
 }
 
 #[test]
