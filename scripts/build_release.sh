@@ -85,6 +85,14 @@ if [[ ! -f Cargo.toml ]]; then
   exit 1
 fi
 
+if [[ "${SKIP_SNAPSHOT_INTEGRITY_TEST:-0}" != "1" ]]; then
+  echo "Running snapshot integrity regression test (root_corruption)"
+  if ! cargo test --locked --test root_corruption; then
+    echo "::error::Snapshot integrity regression detected. The root_corruption test must pass before building release artifacts." >&2
+    exit 1
+  fi
+fi
+
 COMMAND=("$BUILD_TOOL" "build" "--locked" "--package" "rpp-node" "--bins" "--profile" "$PROFILE" "--target" "$TARGET")
 
 BASE_FEATURES="${RPP_RELEASE_BASE_FEATURES:-prod,prover-stwo}"

@@ -32,11 +32,13 @@ same steps can be replicated locally:
   target. It accepts `--target`, `--profile`, and `--tool` (either `cargo` or
   `cross`) flags and emits tarballs under `dist/artifacts/<target>/` together
   with an optional CycloneDX SBOM (`sbom-rpp-node-<target>.json`). Before the
-  build starts the script aborts if `backend-plonky3` (or any alias) is present
-  in the feature list, emitting `error: backend-plonky3 is experimental and
-  cannot be enabled for release builds`. After the build completes, the script
-  invokes `scripts/verify_release_features.sh` to guarantee that production
-  artifacts do not link the mock prover backends.
+  build starts the script runs the snapshot integrity regression test (`cargo
+  test --locked --test root_corruption`) and aborts with a GitHub Actions error
+  log if it fails. The script also blocks any `backend-plonky3` alias in the
+  feature list, emitting `error: backend-plonky3 is experimental and cannot be
+  enabled for release builds`. After the build completes, the script invokes
+  `scripts/verify_release_features.sh` to guarantee that production artifacts do
+  not link the mock prover backends.
 - `scripts/checksums.sh` – generates a sorted SHA256 manifest for a set of
   artifacts and writes it to the path supplied via `--output`.
 - `scripts/verify_checksums.sh` – replays the manifest created by
@@ -71,20 +73,24 @@ the GitHub release body.
 
 Before publishing release artifacts, double-check the following guardrails:
 
-1. Build the workspace via `scripts/build_release.sh`, which enforces the
+1. Run `cargo test --locked --test root_corruption` and ensure the snapshot
+   integrity regression passes before tagging a release. The automated workflow
+   and `scripts/build_release.sh` will both exit early with an explicit error if
+   this test fails.【F:.github/workflows/release.yml†L65-L91】【F:scripts/build_release.sh†L77-L102】
+2. Build the workspace via `scripts/build_release.sh`, which enforces the
    default production feature set (`--no-default-features --features
    prod,prover-stwo`) and immediately exits if any `backend-plonky3` alias or the
    mock prover is requested via flags or environment variables.【F:scripts/build_release.sh†L80-L159】
-2. Let the script run its automatic post-build verification. The bundled
+3. Let the script run its automatic post-build verification. The bundled
    `scripts/verify_release_features.sh` inspects the generated metadata and
    fingerprints to ensure the resulting binaries did not link forbidden prover
    features.【F:scripts/build_release.sh†L160-L200】【F:scripts/verify_release_features.sh†L1-L115】
-3. If you are experimenting with non-default builds, rerun `cargo build` with the
+4. If you are experimenting with non-default builds, rerun `cargo build` with the
    intended feature list and confirm that production profiles still refuse to
    compile when `backend-plonky3` is paired with `prod` or `validator`. The
    compile-time guard keeps the experimental stub out of production releases even
    before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
-4. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
+5. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
    `rpp-node hybrid --dry-run`) to see the runtime guard in action—startup fails
    immediately if the STWO backend was omitted, ensuring the published artifacts
    activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】

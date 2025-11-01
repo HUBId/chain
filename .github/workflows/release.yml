@@ -89,6 +89,15 @@ jobs:
           cargo install --locked git-cliff
       - name: Cargo audit
         run: cargo audit --deny warnings
+      - name: Verify snapshot integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Verifying snapshot integrity via root_corruption regression test"
+          if ! cargo test --locked --test root_corruption; then
+            echo "::error::Snapshot integrity regression detected. The root_corruption test failed." >&2
+            exit 1
+          fi
       - name: Test suite (default, STWO, and RPP-Stark backends)
         run: ./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark
       - name: Prepare release notes
@@ -133,6 +142,8 @@ jobs:
           cargo install --locked cargo-cyclonedx
       - name: Build ${{ matrix.target }}
         shell: bash
+        env:
+          SKIP_SNAPSHOT_INTEGRITY_TEST: 1
         run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool "${{ matrix.tool }}"
       - name: Verify release feature set
         shell: bash
@@ -167,6 +178,8 @@ jobs:
         run: cargo install --locked cargo-cyclonedx
       - name: Build ${{ matrix.target }}
         shell: bash
+        env:
+          SKIP_SNAPSHOT_INTEGRITY_TEST: 1
         run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool cargo
       - name: Verify release feature set
         shell: bash
