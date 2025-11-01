@@ -9,6 +9,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MODE="wallet"
 DEFAULT_CONFIG_PATH="${RPP_WALLET_CONFIG_PATH:-${REPO_ROOT}/config/wallet.toml}"
 
+# Optional environment variables:
+#   RPP_WALLET_RPC_AUTH_TOKEN - when set, send `Authorization: Bearer <token>`
+#     with every readiness probe (overrides `RPP_NODE_RPC_AUTH_TOKEN`).
+#   RPP_WALLET_HEALTH_HEADERS - newline-separated list of additional headers to
+#     attach to readiness probes (e.g. `X-Api-Key: example`).
+
 if [[ ! -f "${DEFAULT_CONFIG_PATH}" ]]; then
   echo "error: default wallet config not found at ${DEFAULT_CONFIG_PATH}" >&2
   exit 1

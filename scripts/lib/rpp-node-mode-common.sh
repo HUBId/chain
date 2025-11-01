@@ -25,21 +25,47 @@ rpp_init_health_headers() {
     return 0
   fi
 
-  if [[ -z "${RPP_NODE_RPC_AUTH_TOKEN:-}" && -z "${RPP_NODE_HEALTH_HEADERS:-}" ]]; then
+  local prefix="RPP_NODE"
+  case "${MODE:-node}" in
+    wallet)
+      prefix="RPP_WALLET"
+      ;;
+    hybrid)
+      prefix="RPP_HYBRID"
+      ;;
+    validator)
+      prefix="RPP_VALIDATOR"
+      ;;
+  esac
+
+  local token_var="${prefix}_RPC_AUTH_TOKEN"
+  local headers_var="${prefix}_HEALTH_HEADERS"
+
+  local token="${!token_var:-}"
+  local headers="${!headers_var:-}"
+
+  if [[ -z "${token}" ]]; then
+    token="${RPP_NODE_RPC_AUTH_TOKEN:-}"
+  fi
+  if [[ -z "${headers}" ]]; then
+    headers="${RPP_NODE_HEALTH_HEADERS:-}"
+  fi
+
+  if [[ -z "${token}" && -z "${headers}" ]]; then
     return 0
   fi
 
   RPP_NODE_HEALTH_CURL_ARGS=()
 
-  if [[ -n "${RPP_NODE_RPC_AUTH_TOKEN:-}" ]]; then
-    RPP_NODE_HEALTH_CURL_ARGS+=("-H" "Authorization: Bearer ${RPP_NODE_RPC_AUTH_TOKEN}")
+  if [[ -n "${token}" ]]; then
+    RPP_NODE_HEALTH_CURL_ARGS+=("-H" "Authorization: Bearer ${token}")
   fi
 
-  if [[ -n "${RPP_NODE_HEALTH_HEADERS:-}" ]]; then
+  if [[ -n "${headers}" ]]; then
     while IFS= read -r header; do
       [[ -z "${header}" ]] && continue
       RPP_NODE_HEALTH_CURL_ARGS+=("-H" "${header}")
-    done <<< "${RPP_NODE_HEALTH_HEADERS}"
+    done <<< "${headers}"
   fi
 }
 

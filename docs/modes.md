@@ -52,7 +52,7 @@ network interfaces and observability hooks. For configuration precedence and tem
   automatically.【F:rpp/runtime/config.rs†L1494-L1513】
 * **Interfaces and probes:** Wallet endpoints share the same RPC router, so `/health/*` is available
   alongside `/wallet/*` APIs for UI integrations.【F:rpp/rpc/api.rs†L984-L1067】
-* **Helper script:** `scripts/run_wallet_mode.sh` wraps the CLI defaults, waits for `/health/live` and `/health/ready`, and exits with the runtime's status code for orchestration pipelines.【F:scripts/run_wallet_mode.sh†L19-L70】【F:rpp/node/src/main.rs†L18-L24】
+* **Helper script:** `scripts/run_wallet_mode.sh` wraps the CLI defaults, waits for `/health/live` and `/health/ready`, and exits with the runtime's status code for orchestration pipelines. When RPC gateways enforce authentication, set `RPP_WALLET_RPC_AUTH_TOKEN` (Bearer auth) or provide newline-separated headers via `RPP_WALLET_HEALTH_HEADERS`; both override the node-level counterparts when defined.【F:scripts/run_wallet_mode.sh†L10-L70】【F:rpp/node/src/main.rs†L18-L24】
 
 ### Hybrid runtime
 
