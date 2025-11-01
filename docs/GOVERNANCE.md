@@ -17,6 +17,28 @@ runbooks and the security guidance in [`SECURITY.md`](../SECURITY.md).
   update the relevant security documents (`THREAT_MODEL`, `KEY_MANAGEMENT`,
   `API_SECURITY`) alongside code to keep operators aligned with implementation
   reality.
+- **Branch protection.** Maintainers must keep the `fmt`, `clippy`, and
+  `tests-stwo` GitHub Actions jobs configured as required status checks on the
+  protected branch (`<PRIMARY_BRANCH_OR_COMMIT>`). When onboarding a new fork or
+  environment, update the branch protection rule through the repository
+  settings or the GitHub CLI:
+
+  ```sh
+  gh api \
+    repos/:owner/:repo/branches/<PRIMARY_BRANCH_OR_COMMIT>/protection \
+    --method PUT \
+    --input - <<'JSON'
+  {
+    "required_status_checks": {
+      "strict": true,
+      "contexts": ["fmt", "clippy", "tests-stwo"]
+    }
+  }
+  JSON
+  ```
+
+  Re-run the command whenever workflow names change so merges cannot bypass the
+  formatting, linting, or STWO test gates.
 
 ## Release workflow
 
