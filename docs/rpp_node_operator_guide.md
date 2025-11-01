@@ -21,6 +21,7 @@ workflows exposed by the running node.
 > [`verify_release_features.sh`](../scripts/verify_release_features.sh) ·
 > [`ensure_prover_backend`](../rpp/node/src/lib.rs) ·
 > [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist)
+> · [Changelog summary](../CHANGELOG.md#unreleased)
 
 ## Build and install the CLI
 
