@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Mark the Phase 1 blueprint milestone as completed in the roadmap, weekly status report, and coverage index so stakeholders can follow the handover into Phase 2.【F:docs/roadmap_implementation_plan.md†L3-L26】【F:docs/status/weekly.md†L1-L20】【F:docs/blueprint_coverage.md†L1-L115】
 - Point operators to the VRF telemetry endpoints exposed by `/status/node` and
   the `target_validator_count` / `rollout.telemetry.*` configuration knobs so
   the new metrics surface alongside existing dashboards.【F:docs/poseidon_vrf.md†L55-L104】【F:config/node.toml†L8-L76】
