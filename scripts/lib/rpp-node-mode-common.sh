@@ -20,17 +20,48 @@ rpp_assert_command() {
   fi
 }
 
+rpp_init_health_headers() {
+  if declare -p RPP_NODE_HEALTH_CURL_ARGS >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [[ -z "${RPP_NODE_RPC_AUTH_TOKEN:-}" && -z "${RPP_NODE_HEALTH_HEADERS:-}" ]]; then
+    return 0
+  fi
+
+  RPP_NODE_HEALTH_CURL_ARGS=()
+
+  if [[ -n "${RPP_NODE_RPC_AUTH_TOKEN:-}" ]]; then
+    RPP_NODE_HEALTH_CURL_ARGS+=("-H" "Authorization: Bearer ${RPP_NODE_RPC_AUTH_TOKEN}")
+  fi
+
+  if [[ -n "${RPP_NODE_HEALTH_HEADERS:-}" ]]; then
+    while IFS= read -r header; do
+      [[ -z "${header}" ]] && continue
+      RPP_NODE_HEALTH_CURL_ARGS+=("-H" "${header}")
+    done <<< "${RPP_NODE_HEALTH_HEADERS}"
+  fi
+}
+
 rpp_wait_for_endpoint() {
   local pid="$1"
   local url="$2"
   local timeout="$3"
   local elapsed=0
+  local -a curl_args=()
+
+  rpp_init_health_headers
+
+  if declare -p RPP_NODE_HEALTH_CURL_ARGS >/dev/null 2>&1; then
+    curl_args=("${RPP_NODE_HEALTH_CURL_ARGS[@]}")
+  fi
+
   while (( elapsed < timeout )); do
     if ! kill -0 "$pid" 2>/dev/null; then
       wait "$pid"
       exit $?
     fi
-    if curl --fail --silent --show-error --max-time 5 "$url" >/dev/null 2>&1; then
+    if curl "${curl_args[@]}" --fail --silent --show-error --max-time 5 "$url" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
