@@ -11,6 +11,10 @@ The project is standardised on the Rust `1.79.0` toolchain. Each release must co
 ## Prover Backend Wiring
 
 - `rpp/node`, `rpp/wallet`, and `rpp/consensus` now enable the `prover/prover_stwo_backend` crate whenever the `prover-stwo` feature is active, replacing their previous interface-only relationship. The `prover-mock` feature continues to keep the backend disabled.
+- `scripts/build_release.sh` blocks release artefacts that request the experimental
+  Plonky3 backend (including aliases such as `plonky3-backend`) or the
+  `prover-mock` feature, emitting an explicit error so production builds cannot
+  link the deterministic stub.【F:scripts/build_release.sh†L105-L145】
 
 ## Storage
 
