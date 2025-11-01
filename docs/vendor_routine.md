@@ -111,7 +111,10 @@ Mit einem dokumentierten und erfolgreichen Batch 1 existiert ein erprobtes Must
 
 ## Produktions-Build-Checkliste (STWO-Backend)
 
-1. **Toolchain pinnen:** Vor dem Build `rustup override set nightly-2025-07-14` oder `cargo +nightly-2025-07-14 …` verwenden, damit die STWO-Sources aus `vendor/stwo-dev/` gebaut werden können.
-2. **Features wählen:** Produktions-Artefakte mit `cargo +nightly-2025-07-14 build -p rpp-node --release --no-default-features --features prod,prover-stwo` (bzw. `prover-stwo-simd`) erzeugen. Builds ohne dieses Feature brechen seit dem neuen CLI-Gate sofort ab.
-3. **Backend verifizieren:** Direkt nach dem Build `cargo +nightly-2025-07-14 run -p rpp-node --bin validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Nur wenn der Lauf ohne den Fehlerhinweis „requires the `prover-stwo` feature“ endet, ist der STWO-Backendcode aktiv und für Deployments freigegeben.
+1. **Toolchains ausrichten:**
+   * Release-Builds laufen auf der Stable-Toolchain – identisch zu `.github/workflows/release.yml`, das `stable` installiert, bevor `./scripts/build_release.sh` ausgeführt wird.
+   * Für Workspace-Prüfungen des vendorten Backends (z. B. `cargo +nightly-2025-07-14 test -p prover-stwo`, `scripts/test.sh --backend stwo`) bleibt `nightly-2025-07-14` laut `prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/rust-toolchain.toml` erforderlich.
+2. **Release-Build starten:** `./scripts/build_release.sh --target <triple> --profile release --out-dir dist/artifacts [--tool cargo|cross]` verwenden. Das Skript ruft intern `cargo build --locked --package rpp-node --bins --no-default-features --features prod,prover-stwo` auf und erzwingt `-D warnings` via Workflow-Umgebung.
+3. **Feature-Flags kontrollieren:** `RPP_RELEASE_BASE_FEATURES` ist standardmäßig `prod,prover-stwo`. Zusätzliche Flags (`RPP_RELEASE_ARGS` oder `RPP_RELEASE_FEATURES`) dürfen kein `prover-mock` enthalten; das Skript beendet den Lauf sonst mit Fehler.
+4. **Backend verifizieren:** Nach dem Build `cargo +nightly-2025-07-14 run -p rpp-node --bin validator --no-default-features --features prod,prover-stwo -- --dry-run` ausführen. Nur wenn der Lauf ohne den Fehlerhinweis „requires the `prover-stwo` feature“ endet, ist der STWO-Backendcode aktiv und für Deployments freigegeben.
 
