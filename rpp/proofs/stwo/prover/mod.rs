@@ -14,6 +14,7 @@ use crate::types::{
     Account, AttestedIdentityRequest, ChainProof, IdentityGenesis, SignedTransaction, Stake,
     UptimeClaim,
 };
+use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 use rpp_pruning::Envelope;
 
 use super::aggregation::{RecursiveAggregator, StateCommitmentSnapshot};
@@ -380,6 +381,62 @@ impl<'a> WalletProver<'a> {
                 let weight = Self::parse_weight(stage, &record.weight)?;
                 Ok(VotePower { voter, weight })
             };
+
+        let ensure_digest = |label: &str, value: &str| -> ChainResult<()> {
+            let bytes = hex::decode(value).map_err(|err| {
+                ChainError::Crypto(format!("invalid {label} encoding '{value}': {err}"))
+            })?;
+            if bytes.len() != 32 {
+                return Err(ChainError::Crypto(format!("{label} must encode 32 bytes")));
+            }
+            Ok(())
+        };
+
+        ensure_digest(
+            "quorum bitmap root",
+            &certificate.metadata.quorum_bitmap_root,
+        )?;
+        ensure_digest(
+            "quorum signature root",
+            &certificate.metadata.quorum_signature_root,
+        )?;
+
+        if certificate.metadata.vrf_outputs.is_empty() {
+            return Err(ChainError::Crypto(
+                "consensus certificate missing VRF outputs".into(),
+            ));
+        }
+        if certificate.metadata.vrf_proofs.is_empty() {
+            return Err(ChainError::Crypto(
+                "consensus certificate missing VRF proofs".into(),
+            ));
+        }
+        if certificate.metadata.vrf_outputs.len() != certificate.metadata.vrf_proofs.len() {
+            return Err(ChainError::Crypto(
+                "consensus certificate VRF output/proof count mismatch".into(),
+            ));
+        }
+        if certificate.metadata.witness_commitments.is_empty() {
+            return Err(ChainError::Crypto(
+                "consensus certificate missing witness commitments".into(),
+            ));
+        }
+        if certificate.metadata.reputation_roots.is_empty() {
+            return Err(ChainError::Crypto(
+                "consensus certificate missing reputation roots".into(),
+            ));
+        }
+
+        for (index, proof) in certificate.metadata.vrf_proofs.iter().enumerate() {
+            let bytes = hex::decode(proof).map_err(|err| {
+                ChainError::Crypto(format!("invalid vrf proof #{index} encoding: {err}"))
+            })?;
+            if bytes.len() != VRF_PROOF_LENGTH {
+                return Err(ChainError::Crypto(format!(
+                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
+                )));
+            }
+        }
 
         let pre_votes = certificate
             .pre_votes

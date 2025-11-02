@@ -25,6 +25,7 @@ use rpp_chain::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
+use rpp_chain::vrf::VRF_PROOF_LENGTH;
 
 const TRANSACTION_SEED: [u8; 32] = [13u8; 32];
 
@@ -61,15 +62,16 @@ fn sample_transaction() -> SignedTransaction {
 
 fn sample_consensus_certificate() -> ConsensusCertificate {
     let block_hash = "11".repeat(32);
-    let mut metadata = ConsensusProofMetadata::default();
-    metadata.epoch = 5;
-    metadata.slot = 7;
-    metadata.quorum_bitmap_root = "22".repeat(32);
-    metadata.quorum_signature_root = "33".repeat(32);
-    metadata.vrf_outputs = vec!["44".repeat(32)];
-    metadata.vrf_proofs = vec!["55".repeat(32)];
-    metadata.witness_commitments = vec!["66".repeat(32)];
-    metadata.reputation_roots = vec!["77".repeat(32)];
+    let metadata = ConsensusProofMetadata {
+        vrf_outputs: vec!["44".repeat(32)],
+        vrf_proofs: vec!["55".repeat(VRF_PROOF_LENGTH)],
+        witness_commitments: vec!["66".repeat(32)],
+        reputation_roots: vec!["77".repeat(32)],
+        epoch: 5,
+        slot: 7,
+        quorum_bitmap_root: "22".repeat(32),
+        quorum_signature_root: "33".repeat(32),
+    };
 
     ConsensusCertificate {
         block_hash: block_hash.clone().into(),

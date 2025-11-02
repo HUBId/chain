@@ -366,7 +366,7 @@ pub struct UptimePublicInputs {
     pub commitment: [u8; 32],
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusPublicInputs {
     pub block_hash: [u8; 32],
     pub round: u64,
@@ -376,13 +376,9 @@ pub struct ConsensusPublicInputs {
     pub quorum_threshold: u64,
     pub quorum_bitmap_root: [u8; 32],
     pub quorum_signature_root: [u8; 32],
-    #[serde(default)]
     pub vrf_outputs: Vec<[u8; 32]>,
-    #[serde(default)]
     pub vrf_proofs: Vec<Vec<u8>>,
-    #[serde(default)]
     pub witness_commitments: Vec<[u8; 32]>,
-    #[serde(default)]
     pub reputation_roots: Vec<[u8; 32]>,
 }
 

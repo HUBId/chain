@@ -651,6 +651,7 @@ impl ConsensusState {
         block_hash: &str,
         height: u64,
         round: u64,
+        metadata: ConsensusProofMetadata,
     ) -> ConsensusCertificate {
         let prevote_tally = self
             .pending_prevotes
@@ -677,7 +678,7 @@ impl ConsensusState {
             commit_power: precommit_power,
             prevotes,
             precommits,
-            metadata: ConsensusProofMetadata::default(),
+            metadata,
         }
     }
 

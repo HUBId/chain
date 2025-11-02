@@ -11,6 +11,7 @@ use crate::proof_backend::{
     ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use crate::validator::ValidatorId;
+use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 
 mod peer_id_serde {
     use libp2p::PeerId;
@@ -61,7 +62,6 @@ pub struct ConsensusProof {
     pub proof_bytes: ProofBytes,
     pub verifying_key: VerifyingKey,
     pub circuit: ConsensusCircuitDef,
-    #[serde(default)]
     pub public_inputs: ConsensusPublicInputs,
 }
 
@@ -222,27 +222,18 @@ pub struct ConsensusCertificate {
     pub commit_power: u64,
     pub prevotes: Vec<TalliedVote>,
     pub precommits: Vec<TalliedVote>,
-    #[serde(default)]
     pub metadata: ConsensusProofMetadata,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusProofMetadata {
-    #[serde(default)]
     pub vrf_outputs: Vec<String>,
-    #[serde(default)]
     pub vrf_proofs: Vec<String>,
-    #[serde(default)]
     pub witness_commitments: Vec<String>,
-    #[serde(default)]
     pub reputation_roots: Vec<String>,
-    #[serde(default)]
     pub epoch: u64,
-    #[serde(default)]
     pub slot: u64,
-    #[serde(default)]
     pub quorum_bitmap_root: String,
-    #[serde(default)]
     pub quorum_signature_root: String,
 }
 
@@ -250,10 +241,10 @@ impl Default for ConsensusProofMetadata {
     fn default() -> Self {
         let zero_digest = "00".repeat(32);
         Self {
-            vrf_outputs: Vec::new(),
-            vrf_proofs: Vec::new(),
-            witness_commitments: Vec::new(),
-            reputation_roots: Vec::new(),
+            vrf_outputs: vec![zero_digest.clone()],
+            vrf_proofs: vec!["00".repeat(VRF_PROOF_LENGTH)],
+            witness_commitments: vec![zero_digest.clone()],
+            reputation_roots: vec![zero_digest.clone()],
             epoch: 0,
             slot: 0,
             quorum_bitmap_root: zero_digest.clone(),
@@ -304,6 +295,33 @@ impl ConsensusCertificate {
 
         let block_hash = decode_hash("block hash", &self.block_hash.0)?;
         let leader_proposal = block_hash;
+
+        if self.metadata.vrf_outputs.is_empty() {
+            return Err(BackendError::Failure(
+                "consensus metadata missing VRF outputs".into(),
+            ));
+        }
+        if self.metadata.vrf_proofs.is_empty() {
+            return Err(BackendError::Failure(
+                "consensus metadata missing VRF proofs".into(),
+            ));
+        }
+        if self.metadata.vrf_outputs.len() != self.metadata.vrf_proofs.len() {
+            return Err(BackendError::Failure(
+                "consensus metadata VRF output/proof count mismatch".into(),
+            ));
+        }
+        if self.metadata.witness_commitments.is_empty() {
+            return Err(BackendError::Failure(
+                "consensus metadata missing witness commitments".into(),
+            ));
+        }
+        if self.metadata.reputation_roots.is_empty() {
+            return Err(BackendError::Failure(
+                "consensus metadata missing reputation roots".into(),
+            ));
+        }
+
         let decode_digests = |label: &str, values: &[String]| -> BackendResult<Vec<[u8; 32]>> {
             values
                 .iter()
@@ -323,9 +341,9 @@ impl ConsensusCertificate {
                     let bytes = hex::decode(value).map_err(|err| {
                         BackendError::Failure(format!("invalid vrf proof #{index} encoding: {err}"))
                     })?;
-                    if bytes.is_empty() {
+                    if bytes.len() != VRF_PROOF_LENGTH {
                         return Err(BackendError::Failure(format!(
-                            "vrf proof #{index} must not be empty"
+                            "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
                         )));
                     }
                     Ok(bytes)

@@ -1,11 +1,12 @@
 use hex;
 use rpp_consensus::messages::{BlockId, ConsensusCertificate, ConsensusProofMetadata};
 use rpp_consensus::proof_backend::ProofSystemKind;
+use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 
 fn sample_metadata() -> ConsensusProofMetadata {
     ConsensusProofMetadata {
         vrf_outputs: vec!["11".repeat(32)],
-        vrf_proofs: vec!["22".repeat(64)],
+        vrf_proofs: vec!["22".repeat(VRF_PROOF_LENGTH)],
         witness_commitments: vec!["22".repeat(32), "33".repeat(32)],
         reputation_roots: vec!["44".repeat(32)],
         epoch: 3,

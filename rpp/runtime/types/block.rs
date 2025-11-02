@@ -25,7 +25,7 @@ use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
 use crate::state::merkle::compute_merkle_root;
 use crate::stwo::aggregation::StateCommitmentSnapshot;
 use crate::stwo::proof::ProofPayload;
-use crate::vrf::VrfProof;
+use crate::vrf::{VrfProof, VRF_PROOF_LENGTH};
 
 use serde_json;
 
@@ -2711,6 +2711,8 @@ mod tests {
             ProofKind::Consensus => ProofPayload::Consensus(CircuitConsensusWitness {
                 block_hash: "ee".repeat(32),
                 round: 0,
+                epoch: 1,
+                slot: 2,
                 leader_proposal: "ee".repeat(32),
                 quorum_threshold: 1,
                 pre_votes: vec![VotePower {
@@ -2725,9 +2727,12 @@ mod tests {
                     voter: "alice".into(),
                     weight: 1,
                 }],
-                vrf_outputs: Vec::new(),
-                witness_commitments: Vec::new(),
-                reputation_roots: Vec::new(),
+                quorum_bitmap_root: "ff".repeat(32),
+                quorum_signature_root: "11".repeat(32),
+                vrf_outputs: vec!["22".repeat(32)],
+                vrf_proofs: vec!["33".repeat(VRF_PROOF_LENGTH)],
+                witness_commitments: vec!["44".repeat(32)],
+                reputation_roots: vec!["55".repeat(32)],
             }),
             ProofKind::Transaction | ProofKind::Identity => {
                 // These variants are not used in the conversion tests.

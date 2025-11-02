@@ -14,6 +14,7 @@ use crate::types::{
     CanonicalPruningEnvelope, IdentityDeclaration, ProofSystem, PruningProof, PruningProofExt,
     RecursiveProof, ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
 };
+use crate::vrf::VRF_PROOF_LENGTH;
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Outcome of executing storage migrations.
@@ -460,6 +461,8 @@ mod tests {
             ProofKind::Consensus => ProofPayload::Consensus(ConsensusWitness {
                 block_hash: "33".repeat(32),
                 round: 1,
+                epoch: 2,
+                slot: 3,
                 leader_proposal: "33".repeat(32),
                 quorum_threshold: 1,
                 pre_votes: vec![VotePower {
@@ -474,9 +477,12 @@ mod tests {
                     voter: "alice".into(),
                     weight: 1,
                 }],
-                vrf_outputs: Vec::new(),
-                witness_commitments: Vec::new(),
-                reputation_roots: Vec::new(),
+                quorum_bitmap_root: "44".repeat(32),
+                quorum_signature_root: "55".repeat(32),
+                vrf_outputs: vec!["66".repeat(32)],
+                vrf_proofs: vec!["77".repeat(VRF_PROOF_LENGTH)],
+                witness_commitments: vec!["88".repeat(32)],
+                reputation_roots: vec!["99".repeat(32)],
             }),
             _ => ProofPayload::State(StateWitness {
                 prev_state_root: "11".repeat(32),

@@ -91,6 +91,59 @@ fn deterministic_keypair(id: &str) -> VrfKeypair {
     }
 }
 
+fn sample_certificate_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
+    ConsensusProofMetadata {
+        vrf_outputs: vec!["11".repeat(32)],
+        vrf_proofs: vec!["22".repeat(rpp_crypto_vrf::VRF_PROOF_LENGTH)],
+        witness_commitments: vec!["33".repeat(32)],
+        reputation_roots: vec!["44".repeat(32)],
+        epoch,
+        slot,
+        quorum_bitmap_root: "55".repeat(32),
+        quorum_signature_root: "66".repeat(32),
+    }
+}
+
+fn decode_digest_hex(value: &str) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hex::decode(value).expect("decode digest"));
+    bytes
+}
+
+fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
+    let metadata = sample_certificate_metadata(5, round);
+    ConsensusPublicInputs {
+        block_hash: decode_digest_hex(&"aa".repeat(32)),
+        round,
+        leader_proposal: decode_digest_hex(&"aa".repeat(32)),
+        epoch: metadata.epoch,
+        slot: metadata.slot,
+        quorum_threshold: 1,
+        quorum_bitmap_root: decode_digest_hex(&metadata.quorum_bitmap_root),
+        quorum_signature_root: decode_digest_hex(&metadata.quorum_signature_root),
+        vrf_outputs: metadata
+            .vrf_outputs
+            .iter()
+            .map(|value| decode_digest_hex(value))
+            .collect(),
+        vrf_proofs: metadata
+            .vrf_proofs
+            .iter()
+            .map(|value| hex::decode(value).expect("decode vrf proof"))
+            .collect(),
+        witness_commitments: metadata
+            .witness_commitments
+            .iter()
+            .map(|value| decode_digest_hex(value))
+            .collect(),
+        reputation_roots: metadata
+            .reputation_roots
+            .iter()
+            .map(|value| decode_digest_hex(value))
+            .collect(),
+    }
+}
+
 #[derive(Default, Clone)]
 struct FixtureBackend {
     fail: bool,
@@ -278,7 +331,7 @@ fn certificate_for_block(block: &Block, round: u64) -> ConsensusCertificate {
         commit_power: total_power,
         prevotes,
         precommits,
-        metadata: ConsensusProofMetadata::default(),
+        metadata: sample_certificate_metadata(block.epoch, round),
     }
 }
 
@@ -391,7 +444,7 @@ fn certificate_with_block(label: &str) -> ConsensusCertificate {
         commit_power: total_power,
         prevotes,
         precommits,
-        metadata: ConsensusProofMetadata::default(),
+        metadata: sample_certificate_metadata(0, CONSENSUS_DEFAULT_ROUND),
     }
 }
 
@@ -836,7 +889,7 @@ fn consensus_proof_rejects_empty_payload() {
         proof_bytes,
         verifying_key,
         circuit,
-        ConsensusPublicInputs::default(),
+        sample_consensus_public_inputs(0),
     );
     let backend = backend();
     assert!(matches!(
