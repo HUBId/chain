@@ -366,6 +366,34 @@ pub struct UptimePublicInputs {
     pub commitment: [u8; 32],
 }
 
+/// Poseidon input tuple associated with a consensus VRF entry.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfPoseidonInput {
+    /// Poseidon digest derived from the VRF input tuple.
+    pub digest: [u8; 32],
+    /// Last block header hash folded into the Poseidon transcript.
+    pub last_block_header: [u8; 32],
+    /// Epoch identifier included in the Poseidon sponge.
+    pub epoch: u64,
+    /// Tier seed binding the validator selection round.
+    pub tier_seed: [u8; 32],
+}
+
+/// Public VRF material included in consensus proofs.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfPublicEntry {
+    /// Poseidon randomness emitted by the VRF evaluation.
+    pub randomness: [u8; 32],
+    /// Poseidon pre-output associated with the randomness.
+    pub pre_output: [u8; 32],
+    /// Raw VRF proof bytes attesting to the output.
+    pub proof: Vec<u8>,
+    /// Validator VRF public key used to produce the proof.
+    pub public_key: [u8; 32],
+    /// Poseidon metadata describing the VRF input tuple.
+    pub poseidon: ConsensusVrfPoseidonInput,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusPublicInputs {
     pub block_hash: [u8; 32],
@@ -376,8 +404,7 @@ pub struct ConsensusPublicInputs {
     pub quorum_threshold: u64,
     pub quorum_bitmap_root: [u8; 32],
     pub quorum_signature_root: [u8; 32],
-    pub vrf_outputs: Vec<[u8; 32]>,
-    pub vrf_proofs: Vec<Vec<u8>>,
+    pub vrf_entries: Vec<ConsensusVrfPublicEntry>,
     pub witness_commitments: Vec<[u8; 32]>,
     pub reputation_roots: Vec<[u8; 32]>,
     pub vrf_output_binding: [u8; 32],
