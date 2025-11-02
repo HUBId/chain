@@ -122,11 +122,12 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 
 ## 9. Test-, Validierungs- und Simulationssuite (Blueprint 4)
 1. **Unit- & Integrationstests**
-   - Deliverable: Testbatterien für STWO, Firewood, VRF, BFT, Networking.
-   - Tests: Automatisiert in CI, Code-Coverage-Tracking.
+   - Deliverable: Testbatterien für STWO, Plonky3 (opt-in), Firewood, VRF, BFT, Networking.
+   - Tests: Automatisiert in CI; `cargo xtask` akzeptiert Matrix-Flags wie `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo"` bzw. `...backend-plonky3`.
+   - Laufzeiten: Standard-Lauf ~85 s (Cold) / 11 s (Warm) auf `ubuntu-latest`; Feature-Läufe verlängern den Cold-Start um wenige Sekunden.【F:.github/workflows/ci.yml†L66-L118】【F:xtask/src/main.rs†L1-L91】【f3105d†L1-L5】【f3e57e†L1-L5】
 2. **Simulationsframework**
    - Deliverable: Szenarien mit ≥100 Wallets/20 Validatoren, parametrisiert für Latenzen.
-   - Status: `tools/simnet` orchestriert Nodes, Wallets und die bestehenden `rpp/sim`-Topologien; Nightly-CI (`.github/workflows/nightly.yml`) fährt die referenzierte Szenariobibliothek und wertet sie mit `scripts/analyze_simnet.py` aus.
+   - Status: `tools/simnet` orchestriert Nodes, Wallets und die bestehenden `rpp/sim`-Topologien; Nightly-CI (`.github/workflows/nightly.yml`) fährt die referenzierte Szenariobibliothek (inkl. `ci_state_sync_guard.ron`) und wertet sie mit `scripts/analyze_simnet.py` aus.
    - Tests: Non-Regression-Reports, Reputation-Evolution-Analysen.
 3. **Security & Performance Audits**
    - Deliverable: Fuzzing, Key-Management-Review, Benchmark-Suite.

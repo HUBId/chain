@@ -318,19 +318,19 @@ impl Blueprint {
                     Task {
                         key: "testing.unit",
                         title: "Unit-Tests",
-                        detail: "STWO-Circuits, Firewood-Roots, VRF-Auswahl und BFT-Voting über `tests/unit/*` absichern.",
+                        detail: "STWO-, Plonky3- sowie Firewood/VRF-Unit-Suites über `tests/unit/*` (inkl. `plonky3_circuits.rs`) absichern; Reproduktion via `cargo xtask test-unit` bzw. `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES=\"prod,prover-stwo\" cargo xtask test-unit`.",
                         status: TaskStatus::Done,
                     },
                     Task {
                         key: "testing.integration",
                         title: "Integrations-Tests",
-                        detail: "End-to-End Blockproduktion, Snapshot-Sync und Operator-RPC-Orchestrierung unter `tests/integration/*` prüfen.",
+                        detail: "End-to-End Blockproduktion, Snapshot-/Light-Client-Sync und Manipulationsschutz (`manipulation_protection.rs`) unter `tests/integration/*` prüfen; Reproduktion via `cargo xtask test-integration` mit optionaler Feature-Matrix (`XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES=\"prod,prover-stwo\"`).",
                         status: TaskStatus::Done,
                     },
                     Task {
                         key: "testing.simulation",
                         title: "Simulationsframework",
-                        detail: "CI-fähiges Simulationsframework (`tools/simnet/`) mit Szenario `ci_block_pipeline` bereitstellen und via `cargo xtask test-simnet` anbinden.",
+                        detail: "CI-fähiges Simulationsframework (`tools/simnet/`) mit den Szenarien `ci_block_pipeline` und `ci_state_sync_guard` bereitstellen und via `cargo xtask test-simnet` inklusive Feature-Flags ausführbar halten.",
                         status: TaskStatus::Done,
                     },
                 ],

@@ -39,6 +39,10 @@ resolver = "2"
 [workspace.features]
 vendor_electrs = ["rpp-chain/vendor_electrs"]
 integration = []
+prod = [
+    "rpp-chain/prod",
+    "rpp-node/prod",
+]
 nightly-prover = [
     "rpp-chain/nightly-prover",
     "rpp-consensus/nightly-prover",

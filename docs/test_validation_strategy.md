@@ -8,20 +8,32 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 - **Kern-Circuits**: Für jeden Circuit (`transaction`, `identity`, `state`, `pruning`, `uptime`, `consensus`, `recursive`) werden Constraints und Witness-Generatoren mit gezielten Testfällen abgedeckt. Spezialfälle (z. B. doppelte Votes im Consensus-Circuit oder negative Gebühren in Transaktionen) erhalten dedizierte Regressionstests.
 - **Aggregations- und Snapshot-Helfer**: Die Hash-Pfade und StateCommitment-Snapshots in `stwo::aggregation` werden gegen deterministische Referenzvektoren getestet.
 - **Hilfsstrukturen**: Parser für Witness-Daten (`types::proofs`, `plonky3::proof`) und das Serialisierungsformat `ChainProof` erhalten Roundtrip-Tests. Commitments für Plonky3 prüfen zusätzlich eine kanonische JSON-Kodierung, bei der Objekt-Schlüssel vor der Serialisierung sortiert werden.
-- **Regressions-Suites**: Die dedizierten Targets unter `tests/unit/` prüfen deterministische Witness-Kodierung (`stwo_circuits.rs`), Firewood-Merkle-Wurzeln (`firewood_roots.rs`) sowie VRF/BFT-Gewichtungen (`vrf_bft.rs`) gegen reproduzierbare Erwartungen und dienen als Guardrails für spätere Refactorings.【F:tests/unit/stwo_circuits.rs†L1-L70】【F:tests/unit/firewood_roots.rs†L1-L24】【F:tests/unit/vrf_bft.rs†L1-L83】
+- **Regressions-Suites**: Die dedizierten Targets unter `tests/unit/` prüfen deterministische Witness-Kodierung (`stwo_circuits.rs`), Firewood-Merkle-Wurzeln (`firewood_roots.rs`), VRF/BFT-Gewichtungen (`vrf_bft.rs`) und – hinter dem Feature-Flag `backend-plonky3` – auch Plonky3-Witnesses (`plonky3_circuits.rs`) gegen reproduzierbare Erwartungen.【F:tests/unit/stwo_circuits.rs†L1-L70】【F:tests/unit/firewood_roots.rs†L1-L24】【F:tests/unit/vrf_bft.rs†L1-L83】【F:tests/unit/plonky3_circuits.rs†L1-L41】
 
 ### 1.2 Integrationstests
 - **Wallet-Prover**: Szenarien vom Bau eines Blocks bis zum Generieren aller Teilbeweise. Enthält Varianten für Identitäts-Genesis, normale Transaktionen, Uptime- und Konsensus-Proofs sowie den rekursiven Block-Proof. Für Plonky3 werden die gleichen Szenarien mit aktiviertem Feature `backend-plonky3` ausgeführt.
 - **Backend-Parität**: Die Standardläufe von `scripts/test.sh` decken `default`, `stwo`, `rpp-stark` und `plonky3` ab. Für Plonky3 werden echte Proofs erzeugt, Witness-Manipulationen getestet und Commitments validiert, sodass alle Produktionsbackends dieselben Acceptance-Kriterien erfüllen.【F:scripts/test.sh†L1-L220】【F:docs/testing/plonky3_experimental_testplan.md†L1-L120】
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
-- **Pipeline-/Sync-Orchestrierung**: Die Integration-Suite unter `tests/integration/` hält End-to-End-Blockproduktion, Snapshot-/Light-Client-Pläne und Operator-RPC-Steuerung als reproduzierbare Workflows fest (`block_production.rs`, `snapshot_light_client.rs`, `operator_rpcs.rs`). Die Tests dokumentieren zugleich Start-/Stop-Orchestrierung und überspringen sich selbst, falls Binärabhängigkeiten fehlen.【F:tests/integration/block_production.rs†L1-L38】【F:tests/integration/snapshot_light_client.rs†L1-L33】【F:tests/integration/operator_rpcs.rs†L1-L45】
+- **Pipeline-/Sync-Orchestrierung**: Die Integration-Suite unter `tests/integration/` hält End-to-End-Blockproduktion, Snapshot-/Light-Client-Pläne, Manipulationsschutz (`manipulation_protection.rs`) und Operator-RPC-Steuerung als reproduzierbare Workflows fest. Die Tests dokumentieren zugleich Start-/Stop-Orchestrierung und überspringen sich selbst, falls Binärabhängigkeiten fehlen.【F:tests/integration/block_production.rs†L1-L38】【F:tests/integration/snapshot_light_client.rs†L1-L33】【F:tests/integration/manipulation_protection.rs†L1-L105】【F:tests/integration/operator_rpcs.rs†L1-L45】
 
 ### 1.3 System- und Szenariotests
 - **End-to-End**: Start eines lokalen Netzwerks (mindestens zwei Wallets + ein Node) mit VRF-basierter Leader-Selektion, Erzeugung von Blöcken und vollständiger Rekursionskette.
 - **Migrationspfad**: Sicherstellen, dass `migration` alte Datensätze korrekt in das `ChainProof`-Format überführt und anschließend verifiziert wird.
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
-- **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) liefert Szenarien wie `ci_block_pipeline.ron`, die CI-freundlich Binärabhängigkeiten prüfen (hier: `cargo test --test integration -- --list`) und orchestrierte Artefakt-Verzeichnisse erzeugen.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/src/main.rs†L1-L59】
+- **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) liefert Szenarien wie `ci_block_pipeline.ron` sowie den neuen Guard `ci_state_sync_guard.ron`. Beide starten gezielte Integrationstests (Blockproduktion, Snapshot-/Light-Client-Sync, Manipulationsschutz) und erzeugen reproduzierbare Artefakt-Verzeichnisse.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/scenarios/ci_state_sync_guard.ron†L1-L36】【F:tools/simnet/src/main.rs†L1-L86】
+
+### 1.4 Feature-Matrix & Laufzeiten
+
+Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt drei Feature-Sets über `cargo xtask`: Standard (`default`), Produktionslauf (`--no-default-features --features prod,prover-stwo`) sowie ein optionaler Plonky3-Build (`--features prod,prover-stwo,backend-plonky3`). Der erste Cold-Start des Standard-Laufs benötigt in der Container-Umgebung rund 85 Sekunden bis alle Abhängigkeiten gebaut sind; ein erneuter Start verkürzt sich auf ~11 Sekunden, weil die Artefakte im Cargo-Target-Cache verbleiben.【F:.github/workflows/ci.yml†L66-L118】【F:.github/workflows/nightly.yml†L11-L41】【f3105d†L1-L5】【f3e57e†L1-L5】
+
+| Feature-Set | Reproduktionsbefehl | Erwartete Dauer (Cold / Warm) |
+| --- | --- | --- |
+| `default` | `cargo xtask test-unit` / `test-integration` / `test-simnet` | ~85 s / ~11 s |
+| `prod,prover-stwo` | `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo" cargo xtask <command>` | ~90 s / ~15 s (wie Default, zusätzliche Proof-Binaries) |
+| `prod,prover-stwo,backend-plonky3` | `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo,backend-plonky3" cargo xtask <command>` | ~95 s / ~20 s (zusätzliche Plonky3-Module) |
+
+Die Feature-Flags werden von `xtask` automatisch übernommen und damit sowohl in CI als auch lokal konsistent ausgewertet.【F:xtask/src/main.rs†L1-L91】
 
 ## 2. Cross-Backend-Parität
 - **Feature-Matrix**: Die Standard-Matrix umfasst `default`, `stwo`, `rpp-stark` und `plonky3`; Release- und CI-Pipelines führen alle Backends verpflichtend aus.【F:.github/workflows/release.yml†L55-L120】【F:scripts/test.sh†L15-L210】
