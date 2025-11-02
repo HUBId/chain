@@ -78,6 +78,8 @@ pub struct RuntimeMetrics {
     header_flush_total: Counter<u64>,
     consensus_round_duration: Histogram<f64>,
     consensus_quorum_latency: Histogram<f64>,
+    consensus_vrf_verification_time: Histogram<f64>,
+    consensus_quorum_verifications_total: Counter<u64>,
     consensus_leader_changes: Counter<u64>,
     consensus_witness_events: Counter<u64>,
     consensus_slashing_events: Counter<u64>,
@@ -166,6 +168,18 @@ impl RuntimeMetrics {
                     "Latency between round start and quorum formation in milliseconds",
                 )
                 .with_unit("ms")
+                .build(),
+            consensus_vrf_verification_time: meter
+                .f64_histogram("consensus_vrf_verification_time_ms")
+                .with_description(
+                    "VRF verification duration for consensus certificates in milliseconds",
+                )
+                .with_unit("ms")
+                .build(),
+            consensus_quorum_verifications_total: meter
+                .u64_counter("consensus_quorum_verifications_total")
+                .with_description("Consensus quorum verification attempts grouped by result")
+                .with_unit("1")
                 .build(),
             consensus_leader_changes: meter
                 .u64_counter("rpp.runtime.consensus.round.leader_changes")
@@ -297,6 +311,44 @@ impl RuntimeMetrics {
         ];
         self.consensus_quorum_latency
             .record(latency.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record the outcome of verifying the VRF portion of a consensus certificate.
+    pub fn record_consensus_vrf_verification_success(&self, duration: Duration) {
+        let attributes = [KeyValue::new("result", "success")];
+        self.consensus_vrf_verification_time
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record a failed VRF verification alongside the failure reason.
+    pub fn record_consensus_vrf_verification_failure(
+        &self,
+        duration: Duration,
+        reason: &'static str,
+    ) {
+        let attributes = [
+            KeyValue::new("result", "failure"),
+            KeyValue::new("reason", reason),
+        ];
+        self.consensus_vrf_verification_time
+            .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
+    }
+
+    /// Record a successful quorum verification.
+    pub fn record_consensus_quorum_verification_success(&self) {
+        let attributes = [KeyValue::new("result", "success")];
+        self.consensus_quorum_verifications_total
+            .add(1, &attributes);
+    }
+
+    /// Record a failed quorum verification with the supplied reason label.
+    pub fn record_consensus_quorum_verification_failure(&self, reason: &'static str) {
+        let attributes = [
+            KeyValue::new("result", "failure"),
+            KeyValue::new("reason", reason),
+        ];
+        self.consensus_quorum_verifications_total
+            .add(1, &attributes);
     }
 
     /// Record a leader change for the provided round.

@@ -4597,7 +4597,11 @@ impl NodeInner {
             self.storage.read_block(height - 1)?
         };
         let proposer_key = self.ledger.validator_public_key(&proposer)?;
-        match block.verify_without_stark(previous_block.as_ref(), &proposer_key) {
+        match block.verify_without_stark_with_metrics(
+            previous_block.as_ref(),
+            &proposer_key,
+            self.metrics.as_ref(),
+        ) {
             Ok(()) => {
                 let hash = block.hash.clone();
                 self.observe_consensus_round(height, round);
@@ -6535,7 +6539,11 @@ impl NodeInner {
         }
         block.bft_votes = recorded_votes;
 
-        block.verify_without_stark(previous_block.as_ref(), &proposer_key)?;
+        block.verify_without_stark_with_metrics(
+            previous_block.as_ref(),
+            &proposer_key,
+            self.metrics.as_ref(),
+        )?;
 
         let round_number = round.round();
         #[cfg(feature = "backend-rpp-stark")]

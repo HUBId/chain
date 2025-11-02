@@ -39,6 +39,18 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 > [!NOTE] Phase 2 Exit Criteria
 > Status: offen – wird auf „erledigt“ gesetzt, sobald alle obigen Acceptance-Kriterien erfüllt, dokumentiert und in den verlinkten Modulen/PRs zusammengeführt sind.
 
+## Phase 2 Exit Criteria
+
+* **Tests:** `cargo xtask test-consensus-manipulation` deckt Plonky3 und STWO ab und
+  dokumentiert manipulierte VRF-/Quorum-Zeugen in
+  `tests/consensus/consensus_certificate_tampering.rs`. Die Ergebnisse müssen in den
+  Phase‑2-Reports archiviert werden.【F:xtask/src/main.rs†L1-L120】【F:tests/consensus/consensus_certificate_tampering.rs†L1-L160】
+* **Metriken & Dashboards:** Die Panels in `docs/dashboards/consensus_grafana.json` visualisieren
+  `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total`; die
+  Observability-Dokumentation beschreibt Schwellenwerte und Alerting.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
+* **Operator-Nachweise:** Die aktualisierten Runbooks verweisen auf CLI- und RPC-Befehle, die
+  erfolgreiche und manipulierte Pfade reproduzieren, inklusive Simnet-Logs und Grafana-Screenshots.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+
 ## Gap-Analyse nach Funktionsbereichen
 | Bereich | Blueprint-Soll | Ist | Lücke |
 | --- | --- | --- | --- |

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use blake3::Hasher as Blake3Hasher;
 use hex;
@@ -22,6 +22,7 @@ use crate::ledger::ReputationAudit;
 use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3TransactionWitness;
 use crate::proof_system::ProofVerifierRegistry;
 use crate::rpp::{ModuleWitnessBundle, ProofArtifact};
+use crate::runtime::telemetry::metrics::RuntimeMetrics;
 use crate::state::merkle::compute_merkle_root;
 use crate::stwo::aggregation::StateCommitmentSnapshot;
 use crate::stwo::proof::ProofPayload;
@@ -1678,7 +1679,21 @@ impl Block {
         previous: Option<&Block>,
         proposer_public_key: &PublicKey,
     ) -> ChainResult<()> {
-        self.verify_internal(previous, VerifyMode::Full, proposer_public_key)
+        self.verify_internal(previous, VerifyMode::Full, proposer_public_key, None)
+    }
+
+    pub fn verify_with_metrics(
+        &self,
+        previous: Option<&Block>,
+        proposer_public_key: &PublicKey,
+        metrics: &RuntimeMetrics,
+    ) -> ChainResult<()> {
+        self.verify_internal(
+            previous,
+            VerifyMode::Full,
+            proposer_public_key,
+            Some(metrics),
+        )
     }
 
     pub fn verify_without_stark(
@@ -1686,7 +1701,26 @@ impl Block {
         previous: Option<&Block>,
         proposer_public_key: &PublicKey,
     ) -> ChainResult<()> {
-        self.verify_internal(previous, VerifyMode::WithoutStark, proposer_public_key)
+        self.verify_internal(
+            previous,
+            VerifyMode::WithoutStark,
+            proposer_public_key,
+            None,
+        )
+    }
+
+    pub fn verify_without_stark_with_metrics(
+        &self,
+        previous: Option<&Block>,
+        proposer_public_key: &PublicKey,
+        metrics: &RuntimeMetrics,
+    ) -> ChainResult<()> {
+        self.verify_internal(
+            previous,
+            VerifyMode::WithoutStark,
+            proposer_public_key,
+            Some(metrics),
+        )
     }
 
     fn verify_internal(
@@ -1694,6 +1728,7 @@ impl Block {
         previous: Option<&Block>,
         mode: VerifyMode,
         proposer_public_key: &PublicKey,
+        metrics: Option<&RuntimeMetrics>,
     ) -> ChainResult<()> {
         let registry = ProofVerifierRegistry::default();
         self.verify_signature(proposer_public_key)?;
@@ -1779,8 +1814,8 @@ impl Block {
         }
 
         match mode {
-            VerifyMode::Full => self.verify_consensus(previous, &registry)?,
-            VerifyMode::WithoutStark => self.verify_consensus_light()?,
+            VerifyMode::Full => self.verify_consensus_with_metrics(previous, &registry, metrics)?,
+            VerifyMode::WithoutStark => self.verify_consensus_light_with_metrics(metrics)?,
         }
 
         Ok(())
@@ -1961,8 +1996,17 @@ impl Block {
         previous: Option<&Block>,
         registry: &ProofVerifierRegistry,
     ) -> ChainResult<()> {
+        self.verify_consensus_with_metrics(previous, registry, None)
+    }
+
+    fn verify_consensus_with_metrics(
+        &self,
+        previous: Option<&Block>,
+        registry: &ProofVerifierRegistry,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> ChainResult<()> {
         let seed = self.consensus_seed(previous)?;
-        self.verify_consensus_certificate(seed)?;
+        self.verify_consensus_certificate_with_metrics(seed, metrics)?;
         if let Some(proof) = &self.consensus_proof {
             registry.verify_consensus(proof)?;
         }
@@ -1970,12 +2014,19 @@ impl Block {
     }
 
     fn verify_consensus_light(&self) -> ChainResult<()> {
+        self.verify_consensus_light_with_metrics(None)
+    }
+
+    fn verify_consensus_light_with_metrics(
+        &self,
+        metrics: Option<&RuntimeMetrics>,
+    ) -> ChainResult<()> {
         let seed = if self.header.height == 0 {
             [0u8; 32]
         } else {
             Self::decode_consensus_seed(&self.header.previous_hash)?
         };
-        self.verify_consensus_certificate(seed)
+        self.verify_consensus_certificate_with_metrics(seed, metrics)
     }
 
     fn consensus_seed(&self, previous: Option<&Block>) -> ChainResult<[u8; 32]> {
@@ -2000,6 +2051,14 @@ impl Block {
     }
 
     fn verify_consensus_certificate(&self, seed: [u8; 32]) -> ChainResult<()> {
+        self.verify_consensus_certificate_with_metrics(seed, None)
+    }
+
+    fn verify_consensus_certificate_with_metrics(
+        &self,
+        seed: [u8; 32],
+        metrics: Option<&RuntimeMetrics>,
+    ) -> ChainResult<()> {
         let randomness = parse_natural(&self.header.randomness)?;
         let proof = VrfProof {
             randomness,
@@ -2011,18 +2070,31 @@ impl Block {
         } else {
             Some(vrf_public_key_from_hex(&self.header.vrf_public_key)?)
         };
-        if !verify_vrf(
+        let vrf_started = Instant::now();
+        let vrf_valid = verify_vrf(
             &seed,
             self.header.height,
             &self.header.proposer,
             self.header.leader_timetoke,
             &proof,
             public_key.as_ref(),
-        ) {
+        );
+        let vrf_elapsed = vrf_started.elapsed();
+        if !vrf_valid {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_vrf_verification_failure(vrf_elapsed, "invalid_vrf_proof");
+                metrics.record_consensus_quorum_verification_failure("invalid_vrf_proof");
+            }
             return Err(ChainError::Crypto("invalid VRF proof".into()));
+        }
+        if let Some(metrics) = metrics {
+            metrics.record_consensus_vrf_verification_success(vrf_elapsed);
         }
 
         if self.consensus.round != self.header.height {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("certificate_round_mismatch");
+            }
             return Err(ChainError::Crypto(
                 "consensus certificate references incorrect round".into(),
             ));
@@ -2035,26 +2107,43 @@ impl Block {
             record.vote.verify()?;
             let vote = &record.vote.vote;
             if vote.kind != BftVoteKind::PreVote {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure("unexpected_prevote_kind");
+                }
                 return Err(ChainError::Crypto(
                     "consensus certificate contains non-prevote in prevote set".into(),
                 ));
             }
             if vote.round != self.consensus.round {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure("prevote_round_mismatch");
+                }
                 return Err(ChainError::Crypto(
                     "prevote references incorrect consensus round".into(),
                 ));
             }
             if vote.height != self.header.height {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure("prevote_height_mismatch");
+                }
                 return Err(ChainError::Crypto(
                     "prevote references incorrect block height".into(),
                 ));
             }
             if vote.block_hash != expected_block_hash {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure(
+                        "prevote_block_hash_mismatch",
+                    );
+                }
                 return Err(ChainError::Crypto(
                     "prevote references unexpected block hash".into(),
                 ));
             }
             if !prevote_voters.insert(vote.voter.clone()) {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure("duplicate_prevote");
+                }
                 return Err(ChainError::Crypto("duplicate prevote detected".into()));
             }
             let weight = parse_natural(&record.weight)?;
@@ -2062,6 +2151,9 @@ impl Block {
         }
 
         if computed_prevote.to_string() != self.consensus.pre_vote_power {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("prevote_power_mismatch");
+            }
             return Err(ChainError::Crypto(
                 "prevote power does not match recorded aggregate".into(),
             ));
@@ -2072,6 +2164,9 @@ impl Block {
         let commit_total = parse_natural(&self.consensus.commit_power)?;
 
         if computed_prevote < quorum {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("prevote_quorum_shortfall");
+            }
             return Err(ChainError::Crypto(
                 "insufficient pre-vote power for quorum".into(),
             ));
@@ -2083,31 +2178,55 @@ impl Block {
             record.vote.verify()?;
             let vote = &record.vote.vote;
             if vote.kind != BftVoteKind::PreCommit {
+                if let Some(metrics) = metrics {
+                    metrics
+                        .record_consensus_quorum_verification_failure("unexpected_precommit_kind");
+                }
                 return Err(ChainError::Crypto(
                     "consensus certificate contains non-precommit in precommit set".into(),
                 ));
             }
             if vote.round != self.consensus.round {
+                if let Some(metrics) = metrics {
+                    metrics
+                        .record_consensus_quorum_verification_failure("precommit_round_mismatch");
+                }
                 return Err(ChainError::Crypto(
                     "precommit references incorrect consensus round".into(),
                 ));
             }
             if vote.height != self.header.height {
+                if let Some(metrics) = metrics {
+                    metrics
+                        .record_consensus_quorum_verification_failure("precommit_height_mismatch");
+                }
                 return Err(ChainError::Crypto(
                     "precommit references incorrect block height".into(),
                 ));
             }
             if vote.block_hash != expected_block_hash {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure(
+                        "precommit_block_hash_mismatch",
+                    );
+                }
                 return Err(ChainError::Crypto(
                     "precommit references unexpected block hash".into(),
                 ));
             }
             if !prevote_voters.contains(&vote.voter) {
+                if let Some(metrics) = metrics {
+                    metrics
+                        .record_consensus_quorum_verification_failure("precommit_missing_prevote");
+                }
                 return Err(ChainError::Crypto(
                     "precommit without corresponding prevote".into(),
                 ));
             }
             if !precommit_voters.insert(vote.voter.clone()) {
+                if let Some(metrics) = metrics {
+                    metrics.record_consensus_quorum_verification_failure("duplicate_precommit");
+                }
                 return Err(ChainError::Crypto("duplicate precommit detected".into()));
             }
             let weight = parse_natural(&record.weight)?;
@@ -2115,30 +2234,46 @@ impl Block {
         }
 
         if computed_precommit.to_string() != self.consensus.pre_commit_power {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("precommit_power_mismatch");
+            }
             return Err(ChainError::Crypto(
                 "precommit power does not match recorded aggregate".into(),
             ));
         }
 
         if computed_precommit < quorum {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("precommit_quorum_shortfall");
+            }
             return Err(ChainError::Crypto(
                 "insufficient pre-commit power for quorum".into(),
             ));
         }
 
         if commit_total != computed_precommit {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("commit_power_mismatch");
+            }
             return Err(ChainError::Crypto(
                 "commit power does not match accumulated precommit power".into(),
             ));
         }
 
         if commit_total < quorum {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("commit_quorum_shortfall");
+            }
             return Err(ChainError::Crypto(
                 "insufficient commit power for quorum".into(),
             ));
         }
 
         if total < quorum {
+            if let Some(metrics) = metrics {
+                metrics
+                    .record_consensus_quorum_verification_failure("invalid_quorum_configuration");
+            }
             return Err(ChainError::Crypto("invalid quorum configuration".into()));
         }
 
@@ -2148,9 +2283,16 @@ impl Block {
             witness.height == self.header.height && witness.round == self.consensus.round
         });
         let witness = witnesses.next().ok_or_else(|| {
+            if let Some(metrics) = metrics {
+                metrics.record_consensus_quorum_verification_failure("missing_consensus_witness");
+            }
             ChainError::Crypto("missing consensus witness for committed round".into())
         })?;
         if witnesses.next().is_some() {
+            if let Some(metrics) = metrics {
+                metrics
+                    .record_consensus_quorum_verification_failure("multiple_consensus_witnesses");
+            }
             return Err(ChainError::Crypto(
                 "multiple consensus witnesses recorded for committed round".into(),
             ));
@@ -2158,9 +2300,16 @@ impl Block {
         let mut recorded_participants = witness.participants.clone();
         recorded_participants.sort();
         if recorded_participants != commit_participants {
+            if let Some(metrics) = metrics {
+                metrics
+                    .record_consensus_quorum_verification_failure("witness_participant_mismatch");
+            }
             return Err(ChainError::Crypto(
                 "consensus witness participants do not match commit set".into(),
             ));
+        }
+        if let Some(metrics) = metrics {
+            metrics.record_consensus_quorum_verification_success();
         }
         Ok(())
     }

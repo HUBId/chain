@@ -318,19 +318,19 @@ impl Blueprint {
                     Task {
                         key: "testing.unit",
                         title: "Unit-Tests",
-                        detail: "STWO-, Plonky3- sowie Firewood/VRF-Unit-Suites über `tests/unit/*` (inkl. `plonky3_circuits.rs`) absichern; Reproduktion via `cargo xtask test-unit` bzw. `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES=\"prod,prover-stwo\" cargo xtask test-unit`.",
+                        detail: "STWO-, Plonky3- sowie Firewood/VRF-Unit-Suites über `tests/unit/*` (inkl. `plonky3_circuits.rs`) absichern; Reproduktion via `cargo xtask test-unit` bzw. `XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES=\"prod,prover-stwo\" cargo xtask test-unit`. Phase‑2 ergänzt `cargo xtask test-consensus-manipulation` als Pflichtlauf, um manipulierte VRF-/Quorum-Zeugen zu verifizieren.",
                         status: TaskStatus::Done,
                     },
                     Task {
                         key: "testing.integration",
                         title: "Integrations-Tests",
-                        detail: "End-to-End Blockproduktion, Snapshot-/Light-Client-Sync und Manipulationsschutz (`manipulation_protection.rs`) unter `tests/integration/*` prüfen; Reproduktion via `cargo xtask test-integration` mit optionaler Feature-Matrix (`XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES=\"prod,prover-stwo\"`).",
+                        detail: "End-to-End Blockproduktion, Snapshot-/Light-Client-Sync und Manipulationsschutz (`manipulation_protection.rs`) unter `tests/integration/*` prüfen; Reproduktion via `cargo xtask test-integration` mit optionaler Feature-Matrix (`XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES=\"prod,prover-stwo\"`). Phase‑2 verlangt zusätzlich, dass die Konsens-Manipulationsfälle in `tests/consensus/consensus_certificate_tampering.rs` dokumentiert und den Auditor:innen zur Verfügung gestellt werden.",
                         status: TaskStatus::Done,
                     },
                     Task {
                         key: "testing.simulation",
                         title: "Simulationsframework",
-                        detail: "CI-fähiges Simulationsframework (`tools/simnet/`) mit den Szenarien `ci_block_pipeline` und `ci_state_sync_guard` bereitstellen und via `cargo xtask test-simnet` inklusive Feature-Flags ausführbar halten.",
+                        detail: "CI-fähiges Simulationsframework (`tools/simnet/`) mit den Szenarien `ci_block_pipeline` und `ci_state_sync_guard` bereitstellen und via `cargo xtask test-simnet` inklusive Feature-Flags ausführbar halten. Phase‑2 ergänzt `consensus_quorum_stress` als obligatorischen Simnet-Lauf, inklusive Log-/Dashboard-Belegen für VRF- und Quorum-Ablehnungen.",
                         status: TaskStatus::Done,
                     },
                 ],

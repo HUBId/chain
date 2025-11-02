@@ -108,6 +108,18 @@ fn run_simnet_smoke() -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_consensus_manipulation_tests() -> anyhow::Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(workspace_root())
+        .arg("test")
+        .arg("--locked")
+        .arg("--test")
+        .arg("consensus_certificate_tampering");
+    apply_feature_flags(&mut command);
+    run_command(command, "consensus manipulation checks")
+}
+
 fn run_full_test_matrix() -> anyhow::Result<()> {
     run_unit_suites()?;
     run_integration_workflows()?;
@@ -115,7 +127,7 @@ fn run_full_test_matrix() -> anyhow::Result<()> {
 }
 
 fn usage() {
-    eprintln!("xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenario\n  test-all             Run unit, integration, and simnet scenarios");
+    eprintln!("xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenario\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, and simnet scenarios");
 }
 
 fn main() -> anyhow::Result<()> {
@@ -125,6 +137,7 @@ fn main() -> anyhow::Result<()> {
         Some("test-unit") => run_unit_suites(),
         Some("test-integration") => run_integration_workflows(),
         Some("test-simnet") => run_simnet_smoke(),
+        Some("test-consensus-manipulation") => run_consensus_manipulation_tests(),
         Some("test-all") => run_full_test_matrix(),
         Some("help") | None => {
             usage();

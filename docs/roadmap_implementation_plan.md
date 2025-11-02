@@ -16,6 +16,15 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 - Root-Integritätsverletzungen lösen dokumentierte Telemetrie- und Testsignale aus (`firewood_root_integrity`, `root_corruption`-Regression), sodass Operatoren sie im Dashboard nachvollziehen können.【F:docs/observability/firewood_root_integrity.md†L1-L52】【F:tests/state_sync/root_corruption.rs†L1-L53】
 - Die CI-Gates spiegeln die lokalen Reproduktionsschritte wider und blockieren Merges, solange `fmt`, `clippy` oder die vollständige Testmatrix fehlschlagen.【F:docs/test_validation_strategy.md†L41-L83】
 
+## Phase 2 Exit Criteria (Arbeitsstand)
+
+- **Tests:** `cargo xtask test-consensus-manipulation` läuft in beiden Backends und dokumentiert VRF-/Quorum-Manipulationen.
+  Ergebnisse werden in den Simnet-/Testreports verlinkt.【F:xtask/src/main.rs†L1-L120】【F:tests/consensus/consensus_certificate_tampering.rs†L1-L160】
+- **Observability:** Neue Panels in `docs/dashboards/consensus_grafana.json` zeigen VRF-Latenzen und Quorum-Fehlerquoten; das
+  Konsens-Observability-Handbuch beschreibt Schwellenwerte und Alarmierung.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
+- **Runbooks & Operator-Guides:** `docs/rpp_node_operator_guide.md` und `docs/runbooks/observability.md` dokumentieren die
+  erforderlichen CLI-/RPC-Schritte inklusive Simnet-Belege und Dashboard-Screenshots für Auditor:innen.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+
 ## 0. Vorbereitungsphase
 - **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module noch experimentelle Pfade enthalten (z. B. GPU-Optimierung für Plonky3, erweiterte VRF-Distribution).
 - **Tooling & CI**: Der Workflow [`CI`](.github/workflows/ci.yml) erzwingt neben dem Dashboard-Lint drei verpflichtende Gates: `fmt` (`cargo fmt --all -- --check`), `clippy` (`cargo clippy --workspace --all-targets --all-features -- -D warnings`) und `test` (`./scripts/test.sh --all`). Jede Blaupausenaufgabe muss diese Jobs grün halten; Reproduktionen laufen lokal mit denselben Kommandos, bevor Änderungen gemergt werden.
