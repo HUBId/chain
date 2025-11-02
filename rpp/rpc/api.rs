@@ -1379,6 +1379,10 @@ where
         .route("/consensus/vrf/submit", post(submit_vrf_proof))
         .route("/consensus/vrf/threshold", get(vrf_threshold))
         .route("/consensus/vrf/:address", get(vrf_status))
+        .route(
+            "/consensus/proof/status",
+            get(routes::consensus::proof_status),
+        )
         .route("/transactions", post(submit_transaction))
         .route("/identities", post(submit_identity))
         .route("/consensus/votes", post(submit_vote))
