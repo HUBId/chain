@@ -10,6 +10,9 @@ description = "Simulation network orchestrator for RPP nodes and wallets"
 anyhow = "1.0"
 clap = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true, features = ["std_rng"] }
+rpp-chain = { path = "../../rpp/chain", default-features = false, features = ["backend-plonky3"] }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "time"] }

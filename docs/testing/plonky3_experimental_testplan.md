@@ -1,43 +1,46 @@
-# Plonky3 Stub Test Plan & Gaps
+# Plonky3 Production Test Plan
 
 ## Scope
 
-Aktueller Fokus: Die Stub-Implementierung validieren und offene Punkte für die
-echte Plonky3-Integration dokumentieren.
+Phase 2 liefert den produktiven Plonky3-Prover/-Verifier. Diese Teststrategie
+überprüft Keygen-, Prover- und Verifier-Flows über alle Circuit-Familien und
+belegt die Tamper-Resilienz, die das Blueprint fordert.
 
-* Wallet- und Node-Flows erzeugen deterministische JSON-Proofs aus dem Stub und
-  prüfen Commitments/Metadaten – echte Plonky3-Beweise fehlen noch.【F:rpp/proofs/plonky3/README.md†L1-L34】
-* Verifier-Integrationen akzeptieren die Stub-Artefakte und speisen Health-
-  Telemetrie ein; reale Kryptoprüfungen folgen erst mit dem Vendor-Backend.【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L120】
-* Telemetrie-Snapshots tracken Stub-Läufe, sodass Dashboards vorab validiert
-  werden können.
+* Wallet- und Node-Flows erzeugen echte Plonky3-Proofs, die in CI und Nightly
+  verifiziert werden. Telemetrie exportiert Cache-Größe sowie Erfolgs-/Fehler-
+  Zähler, die im Runbook dokumentiert sind.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:rpp/runtime/node.rs†L161-L220】
+* Das Simnet-Stressszenario `consensus-quorum-stress` misst Keygen/Prover/Verifier
+  unter hoher Validator-/Witness-Last und injiziert absichtlich manipulierte
+  VRF-/Quorum-Daten. Die Nightly-Pipeline speichert die JSON-Summary und bricht
+  bei p95-Verletzungen oder unerwartet akzeptierten Tamper-Proofs ab.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】
+* Acceptance-Kriterien (maximale p95-Latenzen, Fehlerraten, Tamper-Rejections)
+  sind in `performance/consensus_proofs.md` festgehalten und werden vom
+  Grafana-Export `docs/dashboards/consensus_proof_validation.json` visualisiert.
 
 ## Test Commands
 
 | Command | Purpose |
 | --- | --- |
-| `scripts/test.sh --backend plonky3 --unit --integration` | Läuft gegen das Stub-Backend, um Fixtures, Commitment-Checks und Telemetrie-Hooks abzusichern.【F:scripts/test.sh†L1-L220】 |
-| `cargo test --features backend-plonky3 --test plonky3_transaction_roundtrip` | Prüft deterministische Wallet-Fixtures und dokumentiert fehlende echte Beweise.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】 |
-| `cargo test --features backend-plonky3 --test plonky3_recursion` | Validiert Aggregations-Checks des Stubs und markiert offene TODOs für echte Beweise.【F:tests/plonky3_recursion.rs†L1-L360】 |
-| `cargo test --package rpp-chain --lib --features backend-plonky3` | Deckt Telemetrie- und API-Helfer für das Stub-Backend ab.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】 |
-
-Der Release-Workflow führt `scripts/test.sh` weiterhin aus, deckt aber nur das
-Stub-Backend ab. Ein dedizierter Vendor-Lauf folgt erst nach Integration der
-echten Artefakte.【F:.github/workflows/release.yml†L1-L160】【F:rpp/proofs/plonky3/tests.rs†L58-L74】
+| `scripts/test.sh --backend plonky3 --unit --integration` | Führt Unit- und Integrationstests mit dem produktiven Plonky3-Backend aus, inklusive Konsensus-/Tamper-Tests.【F:scripts/test.sh†L1-L220】【F:tests/consensus/consensus_proof_integrity.rs†L1-L140】 |
+| `cargo test --features backend-plonky3 --test plonky3_transaction_roundtrip` | Validiert Transaktions-/State-/Pruning-Proofs und die deterministische Witness-Kodierung unter dem Vendor-Backend.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】 |
+| `cargo test --features backend-plonky3 --test plonky3_recursion` | Prüft rekursive Aggregationen und stellt sicher, dass Verifier-Checks Manipulationen an Witness-Payloads abweisen.【F:tests/plonky3_recursion.rs†L1-L360】 |
+| `cargo run -p simnet -- --scenario tools/simnet/scenarios/consensus_quorum_stress.ron --artifacts-dir target/simnet/consensus-quorum-stress` | Lasttest für Konsensus-Proofs mit VRF-/Quorum-Tamper; erzeugt JSON-/CSV-Summaries für `scripts/analyze_simnet.py`. |
+| `python3 scripts/analyze_simnet.py target/simnet/consensus-quorum-stress/summaries/consensus_quorum_stress.json` | Prüft p95-Grenzwerte und Tamper-Rejections. Schlägt fehl, wenn Acceptance-Kriterien verletzt werden.【F:scripts/analyze_simnet.py†L1-L200】 |
 
 ## Results
 
 | Command | Outcome |
 | --- | --- |
-| `scripts/test.sh --backend plonky3 --unit --integration` | ⚠️ Läuft in CI, prüft aber nur das Stub-Backend.【F:.github/workflows/release.yml†L1-L160】 |
-| `cargo test --features backend-plonky3 --test plonky3_transaction_roundtrip` | ✅ Stub-Fixtures bestehen weiterhin lokal und in CI.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】 |
-| `cargo test --features backend-plonky3 --test plonky3_recursion` | ✅ Rekursionspfade des Stubs werden abgedeckt; echte Verifikation steht aus.【F:tests/plonky3_recursion.rs†L1-L360】 |
-| `cargo test --package rpp-chain --lib --features backend-plonky3` | ✅ Telemetrie-Helfer für das Stub-Backend gedeckt.【F:scripts/test.sh†L1-L220】 |
+| `scripts/test.sh --backend plonky3 --unit --integration` | ✅ Produziert Vendor-Proofs für alle Circuit-Familien und verifiziert sie innerhalb der Blueprint-Grenzen.【F:scripts/test.sh†L1-L220】 |
+| `cargo test --features backend-plonky3 --test plonky3_transaction_roundtrip` | ✅ Deckt Witness-Roundtrips und Public-Input-Validierung ab.【F:tests/plonky3_transaction_roundtrip.rs†L1-L200】 |
+| `cargo test --features backend-plonky3 --test plonky3_recursion` | ✅ Prüft rekursive Aggregationen und lehnt manipulierte VRF-/Quorum-Werte ab.【F:tests/plonky3_recursion.rs†L1-L360】 |
+| Simnet + Analyse | ✅ `consensus-quorum-stress` bleibt unter den dokumentierten p95-Grenzen und lehnt alle Tamper-Proofs ab (siehe `performance/consensus_proofs.md`). |
 
 ## Offene Arbeitsschritte
 
-1. Vendor-Plonky3-Prover/Verifier anbinden und Stub-Proof-Generierung ersetzen.
-2. CI-Matrix (`ci-plonky3-matrix`) reaktivieren, sobald reproduzierbare echte
-   Beweise möglich sind.【F:rpp/proofs/plonky3/tests.rs†L58-L74】
-3. Telemetrie-/Dashboard-Grenzwerte mit echten Messwerten kalibrieren, nachdem
-   produktive Läufe Daten liefern.
+1. GPU-basierte Benchmarks ergänzen (Nightly-Matrix erweitern, sobald dedizierte
+   Runner verfügbar sind).
+2. Offline-Key-Distribution (Caches/Artifacts) für Mehr-Region-Deployments im
+   Runbook mit konkreten SLOs hinterlegen.
+3. Dashboard-Alerts für plonky3-spezifische Metriken (`backend="plonky3"`) mit
+   Produktionsschwellen verknüpfen.

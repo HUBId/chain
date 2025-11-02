@@ -2,39 +2,43 @@
 
 ## Status
 
-Draft – wird nach Integration des echten Plonky3-Backends aktualisiert.
+Accepted – Plonky3 backend graduated to production in Phase 2.
 
 ## Context
 
 Earlier revisions of this ADR codified Plonky3 as an experimental backend. The
-acknowledgement guard was a temporary safety rail while the prover and verifier
-were still wired to deterministic shims. Diese Aktualisierung hält fest, dass der
-Code weiterhin auf dem Stub-Backend basiert; echte Vendor-Proofs und -Verifier
-stehen noch aus.【F:rpp/proofs/plonky3/README.md†L1-L34】 Runtime und Telemetrie
-sind vorbereitet, liefern aber ausschließlich Stub-Signale.【F:rpp/runtime/node.rs†L161-L220】
+acknowledgement guard acted as a safety rail while the prover and verifier were
+wired to deterministic shims. With Phase 2 the vendor prover/verifier pair ships
+in production builds, the runtime exports real latency metrics, and the release
+pipeline enforces the `backend-plonky3` feature alongside STWO options.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】【F:scripts/build_release.sh†L1-L118】
 
 ## Decision
 
-* Stub-Backend ohne Acknowledgement-Gate weiterführen, bis Vendor-Prover und
-  -Verifier integriert sind. Feature-Flags bleiben bestehen, schalten aktuell
-  jedoch nur die Stub-Implementierung frei.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L120】
-* Backend-Health als strukturierte Telemetrie beibehalten, aber klar als Stub-
-  Signale markieren; produktive Alerts erst nach echter Integration aktivieren.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/validator_status_response.jsonschema†L1-L220】【F:validator-ui/src/types.ts†L140-L220】
-* CI- und Release-Pipelines weiterhin mit Stub-Suites betreiben und einen
-  dedizierten Vendor-Lauf vorbereiten (`ci-plonky3-matrix`), sobald Artefakte
-  verfügbar sind.【F:.github/workflows/release.yml†L1-L160】【F:rpp/proofs/plonky3/tests.rs†L58-L74】
+* Vendor prover/verifier ship behind the `backend-plonky3` feature flag and are
+  required for release artefacts. The guard still prevents combining the mock
+  backend with production features.【F:rpp/node/src/feature_guard.rs†L1-L5】
+* Runtime telemetry exposes live prover/verifier latencies via Prometheus and
+  `/status/node`; dashboards and alerts now rely on these metrics instead of
+  stub placeholders.【F:rpp/runtime/node.rs†L161-L220】【F:docs/dashboards/consensus_proof_validation.json†L1-L200】
+* CI/nightly pipelines execute the consensus stress harness and enforce p95
+  latency/tamper thresholds through `scripts/analyze_simnet.py`. Release
+  validation requires attaching the summary and the Grafana export documented in
+  the Plonky3 runbook.【F:scripts/analyze_simnet.py†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】
 
 ## Consequences
 
-* Operator:innen sollten Plonky3 weiterhin nicht in Produktion einsetzen; die
-  Telemetrie dient vorerst nur als Vertrags-/Dashboard-Test.【F:rpp/runtime/node.rs†L161-L220】
-* CI und Release-Pipelines validieren ausschließlich Stub-Artefakte. Reelle
-  Regressionen werden erst nach Einbindung der Vendor-Bibliotheken sichtbar.【F:scripts/test.sh†L1-L220】【F:.github/workflows/release.yml†L1-L160】
-* Dokumentation und Roadmaps wurden aktualisiert, um den Stub-Status klar zu
-  kennzeichnen und offene Arbeitsschritte hervorzuheben.【F:docs/blueprint_coverage.md†L18-L120】【F:docs/rpp_node_operator_guide.md†L53-L86】
+* Operators may run Plonky3 in production provided the runbook validation steps
+  pass and monitoring is in place.【F:docs/runbooks/plonky3.md†L1-L200】
+* Release artefacts, CI smoke tests, and nightlies validate real proofs rather
+  than deterministic fixtures. Failures block promotion until the acceptance
+  criteria in the performance report are satisfied.【F:docs/performance/consensus_proofs.md†L1-L200】
+* Documentation, roadmap status, and dashboards now treat Plonky3 as a fully
+  supported backend with remaining work limited to GPU benchmarking and
+  distribution automation.【F:docs/blueprint_coverage.md†L1-L200】【F:docs/roadmap_implementation_plan.md†L1-L120】
 
 ## Follow-up
 
-* Vendor-Prover/Verifier integrieren und reale Proof-Läufe ermöglichen.
-* Release-Checklisten und Alerting-Strategien mit echten Plonky3-Metriken
-  aktualisieren, sobald produktive Daten vorliegen.
+* Deliver GPU-backed benchmark variants and extend the nightly matrix when
+  hardware becomes available.
+* Continue refining runbooks for key distribution and alert automation as
+  documented follow-up items land.

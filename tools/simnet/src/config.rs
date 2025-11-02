@@ -24,6 +24,8 @@ pub struct SimnetConfig {
     pub wallets: Vec<ProcessConfig>,
     #[serde(default)]
     pub p2p: Option<P2pConfig>,
+    #[serde(default)]
+    pub consensus: Option<ConsensusLoadConfig>,
     #[serde(skip)]
     source_path: Option<PathBuf>,
 }
@@ -53,12 +55,70 @@ pub struct P2pConfig {
     pub summary_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConsensusLoadConfig {
+    #[serde(default = "default_consensus_runs")]
+    pub runs: u64,
+    #[serde(default = "default_validator_count")]
+    pub validators: usize,
+    #[serde(default = "default_witness_commitments")]
+    pub witness_commitments: usize,
+    #[serde(default)]
+    pub security_bits: Option<u32>,
+    #[serde(default)]
+    pub use_gpu: Option<bool>,
+    #[serde(default)]
+    pub seed: Option<u64>,
+    #[serde(default)]
+    pub tamper: TamperConfig,
+    #[serde(default)]
+    pub summary_path: Option<PathBuf>,
+    #[serde(default)]
+    pub csv_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TamperConfig {
+    #[serde(default)]
+    pub vrf: bool,
+    #[serde(default)]
+    pub quorum_roots: bool,
+    #[serde(default = "default_tamper_every")]
+    pub every_n: u64,
+}
+
+impl Default for TamperConfig {
+    fn default() -> Self {
+        Self {
+            vrf: true,
+            quorum_roots: true,
+            every_n: 16,
+        }
+    }
+}
+
 fn default_duration_secs() -> u64 {
     0
 }
 
 fn default_startup_timeout_ms() -> u64 {
     30_000
+}
+
+fn default_consensus_runs() -> u64 {
+    64
+}
+
+fn default_validator_count() -> usize {
+    64
+}
+
+fn default_witness_commitments() -> usize {
+    192
+}
+
+fn default_tamper_every() -> u64 {
+    8
 }
 
 impl SimnetConfig {
@@ -119,6 +179,36 @@ impl SimnetConfig {
         } else {
             artifacts_dir.join(relative)
         }
+    }
+
+    pub fn resolve_consensus_summary_path(
+        &self,
+        consensus: &ConsensusLoadConfig,
+        artifacts_dir: &Path,
+    ) -> PathBuf {
+        let relative = consensus
+            .summary_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("summaries").join(format!("{}_consensus.json", self.slug())));
+        if relative.is_absolute() {
+            relative
+        } else {
+            artifacts_dir.join(relative)
+        }
+    }
+
+    pub fn resolve_consensus_csv_path(
+        &self,
+        consensus: &ConsensusLoadConfig,
+        artifacts_dir: &Path,
+    ) -> Option<PathBuf> {
+        consensus.csv_path.clone().map(|relative| {
+            if relative.is_absolute() {
+                relative
+            } else {
+                artifacts_dir.join(relative)
+            }
+        })
     }
 
     pub fn slug(&self) -> String {

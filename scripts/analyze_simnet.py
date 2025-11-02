@@ -15,7 +15,7 @@ def load_summary(path: Path) -> Dict[str, Any]:
         return json.load(handle)
 
 
-def render_report(path: Path, summary: Dict[str, Any]) -> str:
+def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
     propagation = summary.get("propagation") or {}
     p50 = propagation.get("p50_ms")
     p95 = propagation.get("p95_ms")
@@ -55,6 +55,34 @@ def render_report(path: Path, summary: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_consensus_report(path: Path, summary: Dict[str, Any]) -> str:
+    prove = summary.get("prove_ms") or {}
+    verify = summary.get("verify_ms") or {}
+    proof_bytes = summary.get("proof_bytes") or {}
+    lines = [
+        f"summary: {path}",
+        f"  runs: {summary.get('runs', 0)} (validators={summary.get('validators', 'n/a')}, witness_commitments={summary.get('witness_commitments', 'n/a')})",
+        f"  prove_ms: p50={prove.get('p50', 0.0):.2f}, p95={prove.get('p95', 0.0):.2f}, max={prove.get('max', 0.0):.2f}",
+        f"  verify_ms: p50={verify.get('p50', 0.0):.2f}, p95={verify.get('p95', 0.0):.2f}, max={verify.get('max', 0.0):.2f}",
+        f"  proof_bytes: p50={proof_bytes.get('p50', 0.0):.0f}, p95={proof_bytes.get('p95', 0.0):.0f}, max={proof_bytes.get('max', 0.0):.0f}",
+    ]
+    if summary.get("failures"):
+        lines.append(f"  failures: {len(summary['failures'])}")
+    for label in ("tamper_vrf", "tamper_quorum"):
+        tamper = summary.get(label)
+        if tamper:
+            lines.append(
+                f"  {label}: attempts={tamper.get('attempts', 0)}, rejected={tamper.get('rejected', 0)}, unexpected_accepts={tamper.get('unexpected_accepts', 0)}"
+            )
+    return "\n".join(lines)
+
+
+def render_report(path: Path, summary: Dict[str, Any]) -> str:
+    if summary.get("kind") == "consensus-load":
+        return render_consensus_report(path, summary)
+    return render_network_report(path, summary)
+
+
 def main(argv: List[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -69,6 +97,24 @@ def main(argv: List[str]) -> int:
         default=500.0,
         help="Fail if the propagation p95 exceeds this threshold (ms)",
     )
+    parser.add_argument(
+        "--max-consensus-prove-p95",
+        type=float,
+        default=5500.0,
+        help="Fail if the consensus prove p95 exceeds this threshold (ms)",
+    )
+    parser.add_argument(
+        "--max-consensus-verify-p95",
+        type=float,
+        default=3200.0,
+        help="Fail if the consensus verify p95 exceeds this threshold (ms)",
+    )
+    parser.add_argument(
+        "--max-consensus-unexpected",
+        type=int,
+        default=0,
+        help="Fail if more than this many tampered consensus proofs are accepted",
+    )
     args = parser.parse_args(argv)
 
     failures: List[str] = []
@@ -76,6 +122,25 @@ def main(argv: List[str]) -> int:
         summary = load_summary(path)
         print(render_report(path, summary))
         print()
+
+        if summary.get("kind") == "consensus-load":
+            prove = (summary.get("prove_ms") or {}).get("p95")
+            if prove is not None and prove > args.max_consensus_prove_p95:
+                failures.append(
+                    f"{path} consensus prove p95 {prove:.2f}ms exceeds threshold {args.max_consensus_prove_p95:.2f}ms"
+                )
+            verify = (summary.get("verify_ms") or {}).get("p95")
+            if verify is not None and verify > args.max_consensus_verify_p95:
+                failures.append(
+                    f"{path} consensus verify p95 {verify:.2f}ms exceeds threshold {args.max_consensus_verify_p95:.2f}ms"
+                )
+            for label in ("tamper_vrf", "tamper_quorum"):
+                tamper = summary.get(label) or {}
+                if tamper.get("unexpected_accepts", 0) > args.max_consensus_unexpected:
+                    failures.append(
+                        f"{path} {label} unexpected accepts {tamper.get('unexpected_accepts', 0)} exceeds threshold {args.max_consensus_unexpected}"
+                    )
+            continue
 
         propagation = summary.get("propagation") or {}
         p95 = propagation.get("p95_ms")

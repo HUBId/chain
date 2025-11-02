@@ -6,18 +6,18 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 
 Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arbeitspakete wurden geliefert und entsprechen der dokumentierten Definition of Done:
 
-- [Plonky3-Arbeiten](testing/plonky3_experimental_testplan.md#results) – Die Stub-Testmatrix deckt deterministische Proof-Fixtures, Rekursionspfade und Telemetrie-Hooks ab; die replizierten Läufe sichern das Stub-Backend bis zur Vendor-Integration.【F:docs/testing/plonky3_experimental_testplan.md†L1-L57】【F:docs/testing/plonky3_experimental_testplan.md†L73-L88】
+- [Plonky3-Arbeiten](testing/plonky3_experimental_testplan.md#results) – Der Vendor-Prover/-Verifier laufen in Produktion; Testplan, Leistungsreport und Runbook dokumentieren Acceptance-Kriterien, Nightly-Stresstests und Betriebsabläufe.【F:docs/testing/plonky3_experimental_testplan.md†L1-L120】【F:docs/performance/consensus_proofs.md†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】
 - [Root-Guards & Telemetrie](observability/firewood_root_integrity.md) – Firewood-Snapshots und Trie-Wurzeln werden überwacht; Regressionstests schützen gegen Root-Korruption und dokumentieren das Incident-Playbook.【F:docs/observability/firewood_root_integrity.md†L1-L52】【F:tests/state_sync/root_corruption.rs†L1-L53】
 - [CI-Erweiterung](test_validation_strategy.md#4-cicd-integration) – Die verpflichtenden Checks erzwingen `fmt`, `clippy` und die vollständige Backend-Testmatrix und verweisen Contributors auf die lokalen Reproduktionskommandos.【F:docs/test_validation_strategy.md†L41-L83】
 
 ### Akzeptanzkriterien (Phase 1)
 
-- Alle Proof-Pfade, die im Stub-Backend laufen, werden durch die in `scripts/test.sh` orchestrierte Backend-Matrix (Default, STWO, RPP-STARK, Plonky3-Stub) abgedeckt.【F:scripts/test.sh†L1-L210】
+- Alle Proof-Pfade (STWO & Plonky3) werden durch die in `scripts/test.sh` orchestrierte Backend-Matrix (Default, STWO, RPP-STARK, Plonky3) abgedeckt.【F:scripts/test.sh†L1-L210】
 - Root-Integritätsverletzungen lösen dokumentierte Telemetrie- und Testsignale aus (`firewood_root_integrity`, `root_corruption`-Regression), sodass Operatoren sie im Dashboard nachvollziehen können.【F:docs/observability/firewood_root_integrity.md†L1-L52】【F:tests/state_sync/root_corruption.rs†L1-L53】
 - Die CI-Gates spiegeln die lokalen Reproduktionsschritte wider und blockieren Merges, solange `fmt`, `clippy` oder die vollständige Testmatrix fehlschlagen.【F:docs/test_validation_strategy.md†L41-L83】
 
 ## 0. Vorbereitungsphase
-- **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module Stub-Implementierungen enthalten (z. B. VRF, BFT, libp2p).
+- **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module noch experimentelle Pfade enthalten (z. B. GPU-Optimierung für Plonky3, erweiterte VRF-Distribution).
 - **Tooling & CI**: Der Workflow [`CI`](.github/workflows/ci.yml) erzwingt neben dem Dashboard-Lint drei verpflichtende Gates: `fmt` (`cargo fmt --all -- --check`), `clippy` (`cargo clippy --workspace --all-targets --all-features -- -D warnings`) und `test` (`./scripts/test.sh --all`). Jede Blaupausenaufgabe muss diese Jobs grün halten; Reproduktionen laufen lokal mit denselben Kommandos, bevor Änderungen gemergt werden.
 - **Teamabstimmung**: Deliverables pro Phase mit Domain-Teams (Node, Wallet, Proofs, Networking) abklären, gemeinsame Definition-of-Done dokumentieren.
 

@@ -1,0 +1,162 @@
+{
+  "title": "Plonky3 Consensus Proof Validation",
+  "uid": "plonky3-consensus-proof",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Prover Latency (p50/p95)",
+      "description": "Latency quantiles for Plonky3 consensus proof generation.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(rpp_runtime_proof_generation_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(rpp_runtime_proof_generation_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Verifier Latency (p50/p95)",
+      "description": "Latency quantiles for Plonky3 consensus verification.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum(rate(rpp_runtime_proof_verification_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum(rate(rpp_runtime_proof_verification_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Proof Size",
+      "description": "Average consensus proof size emitted by the Plonky3 backend.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(rpp_runtime_proof_generation_proof_bytes_sum{backend=\"plonky3\",proof=\"consensus\"}[5m])) / sum(rate(rpp_runtime_proof_generation_proof_bytes_count{backend=\"plonky3\",proof=\"consensus\"}[5m]))",
+          "legendFormat": "avg"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "hidden"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Tamper Rejections",
+      "description": "Latest counts for rejected tamper attempts (VRF/quorum).",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rpp_runtime_proof_generation_tamper_rejected_total{backend=\"plonky3\",tamper=\"vrf\"})",
+          "legendFormat": "VRF"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rpp_runtime_proof_generation_tamper_rejected_total{backend=\"plonky3\",tamper=\"quorum\"})",
+          "legendFormat": "Quorum"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Unexpected Accepts",
+      "description": "Should stay at zero; alerts fire otherwise.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rpp_runtime_proof_generation_tamper_unexpected_total{backend=\"plonky3\"})",
+          "legendFormat": "Unexpected"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    }
+  ]
+}
