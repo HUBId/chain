@@ -232,19 +232,9 @@ fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
 
 #[cfg(feature = "official")]
 fn ensure_consensus_witness_metadata(witness: &ConsensusWitness) -> BackendResult<()> {
-    if witness.vrf_outputs.is_empty() {
+    if witness.vrf_entries.is_empty() {
         return Err(BackendError::Failure(
-            "consensus witness missing VRF outputs".into(),
-        ));
-    }
-    if witness.vrf_proofs.is_empty() {
-        return Err(BackendError::Failure(
-            "consensus witness missing VRF proofs".into(),
-        ));
-    }
-    if witness.vrf_outputs.len() != witness.vrf_proofs.len() {
-        return Err(BackendError::Failure(
-            "consensus witness VRF output/proof count mismatch".into(),
+            "consensus witness missing VRF entries".into(),
         ));
     }
     if witness.witness_commitments.is_empty() {
@@ -398,10 +388,12 @@ pub fn encode_consensus_proof(circuit: &str, proof: &StarkProof) -> BackendResul
 #[cfg(all(test, feature = "official"))]
 mod tests {
     use super::*;
-    use crate::official::circuit::consensus::VotePower;
+    use crate::official::circuit::consensus::{
+        ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, VotePower,
+    };
     use crate::official::circuit::{ExecutionTrace, TraceSegment};
     use crate::official::params::FieldElement;
-    use crate::vrf::VRF_PROOF_LENGTH;
+    use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
     use prover_backend_interface::{ProofHeader, WitnessBytes, WitnessHeader};
 
     #[test]
@@ -469,8 +461,17 @@ mod tests {
             commit_votes: vec![vote],
             quorum_bitmap_root: "22".repeat(32),
             quorum_signature_root: "33".repeat(32),
-            vrf_outputs: vec!["44".repeat(32)],
-            vrf_proofs: vec!["55".repeat(VRF_PROOF_LENGTH)],
+            vrf_entries: vec![ConsensusVrfWitnessEntry {
+                randomness: "44".repeat(32),
+                pre_output: "45".repeat(VRF_PREOUTPUT_LENGTH),
+                proof: "55".repeat(VRF_PROOF_LENGTH),
+                public_key: "46".repeat(32),
+                input: ConsensusVrfPoseidonInput {
+                    last_block_header: "11".repeat(32),
+                    epoch: 0,
+                    tier_seed: "47".repeat(32),
+                },
+            }],
             witness_commitments: vec!["66".repeat(32)],
             reputation_roots: vec!["77".repeat(32)],
         }
@@ -486,7 +487,7 @@ mod tests {
     #[test]
     fn decode_consensus_witness_rejects_missing_metadata() {
         let mut witness = sample_consensus_witness();
-        witness.vrf_outputs.clear();
+        witness.vrf_entries.clear();
         let bytes = WitnessBytes::encode(
             &WitnessHeader::new(ProofSystemKind::Stwo, CONSENSUS_CIRCUIT),
             &witness,
