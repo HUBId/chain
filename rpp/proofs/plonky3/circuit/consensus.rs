@@ -10,32 +10,55 @@ use plonky3_backend::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsensusVrfWitnessPoseidonInput {
+pub struct ConsensusVrfPoseidonWitness {
+    #[serde(default)]
     pub digest: String,
+    #[serde(default)]
     pub last_block_header: String,
-    pub epoch: u64,
+    #[serde(default)]
+    pub epoch: String,
+    #[serde(default)]
     pub tier_seed: String,
 }
 
-impl Default for ConsensusVrfWitnessPoseidonInput {
+impl Default for ConsensusVrfPoseidonWitness {
     fn default() -> Self {
         let zero_digest = "00".repeat(32);
         Self {
             digest: zero_digest.clone(),
             last_block_header: zero_digest.clone(),
-            epoch: 0,
+            epoch: "0".to_string(),
             tier_seed: zero_digest,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct ConsensusVrfWitnessEntry {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ConsensusVrfEntryWitness {
+    #[serde(default)]
     pub randomness: String,
+    #[serde(default)]
     pub pre_output: String,
+    #[serde(default)]
     pub proof: String,
+    #[serde(default)]
     pub public_key: String,
-    pub poseidon: ConsensusVrfWitnessPoseidonInput,
+    #[serde(default)]
+    pub poseidon: ConsensusVrfPoseidonWitness,
+}
+
+impl Default for ConsensusVrfEntryWitness {
+    fn default() -> Self {
+        let zero_hex_32 = "00".repeat(32);
+        Self {
+            randomness: zero_hex_32.clone(),
+            pre_output: zero_hex_32.clone(),
+            proof: "00".repeat(80),
+            public_key: zero_hex_32,
+            poseidon: ConsensusVrfPoseidonWitness::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,41 +91,9 @@ pub struct ConsensusWitness {
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
     #[serde(default)]
-    pub vrf_entries: Vec<ConsensusVrfWitnessEntry>,
-    pub vrf_outputs: Vec<String>,
-    pub vrf_proofs: Vec<String>,
+    pub vrf_entries: Vec<ConsensusVrfEntryWitness>,
     pub witness_commitments: Vec<String>,
     pub reputation_roots: Vec<String>,
-}
-
-impl From<&ConsensusWitness> for BackendConsensusWitness {
-    fn from(value: &ConsensusWitness) -> Self {
-        Self {
-            block_hash: value.block_hash.clone(),
-            round: value.round,
-            epoch: value.epoch,
-            slot: value.slot,
-            leader_proposal: value.leader_proposal.clone(),
-            quorum_threshold: value.quorum_threshold,
-            pre_votes: value.pre_votes.iter().map(BackendVotePower::from).collect(),
-            pre_commits: value
-                .pre_commits
-                .iter()
-                .map(BackendVotePower::from)
-                .collect(),
-            commit_votes: value
-                .commit_votes
-                .iter()
-                .map(BackendVotePower::from)
-                .collect(),
-            quorum_bitmap_root: value.quorum_bitmap_root.clone(),
-            quorum_signature_root: value.quorum_signature_root.clone(),
-            vrf_outputs: value.vrf_outputs.clone(),
-            vrf_proofs: value.vrf_proofs.clone(),
-            witness_commitments: value.witness_commitments.clone(),
-            reputation_roots: value.reputation_roots.clone(),
-        }
-    }
 }
 
 impl ConsensusWitness {
@@ -119,9 +110,7 @@ impl ConsensusWitness {
         commit_votes: Vec<VotePower>,
         quorum_bitmap_root: impl Into<String>,
         quorum_signature_root: impl Into<String>,
-        vrf_entries: Vec<ConsensusVrfWitnessEntry>,
-        vrf_outputs: Vec<String>,
-        vrf_proofs: Vec<String>,
+        vrf_entries: Vec<ConsensusVrfEntryWitness>,
         witness_commitments: Vec<String>,
         reputation_roots: Vec<String>,
     ) -> Self {
@@ -138,15 +127,66 @@ impl ConsensusWitness {
             quorum_bitmap_root: quorum_bitmap_root.into(),
             quorum_signature_root: quorum_signature_root.into(),
             vrf_entries,
-            vrf_outputs,
-            vrf_proofs,
             witness_commitments,
             reputation_roots,
         }
     }
 
+    pub fn to_backend(&self) -> ChainResult<BackendConsensusWitness> {
+        if self.vrf_entries.is_empty() {
+            return Err(ChainError::Crypto(
+                "consensus witness missing VRF entries".into(),
+            ));
+        }
+
+        let mut vrf_outputs = Vec::with_capacity(self.vrf_entries.len());
+        let mut vrf_proofs = Vec::with_capacity(self.vrf_entries.len());
+
+        for (index, entry) in self.vrf_entries.iter().enumerate() {
+            if entry.randomness.trim().is_empty() {
+                return Err(ChainError::Crypto(format!(
+                    "consensus witness vrf entry #{index} missing randomness",
+                )));
+            }
+            if entry.proof.trim().is_empty() {
+                return Err(ChainError::Crypto(format!(
+                    "consensus witness vrf entry #{index} missing proof",
+                )));
+            }
+
+            vrf_outputs.push(entry.randomness.clone());
+            vrf_proofs.push(entry.proof.clone());
+        }
+
+        Ok(BackendConsensusWitness {
+            block_hash: self.block_hash.clone(),
+            round: self.round,
+            epoch: self.epoch,
+            slot: self.slot,
+            leader_proposal: self.leader_proposal.clone(),
+            quorum_threshold: self.quorum_threshold,
+            pre_votes: self.pre_votes.iter().map(BackendVotePower::from).collect(),
+            pre_commits: self
+                .pre_commits
+                .iter()
+                .map(BackendVotePower::from)
+                .collect(),
+            commit_votes: self
+                .commit_votes
+                .iter()
+                .map(BackendVotePower::from)
+                .collect(),
+            quorum_bitmap_root: self.quorum_bitmap_root.clone(),
+            quorum_signature_root: self.quorum_signature_root.clone(),
+            vrf_outputs,
+            vrf_proofs,
+            witness_commitments: self.witness_commitments.clone(),
+            reputation_roots: self.reputation_roots.clone(),
+        })
+    }
+
     pub(crate) fn validate_metadata(&self) -> ChainResult<()> {
-        let backend = BackendConsensusWitness::from(self);
+        let backend = self.to_backend()?;
         BackendConsensusCircuit::new(backend)
             .map(|_| ())
             .map_err(|err| {
@@ -167,7 +207,7 @@ impl Plonky3CircuitWitness for ConsensusWitness {
     }
 
     fn public_inputs(&self) -> ChainResult<Value> {
-        let backend_witness = BackendConsensusWitness::from(self);
+        let backend_witness = self.to_backend()?;
         let circuit = BackendConsensusCircuit::new(backend_witness).map_err(|err| {
             ChainError::Crypto(format!(
                 "failed to prepare consensus public inputs for Plonky3 circuit: {err}"

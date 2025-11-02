@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
 use crate::plonky3::circuit::consensus::{
-    ConsensusVrfWitnessEntry, ConsensusVrfWitnessPoseidonInput, ConsensusWitness, VotePower,
+    ConsensusVrfEntryWitness, ConsensusVrfPoseidonWitness, ConsensusWitness, VotePower,
 };
 use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
@@ -209,15 +209,15 @@ fn consensus_witness_fixture() -> ConsensusWitness {
         voter: "validator-1".into(),
         weight: 80,
     };
-    let vrf_entry = ConsensusVrfWitnessEntry {
+    let vrf_entry = ConsensusVrfEntryWitness {
         randomness: "dd".repeat(32),
         pre_output: "ee".repeat(VRF_PREOUTPUT_LENGTH),
         proof: hex::encode(vec![0xee; VRF_PROOF_LENGTH]),
         public_key: "ff".repeat(32),
-        poseidon: ConsensusVrfWitnessPoseidonInput {
+        poseidon: ConsensusVrfPoseidonWitness {
             digest: "11".repeat(32),
             last_block_header: "22".repeat(32),
-            epoch: 5,
+            epoch: "5".into(),
             tier_seed: "33".repeat(32),
         },
     };
@@ -234,8 +234,6 @@ fn consensus_witness_fixture() -> ConsensusWitness {
         "bb".repeat(32),
         "cc".repeat(32),
         vec![vrf_entry],
-        vec!["dd".repeat(32)],
-        vec![hex::encode(vec![0xee; VRF_PROOF_LENGTH])],
         vec!["ff".repeat(32)],
         vec!["11".repeat(32)],
     )
@@ -244,14 +242,13 @@ fn consensus_witness_fixture() -> ConsensusWitness {
 #[test]
 fn consensus_witness_rejects_missing_metadata() {
     let mut witness = consensus_witness_fixture();
-    witness.vrf_outputs.clear();
-    witness.vrf_proofs.clear();
+    witness.vrf_entries.clear();
 
     let err = witness
         .validate_metadata()
         .expect_err("missing metadata must fail");
     assert!(
-        err.to_string().contains("missing VRF outputs"),
+        err.to_string().contains("missing VRF entries"),
         "unexpected error: {err}"
     );
 }
