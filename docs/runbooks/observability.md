@@ -24,6 +24,24 @@ and runtime protections remain enforced alongside the CI gates.
       `gh run watch --exit-status --workflow ci.yml` or the pull-request status view before declaring
       telemetry healthy.【F:.github/workflows/ci.yml†L1-L80】【F:docs/test_validation_strategy.md†L41-L83】
 
+## Phase-2 consensus proof audits
+
+- [ ] **Tamper-Rejections lokal nachweisen.** Führe `cargo xtask test-consensus-manipulation`
+      aus, um gültige sowie manipulierte VRF-/Quorum-Zeugen gegen beide Backends zu prüfen.
+      Verwende `XTASK_FEATURES="prod,backend-plonky3"` bzw. `XTASK_FEATURES="prod,prover-stwo"`.
+      Der Lauf muss mit Exit-Code `0` enden, andernfalls ist der Proof-Pfad regressiv.【F:xtask/src/main.rs†L1-L120】
+- [ ] **Simnet-Logs protokollieren.** Starte `cargo run -p simnet -- --scenario
+      tools/simnet/scenarios/consensus_quorum_stress.ron --artifacts-dir target/simnet/consensus-quorum`
+      und archiviere die Einträge `invalid VRF proof`, `duplicate precommit detected` usw. aus
+      `target/simnet/consensus-quorum/node.log`. Diese stammen aus
+      `Block::verify_consensus_certificate` und beweisen, dass manipulierte Daten abgelehnt werden.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:rpp/runtime/types/block.rs†L2002-L2245】
+- [ ] **RPC- und Dashboard-Nachweise sammeln.** Während eines erfolgreichen Laufs muss
+      `curl -s http://127.0.0.1:7070/status/consensus | jq '{round, quorum_reached}'`
+      `quorum_reached=true` liefern. Nach einer manipulierten Probe bleibt der Wert `false` und der
+      Log-Eintrag dokumentiert den Abbruch. Erfasse zusätzlich einen Screenshot der Panels
+      `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total` aus
+      `docs/dashboards/consensus_grafana.json`, inklusive des `result="failure"`-Slices.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:rpp/runtime/node.rs†L358-L390】
+
 | Symptom | Check | Action |
 | --- | --- | --- |
 | Alert `root_io_error_rate` fires | Confirm the trigger by querying `sum(increase(rpp_node_pipeline_root_io_errors_total[5m]))` in Prometheus or inspecting the dedicated Grafana stat panel for spikes. Validate that related dashboards still receive pipeline updates and correlate with recent Firewood lifecycle logs containing `root read failed` markers.【F:rpp/node/src/telemetry/pipeline.rs†L12-L73】【F:storage/src/nodestore/mod.rs†L661-L701】 | Treat the incident as a Firewood storage fault: pause snapshot ingestion, audit the underlying object store or block device for I/O errors, then run `firewood_recovery` to rebuild or validate the affected roots before re-enabling peers. Escalate if the counter keeps climbing after recovery or if the WAL drill reports persistent corruption.【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】【F:storage-firewood/src/lifecycle.rs†L18-L37】 |

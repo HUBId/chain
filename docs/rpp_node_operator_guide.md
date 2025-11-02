@@ -139,6 +139,64 @@ Missing or inconsistent values cause the verifier to reject the consensus proof
 bundle, so double-check the witness payload when diagnosing failed block
 imports.【F:docs/consensus/finality_proof_story.md†L1-L38】
 
+### Phase 2 consensus proof validation checks
+
+Phase 2 verlangt nachvollziehbare Belege, dass manipulierte VRF-/Quorum-Daten an
+der Validator-Schnittstelle scheitern. Nutze die folgenden Schritte, um beide
+Pfadvarianten abzudecken:
+
+1. **Lokale Reproduktions-Tests ausführen.** `cargo xtask test-consensus-manipulation`
+   baut einen gültigen Konsens-Proof, permutiert anschließend VRF-Outputs sowie
+   die Quorum-Roots und erwartet Fehler vom Verifier. Aktiviere die gewünschten
+   Backends mit `XTASK_FEATURES`:
+
+   ```sh
+   # Plonky3
+   cargo xtask test-consensus-manipulation \
+     --features backend-plonky3 --no-default-features
+
+   # STWO
+   XTASK_NO_DEFAULT_FEATURES=1 XTASK_FEATURES="prod,prover-stwo" \
+     cargo xtask test-consensus-manipulation
+   ```
+
+   Jeder Lauf muss mit Exit-Code `0` enden. Ein Fehlschlag signalisiert, dass
+   Manipulationen akzeptiert wurden oder der Proof nicht mehr erzeugt werden
+   konnte.【F:xtask/src/main.rs†L1-L120】【F:tests/consensus/consensus_certificate_tampering.rs†L1-L160】
+
+2. **Simnet-Szenario für Tamper-Versuche fahren.** Starte das Stresstest-Szenario,
+   das valide und manipulierte Blöcke gegeneinander laufen lässt:
+
+   ```sh
+   cargo run -p simnet -- \
+     --scenario tools/simnet/scenarios/consensus_quorum_stress.ron \
+     --artifacts-dir target/simnet/consensus-quorum
+   ```
+
+   Die erzeugten Logs (`target/simnet/consensus-quorum/node.log`) enthalten
+   positive Pfade (`consensus witness participants do not match commit set` für
+   Manipulationen, `local consensus proof rejected by verifier` bei invaliden
+   Zeugen). Erfolgreiche Blöcke tauchen weiterhin im Telemetrie-Stream auf und
+   erhöhen `consensus_quorum_verifications_total{result="success"}`.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:rpp/runtime/node.rs†L6314-L6393】【F:rpp/runtime/types/block.rs†L2002-L2245】
+
+3. **RPC-Validierung dokumentieren.** Während eines Testlaufs liest
+   `GET /status/consensus` den aktuellen Quorum-Status; bei erfolgreichen Blöcken
+   ist `quorum_reached=true` und `round` steigt monoton. Führen Tamper-Versuche
+   zu Ablehnungen, bleibt `quorum_reached=false` und die Log-Datei enthält den
+   Fehlergrund (`invalid VRF proof`, `duplicate precommit detected`, …). Dokumentiere
+   beide Antworten in deinem Abnahmeprotokoll.【F:rpp/rpc/api.rs†L1374-L2015】【F:rpp/runtime/node.rs†L358-L390】
+
+4. **Metrik-Snapshots exportieren.** Phase‑2 verlangt Nachweise über die neuen
+   Histogramme/Counters. Verwende deinen Prometheus-/OTLP-Endpunkt oder die
+   bereitgestellten Grafana-Panels (`docs/dashboards/consensus_grafana.json`), um
+   `consensus_vrf_verification_time_ms{result="success"}` und
+   `consensus_quorum_verifications_total{result="failure"}` zu visualisieren. Die
+   Aufzeichnungen gehören in das Abnahme-Log deiner Betriebsabteilung.【F:rpp/runtime/telemetry/metrics.rs†L60-L339】【F:docs/dashboards/consensus_grafana.json†L1-L200】
+
+> 💡 Ergänze jeden Testlauf in der [Observability-Checkliste](./runbooks/observability.md#phase-2-consensus-proof-audits)
+> und verlinke die Log-/Dashboard-Screenshots, damit Auditor:innen die Belege
+> schnell nachvollziehen können.
+
 Common tasks include:
 
 ```sh

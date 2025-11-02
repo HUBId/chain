@@ -13,3 +13,22 @@
 - Phase 2-Backlog priorisieren (Focus: echte Plonky3-Artefakte, Root-Recovery-Automatisierung, CI-Matrix mit Vendor-Proofs).
 - Operator-Briefing zu aktualisierten Dashboards und Eskalationspfaden vorbereiten.
 
+## Phase 2 Fortschritt (Kalenderwoche 38/2025)
+
+**Zusammenfassung:** VRF-/Quorum-Manipulationen lassen sich nun reproduzierbar testen und im Monitoring
+nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phase‑2-Audits.
+
+### Highlights
+- **Tamper-Tests:** `cargo xtask test-consensus-manipulation` läuft für STWO und Plonky3; die Cases in
+  `tests/consensus/consensus_certificate_tampering.rs` sind als Abnahmebeleg dokumentiert.【F:xtask/src/main.rs†L1-L120】【F:tests/consensus/consensus_certificate_tampering.rs†L1-L160】
+- **Observability:** Neues Dashboard `docs/dashboards/consensus_grafana.json` plus Handbuch
+  `docs/observability/consensus.md` liefern Panels und Alert-Vorlagen für
+  `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total`.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
+- **Runbooks:** Operator Guide und Observability-Runbook beschreiben Simnet-Logs, RPC-Checks und
+  Grafana-Screenshots für Phase‑2-Freigaben.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+
+### Ampelstatus
+- **Tests:** 🟢 – Manipulations-Suite läuft nightly.
+- **Monitoring:** 🟡 – Dashboards aktiv, Alerts in Rollout.
+- **Operator Docs:** 🟢 – Phase‑2-Abschnitt veröffentlicht.
+

@@ -28,3 +28,16 @@ and the [runbooks](../runbooks/startup.md). Update it after each deployment.
 - [ ] Reconcile local configurations with the upstream templates after upgrades, noting telemetry or
       heartbeat default changes highlighted in the [upgrade runbook](../runbooks/upgrade.md).【F:config/hybrid.toml†L1-L47】【F:config/validator.toml†L1-L46】
 
+## Phase 2 Acceptance
+
+- [ ] `cargo xtask test-consensus-manipulation` mit den Feature-Sets `backend-plonky3` und
+      `prover-stwo` ausführen; Logs/Screenshots im Abnahmeordner ablegen.【F:xtask/src/main.rs†L1-L120】
+- [ ] Simnet-Szenario `consensus_quorum_stress` laufen lassen und die erwarteten Fehler (`invalid VRF proof`,
+      `duplicate precommit detected`, …) im Operator-Logbook dokumentieren.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:rpp/runtime/types/block.rs†L2002-L2245】
+- [ ] Grafana-Panels für `consensus_vrf_verification_time_ms` und
+      `consensus_quorum_verifications_total{result="failure"}` prüfen, Screenshots an die Auditor:innen
+      weitergeben.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
+- [ ] RPC-Checks (`GET /status/consensus`) für erfolgreiche und abgelehnte Blöcke protokollieren; die
+      Vorgehensweise ist im [Operator Guide](../rpp_node_operator_guide.md#phase-2-consensus-proof-validation-checks) und
+      im [Observability-Runbook](../runbooks/observability.md#phase-2-consensus-proof-audits) beschrieben.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+
