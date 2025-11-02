@@ -48,21 +48,36 @@ recomputing the corresponding binding immediately violates the AIR relations.
 
 ## Verifier Responsibilities
 
-Both the STWO and Plonky3 verifiers re-compute the public input field elements
-from the structured witness payload. Any drift between the supplied inputs and
-the proof metadata causes verification to fail. The implementations enforce that
-quorum roots decode to 32-byte digests, that the VRF output/proof vectors are
-non-empty and length-matched, and that the witness and reputation digests
-reflect exactly what the runtime committed to.  Because the binding digests are
-derived from the raw metadata, the verifiers can reject forged payloads even if
-an attacker tries to keep the Merkle roots or VRF commitments internally
-consistent.
+Today the STWO and Plonky3 verifiers only repeat the lightweight
+format/structure checks that the witness loader performs. They confirm that the
+VRF output/proof vectors are non-empty, length-matched, and filled with
+32-byte-encoded digests, and that the witness and reputation lists provide the
+declared number of entries. These checks prevent obviously malformed payloads
+from entering the recursion path, but they do not yet bind the VRF transcripts
+or quorum commitments to the block context.
+
+> **Gap – VRF/Quorum constraints pending:** Phase‑2 will extend the circuits to
+> re-derive the VRF transcripts and quorum roots inside the AIR so the verifiers
+> can reject semantically valid-looking forgeries. Progress is tracked in the
+> blueprint backlog under [`proofs.plonky3_vendor_backend`](../../rpp/proofs/blueprint/mod.rs#L133-L155). The section returns to
+> “complete” once all acceptance criteria are met:
+> 
+> - the Phase‑2 circuit updates bind VRF transcripts and quorum roots to the
+>   block hash;
+> - the verifier APIs expose and enforce the new constraints end-to-end; and
+> - regression suites cover positive/negative paths with the new tamper tests
+>   described for Phase‑2 (circuit updates plus fresh scenarios in the production
+>   test plan).
 
 ## Tamper Tests
 
-`tests/consensus/consensus_proof_integrity.rs` fabricates consensus proofs and
-tamper with the VRF metadata and quorum roots. Both the STWO and Plonky3
-verifiers reject the forged payloads, mirroring the lower-level unit tests in
-`rpp/proofs/stwo/tests/consensus_metadata.rs` and `rpp/proofs/plonky3/tests.rs`
-that cover the individual circuit invariants.
+`tests/consensus/consensus_proof_integrity.rs` currently limits itself to
+tampering with the vector sizes and digest encodings; both verifiers catch these
+format violations. The lower-level unit suites in
+`rpp/proofs/stwo/tests/consensus_metadata.rs` and
+`rpp/proofs/plonky3/tests.rs` exercise the same guards. Phase‑2 will add
+tampering scenarios that mutate VRF transcripts and quorum Merkle data without
+breaking the encoding so the updated circuits and verifiers can prove they
+reject realistic attacks, backed by the planned circuit changes and new tests
+listed in the production test plan.
 
