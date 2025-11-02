@@ -3,6 +3,9 @@
 use crate::errors::{ChainError, ChainResult};
 use crate::types::ChainProof;
 
+use serde_json::Value;
+
+use super::circuit::consensus::ConsensusWitness;
 use super::circuit::recursive::RecursiveWitness;
 use super::crypto;
 use super::params::Plonky3Parameters;
@@ -19,7 +22,7 @@ impl RecursiveAggregator {
         Self { backend, params }
     }
 
-    fn decode_and_verify(proof: &ChainProof, expected: &str) -> ChainResult<()> {
+    fn decode_and_verify(proof: &ChainProof, expected: &str) -> ChainResult<Plonky3Proof> {
         let value = match proof {
             ChainProof::Plonky3(value) => value,
             ChainProof::Stwo(_) => {
@@ -35,12 +38,34 @@ impl RecursiveAggregator {
                 parsed.circuit
             )));
         }
-        crypto::verify_proof(&parsed)
+        crypto::verify_proof(&parsed)?;
+        Ok(parsed)
     }
 
-    fn validate_group(proofs: &[ChainProof], expected: &str) -> ChainResult<()> {
+    fn validate_group(proofs: &[ChainProof], expected: &str) -> ChainResult<Vec<Plonky3Proof>> {
+        proofs
+            .iter()
+            .map(|proof| Self::decode_and_verify(proof, expected))
+            .collect()
+    }
+
+    fn extract_consensus_witness(public_inputs: &Value) -> ChainResult<ConsensusWitness> {
+        let witness_value = public_inputs.get("witness").cloned().ok_or_else(|| {
+            ChainError::Crypto(
+                "consensus proof missing witness payload in Plonky3 public inputs".into(),
+            )
+        })?;
+        serde_json::from_value(witness_value).map_err(|err| {
+            ChainError::Crypto(format!(
+                "invalid consensus witness payload in Plonky3 proof: {err}"
+            ))
+        })
+    }
+
+    fn ensure_consensus_metadata(proofs: &[Plonky3Proof]) -> ChainResult<()> {
         for proof in proofs {
-            Self::decode_and_verify(proof, expected)?;
+            let witness = Self::extract_consensus_witness(&proof.public_inputs)?;
+            witness.validate_metadata()?;
         }
         Ok(())
     }
@@ -49,10 +74,14 @@ impl RecursiveAggregator {
         if let Some(previous) = &witness.previous_recursive {
             Self::decode_and_verify(previous, "recursive")?;
         }
-        Self::validate_group(&witness.identity_proofs, "identity")?;
-        Self::validate_group(&witness.transaction_proofs, "transaction")?;
-        Self::validate_group(&witness.uptime_proofs, "uptime")?;
-        Self::validate_group(&witness.consensus_proofs, "consensus")?;
+        drop(Self::validate_group(&witness.identity_proofs, "identity")?);
+        drop(Self::validate_group(
+            &witness.transaction_proofs,
+            "transaction",
+        )?);
+        drop(Self::validate_group(&witness.uptime_proofs, "uptime")?);
+        let consensus_proofs = Self::validate_group(&witness.consensus_proofs, "consensus")?;
+        Self::ensure_consensus_metadata(&consensus_proofs)?;
         Self::decode_and_verify(&witness.state_proof, "state")?;
         Self::decode_and_verify(&witness.pruning_proof, "pruning")?;
         self.backend.prove(&self.params, witness)

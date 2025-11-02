@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::num::IntErrorKind;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -405,32 +406,54 @@ impl ProofProver for Plonky3Prover {
             }
         }
 
-        let parse_weight = |weight: &str| weight.parse::<u64>().unwrap_or(0);
+        let parse_weight = |stage: &str, weight: &str| -> ChainResult<u64> {
+            weight.parse::<u64>().map_err(|err| {
+                let message = match err.kind() {
+                    IntErrorKind::InvalidDigit => {
+                        format!("failed to parse {stage} voting weight '{weight}'")
+                    }
+                    _ => format!("{stage} voting weight '{weight}' exceeds supported range"),
+                };
+                ChainError::Crypto(message)
+            })
+        };
         let pre_votes = certificate
             .pre_votes
             .iter()
-            .map(|record| VotePower {
-                voter: record.vote.vote.voter.clone(),
-                weight: parse_weight(&record.weight),
+            .map(|record| {
+                let voter = record.vote.vote.voter.clone();
+                let weight = parse_weight("pre-vote", &record.weight)?;
+                Ok(VotePower { voter, weight })
             })
-            .collect();
+            .collect::<ChainResult<Vec<_>>>()?;
         let pre_commits = certificate
             .pre_commits
             .iter()
-            .map(|record| VotePower {
-                voter: record.vote.vote.voter.clone(),
-                weight: parse_weight(&record.weight),
+            .map(|record| {
+                let voter = record.vote.vote.voter.clone();
+                let weight = parse_weight("pre-commit", &record.weight)?;
+                Ok(VotePower { voter, weight })
             })
-            .collect::<Vec<_>>();
+            .collect::<ChainResult<Vec<_>>>()?;
         let commit_votes = pre_commits.clone();
-        let quorum = certificate.quorum_threshold.parse::<u64>().unwrap_or(0);
-        Ok(ConsensusWitness::new(
+        let quorum_threshold =
+            certificate
+                .quorum_threshold
+                .parse::<u64>()
+                .map_err(|err| match err.kind() {
+                    IntErrorKind::InvalidDigit => ChainError::Crypto(format!(
+                        "invalid quorum threshold encoding '{}'",
+                        certificate.quorum_threshold
+                    )),
+                    _ => ChainError::Crypto("quorum threshold exceeds 64-bit range".into()),
+                })?;
+        let witness = ConsensusWitness::new(
             block_hash,
             certificate.round,
             certificate.metadata.epoch,
             certificate.metadata.slot,
             block_hash,
-            quorum,
+            quorum_threshold,
             pre_votes,
             pre_commits,
             commit_votes,
@@ -440,7 +463,9 @@ impl ProofProver for Plonky3Prover {
             certificate.metadata.vrf_proofs.clone(),
             certificate.metadata.witness_commitments.clone(),
             certificate.metadata.reputation_roots.clone(),
-        ))
+        );
+        witness.validate_metadata()?;
+        Ok(witness)
     }
 
     fn prove_transaction(&self, witness: Self::TransactionWitness) -> ChainResult<ChainProof> {
