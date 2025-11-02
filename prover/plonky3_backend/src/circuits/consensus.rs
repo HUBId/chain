@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::convert::TryInto;
 
 use blake3::Hasher;
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,7 @@ use serde_json::Value;
 use crate::{BackendError, BackendResult};
 
 pub const VRF_PROOF_LENGTH: usize = 80;
+pub const VRF_PREOUTPUT_LENGTH: usize = 32;
 
 const CIRCUIT_NAME: &str = "consensus";
 
@@ -43,6 +45,109 @@ impl VotePower {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ConsensusVrfPoseidonWitness {
+    pub digest: String,
+    pub last_block_header: String,
+    pub epoch: String,
+    pub tier_seed: String,
+}
+
+impl Default for ConsensusVrfPoseidonWitness {
+    fn default() -> Self {
+        let zero_digest = "00".repeat(32);
+        Self {
+            digest: zero_digest.clone(),
+            last_block_header: zero_digest.clone(),
+            epoch: "0".to_string(),
+            tier_seed: zero_digest,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ConsensusVrfWitnessEntry {
+    pub randomness: String,
+    pub pre_output: String,
+    pub proof: String,
+    pub public_key: String,
+    pub poseidon: ConsensusVrfPoseidonWitness,
+}
+
+impl Default for ConsensusVrfWitnessEntry {
+    fn default() -> Self {
+        let zero_hex_32 = "00".repeat(32);
+        Self {
+            randomness: zero_hex_32.clone(),
+            pre_output: zero_hex_32.clone(),
+            proof: "00".repeat(VRF_PROOF_LENGTH),
+            public_key: zero_hex_32,
+            poseidon: ConsensusVrfPoseidonWitness::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfPoseidonInput {
+    pub digest: [u8; 32],
+    pub last_block_header: [u8; 32],
+    pub epoch: u64,
+    pub tier_seed: [u8; 32],
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfPublicEntry {
+    pub randomness: [u8; 32],
+    pub pre_output: [u8; VRF_PREOUTPUT_LENGTH],
+    pub proof: Vec<u8>,
+    pub public_key: [u8; 32],
+    pub poseidon: ConsensusVrfPoseidonInput,
+}
+
+#[derive(Clone, Debug)]
+struct SanitizedVrfPoseidonEntry {
+    digest: [u8; 32],
+    last_block_header: [u8; 32],
+    epoch: u64,
+    tier_seed: [u8; 32],
+}
+
+#[derive(Clone, Debug)]
+struct SanitizedVrfEntry {
+    randomness: [u8; 32],
+    pre_output: [u8; VRF_PREOUTPUT_LENGTH],
+    proof: [u8; VRF_PROOF_LENGTH],
+    public_key: [u8; 32],
+    poseidon: SanitizedVrfPoseidonEntry,
+}
+
+impl SanitizedVrfEntry {
+    fn randomness_hex(&self) -> String {
+        hex::encode(self.randomness)
+    }
+
+    fn proof_hex(&self) -> String {
+        hex::encode(self.proof)
+    }
+
+    fn to_public_entry(&self) -> ConsensusVrfPublicEntry {
+        ConsensusVrfPublicEntry {
+            randomness: self.randomness,
+            pre_output: self.pre_output,
+            proof: self.proof.to_vec(),
+            public_key: self.public_key,
+            poseidon: ConsensusVrfPoseidonInput {
+                digest: self.poseidon.digest,
+                last_block_header: self.poseidon.last_block_header,
+                epoch: self.poseidon.epoch,
+                tier_seed: self.poseidon.tier_seed,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusWitness {
     pub block_hash: String,
     pub round: u64,
@@ -56,9 +161,7 @@ pub struct ConsensusWitness {
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
     #[serde(default)]
-    pub vrf_outputs: Vec<String>,
-    #[serde(default)]
-    pub vrf_proofs: Vec<String>,
+    pub vrf_entries: Vec<ConsensusVrfWitnessEntry>,
     #[serde(default)]
     pub witness_commitments: Vec<String>,
     #[serde(default)]
@@ -73,6 +176,45 @@ impl ConsensusWitness {
             return Err(invalid_witness(format!("{label} must encode 32 bytes")));
         }
         Ok(bytes)
+    }
+
+    fn sanitize_vrf_field<const N: usize>(
+        index: usize,
+        label: &str,
+        value: &str,
+    ) -> BackendResult<[u8; N]> {
+        if value.trim().is_empty() {
+            return Err(invalid_witness(format!(
+                "consensus witness vrf entry #{index} missing {label}"
+            )));
+        }
+        let bytes = hex::decode(value).map_err(|err| {
+            invalid_witness(format!(
+                "invalid vrf entry #{index} {label} encoding: {err}"
+            ))
+        })?;
+        if bytes.len() != N {
+            return Err(invalid_witness(format!(
+                "vrf entry #{index} {label} must encode {N} bytes"
+            )));
+        }
+        Ok(bytes.try_into().map_err(|_| {
+            invalid_witness(format!("vrf entry #{index} {label} must encode {N} bytes"))
+        })?)
+    }
+
+    fn sanitize_vrf_epoch(index: usize, value: &str) -> BackendResult<u64> {
+        let epoch = value.trim();
+        if epoch.is_empty() {
+            return Err(invalid_witness(format!(
+                "consensus witness vrf entry #{index} missing poseidon epoch"
+            )));
+        }
+        epoch.parse::<u64>().map_err(|err| {
+            invalid_witness(format!(
+                "invalid vrf entry #{index} poseidon epoch '{epoch}': {err}"
+            ))
+        })
     }
 
     fn ensure_votes(&self, votes: &[VotePower], label: &str) -> BackendResult<u128> {
@@ -117,27 +259,56 @@ impl ConsensusWitness {
         Ok(())
     }
 
+    fn sanitized_vrf_entries(&self) -> BackendResult<Vec<SanitizedVrfEntry>> {
+        if self.vrf_entries.is_empty() {
+            return Err(invalid_witness("consensus witness missing VRF entries"));
+        }
+
+        let mut sanitized = Vec::with_capacity(self.vrf_entries.len());
+        for (index, entry) in self.vrf_entries.iter().enumerate() {
+            let randomness =
+                Self::sanitize_vrf_field::<32>(index, "randomness", &entry.randomness)?;
+            let pre_output = Self::sanitize_vrf_field::<VRF_PREOUTPUT_LENGTH>(
+                index,
+                "pre-output",
+                &entry.pre_output,
+            )?;
+            let proof = Self::sanitize_vrf_field::<VRF_PROOF_LENGTH>(index, "proof", &entry.proof)?;
+            let public_key =
+                Self::sanitize_vrf_field::<32>(index, "public key", &entry.public_key)?;
+            let poseidon_digest =
+                Self::sanitize_vrf_field::<32>(index, "poseidon digest", &entry.poseidon.digest)?;
+            let poseidon_last_block_header = Self::sanitize_vrf_field::<32>(
+                index,
+                "poseidon last block header",
+                &entry.poseidon.last_block_header,
+            )?;
+            let poseidon_tier_seed = Self::sanitize_vrf_field::<32>(
+                index,
+                "poseidon tier seed",
+                &entry.poseidon.tier_seed,
+            )?;
+            let poseidon_epoch = Self::sanitize_vrf_epoch(index, &entry.poseidon.epoch)?;
+
+            sanitized.push(SanitizedVrfEntry {
+                randomness,
+                pre_output,
+                proof,
+                public_key,
+                poseidon: SanitizedVrfPoseidonEntry {
+                    digest: poseidon_digest,
+                    last_block_header: poseidon_last_block_header,
+                    epoch: poseidon_epoch,
+                    tier_seed: poseidon_tier_seed,
+                },
+            });
+        }
+
+        Ok(sanitized)
+    }
+
     fn ensure_vrf_metadata(&self) -> BackendResult<()> {
-        if self.vrf_outputs.is_empty() {
-            return Err(invalid_witness("consensus witness missing VRF outputs"));
-        }
-        if self.vrf_proofs.is_empty() {
-            return Err(invalid_witness("consensus witness missing VRF proofs"));
-        }
-        if self.vrf_outputs.len() != self.vrf_proofs.len() {
-            return Err(invalid_witness("vrf output/proof count mismatch"));
-        }
-        for (index, proof) in self.vrf_proofs.iter().enumerate() {
-            let bytes = hex::decode(proof).map_err(|err| {
-                invalid_witness(format!("invalid vrf proof #{index} encoding: {err}"))
-            })?;
-            if bytes.len() != VRF_PROOF_LENGTH {
-                return Err(invalid_witness(format!(
-                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
-                )));
-            }
-        }
-        Ok(())
+        self.sanitized_vrf_entries().map(|_| ())
     }
 
     pub fn validate(&self) -> BackendResult<()> {
@@ -176,13 +347,25 @@ pub struct ConsensusBindings {
 }
 
 impl ConsensusBindings {
-    fn from_witness(witness: &ConsensusWitness) -> BackendResult<Self> {
+    fn from_witness(
+        witness: &ConsensusWitness,
+        vrf_entries: &[SanitizedVrfEntry],
+    ) -> BackendResult<Self> {
         let block_hash = ConsensusWitness::ensure_digest("block hash", &witness.block_hash)?;
+
+        let vrf_randomness: Vec<String> = vrf_entries
+            .iter()
+            .map(SanitizedVrfEntry::randomness_hex)
+            .collect();
+        let vrf_proofs_hex: Vec<String> = vrf_entries
+            .iter()
+            .map(SanitizedVrfEntry::proof_hex)
+            .collect();
 
         let vrf_outputs = binding_digest(
             &block_hash,
-            |value| ConsensusWitness::ensure_digest("vrf output", value),
-            &witness.vrf_outputs,
+            |value| ConsensusWitness::ensure_digest("vrf randomness", value),
+            &vrf_randomness,
         )?;
         let vrf_proofs = binding_digest(
             &block_hash,
@@ -196,7 +379,7 @@ impl ConsensusBindings {
                 }
                 Ok(bytes)
             },
-            &witness.vrf_proofs,
+            &vrf_proofs_hex,
         )?;
         let witness_commitments = binding_digest(
             &block_hash,
@@ -250,6 +433,8 @@ fn binding_digest(
 pub struct ConsensusPublicInputs {
     pub witness: ConsensusWitness,
     pub bindings: ConsensusBindings,
+    #[serde(default)]
+    pub vrf_entries: Vec<ConsensusVrfPublicEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub block_height: Option<u64>,
 }
@@ -258,13 +443,23 @@ pub struct ConsensusPublicInputs {
 pub struct ConsensusCircuit {
     witness: ConsensusWitness,
     bindings: ConsensusBindings,
+    vrf_public_entries: Vec<ConsensusVrfPublicEntry>,
 }
 
 impl ConsensusCircuit {
     pub fn new(witness: ConsensusWitness) -> BackendResult<Self> {
         witness.validate()?;
-        let bindings = ConsensusBindings::from_witness(&witness)?;
-        Ok(Self { witness, bindings })
+        let sanitized_vrf_entries = witness.sanitized_vrf_entries()?;
+        let bindings = ConsensusBindings::from_witness(&witness, &sanitized_vrf_entries)?;
+        let vrf_public_entries = sanitized_vrf_entries
+            .iter()
+            .map(SanitizedVrfEntry::to_public_entry)
+            .collect();
+        Ok(Self {
+            witness,
+            bindings,
+            vrf_public_entries,
+        })
     }
 
     pub fn from_public_inputs_value(value: &Value) -> BackendResult<Self> {
@@ -272,8 +467,14 @@ impl ConsensusCircuit {
             serde_json::from_value(value.clone()).map_err(|err| {
                 invalid_public_inputs(format!("invalid consensus public inputs payload: {err}"))
             })?;
-        let circuit = Self::new(parsed.witness)?;
-        if let Some(block_height) = parsed.block_height {
+        let ConsensusPublicInputs {
+            witness: parsed_witness,
+            bindings: parsed_bindings,
+            block_height,
+            vrf_entries: parsed_vrf_entries,
+        } = parsed;
+        let circuit = Self::new(parsed_witness)?;
+        if let Some(block_height) = block_height {
             if block_height != circuit.witness.round {
                 return Err(invalid_public_inputs(format!(
                     "block height {block_height} does not match consensus round {}",
@@ -281,9 +482,14 @@ impl ConsensusCircuit {
                 )));
             }
         }
-        if parsed.bindings != circuit.bindings {
+        if parsed_bindings != circuit.bindings {
             return Err(invalid_public_inputs(
                 "consensus binding digests mismatch public inputs",
+            ));
+        }
+        if parsed_vrf_entries != circuit.vrf_public_entries {
+            return Err(invalid_public_inputs(
+                "consensus VRF entries mismatch public inputs",
             ));
         }
         Ok(circuit)
@@ -297,10 +503,15 @@ impl ConsensusCircuit {
         &self.bindings
     }
 
+    pub fn vrf_entries(&self) -> &[ConsensusVrfPublicEntry] {
+        &self.vrf_public_entries
+    }
+
     pub fn public_inputs_value(&self) -> BackendResult<Value> {
         serde_json::to_value(ConsensusPublicInputs {
             witness: self.witness.clone(),
             bindings: self.bindings.clone(),
+            vrf_entries: self.vrf_public_entries.clone(),
             block_height: Some(self.witness.round),
         })
         .map_err(|err| {
