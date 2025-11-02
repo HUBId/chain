@@ -7,15 +7,16 @@ use std::error::Error;
 use std::fmt;
 
 use crate::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
-    ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVrfPoseidonInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
+    ProofBackend, ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use crate::validator::ValidatorId;
 use rpp_chain::stwo::params::StarkParameters;
 use rpp_chain::stwo::FieldElement;
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusVrfPoseidonInput {
     #[serde(default)]
     pub digest: String,
@@ -25,6 +26,18 @@ pub struct ConsensusVrfPoseidonInput {
     pub epoch: String,
     #[serde(default)]
     pub tier_seed: String,
+}
+
+impl Default for ConsensusVrfPoseidonInput {
+    fn default() -> Self {
+        let zero_digest = "00".repeat(32);
+        Self {
+            digest: zero_digest.clone(),
+            last_block_header: zero_digest.clone(),
+            epoch: "0".to_string(),
+            tier_seed: zero_digest,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -352,8 +365,8 @@ pub struct ConsensusCertificate {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusProofMetadata {
-    pub vrf_outputs: Vec<String>,
-    pub vrf_proofs: Vec<String>,
+    #[serde(default)]
+    pub vrf_entries: Vec<ConsensusVrfEntry>,
     pub witness_commitments: Vec<String>,
     pub reputation_roots: Vec<String>,
     pub epoch: u64,
@@ -366,8 +379,7 @@ impl Default for ConsensusProofMetadata {
     fn default() -> Self {
         let zero_digest = "00".repeat(32);
         Self {
-            vrf_outputs: vec![zero_digest.clone()],
-            vrf_proofs: vec!["00".repeat(VRF_PROOF_LENGTH)],
+            vrf_entries: vec![ConsensusVrfEntry::default()],
             witness_commitments: vec![zero_digest.clone()],
             reputation_roots: vec![zero_digest.clone()],
             epoch: 0,
@@ -405,35 +417,29 @@ impl ConsensusCertificate {
     }
 
     pub fn consensus_public_inputs(&self) -> BackendResult<ConsensusPublicInputs> {
-        fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
+        fn decode_array<const N: usize>(label: &str, value: &str) -> BackendResult<[u8; N]> {
             let bytes = hex::decode(value)
                 .map_err(|err| BackendError::Failure(format!("invalid {label} encoding: {err}")))?;
-            if bytes.len() != 32 {
+            if bytes.len() != N {
                 return Err(BackendError::Failure(format!(
-                    "{label} must encode 32 bytes"
+                    "{label} must encode {N} bytes"
                 )));
             }
-            let mut array = [0u8; 32];
+            let mut array = [0u8; N];
             array.copy_from_slice(&bytes);
             Ok(array)
+        }
+
+        fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
+            decode_array::<32>(label, value)
         }
 
         let block_hash = decode_hash("block hash", &self.block_hash.0)?;
         let leader_proposal = block_hash;
 
-        if self.metadata.vrf_outputs.is_empty() {
+        if self.metadata.vrf_entries.is_empty() {
             return Err(BackendError::Failure(
-                "consensus metadata missing VRF outputs".into(),
-            ));
-        }
-        if self.metadata.vrf_proofs.is_empty() {
-            return Err(BackendError::Failure(
-                "consensus metadata missing VRF proofs".into(),
-            ));
-        }
-        if self.metadata.vrf_outputs.len() != self.metadata.vrf_proofs.len() {
-            return Err(BackendError::Failure(
-                "consensus metadata VRF output/proof count mismatch".into(),
+                "consensus metadata missing VRF entries".into(),
             ));
         }
         if self.metadata.witness_commitments.is_empty() {
@@ -451,30 +457,106 @@ impl ConsensusCertificate {
             values
                 .iter()
                 .enumerate()
-                .map(|(index, value)| {
-                    let bytes = decode_hash(&format!("{label} #{index}"), value)?;
-                    Ok(bytes)
-                })
+                .map(|(index, value)| decode_hash(&format!("{label} #{index}"), value))
                 .collect()
         };
 
-        let decode_proofs = |values: &[String]| -> BackendResult<Vec<Vec<u8>>> {
-            values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| {
-                    let bytes = hex::decode(value).map_err(|err| {
-                        BackendError::Failure(format!("invalid vrf proof #{index} encoding: {err}"))
-                    })?;
-                    if bytes.len() != VRF_PROOF_LENGTH {
-                        return Err(BackendError::Failure(format!(
-                            "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
-                        )));
-                    }
-                    Ok(bytes)
-                })
-                .collect()
+        let decode_proof = |index: usize, value: &str| -> BackendResult<Vec<u8>> {
+            let bytes = hex::decode(value).map_err(|err| {
+                BackendError::Failure(format!("invalid vrf proof #{index} encoding: {err}"))
+            })?;
+            if bytes.len() != VRF_PROOF_LENGTH {
+                return Err(BackendError::Failure(format!(
+                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
+                )));
+            }
+            Ok(bytes)
         };
+
+        let mut vrf_outputs = Vec::with_capacity(self.metadata.vrf_entries.len());
+        let mut vrf_proofs = Vec::with_capacity(self.metadata.vrf_entries.len());
+        let mut vrf_public_entries = Vec::with_capacity(self.metadata.vrf_entries.len());
+
+        for (index, entry) in self.metadata.vrf_entries.iter().enumerate() {
+            if entry.randomness.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing randomness",
+                )));
+            }
+            if entry.pre_output.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing pre-output",
+                )));
+            }
+            if entry.proof.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing proof",
+                )));
+            }
+            if entry.public_key.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing public key",
+                )));
+            }
+            if entry.poseidon.digest.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing poseidon digest",
+                )));
+            }
+            if entry.poseidon.last_block_header.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing poseidon last block header",
+                )));
+            }
+            if entry.poseidon.epoch.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing poseidon epoch",
+                )));
+            }
+            if entry.poseidon.tier_seed.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing poseidon tier seed",
+                )));
+            }
+
+            let randomness = decode_hash(&format!("vrf randomness #{index}"), &entry.randomness)?;
+            let pre_output = decode_array::<VRF_PREOUTPUT_LENGTH>(
+                &format!("vrf pre-output #{index}"),
+                &entry.pre_output,
+            )?;
+            let proof = decode_proof(index, &entry.proof)?;
+            let public_key = decode_hash(&format!("vrf public key #{index}"), &entry.public_key)?;
+            let poseidon_digest = decode_hash(
+                &format!("vrf poseidon digest #{index}"),
+                &entry.poseidon.digest,
+            )?;
+            let poseidon_last_block_header = decode_hash(
+                &format!("vrf poseidon last block header #{index}"),
+                &entry.poseidon.last_block_header,
+            )?;
+            let poseidon_epoch = entry.poseidon.epoch.trim().parse::<u64>().map_err(|err| {
+                BackendError::Failure(format!("invalid vrf entry #{index} poseidon epoch: {err}"))
+            })?;
+            let poseidon_tier_seed = decode_hash(
+                &format!("vrf poseidon tier seed #{index}"),
+                &entry.poseidon.tier_seed,
+            )?;
+
+            vrf_outputs.push(randomness);
+            vrf_proofs.push(proof.clone());
+            vrf_public_entries.push(ConsensusVrfPublicEntry {
+                randomness,
+                pre_output,
+                proof,
+                public_key,
+                poseidon: PublicConsensusVrfPoseidonInput {
+                    digest: poseidon_digest,
+                    last_block_header: poseidon_last_block_header,
+                    epoch: poseidon_epoch,
+                    tier_seed: poseidon_tier_seed,
+                },
+            });
+        }
 
         let quorum_bitmap_root =
             decode_hash("quorum bitmap root", &self.metadata.quorum_bitmap_root)?;
@@ -483,8 +565,6 @@ impl ConsensusCertificate {
             &self.metadata.quorum_signature_root,
         )?;
 
-        let vrf_outputs = decode_digests("vrf output", &self.metadata.vrf_outputs)?;
-        let vrf_proofs = decode_proofs(&self.metadata.vrf_proofs)?;
         let witness_commitments =
             decode_digests("witness commitment", &self.metadata.witness_commitments)?;
         let reputation_roots = decode_digests("reputation root", &self.metadata.reputation_roots)?;
@@ -508,8 +588,7 @@ impl ConsensusCertificate {
             quorum_threshold: self.quorum_threshold,
             quorum_bitmap_root,
             quorum_signature_root,
-            vrf_outputs,
-            vrf_proofs,
+            vrf_entries: vrf_public_entries,
             witness_commitments,
             reputation_roots,
             vrf_output_binding: bindings.vrf_output,
