@@ -6,8 +6,27 @@ use crate::official::air::{
     AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
 };
 use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
+use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
+
+/// Poseidon VRF tuple captured within each consensus witness entry.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfPoseidonInput {
+    pub last_block_header: String,
+    pub epoch: u64,
+    pub tier_seed: String,
+}
+
+/// Full VRF witness information associated with a single validator.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfWitnessEntry {
+    pub randomness: String,
+    pub pre_output: String,
+    pub proof: String,
+    pub public_key: String,
+    pub input: ConsensusVrfPoseidonInput,
+}
 
 /// Column headers for the consensus summary segment. The first eight entries map
 /// directly to fixed public inputs (block metadata and quorum digests) while the
@@ -33,13 +52,21 @@ fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
         }
     };
 
-    extend_with("vrf_output", witness.vrf_outputs.len());
-    extend_with("vrf_proof", witness.vrf_proofs.len());
+    extend_with("vrf_randomness", witness.vrf_entries.len());
+    extend_with("vrf_pre_output", witness.vrf_entries.len());
+    extend_with("vrf_proof", witness.vrf_entries.len());
+    extend_with("vrf_public_key", witness.vrf_entries.len());
+    extend_with("vrf_input_last_block_header", witness.vrf_entries.len());
+    extend_with("vrf_input_epoch", witness.vrf_entries.len());
+    extend_with("vrf_input_tier_seed", witness.vrf_entries.len());
     extend_with("witness_commitment", witness.witness_commitments.len());
     extend_with("reputation_root", witness.reputation_roots.len());
 
     columns.push("vrf_output_count".to_string());
+    columns.push("vrf_pre_output_count".to_string());
     columns.push("vrf_proof_count".to_string());
+    columns.push("vrf_public_key_count".to_string());
+    columns.push("vrf_input_count".to_string());
     columns.push("witness_commitment_count".to_string());
     columns.push("reputation_root_count".to_string());
     columns.push("vrf_output_binding".to_string());
@@ -76,7 +103,7 @@ impl VotePower {
 }
 
 /// Witness describing aggregated consensus votes for a block proposal.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ConsensusWitness {
     pub block_hash: String,
     pub round: u64,
@@ -90,9 +117,7 @@ pub struct ConsensusWitness {
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
     #[serde(default)]
-    pub vrf_outputs: Vec<String>,
-    #[serde(default)]
-    pub vrf_proofs: Vec<String>,
+    pub vrf_entries: Vec<ConsensusVrfWitnessEntry>,
     #[serde(default)]
     pub witness_commitments: Vec<String>,
     #[serde(default)]
@@ -107,6 +132,22 @@ impl ConsensusWitness {
             return Err(CircuitError::ConstraintViolation(
                 "hash must encode 32 bytes".into(),
             ));
+        }
+        Ok(())
+    }
+
+    fn ensure_hex_with_length(
+        value: &str,
+        expected_len: usize,
+        label: &str,
+    ) -> Result<(), CircuitError> {
+        let bytes = hex::decode(value).map_err(|err| {
+            CircuitError::InvalidWitness(format!("invalid {label} encoding: {err}"))
+        })?;
+        if bytes.len() != expected_len {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "{label} must encode {expected_len} bytes"
+            )));
         }
         Ok(())
     }
@@ -163,33 +204,64 @@ impl ConsensusWitness {
         Ok(())
     }
 
-    fn ensure_vrf_proofs(&self) -> Result<(), CircuitError> {
-        if self.vrf_outputs.is_empty() {
+    fn ensure_vrf_entries(&self) -> Result<(), CircuitError> {
+        if self.vrf_entries.is_empty() {
             return Err(CircuitError::ConstraintViolation(
-                "consensus witness missing VRF outputs".into(),
+                "consensus witness missing VRF entries".into(),
             ));
         }
-        if self.vrf_proofs.is_empty() {
-            return Err(CircuitError::ConstraintViolation(
-                "consensus witness missing VRF proofs".into(),
-            ));
-        }
-        if self.vrf_outputs.len() != self.vrf_proofs.len() {
-            return Err(CircuitError::ConstraintViolation(
-                "vrf output/proof count mismatch".into(),
-            ));
-        }
-        for (index, proof) in self.vrf_proofs.iter().enumerate() {
-            let bytes = hex::decode(proof).map_err(|err| {
-                CircuitError::InvalidWitness(format!("invalid vrf proof #{index} encoding: {err}"))
+
+        for (index, entry) in self.vrf_entries.iter().enumerate() {
+            Self::ensure_hex_with_length(
+                &entry.randomness,
+                32,
+                &format!("vrf entry #{index} randomness"),
+            )?;
+            Self::ensure_hex_with_length(
+                &entry.pre_output,
+                VRF_PREOUTPUT_LENGTH,
+                &format!("vrf entry #{index} pre-output"),
+            )?;
+            Self::ensure_hex_with_length(
+                &entry.public_key,
+                32,
+                &format!("vrf entry #{index} public key"),
+            )?;
+            Self::ensure_hex_with_length(
+                &entry.input.last_block_header,
+                32,
+                &format!("vrf entry #{index} poseidon last block header"),
+            )?;
+            Self::ensure_hex_with_length(
+                &entry.input.tier_seed,
+                32,
+                &format!("vrf entry #{index} poseidon tier seed"),
+            )?;
+
+            let proof_label = format!("vrf entry #{index} proof");
+            let proof_bytes = hex::decode(&entry.proof).map_err(|err| {
+                CircuitError::InvalidWitness(format!("invalid {proof_label} encoding: {err}"))
             })?;
-            if bytes.len() != crate::vrf::VRF_PROOF_LENGTH {
+            if proof_bytes.len() != VRF_PROOF_LENGTH {
                 return Err(CircuitError::ConstraintViolation(format!(
-                    "vrf proof #{index} must encode {} bytes",
-                    crate::vrf::VRF_PROOF_LENGTH
+                    "{proof_label} must encode {VRF_PROOF_LENGTH} bytes"
+                )));
+            }
+
+            if entry.input.last_block_header.to_ascii_lowercase()
+                != self.block_hash.to_ascii_lowercase()
+            {
+                return Err(CircuitError::ConstraintViolation(format!(
+                    "vrf entry #{index} poseidon last block header must match block hash"
+                )));
+            }
+            if entry.input.epoch != self.epoch {
+                return Err(CircuitError::ConstraintViolation(format!(
+                    "vrf entry #{index} poseidon epoch mismatch"
                 )));
             }
         }
+
         Ok(())
     }
 }
@@ -253,13 +325,32 @@ impl ConsensusCircuit {
             }
         };
 
-        extend_with(&witness.vrf_outputs);
-        extend_with(&witness.vrf_proofs);
+        for entry in &witness.vrf_entries {
+            inputs.push(string_to_field(parameters, &entry.randomness));
+        }
+        for entry in &witness.vrf_entries {
+            inputs.push(string_to_field(parameters, &entry.pre_output));
+        }
+        for entry in &witness.vrf_entries {
+            inputs.push(string_to_field(parameters, &entry.proof));
+        }
+        for entry in &witness.vrf_entries {
+            inputs.push(string_to_field(parameters, &entry.public_key));
+        }
+        for entry in &witness.vrf_entries {
+            inputs.push(string_to_field(parameters, &entry.input.last_block_header));
+            inputs.push(parameters.element_from_u64(entry.input.epoch));
+            inputs.push(string_to_field(parameters, &entry.input.tier_seed));
+        }
         extend_with(&witness.witness_commitments);
         extend_with(&witness.reputation_roots);
 
-        inputs.push(parameters.element_from_u64(witness.vrf_outputs.len() as u64));
-        inputs.push(parameters.element_from_u64(witness.vrf_proofs.len() as u64));
+        let entry_len = witness.vrf_entries.len() as u64;
+        inputs.push(parameters.element_from_u64(entry_len));
+        inputs.push(parameters.element_from_u64(entry_len));
+        inputs.push(parameters.element_from_u64(entry_len));
+        inputs.push(parameters.element_from_u64(entry_len));
+        inputs.push(parameters.element_from_u64(entry_len));
         inputs.push(parameters.element_from_u64(witness.witness_commitments.len() as u64));
         inputs.push(parameters.element_from_u64(witness.reputation_roots.len() as u64));
 
@@ -337,9 +428,7 @@ impl StarkCircuit for ConsensusCircuit {
         self.witness.verify_quorum(pre_vote_total, "pre-vote")?;
         self.witness.verify_quorum(pre_commit_total, "pre-commit")?;
         self.witness.verify_quorum(commit_total, "commit")?;
-        self.witness
-            .ensure_digest_set("vrf output", &self.witness.vrf_outputs)?;
-        self.witness.ensure_vrf_proofs()?;
+        self.witness.ensure_vrf_entries()?;
         self.witness
             .ensure_digest_set("witness commitment", &self.witness.witness_commitments)?;
         self.witness
@@ -369,15 +458,21 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            &self.witness.vrf_outputs,
+            self.witness
+                .vrf_entries
+                .iter()
+                .map(|entry| entry.randomness.as_str()),
             "vrf_outputs",
-            "digest",
+            "randomness",
         )?;
         let (vrf_proofs, _vrf_proof_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            &self.witness.vrf_proofs,
+            self.witness
+                .vrf_entries
+                .iter()
+                .map(|entry| entry.proof.as_str()),
             "vrf_proofs",
             "proof",
         )?;
@@ -385,7 +480,10 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            &self.witness.witness_commitments,
+            self.witness
+                .witness_commitments
+                .iter()
+                .map(|value| value.as_str()),
             "witness_commitments",
             "commitment",
         )?;
@@ -393,7 +491,10 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            &self.witness.reputation_roots,
+            self.witness
+                .reputation_roots
+                .iter()
+                .map(|value| value.as_str()),
             "reputation_roots",
             "root",
         )?;
@@ -401,7 +502,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            std::slice::from_ref(&self.witness.quorum_bitmap_root),
+            std::iter::once(self.witness.quorum_bitmap_root.as_str()),
             "quorum_bitmap_binding",
             "root",
         )?;
@@ -409,7 +510,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            std::slice::from_ref(&self.witness.quorum_signature_root),
+            std::iter::once(self.witness.quorum_signature_root.as_str()),
             "quorum_signature_binding",
             "root",
         )?;
@@ -466,7 +567,10 @@ impl StarkCircuit for ConsensusCircuit {
         let summary_segment = "summary";
         let summary_block_hash = AirColumn::new(summary_segment, "block_hash");
         let summary_vrf_output = AirColumn::new(summary_segment, "vrf_output_count");
+        let summary_vrf_pre_output = AirColumn::new(summary_segment, "vrf_pre_output_count");
         let summary_vrf_proof = AirColumn::new(summary_segment, "vrf_proof_count");
+        let summary_vrf_public_key = AirColumn::new(summary_segment, "vrf_public_key_count");
+        let summary_vrf_input = AirColumn::new(summary_segment, "vrf_input_count");
         let summary_witness_commitment =
             AirColumn::new(summary_segment, "witness_commitment_count");
         let summary_reputation_root = AirColumn::new(summary_segment, "reputation_root_count");
@@ -516,9 +620,24 @@ impl StarkCircuit for ConsensusCircuit {
                 vrf_output_len as u64,
             ),
             (
+                "summary_vrf_pre_output_count",
+                &summary_vrf_pre_output,
+                vrf_output_len as u64,
+            ),
+            (
                 "summary_vrf_proof_count",
                 &summary_vrf_proof,
                 vrf_proof_len as u64,
+            ),
+            (
+                "summary_vrf_public_key_count",
+                &summary_vrf_public_key,
+                vrf_output_len as u64,
+            ),
+            (
+                "summary_vrf_input_count",
+                &summary_vrf_input,
+                vrf_output_len as u64,
             ),
             (
                 "summary_witness_commitment_count",
@@ -544,12 +663,36 @@ impl StarkCircuit for ConsensusCircuit {
             ));
         }
 
-        constraints.push(AirConstraint::new(
-            "summary_vrf_counts_match",
-            summary_segment,
-            ConstraintDomain::FirstRow,
-            AirExpression::difference(summary_vrf_output.expr(), summary_vrf_proof.expr()),
-        ));
+        let count_pairs = [
+            (
+                "summary_vrf_output_pre_output_count_match",
+                &summary_vrf_output,
+                &summary_vrf_pre_output,
+            ),
+            (
+                "summary_vrf_output_proof_count_match",
+                &summary_vrf_output,
+                &summary_vrf_proof,
+            ),
+            (
+                "summary_vrf_output_public_key_count_match",
+                &summary_vrf_output,
+                &summary_vrf_public_key,
+            ),
+            (
+                "summary_vrf_output_input_count_match",
+                &summary_vrf_output,
+                &summary_vrf_input,
+            ),
+        ];
+        for (name, left, right) in count_pairs {
+            constraints.push(AirConstraint::new(
+                name,
+                summary_segment,
+                ConstraintDomain::FirstRow,
+                AirExpression::difference(left.expr(), right.expr()),
+            ));
+        }
 
         let mut add_binding_constraints = |segment: &str, summary_binding: &AirColumn| {
             let binding_in = AirColumn::new(segment, "binding_in");
@@ -637,23 +780,47 @@ impl ConsensusCircuit {
         block_hash: &FieldElement,
         witness: &ConsensusWitness,
     ) -> ConsensusBindingValues {
-        let vrf_output = Self::fold_binding(parameters, hasher, block_hash, &witness.vrf_outputs);
-        let vrf_proof = Self::fold_binding(parameters, hasher, block_hash, &witness.vrf_proofs);
-        let witness_commitment =
-            Self::fold_binding(parameters, hasher, block_hash, &witness.witness_commitments);
-        let reputation_root =
-            Self::fold_binding(parameters, hasher, block_hash, &witness.reputation_roots);
+        let vrf_output = Self::fold_binding(
+            parameters,
+            hasher,
+            block_hash,
+            witness
+                .vrf_entries
+                .iter()
+                .map(|entry| entry.randomness.as_str()),
+        );
+        let vrf_proof = Self::fold_binding(
+            parameters,
+            hasher,
+            block_hash,
+            witness.vrf_entries.iter().map(|entry| entry.proof.as_str()),
+        );
+        let witness_commitment = Self::fold_binding(
+            parameters,
+            hasher,
+            block_hash,
+            witness
+                .witness_commitments
+                .iter()
+                .map(|value| value.as_str()),
+        );
+        let reputation_root = Self::fold_binding(
+            parameters,
+            hasher,
+            block_hash,
+            witness.reputation_roots.iter().map(|value| value.as_str()),
+        );
         let quorum_bitmap = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::slice::from_ref(&witness.quorum_bitmap_root),
+            std::iter::once(witness.quorum_bitmap_root.as_str()),
         );
         let quorum_signature = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::slice::from_ref(&witness.quorum_signature_root),
+            std::iter::once(witness.quorum_signature_root.as_str()),
         );
 
         ConsensusBindingValues {
@@ -666,12 +833,15 @@ impl ConsensusCircuit {
         }
     }
 
-    fn fold_binding(
+    fn fold_binding<'a, I>(
         parameters: &StarkParameters,
         hasher: &PoseidonHasher,
         block_hash: &FieldElement,
-        values: &[String],
-    ) -> FieldElement {
+        values: I,
+    ) -> FieldElement
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
         for value in values {
@@ -681,17 +851,20 @@ impl ConsensusCircuit {
         accumulator
     }
 
-    fn build_binding_segment(
+    fn build_binding_segment<'a, I>(
         parameters: &StarkParameters,
         hasher: &PoseidonHasher,
         block_hash: &FieldElement,
-        values: &[String],
+        values: I,
         name: &str,
         value_column: &str,
-    ) -> Result<(TraceSegment, FieldElement), CircuitError> {
+    ) -> Result<(TraceSegment, FieldElement), CircuitError>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
         let zero = FieldElement::zero(parameters.modulus());
-        let mut rows = Vec::with_capacity(values.len());
         let mut accumulator = block_hash.clone();
+        let mut rows = Vec::new();
         for value in values {
             let element = string_to_field(parameters, value);
             let next = hasher.hash(&[accumulator.clone(), element.clone(), zero.clone()]);
@@ -708,5 +881,124 @@ impl ConsensusCircuit {
             rows,
         )?;
         Ok((segment, accumulator))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower};
+    use crate::official::circuit::CircuitError;
+    use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
+
+    fn sample_vote() -> VotePower {
+        VotePower {
+            voter: "validator".into(),
+            weight: 1,
+        }
+    }
+
+    fn sample_vrf_entry() -> ConsensusVrfWitnessEntry {
+        ConsensusVrfWitnessEntry {
+            randomness: "aa".repeat(32),
+            pre_output: "bb".repeat(VRF_PREOUTPUT_LENGTH),
+            proof: "cc".repeat(VRF_PROOF_LENGTH),
+            public_key: "dd".repeat(32),
+            input: ConsensusVrfPoseidonInput {
+                last_block_header: "11".repeat(32),
+                epoch: 7,
+                tier_seed: "ee".repeat(32),
+            },
+        }
+    }
+
+    fn sample_witness() -> ConsensusWitness {
+        ConsensusWitness {
+            block_hash: "11".repeat(32),
+            round: 0,
+            epoch: 7,
+            slot: 3,
+            leader_proposal: "11".repeat(32),
+            quorum_threshold: 1,
+            pre_votes: vec![sample_vote()],
+            pre_commits: vec![sample_vote()],
+            commit_votes: vec![sample_vote()],
+            quorum_bitmap_root: "22".repeat(32),
+            quorum_signature_root: "33".repeat(32),
+            vrf_entries: vec![sample_vrf_entry()],
+            witness_commitments: vec!["44".repeat(32)],
+            reputation_roots: vec!["55".repeat(32)],
+        }
+    }
+
+    #[test]
+    fn vrf_entries_validate_on_happy_path() {
+        let witness = sample_witness();
+        assert!(witness.ensure_vrf_entries().is_ok());
+    }
+
+    #[test]
+    fn vrf_entries_reject_invalid_randomness_length() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].randomness = "aa".repeat(31);
+        assert!(matches!(
+            witness.ensure_vrf_entries(),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("randomness")
+        ));
+    }
+
+    #[test]
+    fn vrf_entries_reject_epoch_mismatch() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].input.epoch = witness.epoch + 1;
+        assert!(matches!(
+            witness.ensure_vrf_entries(),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("epoch mismatch")
+        ));
+    }
+
+    #[test]
+    fn vrf_entries_reject_proof_length() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].proof = "cc".repeat(VRF_PROOF_LENGTH - 1);
+        assert!(matches!(
+            witness.ensure_vrf_entries(),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("proof")
+        ));
+    }
+
+    #[test]
+    fn vrf_entries_reject_block_hash_mismatch() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].input.last_block_header = "ff".repeat(32);
+        assert!(matches!(
+            witness.ensure_vrf_entries(),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("block hash")
+        ));
+    }
+
+    #[test]
+    fn vrf_entries_reject_pre_output_length() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].pre_output = "bb".repeat(VRF_PREOUTPUT_LENGTH - 1);
+        assert!(matches!(
+            witness.ensure_vrf_entries(),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("pre-output")
+        ));
+    }
+
+    #[test]
+    fn vrf_entries_reject_public_key_length() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].public_key = "dd".repeat(31);
+        assert!(matches!(
+            witness.ensure_vrf_entries(),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("public key")
+        ));
     }
 }

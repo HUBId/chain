@@ -13,7 +13,9 @@ pub mod state;
 pub mod transaction;
 pub mod uptime;
 
-pub use consensus::{ConsensusWitness, VotePower};
+pub use consensus::{
+    ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower,
+};
 pub use identity::IdentityWitness;
 pub use pruning::PruningWitness;
 pub use recursive::RecursiveWitness;

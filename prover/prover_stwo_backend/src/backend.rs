@@ -26,7 +26,11 @@ use crate::official::aggregation::pruning_fold_from_canonical_bytes;
 #[cfg(feature = "official")]
 use crate::official::circuit::{consensus::ConsensusCircuit, string_to_field};
 #[cfg(feature = "official")]
+use crate::official::circuit::consensus::ConsensusWitness;
+#[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
+#[cfg(feature = "official")]
+use crate::official::proof::ProofPayload;
 #[cfg(feature = "official")]
 use crate::official::verifier::NodeVerifier;
 #[cfg(feature = "official")]
@@ -485,7 +489,23 @@ impl ProofBackend for StwoBackend {
                     "consensus proof circuit identifier mismatch".into(),
                 ));
             }
-            let expected_fields = rebuild_consensus_public_inputs(&parameters, public_inputs);
+            let witness = match &decoded.payload {
+                ProofPayload::Consensus(witness) => witness,
+                _ => {
+                    return Err(BackendError::Failure(
+                        "consensus proof payload missing witness".into(),
+                    ))
+                }
+            };
+            if public_inputs.vrf_outputs.len() != witness.vrf_entries.len()
+                || public_inputs.vrf_proofs.len() != witness.vrf_entries.len()
+            {
+                return Err(BackendError::Failure(
+                    "consensus VRF entry counts mismatch public inputs".into(),
+                ));
+            }
+            let expected_fields =
+                rebuild_consensus_public_inputs(&parameters, public_inputs, witness);
             ensure_proof_integrity("consensus", &parameters, &decoded, &expected_fields)?;
             let verifier = NodeVerifier::with_parameters(parameters);
             let chain_proof = ChainProof::Stwo(decoded.clone());
@@ -706,6 +726,7 @@ fn rebuild_uptime_public_inputs(
 fn rebuild_consensus_public_inputs(
     parameters: &StarkParameters,
     inputs: &ConsensusPublicInputs,
+    witness: &ConsensusWitness,
 ) -> Vec<FieldElement> {
     let mut fields = vec![
         element_from_bytes(parameters, &inputs.block_hash),
@@ -720,8 +741,19 @@ fn rebuild_consensus_public_inputs(
     for digest in &inputs.vrf_outputs {
         fields.push(element_from_bytes(parameters, digest));
     }
+    for entry in &witness.vrf_entries {
+        fields.push(string_to_field(parameters, &entry.pre_output));
+    }
     for proof in &inputs.vrf_proofs {
         fields.push(element_from_bytes(parameters, proof));
+    }
+    for entry in &witness.vrf_entries {
+        fields.push(string_to_field(parameters, &entry.public_key));
+    }
+    for entry in &witness.vrf_entries {
+        fields.push(string_to_field(parameters, &entry.input.last_block_header));
+        fields.push(parameters.element_from_u64(entry.input.epoch));
+        fields.push(string_to_field(parameters, &entry.input.tier_seed));
     }
     for digest in &inputs.witness_commitments {
         fields.push(element_from_bytes(parameters, digest));
@@ -729,8 +761,12 @@ fn rebuild_consensus_public_inputs(
     for digest in &inputs.reputation_roots {
         fields.push(element_from_bytes(parameters, digest));
     }
+    let entry_len = witness.vrf_entries.len() as u64;
     fields.push(parameters.element_from_u64(inputs.vrf_outputs.len() as u64));
+    fields.push(parameters.element_from_u64(entry_len));
     fields.push(parameters.element_from_u64(inputs.vrf_proofs.len() as u64));
+    fields.push(parameters.element_from_u64(entry_len));
+    fields.push(parameters.element_from_u64(entry_len));
     fields.push(parameters.element_from_u64(inputs.witness_commitments.len() as u64));
     fields.push(parameters.element_from_u64(inputs.reputation_roots.len() as u64));
     fields.push(element_from_bytes(parameters, &inputs.vrf_output_binding));
@@ -765,7 +801,10 @@ mod tests {
     use super::keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
     use super::*;
     use crate::identity_tree::IDENTITY_TREE_DEPTH;
-    use crate::official::circuit::consensus::{ConsensusCircuit, ConsensusWitness, VotePower};
+    use crate::official::circuit::consensus::{
+        ConsensusCircuit, ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness,
+        VotePower,
+    };
     use crate::official::circuit::identity::IdentityWitness;
     use crate::official::circuit::pruning::PruningWitness;
     use crate::official::circuit::recursive::{PrefixedDigest, RecursiveWitness};
@@ -778,7 +817,7 @@ mod tests {
     use crate::reputation::{ReputationWeights, Tier};
     use crate::state::compute_merkle_root;
     use crate::types::{Account, Stake, Transaction, UptimeProof};
-    use crate::vrf::VRF_PROOF_LENGTH;
+    use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
     use ed25519_dalek::{Signer, SigningKey, VerifyingKey as DalekVerifyingKey};
     use prover_backend_interface::{
         ConsensusCircuitDef, ConsensusPublicInputs, IdentityPublicInputs, ProofSystemKind,
@@ -1055,8 +1094,17 @@ mod tests {
     fn consensus_verification_rejects_vrf_tampering() {
         let backend = StwoBackend::new();
         let mut witness = sample_consensus_witness();
-        witness.vrf_outputs = vec!["22".repeat(32)];
-        witness.vrf_proofs = vec!["33".repeat(crate::vrf::VRF_PROOF_LENGTH)];
+        witness.vrf_entries = vec![ConsensusVrfWitnessEntry {
+            randomness: "22".repeat(32),
+            pre_output: "23".repeat(VRF_PREOUTPUT_LENGTH),
+            proof: "33".repeat(VRF_PROOF_LENGTH),
+            public_key: "24".repeat(32),
+            input: ConsensusVrfPoseidonInput {
+                last_block_header: witness.block_hash.clone(),
+                epoch: witness.epoch,
+                tier_seed: "25".repeat(32),
+            },
+        }];
 
         let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
         let witness_bytes =
@@ -1414,8 +1462,17 @@ mod tests {
             commit_votes: votes,
             quorum_bitmap_root: "aa".repeat(32),
             quorum_signature_root: "bb".repeat(32),
-            vrf_outputs: Vec::new(),
-            vrf_proofs: Vec::new(),
+            vrf_entries: vec![ConsensusVrfWitnessEntry {
+                randomness: "cc".repeat(32),
+                pre_output: "dd".repeat(VRF_PREOUTPUT_LENGTH),
+                proof: "ee".repeat(VRF_PROOF_LENGTH),
+                public_key: "ff".repeat(32),
+                input: ConsensusVrfPoseidonInput {
+                    last_block_header: "99".repeat(32),
+                    epoch: 2,
+                    tier_seed: "11".repeat(32),
+                },
+            }],
             witness_commitments: Vec::new(),
             reputation_roots: Vec::new(),
         }
@@ -1495,14 +1552,14 @@ mod tests {
             quorum_bitmap_root: hex_to_array(&witness.quorum_bitmap_root),
             quorum_signature_root: hex_to_array(&witness.quorum_signature_root),
             vrf_outputs: witness
-                .vrf_outputs
+                .vrf_entries
                 .iter()
-                .map(|value| hex_to_array(value))
+                .map(|entry| hex_to_array(&entry.randomness))
                 .collect(),
             vrf_proofs: witness
-                .vrf_proofs
+                .vrf_entries
                 .iter()
-                .map(|value| hex_to_vec(value))
+                .map(|entry| hex_to_vec(&entry.proof))
                 .collect(),
             witness_commitments: witness
                 .witness_commitments
