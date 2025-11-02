@@ -3,6 +3,13 @@ use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 
+mod circuits;
+
+pub use circuits::consensus::{
+    encode_consensus_public_inputs, validate_consensus_public_inputs, ConsensusBindings,
+    ConsensusCircuit, ConsensusPublicInputs, ConsensusWitness, VotePower, VRF_PROOF_LENGTH,
+};
+
 pub const PROOF_BLOB_LEN: usize = 96;
 
 #[derive(Debug, Error)]
@@ -29,6 +36,10 @@ pub enum BackendError {
     SecurityParameterMismatch(String),
     #[error("proof metadata GPU flag mismatch for {0} circuit")]
     GpuModeMismatch(String),
+    #[error("invalid {circuit} witness: {message}")]
+    InvalidWitness { circuit: String, message: String },
+    #[error("invalid {circuit} public inputs: {message}")]
+    InvalidPublicInputs { circuit: String, message: String },
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;

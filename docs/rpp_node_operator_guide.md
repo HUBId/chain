@@ -99,6 +99,13 @@ an. `scripts/analyze_simnet.py` wertet die JSON-Summary aus, bricht bei
 Gegenüberstellung von Erfolgs- und Fehlerpfaden ist ebenfalls im Runbook
 festgehalten.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】【F:docs/performance/consensus_proofs.md†L1-L160】
 
+Die Konsensus-Beweise werden zusätzlich softwareseitig gehärtet: `ConsensusCircuit`
+im Backend bindet VRF-Ausgaben, -Beweise und Quorum-Digests an den Block-Hash,
+die Wallet-Adapter lassen nur valide Zeugen in die Prover-Pipeline, und der
+Verifier rekonstruiert die Bindings vor der Proof-Prüfung. Regressionstests in
+`tests/consensus/plonky3_consensus.rs` sowie im Backend sichern diese Checks gegen
+Regressionen.【F:prover/plonky3_backend/src/circuits/consensus.rs†L1-L245】【F:rpp/proofs/plonky3/prover/mod.rs†L123-L520】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】【F:tests/consensus/plonky3_consensus.rs†L1-L134】
+
 Grafana-Panels unter `docs/dashboards/consensus_proof_validation.json`
 visualisieren diese Kennzahlen (Latenzen, Fehlerraten, Circuit-Cache-Größe) für
 Plonky3 und werden vom CI-Dashboard-Lint überprüft. Binde die Panels in das

@@ -12,6 +12,7 @@ use crate::types::{BlockProofBundle, ChainProof};
 
 use super::crypto;
 use super::proof::Plonky3Proof;
+use plonky3_backend::validate_consensus_public_inputs;
 
 #[derive(Debug, Error)]
 enum Plonky3VerificationError {
@@ -103,6 +104,16 @@ impl Plonky3Verifier {
             );
             error!("plonky3 {expected} proof verification failed: {message}");
             return Err(Plonky3VerificationError::verification(expected, message));
+        }
+
+        if expected == "consensus" {
+            validate_consensus_public_inputs(&parsed.public_inputs).map_err(|err| {
+                error!("plonky3 consensus proof verification failed: invalid public inputs: {err}");
+                Plonky3VerificationError::malformed(
+                    expected,
+                    format!("invalid consensus public inputs: {err}"),
+                )
+            })?;
         }
 
         crypto::verify_proof(&parsed).map_err(|err| {

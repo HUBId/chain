@@ -5019,6 +5019,7 @@ name = "plonky3-backend"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "hex",
  "p3-air",
  "p3-baby-bear",
  "p3-challenger",
