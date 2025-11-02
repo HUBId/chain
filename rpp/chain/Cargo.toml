@@ -11,6 +11,7 @@ build = "build.rs"
 
 [features]
 default = ["prover-mock"]
+prod = []
 nightly-prover = [
     "dep:prover_stwo_backend",
     "prover_stwo_backend/prover-stwo",

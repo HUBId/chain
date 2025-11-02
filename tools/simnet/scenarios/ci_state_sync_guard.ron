@@ -1,0 +1,54 @@
+{
+  "name": "ci-state-sync-guard",
+  "description": "Validate block production, snapshot planning, and manipulation guards via integration tests",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [
+    {
+      "label": "integration-block-production",
+      "program": "cargo",
+      "args": [
+        "test",
+        "--quiet",
+        "--test",
+        "integration",
+        "--",
+        "block_production::"
+      ],
+      "startup_timeout_ms": 120000,
+      "working_dir": "../.."
+    },
+    {
+      "label": "integration-snapshot-light-client",
+      "program": "cargo",
+      "args": [
+        "test",
+        "--quiet",
+        "--test",
+        "integration",
+        "--",
+        "snapshot_light_client::"
+      ],
+      "startup_timeout_ms": 120000,
+      "working_dir": "../.."
+    },
+    {
+      "label": "integration-manipulation-protection",
+      "program": "cargo",
+      "args": [
+        "test",
+        "--quiet",
+        "--test",
+        "integration",
+        "--",
+        "manipulation_protection::"
+      ],
+      "startup_timeout_ms": 120000,
+      "working_dir": "../.."
+    }
+  ],
+  "wallets": [],
+  "p2p": null
+}

@@ -1,5 +1,5 @@
-mod consensus;
 mod config;
+mod consensus;
 mod process;
 mod runner;
 

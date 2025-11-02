@@ -113,28 +113,103 @@ PY
           fi
 
   unit-suites:
-    name: Unit suites
+    name: Unit suites (${{ matrix.name }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+            no_default_features: ""
+            experimental: false
+          - name: prod-stwo
+            features: "prod,prover-stwo"
+            no_default_features: "1"
+            experimental: false
+          - name: prod-stwo-plonky3
+            features: "prod,prover-stwo,backend-plonky3"
+            no_default_features: "1"
+            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run unit validation suites
-        run: cargo xtask test-unit
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.no_default_features }}" ]; then
+            export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
+          fi
+          if [ -n "${{ matrix.features }}" ]; then
+            export XTASK_FEATURES='${{ matrix.features }}'
+          fi
+          cargo xtask test-unit
 
   integration-workflows:
-    name: Integration workflows
+    name: Integration workflows (${{ matrix.name }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+            no_default_features: ""
+            experimental: false
+          - name: prod-stwo
+            features: "prod,prover-stwo"
+            no_default_features: "1"
+            experimental: false
+          - name: prod-stwo-plonky3
+            features: "prod,prover-stwo,backend-plonky3"
+            no_default_features: "1"
+            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run integration workflows
-        run: cargo xtask test-integration
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.no_default_features }}" ]; then
+            export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
+          fi
+          if [ -n "${{ matrix.features }}" ]; then
+            export XTASK_FEATURES='${{ matrix.features }}'
+          fi
+          cargo xtask test-integration
 
   simnet-smoke:
-    name: Simnet smoke
+    name: Simnet smoke (${{ matrix.name }})
     runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+            no_default_features: ""
+            experimental: false
+          - name: prod-stwo
+            features: "prod,prover-stwo"
+            no_default_features: "1"
+            experimental: false
+          - name: prod-stwo-plonky3
+            features: "prod,prover-stwo,backend-plonky3"
+            no_default_features: "1"
+            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run simnet scenario
-        run: cargo xtask test-simnet
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.no_default_features }}" ]; then
+            export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
+          fi
+          if [ -n "${{ matrix.features }}" ]; then
+            export XTASK_FEATURES='${{ matrix.features }}'
+          fi
+          cargo xtask test-simnet
