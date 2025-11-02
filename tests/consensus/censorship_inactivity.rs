@@ -4,7 +4,8 @@ use std::sync::Arc;
 use libp2p::PeerId;
 use rpp_consensus::evidence::{CensorshipStage, EvidenceKind, EvidenceType};
 use rpp_consensus::messages::{
-    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreVote,
+    compute_consensus_bindings, Block, BlockId, Commit, ConsensusCertificate, ConsensusProof,
+    ConsensusProofMetadata, PreVote,
 };
 use rpp_consensus::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
@@ -137,39 +138,63 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
     let metadata = sample_metadata(state.epoch, state.round);
     let certificate =
         state.build_certificate(&block_hash.0, block.height, state.round, metadata.clone());
+    let block_hash_bytes = decode_digest(&block_hash.0);
+    let quorum_bitmap_root = decode_digest(&metadata.quorum_bitmap_root);
+    let quorum_signature_root = decode_digest(&metadata.quorum_signature_root);
+    let vrf_outputs: Vec<[u8; 32]> = metadata
+        .vrf_outputs
+        .iter()
+        .map(|value| decode_digest(value))
+        .collect();
+    let vrf_proofs: Vec<Vec<u8>> = metadata
+        .vrf_proofs
+        .iter()
+        .map(|value| hex::decode(value).expect("decode vrf proof"))
+        .collect();
+    let witness_commitments: Vec<[u8; 32]> = metadata
+        .witness_commitments
+        .iter()
+        .map(|value| decode_digest(value))
+        .collect();
+    let reputation_roots: Vec<[u8; 32]> = metadata
+        .reputation_roots
+        .iter()
+        .map(|value| decode_digest(value))
+        .collect();
+
+    let bindings = compute_consensus_bindings(
+        &block_hash_bytes,
+        &vrf_outputs,
+        &vrf_proofs,
+        &witness_commitments,
+        &reputation_roots,
+        &quorum_bitmap_root,
+        &quorum_signature_root,
+    );
+
     let proof = ConsensusProof::new(
         ProofBytes::new(vec![1, 2, 3]),
         VerifyingKey(vec![1, 2, 3]),
         ConsensusCircuitDef::new("consensus-fixture"),
         ConsensusPublicInputs {
-            block_hash: decode_digest(&block_hash.0),
+            block_hash: block_hash_bytes,
             round: state.round,
-            leader_proposal: decode_digest(&block_hash.0),
+            leader_proposal: block_hash_bytes,
             epoch: metadata.epoch,
             slot: metadata.slot,
             quorum_threshold: state.validator_set.quorum_threshold,
-            quorum_bitmap_root: decode_digest(&metadata.quorum_bitmap_root),
-            quorum_signature_root: decode_digest(&metadata.quorum_signature_root),
-            vrf_outputs: metadata
-                .vrf_outputs
-                .iter()
-                .map(|value| decode_digest(value))
-                .collect(),
-            vrf_proofs: metadata
-                .vrf_proofs
-                .iter()
-                .map(|value| hex::decode(value).expect("decode vrf proof"))
-                .collect(),
-            witness_commitments: metadata
-                .witness_commitments
-                .iter()
-                .map(|value| decode_digest(value))
-                .collect(),
-            reputation_roots: metadata
-                .reputation_roots
-                .iter()
-                .map(|value| decode_digest(value))
-                .collect(),
+            quorum_bitmap_root,
+            quorum_signature_root,
+            vrf_outputs,
+            vrf_proofs,
+            witness_commitments,
+            reputation_roots,
+            vrf_output_binding: bindings.vrf_output,
+            vrf_proof_binding: bindings.vrf_proof,
+            witness_commitment_binding: bindings.witness_commitment,
+            reputation_root_binding: bindings.reputation_root,
+            quorum_bitmap_binding: bindings.quorum_bitmap,
+            quorum_signature_binding: bindings.quorum_signature,
         },
     );
     Commit {

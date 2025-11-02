@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::official::air::{
     AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
 };
-use crate::official::params::{FieldElement, StarkParameters};
+use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
@@ -42,6 +42,12 @@ fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
     columns.push("vrf_proof_count".to_string());
     columns.push("witness_commitment_count".to_string());
     columns.push("reputation_root_count".to_string());
+    columns.push("vrf_output_binding".to_string());
+    columns.push("vrf_proof_binding".to_string());
+    columns.push("witness_commitment_binding".to_string());
+    columns.push("reputation_root_binding".to_string());
+    columns.push("quorum_bitmap_binding".to_string());
+    columns.push("quorum_signature_binding".to_string());
 
     columns
 }
@@ -226,15 +232,19 @@ impl ConsensusCircuit {
         parameters: &StarkParameters,
         witness: &ConsensusWitness,
     ) -> Vec<FieldElement> {
+        let block_hash = string_to_field(parameters, &witness.block_hash);
+        let leader_proposal = string_to_field(parameters, &witness.leader_proposal);
+        let quorum_bitmap_root = string_to_field(parameters, &witness.quorum_bitmap_root);
+        let quorum_signature_root = string_to_field(parameters, &witness.quorum_signature_root);
         let mut inputs = vec![
-            string_to_field(parameters, &witness.block_hash),
+            block_hash.clone(),
             parameters.element_from_u64(witness.round),
-            string_to_field(parameters, &witness.leader_proposal),
+            leader_proposal,
             parameters.element_from_u64(witness.epoch),
             parameters.element_from_u64(witness.slot),
             parameters.element_from_u64(witness.quorum_threshold),
-            string_to_field(parameters, &witness.quorum_bitmap_root),
-            string_to_field(parameters, &witness.quorum_signature_root),
+            quorum_bitmap_root.clone(),
+            quorum_signature_root.clone(),
         ];
 
         let mut extend_with = |values: &[String]| {
@@ -252,6 +262,17 @@ impl ConsensusCircuit {
         inputs.push(parameters.element_from_u64(witness.vrf_proofs.len() as u64));
         inputs.push(parameters.element_from_u64(witness.witness_commitments.len() as u64));
         inputs.push(parameters.element_from_u64(witness.reputation_roots.len() as u64));
+
+        let hasher = parameters.poseidon_hasher();
+        let bindings =
+            ConsensusCircuit::compute_binding_values(parameters, &hasher, &block_hash, witness);
+
+        inputs.push(bindings.vrf_output);
+        inputs.push(bindings.vrf_proof);
+        inputs.push(bindings.witness_commitment);
+        inputs.push(bindings.reputation_root);
+        inputs.push(bindings.quorum_bitmap);
+        inputs.push(bindings.quorum_signature);
 
         inputs
     }
@@ -342,41 +363,55 @@ impl StarkCircuit for ConsensusCircuit {
         let (pre_vote_total, pre_commit_total, commit_total) =
             Self::compute_vote_totals(&self.witness);
 
-        let vrf_outputs = TraceSegment::new(
+        let hasher = parameters.poseidon_hasher();
+        let block_hash = string_to_field(parameters, &self.witness.block_hash);
+        let (vrf_outputs, _vrf_output_binding) = Self::build_binding_segment(
+            parameters,
+            &hasher,
+            &block_hash,
+            &self.witness.vrf_outputs,
             "vrf_outputs",
-            vec!["digest".to_string()],
-            self.witness
-                .vrf_outputs
-                .iter()
-                .map(|value| vec![string_to_field(parameters, value)])
-                .collect(),
+            "digest",
         )?;
-        let vrf_proofs = TraceSegment::new(
+        let (vrf_proofs, _vrf_proof_binding) = Self::build_binding_segment(
+            parameters,
+            &hasher,
+            &block_hash,
+            &self.witness.vrf_proofs,
             "vrf_proofs",
-            vec!["proof".to_string()],
-            self.witness
-                .vrf_proofs
-                .iter()
-                .map(|value| vec![string_to_field(parameters, value)])
-                .collect(),
+            "proof",
         )?;
-        let witness_commitments = TraceSegment::new(
+        let (witness_commitments, _witness_commitment_binding) = Self::build_binding_segment(
+            parameters,
+            &hasher,
+            &block_hash,
+            &self.witness.witness_commitments,
             "witness_commitments",
-            vec!["commitment".to_string()],
-            self.witness
-                .witness_commitments
-                .iter()
-                .map(|value| vec![string_to_field(parameters, value)])
-                .collect(),
+            "commitment",
         )?;
-        let reputation_roots = TraceSegment::new(
+        let (reputation_roots, _reputation_root_binding) = Self::build_binding_segment(
+            parameters,
+            &hasher,
+            &block_hash,
+            &self.witness.reputation_roots,
             "reputation_roots",
-            vec!["root".to_string()],
-            self.witness
-                .reputation_roots
-                .iter()
-                .map(|value| vec![string_to_field(parameters, value)])
-                .collect(),
+            "root",
+        )?;
+        let (quorum_bitmap_binding, _bitmap_final) = Self::build_binding_segment(
+            parameters,
+            &hasher,
+            &block_hash,
+            std::slice::from_ref(&self.witness.quorum_bitmap_root),
+            "quorum_bitmap_binding",
+            "root",
+        )?;
+        let (quorum_signature_binding, _signature_final) = Self::build_binding_segment(
+            parameters,
+            &hasher,
+            &block_hash,
+            std::slice::from_ref(&self.witness.quorum_signature_root),
+            "quorum_signature_binding",
+            "root",
         )?;
 
         let summary_columns = summary_columns(&self.witness);
@@ -391,6 +426,8 @@ impl StarkCircuit for ConsensusCircuit {
             vrf_proofs,
             witness_commitments,
             reputation_roots,
+            quorum_bitmap_binding,
+            quorum_signature_binding,
             summary,
         ])
     }
@@ -427,11 +464,25 @@ impl StarkCircuit for ConsensusCircuit {
         }
 
         let summary_segment = "summary";
+        let summary_block_hash = AirColumn::new(summary_segment, "block_hash");
         let summary_vrf_output = AirColumn::new(summary_segment, "vrf_output_count");
         let summary_vrf_proof = AirColumn::new(summary_segment, "vrf_proof_count");
         let summary_witness_commitment =
             AirColumn::new(summary_segment, "witness_commitment_count");
         let summary_reputation_root = AirColumn::new(summary_segment, "reputation_root_count");
+        let summary_vrf_output_binding = AirColumn::new(summary_segment, "vrf_output_binding");
+        let summary_vrf_proof_binding = AirColumn::new(summary_segment, "vrf_proof_binding");
+        let summary_witness_commitment_binding =
+            AirColumn::new(summary_segment, "witness_commitment_binding");
+        let summary_reputation_root_binding =
+            AirColumn::new(summary_segment, "reputation_root_binding");
+        let summary_quorum_bitmap_root = AirColumn::new(summary_segment, "quorum_bitmap_root");
+        let summary_quorum_signature_root =
+            AirColumn::new(summary_segment, "quorum_signature_root");
+        let summary_quorum_bitmap_binding =
+            AirColumn::new(summary_segment, "quorum_bitmap_binding");
+        let summary_quorum_signature_binding =
+            AirColumn::new(summary_segment, "quorum_signature_binding");
 
         let vrf_output_len = trace
             .segments
@@ -500,6 +551,162 @@ impl StarkCircuit for ConsensusCircuit {
             AirExpression::difference(summary_vrf_output.expr(), summary_vrf_proof.expr()),
         ));
 
+        let mut add_binding_constraints = |segment: &str, summary_binding: &AirColumn| {
+            let binding_in = AirColumn::new(segment, "binding_in");
+            let binding_out = AirColumn::new(segment, "binding_out");
+            constraints.push(AirConstraint::new(
+                &format!("{segment}_binding_initial"),
+                segment,
+                ConstraintDomain::FirstRow,
+                AirExpression::difference(binding_in.expr(), summary_block_hash.expr()),
+            ));
+            constraints.push(AirConstraint::new(
+                &format!("{segment}_binding_links"),
+                segment,
+                ConstraintDomain::Range {
+                    start: 1,
+                    end: None,
+                },
+                AirExpression::difference(binding_in.expr(), binding_out.shifted(-1)),
+            ));
+            constraints.push(AirConstraint::new(
+                &format!("{segment}_binding_summary"),
+                segment,
+                ConstraintDomain::LastRow,
+                AirExpression::difference(binding_out.expr(), summary_binding.expr()),
+            ));
+        };
+
+        add_binding_constraints("vrf_outputs", &summary_vrf_output_binding);
+        add_binding_constraints("vrf_proofs", &summary_vrf_proof_binding);
+        add_binding_constraints("witness_commitments", &summary_witness_commitment_binding);
+        add_binding_constraints("reputation_roots", &summary_reputation_root_binding);
+
+        for (segment, summary_root, summary_binding) in [
+            (
+                "quorum_bitmap_binding",
+                &summary_quorum_bitmap_root,
+                &summary_quorum_bitmap_binding,
+            ),
+            (
+                "quorum_signature_binding",
+                &summary_quorum_signature_root,
+                &summary_quorum_signature_binding,
+            ),
+        ] {
+            let root_column = AirColumn::new(segment, "root");
+            let binding_in = AirColumn::new(segment, "binding_in");
+            let binding_out = AirColumn::new(segment, "binding_out");
+            constraints.push(AirConstraint::new(
+                &format!("{segment}_root_matches"),
+                segment,
+                ConstraintDomain::AllRows,
+                AirExpression::difference(root_column.expr(), summary_root.expr()),
+            ));
+            constraints.push(AirConstraint::new(
+                &format!("{segment}_binding_initial"),
+                segment,
+                ConstraintDomain::FirstRow,
+                AirExpression::difference(binding_in.expr(), summary_block_hash.expr()),
+            ));
+            constraints.push(AirConstraint::new(
+                &format!("{segment}_binding_summary"),
+                segment,
+                ConstraintDomain::LastRow,
+                AirExpression::difference(binding_out.expr(), summary_binding.expr()),
+            ));
+        }
+
         Ok(AirDefinition::new(constraints))
+    }
+}
+
+pub(crate) struct ConsensusBindingValues {
+    pub(crate) vrf_output: FieldElement,
+    pub(crate) vrf_proof: FieldElement,
+    pub(crate) witness_commitment: FieldElement,
+    pub(crate) reputation_root: FieldElement,
+    pub(crate) quorum_bitmap: FieldElement,
+    pub(crate) quorum_signature: FieldElement,
+}
+
+impl ConsensusCircuit {
+    pub(crate) fn compute_binding_values(
+        parameters: &StarkParameters,
+        hasher: &PoseidonHasher,
+        block_hash: &FieldElement,
+        witness: &ConsensusWitness,
+    ) -> ConsensusBindingValues {
+        let vrf_output = Self::fold_binding(parameters, hasher, block_hash, &witness.vrf_outputs);
+        let vrf_proof = Self::fold_binding(parameters, hasher, block_hash, &witness.vrf_proofs);
+        let witness_commitment =
+            Self::fold_binding(parameters, hasher, block_hash, &witness.witness_commitments);
+        let reputation_root =
+            Self::fold_binding(parameters, hasher, block_hash, &witness.reputation_roots);
+        let quorum_bitmap = Self::fold_binding(
+            parameters,
+            hasher,
+            block_hash,
+            std::slice::from_ref(&witness.quorum_bitmap_root),
+        );
+        let quorum_signature = Self::fold_binding(
+            parameters,
+            hasher,
+            block_hash,
+            std::slice::from_ref(&witness.quorum_signature_root),
+        );
+
+        ConsensusBindingValues {
+            vrf_output,
+            vrf_proof,
+            witness_commitment,
+            reputation_root,
+            quorum_bitmap,
+            quorum_signature,
+        }
+    }
+
+    fn fold_binding(
+        parameters: &StarkParameters,
+        hasher: &PoseidonHasher,
+        block_hash: &FieldElement,
+        values: &[String],
+    ) -> FieldElement {
+        let zero = FieldElement::zero(parameters.modulus());
+        let mut accumulator = block_hash.clone();
+        for value in values {
+            let element = string_to_field(parameters, value);
+            accumulator = hasher.hash(&[accumulator, element, zero.clone()]);
+        }
+        accumulator
+    }
+
+    fn build_binding_segment(
+        parameters: &StarkParameters,
+        hasher: &PoseidonHasher,
+        block_hash: &FieldElement,
+        values: &[String],
+        name: &str,
+        value_column: &str,
+    ) -> Result<(TraceSegment, FieldElement), CircuitError> {
+        let zero = FieldElement::zero(parameters.modulus());
+        let mut rows = Vec::with_capacity(values.len());
+        let mut accumulator = block_hash.clone();
+        for value in values {
+            let element = string_to_field(parameters, value);
+            let next = hasher.hash(&[accumulator.clone(), element.clone(), zero.clone()]);
+            rows.push(vec![element, accumulator.clone(), next.clone()]);
+            accumulator = next;
+        }
+        let segment = TraceSegment::new(
+            name,
+            vec![
+                value_column.to_string(),
+                "binding_in".to_string(),
+                "binding_out".to_string(),
+            ],
+            rows,
+        )?;
+        Ok((segment, accumulator))
     }
 }

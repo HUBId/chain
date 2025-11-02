@@ -380,6 +380,12 @@ pub struct ConsensusPublicInputs {
     pub vrf_proofs: Vec<Vec<u8>>,
     pub witness_commitments: Vec<[u8; 32]>,
     pub reputation_roots: Vec<[u8; 32]>,
+    pub vrf_output_binding: [u8; 32],
+    pub vrf_proof_binding: [u8; 32],
+    pub witness_commitment_binding: [u8; 32],
+    pub reputation_root_binding: [u8; 32],
+    pub quorum_bitmap_binding: [u8; 32],
+    pub quorum_signature_binding: [u8; 32],
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -24,6 +24,8 @@ use prover_backend_interface::{
 #[cfg(feature = "official")]
 use crate::official::aggregation::pruning_fold_from_canonical_bytes;
 #[cfg(feature = "official")]
+use crate::official::circuit::{consensus::ConsensusCircuit, string_to_field};
+#[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
 #[cfg(feature = "official")]
 use crate::official::verifier::NodeVerifier;
@@ -731,6 +733,24 @@ fn rebuild_consensus_public_inputs(
     fields.push(parameters.element_from_u64(inputs.vrf_proofs.len() as u64));
     fields.push(parameters.element_from_u64(inputs.witness_commitments.len() as u64));
     fields.push(parameters.element_from_u64(inputs.reputation_roots.len() as u64));
+    fields.push(element_from_bytes(parameters, &inputs.vrf_output_binding));
+    fields.push(element_from_bytes(parameters, &inputs.vrf_proof_binding));
+    fields.push(element_from_bytes(
+        parameters,
+        &inputs.witness_commitment_binding,
+    ));
+    fields.push(element_from_bytes(
+        parameters,
+        &inputs.reputation_root_binding,
+    ));
+    fields.push(element_from_bytes(
+        parameters,
+        &inputs.quorum_bitmap_binding,
+    ));
+    fields.push(element_from_bytes(
+        parameters,
+        &inputs.quorum_signature_binding,
+    ));
     fields
 }
 #[cfg(all(test, feature = "official"))]
@@ -745,7 +765,7 @@ mod tests {
     use super::keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
     use super::*;
     use crate::identity_tree::IDENTITY_TREE_DEPTH;
-    use crate::official::circuit::consensus::{ConsensusWitness, VotePower};
+    use crate::official::circuit::consensus::{ConsensusCircuit, ConsensusWitness, VotePower};
     use crate::official::circuit::identity::IdentityWitness;
     use crate::official::circuit::pruning::PruningWitness;
     use crate::official::circuit::recursive::{PrefixedDigest, RecursiveWitness};
@@ -1455,6 +1475,16 @@ mod tests {
     }
 
     fn consensus_public_inputs(witness: &ConsensusWitness) -> ConsensusPublicInputs {
+        let parameters = StarkParameters::blueprint_default();
+        let hasher = parameters.poseidon_hasher();
+        let block_hash_field = string_to_field(&parameters, &witness.block_hash);
+        let bindings = ConsensusCircuit::compute_binding_values(
+            &parameters,
+            &hasher,
+            &block_hash_field,
+            witness,
+        );
+
         ConsensusPublicInputs {
             block_hash: hex_to_array(&witness.block_hash),
             round: witness.round,
@@ -1484,6 +1514,12 @@ mod tests {
                 .iter()
                 .map(|value| hex_to_array(value))
                 .collect(),
+            vrf_output_binding: field_to_padded_bytes(&bindings.vrf_output),
+            vrf_proof_binding: field_to_padded_bytes(&bindings.vrf_proof),
+            witness_commitment_binding: field_to_padded_bytes(&bindings.witness_commitment),
+            reputation_root_binding: field_to_padded_bytes(&bindings.reputation_root),
+            quorum_bitmap_binding: field_to_padded_bytes(&bindings.quorum_bitmap),
+            quorum_signature_binding: field_to_padded_bytes(&bindings.quorum_signature),
         }
     }
 

@@ -25,6 +25,12 @@ Consensus proofs expose the following public inputs:
 | `vrf_proof_count` | Mirrors `vrf_output_count` and anchors the proof list. |
 | `witness_commitment_count` | Cardinality of the witness commitment vector. |
 | `reputation_root_count` | Cardinality of the reputation root vector. |
+| `vrf_output_binding` | Poseidon fold of `block_hash` with every VRF output digest. |
+| `vrf_proof_binding` | Poseidon fold of `block_hash` with every VRF proof blob. |
+| `witness_commitment_binding` | Poseidon fold of `block_hash` with each witness commitment digest. |
+| `reputation_root_binding` | Poseidon fold of `block_hash` with the reputation tree digests. |
+| `quorum_bitmap_binding` | Poseidon commitment tying the prevote bitmap root to the `block_hash`. |
+| `quorum_signature_binding` | Poseidon commitment tying the aggregated signature root to the `block_hash`. |
 
 All metadata vectors must be non-empty; empty VRF digests, witness commitments,
 or reputation roots are treated as forged data. The verifier also expects each
@@ -34,7 +40,11 @@ an invalid encoding.
 Every proof must supply the same number of VRF outputs and proofs.  The STWO
 circuit enforces this relationship, verifies that the proofs are correctly
 formatted Schnorrkel transcripts, and constrains the count fields above so they
-exactly match the trace segment lengths for each vector.
+exactly match the trace segment lengths for each vector.  In addition, the
+binding commitments above are recomputed inside the circuit by folding the
+`block_hash` with each metadata list using the Poseidon permutation.  Any
+attempt to alter a VRF digest, witness commitment, or quorum root without also
+recomputing the corresponding binding immediately violates the AIR relations.
 
 ## Verifier Responsibilities
 
@@ -43,7 +53,10 @@ from the structured witness payload. Any drift between the supplied inputs and
 the proof metadata causes verification to fail. The implementations enforce that
 quorum roots decode to 32-byte digests, that the VRF output/proof vectors are
 non-empty and length-matched, and that the witness and reputation digests
-reflect exactly what the runtime committed to.
+reflect exactly what the runtime committed to.  Because the binding digests are
+derived from the raw metadata, the verifiers can reject forged payloads even if
+an attacker tries to keep the Merkle roots or VRF commitments internally
+consistent.
 
 ## Tamper Tests
 

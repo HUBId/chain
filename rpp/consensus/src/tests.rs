@@ -13,8 +13,8 @@ use super::evidence::EvidenceType;
 #[cfg(feature = "prover-stwo")]
 use super::leader::{Leader, LeaderContext};
 use super::messages::{
-    Block, BlockId, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreCommit,
-    PreVote, ProofVerificationError, Proposal, TalliedVote,
+    compute_consensus_bindings, Block, BlockId, ConsensusCertificate, ConsensusProof,
+    ConsensusProofMetadata, PreCommit, PreVote, ProofVerificationError, Proposal, TalliedVote,
 };
 #[cfg(feature = "prover-stwo")]
 use super::messages::{Commit, Signature};
@@ -112,35 +112,59 @@ fn decode_digest_hex(value: &str) -> [u8; 32] {
 
 fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
     let metadata = sample_certificate_metadata(5, round);
+    let block_hash_bytes = decode_digest_hex(&"aa".repeat(32));
+    let quorum_bitmap_root = decode_digest_hex(&metadata.quorum_bitmap_root);
+    let quorum_signature_root = decode_digest_hex(&metadata.quorum_signature_root);
+    let vrf_outputs: Vec<[u8; 32]> = metadata
+        .vrf_outputs
+        .iter()
+        .map(|value| decode_digest_hex(value))
+        .collect();
+    let vrf_proofs: Vec<Vec<u8>> = metadata
+        .vrf_proofs
+        .iter()
+        .map(|value| hex::decode(value).expect("decode vrf proof"))
+        .collect();
+    let witness_commitments: Vec<[u8; 32]> = metadata
+        .witness_commitments
+        .iter()
+        .map(|value| decode_digest_hex(value))
+        .collect();
+    let reputation_roots: Vec<[u8; 32]> = metadata
+        .reputation_roots
+        .iter()
+        .map(|value| decode_digest_hex(value))
+        .collect();
+
+    let bindings = compute_consensus_bindings(
+        &block_hash_bytes,
+        &vrf_outputs,
+        &vrf_proofs,
+        &witness_commitments,
+        &reputation_roots,
+        &quorum_bitmap_root,
+        &quorum_signature_root,
+    );
+
     ConsensusPublicInputs {
-        block_hash: decode_digest_hex(&"aa".repeat(32)),
+        block_hash: block_hash_bytes,
         round,
-        leader_proposal: decode_digest_hex(&"aa".repeat(32)),
+        leader_proposal: block_hash_bytes,
         epoch: metadata.epoch,
         slot: metadata.slot,
         quorum_threshold: 1,
-        quorum_bitmap_root: decode_digest_hex(&metadata.quorum_bitmap_root),
-        quorum_signature_root: decode_digest_hex(&metadata.quorum_signature_root),
-        vrf_outputs: metadata
-            .vrf_outputs
-            .iter()
-            .map(|value| decode_digest_hex(value))
-            .collect(),
-        vrf_proofs: metadata
-            .vrf_proofs
-            .iter()
-            .map(|value| hex::decode(value).expect("decode vrf proof"))
-            .collect(),
-        witness_commitments: metadata
-            .witness_commitments
-            .iter()
-            .map(|value| decode_digest_hex(value))
-            .collect(),
-        reputation_roots: metadata
-            .reputation_roots
-            .iter()
-            .map(|value| decode_digest_hex(value))
-            .collect(),
+        quorum_bitmap_root,
+        quorum_signature_root,
+        vrf_outputs,
+        vrf_proofs,
+        witness_commitments,
+        reputation_roots,
+        vrf_output_binding: bindings.vrf_output,
+        vrf_proof_binding: bindings.vrf_proof,
+        witness_commitment_binding: bindings.witness_commitment,
+        reputation_root_binding: bindings.reputation_root,
+        quorum_bitmap_binding: bindings.quorum_bitmap,
+        quorum_signature_binding: bindings.quorum_signature,
     }
 }
 
