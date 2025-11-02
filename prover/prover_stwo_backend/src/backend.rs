@@ -1614,8 +1614,8 @@ mod tests {
                     tier_seed: "11".repeat(32),
                 },
             }],
-            witness_commitments: Vec::new(),
-            reputation_roots: Vec::new(),
+            witness_commitments: vec!["12".repeat(32)],
+            reputation_roots: vec!["13".repeat(32)],
         }
     }
 

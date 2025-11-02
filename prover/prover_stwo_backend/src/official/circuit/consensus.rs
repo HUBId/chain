@@ -889,6 +889,7 @@ mod tests {
     use super::{ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower};
     use crate::official::circuit::CircuitError;
     use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
+    use serde_json::{from_value, to_value};
 
     fn sample_vote() -> VotePower {
         VotePower {
@@ -1000,5 +1001,36 @@ mod tests {
             Err(CircuitError::ConstraintViolation(message))
                 if message.contains("public key")
         ));
+    }
+
+    #[test]
+    fn witness_roundtrips_nested_vrf_entries_in_json() {
+        let witness = sample_witness();
+        let json = to_value(&witness).expect("serialize witness");
+
+        let first_entry = json
+            .get("vrf_entries")
+            .and_then(|value| value.as_array())
+            .and_then(|entries| entries.first())
+            .expect("vrf entries array present")
+            .clone();
+
+        assert_eq!(
+            first_entry
+                .get("input")
+                .and_then(|value| value.get("epoch"))
+                .and_then(|value| value.as_u64()),
+            Some(witness.epoch),
+        );
+        assert_eq!(
+            first_entry
+                .get("input")
+                .and_then(|value| value.get("last_block_header"))
+                .and_then(|value| value.as_str()),
+            Some(witness.block_hash.as_str()),
+        );
+
+        let decoded: ConsensusWitness = from_value(json).expect("deserialize witness");
+        assert_eq!(decoded, witness);
     }
 }
