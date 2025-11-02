@@ -12,7 +12,9 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
-use crate::plonky3::circuit::consensus::{ConsensusWitness, VotePower};
+use crate::plonky3::circuit::consensus::{
+    ConsensusVrfWitnessEntry, ConsensusVrfWitnessPoseidonInput, ConsensusWitness, VotePower,
+};
 use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
 use crate::plonky3::prover::Plonky3Prover;
@@ -24,7 +26,7 @@ use crate::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
 
 const TRANSACTION_SEED: [u8; 32] = [7u8; 32];
@@ -207,6 +209,18 @@ fn consensus_witness_fixture() -> ConsensusWitness {
         voter: "validator-1".into(),
         weight: 80,
     };
+    let vrf_entry = ConsensusVrfWitnessEntry {
+        randomness: "dd".repeat(32),
+        pre_output: "ee".repeat(VRF_PREOUTPUT_LENGTH),
+        proof: hex::encode(vec![0xee; VRF_PROOF_LENGTH]),
+        public_key: "ff".repeat(32),
+        poseidon: ConsensusVrfWitnessPoseidonInput {
+            digest: "11".repeat(32),
+            last_block_header: "22".repeat(32),
+            epoch: 5,
+            tier_seed: "33".repeat(32),
+        },
+    };
     ConsensusWitness::new(
         "aa".repeat(32),
         3,
@@ -219,6 +233,7 @@ fn consensus_witness_fixture() -> ConsensusWitness {
         vec![vote],
         "bb".repeat(32),
         "cc".repeat(32),
+        vec![vrf_entry],
         vec!["dd".repeat(32)],
         vec![hex::encode(vec![0xee; VRF_PROOF_LENGTH])],
         vec!["ff".repeat(32)],
