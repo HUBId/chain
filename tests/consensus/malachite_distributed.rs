@@ -8,9 +8,73 @@ use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
     ConsensusCircuitDef, ConsensusPublicInputs, ProofBytes, VerifyingKey,
 };
+use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 use rpp_p2p::GossipTopic;
 use serde_json::json;
 use tokio::runtime::Builder;
+
+fn sample_metadata(round: u64) -> ConsensusProofMetadata {
+    let digest = |seed: u8| hex::encode([seed; 32]);
+    let seed = seed_from_round(round);
+    let proof = hex::encode(vec![seed; VRF_PROOF_LENGTH]);
+    ConsensusProofMetadata {
+        vrf_outputs: vec![digest(seed)],
+        vrf_proofs: vec![proof],
+        witness_commitments: vec![digest(seed.wrapping_add(1))],
+        reputation_roots: vec![digest(seed.wrapping_add(2))],
+        epoch: round,
+        slot: round,
+        quorum_bitmap_root: digest(seed.wrapping_add(3)),
+        quorum_signature_root: digest(seed.wrapping_add(4)),
+    }
+}
+
+fn seed_from_round(round: u64) -> u8 {
+    (round as u8).wrapping_add(1)
+}
+
+fn decode_digest(hex_value: &str) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hex::decode(hex_value).expect("decode digest"));
+    bytes
+}
+
+fn sample_public_inputs(
+    block_hash: &BlockId,
+    round: u64,
+    metadata: &ConsensusProofMetadata,
+) -> ConsensusPublicInputs {
+    ConsensusPublicInputs {
+        block_hash: decode_digest(&block_hash.0),
+        round,
+        leader_proposal: decode_digest(&block_hash.0),
+        epoch: metadata.epoch,
+        slot: metadata.slot,
+        quorum_threshold: 67,
+        quorum_bitmap_root: decode_digest(&metadata.quorum_bitmap_root),
+        quorum_signature_root: decode_digest(&metadata.quorum_signature_root),
+        vrf_outputs: metadata
+            .vrf_outputs
+            .iter()
+            .map(|value| decode_digest(value))
+            .collect(),
+        vrf_proofs: metadata
+            .vrf_proofs
+            .iter()
+            .map(|value| hex::decode(value).expect("decode vrf proof"))
+            .collect(),
+        witness_commitments: metadata
+            .witness_commitments
+            .iter()
+            .map(|value| decode_digest(value))
+            .collect(),
+        reputation_roots: metadata
+            .reputation_roots
+            .iter()
+            .map(|value| decode_digest(value))
+            .collect(),
+    }
+}
 
 fn sample_block(height: u64, round: u64) -> Block {
     Block {
@@ -21,26 +85,25 @@ fn sample_block(height: u64, round: u64) -> Block {
     }
 }
 
-fn sample_proof(round: u64) -> ConsensusProof {
-    let mut block_hash = [0u8; 32];
-    block_hash[0] = (round % 255) as u8;
-    let mut leader_proposal = [1u8; 32];
-    leader_proposal[0] = (round % 255) as u8;
+fn sample_proof(
+    block_hash: &BlockId,
+    round: u64,
+    metadata: &ConsensusProofMetadata,
+) -> ConsensusProof {
     ConsensusProof::new(
         ProofBytes(vec![0xAA, round as u8]),
         VerifyingKey(vec![0xBB, round as u8]),
         ConsensusCircuitDef::new(format!("consensus-stream-{round}")),
-        ConsensusPublicInputs {
-            block_hash,
-            round,
-            leader_proposal,
-            quorum_threshold: 67,
-            ..Default::default()
-        },
+        sample_public_inputs(block_hash, round, metadata),
     )
 }
 
-fn sample_certificate(block_hash: BlockId, height: u64, round: u64) -> ConsensusCertificate {
+fn sample_certificate(
+    block_hash: BlockId,
+    height: u64,
+    round: u64,
+    metadata: ConsensusProofMetadata,
+) -> ConsensusCertificate {
     ConsensusCertificate {
         block_hash,
         height,
@@ -52,17 +115,18 @@ fn sample_certificate(block_hash: BlockId, height: u64, round: u64) -> Consensus
         commit_power: 100,
         prevotes: Vec::new(),
         precommits: Vec::new(),
-        metadata: ConsensusProofMetadata::default(),
+        metadata,
     }
 }
 
 fn sample_proposal(height: u64, round: u64, leader: &str) -> Proposal {
     let block = sample_block(height, round);
     let block_hash = block.hash();
+    let metadata = sample_metadata(round);
     Proposal {
         block,
-        proof: sample_proof(round),
-        certificate: sample_certificate(block_hash, height, round),
+        proof: sample_proof(&block_hash, round, &metadata),
+        certificate: sample_certificate(block_hash, height, round, metadata),
         leader_id: leader.to_string(),
     }
 }

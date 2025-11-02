@@ -4,7 +4,7 @@ use std::sync::Arc;
 use libp2p::PeerId;
 use rpp_consensus::evidence::{CensorshipStage, EvidenceKind, EvidenceType};
 use rpp_consensus::messages::{
-    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, PreVote,
+    Block, BlockId, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata, PreVote,
 };
 use rpp_consensus::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
@@ -12,7 +12,27 @@ use rpp_consensus::proof_backend::{
 };
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_consensus::validator::{VRFOutput, ValidatorLedgerEntry};
+use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 use serde_json::json;
+
+fn sample_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
+    ConsensusProofMetadata {
+        vrf_outputs: vec!["11".repeat(32)],
+        vrf_proofs: vec!["22".repeat(VRF_PROOF_LENGTH)],
+        witness_commitments: vec!["33".repeat(32)],
+        reputation_roots: vec!["44".repeat(32)],
+        epoch,
+        slot,
+        quorum_bitmap_root: "55".repeat(32),
+        quorum_signature_root: "66".repeat(32),
+    }
+}
+
+fn decode_digest(hex_value: &str) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&hex::decode(hex_value).expect("decode digest"));
+    bytes
+}
 
 #[derive(Default)]
 struct FixtureBackend;
@@ -114,19 +134,42 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
         timestamp: 0,
     };
     let block_hash = block.hash();
-    let certificate = state.build_certificate(&block_hash.0, block.height, state.round);
+    let metadata = sample_metadata(state.epoch, state.round);
+    let certificate =
+        state.build_certificate(&block_hash.0, block.height, state.round, metadata.clone());
     let proof = ConsensusProof::new(
         ProofBytes::new(vec![1, 2, 3]),
         VerifyingKey(vec![1, 2, 3]),
         ConsensusCircuitDef::new("consensus-fixture"),
         ConsensusPublicInputs {
-            block_hash: [0u8; 32],
+            block_hash: decode_digest(&block_hash.0),
             round: state.round,
-            leader_proposal: [0u8; 32],
+            leader_proposal: decode_digest(&block_hash.0),
+            epoch: metadata.epoch,
+            slot: metadata.slot,
             quorum_threshold: state.validator_set.quorum_threshold,
-            vrf_outputs: Vec::new(),
-            witness_commitments: Vec::new(),
-            reputation_roots: Vec::new(),
+            quorum_bitmap_root: decode_digest(&metadata.quorum_bitmap_root),
+            quorum_signature_root: decode_digest(&metadata.quorum_signature_root),
+            vrf_outputs: metadata
+                .vrf_outputs
+                .iter()
+                .map(|value| decode_digest(value))
+                .collect(),
+            vrf_proofs: metadata
+                .vrf_proofs
+                .iter()
+                .map(|value| hex::decode(value).expect("decode vrf proof"))
+                .collect(),
+            witness_commitments: metadata
+                .witness_commitments
+                .iter()
+                .map(|value| decode_digest(value))
+                .collect(),
+            reputation_roots: metadata
+                .reputation_roots
+                .iter()
+                .map(|value| decode_digest(value))
+                .collect(),
         },
     );
     Commit {

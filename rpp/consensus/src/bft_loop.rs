@@ -188,6 +188,7 @@ fn handle_precommit(state: &mut ConsensusState, vote: PreCommit) {
                         &vote.block_hash.0,
                         proposal.block.height,
                         vote.round,
+                        proposal.certificate.metadata.clone(),
                     );
                     state.stage_certificate(new_certificate);
                     let signatures = state.precommit_signatures(&vote.block_hash.0);

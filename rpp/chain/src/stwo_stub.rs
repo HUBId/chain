@@ -378,12 +378,17 @@ pub mod circuit {
         pub struct ConsensusWitness {
             pub block_hash: String,
             pub round: u64,
+            pub epoch: u64,
+            pub slot: u64,
             pub leader_proposal: String,
             pub quorum_threshold: u64,
             pub pre_votes: Vec<VotePower>,
             pub pre_commits: Vec<VotePower>,
             pub commit_votes: Vec<VotePower>,
+            pub quorum_bitmap_root: String,
+            pub quorum_signature_root: String,
             pub vrf_outputs: Vec<String>,
+            pub vrf_proofs: Vec<String>,
             pub witness_commitments: Vec<String>,
             pub reputation_roots: Vec<String>,
         }
