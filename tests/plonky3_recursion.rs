@@ -12,7 +12,11 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde_json::Value;
 
-use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
+#[path = "consensus/common.rs"]
+mod consensus_common;
+
+use consensus_common::{digest, metadata_fixture, vrf_entry};
+use rpp_chain::consensus::ConsensusCertificate;
 use rpp_chain::crypto::address_from_public_key;
 use rpp_chain::plonky3::circuit::pruning::PruningWitness;
 use rpp_chain::plonky3::crypto;
@@ -25,8 +29,6 @@ use rpp_chain::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
-use rpp_chain::vrf::VRF_PROOF_LENGTH;
-
 const TRANSACTION_SEED: [u8; 32] = [13u8; 32];
 
 fn canonical_pruning_header() -> BlockHeader {
@@ -62,16 +64,15 @@ fn sample_transaction() -> SignedTransaction {
 
 fn sample_consensus_certificate() -> ConsensusCertificate {
     let block_hash = "11".repeat(32);
-    let metadata = ConsensusProofMetadata {
-        vrf_outputs: vec!["44".repeat(32)],
-        vrf_proofs: vec!["55".repeat(VRF_PROOF_LENGTH)],
-        witness_commitments: vec!["66".repeat(32)],
-        reputation_roots: vec!["77".repeat(32)],
-        epoch: 5,
-        slot: 7,
-        quorum_bitmap_root: "22".repeat(32),
-        quorum_signature_root: "33".repeat(32),
-    };
+    let metadata = metadata_fixture(
+        vec![vrf_entry(0x44, 0x55)],
+        vec![digest(0x66)],
+        vec![digest(0x77)],
+        5,
+        7,
+        digest(0x22),
+        digest(0x33),
+    );
 
     ConsensusCertificate {
         block_hash: block_hash.clone().into(),

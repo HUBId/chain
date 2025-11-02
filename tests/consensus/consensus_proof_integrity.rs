@@ -1,24 +1,23 @@
+#[path = "common.rs"]
+mod common;
+
+use common::{digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
 use rpp_chain::consensus_engine::messages::{BlockId, TalliedVote};
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::ChainProof;
-use rpp_chain::vrf::VRF_PROOF_LENGTH;
 
 fn sample_metadata() -> ConsensusProofMetadata {
-    let digest = |byte: u8| hex::encode([byte; 32]);
-    let proof_bytes = |byte: u8| hex::encode(vec![byte; VRF_PROOF_LENGTH]);
-
-    ConsensusProofMetadata {
-        vrf_outputs: vec![digest(0x11), digest(0x12)],
-        vrf_proofs: vec![proof_bytes(0x21), proof_bytes(0x22)],
-        witness_commitments: vec![digest(0x33)],
-        reputation_roots: vec![digest(0x44), digest(0x45)],
-        epoch: 5,
-        slot: 7,
-        quorum_bitmap_root: digest(0x55),
-        quorum_signature_root: digest(0x66),
-    }
+    metadata_fixture(
+        vec![vrf_entry(0x11, 0x21), vrf_entry(0x12, 0x22)],
+        vec![digest(0x33)],
+        vec![digest(0x44), digest(0x45)],
+        5,
+        7,
+        digest(0x55),
+        digest(0x66),
+    )
 }
 
 fn sample_vote(validator: &str, voting_power: u64) -> TalliedVote {
@@ -96,8 +95,7 @@ mod plonky3_backend {
             .expect("baseline consensus proof should verify");
 
         let missing_vrf = tamper_proof(&proof, |witness| {
-            witness.insert("vrf_outputs".into(), Value::Array(Vec::new()));
-            witness.insert("vrf_proofs".into(), Value::Array(Vec::new()));
+            witness.insert("vrf_entries".into(), Value::Array(Vec::new()));
         });
         assert!(verifier.verify_consensus(&missing_vrf).is_err());
 
@@ -110,9 +108,13 @@ mod plonky3_backend {
         assert!(verifier.verify_consensus(&invalid_quorum_root).is_err());
 
         let tampered_vrf_output = tamper_proof(&proof, |witness| {
-            if let Some(Value::Array(outputs)) = witness.get_mut("vrf_outputs") {
-                if let Some(first) = outputs.first_mut() {
-                    *first = Value::String("ff".repeat(32));
+            if let Some(Value::Array(entries)) = witness.get_mut("vrf_entries") {
+                if let Some(Value::Object(first)) = entries.first_mut() {
+                    if let Some(Value::Object(poseidon)) =
+                        first.get_mut("poseidon").and_then(Value::as_object_mut)
+                    {
+                        poseidon.insert("digest".into(), Value::String(digest(0xFF)));
+                    }
                 }
             }
         });
@@ -174,8 +176,7 @@ mod stwo_backend {
             .expect("baseline consensus proof should verify");
 
         let missing_vrf = tamper_proof(&proof, |witness| {
-            witness.vrf_outputs.clear();
-            witness.vrf_proofs.clear();
+            witness.vrf_entries.clear();
         });
         assert!(verifier.verify_consensus(&missing_vrf).is_err());
 
@@ -185,8 +186,8 @@ mod stwo_backend {
         assert!(verifier.verify_consensus(&invalid_quorum_root).is_err());
 
         let tampered_vrf_output = tamper_proof(&proof, |witness| {
-            if let Some(first) = witness.vrf_outputs.first_mut() {
-                *first = "ee".repeat(32);
+            if let Some(first) = witness.vrf_entries.first_mut() {
+                first.poseidon.digest = digest(0xEE);
             }
         });
         assert!(verifier.verify_consensus(&tampered_vrf_output).is_err());

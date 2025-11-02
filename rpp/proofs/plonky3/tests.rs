@@ -254,6 +254,22 @@ fn consensus_witness_rejects_missing_metadata() {
 }
 
 #[test]
+fn consensus_witness_rejects_missing_vrf_proof() {
+    let mut witness = consensus_witness_fixture();
+    if let Some(entry) = witness.vrf_entries.first_mut() {
+        entry.proof.clear();
+    }
+
+    let err = witness
+        .validate_metadata()
+        .expect_err("missing vrf proof must fail");
+    assert!(
+        err.to_string().contains("missing proof"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn consensus_witness_rejects_invalid_quorum_root() {
     let mut witness = consensus_witness_fixture();
     witness.quorum_bitmap_root = "deadbeef".into();
