@@ -3,7 +3,7 @@ use crate::official::params::StarkParameters;
 #[cfg(feature = "official")]
 use crate::official::{
     circuit::{
-        consensus::{ConsensusCircuit, ConsensusWitness, CONSENSUS_PUBLIC_INPUT_WIDTH},
+        consensus::{ConsensusCircuit, ConsensusWitness},
         identity::IdentityWitness,
         pruning::PruningWitness,
         recursive::RecursiveWitness,
@@ -222,9 +222,7 @@ fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
         .into_iter()
         .map(|element| element.to_hex())
         .collect();
-    if proof.public_inputs.len() != CONSENSUS_PUBLIC_INPUT_WIDTH
-        || proof.public_inputs != expected_inputs
-    {
+    if proof.public_inputs != expected_inputs {
         return Err(BackendError::Failure(
             "consensus public inputs do not match witness metadata".into(),
         ));
@@ -522,7 +520,11 @@ mod tests {
         ensure_consensus_payload(&proof).expect("valid consensus payload");
 
         let mut tampered = proof.clone();
-        tampered.public_inputs[CONSENSUS_PUBLIC_INPUT_WIDTH - 1] = String::new();
+        tampered
+            .public_inputs
+            .last_mut()
+            .expect("consensus inputs present")
+            .clear();
         let result = ensure_consensus_payload(&tampered);
         assert!(
             matches!(result, Err(BackendError::Failure(message)) if message.contains("public inputs"))

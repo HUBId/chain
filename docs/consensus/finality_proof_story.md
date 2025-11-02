@@ -21,6 +21,10 @@ Consensus proofs expose the following public inputs:
 | `vrf_proofs[]` | Raw Schnorrkel VRF proofs paired with the outputs. |
 | `witness_commitments[]` | Module witness commitments included in the block. |
 | `reputation_roots[]` | Pre/post reputation ledger roots. |
+| `vrf_output_count` | Declares how many entries populate `vrf_outputs[]`. |
+| `vrf_proof_count` | Mirrors `vrf_output_count` and anchors the proof list. |
+| `witness_commitment_count` | Cardinality of the witness commitment vector. |
+| `reputation_root_count` | Cardinality of the reputation root vector. |
 
 All metadata vectors must be non-empty; empty VRF digests, witness commitments,
 or reputation roots are treated as forged data. The verifier also expects each
@@ -28,8 +32,9 @@ entry to be a 32-byte hexadecimal digest and will abort if any quorum root uses
 an invalid encoding.
 
 Every proof must supply the same number of VRF outputs and proofs.  The STWO
-circuit enforces this relationship and verifies that the proofs are correctly
-formatted Schnorrkel transcripts.
+circuit enforces this relationship, verifies that the proofs are correctly
+formatted Schnorrkel transcripts, and constrains the count fields above so they
+exactly match the trace segment lengths for each vector.
 
 ## Verifier Responsibilities
 

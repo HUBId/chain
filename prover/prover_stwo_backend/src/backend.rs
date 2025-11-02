@@ -727,6 +727,10 @@ fn rebuild_consensus_public_inputs(
     for digest in &inputs.reputation_roots {
         fields.push(element_from_bytes(parameters, digest));
     }
+    fields.push(parameters.element_from_u64(inputs.vrf_outputs.len() as u64));
+    fields.push(parameters.element_from_u64(inputs.vrf_proofs.len() as u64));
+    fields.push(parameters.element_from_u64(inputs.witness_commitments.len() as u64));
+    fields.push(parameters.element_from_u64(inputs.reputation_roots.len() as u64));
     fields
 }
 #[cfg(all(test, feature = "official"))]

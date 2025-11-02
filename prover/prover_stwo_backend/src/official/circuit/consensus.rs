@@ -9,26 +9,42 @@ use crate::official::params::{FieldElement, StarkParameters};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
-/// Number of public inputs emitted by the consensus circuit.
-pub const CONSENSUS_PUBLIC_INPUT_WIDTH: usize = 15;
+/// Column headers for the consensus summary segment. The first eight entries map
+/// directly to fixed public inputs (block metadata and quorum digests) while the
+/// remaining names enumerate the VRF outputs, proofs, witness commitments, and
+/// reputation tree roots that are exposed as individual public inputs. The four
+/// trailing columns track the respective list lengths so the AIR can bind the
+/// per-segment multiplicities.
+fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
+    let mut columns = vec![
+        "block_hash".to_string(),
+        "round".to_string(),
+        "leader_proposal".to_string(),
+        "epoch".to_string(),
+        "slot".to_string(),
+        "quorum".to_string(),
+        "quorum_bitmap_root".to_string(),
+        "quorum_signature_root".to_string(),
+    ];
 
-const SUMMARY_COLUMNS: [&str; CONSENSUS_PUBLIC_INPUT_WIDTH] = [
-    "block_hash",
-    "round",
-    "leader_proposal",
-    "epoch",
-    "slot",
-    "quorum",
-    "quorum_bitmap_root",
-    "quorum_signature_root",
-    "pre_vote_total",
-    "pre_commit_total",
-    "commit_total",
-    "vrf_output_count",
-    "vrf_proof_count",
-    "witness_commitment_count",
-    "reputation_root_count",
-];
+    let mut extend_with = |prefix: &str, len: usize| {
+        for index in 0..len {
+            columns.push(format!("{prefix}_{index}"));
+        }
+    };
+
+    extend_with("vrf_output", witness.vrf_outputs.len());
+    extend_with("vrf_proof", witness.vrf_proofs.len());
+    extend_with("witness_commitment", witness.witness_commitments.len());
+    extend_with("reputation_root", witness.reputation_roots.len());
+
+    columns.push("vrf_output_count".to_string());
+    columns.push("vrf_proof_count".to_string());
+    columns.push("witness_commitment_count".to_string());
+    columns.push("reputation_root_count".to_string());
+
+    columns
+}
 
 /// Vote weight associated with a consensus participant.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -201,12 +217,16 @@ impl ConsensusCircuit {
         (pre_vote_total, pre_commit_total, commit_total)
     }
 
+    /// Materialise the public inputs that the consensus circuit exposes. The
+    /// layout matches the backend interface: block metadata, quorum digests,
+    /// every VRF output/proof pair, each witness commitment, each reputation
+    /// tree root, and finally the counts for those variable-length vectors so
+    /// the AIR can cross-check them against the trace segments.
     pub fn public_inputs(
         parameters: &StarkParameters,
         witness: &ConsensusWitness,
     ) -> Vec<FieldElement> {
-        let (pre_vote_total, pre_commit_total, commit_total) = Self::compute_vote_totals(witness);
-        vec![
+        let mut inputs = vec![
             string_to_field(parameters, &witness.block_hash),
             parameters.element_from_u64(witness.round),
             string_to_field(parameters, &witness.leader_proposal),
@@ -215,14 +235,25 @@ impl ConsensusCircuit {
             parameters.element_from_u64(witness.quorum_threshold),
             string_to_field(parameters, &witness.quorum_bitmap_root),
             string_to_field(parameters, &witness.quorum_signature_root),
-            parameters.element_from_u128(pre_vote_total),
-            parameters.element_from_u128(pre_commit_total),
-            parameters.element_from_u128(commit_total),
-            parameters.element_from_u64(witness.vrf_outputs.len() as u64),
-            parameters.element_from_u64(witness.vrf_proofs.len() as u64),
-            parameters.element_from_u64(witness.witness_commitments.len() as u64),
-            parameters.element_from_u64(witness.reputation_roots.len() as u64),
-        ]
+        ];
+
+        let mut extend_with = |values: &[String]| {
+            for value in values {
+                inputs.push(string_to_field(parameters, value));
+            }
+        };
+
+        extend_with(&witness.vrf_outputs);
+        extend_with(&witness.vrf_proofs);
+        extend_with(&witness.witness_commitments);
+        extend_with(&witness.reputation_roots);
+
+        inputs.push(parameters.element_from_u64(witness.vrf_outputs.len() as u64));
+        inputs.push(parameters.element_from_u64(witness.vrf_proofs.len() as u64));
+        inputs.push(parameters.element_from_u64(witness.witness_commitments.len() as u64));
+        inputs.push(parameters.element_from_u64(witness.reputation_roots.len() as u64));
+
+        inputs
     }
 
     fn build_vote_segment(
@@ -348,14 +379,9 @@ impl StarkCircuit for ConsensusCircuit {
                 .collect(),
         )?;
 
-        let summary = TraceSegment::new(
-            "summary",
-            SUMMARY_COLUMNS
-                .iter()
-                .map(|column| column.to_string())
-                .collect(),
-            vec![Self::public_inputs(parameters, &self.witness)],
-        )?;
+        let summary_columns = summary_columns(&self.witness);
+        let summary_values = Self::public_inputs(parameters, &self.witness);
+        let summary = TraceSegment::new("summary", summary_columns, vec![summary_values])?;
 
         ExecutionTrace::from_segments(vec![
             pre_votes,

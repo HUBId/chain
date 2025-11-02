@@ -89,6 +89,14 @@ repeatedly colliding on the cutoff.
 trail and metrics that the runtime later publishes via its status endpoints, so
 no additional adapter crate is required.【F:rpp/consensus/node.rs†L360-L450】
 
+The STWO consensus circuit now exposes every VRF output, proof, and the witness
+commitment roots as explicit public inputs. Companion count fields (for VRF
+outputs/proofs, witness commitments, and reputation roots) allow the AIR to bind
+the execution trace multiplicities and reject forged metadata.  The backend
+rebuilds those public inputs from the certificate payload, so mismatches surface
+immediately during verification and in the `consensus_proof_integrity`
+regression suite.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L1-L180】【F:docs/consensus/finality_proof_story.md†L1-L60】【F:tests/consensus/consensus_proof_integrity.rs†L1-L160】
+
 ## Audit Trail & History
 Consensus rounds now emit structured `VrfSelectionRecord` entries that capture
 the address, tier, timetoke balance, published proof, and the final verdict for
