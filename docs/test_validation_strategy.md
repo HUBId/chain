@@ -8,17 +8,20 @@ Diese Strategie beschreibt, wie die STWO-Integration vollständig überprüft wi
 - **Kern-Circuits**: Für jeden Circuit (`transaction`, `identity`, `state`, `pruning`, `uptime`, `consensus`, `recursive`) werden Constraints und Witness-Generatoren mit gezielten Testfällen abgedeckt. Spezialfälle (z. B. doppelte Votes im Consensus-Circuit oder negative Gebühren in Transaktionen) erhalten dedizierte Regressionstests.
 - **Aggregations- und Snapshot-Helfer**: Die Hash-Pfade und StateCommitment-Snapshots in `stwo::aggregation` werden gegen deterministische Referenzvektoren getestet.
 - **Hilfsstrukturen**: Parser für Witness-Daten (`types::proofs`, `plonky3::proof`) und das Serialisierungsformat `ChainProof` erhalten Roundtrip-Tests. Commitments für Plonky3 prüfen zusätzlich eine kanonische JSON-Kodierung, bei der Objekt-Schlüssel vor der Serialisierung sortiert werden.
+- **Regressions-Suites**: Die dedizierten Targets unter `tests/unit/` prüfen deterministische Witness-Kodierung (`stwo_circuits.rs`), Firewood-Merkle-Wurzeln (`firewood_roots.rs`) sowie VRF/BFT-Gewichtungen (`vrf_bft.rs`) gegen reproduzierbare Erwartungen und dienen als Guardrails für spätere Refactorings.【F:tests/unit/stwo_circuits.rs†L1-L70】【F:tests/unit/firewood_roots.rs†L1-L24】【F:tests/unit/vrf_bft.rs†L1-L83】
 
 ### 1.2 Integrationstests
 - **Wallet-Prover**: Szenarien vom Bau eines Blocks bis zum Generieren aller Teilbeweise. Enthält Varianten für Identitäts-Genesis, normale Transaktionen, Uptime- und Konsensus-Proofs sowie den rekursiven Block-Proof. Für Plonky3 werden die gleichen Szenarien mit aktiviertem Feature `backend-plonky3` ausgeführt.
 - **Backend-Parität (Stub)**: Die Standardläufe von `scripts/test.sh` decken `default`, `stwo` und `rpp-stark` ab; Plonky3 wird nur via Opt-in (`--backend plonky3`) gegen das Stub-Backend ausgeführt und prüft ausschließlich Fixtures sowie Commitment-Hooks.【F:.github/workflows/release.yml†L55-L86】【F:scripts/test.sh†L15-L121】【F:rpp/proofs/plonky3/README.md†L1-L34】
 - **Node-Verifier**: Tests für den Import eines Blocks, die Verifikation einzelner Proof-Kategorien und die rekursive Bestätigung der Kette. Fehlerfälle (z. B. manipulierte Witnesses) führen zu erwarteten Fehlermeldungen.
 - **Synchronisation**: Cross-node-Sync-Tests (`sync`-Modul), die prüfen, dass rekursive Beweise beim Nachladen historischer Blöcke akzeptiert werden.
+- **Pipeline-/Sync-Orchestrierung**: Die Integration-Suite unter `tests/integration/` hält End-to-End-Blockproduktion, Snapshot-/Light-Client-Pläne und Operator-RPC-Steuerung als reproduzierbare Workflows fest (`block_production.rs`, `snapshot_light_client.rs`, `operator_rpcs.rs`). Die Tests dokumentieren zugleich Start-/Stop-Orchestrierung und überspringen sich selbst, falls Binärabhängigkeiten fehlen.【F:tests/integration/block_production.rs†L1-L38】【F:tests/integration/snapshot_light_client.rs†L1-L33】【F:tests/integration/operator_rpcs.rs†L1-L45】
 
 ### 1.3 System- und Szenariotests
 - **End-to-End**: Start eines lokalen Netzwerks (mindestens zwei Wallets + ein Node) mit VRF-basierter Leader-Selektion, Erzeugung von Blöcken und vollständiger Rekursionskette.
 - **Migrationspfad**: Sicherstellen, dass `migration` alte Datensätze korrekt in das `ChainProof`-Format überführt und anschließend verifiziert wird.
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
+- **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) liefert Szenarien wie `ci_block_pipeline.ron`, die CI-freundlich Binärabhängigkeiten prüfen (hier: `cargo test --test integration -- --list`) und orchestrierte Artefakt-Verzeichnisse erzeugen.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/src/main.rs†L1-L59】
 
 ## 2. Cross-Backend-Parität
 - **Feature-Matrix (Stub)**: Die Standard-Matrix umfasst `default`, `stwo` und `rpp-stark`; Plonky3 bleibt ein manueller Opt-in-Lauf gegen das Stub-Backend, bis Vendor-Artefakte bereitstehen.【F:.github/workflows/release.yml†L55-L86】【F:scripts/test.sh†L15-L121】
@@ -42,15 +45,18 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
 | `fmt` | Rustfmt stellt konsistente Formatierung im gesamten Workspace sicher. | `cargo fmt --all -- --check` |
 | `clippy` | `cargo clippy` lints alle Targets und Features mit aktivierten Warnungen als Fehler. | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | `test` | Führt die vollständige Backend-Matrix (Default, STWO, RPP-STARK) über `scripts/test.sh` aus. | `./scripts/test.sh --all --unit --integration` |
+| `unit-suites` | Erzwingt die deterministischen STWO/Firewood/VRF-Unit-Suites. | `cargo xtask test-unit` |
+| `integration-workflows` | Überprüft Blockproduktion, Snapshot-/Light-Client-Pläne und Operator-RPC-Lifecycle. | `cargo xtask test-integration` |
+| `simnet-smoke` | Führt das Simnet-Szenario `ci_block_pipeline` aus und protokolliert Artefakte. | `cargo xtask test-simnet` |
 
 > **Hinweis:** `scripts/test.sh` setzt `RUSTFLAGS=-D warnings`, aktiviert automatisch das passende Feature-Set und wählt für STWO den gepinnten Nightly-Toolchain, damit lokale Läufe die CI-Ergebnisse widerspiegeln.【F:scripts/test.sh†L4-L8】【F:scripts/test.sh†L81-L210】
 
 - **GitHub Actions Workflows**:
   - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark` aus und deckt damit die stabile Matrix ab; Plonky3 bleibt aufgrund des Stub-Status außen vor.【F:.github/workflows/release.yml†L55-L86】
-  - [`CI`](../.github/workflows/ci.yml): Führt `fmt`, `clippy` und `test` als verpflichtende Statuschecks aus und validiert
-    zusätzlich die Grafana-Dashboard-Exporte in `docs/dashboards/*.json` via `jq`, sodass Contributors dieselben Gates lokal
-    mit `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` und
-    `./scripts/test.sh --all --unit --integration` nachvollziehen können.
+  - [`CI`](../.github/workflows/ci.yml): Ergänzt `fmt`, `clippy` und `test` um die verpflichtenden Gates `unit-suites`,
+    `integration-workflows` und `simnet-smoke`. Die Jobs delegieren an `cargo xtask test-unit`, `cargo xtask test-integration`
+    und `cargo xtask test-simnet`, womit alle drei Testebenen (Unit, Workflow, Simulation) automatisiert abgedeckt werden und
+    Contributors dieselben Läufe lokal reproduzieren können.【F:.github/workflows/ci.yml†L63-L96】【F:xtask/src/main.rs†L1-L86】
   - [`nightly-simnet`](../.github/workflows/nightly.yml): Führt eine Matrix von Simnet-Szenarien (`small_world_smoke`,
     `ring_latency_profile`) aus, analysiert die Ergebnisse mit `scripts/analyze_simnet.py` und veröffentlicht die Artefakte
     zur Regressionsanalyse. **TODO:** Automatisches Auswerten von Thresholds und Rückmelden kritischer Abweichungen.
