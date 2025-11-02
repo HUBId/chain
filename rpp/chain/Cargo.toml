@@ -158,6 +158,14 @@ name = "consensus"
 path = "../../tests/consensus.rs"
 
 [[test]]
+name = "unit"
+path = "../../tests/unit/mod.rs"
+
+[[test]]
+name = "integration"
+path = "../../tests/integration/mod.rs"
+
+[[test]]
 name = "deployment_feature_gates"
 path = "../../tests/deployment/feature_gates.rs"
 

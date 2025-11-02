@@ -1,0 +1,19 @@
+{
+  "name": "ci-block-pipeline",
+  "description": "Enumerate integration pipeline tests to verify binaries and orchestrator wiring",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [
+    {
+      "label": "integration-block-pipeline",
+      "program": "cargo",
+      "args": ["test", "--quiet", "--test", "integration", "--", "--list"],
+      "startup_timeout_ms": 120000,
+      "working_dir": "../.."
+    }
+  ],
+  "wallets": [],
+  "p2p": null
+}

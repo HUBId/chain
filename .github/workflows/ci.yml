@@ -110,3 +110,30 @@ PY
             echo "One or more dashboard exports are missing."
             exit 1
           fi
+
+  unit-suites:
+    name: Unit suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run unit validation suites
+        run: cargo xtask test-unit
+
+  integration-workflows:
+    name: Integration workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run integration workflows
+        run: cargo xtask test-integration
+
+  simnet-smoke:
+    name: Simnet smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run simnet scenario
+        run: cargo xtask test-simnet

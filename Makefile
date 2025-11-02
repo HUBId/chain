@@ -25,8 +25,24 @@ build\:nightly:
 test\:nightly:
         cargo $(NIGHTLY_TOOLCHAIN) test --manifest-path $(PROVER_MANIFEST) --workspace
 
-.PHONY: pruning-validation
+.PHONY: pruning-validation test\:unit test\:integration test\:simnet test\:all
 
 ## Run pruning receipt conformance checks to guard snapshot publication.
 pruning-validation:
         cargo xtask pruning-validation
+
+## Execute lightweight unit suites that focus on deterministic circuit and storage behaviour.
+test\:unit:
+        cargo xtask test-unit
+
+## Execute integration workflows for pipeline, snapshot, and operator RPC lifecycles.
+test\:integration:
+        cargo xtask test-integration
+
+## Run the CI simnet scenario that exercises orchestrator wiring.
+test\:simnet:
+        cargo xtask test-simnet
+
+## Run the full multi-layer validation stack (unit + integration + simnet).
+test\:all:
+        cargo xtask test-all
