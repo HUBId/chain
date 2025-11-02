@@ -15,6 +15,46 @@ use rpp_chain::stwo::params::StarkParameters;
 use rpp_chain::stwo::FieldElement;
 use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ConsensusVrfPoseidonInput {
+    #[serde(default)]
+    pub digest: String,
+    #[serde(default)]
+    pub last_block_header: String,
+    #[serde(default)]
+    pub epoch: String,
+    #[serde(default)]
+    pub tier_seed: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ConsensusVrfEntry {
+    #[serde(default)]
+    pub randomness: String,
+    #[serde(default)]
+    pub pre_output: String,
+    #[serde(default)]
+    pub proof: String,
+    #[serde(default)]
+    pub public_key: String,
+    #[serde(default)]
+    pub poseidon: ConsensusVrfPoseidonInput,
+}
+
+impl Default for ConsensusVrfEntry {
+    fn default() -> Self {
+        let zero_hex_32 = "00".repeat(32);
+        Self {
+            randomness: zero_hex_32.clone(),
+            pre_output: zero_hex_32.clone(),
+            proof: "00".repeat(VRF_PROOF_LENGTH),
+            public_key: zero_hex_32,
+            poseidon: ConsensusVrfPoseidonInput::default(),
+        }
+    }
+}
+
 mod peer_id_serde {
     use libp2p::PeerId;
     use serde::{Deserialize, Deserializer, Serializer};
