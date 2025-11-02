@@ -18,7 +18,7 @@ backend, and the remaining work required for production readiness.
 | Backend | Current integration | Production gaps |
 | --- | --- | --- |
 | **STWO (`official`)** | The [`StwoBackend`](../prover/prover_stwo_backend/src/backend.rs) now drives key generation, proving, and verification through the vendor crates when the `official` feature is enabled. The adapter wraps the official [`WalletProver`](../prover/prover_stwo_backend/src/official/prover.rs) for every circuit family and delegates verification to the [`NodeVerifier`](../prover/prover_stwo_backend/src/official/verifier/mod.rs). Feature wiring is captured in the crate manifest so production builds can opt into the vendor dependency.【F:prover/prover_stwo_backend/src/backend.rs†L35-L496】【F:prover/prover_stwo_backend/src/official/prover.rs†L18-L199】【F:prover/prover_stwo_backend/src/official/verifier/mod.rs†L1-L120】【F:prover/prover_stwo_backend/Cargo.toml†L1-L21】 Firewood integration now runs end-to-end: lifecycle helpers apply snapshots, block metadata persists pruning proofs, and the pruning worker streams job status while RPC endpoints issue receipts for rebuild/snapshot requests backed by documented runbooks.【F:rpp/storage/state/lifecycle.rs†L10-L130】【F:rpp/storage/mod.rs†L267-L352】【F:rpp/node/src/services/pruning.rs†L120-L200】【F:rpp/runtime/node.rs†L3580-L3639】【F:rpp/rpc/src/routes/state.rs†L1-L26】【F:rpp/storage/pruner/receipt.rs†L1-L58】【F:docs/runbooks/pruning.md†L1-L120】【F:docs/runbooks/pruning_operations.md†L1-L120】 | Production gaps now concentrate on wallet integrations and uptime propagation; the remaining `Todo` entries sit under the wallet workflow keys in the blueprint module while Firewood-facing tasks have been closed out.【F:rpp/proofs/blueprint/mod.rs†L130-L157】 Operationally, operators must still provision the nightly toolchain and vendor artifacts recorded in the integration log before enabling the feature in production.【F:docs/vendor_log.md†L20-L68】 |
-| **Plonky3** | The [`Plonky3Prover`](../rpp/proofs/plonky3/prover/mod.rs) / [`Plonky3Verifier`](../rpp/proofs/plonky3/verifier/mod.rs) adapters now execute the vendor backend end-to-end. Circuit caches, public-input validation, and proof payloads mirror the STWO implementation, the runtime exposes `backend_health.plonky3.*` snapshots plus Prometheus metrics for generation/verification latencies, and the consensus circuit now ships VRF/quorum binding checks so public inputs are derived from the canonical witness representation.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】【F:prover/plonky3_backend/src/circuits/consensus.rs†L1-L245】【F:rpp/runtime/node.rs†L161-L220】 | **Done –** witness validation and tamper detection for the consensus circuit are live; remaining GPU/hardware sweep items moved to the observability runbook backlog. |
+| **Plonky3** | The [`Plonky3Prover`](../rpp/proofs/plonky3/prover/mod.rs) / [`Plonky3Verifier`](../rpp/proofs/plonky3/verifier/mod.rs) adapters now execute the vendor backend end-to-end. Circuit caches, public-input validation, and proof payloads mirror the STWO implementation, the runtime exposes `backend_health.plonky3.*` snapshots plus Prometheus metrics for generation/verification latencies, and the consensus circuit now ships VRF/quorum binding checks so public inputs are derived from the canonical witness representation.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】【F:prover/plonky3_backend/src/circuits/consensus.rs†L1-L245】【F:rpp/runtime/node.rs†L161-L220】 Manipulation paths are covered by the dedicated tamper tests (`consensus_certificate_tampering.rs`) and the Simnet stress scenario documented below.【F:tests/consensus/consensus_certificate_tampering.rs†L1-L156】【F:docs/testing/simulations.md†L1-L120】 | **Done –** witness validation and tamper detection for the consensus circuit are live; Nightly `nightly-simnet` runs (`cargo xtask test-simnet` + `scripts/analyze_simnet.py`) enforce the Phase‑2 VRF/quorum thresholds while GPU/hardware sweep items remain tracked in the observability backlog.【F:.github/workflows/nightly.yml†L1-L86】【F:docs/testing/simulations.md†L1-L120】 |
 
 **Update:** The blueprint tasks `proofs.plonky3_vendor_backend` and `proofs.plonky3_ci_matrix` are now marked `InProgress` again until the vendor prover/verifier lands; the corrective roadmap stays tracked in [`docs/testing/plonky3_experimental_testplan.md`](testing/plonky3_experimental_testplan.md) and [`docs/zk_backends.md`](zk_backends.md).【F:rpp/proofs/blueprint/mod.rs†L145-L191】
 
@@ -64,6 +64,25 @@ production builds.
 * Operative Abläufe (Key-Rotation, Cache-Seeding, Alerting) sind im
   [Plonky3-Runbook](runbooks/plonky3.md) verankert. Das Runbook verweist auf die
   relevanten Telemetrie-Namen, Nightly-Artefakte und Tamper-Erwartungen.
+
+## Consensus Phase‑2 evidence
+
+* **Circuit-level constraints:** The Plonky3 consensus circuit binds VRF outputs
+  and quorum roots directly in the witness, rejecting tampered bundles during
+  proof generation and verification.【F:prover/plonky3_backend/src/circuits/consensus.rs†L1-L245】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】
+* **Unit & tamper tests:** `tests/consensus/consensus_certificate_tampering.rs`
+  injects manipulated VRF outputs, quorum bitmaps, and signature roots across
+  both backends; the suite is wired into `cargo xtask test-consensus-manipulation`
+  and referenced by the validation strategy.【F:tests/consensus/consensus_certificate_tampering.rs†L1-L156】【F:xtask/src/main.rs†L1-L140】【F:docs/test_validation_strategy.md†L1-L83】
+* **Simulation evidence:** `cargo xtask test-simnet` executes the scenarios
+  `ci_block_pipeline`, `ci_state_sync_guard`, and
+  `consensus_quorum_stress`, producing JSON/CSV summaries that are analyzed via
+  `scripts/analyze_simnet.py`. Threshold violations (P2P p95, prove/verify p95,
+  tamper acceptance) fail Nightly runs and surface in the weekly status report.【F:docs/testing/simulations.md†L1-L160】【F:.github/workflows/nightly.yml†L1-L86】【F:docs/status/weekly.md†L1-L70】
+* **Telemetry & reporting:** Metrics (`consensus_vrf_verification_time_ms`,
+  `consensus_quorum_verifications_total`) feed dashboards and are cross-referenced
+  in the observability/runbook docs so auditors can map Nightly artifacts to
+  production alerting.【F:docs/observability/consensus.md†L1-L70】【F:docs/runbooks/observability.md†L1-L120】
 
 ## Poseidon VRF coverage
 

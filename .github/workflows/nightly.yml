@@ -45,43 +45,38 @@ jobs:
           cargo xtask test-all
 
   simnet:
+    name: Simnet harness (prod, prover-stwo, plonky3)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: small-world-smoke
-            scenario: tools/simnet/scenarios/small_world_smoke.ron
-            summary: summaries/small_world_smoke.json
-          - name: ring-latency-profile
-            scenario: tools/simnet/scenarios/ring_latency_profile.ron
-            summary: summaries/ring_poisson.json
-          - name: consensus-quorum-stress
-            scenario: tools/simnet/scenarios/consensus_quorum_stress.ron
-            summary: summaries/consensus_quorum_stress.json
+    env:
+      XTASK_NO_DEFAULT_FEATURES: "1"
+      XTASK_FEATURES: "prod,prover-stwo,backend-plonky3"
+      RUSTFLAGS: "-C debuginfo=0"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install stable toolchain
-        run: rustup show
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Run simnet scenario
+      - name: Execute simnet harness
         run: |
-          cargo run -p simnet -- --scenario "${{ matrix.scenario }}" --artifacts-dir "target/simnet/${{ matrix.name }}"
-        env:
-          RUSTFLAGS: "-C debuginfo=0"
+          set -euo pipefail
+          cargo xtask test-simnet
 
-      - name: Analyze metrics
+      - name: Analyze summaries
         run: |
-          python3 scripts/analyze_simnet.py "target/simnet/${{ matrix.name }}/${{ matrix.summary }}"
+          set -euo pipefail
+          python3 scripts/analyze_simnet.py \
+            target/simnet/ci-block-pipeline/summaries/ci-block-pipeline.json \
+            target/simnet/ci-state-sync-guard/summaries/ci-state-sync-guard.json \
+            target/simnet/consensus-quorum-stress/summaries/consensus_quorum_stress.json
 
       - name: Package artifacts
         run: |
-          tar -czf "simnet-${{ matrix.name }}.tar.gz" -C target/simnet/${{ matrix.name }} .
+          tar -czf simnet-artifacts.tar.gz -C target simnet
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: simnet-${{ matrix.name }}
-          path: simnet-${{ matrix.name }}.tar.gz
+          name: simnet-nightly
+          path: simnet-artifacts.tar.gz

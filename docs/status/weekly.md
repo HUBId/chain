@@ -26,6 +26,10 @@ nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phas
   `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total`.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
 - **Runbooks:** Operator Guide und Observability-Runbook beschreiben Simnet-Logs, RPC-Checks und
   Grafana-Screenshots für Phase‑2-Freigaben.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+- **Nightly Simnet:** Der Workflow [`nightly-simnet`](../.github/workflows/nightly.yml) fährt täglich `cargo xtask test-simnet`
+  mit dem Produktions-Feature-Set, wertet alle Summaries via `scripts/analyze_simnet.py` aus und stellt die Artefakte im Actions-Tab bereit.
+  Abweichungen bei VRF-/Quorum-Tamper führen zu roten Nightly-Statusmeldungen, die im
+  [Validierungsplan](../test_validation_strategy.md#4-cicd-integration) dokumentiert sind.【F:.github/workflows/nightly.yml†L1-L86】【F:docs/test_validation_strategy.md†L41-L83】
 
 ### Ampelstatus
 - **Tests:** 🟢 – Manipulations-Suite läuft nightly.

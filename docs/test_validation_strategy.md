@@ -22,11 +22,11 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 - **End-to-End**: Start eines lokalen Netzwerks (mindestens zwei Wallets + ein Node) mit VRF-basierter Leader-Selektion, Erzeugung von Blöcken und vollständiger Rekursionskette.
 - **Migrationspfad**: Sicherstellen, dass `migration` alte Datensätze korrekt in das `ChainProof`-Format überführt und anschließend verifiziert wird.
 - **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
-- **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) liefert Szenarien wie `ci_block_pipeline.ron` sowie den neuen Guard `ci_state_sync_guard.ron`. Beide starten gezielte Integrationstests (Blockproduktion, Snapshot-/Light-Client-Sync, Manipulationsschutz) und erzeugen reproduzierbare Artefakt-Verzeichnisse.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/scenarios/ci_state_sync_guard.ron†L1-L36】【F:tools/simnet/src/main.rs†L1-L86】
+- **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) bündelt `ci_block_pipeline.ron`, `ci_state_sync_guard.ron` und den Phase‑2-Stresslauf `consensus_quorum_stress.ron`. Die ersten beiden orchestrieren Integrationstests (Blockproduktion, Snapshot-/Light-Client-Sync, Manipulationsschutz); der dritte injiziert VRF-/Quorum-Manipulationen und misst Prover/Verifier-Latenzen inklusive CSV-/JSON-Summaries.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/scenarios/ci_state_sync_guard.ron†L1-L36】【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:tools/simnet/src/main.rs†L1-L86】
 
 ### 1.4 Feature-Matrix & Laufzeiten
 
-Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt drei Feature-Sets über `cargo xtask`: Standard (`default`), Produktionslauf (`--no-default-features --features prod,prover-stwo`) sowie ein optionaler Plonky3-Build (`--features prod,prover-stwo,backend-plonky3`). Der erste Cold-Start des Standard-Laufs benötigt in der Container-Umgebung rund 85 Sekunden bis alle Abhängigkeiten gebaut sind; ein erneuter Start verkürzt sich auf ~11 Sekunden, weil die Artefakte im Cargo-Target-Cache verbleiben.【F:.github/workflows/ci.yml†L66-L118】【F:.github/workflows/nightly.yml†L11-L41】【f3105d†L1-L5】【f3e57e†L1-L5】
+Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt drei Feature-Sets über `cargo xtask`: Standard (`default`), Produktionslauf (`--no-default-features --features prod,prover-stwo`) sowie ein Plonky3-Build (`--features prod,prover-stwo,backend-plonky3`). Der erste Cold-Start des Standard-Laufs benötigt in der Container-Umgebung rund 85 Sekunden bis alle Abhängigkeiten gebaut sind; ein erneuter Start verkürzt sich auf ~11 Sekunden, weil die Artefakte im Cargo-Target-Cache verbleiben.【F:.github/workflows/ci.yml†L63-L118】【F:.github/workflows/nightly.yml†L1-L86】【f3105d†L1-L5】【f3e57e†L1-L5】
 
 | Feature-Set | Reproduktionsbefehl | Erwartete Dauer (Cold / Warm) |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
 | `test` | Führt die vollständige Backend-Matrix (Default, STWO, RPP-STARK, Plonky3) über `scripts/test.sh` aus. | `./scripts/test.sh --all --unit --integration` |
 | `unit-suites` | Erzwingt die deterministischen STWO/Firewood/VRF-Unit-Suites. | `cargo xtask test-unit` |
 | `integration-workflows` | Überprüft Blockproduktion, Snapshot-/Light-Client-Pläne und Operator-RPC-Lifecycle. | `cargo xtask test-integration` |
-| `simnet-smoke` | Führt das Simnet-Szenario `ci_block_pipeline` aus und protokolliert Artefakte. | `cargo xtask test-simnet` |
+| `simnet-smoke` | Führt alle drei Simnet-Szenarien (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) aus und protokolliert Artefakte inkl. Tamper-Checks. | `cargo xtask test-simnet` |
 
 > **Hinweis:** `scripts/test.sh` setzt `RUSTFLAGS=-D warnings`, aktiviert automatisch das passende Feature-Set und wählt für STWO den gepinnten Nightly-Toolchain, damit lokale Läufe die CI-Ergebnisse widerspiegeln.【F:scripts/test.sh†L4-L8】【F:scripts/test.sh†L81-L210】
 
@@ -70,9 +70,10 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
     `integration-workflows` und `simnet-smoke`. Die Jobs delegieren an `cargo xtask test-unit`, `cargo xtask test-integration`
     und `cargo xtask test-simnet`, womit alle drei Testebenen (Unit, Workflow, Simulation) automatisiert abgedeckt werden und
     Contributors dieselben Läufe lokal reproduzieren können.【F:.github/workflows/ci.yml†L63-L96】【F:xtask/src/main.rs†L1-L86】
-  - [`nightly-simnet`](../.github/workflows/nightly.yml): Führt eine Matrix von Simnet-Szenarien (`small_world_smoke`,
-    `ring_latency_profile`) aus, analysiert die Ergebnisse mit `scripts/analyze_simnet.py` und veröffentlicht die Artefakte
-    zur Regressionsanalyse. **TODO:** Automatisches Auswerten von Thresholds und Rückmelden kritischer Abweichungen.
+  - [`nightly-simnet`](../.github/workflows/nightly.yml): Startet täglich `cargo xtask test-simnet` mit dem Production-
+    Feature-Set (`prod,prover-stwo,backend-plonky3`), wertet alle JSON-Summaries über `scripts/analyze_simnet.py` aus und
+    lädt ein Tarball mit Logs, JSON- und CSV-Reports hoch. Abweichungen bei P2P-Latenzen oder akzeptierten VRF-/Quorum-
+    Manipulationen führen zu einem roten Workflow-Status.
   - [`Nightly fuzzing`](../.github/workflows/nightly-fuzz.yml): Startet `cargo fuzz` für die P2P-Handler (`handle_meta`,
     `handle_blocks`, `handle_votes`, `admission_evaluate_publish`) auf einem Nightly-Toolchain-Setup und archiviert die
     Corpora. **TODO:** Auf Wallet- und Prover-Komponenten ausweiten.
