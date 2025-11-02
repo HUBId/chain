@@ -1,15 +1,27 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Number, Value};
+use serde_json::Value;
 
 use crate::errors::{ChainError, ChainResult};
 
 use super::Plonky3CircuitWitness;
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
+use plonky3_backend::{
+    ConsensusCircuit as BackendConsensusCircuit, ConsensusWitness as BackendConsensusWitness,
+    VotePower as BackendVotePower,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VotePower {
     pub voter: String,
     pub weight: u64,
+}
+
+impl From<&VotePower> for BackendVotePower {
+    fn from(value: &VotePower) -> Self {
+        Self {
+            voter: value.voter.clone(),
+            weight: value.weight,
+        }
+    }
 }
 
 /// Witness representation for the BFT consensus circuit.
@@ -30,6 +42,36 @@ pub struct ConsensusWitness {
     pub vrf_proofs: Vec<String>,
     pub witness_commitments: Vec<String>,
     pub reputation_roots: Vec<String>,
+}
+
+impl From<&ConsensusWitness> for BackendConsensusWitness {
+    fn from(value: &ConsensusWitness) -> Self {
+        Self {
+            block_hash: value.block_hash.clone(),
+            round: value.round,
+            epoch: value.epoch,
+            slot: value.slot,
+            leader_proposal: value.leader_proposal.clone(),
+            quorum_threshold: value.quorum_threshold,
+            pre_votes: value.pre_votes.iter().map(BackendVotePower::from).collect(),
+            pre_commits: value
+                .pre_commits
+                .iter()
+                .map(BackendVotePower::from)
+                .collect(),
+            commit_votes: value
+                .commit_votes
+                .iter()
+                .map(BackendVotePower::from)
+                .collect(),
+            quorum_bitmap_root: value.quorum_bitmap_root.clone(),
+            quorum_signature_root: value.quorum_signature_root.clone(),
+            vrf_outputs: value.vrf_outputs.clone(),
+            vrf_proofs: value.vrf_proofs.clone(),
+            witness_commitments: value.witness_commitments.clone(),
+            reputation_roots: value.reputation_roots.clone(),
+        }
+    }
 }
 
 impl ConsensusWitness {
@@ -70,52 +112,15 @@ impl ConsensusWitness {
         }
     }
 
-    fn ensure_digest(label: &str, value: &str) -> ChainResult<()> {
-        let bytes = hex::decode(value).map_err(|err| {
-            ChainError::Crypto(format!("invalid {label} encoding '{value}': {err}"))
-        })?;
-        if bytes.len() != 32 {
-            return Err(ChainError::Crypto(format!("{label} must encode 32 bytes")));
-        }
-        Ok(())
-    }
-
-    fn ensure_non_empty(label: &str, values: &[String]) -> ChainResult<()> {
-        if values.is_empty() {
-            return Err(ChainError::Crypto(format!(
-                "consensus certificate missing {label}"
-            )));
-        }
-        Ok(())
-    }
-
-    fn ensure_vrf_metadata(&self) -> ChainResult<()> {
-        Self::ensure_non_empty("VRF outputs", &self.vrf_outputs)?;
-        Self::ensure_non_empty("VRF proofs", &self.vrf_proofs)?;
-        if self.vrf_outputs.len() != self.vrf_proofs.len() {
-            return Err(ChainError::Crypto(
-                "consensus certificate VRF output/proof count mismatch".into(),
-            ));
-        }
-        for (index, proof) in self.vrf_proofs.iter().enumerate() {
-            let bytes = hex::decode(proof).map_err(|err| {
-                ChainError::Crypto(format!("invalid vrf proof #{index} encoding: {err}"))
-            })?;
-            if bytes.len() != VRF_PROOF_LENGTH {
-                return Err(ChainError::Crypto(format!(
-                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
-                )));
-            }
-        }
-        Ok(())
-    }
-
     pub(crate) fn validate_metadata(&self) -> ChainResult<()> {
-        Self::ensure_digest("quorum bitmap root", &self.quorum_bitmap_root)?;
-        Self::ensure_digest("quorum signature root", &self.quorum_signature_root)?;
-        Self::ensure_non_empty("witness commitments", &self.witness_commitments)?;
-        Self::ensure_non_empty("reputation roots", &self.reputation_roots)?;
-        Self::ensure_vrf_metadata()
+        let backend = BackendConsensusWitness::from(self);
+        BackendConsensusCircuit::new(backend)
+            .map(|_| ())
+            .map_err(|err| {
+                ChainError::Crypto(format!(
+                    "invalid consensus witness metadata for Plonky3 circuit: {err}"
+                ))
+            })
     }
 }
 
@@ -129,19 +134,16 @@ impl Plonky3CircuitWitness for ConsensusWitness {
     }
 
     fn public_inputs(&self) -> ChainResult<Value> {
-        self.validate_metadata()?;
-
-        let mut object = Map::new();
-        let witness_value = serde_json::to_value(self).map_err(|err| {
+        let backend_witness = BackendConsensusWitness::from(self);
+        let circuit = BackendConsensusCircuit::new(backend_witness).map_err(|err| {
             ChainError::Crypto(format!(
-                "failed to serialize {} witness for Plonky3 public inputs: {err}",
-                self.circuit()
+                "failed to prepare consensus public inputs for Plonky3 circuit: {err}"
             ))
         })?;
-        object.insert("witness".into(), witness_value);
-        if let Some(height) = self.block_height() {
-            object.insert("block_height".into(), Value::Number(Number::from(height)));
-        }
-        Ok(Value::Object(object))
+        circuit.public_inputs_value().map_err(|err| {
+            ChainError::Crypto(format!(
+                "failed to serialize consensus public inputs for Plonky3 circuit: {err}"
+            ))
+        })
     }
 }
