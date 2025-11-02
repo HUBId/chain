@@ -12,6 +12,7 @@ use serde_json::json;
 use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
+use crate::plonky3::circuit::consensus::{ConsensusWitness, VotePower};
 use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
 use crate::plonky3::prover::Plonky3Prover;
@@ -23,6 +24,7 @@ use crate::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
+use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 use rpp_pruning::Envelope;
 
 const TRANSACTION_SEED: [u8; 32] = [7u8; 32];
@@ -198,6 +200,59 @@ fn transaction_proof_roundtrip() {
     )
     .unwrap();
     assert_eq!(decoded.transaction, tx);
+}
+
+fn consensus_witness_fixture() -> ConsensusWitness {
+    let vote = VotePower {
+        voter: "validator-1".into(),
+        weight: 80,
+    };
+    ConsensusWitness::new(
+        "aa".repeat(32),
+        3,
+        5,
+        7,
+        "aa".repeat(32),
+        67,
+        vec![vote.clone()],
+        vec![vote.clone()],
+        vec![vote],
+        "bb".repeat(32),
+        "cc".repeat(32),
+        vec!["dd".repeat(32)],
+        vec![hex::encode(vec![0xee; VRF_PROOF_LENGTH])],
+        vec!["ff".repeat(32)],
+        vec!["11".repeat(32)],
+    )
+}
+
+#[test]
+fn consensus_witness_rejects_missing_metadata() {
+    let mut witness = consensus_witness_fixture();
+    witness.vrf_outputs.clear();
+    witness.vrf_proofs.clear();
+
+    let err = witness
+        .validate_metadata()
+        .expect_err("missing metadata must fail");
+    assert!(
+        err.to_string().contains("missing VRF outputs"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn consensus_witness_rejects_invalid_quorum_root() {
+    let mut witness = consensus_witness_fixture();
+    witness.quorum_bitmap_root = "deadbeef".into();
+
+    let err = witness
+        .validate_metadata()
+        .expect_err("invalid quorum root must fail");
+    assert!(
+        err.to_string().contains("quorum bitmap root"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
