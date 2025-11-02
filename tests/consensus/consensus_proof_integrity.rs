@@ -108,6 +108,25 @@ mod plonky3_backend {
             );
         });
         assert!(verifier.verify_consensus(&invalid_quorum_root).is_err());
+
+        let tampered_vrf_output = tamper_proof(&proof, |witness| {
+            if let Some(Value::Array(outputs)) = witness.get_mut("vrf_outputs") {
+                if let Some(first) = outputs.first_mut() {
+                    *first = Value::String("ff".repeat(32));
+                }
+            }
+        });
+        assert!(verifier.verify_consensus(&tampered_vrf_output).is_err());
+
+        let tampered_quorum_signature = tamper_proof(&proof, |witness| {
+            witness.insert(
+                "quorum_signature_root".into(),
+                Value::String("11".repeat(32)),
+            );
+        });
+        assert!(verifier
+            .verify_consensus(&tampered_quorum_signature)
+            .is_err());
     }
 }
 
@@ -164,5 +183,19 @@ mod stwo_backend {
             witness.quorum_bitmap_root = "cafebabe".into();
         });
         assert!(verifier.verify_consensus(&invalid_quorum_root).is_err());
+
+        let tampered_vrf_output = tamper_proof(&proof, |witness| {
+            if let Some(first) = witness.vrf_outputs.first_mut() {
+                *first = "ee".repeat(32);
+            }
+        });
+        assert!(verifier.verify_consensus(&tampered_vrf_output).is_err());
+
+        let tampered_quorum_signature = tamper_proof(&proof, |witness| {
+            witness.quorum_signature_root = "77".repeat(32);
+        });
+        assert!(verifier
+            .verify_consensus(&tampered_quorum_signature)
+            .is_err());
     }
 }

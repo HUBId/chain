@@ -11,6 +11,8 @@ use crate::proof_backend::{
     ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use crate::validator::ValidatorId;
+use rpp_chain::stwo::params::StarkParameters;
+use rpp_chain::stwo::FieldElement;
 use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 
 mod peer_id_serde {
@@ -63,6 +65,89 @@ pub struct ConsensusProof {
     pub verifying_key: VerifyingKey,
     pub circuit: ConsensusCircuitDef,
     pub public_inputs: ConsensusPublicInputs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusBindingDigests {
+    pub vrf_output: [u8; 32],
+    pub vrf_proof: [u8; 32],
+    pub witness_commitment: [u8; 32],
+    pub reputation_root: [u8; 32],
+    pub quorum_bitmap: [u8; 32],
+    pub quorum_signature: [u8; 32],
+}
+
+fn field_to_array(value: &FieldElement) -> [u8; 32] {
+    let repr = value.to_bytes();
+    let mut bytes = [0u8; 32];
+    let offset = bytes.len().saturating_sub(repr.len());
+    bytes[offset..offset + repr.len()].copy_from_slice(&repr);
+    bytes
+}
+
+fn binding_from_bytes<I>(
+    parameters: &StarkParameters,
+    hasher: &rpp_chain::stwo::params::PoseidonHasher,
+    block_hash: &FieldElement,
+    values: I,
+) -> FieldElement
+where
+    I: IntoIterator,
+    I::Item: AsRef<[u8]>,
+{
+    let zero = FieldElement::zero(parameters.modulus());
+    let mut accumulator = block_hash.clone();
+    for value in values {
+        let element = parameters.element_from_bytes(value.as_ref());
+        accumulator = hasher.hash(&[accumulator.clone(), element, zero.clone()]);
+    }
+    accumulator
+}
+
+pub fn compute_consensus_bindings(
+    block_hash: &[u8; 32],
+    vrf_outputs: &[[u8; 32]],
+    vrf_proofs: &[Vec<u8>],
+    witness_commitments: &[[u8; 32]],
+    reputation_roots: &[[u8; 32]],
+    quorum_bitmap_root: &[u8; 32],
+    quorum_signature_root: &[u8; 32],
+) -> ConsensusBindingDigests {
+    let parameters = StarkParameters::blueprint_default();
+    let hasher = parameters.poseidon_hasher();
+    let block_hash_element = parameters.element_from_bytes(block_hash);
+
+    let vrf_output = binding_from_bytes(&parameters, &hasher, &block_hash_element, vrf_outputs);
+    let vrf_proof = binding_from_bytes(&parameters, &hasher, &block_hash_element, vrf_proofs);
+    let witness_commitment = binding_from_bytes(
+        &parameters,
+        &hasher,
+        &block_hash_element,
+        witness_commitments,
+    );
+    let reputation_root =
+        binding_from_bytes(&parameters, &hasher, &block_hash_element, reputation_roots);
+    let quorum_bitmap = binding_from_bytes(
+        &parameters,
+        &hasher,
+        &block_hash_element,
+        std::iter::once(quorum_bitmap_root.as_slice()),
+    );
+    let quorum_signature = binding_from_bytes(
+        &parameters,
+        &hasher,
+        &block_hash_element,
+        std::iter::once(quorum_signature_root.as_slice()),
+    );
+
+    ConsensusBindingDigests {
+        vrf_output: field_to_array(&vrf_output),
+        vrf_proof: field_to_array(&vrf_proof),
+        witness_commitment: field_to_array(&witness_commitment),
+        reputation_root: field_to_array(&reputation_root),
+        quorum_bitmap: field_to_array(&quorum_bitmap),
+        quorum_signature: field_to_array(&quorum_signature),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -358,6 +443,22 @@ impl ConsensusCertificate {
             &self.metadata.quorum_signature_root,
         )?;
 
+        let vrf_outputs = decode_digests("vrf output", &self.metadata.vrf_outputs)?;
+        let vrf_proofs = decode_proofs(&self.metadata.vrf_proofs)?;
+        let witness_commitments =
+            decode_digests("witness commitment", &self.metadata.witness_commitments)?;
+        let reputation_roots = decode_digests("reputation root", &self.metadata.reputation_roots)?;
+
+        let bindings = compute_consensus_bindings(
+            &block_hash,
+            &vrf_outputs,
+            &vrf_proofs,
+            &witness_commitments,
+            &reputation_roots,
+            &quorum_bitmap_root,
+            &quorum_signature_root,
+        );
+
         Ok(ConsensusPublicInputs {
             block_hash,
             round: self.round,
@@ -367,13 +468,16 @@ impl ConsensusCertificate {
             quorum_threshold: self.quorum_threshold,
             quorum_bitmap_root,
             quorum_signature_root,
-            vrf_outputs: decode_digests("vrf output", &self.metadata.vrf_outputs)?,
-            vrf_proofs: decode_proofs(&self.metadata.vrf_proofs)?,
-            witness_commitments: decode_digests(
-                "witness commitment",
-                &self.metadata.witness_commitments,
-            )?,
-            reputation_roots: decode_digests("reputation root", &self.metadata.reputation_roots)?,
+            vrf_outputs,
+            vrf_proofs,
+            witness_commitments,
+            reputation_roots,
+            vrf_output_binding: bindings.vrf_output,
+            vrf_proof_binding: bindings.vrf_proof,
+            witness_commitment_binding: bindings.witness_commitment,
+            reputation_root_binding: bindings.reputation_root,
+            quorum_bitmap_binding: bindings.quorum_bitmap,
+            quorum_signature_binding: bindings.quorum_signature,
         })
     }
 }
