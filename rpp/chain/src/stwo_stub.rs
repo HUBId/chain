@@ -374,6 +374,22 @@ pub mod circuit {
             pub weight: u64,
         }
 
+        #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+        pub struct ConsensusVrfPoseidonInput {
+            pub last_block_header: String,
+            pub epoch: u64,
+            pub tier_seed: String,
+        }
+
+        #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+        pub struct ConsensusVrfWitnessEntry {
+            pub randomness: String,
+            pub pre_output: String,
+            pub proof: String,
+            pub public_key: String,
+            pub input: ConsensusVrfPoseidonInput,
+        }
+
         #[derive(Clone, Debug, Serialize, Deserialize)]
         pub struct ConsensusWitness {
             pub block_hash: String,
@@ -387,8 +403,7 @@ pub mod circuit {
             pub commit_votes: Vec<VotePower>,
             pub quorum_bitmap_root: String,
             pub quorum_signature_root: String,
-            pub vrf_outputs: Vec<String>,
-            pub vrf_proofs: Vec<String>,
+            pub vrf_entries: Vec<ConsensusVrfWitnessEntry>,
             pub witness_commitments: Vec<String>,
             pub reputation_roots: Vec<String>,
         }

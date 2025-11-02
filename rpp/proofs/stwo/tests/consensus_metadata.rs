@@ -1,8 +1,11 @@
 #![cfg(feature = "prover-stwo")]
 
 use crate::errors::ChainError;
-use crate::stwo::circuit::consensus::{ConsensusCircuit, ConsensusWitness, VotePower};
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
+use crate::stwo::circuit::consensus::{
+    ConsensusCircuit, ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness,
+    VotePower,
+};
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 fn sample_vote(weight: u64) -> VotePower {
     VotePower {
@@ -15,11 +18,21 @@ fn valid_witness() -> ConsensusWitness {
     let block_hash = "11".repeat(32);
     let quorum_bitmap_root = "22".repeat(32);
     let quorum_signature_root = "33".repeat(32);
-    let vrf_output = "44".repeat(32);
     let witness_commitment = "55".repeat(32);
     let reputation_root = "66".repeat(32);
 
     let vrf_proof = hex::encode(vec![0x77; VRF_PROOF_LENGTH]);
+    let vrf_entry = ConsensusVrfWitnessEntry {
+        randomness: "44".repeat(32),
+        pre_output: "88".repeat(VRF_PREOUTPUT_LENGTH),
+        proof: vrf_proof,
+        public_key: "99".repeat(32),
+        input: ConsensusVrfPoseidonInput {
+            last_block_header: block_hash.clone(),
+            epoch: 7,
+            tier_seed: "aa".repeat(32),
+        },
+    };
 
     ConsensusWitness {
         block_hash: block_hash.clone(),
@@ -33,8 +46,7 @@ fn valid_witness() -> ConsensusWitness {
         commit_votes: vec![sample_vote(80)],
         quorum_bitmap_root,
         quorum_signature_root,
-        vrf_outputs: vec![vrf_output],
-        vrf_proofs: vec![vrf_proof],
+        vrf_entries: vec![vrf_entry],
         witness_commitments: vec![witness_commitment],
         reputation_roots: vec![reputation_root],
     }
@@ -51,14 +63,13 @@ fn expect_err_message(error: ChainError, needle: &str) {
 #[test]
 fn consensus_witness_requires_vrf_metadata() {
     let mut witness = valid_witness();
-    witness.vrf_outputs.clear();
-    witness.vrf_proofs.clear();
+    witness.vrf_entries.clear();
 
     let circuit = ConsensusCircuit::new(witness);
     let err = circuit
         .evaluate_constraints()
         .expect_err("missing VRF metadata must fail");
-    expect_err_message(err, "missing VRF outputs");
+    expect_err_message(err, "missing VRF entries");
 }
 
 #[test]
@@ -71,4 +82,28 @@ fn consensus_witness_rejects_invalid_quorum_root() {
         .evaluate_constraints()
         .expect_err("invalid quorum root must fail");
     expect_err_message(err, "quorum bitmap root");
+}
+
+#[test]
+fn consensus_witness_rejects_poseidon_header_mismatch() {
+    let mut witness = valid_witness();
+    witness.vrf_entries[0].input.last_block_header = "de".repeat(32);
+
+    let circuit = ConsensusCircuit::new(witness);
+    let err = circuit
+        .evaluate_constraints()
+        .expect_err("poseidon header mismatch must fail");
+    expect_err_message(err, "poseidon last block header");
+}
+
+#[test]
+fn consensus_witness_rejects_poseidon_epoch_mismatch() {
+    let mut witness = valid_witness();
+    witness.vrf_entries[0].input.epoch += 1;
+
+    let circuit = ConsensusCircuit::new(witness);
+    let err = circuit
+        .evaluate_constraints()
+        .expect_err("poseidon epoch mismatch must fail");
+    expect_err_message(err, "poseidon epoch");
 }
