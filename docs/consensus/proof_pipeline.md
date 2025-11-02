@@ -33,8 +33,11 @@ The metadata captures several critical views of validator participation:
 
 `ConsensusCertificate::encode_witness` serialises the certificate together with
 its `ConsensusProofMetadata` and wraps the payload in a typed witness envelope.
-The STWO backend reconstructs the public-input field elements from the same
-metadata, ensuring that verification fails if any digest diverges from the block
-state observed by the runtime.  The integration tests in
-`rpp/consensus/tests/consensus_proof_roundtrip.rs` exercise the new metadata path
-and guarantee that encode/decode operations retain the structured inputs.
+Both the STWO and Plonky3 backends reconstruct the public-input field elements
+from the same metadata, ensuring that verification fails if any digest diverges
+from the block state observed by the runtime. The regression tests in
+`tests/consensus/consensus_proof_integrity.rs`,
+`rpp/proofs/stwo/tests/consensus_metadata.rs`, and
+`rpp/proofs/plonky3/tests.rs` keep the metadata guarantees honest by mutating
+VRF bundles and quorum roots and asserting that the verifiers reject the forged
+payloads.

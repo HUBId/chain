@@ -22,7 +22,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 * **Reputation & Stake**: Reputation verwaltet Score **und** Tier-Level; Timetoke-Balances werden im Ledger gepflegt und bei Reputation-Audits berücksichtigt.
 * **Validator-/Proposer-Selektion**: VRF-Auswertung nutzt Timetoke-Daten (`derive_tier_seed`) und filtert Kandidaten mit Tier < 3 aus; Leader-Selektion priorisiert Tier → Timetoke → VRF.
 * **Rewards**: `Ledger::distribute_consensus_rewards` verteilt Basis-Rewards gleichmäßig, addiert Gebühren und vergibt einen Leader-Bonus von 20 %. Die Auszahlung belastet die in `rewards.treasury_accounts` hinterlegten Treasury-Konten; fehlen dort Mittel, greift der Ledger automatisch auf den Gebühren-Topf zurück und verbucht verbleibende Fehlbeträge.
-* **Proofs**: STWO-Workflow prüft Konsens-, Uptime- und Modul-Witnesses; VRF- und Leader-Daten werden im Blockheader persistiert und während der Finalisierung validiert.
+* **Proofs**: STWO- und Plonky3-Workflows prüfen Konsens-, Uptime- und Modul-Witnesses, erzwingen vollständige VRF-/Quorum-Metadaten und verwerfen manipulierte Digests bereits vor der Rekursion; neue Regressionstests decken gefälschte VRF-Bundles sowie fehlerhafte Quorum-Wurzeln ab (`tests/consensus/consensus_proof_integrity.rs`, `rpp/proofs/stwo/tests/consensus_metadata.rs`, `rpp/proofs/plonky3/tests.rs`).
 * **Anti-Abuse**: Allgemeines Slashing vorhanden, jedoch ohne blueprint-spezifische Checks.
 * **Netzwerk**: BFT-Nachrichten sind nicht entlang der geforderten Kanalstruktur organisiert.
 * **Rust-Interfaces**: Traits fokussieren auf Stake-BFT, ohne Reputation-/Timetoke-Einbindung.
