@@ -5,9 +5,30 @@ use std::collections::HashSet;
 use crate::official::air::{
     AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
 };
-use crate::official::params::StarkParameters;
+use crate::official::params::{FieldElement, StarkParameters};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
+
+/// Number of public inputs emitted by the consensus circuit.
+pub const CONSENSUS_PUBLIC_INPUT_WIDTH: usize = 15;
+
+const SUMMARY_COLUMNS: [&str; CONSENSUS_PUBLIC_INPUT_WIDTH] = [
+    "block_hash",
+    "round",
+    "leader_proposal",
+    "epoch",
+    "slot",
+    "quorum",
+    "quorum_bitmap_root",
+    "quorum_signature_root",
+    "pre_vote_total",
+    "pre_commit_total",
+    "commit_total",
+    "vrf_output_count",
+    "vrf_proof_count",
+    "witness_commitment_count",
+    "reputation_root_count",
+];
 
 /// Vote weight associated with a consensus participant.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -101,6 +122,11 @@ impl ConsensusWitness {
     }
 
     fn ensure_digest_set(&self, label: &str, values: &[String]) -> Result<(), CircuitError> {
+        if values.is_empty() {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "{label} set cannot be empty"
+            )));
+        }
         for value in values {
             Self::ensure_hex(value).map_err(|err| match err {
                 CircuitError::InvalidWitness(message) => {
@@ -116,6 +142,16 @@ impl ConsensusWitness {
     }
 
     fn ensure_vrf_proofs(&self) -> Result<(), CircuitError> {
+        if self.vrf_outputs.is_empty() {
+            return Err(CircuitError::ConstraintViolation(
+                "consensus witness missing VRF outputs".into(),
+            ));
+        }
+        if self.vrf_proofs.is_empty() {
+            return Err(CircuitError::ConstraintViolation(
+                "consensus witness missing VRF proofs".into(),
+            ));
+        }
         if self.vrf_outputs.len() != self.vrf_proofs.len() {
             return Err(CircuitError::ConstraintViolation(
                 "vrf output/proof count mismatch".into(),
@@ -144,6 +180,49 @@ pub struct ConsensusCircuit {
 impl ConsensusCircuit {
     pub fn new(witness: ConsensusWitness) -> Self {
         Self { witness }
+    }
+
+    fn compute_vote_totals(witness: &ConsensusWitness) -> (u128, u128, u128) {
+        let pre_vote_total = witness
+            .pre_votes
+            .iter()
+            .map(|vote| vote.weight as u128)
+            .sum();
+        let pre_commit_total = witness
+            .pre_commits
+            .iter()
+            .map(|vote| vote.weight as u128)
+            .sum();
+        let commit_total = witness
+            .commit_votes
+            .iter()
+            .map(|vote| vote.weight as u128)
+            .sum();
+        (pre_vote_total, pre_commit_total, commit_total)
+    }
+
+    pub fn public_inputs(
+        parameters: &StarkParameters,
+        witness: &ConsensusWitness,
+    ) -> Vec<FieldElement> {
+        let (pre_vote_total, pre_commit_total, commit_total) = Self::compute_vote_totals(witness);
+        vec![
+            string_to_field(parameters, &witness.block_hash),
+            parameters.element_from_u64(witness.round),
+            string_to_field(parameters, &witness.leader_proposal),
+            parameters.element_from_u64(witness.epoch),
+            parameters.element_from_u64(witness.slot),
+            parameters.element_from_u64(witness.quorum_threshold),
+            string_to_field(parameters, &witness.quorum_bitmap_root),
+            string_to_field(parameters, &witness.quorum_signature_root),
+            parameters.element_from_u128(pre_vote_total),
+            parameters.element_from_u128(pre_commit_total),
+            parameters.element_from_u128(commit_total),
+            parameters.element_from_u64(witness.vrf_outputs.len() as u64),
+            parameters.element_from_u64(witness.vrf_proofs.len() as u64),
+            parameters.element_from_u64(witness.witness_commitments.len() as u64),
+            parameters.element_from_u64(witness.reputation_roots.len() as u64),
+        ]
     }
 
     fn build_vote_segment(
@@ -229,60 +308,71 @@ impl StarkCircuit for ConsensusCircuit {
             Self::build_vote_segment(parameters, "pre_commits", &self.witness.pre_commits)?;
         let commits = Self::build_vote_segment(parameters, "commits", &self.witness.commit_votes)?;
 
-        let pre_vote_total: u128 = self
-            .witness
-            .pre_votes
-            .iter()
-            .map(|vote| vote.weight as u128)
-            .sum();
-        let pre_commit_total: u128 = self
-            .witness
-            .pre_commits
-            .iter()
-            .map(|vote| vote.weight as u128)
-            .sum();
-        let commit_total: u128 = self
-            .witness
-            .commit_votes
-            .iter()
-            .map(|vote| vote.weight as u128)
-            .sum();
+        let (pre_vote_total, pre_commit_total, commit_total) =
+            Self::compute_vote_totals(&self.witness);
+
+        let vrf_outputs = TraceSegment::new(
+            "vrf_outputs",
+            vec!["digest".to_string()],
+            self.witness
+                .vrf_outputs
+                .iter()
+                .map(|value| vec![string_to_field(parameters, value)])
+                .collect(),
+        )?;
+        let vrf_proofs = TraceSegment::new(
+            "vrf_proofs",
+            vec!["proof".to_string()],
+            self.witness
+                .vrf_proofs
+                .iter()
+                .map(|value| vec![string_to_field(parameters, value)])
+                .collect(),
+        )?;
+        let witness_commitments = TraceSegment::new(
+            "witness_commitments",
+            vec!["commitment".to_string()],
+            self.witness
+                .witness_commitments
+                .iter()
+                .map(|value| vec![string_to_field(parameters, value)])
+                .collect(),
+        )?;
+        let reputation_roots = TraceSegment::new(
+            "reputation_roots",
+            vec!["root".to_string()],
+            self.witness
+                .reputation_roots
+                .iter()
+                .map(|value| vec![string_to_field(parameters, value)])
+                .collect(),
+        )?;
 
         let summary = TraceSegment::new(
             "summary",
-            vec![
-                "block_hash".to_string(),
-                "round".to_string(),
-                "epoch".to_string(),
-                "slot".to_string(),
-                "quorum".to_string(),
-                "quorum_bitmap_root".to_string(),
-                "quorum_signature_root".to_string(),
-                "pre_vote_total".to_string(),
-                "pre_commit_total".to_string(),
-                "commit_total".to_string(),
-            ],
-            vec![vec![
-                string_to_field(parameters, &self.witness.block_hash),
-                parameters.element_from_u64(self.witness.round),
-                parameters.element_from_u64(self.witness.epoch),
-                parameters.element_from_u64(self.witness.slot),
-                parameters.element_from_u64(self.witness.quorum_threshold),
-                string_to_field(parameters, &self.witness.quorum_bitmap_root),
-                string_to_field(parameters, &self.witness.quorum_signature_root),
-                parameters.element_from_u128(pre_vote_total),
-                parameters.element_from_u128(pre_commit_total),
-                parameters.element_from_u128(commit_total),
-            ]],
+            SUMMARY_COLUMNS
+                .iter()
+                .map(|column| column.to_string())
+                .collect(),
+            vec![Self::public_inputs(parameters, &self.witness)],
         )?;
 
-        ExecutionTrace::from_segments(vec![pre_votes, pre_commits, commits, summary])
+        ExecutionTrace::from_segments(vec![
+            pre_votes,
+            pre_commits,
+            commits,
+            vrf_outputs,
+            vrf_proofs,
+            witness_commitments,
+            reputation_roots,
+            summary,
+        ])
     }
 
     fn define_air(
         &self,
-        _parameters: &StarkParameters,
-        _trace: &ExecutionTrace,
+        parameters: &StarkParameters,
+        trace: &ExecutionTrace,
     ) -> Result<AirDefinition, CircuitError> {
         let mut constraints = Vec::new();
 
@@ -309,6 +399,80 @@ impl StarkCircuit for ConsensusCircuit {
                 ),
             ));
         }
+
+        let summary_segment = "summary";
+        let summary_vrf_output = AirColumn::new(summary_segment, "vrf_output_count");
+        let summary_vrf_proof = AirColumn::new(summary_segment, "vrf_proof_count");
+        let summary_witness_commitment =
+            AirColumn::new(summary_segment, "witness_commitment_count");
+        let summary_reputation_root = AirColumn::new(summary_segment, "reputation_root_count");
+
+        let vrf_output_len = trace
+            .segments
+            .iter()
+            .find(|segment| segment.name == "vrf_outputs")
+            .map(|segment| segment.rows.len())
+            .unwrap_or_default();
+        let vrf_proof_len = trace
+            .segments
+            .iter()
+            .find(|segment| segment.name == "vrf_proofs")
+            .map(|segment| segment.rows.len())
+            .unwrap_or_default();
+        let witness_commitment_len = trace
+            .segments
+            .iter()
+            .find(|segment| segment.name == "witness_commitments")
+            .map(|segment| segment.rows.len())
+            .unwrap_or_default();
+        let reputation_root_len = trace
+            .segments
+            .iter()
+            .find(|segment| segment.name == "reputation_roots")
+            .map(|segment| segment.rows.len())
+            .unwrap_or_default();
+
+        let expected_counts = [
+            (
+                "summary_vrf_output_count",
+                &summary_vrf_output,
+                vrf_output_len as u64,
+            ),
+            (
+                "summary_vrf_proof_count",
+                &summary_vrf_proof,
+                vrf_proof_len as u64,
+            ),
+            (
+                "summary_witness_commitment_count",
+                &summary_witness_commitment,
+                witness_commitment_len as u64,
+            ),
+            (
+                "summary_reputation_root_count",
+                &summary_reputation_root,
+                reputation_root_len as u64,
+            ),
+        ];
+
+        for (name, column, value) in expected_counts {
+            constraints.push(AirConstraint::new(
+                name,
+                summary_segment,
+                ConstraintDomain::FirstRow,
+                AirExpression::difference(
+                    column.expr(),
+                    AirExpression::constant(parameters.element_from_u64(value)),
+                ),
+            ));
+        }
+
+        constraints.push(AirConstraint::new(
+            "summary_vrf_counts_match",
+            summary_segment,
+            ConstraintDomain::FirstRow,
+            AirExpression::difference(summary_vrf_output.expr(), summary_vrf_proof.expr()),
+        ));
 
         Ok(AirDefinition::new(constraints))
     }

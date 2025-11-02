@@ -304,7 +304,9 @@ impl RecursiveAggregator {
 mod tests {
     use super::*;
     use crate::reputation::{ReputationWeights, Tier};
-    use crate::stwo::circuit::consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower};
+    use crate::stwo::circuit::consensus::{
+        ConsensusCircuit, ConsensusWitness as CircuitConsensusWitness, VotePower,
+    };
     use crate::stwo::circuit::identity::IdentityWitness;
     use crate::stwo::circuit::recursive::{
         PrefixedDigest as CircuitPrefixedDigest, RecursiveWitness as CircuitRecursiveWitness,
@@ -507,17 +509,24 @@ mod tests {
             commit_votes: vec![vote],
             quorum_bitmap_root: "bb".repeat(32),
             quorum_signature_root: "cc".repeat(32),
-            vrf_outputs: Vec::new(),
-            vrf_proofs: Vec::new(),
-            witness_commitments: Vec::new(),
-            reputation_roots: Vec::new(),
+            vrf_outputs: vec!["dd".repeat(32)],
+            vrf_proofs: vec!["ee".repeat(rpp_crypto_vrf::VRF_PROOF_LENGTH)],
+            witness_commitments: vec!["ff".repeat(32)],
+            reputation_roots: vec!["aa".repeat(32)],
         };
-        make_proof(
+        let mut proof = make_proof(
             parameters,
             ProofKind::Consensus,
             ProofPayload::Consensus(witness),
             commitment,
-        )
+        );
+        if let ProofPayload::Consensus(witness) = &proof.payload {
+            proof.public_inputs = ConsensusCircuit::public_inputs(parameters, witness)
+                .into_iter()
+                .map(|value| value.to_hex())
+                .collect();
+        }
+        proof
     }
 
     fn sample_state_roots(seed: u64) -> StateCommitmentSnapshot {
