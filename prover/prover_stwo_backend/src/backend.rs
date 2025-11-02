@@ -14,19 +14,20 @@ pub use io::{
 };
 
 use prover_backend_interface::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, IdentityCircuitDef,
-    IdentityPublicInputs, ProofBackend, ProofBytes, ProvingKey, PruningCircuitDef,
-    PruningPublicInputs, RecursiveCircuitDef, RecursivePublicInputs, SecurityLevel,
-    StateCircuitDef, StatePublicInputs, TxCircuitDef, TxPublicInputs, UptimeCircuitDef,
-    UptimePublicInputs, VerifyingKey, WitnessBytes,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVrfPoseidonInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
+    IdentityCircuitDef, IdentityPublicInputs, ProofBackend, ProofBytes, ProvingKey,
+    PruningCircuitDef, PruningPublicInputs, RecursiveCircuitDef, RecursivePublicInputs,
+    SecurityLevel, StateCircuitDef, StatePublicInputs, TxCircuitDef, TxPublicInputs,
+    UptimeCircuitDef, UptimePublicInputs, VerifyingKey, WitnessBytes,
 };
 
 #[cfg(feature = "official")]
 use crate::official::aggregation::pruning_fold_from_canonical_bytes;
 #[cfg(feature = "official")]
-use crate::official::circuit::{consensus::ConsensusCircuit, string_to_field};
-#[cfg(feature = "official")]
 use crate::official::circuit::consensus::ConsensusWitness;
+#[cfg(feature = "official")]
+use crate::official::circuit::{consensus::ConsensusCircuit, string_to_field};
 #[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
 #[cfg(feature = "official")]
@@ -38,9 +39,14 @@ use crate::proof_system::ProofVerifier;
 #[cfg(feature = "official")]
 use crate::types::ChainProof;
 #[cfg(feature = "official")]
+use crate::vrf::VRF_PREOUTPUT_LENGTH;
+#[cfg(feature = "official")]
 use keys::{decode_key_payload, encode_key_payload, KeyPayload, SupportedCircuit};
 #[cfg(feature = "official")]
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
+
+#[cfg(feature = "official")]
+const POSEIDON_VRF_DOMAIN: &[u8] = b"chain.vrf.poseidon";
 
 /// Thin adapter exposing the STWO integration through the shared backend
 /// interface.  The concrete proving routines are wired in lazily to keep the
@@ -497,12 +503,141 @@ impl ProofBackend for StwoBackend {
                     ))
                 }
             };
-            if public_inputs.vrf_outputs.len() != witness.vrf_entries.len()
-                || public_inputs.vrf_proofs.len() != witness.vrf_entries.len()
-            {
+            if public_inputs.vrf_entries.len() != witness.vrf_entries.len() {
                 return Err(BackendError::Failure(
-                    "consensus VRF entry counts mismatch public inputs".into(),
+                    "consensus VRF entry count mismatch public inputs".into(),
                 ));
+            }
+
+            for (index, (public_entry, witness_entry)) in public_inputs
+                .vrf_entries
+                .iter()
+                .zip(&witness.vrf_entries)
+                .enumerate()
+            {
+                let index = index + 1;
+                let witness_randomness: [u8; 32] = hex::decode(&witness_entry.randomness)
+                    .map_err(|err| {
+                        BackendError::Failure(format!(
+                            "consensus witness VRF entry #{index} randomness not valid hex: {err}"
+                        ))
+                    })?
+                    .try_into()
+                    .map_err(|_| {
+                        BackendError::Failure(format!(
+                            "consensus witness VRF entry #{index} randomness has incorrect length"
+                        ))
+                    })?;
+                if witness_randomness != public_entry.randomness {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} randomness mismatch public inputs"
+                    )));
+                }
+
+                let witness_pre_output: [u8; VRF_PREOUTPUT_LENGTH] = hex::decode(
+                    &witness_entry.pre_output,
+                )
+                .map_err(|err| {
+                    BackendError::Failure(format!(
+                        "consensus witness VRF entry #{index} pre-output not valid hex: {err}"
+                    ))
+                })?
+                .try_into()
+                .map_err(|_| {
+                    BackendError::Failure(format!(
+                        "consensus witness VRF entry #{index} pre-output has incorrect length"
+                    ))
+                })?;
+                if witness_pre_output != public_entry.pre_output {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} pre-output mismatch public inputs"
+                    )));
+                }
+
+                let witness_proof = hex::decode(&witness_entry.proof).map_err(|err| {
+                    BackendError::Failure(format!(
+                        "consensus witness VRF entry #{index} proof not valid hex: {err}"
+                    ))
+                })?;
+                if witness_proof != public_entry.proof {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} proof mismatch public inputs"
+                    )));
+                }
+
+                let witness_public_key: [u8; 32] = hex::decode(&witness_entry.public_key)
+                    .map_err(|err| {
+                        BackendError::Failure(format!(
+                            "consensus witness VRF entry #{index} public key not valid hex: {err}"
+                        ))
+                    })?
+                    .try_into()
+                    .map_err(|_| {
+                        BackendError::Failure(format!(
+                            "consensus witness VRF entry #{index} public key has incorrect length"
+                        ))
+                    })?;
+                if witness_public_key != public_entry.public_key {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} public key mismatch public inputs"
+                    )));
+                }
+
+                let witness_last_block: [u8; 32] = hex::decode(
+                    &witness_entry.input.last_block_header,
+                )
+                .map_err(|err| {
+                    BackendError::Failure(format!(
+                        "consensus witness VRF entry #{index} Poseidon header not valid hex: {err}"
+                    ))
+                })?
+                .try_into()
+                .map_err(|_| {
+                    BackendError::Failure(format!(
+                        "consensus witness VRF entry #{index} Poseidon header has incorrect length"
+                    ))
+                })?;
+                if witness_last_block != public_entry.poseidon.last_block_header {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} poseidon last block header mismatch public inputs"
+                    )));
+                }
+
+                if witness_entry.input.epoch != public_entry.poseidon.epoch {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} poseidon epoch mismatch public inputs"
+                    )));
+                }
+
+                let witness_tier_seed: [u8; 32] = hex::decode(&witness_entry.input.tier_seed)
+                    .map_err(|err| {
+                        BackendError::Failure(format!(
+                            "consensus witness VRF entry #{index} Poseidon tier seed not valid hex: {err}"
+                        ))
+                    })?
+                    .try_into()
+                    .map_err(|_| {
+                        BackendError::Failure(format!(
+                            "consensus witness VRF entry #{index} Poseidon tier seed has incorrect length"
+                        ))
+                    })?;
+                if witness_tier_seed != public_entry.poseidon.tier_seed {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} poseidon tier seed mismatch public inputs"
+                    )));
+                }
+
+                let digest_field = parameters.poseidon_hasher().hash(&[
+                    parameters.element_from_bytes(POSEIDON_VRF_DOMAIN),
+                    string_to_field(&parameters, &witness_entry.input.last_block_header),
+                    parameters.element_from_u64(witness_entry.input.epoch),
+                    string_to_field(&parameters, &witness_entry.input.tier_seed),
+                ]);
+                if field_to_padded_bytes(&digest_field) != public_entry.poseidon.digest {
+                    return Err(BackendError::Failure(format!(
+                        "consensus VRF entry #{index} poseidon digest mismatch public inputs"
+                    )));
+                }
             }
             let expected_fields =
                 rebuild_consensus_public_inputs(&parameters, public_inputs, witness);
@@ -738,22 +873,25 @@ fn rebuild_consensus_public_inputs(
         element_from_bytes(parameters, &inputs.quorum_bitmap_root),
         element_from_bytes(parameters, &inputs.quorum_signature_root),
     ];
-    for digest in &inputs.vrf_outputs {
-        fields.push(element_from_bytes(parameters, digest));
+    for entry in &inputs.vrf_entries {
+        fields.push(element_from_bytes(parameters, &entry.randomness));
     }
-    for entry in &witness.vrf_entries {
-        fields.push(string_to_field(parameters, &entry.pre_output));
+    for entry in &inputs.vrf_entries {
+        fields.push(element_from_bytes(parameters, &entry.pre_output));
     }
-    for proof in &inputs.vrf_proofs {
-        fields.push(element_from_bytes(parameters, proof));
+    for entry in &inputs.vrf_entries {
+        fields.push(element_from_bytes(parameters, &entry.proof));
     }
-    for entry in &witness.vrf_entries {
-        fields.push(string_to_field(parameters, &entry.public_key));
+    for entry in &inputs.vrf_entries {
+        fields.push(element_from_bytes(parameters, &entry.public_key));
     }
-    for entry in &witness.vrf_entries {
-        fields.push(string_to_field(parameters, &entry.input.last_block_header));
-        fields.push(parameters.element_from_u64(entry.input.epoch));
-        fields.push(string_to_field(parameters, &entry.input.tier_seed));
+    for entry in &inputs.vrf_entries {
+        fields.push(element_from_bytes(
+            parameters,
+            &entry.poseidon.last_block_header,
+        ));
+        fields.push(parameters.element_from_u64(entry.poseidon.epoch));
+        fields.push(element_from_bytes(parameters, &entry.poseidon.tier_seed));
     }
     for digest in &inputs.witness_commitments {
         fields.push(element_from_bytes(parameters, digest));
@@ -761,10 +899,10 @@ fn rebuild_consensus_public_inputs(
     for digest in &inputs.reputation_roots {
         fields.push(element_from_bytes(parameters, digest));
     }
-    let entry_len = witness.vrf_entries.len() as u64;
-    fields.push(parameters.element_from_u64(inputs.vrf_outputs.len() as u64));
+    let entry_len = inputs.vrf_entries.len() as u64;
     fields.push(parameters.element_from_u64(entry_len));
-    fields.push(parameters.element_from_u64(inputs.vrf_proofs.len() as u64));
+    fields.push(parameters.element_from_u64(entry_len));
+    fields.push(parameters.element_from_u64(entry_len));
     fields.push(parameters.element_from_u64(entry_len));
     fields.push(parameters.element_from_u64(entry_len));
     fields.push(parameters.element_from_u64(inputs.witness_commitments.len() as u64));
@@ -1114,7 +1252,7 @@ mod tests {
             .expect("consensus proving succeeds");
 
         let mut public_inputs = consensus_public_inputs(&witness);
-        public_inputs.vrf_outputs[0][0] ^= 0xff;
+        public_inputs.vrf_entries[0].randomness[0] ^= 0xff;
 
         let err = backend
             .verify_consensus(&verifying_key, &proof_bytes, &circuit, &public_inputs)
@@ -1551,15 +1689,29 @@ mod tests {
             quorum_threshold: witness.quorum_threshold,
             quorum_bitmap_root: hex_to_array(&witness.quorum_bitmap_root),
             quorum_signature_root: hex_to_array(&witness.quorum_signature_root),
-            vrf_outputs: witness
+            vrf_entries: witness
                 .vrf_entries
                 .iter()
-                .map(|entry| hex_to_array(&entry.randomness))
-                .collect(),
-            vrf_proofs: witness
-                .vrf_entries
-                .iter()
-                .map(|entry| hex_to_vec(&entry.proof))
+                .map(|entry| {
+                    let digest = parameters.poseidon_hasher().hash(&[
+                        parameters.element_from_bytes(POSEIDON_VRF_DOMAIN),
+                        string_to_field(&parameters, &entry.input.last_block_header),
+                        parameters.element_from_u64(entry.input.epoch),
+                        string_to_field(&parameters, &entry.input.tier_seed),
+                    ]);
+                    ConsensusVrfPublicEntry {
+                        randomness: hex_to_array(&entry.randomness),
+                        pre_output: hex_to_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
+                        proof: hex_to_vec(&entry.proof),
+                        public_key: hex_to_array(&entry.public_key),
+                        poseidon: PublicConsensusVrfPoseidonInput {
+                            digest: field_to_padded_bytes(&digest),
+                            last_block_header: hex_to_array(&entry.input.last_block_header),
+                            epoch: entry.input.epoch,
+                            tier_seed: hex_to_array(&entry.input.tier_seed),
+                        },
+                    }
+                })
                 .collect(),
             witness_commitments: witness
                 .witness_commitments

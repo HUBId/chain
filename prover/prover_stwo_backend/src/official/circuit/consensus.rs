@@ -204,7 +204,7 @@ impl ConsensusWitness {
         Ok(())
     }
 
-    fn ensure_vrf_entries(&self) -> Result<(), CircuitError> {
+    pub(crate) fn ensure_vrf_entries(&self) -> Result<(), CircuitError> {
         if self.vrf_entries.is_empty() {
             return Err(CircuitError::ConstraintViolation(
                 "consensus witness missing VRF entries".into(),

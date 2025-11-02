@@ -232,11 +232,9 @@ fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
 
 #[cfg(feature = "official")]
 fn ensure_consensus_witness_metadata(witness: &ConsensusWitness) -> BackendResult<()> {
-    if witness.vrf_entries.is_empty() {
-        return Err(BackendError::Failure(
-            "consensus witness missing VRF entries".into(),
-        ));
-    }
+    witness
+        .ensure_vrf_entries()
+        .map_err(|error| BackendError::Failure(error.to_string()))?;
     if witness.witness_commitments.is_empty() {
         return Err(BackendError::Failure(
             "consensus witness missing witness commitments".into(),
@@ -495,7 +493,39 @@ mod tests {
         .expect("encode witness");
         let result = decode_consensus_witness(&bytes);
         assert!(
-            matches!(result, Err(BackendError::Failure(message)) if message.contains("missing VRF outputs"))
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("missing VRF entries"))
+        );
+    }
+
+    #[test]
+    fn decode_consensus_witness_rejects_poseidon_header_mismatch() {
+        let mut witness = sample_consensus_witness();
+        witness.vrf_entries[0].input.last_block_header = "ff".repeat(32);
+        let bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, CONSENSUS_CIRCUIT),
+            &witness,
+        )
+        .expect("encode witness");
+        let result = decode_consensus_witness(&bytes);
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message
+            .contains("poseidon last block header must match block hash"))
+        );
+    }
+
+    #[test]
+    fn decode_consensus_witness_rejects_poseidon_epoch_mismatch() {
+        let mut witness = sample_consensus_witness();
+        witness.vrf_entries[0].input.epoch += 1;
+        let bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, CONSENSUS_CIRCUIT),
+            &witness,
+        )
+        .expect("encode witness");
+        let result = decode_consensus_witness(&bytes);
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message
+            .contains("poseidon epoch mismatch"))
         );
     }
 
