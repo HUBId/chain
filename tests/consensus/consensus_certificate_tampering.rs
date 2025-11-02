@@ -1,24 +1,27 @@
+#[path = "common.rs"]
+mod common;
+
+use common::{digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
 use rpp_chain::consensus_engine::messages::{BlockId, TalliedVote};
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::ChainProof;
-use rpp_chain::vrf::VRF_PROOF_LENGTH;
 
 fn sample_metadata() -> ConsensusProofMetadata {
-    let digest = |byte: u8| hex::encode([byte; 32]);
-    let proof_bytes = |byte: u8| hex::encode(vec![byte; VRF_PROOF_LENGTH]);
-
-    ConsensusProofMetadata {
-        vrf_outputs: vec![digest(0xAA), digest(0xBB), digest(0xCC)],
-        vrf_proofs: vec![proof_bytes(0x11), proof_bytes(0x22), proof_bytes(0x33)],
-        witness_commitments: vec![digest(0xDD)],
-        reputation_roots: vec![digest(0xEE)],
-        epoch: 17,
-        slot: 29,
-        quorum_bitmap_root: digest(0xF1),
-        quorum_signature_root: digest(0xF2),
-    }
+    metadata_fixture(
+        vec![
+            vrf_entry(0xAA, 0x11),
+            vrf_entry(0xBB, 0x22),
+            vrf_entry(0xCC, 0x33),
+        ],
+        vec![digest(0xDD)],
+        vec![digest(0xEE)],
+        17,
+        29,
+        digest(0xF1),
+        digest(0xF2),
+    )
 }
 
 fn sample_vote(validator: &str, voting_power: u64) -> TalliedVote {
@@ -98,14 +101,14 @@ mod plonky3_backend {
             .verify_consensus(&proof)
             .expect("baseline consensus proof should verify");
 
-        let twisted_vrf_outputs = tamper_proof(&proof, |witness| {
-            if let Some(Value::Array(outputs)) = witness.get_mut("vrf_outputs") {
-                if outputs.len() > 1 {
-                    outputs.rotate_left(1);
+        let twisted_vrf_entries = tamper_proof(&proof, |witness| {
+            if let Some(Value::Array(entries)) = witness.get_mut("vrf_entries") {
+                if entries.len() > 1 {
+                    entries.rotate_left(1);
                 }
             }
         });
-        assert!(verifier.verify_consensus(&twisted_vrf_outputs).is_err());
+        assert!(verifier.verify_consensus(&twisted_vrf_entries).is_err());
 
         let scrambled_quorum_bitmap = tamper_proof(&proof, |witness| {
             if let Some(Value::String(root)) = witness.get_mut("quorum_bitmap_root") {
@@ -170,12 +173,12 @@ mod stwo_backend {
             .verify_consensus(&proof)
             .expect("baseline consensus proof should verify");
 
-        let twisted_vrf_outputs = tamper_proof(&proof, |witness| {
-            if witness.vrf_outputs.len() > 1 {
-                witness.vrf_outputs.rotate_left(1);
+        let twisted_vrf_entries = tamper_proof(&proof, |witness| {
+            if witness.vrf_entries.len() > 1 {
+                witness.vrf_entries.rotate_left(1);
             }
         });
-        assert!(verifier.verify_consensus(&twisted_vrf_outputs).is_err());
+        assert!(verifier.verify_consensus(&twisted_vrf_entries).is_err());
 
         let scrambled_quorum_bitmap = tamper_proof(&proof, |witness| {
             witness.quorum_bitmap_root = witness

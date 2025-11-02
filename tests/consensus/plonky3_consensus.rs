@@ -1,12 +1,16 @@
+#[path = "common.rs"]
+mod common;
+
+use common::{digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
-use plonky3_backend::{ConsensusCircuit, ConsensusWitness as BackendConsensusWitness};
+use plonky3_backend::ConsensusCircuit;
 use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
 use rpp_chain::consensus_engine::messages::{BlockId, TalliedVote};
+use rpp_chain::plonky3::circuit::consensus::ConsensusWitness as Plonky3ConsensusWitness;
 use rpp_chain::plonky3::prover::Plonky3Prover;
 use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::ChainProof;
-use rpp_chain::vrf::VRF_PROOF_LENGTH;
 use serde_json::{Map, Value};
 
 fn sample_vote(validator: &str, voting_power: u64) -> TalliedVote {
@@ -19,19 +23,15 @@ fn sample_vote(validator: &str, voting_power: u64) -> TalliedVote {
 }
 
 fn sample_metadata() -> ConsensusProofMetadata {
-    let digest = |byte: u8| hex::encode([byte; 32]);
-    let proof_bytes = |byte: u8| hex::encode(vec![byte; VRF_PROOF_LENGTH]);
-
-    ConsensusProofMetadata {
-        vrf_outputs: vec![digest(0x11)],
-        vrf_proofs: vec![proof_bytes(0x21)],
-        witness_commitments: vec![digest(0x33)],
-        reputation_roots: vec![digest(0x44)],
-        epoch: 7,
-        slot: 9,
-        quorum_bitmap_root: digest(0x55),
-        quorum_signature_root: digest(0x66),
-    }
+    metadata_fixture(
+        vec![vrf_entry(0x11, 0x21)],
+        vec![digest(0x33)],
+        vec![digest(0x44)],
+        7,
+        9,
+        digest(0x55),
+        digest(0x66),
+    )
 }
 
 fn sample_certificate() -> ConsensusCertificate {
@@ -65,8 +65,12 @@ fn tamper_proof(proof: &ChainProof, mutator: impl FnOnce(&mut Map<String, Value>
         mutator(witness);
 
         // Recompute bindings so the mutation mimics a sophisticated attacker.
-        let backend_witness: BackendConsensusWitness =
-            serde_json::from_value(Value::Object(witness.clone())).expect("backend witness");
+        let consensus_witness: Plonky3ConsensusWitness =
+            serde_json::from_value(Value::Object(witness.clone()))
+                .expect("consensus witness struct");
+        let backend_witness = consensus_witness
+            .to_backend()
+            .expect("prepare backend witness");
         let circuit = ConsensusCircuit::new(backend_witness).expect("backend circuit");
         let bindings = circuit.bindings().clone();
         parsed.public_inputs.as_object_mut().unwrap().insert(
@@ -99,10 +103,7 @@ fn plonky3_rejects_consensus_manipulation() {
         .expect("baseline proof verifies");
 
     let tampered = tamper_proof(&proof, |witness| {
-        witness.insert(
-            "quorum_signature_root".into(),
-            Value::String("77".repeat(32)),
-        );
+        witness.insert("quorum_signature_root".into(), Value::String(digest(0x77)));
     });
     assert!(verifier.verify_consensus(&tampered).is_err());
 }

@@ -1,3 +1,7 @@
+#[path = "common.rs"]
+mod common;
+
+use common::{digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_consensus::malachite::distributed::{DistributedOrchestrator, NodeStreams, VoteMessage};
 use rpp_consensus::messages::{
@@ -8,25 +12,21 @@ use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
     ConsensusCircuitDef, ConsensusPublicInputs, ProofBytes, VerifyingKey,
 };
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 use rpp_p2p::GossipTopic;
 use serde_json::json;
 use tokio::runtime::Builder;
 
 fn sample_metadata(round: u64) -> ConsensusProofMetadata {
-    let digest = |seed: u8| hex::encode([seed; 32]);
     let seed = seed_from_round(round);
-    let proof = hex::encode(vec![seed; VRF_PROOF_LENGTH]);
-    ConsensusProofMetadata {
-        vrf_outputs: vec![digest(seed)],
-        vrf_proofs: vec![proof],
-        witness_commitments: vec![digest(seed.wrapping_add(1))],
-        reputation_roots: vec![digest(seed.wrapping_add(2))],
-        epoch: round,
-        slot: round,
-        quorum_bitmap_root: digest(seed.wrapping_add(3)),
-        quorum_signature_root: digest(seed.wrapping_add(4)),
-    }
+    metadata_fixture(
+        vec![vrf_entry(seed, seed)],
+        vec![digest(seed.wrapping_add(1))],
+        vec![digest(seed.wrapping_add(2))],
+        round,
+        round,
+        digest(seed.wrapping_add(3)),
+        digest(seed.wrapping_add(4)),
+    )
 }
 
 fn seed_from_round(round: u64) -> u8 {
@@ -47,16 +47,16 @@ fn sample_public_inputs(
     let block_hash_bytes = decode_digest(&block_hash.0);
     let quorum_bitmap_root = decode_digest(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest(&metadata.quorum_signature_root);
-    let vrf_outputs: Vec<[u8; 32]> = metadata
-        .vrf_outputs
+    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = metadata
+        .vrf_entries
         .iter()
-        .map(|value| decode_digest(value))
-        .collect();
-    let vrf_proofs: Vec<Vec<u8>> = metadata
-        .vrf_proofs
-        .iter()
-        .map(|value| hex::decode(value).expect("decode vrf proof"))
-        .collect();
+        .map(|entry| {
+            (
+                decode_digest(&entry.randomness),
+                hex::decode(&entry.proof).expect("decode vrf proof"),
+            )
+        })
+        .unzip();
     let witness_commitments: Vec<[u8; 32]> = metadata
         .witness_commitments
         .iter()

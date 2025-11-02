@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[path = "common.rs"]
+mod common;
+
+use common::{digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_consensus::evidence::{CensorshipStage, EvidenceKind, EvidenceType};
 use rpp_consensus::messages::{
@@ -13,20 +17,18 @@ use rpp_consensus::proof_backend::{
 };
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_consensus::validator::{VRFOutput, ValidatorLedgerEntry};
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
 use serde_json::json;
 
 fn sample_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
-    ConsensusProofMetadata {
-        vrf_outputs: vec!["11".repeat(32)],
-        vrf_proofs: vec!["22".repeat(VRF_PROOF_LENGTH)],
-        witness_commitments: vec!["33".repeat(32)],
-        reputation_roots: vec!["44".repeat(32)],
+    metadata_fixture(
+        vec![vrf_entry(0x11, 0x22)],
+        vec![digest(0x33)],
+        vec![digest(0x44)],
         epoch,
         slot,
-        quorum_bitmap_root: "55".repeat(32),
-        quorum_signature_root: "66".repeat(32),
-    }
+        digest(0x55),
+        digest(0x66),
+    )
 }
 
 fn decode_digest(hex_value: &str) -> [u8; 32] {
@@ -141,16 +143,16 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
     let block_hash_bytes = decode_digest(&block_hash.0);
     let quorum_bitmap_root = decode_digest(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest(&metadata.quorum_signature_root);
-    let vrf_outputs: Vec<[u8; 32]> = metadata
-        .vrf_outputs
+    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = metadata
+        .vrf_entries
         .iter()
-        .map(|value| decode_digest(value))
-        .collect();
-    let vrf_proofs: Vec<Vec<u8>> = metadata
-        .vrf_proofs
-        .iter()
-        .map(|value| hex::decode(value).expect("decode vrf proof"))
-        .collect();
+        .map(|entry| {
+            (
+                decode_digest(&entry.randomness),
+                hex::decode(&entry.proof).expect("decode vrf proof"),
+            )
+        })
+        .unzip();
     let witness_commitments: Vec<[u8; 32]> = metadata
         .witness_commitments
         .iter()
