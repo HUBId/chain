@@ -1,0 +1,16 @@
+{
+  "name": "snapshot-rebuild",
+  "description": "Rebuild snapshot state while replaying partition recovery and light-client sync",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/partition_restart_plan.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/partition_restart_plan.json"
+  },
+  "consensus": null
+}

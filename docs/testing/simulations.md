@@ -69,6 +69,24 @@ Die Kommandoausgabe listet jeden Szenario-Namen; bei Fehlern (z. B.
 Start-Timeouts oder abgelehnten Prozessen) bricht `xtask` mit einem nicht-null
 Exitcode ab.【F:xtask/src/main.rs†L60-L110】
 
+### Phase‑2-Regression
+
+Für Phase‑2-Abnahmen existiert ein orchestrierter Lauf, der alle
+VRF-/Quorum-relevanten Szenarien nacheinander startet und konsolidierte
+Berichte erzeugt. Der Befehl
+
+```bash
+cargo run -p simnet --bin regression -- \
+  --artifacts-root target/simnet/regression-manual
+```
+
+legt je Szenario ein Unterverzeichnis an, führt zunächst den
+VRF-/Quorum-Stresstest, anschließend den Snapshot-Rebuild und zuletzt den
+Gossip-Backpressure-Lauf aus.【F:tools/simnet/src/bin/regression.rs†L1-L240】 Die
+JSON- und HTML-Gesamtberichte (`regression.json`/`regression.html`) listen
+Laufzeit, Artefaktpfade sowie Konsensus-Kennzahlen (p95 prove/verify, Tamper-Rate)
+und brechen mit non-zero Exitcode ab, sobald ein Einzelszenario scheitert.【F:tools/simnet/src/bin/regression.rs†L96-L214】 Override-Pfade ermöglichen die Einbindung in CI-Artefaktpipelines.
+
 ## Artefakte und Auswertung
 
 Jedes Artefaktverzeichnis enthält:
@@ -101,6 +119,8 @@ Nachvollziehbarkeit herstellen können.【F:scripts/analyze_simnet.py†L120-L20
 | [`ci_block_pipeline.ron`](../../tools/simnet/scenarios/ci_block_pipeline.ron) | Basislauf für Blockproduktion, Gossip, Wallet ↔ Node RPC. | Core Testing (`#simnet-harness`)|
 | [`ci_state_sync_guard.ron`](../../tools/simnet/scenarios/ci_state_sync_guard.ron) | Überprüft Snapshot-/Light-Client-Schutzpfade und Root-Guards. | Core Testing (`#state-sync`)|
 | [`consensus_quorum_stress.ron`](../../tools/simnet/scenarios/consensus_quorum_stress.ron) | VRF-/Quorum-Stresstest mit Tamper-Injektion und Latenzmetriken. | Consensus/Proofs (`#consensus-ztk`)|
+| [`snapshot_rebuild.ron`](../../tools/simnet/scenarios/snapshot_rebuild.ron) | Repliziert Partition-Restarts und Snapshot-Neuaufbau via Light-Client-Sync. | State Sync (`#state-sync`)|
+| [`gossip_backpressure.ron`](../../tools/simnet/scenarios/gossip_backpressure.ron) | Wallet-Tracker-Backpressure und Admission-Control im Gossip-Netzwerk. | Networking (`#p2p`)|
 
 Die Owner-Channels sind im internen Slack verankert; bei Ausreißern oder neuen
 Szenarioanforderungen bitte direkt dort eskalieren.
@@ -118,16 +138,17 @@ Szenarioanforderungen bitte direkt dort eskalieren.
 
 ## CI- und Nightly-Integration
 
-* **CI (`.github/workflows/ci.yml`):** Der Job `simnet-smoke` ruft
-  `cargo xtask test-simnet` mit Standard-Feature-Flags auf und lädt die artefakte
-  der Smoke-Szenarien hoch. Trigger: `pull_request` gegen `main`.【F:.github/workflows/ci.yml†L63-L118】
-* **Nightly (`.github/workflows/nightly.yml`):** Der neue Job `simnet` führt
-  täglich um 01:30 UTC `cargo xtask test-simnet` mit dem Production-Feature-Set
-  aus, wertet anschließend alle JSON-Summaries mit
-  `scripts/analyze_simnet.py` aus und veröffentlicht ein Tarball mit Logs,
-  JSON- und CSV-Reports. Triggert automatisch sowie manuell über
-  `workflow_dispatch`. Bei Grenzwertüberschreitungen setzt der Analyse-Schritt
-  den Workflow-Status auf rot (Fail-fast).【F:.github/workflows/nightly.yml†L1-L86】
+* **CI (`.github/workflows/ci.yml`):** `simnet-smoke` ruft
+  `cargo xtask test-simnet` mit Standard-Feature-Flags auf; der zusätzliche Job
+  `simnet-regression` führt die Phase‑2-Szenarien via
+  `cargo run -p simnet --bin regression` aus und veröffentlicht JSON/HTML-Berichte
+  als Artefakt.【F:.github/workflows/ci.yml†L184-L226】【F:tools/simnet/src/bin/regression.rs†L1-L240】 Trigger: `pull_request`
+  gegen `main`.
+* **Nightly (`.github/workflows/nightly.yml`):** Neben dem bestehenden
+  `simnet`-Smoke-Test läuft der Job `simnet-regression`, der das Regressionstool
+  täglich um 01:30 UTC mit Produktionsflaggen anstößt und die Ergebnisse als Tarball
+  archiviert.【F:.github/workflows/nightly.yml†L1-L120】 Beide Workflows schlagen fehl,
+  sobald ein Einzelszenario unerwartet scheitert.
 
 Alle Artefakte stehen für 30 Tage im Actions-Tab bereit und sind im Weekly
 Status-Bericht verlinkt.

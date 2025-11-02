@@ -40,7 +40,34 @@ and runtime protections remain enforced alongside the CI gates.
       `quorum_reached=true` liefern. Nach einer manipulierten Probe bleibt der Wert `false` und der
       Log-Eintrag dokumentiert den Abbruch. Erfasse zusätzlich einen Screenshot der Panels
       `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total` aus
-      `docs/dashboards/consensus_grafana.json`, inklusive des `result="failure"`-Slices.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:rpp/runtime/node.rs†L358-L390】
+`docs/dashboards/consensus_grafana.json`, inklusive des `result="failure"`-Slices.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:rpp/runtime/node.rs†L358-L390】
+
+## Consensus VRF-/Quorum-Alert-Playbook
+
+Die Prometheus-Regeln unter `docs/observability/alerts/consensus_vrf.yaml` schlagen bei erhöhten VRF-Latenzen,
+Failure-Bursts oder Quorum-Rejections an.【F:docs/observability/alerts/consensus_vrf.yaml†L1-L47】 Verwende folgende Schritte,
+um On-Call-Reaktionen zu standardisieren:
+
+1. **Alert `ConsensusVRFSlow` (warning).** Prüfe das Histogramm
+   `consensus_vrf_verification_time_ms` nach `result="success"` und verifiziere, dass der p95-Wert
+   über 50 ms bleibt. Korrelierte Ursachen sind CPU- oder GPU-Sättigung – kontrolliere die Node-Hardware
+   via `top`/`nvidia-smi` und vergleiche den `prove_ms`-Trend aus dem letzten Regression-Lauf
+   (`regression.json`).【F:docs/observability/consensus.md†L1-L70】【F:tools/simnet/src/bin/regression.rs†L1-L240】 Drossele Testlasten
+   oder starte die GPU-Runtime neu, bevor das Latency-Budget dauerhaft überschritten wird.
+2. **Alert `ConsensusVRFFailureBurst` (page).** Wurde in den letzten fünf Minuten mehr als zweimal
+   `result="failure"` gezählt, ermittele die `reason`-Labels und suche in `node.log` nach `invalid VRF proof`.
+   Bestätige über das Regressionstool (`cargo run -p simnet --bin regression`), dass Manipulationen weiterhin
+   abgelehnt werden, bevor du die Runde erneut startest.【F:tools/simnet/src/bin/regression.rs†L96-L214】 Fehlende Ablehnungen
+   deuten auf Konfigurations- oder Schlüsselprobleme hin.
+3. **Alert `ConsensusQuorumVerificationFailure` (page).** Notiere den `reason`-Tag des Counters
+   `consensus_quorum_verifications_total`, vergleiche ihn mit den Tamper-Fällen der Regression und
+   auditier die betroffenen Validatoren. Ein Quorum-Failure deutet auf manipulierte Zertifikate hin –
+   stoppe Blockproduktion, analysiere Logs und eskaliere an das Consensus-Team, falls der Fehler nach
+   erneuter Validierung bestehen bleibt.【F:docs/observability/alerts/consensus_vrf.yaml†L27-L47】
+
+> 📌 Dokumentiere jeden Alert im Incident-Log (Zeit, Labels, Gegenmaßnahmen) und verlinke Regression-
+>  bzw. Dashboard-Artefakte. Der Playbook-Eintrag dient Auditor:innen als Nachweis, dass Phase‑2-Alarme
+>  reproduzierbar und mit klaren Eskalationspfaden hinterlegt sind.
 
 | Symptom | Check | Action |
 | --- | --- | --- |

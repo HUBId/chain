@@ -5,3 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+base64 = "=0.22.1"
+blake3 = "=1.8.2"
+flate2 = { version = "=1.0.34", default-features = false, features = ["rust_backend"] }
+serde = { version = "=1.0.225", features = ["derive"] }
+serde_json = { workspace = true }

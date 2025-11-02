@@ -6,21 +6,21 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
     body::Body,
     http::{Method, Request as HttpRequest, StatusCode},
     routing::get,
+    Router,
 };
 use hyper::body::to_bytes;
-use opentelemetry::{Value, global};
+use opentelemetry::{global, Value};
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData, ResourceMetrics};
 use opentelemetry_sdk::metrics::{
     InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
 };
 use parking_lot::RwLock;
-use rpp_chain::api::{ApiContext, ErrorResponse, RpcMetricsLayer, routes};
-use rpp_chain::runtime::RuntimeMode;
+use rpp_chain::api::{routes, ApiContext, ErrorResponse, RpcMetricsLayer};
 use rpp_chain::runtime::metrics::RuntimeMetrics;
+use rpp_chain::runtime::RuntimeMode;
 #[path = "support/mod.rs"]
 mod support;
 

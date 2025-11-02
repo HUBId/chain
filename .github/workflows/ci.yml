@@ -45,8 +45,9 @@ from pathlib import Path
 
 import yaml
 
-files = [
+          files = [
     Path("docs/observability/alerts/root_integrity.yaml"),
+    Path("docs/observability/alerts/consensus_vrf.yaml"),
 ]
 
 error = False
@@ -213,3 +214,21 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-simnet
+
+  simnet-regression:
+    name: Simnet regression sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run regression harness
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/regression-ci
+          cargo run -p simnet --bin regression -- \
+            --artifacts-root target/simnet/regression-ci
+      - name: Upload regression artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-regression
+          path: target/simnet/regression-ci

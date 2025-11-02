@@ -4,10 +4,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::telemetry::pipeline::PipelineMetrics;
-use base64::Engine as _;
 use base64::engine::general_purpose;
-use blake2::Blake2s256;
+use base64::Engine as _;
 use blake2::digest::Digest as _;
+use blake2::Blake2s256;
 use blake3::Hasher as Blake3Hasher;
 use rpp_chain::runtime::sync::{
     ReconstructionEngine, RuntimeRecursiveProofVerifier, StateSyncPlan,
@@ -18,7 +18,7 @@ use rpp_p2p::{
     PipelineError,
 };
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
-use storage::snapshots::{SnapshotSet, known_snapshot_sets};
+use storage::snapshots::{known_snapshot_sets, SnapshotSet};
 use storage_firewood::pruning::{PersistedPrunerSnapshot, PersistedPrunerState};
 use thiserror::Error;
 

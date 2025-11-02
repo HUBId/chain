@@ -3,8 +3,7 @@ use std::env;
 use assert_cmd::Command;
 use predicates::str::contains;
 
-const ERROR_FRAGMENT: &str =
-    "The Plonky3 backend cannot be combined with the mock prover feature.";
+const ERROR_FRAGMENT: &str = "The Plonky3 backend cannot be combined with the mock prover feature.";
 
 #[test]
 fn backend_plonky3_rejected_with_mock_prover() {
