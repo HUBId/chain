@@ -44,6 +44,7 @@ use serde_json;
 use crate::config::{
     FeatureGates, GenesisAccount, NodeConfig, QueueWeightsConfig, ReleaseChannel, SecretsConfig,
 };
+use crate::consensus::messages::compute_consensus_bindings;
 use crate::consensus::{
     aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
     ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
@@ -114,6 +115,7 @@ use crate::types::{
 };
 use crate::vrf::{
     self, PoseidonVrfInput, VrfEpochManager, VrfProof, VrfSubmission, VrfSubmissionPool,
+    VRF_PROOF_LENGTH,
 };
 #[cfg(feature = "backend-rpp-stark")]
 use crate::zk::rpp_adapter::compute_public_digest;
@@ -377,6 +379,32 @@ pub struct ConsensusStatus {
     pub witness_events: u64,
     pub slashing_events: u64,
     pub failed_votes: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsensusProofStatus {
+    pub height: u64,
+    pub round: u64,
+    pub block_hash: String,
+    pub total_power: String,
+    pub quorum_threshold: String,
+    pub prevote_power: String,
+    pub precommit_power: String,
+    pub commit_power: String,
+    pub epoch: u64,
+    pub slot: u64,
+    pub vrf_outputs: Vec<String>,
+    pub vrf_proofs: Vec<String>,
+    pub witness_commitments: Vec<String>,
+    pub reputation_roots: Vec<String>,
+    pub quorum_bitmap_root: String,
+    pub quorum_signature_root: String,
+    pub vrf_output: String,
+    pub vrf_proof: String,
+    pub witness_commitment_root: String,
+    pub reputation_root: String,
+    pub quorum_bitmap: String,
+    pub quorum_signature: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -2542,6 +2570,10 @@ impl NodeHandle {
 
     pub fn consensus_status(&self) -> ChainResult<ConsensusStatus> {
         self.inner.consensus_status()
+    }
+
+    pub fn consensus_proof_status(&self) -> ChainResult<Option<ConsensusProofStatus>> {
+        self.inner.consensus_proof_status()
     }
 
     pub fn vrf_threshold(&self) -> VrfThresholdStatus {
@@ -4986,6 +5018,17 @@ impl NodeInner {
         })
     }
 
+    fn consensus_proof_status(&self) -> ChainResult<Option<ConsensusProofStatus>> {
+        let certificate = {
+            let state = self.consensus_state.read();
+            state.last_certificate.clone()
+        };
+        match certificate {
+            Some(certificate) => summarize_consensus_certificate(&certificate).map(Some),
+            None => Ok(None),
+        }
+    }
+
     fn vrf_status(&self, address: &str) -> ChainResult<VrfStatus> {
         let epoch_info = self.ledger.epoch_info();
         let nonce = self.ledger.current_epoch_nonce();
@@ -6912,6 +6955,96 @@ impl NodeInner {
     }
 }
 
+fn summarize_consensus_certificate(
+    certificate: &ConsensusCertificate,
+) -> ChainResult<ConsensusProofStatus> {
+    let block_hash_hex = certificate.block_hash.0.clone();
+    let block_hash = decode_digest("consensus block hash", &block_hash_hex)?;
+    let metadata = &certificate.metadata;
+
+    let vrf_outputs = decode_digest_list("vrf output", &metadata.vrf_outputs)?;
+    let vrf_proofs = decode_vrf_proofs(&metadata.vrf_proofs)?;
+    let witness_commitments =
+        decode_digest_list("witness commitment", &metadata.witness_commitments)?;
+    let reputation_roots = decode_digest_list("reputation root", &metadata.reputation_roots)?;
+    let quorum_bitmap_root = decode_digest("quorum bitmap root", &metadata.quorum_bitmap_root)?;
+    let quorum_signature_root =
+        decode_digest("quorum signature root", &metadata.quorum_signature_root)?;
+
+    let bindings = compute_consensus_bindings(
+        &block_hash,
+        &vrf_outputs,
+        &vrf_proofs,
+        &witness_commitments,
+        &reputation_roots,
+        &quorum_bitmap_root,
+        &quorum_signature_root,
+    );
+
+    let encode = |digest: [u8; 32]| hex::encode(digest);
+
+    Ok(ConsensusProofStatus {
+        height: certificate.height,
+        round: certificate.round,
+        block_hash: block_hash_hex,
+        total_power: certificate.total_power.to_string(),
+        quorum_threshold: certificate.quorum_threshold.to_string(),
+        prevote_power: certificate.prevote_power.to_string(),
+        precommit_power: certificate.precommit_power.to_string(),
+        commit_power: certificate.commit_power.to_string(),
+        epoch: metadata.epoch,
+        slot: metadata.slot,
+        vrf_outputs: metadata.vrf_outputs.clone(),
+        vrf_proofs: metadata.vrf_proofs.clone(),
+        witness_commitments: metadata.witness_commitments.clone(),
+        reputation_roots: metadata.reputation_roots.clone(),
+        quorum_bitmap_root: metadata.quorum_bitmap_root.clone(),
+        quorum_signature_root: metadata.quorum_signature_root.clone(),
+        vrf_output: encode(bindings.vrf_output),
+        vrf_proof: encode(bindings.vrf_proof),
+        witness_commitment_root: encode(bindings.witness_commitment),
+        reputation_root: encode(bindings.reputation_root),
+        quorum_bitmap: encode(bindings.quorum_bitmap),
+        quorum_signature: encode(bindings.quorum_signature),
+    })
+}
+
+fn decode_digest(label: &str, value: &str) -> ChainResult<[u8; 32]> {
+    let bytes =
+        hex::decode(value).map_err(|err| ChainError::Crypto(format!("invalid {label}: {err}")))?;
+    if bytes.len() != 32 {
+        return Err(ChainError::Crypto(format!("{label} must encode 32 bytes")));
+    }
+    let mut array = [0u8; 32];
+    array.copy_from_slice(&bytes);
+    Ok(array)
+}
+
+fn decode_digest_list(label: &str, values: &[String]) -> ChainResult<Vec<[u8; 32]>> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| decode_digest(&format!("{label} #{index}"), value))
+        .collect()
+}
+
+fn decode_vrf_proofs(values: &[String]) -> ChainResult<Vec<Vec<u8>>> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            let bytes = hex::decode(value)
+                .map_err(|err| ChainError::Crypto(format!("invalid vrf proof #{index}: {err}")))?;
+            if bytes.len() != VRF_PROOF_LENGTH {
+                return Err(ChainError::Crypto(format!(
+                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
+                )));
+            }
+            Ok(bytes)
+        })
+        .collect()
+}
+
 fn is_double_spend(err: &ChainError) -> bool {
     matches!(
         err,
@@ -6996,6 +7129,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use crate::consensus::messages::{BlockId, ConsensusProofMetadata};
     use tempfile::tempdir;
 
     use crate::crypto::{address_from_public_key, generate_keypair, sign_message};
@@ -7004,6 +7138,102 @@ mod tests {
         RppStarkProof, SignedTransaction, Stake, StarkProof, Tier, Transaction,
         TransactionProofBundle, TransactionWitness,
     };
+
+    fn sample_consensus_certificate() -> ConsensusCertificate {
+        let digest = |byte: u8| hex::encode([byte; 32]);
+        let proof_bytes = |byte: u8| hex::encode(vec![byte; VRF_PROOF_LENGTH]);
+
+        let metadata = ConsensusProofMetadata {
+            vrf_outputs: vec![digest(0x11), digest(0x12)],
+            vrf_proofs: vec![proof_bytes(0x21), proof_bytes(0x22)],
+            witness_commitments: vec![digest(0x33)],
+            reputation_roots: vec![digest(0x44)],
+            epoch: 5,
+            slot: 7,
+            quorum_bitmap_root: digest(0x55),
+            quorum_signature_root: digest(0x66),
+        };
+
+        ConsensusCertificate {
+            block_hash: BlockId(digest(0x77)),
+            height: 42,
+            round: 3,
+            total_power: 100,
+            quorum_threshold: 67,
+            prevote_power: 80,
+            precommit_power: 80,
+            commit_power: 80,
+            prevotes: Vec::new(),
+            precommits: Vec::new(),
+            metadata,
+        }
+    }
+
+    #[test]
+    fn summarize_consensus_certificate_includes_bindings() {
+        let certificate = sample_consensus_certificate();
+        let status = summarize_consensus_certificate(&certificate).expect("status computed");
+
+        assert_eq!(status.height, certificate.height);
+        assert_eq!(status.round, certificate.round);
+        assert_eq!(status.block_hash, certificate.block_hash.0);
+        assert_eq!(status.vrf_outputs, certificate.metadata.vrf_outputs);
+        assert_eq!(status.vrf_proofs, certificate.metadata.vrf_proofs);
+        assert_eq!(
+            status.witness_commitments,
+            certificate.metadata.witness_commitments
+        );
+        assert_eq!(
+            status.reputation_roots,
+            certificate.metadata.reputation_roots
+        );
+        assert_eq!(
+            status.quorum_bitmap_root,
+            certificate.metadata.quorum_bitmap_root
+        );
+        assert_eq!(
+            status.quorum_signature_root,
+            certificate.metadata.quorum_signature_root
+        );
+
+        let block_hash = decode_digest("block hash", &certificate.block_hash.0).unwrap();
+        let vrf_outputs = decode_digest_list("vrf", &certificate.metadata.vrf_outputs).unwrap();
+        let vrf_proofs = decode_vrf_proofs(&certificate.metadata.vrf_proofs).unwrap();
+        let witness_commitments =
+            decode_digest_list("witness", &certificate.metadata.witness_commitments).unwrap();
+        let reputation_roots =
+            decode_digest_list("reputation", &certificate.metadata.reputation_roots).unwrap();
+        let bitmap_root =
+            decode_digest("bitmap", &certificate.metadata.quorum_bitmap_root).unwrap();
+        let signature_root =
+            decode_digest("signature", &certificate.metadata.quorum_signature_root).unwrap();
+
+        let expected = compute_consensus_bindings(
+            &block_hash,
+            &vrf_outputs,
+            &vrf_proofs,
+            &witness_commitments,
+            &reputation_roots,
+            &bitmap_root,
+            &signature_root,
+        );
+
+        assert_eq!(status.vrf_output, hex::encode(expected.vrf_output));
+        assert_eq!(status.vrf_proof, hex::encode(expected.vrf_proof));
+        assert_eq!(
+            status.witness_commitment_root,
+            hex::encode(expected.witness_commitment)
+        );
+        assert_eq!(
+            status.reputation_root,
+            hex::encode(expected.reputation_root)
+        );
+        assert_eq!(status.quorum_bitmap, hex::encode(expected.quorum_bitmap));
+        assert_eq!(
+            status.quorum_signature,
+            hex::encode(expected.quorum_signature)
+        );
+    }
 
     fn sample_node_config(base: &Path) -> NodeConfig {
         let data_dir = base.join("data");

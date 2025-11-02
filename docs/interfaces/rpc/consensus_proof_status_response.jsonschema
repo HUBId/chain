@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.rpp.dev/rpc/consensus_proof_status_response.json",
+  "title": "ConsensusProofStatusResponse",
+  "type": "object",
+  "description": "Versioned consensus proof metadata exported by `/consensus/proof/status`.",
+  "required": [
+    "version",
+    "height",
+    "round",
+    "block_hash",
+    "total_power",
+    "quorum_threshold",
+    "prevote_power",
+    "precommit_power",
+    "commit_power",
+    "epoch",
+    "slot",
+    "vrf_outputs",
+    "vrf_proofs",
+    "witness_commitments",
+    "reputation_roots",
+    "quorum_bitmap_root",
+    "quorum_signature_root"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "enum": [1, 2],
+      "description": "Response schema version. Version 2 adds Poseidon binding digests alongside the raw metadata." 
+    },
+    "height": {"type": "integer", "minimum": 0},
+    "round": {"type": "integer", "minimum": 0},
+    "block_hash": {
+      "type": "string",
+      "description": "Hex-encoded block hash associated with the certificate.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "total_power": {"type": "string"},
+    "quorum_threshold": {"type": "string"},
+    "prevote_power": {"type": "string"},
+    "precommit_power": {"type": "string"},
+    "commit_power": {"type": "string"},
+    "epoch": {"type": "integer", "minimum": 0},
+    "slot": {"type": "integer", "minimum": 0},
+    "vrf_outputs": {
+      "type": "array",
+      "description": "VRF output digests contributed by the validator set.",
+      "items": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+    },
+    "vrf_proofs": {
+      "type": "array",
+      "description": "VRF proofs that justify the outputs for the current round.",
+      "items": {"type": "string", "pattern": "^[0-9a-fA-F]+$"}
+    },
+    "witness_commitments": {
+      "type": "array",
+      "description": "Witness commitment digests provided by assigned witnesses.",
+      "items": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+    },
+    "reputation_roots": {
+      "type": "array",
+      "description": "Merkle roots for validator reputation trees tracked during the round.",
+      "items": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
+    },
+    "quorum_bitmap_root": {
+      "type": "string",
+      "description": "Poseidon commitment to the prevote bitmap root embedded in the proof.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "quorum_signature_root": {
+      "type": "string",
+      "description": "Poseidon commitment to the aggregated quorum signature root embedded in the proof.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "vrf_output": {
+      "type": "string",
+      "description": "Poseidon binding digest folding the block hash with each VRF output. Present for version ≥ 2.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "vrf_proof": {
+      "type": "string",
+      "description": "Poseidon binding digest folding the block hash with each VRF proof blob. Present for version ≥ 2.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "witness_commitment_root": {
+      "type": "string",
+      "description": "Poseidon binding digest for witness commitments relative to the block hash. Present for version ≥ 2.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "reputation_root": {
+      "type": "string",
+      "description": "Poseidon binding digest for reputation tree roots relative to the block hash. Present for version ≥ 2.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "quorum_bitmap": {
+      "type": "string",
+      "description": "Poseidon binding digest tying the prevote bitmap root to the block hash. Present for version ≥ 2.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "quorum_signature": {
+      "type": "string",
+      "description": "Poseidon binding digest tying the aggregated quorum signature root to the block hash. Present for version ≥ 2.",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"version": {"const": 2}}
+      },
+      "then": {
+        "required": [
+          "vrf_output",
+          "vrf_proof",
+          "witness_commitment_root",
+          "reputation_root",
+          "quorum_bitmap",
+          "quorum_signature"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": false
+}
