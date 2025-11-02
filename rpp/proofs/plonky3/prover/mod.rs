@@ -26,7 +26,7 @@ use rpp_pruning::Envelope;
 
 use super::aggregation::RecursiveAggregator;
 use super::circuit::consensus::{
-    ConsensusVrfWitnessEntry, ConsensusVrfWitnessPoseidonInput, ConsensusWitness, VotePower,
+    ConsensusVrfEntryWitness, ConsensusVrfPoseidonWitness, ConsensusWitness, VotePower,
 };
 use super::circuit::identity::IdentityWitness;
 use super::circuit::pruning::PruningWitness;
@@ -395,8 +395,6 @@ impl ProofProver for Plonky3Prover {
         }
 
         let mut vrf_entries = Vec::with_capacity(certificate.metadata.vrf_entries.len());
-        let mut vrf_outputs = Vec::with_capacity(certificate.metadata.vrf_entries.len());
-        let mut vrf_proofs = Vec::with_capacity(certificate.metadata.vrf_entries.len());
 
         for (index, entry) in certificate.metadata.vrf_entries.iter().enumerate() {
             let sanitize_hex =
@@ -444,18 +442,15 @@ impl ProofProver for Plonky3Prover {
                 ))
             })?;
 
-            vrf_outputs.push(randomness.clone());
-            vrf_proofs.push(proof.clone());
-
-            vrf_entries.push(ConsensusVrfWitnessEntry {
+            vrf_entries.push(ConsensusVrfEntryWitness {
                 randomness,
                 pre_output,
                 proof,
                 public_key,
-                poseidon: ConsensusVrfWitnessPoseidonInput {
+                poseidon: ConsensusVrfPoseidonWitness {
                     digest: poseidon_digest,
                     last_block_header: poseidon_last_block_header,
-                    epoch: poseidon_epoch,
+                    epoch: poseidon_epoch.to_string(),
                     tier_seed: poseidon_tier_seed,
                 },
             });
@@ -521,8 +516,6 @@ impl ProofProver for Plonky3Prover {
             certificate.metadata.quorum_bitmap_root.clone(),
             certificate.metadata.quorum_signature_root.clone(),
             vrf_entries,
-            vrf_outputs,
-            vrf_proofs,
             certificate.metadata.witness_commitments.clone(),
             certificate.metadata.reputation_roots.clone(),
         );
