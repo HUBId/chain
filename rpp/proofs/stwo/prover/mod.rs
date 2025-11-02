@@ -810,12 +810,7 @@ impl<'a> WalletProver<'a> {
         let air = circuit
             .define_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
-        let inputs = vec![
-            string_to_field(&self.parameters, &witness.block_hash),
-            self.parameters.element_from_u64(witness.round),
-            string_to_field(&self.parameters, &witness.leader_proposal),
-            self.parameters.element_from_u64(witness.quorum_threshold),
-        ];
+        let inputs = ConsensusCircuit::public_inputs(&self.parameters, &witness);
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
         let fri_output = fri_prover.prove(&air, &trace, &inputs);

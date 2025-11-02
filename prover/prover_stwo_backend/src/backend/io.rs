@@ -1,8 +1,14 @@
 #[cfg(feature = "official")]
+use crate::official::params::StarkParameters;
+#[cfg(feature = "official")]
 use crate::official::{
     circuit::{
-        consensus::ConsensusWitness, identity::IdentityWitness, pruning::PruningWitness,
-        recursive::RecursiveWitness, state::StateWitness, transaction::TransactionWitness,
+        consensus::{ConsensusCircuit, ConsensusWitness, CONSENSUS_PUBLIC_INPUT_WIDTH},
+        identity::IdentityWitness,
+        pruning::PruningWitness,
+        recursive::RecursiveWitness,
+        state::StateWitness,
+        transaction::TransactionWitness,
         uptime::UptimeWitness,
     },
     proof::{ProofKind, ProofPayload, StarkProof},
@@ -202,9 +208,55 @@ fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
             proof.kind
         )));
     }
-    if !matches!(&proof.payload, ProofPayload::Consensus(_)) {
+    let witness = match &proof.payload {
+        ProofPayload::Consensus(witness) => witness,
+        _ => {
+            return Err(BackendError::Failure(
+                "proof payload does not contain a consensus witness".into(),
+            ));
+        }
+    };
+    ensure_consensus_witness_metadata(witness)?;
+    let parameters = StarkParameters::blueprint_default();
+    let expected_inputs: Vec<_> = ConsensusCircuit::public_inputs(&parameters, witness)
+        .into_iter()
+        .map(|element| element.to_hex())
+        .collect();
+    if proof.public_inputs.len() != CONSENSUS_PUBLIC_INPUT_WIDTH
+        || proof.public_inputs != expected_inputs
+    {
         return Err(BackendError::Failure(
-            "proof payload does not contain a consensus witness".into(),
+            "consensus public inputs do not match witness metadata".into(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "official")]
+fn ensure_consensus_witness_metadata(witness: &ConsensusWitness) -> BackendResult<()> {
+    if witness.vrf_outputs.is_empty() {
+        return Err(BackendError::Failure(
+            "consensus witness missing VRF outputs".into(),
+        ));
+    }
+    if witness.vrf_proofs.is_empty() {
+        return Err(BackendError::Failure(
+            "consensus witness missing VRF proofs".into(),
+        ));
+    }
+    if witness.vrf_outputs.len() != witness.vrf_proofs.len() {
+        return Err(BackendError::Failure(
+            "consensus witness VRF output/proof count mismatch".into(),
+        ));
+    }
+    if witness.witness_commitments.is_empty() {
+        return Err(BackendError::Failure(
+            "consensus witness missing witness commitments".into(),
+        ));
+    }
+    if witness.reputation_roots.is_empty() {
+        return Err(BackendError::Failure(
+            "consensus witness missing reputation roots".into(),
         ));
     }
     Ok(())
@@ -326,6 +378,7 @@ pub fn decode_consensus_witness(
 ) -> BackendResult<(WitnessHeader, ConsensusWitness)> {
     let (header, witness) = witness.decode::<ConsensusWitness>()?;
     ensure_witness_header(&header, CONSENSUS_CIRCUIT)?;
+    ensure_consensus_witness_metadata(&witness)?;
     Ok((header, witness))
 }
 
@@ -347,7 +400,11 @@ pub fn encode_consensus_proof(circuit: &str, proof: &StarkProof) -> BackendResul
 #[cfg(all(test, feature = "official"))]
 mod tests {
     use super::*;
-    use prover_backend_interface::{ProofHeader, WitnessHeader};
+    use crate::official::circuit::consensus::VotePower;
+    use crate::official::circuit::{ExecutionTrace, TraceSegment};
+    use crate::official::params::FieldElement;
+    use crate::vrf::VRF_PROOF_LENGTH;
+    use prover_backend_interface::{ProofHeader, WitnessBytes, WitnessHeader};
 
     #[test]
     fn rejects_non_stwo_witness_headers() {
@@ -394,6 +451,91 @@ mod tests {
         let result = ensure_proof_header(&header, "tx");
         assert!(
             matches!(result, Err(BackendError::Failure(message)) if message.contains("unsupported proof format version"))
+        );
+    }
+
+    fn sample_consensus_witness() -> ConsensusWitness {
+        let vote = VotePower {
+            voter: "validator".into(),
+            weight: 1,
+        };
+        ConsensusWitness {
+            block_hash: "11".repeat(32),
+            round: 1,
+            epoch: 0,
+            slot: 1,
+            leader_proposal: "11".repeat(32),
+            quorum_threshold: 1,
+            pre_votes: vec![vote.clone()],
+            pre_commits: vec![vote.clone()],
+            commit_votes: vec![vote],
+            quorum_bitmap_root: "22".repeat(32),
+            quorum_signature_root: "33".repeat(32),
+            vrf_outputs: vec!["44".repeat(32)],
+            vrf_proofs: vec!["55".repeat(VRF_PROOF_LENGTH)],
+            witness_commitments: vec!["66".repeat(32)],
+            reputation_roots: vec!["77".repeat(32)],
+        }
+    }
+
+    fn dummy_trace(parameters: &StarkParameters) -> ExecutionTrace {
+        let zero = FieldElement::zero(parameters.modulus());
+        let segment = TraceSegment::new("dummy", vec!["value".into()], vec![vec![zero]])
+            .expect("dummy segment");
+        ExecutionTrace::from_segments(vec![segment]).expect("dummy trace")
+    }
+
+    #[test]
+    fn decode_consensus_witness_rejects_missing_metadata() {
+        let mut witness = sample_consensus_witness();
+        witness.vrf_outputs.clear();
+        let bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, CONSENSUS_CIRCUIT),
+            &witness,
+        )
+        .expect("encode witness");
+        let result = decode_consensus_witness(&bytes);
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("missing VRF outputs"))
+        );
+    }
+
+    #[test]
+    fn consensus_payload_rejects_public_input_mismatch() {
+        let parameters = StarkParameters::blueprint_default();
+        let witness = sample_consensus_witness();
+        let public_inputs: Vec<_> = ConsensusCircuit::public_inputs(&parameters, &witness)
+            .into_iter()
+            .map(|value| value.to_hex())
+            .collect();
+        let trace = dummy_trace(&parameters);
+        let mut proof = StarkProof {
+            kind: ProofKind::Consensus,
+            commitment: String::new(),
+            public_inputs,
+            payload: ProofPayload::Consensus(witness.clone()),
+            trace: trace.clone(),
+            commitment_proof: Default::default(),
+            fri_proof: Default::default(),
+        };
+
+        ensure_consensus_payload(&proof).expect("valid consensus payload");
+
+        let mut tampered = proof.clone();
+        tampered.public_inputs[CONSENSUS_PUBLIC_INPUT_WIDTH - 1] = String::new();
+        let result = ensure_consensus_payload(&tampered);
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("public inputs"))
+        );
+
+        // Ensure the witness metadata is also validated independently of inputs.
+        let mut broken = proof;
+        if let ProofPayload::Consensus(inner) = &mut broken.payload {
+            inner.reputation_roots.clear();
+        }
+        let result = ensure_consensus_payload(&broken);
+        assert!(
+            matches!(result, Err(BackendError::Failure(message)) if message.contains("missing reputation roots"))
         );
     }
 
