@@ -80,22 +80,27 @@ Before publishing release artifacts, double-check the following guardrails:
 1. Run `cargo test --locked --test root_corruption` and ensure the snapshot
    integrity regression passes before tagging a release. The automated workflow
    and `scripts/build_release.sh` will both exit early with an explicit error if
-   this test fails.【F:.github/workflows/release.yml†L65-L91】【F:scripts/build_release.sh†L77-L102】
-2. Build the workspace via `scripts/build_release.sh` with
+   this test fails.【F:.github/workflows/release.yml†L65-L106】【F:scripts/build_release.sh†L77-L102】
+2. Execute the consensus manipulation regression suite via
+   `cargo xtask test-consensus-manipulation` to confirm both the STWO and
+   Plonky3 prover backends reject tampered VRF and quorum inputs. The release
+   workflow aborts with a dedicated error if these negative tests fail so local
+   runs should be clean before tagging.【F:.github/workflows/release.yml†L92-L103】
+3. Build the workspace via `scripts/build_release.sh` with
    `RPP_RELEASE_BASE_FEATURES="--no-default-features --features prod,prover-stwo"`
    (append `,simd` if required) so the manual invocation matches CI. The script
    immediately exits if any `backend-plonky3` alias or the mock prover is
    requested via flags or environment variables.【F:scripts/build_release.sh†L80-L162】
-3. Let the script run its automatic post-build verification. The bundled
+4. Let the script run its automatic post-build verification. The bundled
    `scripts/verify_release_features.sh` inspects the generated metadata and
    fingerprints to ensure the resulting binaries did not link forbidden prover
    features.【F:scripts/build_release.sh†L160-L200】【F:scripts/verify_release_features.sh†L1-L115】
-4. If you are experimenting with non-default builds, rerun `cargo build` with the
+5. If you are experimenting with non-default builds, rerun `cargo build` with the
    intended feature list and confirm that production profiles still refuse to
    compile when `backend-plonky3` is paired with `prod` or `validator`. The
    compile-time guard keeps the experimental stub out of production releases even
    before the packaging scripts execute.【F:rpp/node/src/feature_guard.rs†L1-L7】
-5. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
+6. Dry-run validator or hybrid binaries (`rpp-node validator --dry-run` /
    `rpp-node hybrid --dry-run`) to see the runtime guard in action—startup fails
    immediately if the STWO backend was omitted, ensuring the published artifacts
    activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
