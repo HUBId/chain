@@ -18,6 +18,9 @@ jobs:
           - name: ring-latency-profile
             scenario: tools/simnet/scenarios/ring_latency_profile.ron
             summary: summaries/ring_poisson.json
+          - name: consensus-quorum-stress
+            scenario: tools/simnet/scenarios/consensus_quorum_stress.ron
+            summary: summaries/consensus_quorum_stress.json
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

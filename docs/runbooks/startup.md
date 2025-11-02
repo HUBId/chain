@@ -19,12 +19,11 @@ context.
 Run this checklist after upgrades or incident response to confirm the compile-time, runtime, and CI
 guardrails from Phase 1 are still enforced.
 
-- [ ] **Compile-time Plonky3 guard trips on release builds.** From the repository root, execute
-      `cargo check --features backend-plonky3,prod`. The command must fail with the message
-      `The experimental Plonky3 backend cannot be enabled together with the \`prod\` or \`validator\`
-      features.`, which is emitted by the compile-time guard and covered by the feature-matrix test
-      suite.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/tests/feature_matrix.rs†L6-L29】 A
-      successful run indicates the guard regressed and should be treated as a release blocker.
+- [ ] **Compile-time Plonky3 guard rejects the mock backend.** From the repository root, execute
+      `cargo check --features backend-plonky3,prover-mock`. The command must fail with the message
+      `The Plonky3 backend cannot be combined with the mock prover feature.`, which is emitted by the
+      compile-time guard and covered by the feature-matrix test suite.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/tests/feature_matrix.rs†L6-L60】
+      A successful run indicates the guard regressed and should be treated as a release blocker.
 - [ ] **Runtime root-integrity guard surfaces on corrupted snapshots.** With a validator or hybrid
       node running against a known-good snapshot, overwrite one snapshot payload (for example via:
       ```sh

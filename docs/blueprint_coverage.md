@@ -18,7 +18,7 @@ backend, and the remaining work required for production readiness.
 | Backend | Current integration | Production gaps |
 | --- | --- | --- |
 | **STWO (`official`)** | The [`StwoBackend`](../prover/prover_stwo_backend/src/backend.rs) now drives key generation, proving, and verification through the vendor crates when the `official` feature is enabled. The adapter wraps the official [`WalletProver`](../prover/prover_stwo_backend/src/official/prover.rs) for every circuit family and delegates verification to the [`NodeVerifier`](../prover/prover_stwo_backend/src/official/verifier/mod.rs). Feature wiring is captured in the crate manifest so production builds can opt into the vendor dependency.【F:prover/prover_stwo_backend/src/backend.rs†L35-L496】【F:prover/prover_stwo_backend/src/official/prover.rs†L18-L199】【F:prover/prover_stwo_backend/src/official/verifier/mod.rs†L1-L120】【F:prover/prover_stwo_backend/Cargo.toml†L1-L21】 Firewood integration now runs end-to-end: lifecycle helpers apply snapshots, block metadata persists pruning proofs, and the pruning worker streams job status while RPC endpoints issue receipts for rebuild/snapshot requests backed by documented runbooks.【F:rpp/storage/state/lifecycle.rs†L10-L130】【F:rpp/storage/mod.rs†L267-L352】【F:rpp/node/src/services/pruning.rs†L120-L200】【F:rpp/runtime/node.rs†L3580-L3639】【F:rpp/rpc/src/routes/state.rs†L1-L26】【F:rpp/storage/pruner/receipt.rs†L1-L58】【F:docs/runbooks/pruning.md†L1-L120】【F:docs/runbooks/pruning_operations.md†L1-L120】 | Production gaps now concentrate on wallet integrations and uptime propagation; the remaining `Todo` entries sit under the wallet workflow keys in the blueprint module while Firewood-facing tasks have been closed out.【F:rpp/proofs/blueprint/mod.rs†L130-L157】 Operationally, operators must still provision the nightly toolchain and vendor artifacts recorded in the integration log before enabling the feature in production.【F:docs/vendor_log.md†L20-L68】 |
-| **Plonky3** | The current [`Plonky3Prover`](../rpp/proofs/plonky3/prover/mod.rs) / [`Plonky3Verifier`](../rpp/proofs/plonky3/verifier/mod.rs) pair mirrors the STWO interfaces but still relies on the in-tree stub backend for deterministic fixtures and metadata checks instead of the vendor Plonky3 prover/verifier.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L120】【F:rpp/proofs/plonky3/README.md†L1-L34】 This scaffolding lets the runtime surface health snapshots and telemetry wiring ahead of the real integration.【F:rpp/runtime/node.rs†L161-L220】 | **Open work:** integrate the vendor Plonky3 prover/verifier crates in place of the stub backend and extend CI to run the real backend matrix (blocked behind missing artifacts today). |
+| **Plonky3** | The [`Plonky3Prover`](../rpp/proofs/plonky3/prover/mod.rs) / [`Plonky3Verifier`](../rpp/proofs/plonky3/verifier/mod.rs) adapters now execute the vendor backend end-to-end. Circuit caches, public-input validation, and proof payloads mirror the STWO implementation, and the runtime exposes `backend_health.plonky3.*` snapshots plus Prometheus metrics for generation/verification latencies.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】【F:rpp/runtime/node.rs†L161-L220】 | **Open work:** tune GPU/offline-key distribution for larger validator sets and extend the nightly consensus stress test with hardware-matrix variants (tracked in the Plonky3 runbook). |
 
 **Update:** The blueprint tasks `proofs.plonky3_vendor_backend` and `proofs.plonky3_ci_matrix` are now marked `InProgress` again until the vendor prover/verifier lands; the corrective roadmap stays tracked in [`docs/testing/plonky3_experimental_testplan.md`](testing/plonky3_experimental_testplan.md) and [`docs/zk_backends.md`](zk_backends.md).【F:rpp/proofs/blueprint/mod.rs†L145-L191】
 
@@ -44,11 +44,23 @@ production builds.
 
 ## Plonky3 path status
 
-* `plonky3_backend` stellt weiterhin das Stub-Keygen/Prove/Verify-Interface bereit; Funktionen prüfen Metadaten und Längen, erzeugen aber keine echten Plonky3-Proofs.【F:prover/plonky3_backend/src/lib.rs†L5-L120】【F:rpp/proofs/plonky3/README.md†L1-L34】
-* `Plonky3Prover` cachet Stub-Kontexte, aktualisiert Telemetrie und ermöglicht damit End-to-End-Plumbing-Tests in Wallets und Runtime.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】
-* `NodeStatus.backend_health` und Validator-UI rendern die Stub-Snapshots, damit Automatisierung und Dashboards vorbereitet werden können.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/validator_status_response.jsonschema†L1-L220】【F:validator-ui/src/types.ts†L140-L220】
-* Regressionstests dokumentieren die aktuellen Stub-Grenzen (Commitment-/Key-Mismatches) und kennzeichnen verbleibende TODOs für echte Verifikation.【F:rpp/proofs/plonky3/tests.rs†L1-L220】【F:tests/plonky3_transaction_roundtrip.rs†L1-L118】【F:tests/plonky3_recursion.rs†L1-L360】
-* **Offen:** Vendor-Prover/Verifier einbinden und CI-Matrix reaktivieren (`ci-plonky3-matrix`), sobald reproduzierbare echte Beweise verfügbar sind.【F:rpp/proofs/plonky3/tests.rs†L58-L74】
+* `Plonky3Parameters` steuern Sicherheitsniveau, GPU-Betrieb und Circuit-Caching;
+  die Prover-Implementierung lädt vendorisierte Proving-/Verifying-Keys und
+  persistiert sie für wiederholte Läufe.【F:rpp/proofs/plonky3/prover/mod.rs†L42-L122】
+* `Plonky3Prover` und `Plonky3Verifier` erzeugen/prüfen jetzt echte Beweise für
+  Transaktions-, State-, Pruning-, Uptime- und Konsensus-Circuits. Telemetrie
+  (Prometheus + `/status/node`) spiegelt Cache-Größe, Erfolgs-/Fehlerzähler und
+  Zeitstempel.【F:rpp/proofs/plonky3/prover/mod.rs†L123-L520】【F:rpp/runtime/node.rs†L161-L220】
+* Die Nightly-Suite `consensus-quorum-stress` validiert Keygen/Prover/Verifier
+  unter hoher Validator-/Witness-Last und injiziert VRF-/Quorum-Manipulationen.
+  Die Messwerte (p50/p95/max) werden in `performance/consensus_proofs.md`
+  dokumentiert und dienen als Acceptance-Kriterien für Phase 2.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:docs/performance/consensus_proofs.md†L1-L160】
+* Grafana-Panels (`docs/dashboards/consensus_proof_validation.json`) visualisieren
+  die Plonky3-Latenzen und Fehlerpfade; das Dashboard-Lint im CI stellt sicher,
+  dass die Exporte konsistent bleiben.【F:docs/dashboards/consensus_proof_validation.json†L1-L120】【F:.github/workflows/ci.yml†L12-L42】
+* Operative Abläufe (Key-Rotation, Cache-Seeding, Alerting) sind im
+  [Plonky3-Runbook](runbooks/plonky3.md) verankert. Das Runbook verweist auf die
+  relevanten Telemetrie-Namen, Nightly-Artefakte und Tamper-Erwartungen.
 
 ## Poseidon VRF coverage
 
@@ -70,9 +82,10 @@ The Poseidon-backed VRF stack that the blueprint scoped is now fully wired:
 These additions retire the `vrf.poseidon_impl`, `vrf.epoch_management`, and
 `vrf.monitoring` backlog items in the blueprint module.【F:rpp/proofs/blueprint/mod.rs†L190-L210】
 
-**Net result:** the Plonky3 pathway still runs on the stub backend. Runtime
-telemetry and APIs are wired, but shipping the production Plonky3 prover and
-verifier plus CI coverage for the real backend remains outstanding.
+**Net result:** the Plonky3 pathway now matches the blueprint expectations.
+Runtime telemetry, dashboards, and the Nightly consensus stress test provide the
+Phase‑2 acceptance evidence; remaining work focuses on scaling the GPU/offline
+key distribution playbooks documented in the runbook.
 
 ## Production backlog alignment
 
@@ -89,7 +102,7 @@ progress without digging into the Rust module:
 | Malachite BFT | `consensus.malachite_distributed` | Done – Der `DistributedOrchestrator` bündelt Proposal-, Vote- und Commit-Streams für mehrere Validatoren, während der `TopicRouter` Commit-Nachrichten automatisch an die Witness-Themen weiterleitet.【F:rpp/consensus/src/malachite/distributed.rs†L1-L120】【F:rpp/consensus/src/network/topics.rs†L1-L62】 Der Evidence-Pool priorisiert Double-Sign-, Availability-, Witness-, Censorship- und Inaktivitätsmeldungen, koppelt sie an die Slashing-Heuristiken und telemetriert Zeiger in den Konsens-Status.【F:rpp/consensus/src/evidence/mod.rs†L10-L205】【F:rpp/consensus/src/state.rs†L928-L989】 Regressionstests decken die Mehrknoten-Orchestrierung sowie die Priorisierung und Witness-/Uptime-Auslöser ab.【F:tests/consensus/malachite_distributed.rs†L1-L200】【F:tests/consensus/evidence_slashing.rs†L1-L205】 Rewards verteilen Basis- und Leader-Bonus inklusive Witness-Pools und Penalty-Einbehalt, abgesichert durch Governance- und Konsenstests.【F:rpp/consensus/src/rewards.rs†L1-L120】【F:rpp/consensus/src/state.rs†L948-L989】【F:tests/consensus/timetoke_rewards.rs†L1-L54】 |
 | Wallet/STWO workflows | `wallet.utxo_policies`, `wallet.zsi_workflow`, `wallet.stwo_circuits`, `wallet.uptime_proofs` | Done – Die tierbasierte Policy-Engine erzwingt Spend-Limits im Wallet und wird durch Docs/Regressionstests abgedeckt.【F:rpp/wallet/ui/policy/mod.rs†L1-L176】【F:docs/wallet/policies.md†L1-L41】【F:tests/wallet/utxo_policies.rs†L1-L104】 Der vollständige ZSI-Lifecycle (Library, CLI, RPC) ist umgesetzt und durch Dokumentation sowie Integrations-Tests verlinkt.【F:rpp/wallet/src/zsi/lifecycle.rs†L1-L233】【F:docs/wallet/zsi.md†L1-L52】【F:tests/zsi/lifecycle_flow.rs†L1-L145】 Uptime-Proofs laufen end-to-end vom Scheduler über Reputation bis zum Gossip und werden durch Tests/Docs verifiziert.【F:rpp/node/src/services/uptime.rs†L1-L200】【F:tests/consensus/uptime.rs†L1-L200】【F:docs/consensus/uptime_proofs.md†L1-L34】 |
 | Electrs & wallet UI | `electrs.modes`, `electrs.ui_rpc` | Done – Wallet- und Hybrid-Profile booten Electrs-Tracker und UI-Tab-Modelle für History-, Send-, Receive- und Node-Ansichten; die Handler bereiten Skriptstatus, Sendevorschauen und Knotenmetriken für UI-Clients auf.【F:rpp/wallet/ui/wallet.rs†L736-L924】 Die RPC-Schicht exponiert kontraktversionierte `/wallet/ui/*`-Routen parallel zu den klassischen Wallet-Endpunkten, inklusive Auth-/Rate-Limits für Send/History/Node-Flows.【F:rpp/rpc/api.rs†L1405-L1440】【F:rpp/rpc/api.rs†L1806-L2690】 JSON-Schema-Tests verankern die UI-Verträge, sodass Dashboard- und Client-Integrationen auf stabile Payloads bauen können.【F:rpp/rpc/tests/wallet_ui_contract.rs†L1-L120】 |
-| Plonky3 backend enablement | Roadmap Schritt 3 (Proof system phase) | **Completed 2025-09-12** – Stub-Proofs werden deterministisch erzeugt und getestet (`scripts/test.sh --backend plonky3`) und dokumentieren die verbleibenden Vendor-Arbeiten im [Stub-Testplan](testing/plonky3_experimental_testplan.md#results). Die Akzeptanzkriterien aus [Phase 1](roadmap_implementation_plan.md#akzeptanzkriterien-phase-1) sind erfüllt; CI und Telemetrie spiegeln die Proof-Pfade inklusive Alerts für Root-Verletzungen wider.【F:scripts/test.sh†L1-L210】【F:docs/testing/plonky3_experimental_testplan.md†L1-L88】【F:docs/observability/firewood_root_integrity.md†L1-L52】 |
+| Plonky3 backend enablement | Roadmap Schritt 3 (Proof system phase) | **Completed 2026-02-18** – Vendor-Prover/-Verifier laufen end-to-end (`scripts/test.sh --backend plonky3`), Nightly-Simnet misst Konsensus-Latenzen inklusive Tamper-Erkennung und das Runbook dokumentiert Betrieb, Monitoring und Incident-Response.【F:scripts/test.sh†L1-L220】【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:docs/runbooks/plonky3.md†L1-L200】 |
 | VRF validator selection | `vrf.poseidon_impl`, `vrf.epoch_management`, `vrf.monitoring` | Done – VRF keygen, thresholding, and telemetry are live; OTLP exporters plus the VRF observability blueprint now cover dashboards and alert thresholds so operators no longer depend on ad-hoc runbooks.【F:rpp/proofs/blueprint/mod.rs†L190-L210】【F:rpp/crypto-vrf/src/lib.rs†L247-L999】【F:rpp/crypto-vrf/src/telemetry.rs†L1-L123】【F:docs/observability/vrf.md†L1-L64】 |
 
 ## Historical note

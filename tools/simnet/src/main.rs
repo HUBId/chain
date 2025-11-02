@@ -1,3 +1,4 @@
+mod consensus;
 mod config;
 mod process;
 mod runner;

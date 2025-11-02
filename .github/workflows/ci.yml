@@ -25,6 +25,7 @@ jobs:
             "dashboards/pipeline_storage_commit.json"
             "dashboards/vrf_overview.json"
             "dashboards/vrf_thresholds.json"
+            "dashboards/consensus_proof_validation.json"
             "observability/pipeline_grafana.json"
           )
           missing=0

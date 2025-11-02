@@ -59,10 +59,6 @@ if [[ ! -d "$TARGET_DIR" ]]; then
 fi
 
 forbidden_features=(
-  "backend-plonky3"
-  "backend_plonky3"
-  "plonky3-backend"
-  "plonky3_backend"
   "prover-mock"
   "prover_mock"
 )

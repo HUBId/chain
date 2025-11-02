@@ -98,8 +98,8 @@ jobs:
             echo "::error::Snapshot integrity regression detected. The root_corruption test failed." >&2
             exit 1
           fi
-      - name: Test suite (default, STWO, and RPP-Stark backends)
-        run: ./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark
+      - name: Test suite (default, STWO, RPP-Stark, and Plonky3 backends)
+        run: ./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark --backend plonky3
       - name: Prepare release notes
         run: ./scripts/prepare_changelog.sh --tag "${{ steps.determine_tag.outputs.release_tag }}" --output dist/release-notes.md
       - uses: actions/upload-artifact@v4

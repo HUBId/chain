@@ -4,16 +4,11 @@ use assert_cmd::Command;
 use predicates::str::contains;
 
 const ERROR_FRAGMENT: &str =
-    "Plonky3 backend cannot be enabled together with the `prod` or `validator` features.";
+    "The Plonky3 backend cannot be combined with the mock prover feature.";
 
 #[test]
-fn backend_plonky3_rejected_in_prod_builds() {
-    assert_forbidden_features("backend-plonky3,prod");
-}
-
-#[test]
-fn backend_plonky3_rejected_for_validator_feature() {
-    assert_forbidden_features("backend-plonky3,validator");
+fn backend_plonky3_rejected_with_mock_prover() {
+    assert_forbidden_features("backend-plonky3,prover-mock");
 }
 
 fn assert_forbidden_features(features: &str) {

@@ -5,8 +5,9 @@ use serde_json::to_vec_pretty;
 use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 
-use crate::config::{P2pConfig, ProcessConfig, SimnetConfig};
+use crate::config::{ConsensusLoadConfig, P2pConfig, ProcessConfig, SimnetConfig};
 use crate::process::{spawn_process, ProcessHandle};
+use crate::consensus::{run_consensus_load, ConsensusLoadSummary};
 
 pub struct SimnetRunner {
     config: SimnetConfig,
@@ -40,6 +41,38 @@ impl SimnetRunner {
             );
         }
 
+        if let Some(consensus) = &self.config.consensus {
+            let summary = self.run_consensus(consensus).await?;
+            info!(
+                target = "simnet::runner",
+                runs = summary.runs,
+                validators = summary.validators,
+                witness_commitments = summary.witness_commitments,
+                prove_p95_ms = summary.prove_ms.p95,
+                verify_p95_ms = summary.verify_ms.p95,
+                path = %summary.summary_path.display(),
+                "consensus load summary written"
+            );
+            if let Some(vrf) = summary.tamper_vrf {
+                info!(
+                    target = "simnet::runner",
+                    attempts = vrf.attempts,
+                    rejected = vrf.rejected,
+                    unexpected_accepts = vrf.unexpected_accepts,
+                    "vrf tamper outcomes"
+                );
+            }
+            if let Some(quorum) = summary.tamper_quorum {
+                info!(
+                    target = "simnet::runner",
+                    attempts = quorum.attempts,
+                    rejected = quorum.rejected,
+                    unexpected_accepts = quorum.unexpected_accepts,
+                    "quorum tamper outcomes"
+                );
+            }
+        }
+
         if self.config.duration_secs > 0 {
             info!(
                 target = "simnet::runner",
@@ -67,6 +100,40 @@ impl SimnetRunner {
                 .with_context(|| format!("{group} {} failed to signal readiness", process.label))?;
         }
         Ok(())
+    }
+
+    async fn run_consensus(
+        &self,
+        config: &ConsensusLoadConfig,
+    ) -> Result<ConsensusLoadSummary> {
+        let summary_path = self
+            .config
+            .resolve_consensus_summary_path(config, &self.artifacts_dir);
+        if let Some(parent) = summary_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("create summary dir {}", parent.display()))?;
+        }
+        let csv_path = self
+            .config
+            .resolve_consensus_csv_path(config, &self.artifacts_dir);
+        if let Some(path) = &csv_path {
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .with_context(|| format!("create csv dir {}", parent.display()))?;
+            }
+        }
+
+        let summary_clone = summary_path.clone();
+        let config_clone = config.clone();
+        let summary = tokio::task::spawn_blocking(move || {
+            run_consensus_load(config_clone, summary_clone, csv_path)
+        })
+        .await
+        .context("consensus load task panicked")??;
+
+        Ok(summary)
     }
 
     async fn run_p2p(&self, config: &P2pConfig) -> Result<PathBuf> {

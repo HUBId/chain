@@ -9,11 +9,10 @@ configuration changes.
 Re-run these guard checks whenever telemetry gaps or snapshot alerts occur to ensure the compile-time
 and runtime protections remain enforced alongside the CI gates.
 
-- [ ] **Compile guard blocks `backend-plonky3` in production builds.** Run
-      `cargo check --features backend-plonky3,prod` from the repository root. Compilation must abort
-      with `The experimental Plonky3 backend cannot be enabled together with the \`prod\` or \`validator\`
-      features.`, confirming the guard in `rpp-node` still fires and the feature-matrix tests continue to
-      cover it.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/tests/feature_matrix.rs†L6-L29】
+- [ ] **Compile guard blocks Plonky3 + mock combinations.** Run
+      `cargo check --features backend-plonky3,prover-mock` from the repository root. Compilation must
+      abort with `The Plonky3 backend cannot be combined with the mock prover feature.`, confirming the
+      guard in `rpp-node` still fires and the feature-matrix tests continue to cover it.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/tests/feature_matrix.rs†L6-L60】
 - [ ] **Runtime guard raises root-integrity signals.** Temporarily corrupt a snapshot payload (see the
       Python helper in the [startup checklist](startup.md#phase-1-guard-verification)) and request a
       state-sync chunk before polling `curl -i http://localhost:26600/health/ready`. The readiness probe

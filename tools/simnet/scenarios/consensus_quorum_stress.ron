@@ -1,0 +1,26 @@
+{
+  "name": "consensus-quorum-stress",
+  "description": "Stress Plonky3 consensus keygen/prove/verify paths with validator-heavy runs and tampering",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": null,
+  "consensus": {
+    "runs": 120,
+    "validators": 96,
+    "witness_commitments": 256,
+    "security_bits": 128,
+    "use_gpu": false,
+    "seed": 1337,
+    "tamper": {
+      "vrf": true,
+      "quorum_roots": true,
+      "every_n": 8
+    },
+    "summary_path": "summaries/consensus_quorum_stress.json",
+    "csv_path": "summaries/consensus_quorum_stress.csv"
+  }
+}

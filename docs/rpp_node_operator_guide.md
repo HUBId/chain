@@ -6,55 +6,50 @@ validator maintenance subcommands. No standalone `rpc-cli` tool exists in this
 workspace—the shipped operator interface is the `rpp-node` CLI and the REST/RPC
 workflows exposed by the running node.
 
-> **⚠️ Production warning:** The `backend-plonky3` feature remains an
-> experimental stub and is not supported in production. The crate now emits a
-> hard compile error whenever `backend-plonky3` is combined with the `prod` or
-> `validator` feature sets, and the release packaging scripts abort if any
-> Plonky3 alias appears in the requested feature list or the compiled metadata.
-> Runtime launches for validator or hybrid roles additionally fail fast when the
-> binary lacks the STWO backend, so production builds must continue to use the
-> official STWO feature set (`--no-default-features --features
-> prod,prover-stwo` or `prover-stwo-simd`). Use the release pipeline checklist
-> to double-check these guards before publishing artefacts.
+> **Phase 2 update:** The `backend-plonky3` feature now enables the vendor
+> Plonky3 prover/verifier pipeline. Production builds may target either the
+> STWO (`prover-stwo`/`prover-stwo-simd`) or Plonky3 backend; only the
+> deterministic mock backend remains blocked in release artefacts. Use the
+> release pipeline checklist to verify that binaries are compiled with one of
+> the production backends and that mock features are absent from build metadata.
 > [`feature_guard.rs`](../rpp/node/src/feature_guard.rs) ·
 > [`build_release.sh`](../scripts/build_release.sh) ·
 > [`verify_release_features.sh`](../scripts/verify_release_features.sh) ·
 > [`ensure_prover_backend`](../rpp/node/src/lib.rs) ·
 > [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist)
-> · [Changelog summary](../CHANGELOG.md#unreleased)
+> · [Plonky3 runbook](./runbooks/plonky3.md)
 
 ## Build and install the CLI
 
-Compile the binary with the release profile and the production feature set. The
-build installs the multiplexer binary at `target/release/rpp-node` and enables
-validator functionality required in staging and production deployments.【F:docs/validator_quickstart.md†L24-L56】
+Compile the binary with the release profile and select the backend that matches
+the deployment tier. The build installs the multiplexer binary at
+`target/release/rpp-node` and enables validator functionality required in
+staging and production deployments.【F:docs/validator_quickstart.md†L24-L56】
 
 ```sh
+# STWO backend
 cargo build --release -p rpp-node --no-default-features --features prod,prover-stwo
+
+# Plonky3 backend
+cargo build --release -p rpp-node --no-default-features --features prod,backend-plonky3
 ```
 
-The automated release pipeline exports
-`RPP_RELEASE_BASE_FEATURES="prod,prover-stwo"` before invoking
-`scripts/build_release.sh`, and the script always forces
+The automated release pipeline exports `RPP_RELEASE_BASE_FEATURES` before
+invoking `scripts/build_release.sh`. Point the variable to
+`"prod,prover-stwo"`, `"prod,prover-stwo-simd"`, or `"prod,backend-plonky3"`
+depending on the backend you intend to ship; the script always forces
 `--no-default-features --features "$RPP_RELEASE_BASE_FEATURES"` so every
-published artifact includes the STWO prover.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L1-L104】
+published artifact includes a production prover and the mock backend remains
+disabled.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L1-L118】
 Local builds should mirror the same flag set shown in
-`scripts/build_release.sh` (or swap in `prover-stwo-simd` on hosts that support
-SIMD acceleration) to avoid shipping binaries that fail at runtime due to a
-missing production backend.【F:scripts/build_release.sh†L1-L87】 Release builds
-reject both the deterministic mock prover and the experimental Plonky3 stub: if
-any `backend-plonky3` alias leaks into the feature list, `scripts/build_release.sh`
-fails immediately with `error: backend-plonky3 is experimental and cannot be
-enabled for release builds`, and the GitHub release workflow halts before any
-artifacts are published.【F:.github/workflows/release.yml†L115-L158】【F:scripts/build_release.sh†L70-L160】
+`scripts/build_release.sh` to avoid shipping binaries that fail at runtime due
+to a missing production backend.
 
-The crate mirrors that protection at compile time. Any attempt to combine the
-experimental Plonky3 backend with the `prod` or `validator` features now emits a
-hard compile error so production builds cannot accidentally depend on the stub
-backend. Local experiments should target non-production profiles, for example
-`cargo check -p rpp-node --no-default-features --features backend-plonky3` or
-`cargo build -p rpp-node --features dev,backend-plonky3` when pairing the stub
-with the developer toolchain.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】
+The helper `scripts/verify_release_features.sh` checks the compiled metadata and
+fails when the mock prover slips into the feature list; run it as part of
+pre-release validation. The compile-time guard mirrors this behaviour by
+preventing `backend-plonky3` and `prover-mock` from being enabled at the same
+time.【F:scripts/verify_release_features.sh†L1-L146】【F:rpp/node/src/feature_guard.rs†L1-L5】
 
 Keep the repository cloned on the host to rebuild quickly when upgrades ship.
 
@@ -77,23 +72,41 @@ are sufficient.【F:docs/validator_quickstart.md†L62-L111】 Add `--dry-run` t
 validate configuration without starting long-running tasks; the CLI exits after
 bootstrap so operators can gate deployments in CI.【F:docs/validator_quickstart.md†L195-L210】
 
-### Plonky3 backend scaffolding
+### Plonky3 backend (Phase 2)
 
-Das Flag `--features backend-plonky3` aktiviert derzeit weiterhin das Stub-
-Backend, das deterministische Fixtures und Telemetrie-Pfade bereitstellt, aber
-noch keine vendor Plonky3-Proofs erzeugt oder verifiziert.【F:rpp/proofs/plonky3/prover/mod.rs†L201-L233】【F:rpp/proofs/plonky3/README.md†L1-L34】
-Nutze diese Konfiguration, um die Runtime-/CLI-Flows und Dashboards gegen das
-spätere Backend zu testen; produktive Rollouts bleiben blockiert, bis der
-Vendor-Prover/-Verifier integriert ist. Das `/status/node` RPC exponiert bereits
-`backend_health.plonky3.*`, jedoch basieren die Werte auf Stub-Läufen und
-sollten nicht für Produktionsalarme herangezogen werden.【F:rpp/runtime/node.rs†L161-L220】【F:docs/interfaces/rpc/examples/validator_status_response.json†L1-L120】
-Validator-UI und Metriken spiegeln dieselben Felder wider, dienen aktuell aber
-als Vertragstests.【F:validator-ui/src/types.ts†L140-L220】 Der Plonky3-Lauf in
-`scripts/test.sh` bleibt Teil der Matrix, verifiziert aber ausschließlich die
-Stub-Implementierung, bis die echten Artefakte verfügbar sind.【F:scripts/test.sh†L1-L220】
-Kompiliere die Stub-Pfade ausschließlich ohne die `prod`- oder `validator`-
-Features, ansonsten schlägt der Build jetzt mit dem oben beschriebenen
-Sicherheitsnetz fehl.【F:rpp/node/src/feature_guard.rs†L1-L7】
+`backend-plonky3` aktiviert jetzt den produktiven Plonky3-Prover und -Verifier.
+Die Wallet- und Node-Adapter erzeugen und prüfen Vendor-Beweise über dieselben
+Traits wie das STWO-Backend, sodass Keygen-, Prover- und Verifier-Hooks im
+Produktionspfad identisch orchestriert werden.【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:rpp/proofs/plonky3/verifier/mod.rs†L1-L212】
+
+Das [Plonky3-Runbook](./runbooks/plonky3.md) beschreibt den vollständigen
+Operator-Workflow:
+
+- Circuit-Caches vorbereiten (`rpp-node` legt Proving-/Verifying-Keys im
+  Artefaktverzeichnis ab und spiegelt den Zustand über
+  `backend_health.plonky3.*`).
+- Proof-Generierung und -Verifikation überwachen (`rpp.runtime.proof.generation.*`
+  und `rpp.runtime.proof.verification.*` mit Labels `backend="plonky3"`,
+  `proof="transaction|state|pruning|consensus"`).
+- Acceptance-Kriterien prüfen: die Phase‑2-Grenzwerte orientieren sich an den
+  Messwerten aus `tools/simnet/scenarios/consensus_quorum_stress.ron` und sind in
+  `performance/consensus_proofs.md` dokumentiert.
+
+Das Nightly-Szenario `consensus-quorum-stress` treibt den Prover mit hoher
+Validator- und Witness-Last sowie absichtlich manipulierten VRF-/Quorum-Daten
+an. `scripts/analyze_simnet.py` wertet die JSON-Summary aus, bricht bei
+Überschreitung der p95-Grenzen ab und meldet unerwartete Tamper-Erfolge. Die
+Gegenüberstellung von Erfolgs- und Fehlerpfaden ist ebenfalls im Runbook
+festgehalten.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】【F:docs/performance/consensus_proofs.md†L1-L160】
+
+Grafana-Panels unter `docs/dashboards/consensus_proof_validation.json`
+visualisieren diese Kennzahlen (Latenzen, Fehlerraten, Circuit-Cache-Größe) für
+Plonky3 und werden vom CI-Dashboard-Lint überprüft. Binde die Panels in das
+Produktions-Dashboard ein, um Phase‑2-Abnahmekriterien sichtbar zu machen.【F:docs/dashboards/consensus_proof_validation.json†L1-L120】
+
+Kombiniere `backend-plonky3` nicht mit dem `prover-mock`-Feature; der Guard
+erzwingt weiterhin die Trennung zwischen deterministischen Test-Fixtures und
+produktiven Vendor-Artefakten.【F:rpp/node/src/feature_guard.rs†L1-L5】
 
 ## Validator tooling
 
