@@ -58,6 +58,9 @@ Telemetriegestützte Fehlersuche.【F:rpp/runtime/node.rs†L5036-L5099】【F:d
     `/status/consensus`-Endpoints und der Simnet-Harness-Ausführung.【F:docs/runbooks/observability.md†L27-L59】
   * `docs/runbooks/plonky3.md` koppelt Performance-Audits mit den genannten
     Dashboards, damit Proof-Latenzen dokumentiert und archiviert werden.【F:docs/runbooks/plonky3.md†L1-L120】
+* **Release-Metadaten.** `docs/release_notes.md` listet pro Version Circuit-IDs,
+  Constraint-Zählungen und Backend-Support und wird automatisch im Release-Workflow
+  gepflegt, sodass Auditor:innen Proof-Artefakte eindeutig zuordnen können.【F:docs/release_notes.md†L1-L160】【F:.github/workflows/release.yml†L1-L120】
 
 ## Konsequenzen
 

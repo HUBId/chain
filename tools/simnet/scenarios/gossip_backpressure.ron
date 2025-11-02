@@ -1,0 +1,16 @@
+{
+  "name": "gossip-backpressure",
+  "description": "Exercise gossip backpressure and admission controls with tracker workloads",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/wallet_tracker_p2p.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/wallet_tracker_backpressure.json"
+  },
+  "consensus": null
+}

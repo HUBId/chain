@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 
-use opentelemetry::KeyValue;
 use opentelemetry::global;
 use opentelemetry::metrics::{Counter, Histogram, Meter};
+use opentelemetry::KeyValue;
 use rpp_runtime::orchestration::PipelineStage;
 
 static METRICS: OnceLock<PipelineMetrics> = OnceLock::new();

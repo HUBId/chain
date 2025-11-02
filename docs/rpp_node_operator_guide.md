@@ -139,6 +139,11 @@ Missing or inconsistent values cause the verifier to reject the consensus proof
 bundle, so double-check the witness payload when diagnosing failed block
 imports.【F:docs/consensus/finality_proof_story.md†L1-L38】
 
+Release-Builds listen Circuit-Versionen, Constraint-Zählungen und unterstützte Backends
+in den [Release-Notizen](docs/release_notes.md); ziehe die Tabelle bei Audits oder
+Rollback-Plänen hinzu, um sicherzustellen, dass Operator:innen identische Proof-Artefakte
+ausrollen.【F:docs/release_notes.md†L1-L160】
+
 ### Phase 2 consensus proof validation checks
 
 Phase 2 verlangt nachvollziehbare Belege, dass manipulierte VRF-/Quorum-Daten an

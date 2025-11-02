@@ -6,8 +6,8 @@ use tokio::time::{sleep, Duration};
 use tracing::{info, warn};
 
 use crate::config::{ConsensusLoadConfig, P2pConfig, ProcessConfig, SimnetConfig};
-use crate::process::{spawn_process, ProcessHandle};
 use crate::consensus::{run_consensus_load, ConsensusLoadSummary};
+use crate::process::{spawn_process, ProcessHandle};
 
 pub struct SimnetRunner {
     config: SimnetConfig,
@@ -102,10 +102,7 @@ impl SimnetRunner {
         Ok(())
     }
 
-    async fn run_consensus(
-        &self,
-        config: &ConsensusLoadConfig,
-    ) -> Result<ConsensusLoadSummary> {
+    async fn run_consensus(&self, config: &ConsensusLoadConfig) -> Result<ConsensusLoadSummary> {
         let summary_path = self
             .config
             .resolve_consensus_summary_path(config, &self.artifacts_dir);

@@ -37,6 +37,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+METADATA_MARKDOWN=$(cargo xtask proof-metadata --format markdown)
+METADATA_BODY=$(printf '%s\n' "$METADATA_MARKDOWN" | sed '1,2d')
+
+cat >>"$OUTPUT" <<'EOF'
+
+## 🧾 Proof Metadata
+EOF
+
+printf '%s\n' "$METADATA_BODY" >>"$OUTPUT"
+
 if [[ -z "$TAG" || -z "$OUTPUT" ]]; then
   echo "error: --tag and --output are required" >&2
   usage >&2

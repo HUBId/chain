@@ -9,6 +9,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, RngCore, SeedableRng};
 use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata, TalliedVote};
 use rpp_chain::consensus_engine::messages::BlockId;
+use rpp_chain::errors::ChainError;
 use rpp_chain::plonky3::proof::Plonky3Proof;
 use rpp_chain::plonky3::prover::Plonky3Prover;
 use rpp_chain::plonky3::verifier::Plonky3Verifier;
@@ -16,8 +17,7 @@ use rpp_chain::proof_system::ProofProver;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::types::ChainProof;
 use rpp_chain::vrf::VRF_PROOF_LENGTH;
-use rpp_chain::errors::ChainError;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::config::ConsensusLoadConfig;
@@ -25,7 +25,7 @@ use crate::config::ConsensusLoadConfig;
 const DEFAULT_SEED: u64 = 0x706C_6F6E_6B33_3032;
 const DEFAULT_REPUTATION_ROOTS: usize = 4;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantileStats {
     pub min: f64,
     pub p50: f64,
@@ -67,17 +67,17 @@ impl QuantileStats {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TamperSummary {
     pub attempts: u64,
     pub rejected: u64,
     pub unexpected_accepts: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsensusLoadSummary {
     #[serde(rename = "kind")]
-    pub kind: &'static str,
+    pub kind: String,
     pub runs: u64,
     pub validators: usize,
     pub witness_commitments: usize,
@@ -156,7 +156,9 @@ pub fn run_consensus_load(
 
         let verify_start = Instant::now();
         if let Err(err) = verifier.verify_consensus(&proof) {
-            failures.push(format!("run {run_idx} failed to verify consensus proof: {err}"));
+            failures.push(format!(
+                "run {run_idx} failed to verify consensus proof: {err}"
+            ));
             records.push(RunRecord {
                 run: run_idx,
                 prove_ms,
@@ -216,7 +218,7 @@ fn write_summary(
     csv_path: Option<PathBuf>,
 ) -> Result<ConsensusLoadSummary> {
     let summary = ConsensusLoadSummary {
-        kind: "consensus-load",
+        kind: "consensus-load".to_string(),
         runs: config.runs,
         validators: config.validators,
         witness_commitments: config.witness_commitments,
@@ -256,10 +258,7 @@ fn write_csv(path: &PathBuf, records: &[RunRecord]) -> Result<()> {
         writeln!(
             file,
             "{},{:.6},{},{}",
-            record.run,
-            record.prove_ms,
-            verify,
-            record.proof_bytes
+            record.run, record.prove_ms, verify, record.proof_bytes
         )
         .context("write csv row")?;
     }
@@ -351,7 +350,10 @@ fn tamper_vrf_payload(map: &mut Map<String, Value>) {
 }
 
 fn tamper_quorum_payload(map: &mut Map<String, Value>) {
-    map.insert("quorum_bitmap_root".into(), Value::String("deadbeef".into()));
+    map.insert(
+        "quorum_bitmap_root".into(),
+        Value::String("deadbeef".into()),
+    );
 }
 
 struct TamperTracker {
@@ -411,10 +413,7 @@ impl TamperTracker {
     }
 }
 
-fn tamper_proof(
-    proof: &ChainProof,
-    mutator: fn(&mut Map<String, Value>),
-) -> Result<ChainProof> {
+fn tamper_proof(proof: &ChainProof, mutator: fn(&mut Map<String, Value>)) -> Result<ChainProof> {
     match proof {
         ChainProof::Plonky3(value) => {
             let mut parsed = Plonky3Proof::from_value(value)?;

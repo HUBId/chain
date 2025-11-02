@@ -80,3 +80,28 @@ jobs:
         with:
           name: simnet-nightly
           path: simnet-artifacts.tar.gz
+
+  simnet-regression:
+    name: Simnet regression (prod, plonky3)
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Execute regression sweep
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/regression-nightly
+          cargo run -p simnet --bin regression -- \
+            --artifacts-root target/simnet/regression-nightly
+      - name: Package regression artifacts
+        run: |
+          tar -czf simnet-regression.tar.gz -C target/simnet regression-nightly
+      - name: Upload regression archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-regression-nightly
+          path: simnet-regression.tar.gz

@@ -6,13 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
-- Update documentation and automation to reference the new `ava-labs/chain`
-  repository path across tooling and guides.
+- Update documentation and automation to reference the new `ava-labs/chain` repository path across tooling and guides.
+- Wire the Simnet regression orchestrator and CI/nightly job to chain VRF/quorum stress, snapshot rebuild, and gossip backpressure scenarios while exporting HTML/JSON artifacts for audit trails.【F:tools/simnet/src/bin/regression.rs†L1-L220】【F:.github/workflows/ci.yml†L1-L120】【F:.github/workflows/nightly.yml†L1-L130】
 - Align all nightly Rust toolchain references on `nightly-2025-07-14`, update CI to guard the pin, and document the one-time cache cleanup required after installing the new compiler.
 - Confirm contributors have the cleanup steps for stale nightly artifacts (`cargo clean -p prover_stwo_backend`, `rm -rf prover/target`, uninstall toolchains older than `nightly-2025-07-14`) and record the stable/nightly build separation verified on Rust 1.79 and the pinned nightly toolchain.
 
 ### 📚 Documentation
 
+- Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - Mark the Phase 1 blueprint milestone as completed in the roadmap, weekly status report, and coverage index so stakeholders can follow the handover into Phase 2.【F:docs/roadmap_implementation_plan.md†L3-L26】【F:docs/status/weekly.md†L1-L20】【F:docs/blueprint_coverage.md†L1-L115】
 - Point operators to the VRF telemetry endpoints exposed by `/status/node` and
   the `target_validator_count` / `rollout.telemetry.*` configuration knobs so
@@ -154,6 +155,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - Update ffi/README.md to include configs, metrics, and logs ([#1111](https://github.com/ava-labs/chain/pull/1111))
 
 ### 🎨 Styling
@@ -247,6 +249,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - README cleanup ([#1024](https://github.com/ava-labs/chain/pull/1024))
 
 ### ⚡ Performance
@@ -420,6 +423,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - *(ffi)* Remove private declarations from public docs ([#874](https://github.com/ava-labs/chain/pull/874))
 
 ### 🧪 Testing
@@ -513,6 +517,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - Add release notes ([#27](https://github.com/ava-labs/chain/pull/27))
 - Update CODEOWNERS ([#28](https://github.com/ava-labs/chain/pull/28))
 - Add badges to README ([#33](https://github.com/ava-labs/chain/pull/33))
@@ -583,6 +588,7 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - Add link to fwdctl README in main README
 - Update fwdctl README with storage information
 - Update fwdctl README with more examples

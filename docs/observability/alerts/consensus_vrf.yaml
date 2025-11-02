@@ -1,0 +1,53 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: consensus-vrf
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: consensus-vrf
+      rules:
+        - alert: ConsensusVRFSlow
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (
+                rate(consensus_vrf_verification_time_ms_bucket{result="success"}[5m])
+              )
+            ) > 50
+          for: 5m
+          labels:
+            severity: warning
+            service: consensus
+          annotations:
+            summary: VRF verification p95 latency exceeded 50 ms
+            description: |
+              VRF verification latency is above the documented 50 ms warning threshold for five
+              consecutive minutes. Investigate validator CPU saturation, GPU misconfiguration,
+              or unexpected workload spikes before the degradation impacts quorum formation.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook
+        - alert: ConsensusVRFFailureBurst
+          expr: sum(increase(consensus_vrf_verification_time_ms_count{result="failure"}[5m])) > 2
+          labels:
+            severity: page
+            service: consensus
+          annotations:
+            summary: Multiple VRF verification failures detected
+            description: |
+              More than two VRF verifications failed within the last five minutes. Review node logs
+              for `invalid VRF proof` markers, confirm the validator key material, and execute the
+              Simnet regression run to rule out regressions.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook
+        - alert: ConsensusQuorumVerificationFailure
+          expr: sum(increase(consensus_quorum_verifications_total{result="failure"}[2m])) > 0
+          labels:
+            severity: page
+            service: consensus
+          annotations:
+            summary: Consensus quorum verification failed
+            description: |
+              A validator rejected a tampered or inconsistent consensus certificate. Capture the
+              failure reason label, inspect node logs for rejection details, and follow the Phase-2
+              runbook before re-enabling block production.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/observability.md#consensus-vrf--quorum-alert-playbook

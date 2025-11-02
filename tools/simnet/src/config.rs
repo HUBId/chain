@@ -186,10 +186,9 @@ impl SimnetConfig {
         consensus: &ConsensusLoadConfig,
         artifacts_dir: &Path,
     ) -> PathBuf {
-        let relative = consensus
-            .summary_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("summaries").join(format!("{}_consensus.json", self.slug())));
+        let relative = consensus.summary_path.clone().unwrap_or_else(|| {
+            PathBuf::from("summaries").join(format!("{}_consensus.json", self.slug()))
+        });
         if relative.is_absolute() {
             relative
         } else {
