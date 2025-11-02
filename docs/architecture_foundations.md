@@ -31,17 +31,54 @@
   handles are configured the wallet attaches to witness gossip topics exposed by
   the node adapters and forwards finality telemetry into long-running UI tasks.【F:rpp/wallet/ui/wallet.rs†L945-L1015】
 
-## 3. Proof Construction and Verification
-- `WalletProver` implements `ProofProver` and derives identity, transaction,
-  state, pruning, recursive, uptime, and consensus witnesses directly from the
-  Firewood-backed storage snapshot. It wraps every witness builder with concrete
-  STWO proof generation methods so each pipeline stage emits a canonical
-  `ChainProof`.【F:rpp/proofs/stwo/prover/mod.rs†L408-L519】
-- `StateLifecycle` integrates the prover and verifier registry: it reuses the
-  wallet prover to build state transition witnesses, produces STWO state proofs,
-  and verifies witness payloads against the expected roots before exposing the
-  receipt. The same interface is consumed by the runtime node when persisting
-  Firewood transitions.【F:rpp/storage/state/lifecycle.rs†L45-L86】
+## 3. Consensus Proof Flow (VRF → Witness → Quorum)
+### VRF-Erzeugung und Datenpfad
+- `NodeInner::gather_vrf_submissions` filtert das VRF-Mempool nach Epoche und
+  Seed, erzeugt lokale Poseidon-Ausgaben und persistiert sie. Fehler beim
+  Signieren werden über strukturierte Warnungen propagiert, die Submission bleibt
+  dadurch für die Quorum-Auswertung nachvollziehbar.【F:rpp/runtime/node.rs†L5036-L5099】
+- `Block::verify_consensus_certificate_with_metrics` validiert die im Header
+  eingebetteten VRF-Daten gegen den vorherigen Block-Hash. Die Methode misst
+  Verifikationslatenzen und markiert misslungene Prüfungen (`invalid_vrf_proof`)
+  über Prometheus-Metriken, bevor sie einen `ChainError::Crypto` auslöst.【F:rpp/runtime/types/block.rs†L2008-L2050】
+- Tests wie `tests/vrf_selection.rs` prüfen, dass die Konsens-Runde die VRF-
+  Historie korrekt rekonstruiert und dass Knoten ohne gültige VRF-Ausgaben keine
+  Quoren erreichen.【F:tests/vrf_selection.rs†L12-L120】
+
+### Witness-Bündel und Constraints
+- `WalletProver::build_consensus_witness` stellt sicher, dass VRF-Ausgaben,
+  Witness-Commitments und Reputation-Roots vollständig und größenkonform sind,
+  bevor der STWO-Zeugnisdatensatz erzeugt wird. Abweichungen führen zu
+  `ChainError::Crypto` mit aussagekräftigen Fehlermeldungen, die das Monitoring
+  unmittelbar korrelieren kann.【F:rpp/proofs/stwo/prover/mod.rs†L419-L472】
+- `Block::verify_consensus_certificate_with_metrics` erzwingt zusätzliche
+  Invarianten: Vote-Sets müssen den erwarteten Rundenzähler, Block-Hash und
+  Quorum-Schwellen erfüllen, Witness-Teilnehmer müssen mit den Commit-Votes
+  übereinstimmen, und doppelte Stimmen werden abgewiesen. Jeder Bruch setzt
+  spezifische `consensus_quorum_verification_failure`-Labels, um Runbooks direkt
+  auf die Metrikwerte zu verweisen.【F:rpp/runtime/types/block.rs†L2051-L2332】
+- Das Witness-Commitment wird parallel über die Konsens-Gossip-Pipeline
+  repliziert (`witness_events` im Node-Status), wodurch Quorum-Entscheidungen in
+  Wallet und Operator-Dashboards synchron bleiben.【F:rpp/runtime/node.rs†L5036-L5099】【F:rpp/runtime/node.rs†L5005-L5019】
+
+### Quorum-Auswertung und Fehlerbehandlung
+- Die Quorum-Logik sammelt Vote-Gewichte, prüft Schwellenwerte (`quorum_threshold`,
+  `commit_power`) und verweist bei Abweichungen auf dedizierte
+  Fehlermeldungen. Gleichzeitig zeichnet der Runtime-Metrikexporter erfolgreiche
+  und fehlerhafte Quorum-Verifikationen auf, sodass Dashboards wie
+  `docs/dashboards/consensus_grafana.json` automatisiert regressionswarnungen
+  auslösen.【F:rpp/runtime/types/block.rs†L2140-L2328】【F:docs/dashboards/consensus_grafana.json†L1-L200】
+- Runbooks (`docs/runbooks/observability.md`) führen Operatoren durch die
+  Auswertung dieser Metriken: Simulationstests und `curl /status/consensus`
+  dienen als erste Fehlerlokalisierung, während das Konsens-Grafana-Board die
+  Resultate der VRF- und Witness-Prüfpfade kontrastiert.【F:docs/runbooks/observability.md†L27-L59】
+- Automatisierte Szenarien wie `tools/simnet/scenarios/consensus_quorum_stress.ron`
+  werden über das Observability-Runbook und den Simnet-Harness verlinkt, um
+  Fehlpfade (z. B. manipulierte Witness-Bundles) reproduzierbar zu machen.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】
+- Bei persistierenden Fehlern aktualisiert `consensus_proof_status` das
+  Node-API-Abbild; das Wallet und externe Auditoren können dadurch den letzten
+  gültigen Nachweis samt Witness-Commitments abfragen und Runbook-Schritte
+  sequentiell ausführen.【F:rpp/runtime/node.rs†L5005-L5035】【F:rpp/rpc/src/routes/consensus.rs†L30-L95】
 
 ## 4. Gossip and Network Backbone
 - Gossip topics are versioned under `/rpp/gossip/*` and cover block proposals,
@@ -98,3 +135,12 @@
 | `bft.*` | BFT loops, evidence, rewards | Sections 1 & 4 note the consensus state, evidence pool, and gossip integration. |
 | `lifecycle.*` | Lifecycle orchestration | Sections 1, 3, & 5 show the end-to-end pipeline and contract tests. |
 | `testing.*` | Test and validation suite | Section 5 enumerates the schema tests enforced in CI. |
+
+## 8. Open Questions/Follow-ups
+- GPU-gestütztes Witness-Caching und Circuit-Optimierung zur Reduktion der VRF-
+  und Quorum-Latenzen stehen weiterhin aus und sind für Phase 2.1 eingeplant.
+- Das Observability-Runbook sieht zusätzliche Drill-down-Dashboards für Witness-
+  Outliers vor; die Panels werden nach Abschluss der erweiterten Telemetrie
+  (zusätzliche Labels für Witness-Pipelines) ergänzt.
+- Performance-Regressionstests für das Simnet-Quorum-Szenario laufen aktuell nur
+  nightly. Eine Integration in den PR-Gating-Fluss bleibt ein offener Punkt.
