@@ -305,7 +305,8 @@ mod tests {
     use super::*;
     use crate::reputation::{ReputationWeights, Tier};
     use crate::stwo::circuit::consensus::{
-        ConsensusCircuit, ConsensusWitness as CircuitConsensusWitness, VotePower,
+        ConsensusCircuit, ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry,
+        ConsensusWitness as CircuitConsensusWitness, VotePower,
     };
     use crate::stwo::circuit::identity::IdentityWitness;
     use crate::stwo::circuit::recursive::{
@@ -497,20 +498,30 @@ mod tests {
             voter: "validator".into(),
             weight: 1,
         };
+        let block_hash = "bb".repeat(32);
         let witness = CircuitConsensusWitness {
-            block_hash: "bb".repeat(32),
+            block_hash: block_hash.clone(),
             round: 1,
             epoch: 0,
             slot: 1,
-            leader_proposal: "bb".repeat(32),
+            leader_proposal: block_hash.clone(),
             quorum_threshold: 1,
             pre_votes: vec![vote.clone()],
             pre_commits: vec![vote.clone()],
             commit_votes: vec![vote],
             quorum_bitmap_root: "bb".repeat(32),
             quorum_signature_root: "cc".repeat(32),
-            vrf_outputs: vec!["dd".repeat(32)],
-            vrf_proofs: vec!["ee".repeat(rpp_crypto_vrf::VRF_PROOF_LENGTH)],
+            vrf_entries: vec![ConsensusVrfWitnessEntry {
+                randomness: "dd".repeat(32),
+                pre_output: "ee".repeat(rpp_crypto_vrf::VRF_PREOUTPUT_LENGTH),
+                proof: hex::encode(vec![0xff; rpp_crypto_vrf::VRF_PROOF_LENGTH]),
+                public_key: "aa".repeat(32),
+                input: ConsensusVrfPoseidonInput {
+                    last_block_header: block_hash,
+                    epoch: 0,
+                    tier_seed: "77".repeat(32),
+                },
+            }],
             witness_commitments: vec!["ff".repeat(32)],
             reputation_roots: vec!["aa".repeat(32)],
         };
