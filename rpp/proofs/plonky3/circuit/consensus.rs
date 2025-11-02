@@ -9,6 +9,35 @@ use plonky3_backend::{
     VotePower as BackendVotePower,
 };
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusVrfWitnessPoseidonInput {
+    pub digest: String,
+    pub last_block_header: String,
+    pub epoch: u64,
+    pub tier_seed: String,
+}
+
+impl Default for ConsensusVrfWitnessPoseidonInput {
+    fn default() -> Self {
+        let zero_digest = "00".repeat(32);
+        Self {
+            digest: zero_digest.clone(),
+            last_block_header: zero_digest.clone(),
+            epoch: 0,
+            tier_seed: zero_digest,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ConsensusVrfWitnessEntry {
+    pub randomness: String,
+    pub pre_output: String,
+    pub proof: String,
+    pub public_key: String,
+    pub poseidon: ConsensusVrfWitnessPoseidonInput,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VotePower {
     pub voter: String,
@@ -38,6 +67,8 @@ pub struct ConsensusWitness {
     pub commit_votes: Vec<VotePower>,
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
+    #[serde(default)]
+    pub vrf_entries: Vec<ConsensusVrfWitnessEntry>,
     pub vrf_outputs: Vec<String>,
     pub vrf_proofs: Vec<String>,
     pub witness_commitments: Vec<String>,
@@ -88,6 +119,7 @@ impl ConsensusWitness {
         commit_votes: Vec<VotePower>,
         quorum_bitmap_root: impl Into<String>,
         quorum_signature_root: impl Into<String>,
+        vrf_entries: Vec<ConsensusVrfWitnessEntry>,
         vrf_outputs: Vec<String>,
         vrf_proofs: Vec<String>,
         witness_commitments: Vec<String>,
@@ -105,6 +137,7 @@ impl ConsensusWitness {
             commit_votes,
             quorum_bitmap_root: quorum_bitmap_root.into(),
             quorum_signature_root: quorum_signature_root.into(),
+            vrf_entries,
             vrf_outputs,
             vrf_proofs,
             witness_commitments,

@@ -21,11 +21,13 @@ use crate::rpp::{GlobalStateCommitments, ProofSystemKind};
 use crate::types::{
     AttestedIdentityRequest, ChainProof, IdentityGenesis, SignedTransaction, UptimeClaim,
 };
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
 
 use super::aggregation::RecursiveAggregator;
-use super::circuit::consensus::{ConsensusWitness, VotePower};
+use super::circuit::consensus::{
+    ConsensusVrfWitnessEntry, ConsensusVrfWitnessPoseidonInput, ConsensusWitness, VotePower,
+};
 use super::circuit::identity::IdentityWitness;
 use super::circuit::pruning::PruningWitness;
 use super::circuit::recursive::RecursiveWitness;
@@ -376,19 +378,9 @@ impl ProofProver for Plonky3Prover {
             &certificate.metadata.quorum_signature_root,
         )?;
 
-        if certificate.metadata.vrf_outputs.is_empty() {
+        if certificate.metadata.vrf_entries.is_empty() {
             return Err(ChainError::Crypto(
-                "consensus certificate missing VRF outputs".into(),
-            ));
-        }
-        if certificate.metadata.vrf_proofs.is_empty() {
-            return Err(ChainError::Crypto(
-                "consensus certificate missing VRF proofs".into(),
-            ));
-        }
-        if certificate.metadata.vrf_outputs.len() != certificate.metadata.vrf_proofs.len() {
-            return Err(ChainError::Crypto(
-                "consensus certificate VRF output/proof count mismatch".into(),
+                "consensus certificate missing VRF entries".into(),
             ));
         }
         if certificate.metadata.witness_commitments.is_empty() {
@@ -402,15 +394,77 @@ impl ProofProver for Plonky3Prover {
             ));
         }
 
-        for (index, proof) in certificate.metadata.vrf_proofs.iter().enumerate() {
-            let bytes = hex::decode(proof).map_err(|err| {
-                ChainError::Crypto(format!("invalid vrf proof #{index} encoding: {err}"))
-            })?;
-            if bytes.len() != VRF_PROOF_LENGTH {
+        let mut vrf_entries = Vec::with_capacity(certificate.metadata.vrf_entries.len());
+        let mut vrf_outputs = Vec::with_capacity(certificate.metadata.vrf_entries.len());
+        let mut vrf_proofs = Vec::with_capacity(certificate.metadata.vrf_entries.len());
+
+        for (index, entry) in certificate.metadata.vrf_entries.iter().enumerate() {
+            let sanitize_hex =
+                |value: &str, label: &str, expected_len: usize| -> ChainResult<String> {
+                    if value.trim().is_empty() {
+                        return Err(ChainError::Crypto(format!(
+                            "consensus certificate vrf entry #{index} missing {label}",
+                        )));
+                    }
+                    let bytes = hex::decode(value).map_err(|err| {
+                        ChainError::Crypto(format!(
+                            "invalid vrf entry #{index} {label} encoding: {err}",
+                        ))
+                    })?;
+                    if bytes.len() != expected_len {
+                        return Err(ChainError::Crypto(format!(
+                            "vrf entry #{index} {label} must encode {expected_len} bytes",
+                        )));
+                    }
+                    Ok(hex::encode(bytes))
+                };
+
+            let randomness = sanitize_hex(&entry.randomness, "randomness", 32)?;
+            let pre_output = sanitize_hex(&entry.pre_output, "pre-output", VRF_PREOUTPUT_LENGTH)?;
+            let proof = sanitize_hex(&entry.proof, "proof", VRF_PROOF_LENGTH)?;
+            let public_key = sanitize_hex(&entry.public_key, "public key", 32)?;
+            let poseidon_digest = sanitize_hex(&entry.poseidon.digest, "poseidon digest", 32)?;
+            let poseidon_last_block_header = sanitize_hex(
+                &entry.poseidon.last_block_header,
+                "poseidon last block header",
+                32,
+            )?;
+            let poseidon_tier_seed =
+                sanitize_hex(&entry.poseidon.tier_seed, "poseidon tier seed", 32)?;
+
+            let poseidon_epoch_str = entry.poseidon.epoch.trim();
+            if poseidon_epoch_str.is_empty() {
                 return Err(ChainError::Crypto(format!(
-                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
+                    "consensus certificate vrf entry #{index} missing poseidon epoch",
                 )));
             }
+            let poseidon_epoch = poseidon_epoch_str.parse::<u64>().map_err(|err| {
+                ChainError::Crypto(format!(
+                    "invalid vrf entry #{index} poseidon epoch '{poseidon_epoch_str}': {err}",
+                ))
+            })?;
+
+            vrf_outputs.push(randomness.clone());
+            vrf_proofs.push(proof.clone());
+
+            vrf_entries.push(ConsensusVrfWitnessEntry {
+                randomness,
+                pre_output,
+                proof,
+                public_key,
+                poseidon: ConsensusVrfWitnessPoseidonInput {
+                    digest: poseidon_digest,
+                    last_block_header: poseidon_last_block_header,
+                    epoch: poseidon_epoch,
+                    tier_seed: poseidon_tier_seed,
+                },
+            });
+        }
+
+        if vrf_entries.is_empty() {
+            return Err(ChainError::Crypto(
+                "consensus certificate missing VRF entries".into(),
+            ));
         }
 
         let parse_weight = |stage: &str, weight: &str| -> ChainResult<u64> {
@@ -466,8 +520,9 @@ impl ProofProver for Plonky3Prover {
             commit_votes,
             certificate.metadata.quorum_bitmap_root.clone(),
             certificate.metadata.quorum_signature_root.clone(),
-            certificate.metadata.vrf_outputs.clone(),
-            certificate.metadata.vrf_proofs.clone(),
+            vrf_entries,
+            vrf_outputs,
+            vrf_proofs,
             certificate.metadata.witness_commitments.clone(),
             certificate.metadata.reputation_roots.clone(),
         );
