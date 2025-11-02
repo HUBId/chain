@@ -79,6 +79,7 @@ fn run_simnet_smoke() -> anyhow::Result<()> {
     let scenarios = [
         "tools/simnet/scenarios/ci_block_pipeline.ron",
         "tools/simnet/scenarios/ci_state_sync_guard.ron",
+        "tools/simnet/scenarios/consensus_quorum_stress.ron",
     ];
     for scenario in scenarios {
         let scenario_path = workspace_root().join(scenario);

@@ -330,7 +330,7 @@ impl Blueprint {
                     Task {
                         key: "testing.simulation",
                         title: "Simulationsframework",
-                        detail: "CI-fähiges Simulationsframework (`tools/simnet/`) mit den Szenarien `ci_block_pipeline` und `ci_state_sync_guard` bereitstellen und via `cargo xtask test-simnet` inklusive Feature-Flags ausführbar halten. Phase‑2 ergänzt `consensus_quorum_stress` als obligatorischen Simnet-Lauf, inklusive Log-/Dashboard-Belegen für VRF- und Quorum-Ablehnungen.",
+                        detail: "CI-fähiges Simulationsframework (`tools/simnet/`) mit den Szenarien `ci_block_pipeline` und `ci_state_sync_guard` bereitstellen und via `cargo xtask test-simnet` inklusive Feature-Flags ausführbar halten. Phase‑2 (abgeschlossen am 2026-04-03) ergänzt `consensus_quorum_stress` als obligatorischen Lauf; Nightly `nightly-simnet` wertet die JSON-/CSV-Reports per `scripts/analyze_simnet.py` aus und dokumentiert VRF-/Quorum-Ablehnungen in `docs/testing/simulations.md`.",
                         status: TaskStatus::Done,
                     },
                 ],
