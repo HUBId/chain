@@ -21,7 +21,7 @@ Consensus proofs expose the following public inputs:
 | `vrf_entries[].pre_output` | VRF pre-output commitments paired with the randomness element. |
 | `vrf_entries[].proof` | Raw Schnorrkel VRF proofs for the randomness/pre-output pair. |
 | `vrf_entries[].public_key` | Validator VRF public keys that authored the transcript. |
-| `vrf_entries[].poseidon.{digest,last_block_header,epoch,tier_seed}` | Poseidon transcript inputs that tie the validator metadata to the `block_hash`. |
+| `vrf_entries[].poseidon.{digest,last_block_header,epoch,tier_seed}` | Poseidon transcript inputs that tie the validator metadata to the `block_hash`. `last_block_header` must equal the certificate `block_hash`, while each entry's `epoch` string mirrors the top-level `epoch` counter. |
 | `witness_commitments[]` | Module witness commitments included in the block. |
 | `reputation_roots[]` | Pre/post reputation ledger roots. |
 | `vrf_entry_count` | Declares how many transcripts populate `vrf_entries[]`. |
@@ -40,6 +40,12 @@ expects each digest to be a 32-byte hexadecimal encoding (VRF proofs remain
 variable-length Schnorrkel transcripts) and will abort if any quorum root uses
 an invalid encoding. Validator public keys are exported as 32-byte hex strings
 and undergo the same validation before entering the circuit.
+
+Simnet fixtures and associated tooling now synthesise complete VRF transcript
+objects that mirror this shape. Every entry includes the validator's randomness,
+pre-output, proof bytes, public key, and Poseidon tuple bound to the certificate
+`block_hash`/`epoch`, keeping the documentation examples aligned with the
+on-chain metadata.
 
 Legacy projections such as `vrf_outputs[]`/`vrf_proofs[]` remain available to the
 RPC layer for a transition period. They are derived directly from
