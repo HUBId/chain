@@ -270,6 +270,38 @@ fn consensus_witness_rejects_missing_vrf_proof() {
 }
 
 #[test]
+fn consensus_witness_rejects_missing_vrf_pre_output() {
+    let mut witness = consensus_witness_fixture();
+    if let Some(entry) = witness.vrf_entries.first_mut() {
+        entry.pre_output.clear();
+    }
+
+    let err = witness
+        .validate_metadata()
+        .expect_err("missing vrf pre-output must fail");
+    assert!(
+        err.to_string().contains("missing pre-output"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn consensus_witness_rejects_missing_vrf_poseidon_digest() {
+    let mut witness = consensus_witness_fixture();
+    if let Some(entry) = witness.vrf_entries.first_mut() {
+        entry.poseidon.digest.clear();
+    }
+
+    let err = witness
+        .validate_metadata()
+        .expect_err("missing vrf poseidon digest must fail");
+    assert!(
+        err.to_string().contains("poseidon digest"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn consensus_witness_rejects_invalid_quorum_root() {
     let mut witness = consensus_witness_fixture();
     witness.quorum_bitmap_root = "deadbeef".into();

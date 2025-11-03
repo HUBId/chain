@@ -410,7 +410,7 @@ impl ConsensusProofStatus {
     pub fn legacy_vrf_outputs(&self) -> Vec<String> {
         self.vrf_entries
             .iter()
-            .map(|entry| entry.randomness.clone())
+            .map(|entry| entry.pre_output.clone())
             .collect()
     }
 
@@ -7335,6 +7335,20 @@ mod tests {
                 certificate_entry.poseidon.tier_seed
             );
         }
+        let expected_outputs: Vec<String> = certificate
+            .metadata
+            .vrf_entries
+            .iter()
+            .map(|entry| entry.pre_output.clone())
+            .collect();
+        assert_eq!(status.legacy_vrf_outputs(), expected_outputs);
+        let expected_proofs: Vec<String> = certificate
+            .metadata
+            .vrf_entries
+            .iter()
+            .map(|entry| entry.proof.clone())
+            .collect();
+        assert_eq!(status.legacy_vrf_proofs(), expected_proofs);
         assert_eq!(
             status.witness_commitments,
             certificate.metadata.witness_commitments

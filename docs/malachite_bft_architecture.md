@@ -95,7 +95,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 ### Konsens- und Auswahlmodule
 1. **VRF Engine**
    * Input: `(secret_key, epoch_nonce, timetoke_balance, validator_id)`.
-   * Output: `vrf_entry { randomness, pre_output, proof, public_key, poseidon }`.
+   * Output: `vrf_entry { randomness, pre_output, proof, public_key, poseidon { digest, last_block_header, epoch, tier_seed } }`.
    * Threshold-Funktion: `threshold = f(timetoke_balance, network_params)` (z. B. logistischer Anstieg).
    * Interface: `trait VrfProvider { fn evaluate(&self, ctx: VrfContext) -> VrfResult; }`.
 

@@ -139,23 +139,27 @@ impl ConsensusWitness {
             ));
         }
 
-        let mut vrf_outputs = Vec::with_capacity(self.vrf_entries.len());
-        let mut vrf_proofs = Vec::with_capacity(self.vrf_entries.len());
-
         for (index, entry) in self.vrf_entries.iter().enumerate() {
-            if entry.randomness.trim().is_empty() {
-                return Err(ChainError::Crypto(format!(
-                    "consensus witness vrf entry #{index} missing randomness",
-                )));
-            }
-            if entry.proof.trim().is_empty() {
-                return Err(ChainError::Crypto(format!(
-                    "consensus witness vrf entry #{index} missing proof",
-                )));
-            }
+            let ensure_present = |label: &str, value: &str| -> ChainResult<()> {
+                if value.trim().is_empty() {
+                    return Err(ChainError::Crypto(format!(
+                        "consensus witness vrf entry #{index} missing {label}",
+                    )));
+                }
+                Ok(())
+            };
 
-            vrf_outputs.push(entry.randomness.clone());
-            vrf_proofs.push(entry.proof.clone());
+            ensure_present("randomness", &entry.randomness)?;
+            ensure_present("pre-output", &entry.pre_output)?;
+            ensure_present("proof", &entry.proof)?;
+            ensure_present("public key", &entry.public_key)?;
+            ensure_present("poseidon digest", &entry.poseidon.digest)?;
+            ensure_present(
+                "poseidon last block header",
+                &entry.poseidon.last_block_header,
+            )?;
+            ensure_present("poseidon epoch", &entry.poseidon.epoch)?;
+            ensure_present("poseidon tier seed", &entry.poseidon.tier_seed)?;
         }
 
         Ok(BackendConsensusWitness {
@@ -178,8 +182,7 @@ impl ConsensusWitness {
                 .collect(),
             quorum_bitmap_root: self.quorum_bitmap_root.clone(),
             quorum_signature_root: self.quorum_signature_root.clone(),
-            vrf_outputs,
-            vrf_proofs,
+            vrf_entries: self.vrf_entries.clone(),
             witness_commitments: self.witness_commitments.clone(),
             reputation_roots: self.reputation_roots.clone(),
         })
