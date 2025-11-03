@@ -219,6 +219,9 @@ fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
     ensure_consensus_witness_metadata(witness)?;
     let parameters = StarkParameters::blueprint_default();
     let expected_inputs: Vec<_> = ConsensusCircuit::public_inputs(&parameters, witness)
+        .map_err(|error| {
+            BackendError::Failure(format!("failed to derive consensus public inputs: {error}"))
+        })?
         .into_iter()
         .map(|element| element.to_hex())
         .collect();
@@ -548,6 +551,7 @@ mod tests {
         let parameters = StarkParameters::blueprint_default();
         let witness = sample_consensus_witness();
         let public_inputs: Vec<_> = ConsensusCircuit::public_inputs(&parameters, &witness)
+            .expect("consensus public inputs")
             .into_iter()
             .map(|value| value.to_hex())
             .collect();

@@ -237,7 +237,7 @@ impl WalletProver {
         circuit.verify_air(&self.parameters, &trace)?;
         let air = circuit.define_air(&self.parameters, &trace)?;
 
-        let public_inputs = ConsensusCircuit::public_inputs(&self.parameters, &witness);
+        let public_inputs = ConsensusCircuit::public_inputs(&self.parameters, &witness)?;
 
         let fri_prover = FriProver::new(&self.parameters);
         let fri_output = fri_prover.prove(&air, &trace, &public_inputs);

@@ -272,7 +272,9 @@ impl ConsensusWitness {
     }
 }
 
-fn parse_vrf_entries(witness: &ConsensusWitness) -> Result<Vec<VrfOutput>, CircuitError> {
+pub(crate) fn parse_vrf_entries(
+    witness: &ConsensusWitness,
+) -> Result<Vec<VrfOutput>, CircuitError> {
     if witness.vrf_entries.is_empty() {
         return Err(CircuitError::ConstraintViolation(
             "consensus witness missing VRF entries".into(),
@@ -477,7 +479,7 @@ impl ConsensusCircuit {
     pub fn public_inputs(
         parameters: &StarkParameters,
         witness: &ConsensusWitness,
-    ) -> Vec<FieldElement> {
+    ) -> Result<Vec<FieldElement>, CircuitError> {
         let block_hash = string_to_field(parameters, &witness.block_hash);
         let leader_proposal = string_to_field(parameters, &witness.leader_proposal);
         let quorum_bitmap_root = string_to_field(parameters, &witness.quorum_bitmap_root);
@@ -493,16 +495,23 @@ impl ConsensusCircuit {
             quorum_signature_root.clone(),
         ];
 
+        let verified_outputs = parse_vrf_entries(witness)?;
+        if witness.vrf_entries.len() != verified_outputs.len() {
+            return Err(CircuitError::ConstraintViolation(
+                "witness VRF entries and verified outputs differ".into(),
+            ));
+        }
+
         let mut extend_with = |values: &[String]| {
             for value in values {
                 inputs.push(string_to_field(parameters, value));
             }
         };
 
-        for entry in &witness.vrf_entries {
-            inputs.push(string_to_field(parameters, &entry.randomness));
-            inputs.push(string_to_field(parameters, &entry.pre_output));
-            inputs.push(string_to_field(parameters, &entry.proof));
+        for (entry, output) in witness.vrf_entries.iter().zip(verified_outputs.iter()) {
+            inputs.push(parameters.element_from_bytes(&output.randomness));
+            inputs.push(parameters.element_from_bytes(&output.preoutput));
+            inputs.push(parameters.element_from_bytes(&output.proof));
             inputs.push(string_to_field(parameters, &entry.public_key));
             inputs.push(string_to_field(parameters, &entry.input.last_block_header));
             inputs.push(parameters.element_from_u64(entry.input.epoch));
@@ -517,8 +526,13 @@ impl ConsensusCircuit {
         inputs.push(parameters.element_from_u64(witness.reputation_roots.len() as u64));
 
         let hasher = parameters.poseidon_hasher();
-        let bindings =
-            ConsensusCircuit::compute_binding_values(parameters, &hasher, &block_hash, witness);
+        let bindings = ConsensusCircuit::compute_binding_values(
+            parameters,
+            &hasher,
+            &block_hash,
+            witness,
+            &verified_outputs,
+        )?;
 
         inputs.push(bindings.vrf_output);
         inputs.push(bindings.vrf_proof);
@@ -527,22 +541,17 @@ impl ConsensusCircuit {
         inputs.push(bindings.quorum_bitmap);
         inputs.push(bindings.quorum_signature);
 
-        inputs
+        Ok(inputs)
     }
 
     pub fn verified_vrf_outputs(&self) -> Result<Ref<Vec<VrfOutput>>, CircuitError> {
         let cache = self.verified_outputs.borrow();
-        if !cache.is_empty() {
-            return Ok(cache);
+        if cache.is_empty() {
+            return Err(CircuitError::ConstraintViolation(
+                "VRF outputs unavailable – run evaluate_constraints first".into(),
+            ));
         }
-        drop(cache);
-
-        let verified_outputs = parse_vrf_entries(&self.witness)?;
-        {
-            let mut cache = self.verified_outputs.borrow_mut();
-            *cache = verified_outputs;
-        }
-        Ok(self.verified_outputs.borrow())
+        Ok(cache)
     }
 
     fn build_vote_segment(
@@ -638,14 +647,14 @@ impl StarkCircuit for ConsensusCircuit {
 
         let hasher = parameters.poseidon_hasher();
         let block_hash = string_to_field(parameters, &self.witness.block_hash);
+        let verified_outputs = self.verified_vrf_outputs()?;
         let (vrf_outputs, _vrf_output_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            self.witness
-                .vrf_entries
+            verified_outputs
                 .iter()
-                .map(|entry| &entry.randomness),
+                .map(|output| BindingInput::Bytes(output.randomness.as_ref())),
             "vrf_outputs",
             "randomness",
         )?;
@@ -653,15 +662,21 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            self.witness.vrf_entries.iter().map(|entry| &entry.proof),
+            verified_outputs
+                .iter()
+                .map(|output| BindingInput::Bytes(output.proof.as_ref())),
             "vrf_proofs",
             "proof",
         )?;
+        drop(verified_outputs);
         let (witness_commitments, _witness_commitment_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            self.witness.witness_commitments.iter().map(|value| value),
+            self.witness
+                .witness_commitments
+                .iter()
+                .map(|value| BindingInput::Hex(value)),
             "witness_commitments",
             "commitment",
         )?;
@@ -669,7 +684,10 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            self.witness.reputation_roots.iter().map(|value| value),
+            self.witness
+                .reputation_roots
+                .iter()
+                .map(|value| BindingInput::Hex(value)),
             "reputation_roots",
             "root",
         )?;
@@ -677,7 +695,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            std::iter::once(&self.witness.quorum_bitmap_root),
+            std::iter::once(BindingInput::Hex(&self.witness.quorum_bitmap_root)),
             "quorum_bitmap_binding",
             "root",
         )?;
@@ -685,13 +703,13 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            std::iter::once(&self.witness.quorum_signature_root),
+            std::iter::once(BindingInput::Hex(&self.witness.quorum_signature_root)),
             "quorum_signature_binding",
             "root",
         )?;
 
         let summary_columns = summary_columns(&self.witness);
-        let summary_values = Self::public_inputs(parameters, &self.witness);
+        let summary_values = Self::public_inputs(parameters, &self.witness)?;
         let summary = TraceSegment::new("summary", summary_columns, vec![summary_values])?;
 
         ExecutionTrace::from_segments(vec![
@@ -903,58 +921,88 @@ pub(crate) struct ConsensusBindingValues {
     pub(crate) quorum_signature: FieldElement,
 }
 
+enum BindingInput<'a> {
+    Hex(&'a str),
+    Bytes(&'a [u8]),
+}
+
+impl<'a> BindingInput<'a> {
+    fn to_field(&self, parameters: &StarkParameters) -> FieldElement {
+        match self {
+            BindingInput::Hex(value) => string_to_field(parameters, value),
+            BindingInput::Bytes(bytes) => parameters.element_from_bytes(bytes),
+        }
+    }
+}
+
 impl ConsensusCircuit {
     pub(crate) fn compute_binding_values(
         parameters: &StarkParameters,
         hasher: &PoseidonHasher,
         block_hash: &FieldElement,
         witness: &ConsensusWitness,
-    ) -> ConsensusBindingValues {
+        verified_outputs: &[VrfOutput],
+    ) -> Result<ConsensusBindingValues, CircuitError> {
+        if witness.vrf_entries.len() != verified_outputs.len() {
+            return Err(CircuitError::ConstraintViolation(
+                "witness VRF entries and verified outputs differ".into(),
+            ));
+        }
         let vrf_output = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness.vrf_entries.iter().map(|entry| &entry.randomness),
+            verified_outputs
+                .iter()
+                .map(|output| BindingInput::Bytes(output.randomness.as_ref())),
         );
         let vrf_proof = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness.vrf_entries.iter().map(|entry| &entry.proof),
+            verified_outputs
+                .iter()
+                .map(|output| BindingInput::Bytes(output.proof.as_ref())),
         );
         let witness_commitment = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness.witness_commitments.iter().map(|value| value),
+            witness
+                .witness_commitments
+                .iter()
+                .map(|value| BindingInput::Hex(value)),
         );
         let reputation_root = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness.reputation_roots.iter().map(|value| value),
+            witness
+                .reputation_roots
+                .iter()
+                .map(|value| BindingInput::Hex(value)),
         );
         let quorum_bitmap = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::iter::once(&witness.quorum_bitmap_root),
+            std::iter::once(BindingInput::Hex(&witness.quorum_bitmap_root)),
         );
         let quorum_signature = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::iter::once(&witness.quorum_signature_root),
+            std::iter::once(BindingInput::Hex(&witness.quorum_signature_root)),
         );
 
-        ConsensusBindingValues {
+        Ok(ConsensusBindingValues {
             vrf_output,
             vrf_proof,
             witness_commitment,
             reputation_root,
             quorum_bitmap,
             quorum_signature,
-        }
+        })
     }
 
     fn fold_binding<'a, I>(
@@ -964,12 +1012,12 @@ impl ConsensusCircuit {
         values: I,
     ) -> FieldElement
     where
-        I: IntoIterator<Item = &'a String>,
+        I: IntoIterator<Item = BindingInput<'a>>,
     {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
         for value in values {
-            let element = string_to_field(parameters, value);
+            let element = value.to_field(parameters);
             accumulator = hasher.hash(&[accumulator, element, zero.clone()]);
         }
         accumulator
@@ -984,13 +1032,13 @@ impl ConsensusCircuit {
         value_column: &str,
     ) -> Result<(TraceSegment, FieldElement), CircuitError>
     where
-        I: IntoIterator<Item = &'a String>,
+        I: IntoIterator<Item = BindingInput<'a>>,
     {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
         let mut rows = Vec::new();
         for value in values {
-            let element = string_to_field(parameters, value);
+            let element = value.to_field(parameters);
             let next = hasher.hash(&[accumulator.clone(), element.clone(), zero.clone()]);
             rows.push(vec![element, accumulator.clone(), next.clone()]);
             accumulator = next;

@@ -24,9 +24,9 @@ use prover_backend_interface::{
 #[cfg(feature = "official")]
 use crate::official::aggregation::pruning_fold_from_canonical_bytes;
 #[cfg(feature = "official")]
-use crate::official::circuit::consensus::ConsensusWitness;
+use crate::official::circuit::consensus::{parse_vrf_entries, ConsensusCircuit, ConsensusWitness};
 #[cfg(feature = "official")]
-use crate::official::circuit::{consensus::ConsensusCircuit, string_to_field};
+use crate::official::circuit::string_to_field;
 #[cfg(feature = "official")]
 use crate::official::params::{FieldElement, StarkParameters};
 #[cfg(feature = "official")]
@@ -1677,21 +1677,26 @@ mod tests {
         let parameters = StarkParameters::blueprint_default();
         let hasher = parameters.poseidon_hasher();
         let block_hash_field = string_to_field(&parameters, &witness.block_hash);
+        let verified_outputs =
+            parse_vrf_entries(witness).expect("consensus witness contains verified VRF outputs");
         let bindings = ConsensusCircuit::compute_binding_values(
             &parameters,
             &hasher,
             &block_hash_field,
             witness,
-        );
+            &verified_outputs,
+        )
+        .expect("consensus VRF bindings");
 
         let poseidon_domain = element_from_bytes(&parameters, POSEIDON_VRF_DOMAIN);
         let vrf_entries = witness
             .vrf_entries
             .iter()
-            .map(|entry| {
-                let randomness = hex_to_array(&entry.randomness);
-                let pre_output = hex_to_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output);
-                let proof = hex_to_vec(&entry.proof);
+            .zip(verified_outputs.iter())
+            .map(|(entry, output)| {
+                let randomness = output.randomness;
+                let pre_output = output.preoutput;
+                let proof = output.proof.to_vec();
                 let public_key = hex_to_array(&entry.public_key);
                 let last_block_header = hex_to_array(&entry.input.last_block_header);
                 let epoch = entry.input.epoch;

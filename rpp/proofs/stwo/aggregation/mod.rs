@@ -533,6 +533,7 @@ mod tests {
         );
         if let ProofPayload::Consensus(witness) = &proof.payload {
             proof.public_inputs = ConsensusCircuit::public_inputs(parameters, witness)
+                .expect("consensus public inputs")
                 .into_iter()
                 .map(|value| value.to_hex())
                 .collect();
