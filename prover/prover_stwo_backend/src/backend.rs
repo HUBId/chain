@@ -15,7 +15,7 @@ pub use io::{
 
 use prover_backend_interface::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
+    ConsensusVrfPoseidonPublicInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
     IdentityCircuitDef, IdentityPublicInputs, ProofBackend, ProofBytes, ProvingKey,
     PruningCircuitDef, PruningPublicInputs, RecursiveCircuitDef, RecursivePublicInputs,
     SecurityLevel, StateCircuitDef, StatePublicInputs, TxCircuitDef, TxPublicInputs,

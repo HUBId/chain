@@ -46,14 +46,14 @@ impl VotePower {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct ConsensusVrfPoseidonWitness {
+pub struct ConsensusVrfPoseidonInput {
     pub digest: String,
     pub last_block_header: String,
     pub epoch: String,
     pub tier_seed: String,
 }
 
-impl Default for ConsensusVrfPoseidonWitness {
+impl Default for ConsensusVrfPoseidonInput {
     fn default() -> Self {
         let zero_digest = "00".repeat(32);
         Self {
@@ -67,15 +67,15 @@ impl Default for ConsensusVrfPoseidonWitness {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct ConsensusVrfWitnessEntry {
+pub struct ConsensusVrfEntry {
     pub randomness: String,
     pub pre_output: String,
     pub proof: String,
     pub public_key: String,
-    pub poseidon: ConsensusVrfPoseidonWitness,
+    pub poseidon: ConsensusVrfPoseidonInput,
 }
 
-impl Default for ConsensusVrfWitnessEntry {
+impl Default for ConsensusVrfEntry {
     fn default() -> Self {
         let zero_hex_32 = "00".repeat(32);
         Self {
@@ -83,13 +83,13 @@ impl Default for ConsensusVrfWitnessEntry {
             pre_output: zero_hex_32.clone(),
             proof: "00".repeat(VRF_PROOF_LENGTH),
             public_key: zero_hex_32,
-            poseidon: ConsensusVrfPoseidonWitness::default(),
+            poseidon: ConsensusVrfPoseidonInput::default(),
         }
     }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsensusVrfPoseidonInput {
+pub struct ConsensusVrfPoseidonPublicInput {
     pub digest: [u8; 32],
     pub last_block_header: [u8; 32],
     pub epoch: u64,
@@ -102,11 +102,11 @@ pub struct ConsensusVrfPublicEntry {
     pub pre_output: [u8; VRF_PREOUTPUT_LENGTH],
     pub proof: Vec<u8>,
     pub public_key: [u8; 32],
-    pub poseidon: ConsensusVrfPoseidonInput,
+    pub poseidon: ConsensusVrfPoseidonPublicInput,
 }
 
 #[derive(Clone, Debug)]
-struct SanitizedVrfPoseidonEntry {
+struct SanitizedVrfPoseidonInput {
     digest: [u8; 32],
     last_block_header: [u8; 32],
     epoch: u64,
@@ -119,7 +119,7 @@ struct SanitizedVrfEntry {
     pre_output: [u8; VRF_PREOUTPUT_LENGTH],
     proof: [u8; VRF_PROOF_LENGTH],
     public_key: [u8; 32],
-    poseidon: SanitizedVrfPoseidonEntry,
+    poseidon: SanitizedVrfPoseidonInput,
 }
 
 impl SanitizedVrfEntry {
@@ -137,7 +137,7 @@ impl SanitizedVrfEntry {
             pre_output: self.pre_output,
             proof: self.proof.to_vec(),
             public_key: self.public_key,
-            poseidon: ConsensusVrfPoseidonInput {
+            poseidon: ConsensusVrfPoseidonPublicInput {
                 digest: self.poseidon.digest,
                 last_block_header: self.poseidon.last_block_header,
                 epoch: self.poseidon.epoch,
@@ -161,7 +161,7 @@ pub struct ConsensusWitness {
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
     #[serde(default)]
-    pub vrf_entries: Vec<ConsensusVrfWitnessEntry>,
+    pub vrf_entries: Vec<ConsensusVrfEntry>,
     #[serde(default)]
     pub witness_commitments: Vec<String>,
     #[serde(default)]
@@ -264,6 +264,12 @@ impl ConsensusWitness {
             return Err(invalid_witness("consensus witness missing VRF entries"));
         }
 
+        let block_hash_vec = Self::ensure_digest("block hash", &self.block_hash)?;
+        let block_hash: [u8; 32] = block_hash_vec
+            .as_slice()
+            .try_into()
+            .map_err(|_| invalid_witness("block hash must encode 32 bytes"))?;
+
         let mut sanitized = Vec::with_capacity(self.vrf_entries.len());
         for (index, entry) in self.vrf_entries.iter().enumerate() {
             let randomness =
@@ -283,19 +289,29 @@ impl ConsensusWitness {
                 "poseidon last block header",
                 &entry.poseidon.last_block_header,
             )?;
+            if poseidon_last_block_header != block_hash {
+                return Err(invalid_witness(format!(
+                    "vrf entry #{index} poseidon last block header must match block hash"
+                )));
+            }
             let poseidon_tier_seed = Self::sanitize_vrf_field::<32>(
                 index,
                 "poseidon tier seed",
                 &entry.poseidon.tier_seed,
             )?;
             let poseidon_epoch = Self::sanitize_vrf_epoch(index, &entry.poseidon.epoch)?;
+            if poseidon_epoch != self.epoch {
+                return Err(invalid_witness(format!(
+                    "vrf entry #{index} poseidon epoch must match consensus epoch"
+                )));
+            }
 
             sanitized.push(SanitizedVrfEntry {
                 randomness,
                 pre_output,
                 proof,
                 public_key,
-                poseidon: SanitizedVrfPoseidonEntry {
+                poseidon: SanitizedVrfPoseidonInput {
                     digest: poseidon_digest,
                     last_block_header: poseidon_last_block_header,
                     epoch: poseidon_epoch,

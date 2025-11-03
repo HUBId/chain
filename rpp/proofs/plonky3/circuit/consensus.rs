@@ -10,7 +10,7 @@ use plonky3_backend::{
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsensusVrfPoseidonWitness {
+pub struct ConsensusVrfPoseidonInput {
     #[serde(default)]
     pub digest: String,
     #[serde(default)]
@@ -21,7 +21,7 @@ pub struct ConsensusVrfPoseidonWitness {
     pub tier_seed: String,
 }
 
-impl Default for ConsensusVrfPoseidonWitness {
+impl Default for ConsensusVrfPoseidonInput {
     fn default() -> Self {
         let zero_digest = "00".repeat(32);
         Self {
@@ -35,7 +35,7 @@ impl Default for ConsensusVrfPoseidonWitness {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct ConsensusVrfEntryWitness {
+pub struct ConsensusVrfEntry {
     #[serde(default)]
     pub randomness: String,
     #[serde(default)]
@@ -45,10 +45,10 @@ pub struct ConsensusVrfEntryWitness {
     #[serde(default)]
     pub public_key: String,
     #[serde(default)]
-    pub poseidon: ConsensusVrfPoseidonWitness,
+    pub poseidon: ConsensusVrfPoseidonInput,
 }
 
-impl Default for ConsensusVrfEntryWitness {
+impl Default for ConsensusVrfEntry {
     fn default() -> Self {
         let zero_hex_32 = "00".repeat(32);
         Self {
@@ -56,7 +56,7 @@ impl Default for ConsensusVrfEntryWitness {
             pre_output: zero_hex_32.clone(),
             proof: "00".repeat(80),
             public_key: zero_hex_32,
-            poseidon: ConsensusVrfPoseidonWitness::default(),
+            poseidon: ConsensusVrfPoseidonInput::default(),
         }
     }
 }
@@ -91,7 +91,7 @@ pub struct ConsensusWitness {
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
     #[serde(default)]
-    pub vrf_entries: Vec<ConsensusVrfEntryWitness>,
+    pub vrf_entries: Vec<ConsensusVrfEntry>,
     pub witness_commitments: Vec<String>,
     pub reputation_roots: Vec<String>,
 }
@@ -110,7 +110,7 @@ impl ConsensusWitness {
         commit_votes: Vec<VotePower>,
         quorum_bitmap_root: impl Into<String>,
         quorum_signature_root: impl Into<String>,
-        vrf_entries: Vec<ConsensusVrfEntryWitness>,
+        vrf_entries: Vec<ConsensusVrfEntry>,
         witness_commitments: Vec<String>,
         reputation_roots: Vec<String>,
     ) -> Self {

@@ -8,7 +8,7 @@ use std::fmt;
 
 use crate::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
+    ConsensusVrfPoseidonPublicInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
     ProofBackend, ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
 };
 use crate::validator::ValidatorId;

@@ -65,7 +65,7 @@ use crate::plonky3::prover::{
     telemetry_snapshot as plonky3_prover_telemetry, Plonky3BackendHealth,
 };
 use crate::proof_backend::{
-    Blake2sHasher, ConsensusVrfPoseidonInput as BackendVrfPoseidonInput,
+    Blake2sHasher, ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput,
     ConsensusVrfPublicEntry as BackendVrfPublicEntry, ProofBytes,
 };
 #[cfg(feature = "prover-stwo")]

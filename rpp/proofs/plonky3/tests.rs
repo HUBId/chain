@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::crypto::address_from_public_key;
 use crate::plonky3::circuit::consensus::{
-    ConsensusVrfEntryWitness, ConsensusVrfPoseidonWitness, ConsensusWitness, VotePower,
+    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, VotePower,
 };
 use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
@@ -209,12 +209,12 @@ fn consensus_witness_fixture() -> ConsensusWitness {
         voter: "validator-1".into(),
         weight: 80,
     };
-    let vrf_entry = ConsensusVrfEntryWitness {
+    let vrf_entry = ConsensusVrfEntry {
         randomness: "dd".repeat(32),
         pre_output: "ee".repeat(VRF_PREOUTPUT_LENGTH),
         proof: hex::encode(vec![0xee; VRF_PROOF_LENGTH]),
         public_key: "ff".repeat(32),
-        poseidon: ConsensusVrfPoseidonWitness {
+        poseidon: ConsensusVrfPoseidonInput {
             digest: "11".repeat(32),
             last_block_header: "22".repeat(32),
             epoch: "5".into(),

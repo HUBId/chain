@@ -30,8 +30,8 @@ use super::validator::{
 
 use crate::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry, ProofBackend,
-    ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey, WitnessBytes,
+    ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry,
+    ProofBackend, ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey, WitnessBytes,
 };
 
 #[cfg(feature = "prover-mock")]

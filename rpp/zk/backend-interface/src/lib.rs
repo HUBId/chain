@@ -368,7 +368,7 @@ pub struct UptimePublicInputs {
 
 /// Poseidon input tuple associated with a consensus VRF entry.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsensusVrfPoseidonInput {
+pub struct ConsensusVrfPoseidonPublicInput {
     /// Poseidon digest derived from the VRF input tuple.
     pub digest: [u8; 32],
     /// Last block header hash folded into the Poseidon transcript.
@@ -391,7 +391,7 @@ pub struct ConsensusVrfPublicEntry {
     /// Validator VRF public key used to produce the proof.
     pub public_key: [u8; 32],
     /// Poseidon metadata describing the VRF input tuple.
-    pub poseidon: ConsensusVrfPoseidonInput,
+    pub poseidon: ConsensusVrfPoseidonPublicInput,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

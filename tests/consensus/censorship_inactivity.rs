@@ -13,8 +13,8 @@ use rpp_consensus::messages::{
 };
 use rpp_consensus::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPublicEntry, ConsensusVrfPoseidonInput as BackendVrfPoseidonInput, ProofBackend,
-    ProofBytes, VerifyingKey,
+    ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry,
+    ProofBackend, ProofBytes, VerifyingKey,
 };
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_consensus::validator::{VRFOutput, ValidatorLedgerEntry};

@@ -26,7 +26,7 @@ use rpp_pruning::Envelope;
 
 use super::aggregation::RecursiveAggregator;
 use super::circuit::consensus::{
-    ConsensusVrfEntryWitness, ConsensusVrfPoseidonWitness, ConsensusWitness, VotePower,
+    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, VotePower,
 };
 use super::circuit::identity::IdentityWitness;
 use super::circuit::pruning::PruningWitness;
@@ -359,24 +359,27 @@ impl ProofProver for Plonky3Prover {
         block_hash: &str,
         certificate: &ConsensusCertificate,
     ) -> ChainResult<Self::ConsensusWitness> {
-        let ensure_digest = |label: &str, value: &str| -> ChainResult<()> {
+        let decode_digest = |label: &str, value: &str| -> ChainResult<Vec<u8>> {
             let bytes = hex::decode(value).map_err(|err| {
                 ChainError::Crypto(format!("invalid {label} encoding '{value}': {err}"))
             })?;
             if bytes.len() != 32 {
                 return Err(ChainError::Crypto(format!("{label} must encode 32 bytes")));
             }
-            Ok(())
+            Ok(bytes)
         };
 
-        ensure_digest(
+        decode_digest(
             "quorum bitmap root",
             &certificate.metadata.quorum_bitmap_root,
         )?;
-        ensure_digest(
+        decode_digest(
             "quorum signature root",
             &certificate.metadata.quorum_signature_root,
         )?;
+
+        let block_hash_bytes = decode_digest("block hash", block_hash)?;
+        let normalized_block_hash = hex::encode(&block_hash_bytes);
 
         if certificate.metadata.vrf_entries.is_empty() {
             return Err(ChainError::Crypto(
@@ -397,14 +400,15 @@ impl ProofProver for Plonky3Prover {
         let mut vrf_entries = Vec::with_capacity(certificate.metadata.vrf_entries.len());
 
         for (index, entry) in certificate.metadata.vrf_entries.iter().enumerate() {
-            let sanitize_hex =
-                |value: &str, label: &str, expected_len: usize| -> ChainResult<String> {
-                    if value.trim().is_empty() {
+            let sanitize_entry_hex =
+                |value: &str, label: &str, expected_len: usize| -> ChainResult<Vec<u8>> {
+                    let trimmed = value.trim();
+                    if trimmed.is_empty() {
                         return Err(ChainError::Crypto(format!(
                             "consensus certificate vrf entry #{index} missing {label}",
                         )));
                     }
-                    let bytes = hex::decode(value).map_err(|err| {
+                    let bytes = hex::decode(trimmed).map_err(|err| {
                         ChainError::Crypto(format!(
                             "invalid vrf entry #{index} {label} encoding: {err}",
                         ))
@@ -414,21 +418,28 @@ impl ProofProver for Plonky3Prover {
                             "vrf entry #{index} {label} must encode {expected_len} bytes",
                         )));
                     }
-                    Ok(hex::encode(bytes))
+                    Ok(bytes)
                 };
 
-            let randomness = sanitize_hex(&entry.randomness, "randomness", 32)?;
-            let pre_output = sanitize_hex(&entry.pre_output, "pre-output", VRF_PREOUTPUT_LENGTH)?;
-            let proof = sanitize_hex(&entry.proof, "proof", VRF_PROOF_LENGTH)?;
-            let public_key = sanitize_hex(&entry.public_key, "public key", 32)?;
-            let poseidon_digest = sanitize_hex(&entry.poseidon.digest, "poseidon digest", 32)?;
-            let poseidon_last_block_header = sanitize_hex(
+            let randomness = sanitize_entry_hex(&entry.randomness, "randomness", 32)?;
+            let pre_output =
+                sanitize_entry_hex(&entry.pre_output, "pre-output", VRF_PREOUTPUT_LENGTH)?;
+            let proof_bytes = sanitize_entry_hex(&entry.proof, "proof", VRF_PROOF_LENGTH)?;
+            let public_key = sanitize_entry_hex(&entry.public_key, "public key", 32)?;
+            let poseidon_digest =
+                sanitize_entry_hex(&entry.poseidon.digest, "poseidon digest", 32)?;
+            let poseidon_last_block_header = sanitize_entry_hex(
                 &entry.poseidon.last_block_header,
                 "poseidon last block header",
                 32,
             )?;
+            if poseidon_last_block_header.as_slice() != block_hash_bytes.as_slice() {
+                return Err(ChainError::Crypto(format!(
+                    "vrf entry #{index} poseidon last block header must match block hash",
+                )));
+            }
             let poseidon_tier_seed =
-                sanitize_hex(&entry.poseidon.tier_seed, "poseidon tier seed", 32)?;
+                sanitize_entry_hex(&entry.poseidon.tier_seed, "poseidon tier seed", 32)?;
 
             let poseidon_epoch_str = entry.poseidon.epoch.trim();
             if poseidon_epoch_str.is_empty() {
@@ -441,17 +452,22 @@ impl ProofProver for Plonky3Prover {
                     "invalid vrf entry #{index} poseidon epoch '{poseidon_epoch_str}': {err}",
                 ))
             })?;
+            if poseidon_epoch != certificate.metadata.epoch {
+                return Err(ChainError::Crypto(format!(
+                    "vrf entry #{index} poseidon epoch mismatch",
+                )));
+            }
 
-            vrf_entries.push(ConsensusVrfEntryWitness {
-                randomness,
-                pre_output,
-                proof,
-                public_key,
-                poseidon: ConsensusVrfPoseidonWitness {
-                    digest: poseidon_digest,
-                    last_block_header: poseidon_last_block_header,
+            vrf_entries.push(ConsensusVrfEntry {
+                randomness: hex::encode(randomness),
+                pre_output: hex::encode(pre_output),
+                proof: hex::encode(proof_bytes),
+                public_key: hex::encode(public_key),
+                poseidon: ConsensusVrfPoseidonInput {
+                    digest: hex::encode(poseidon_digest),
+                    last_block_header: normalized_block_hash.clone(),
                     epoch: poseidon_epoch.to_string(),
-                    tier_seed: poseidon_tier_seed,
+                    tier_seed: hex::encode(poseidon_tier_seed),
                 },
             });
         }
@@ -504,11 +520,11 @@ impl ProofProver for Plonky3Prover {
                     _ => ChainError::Crypto("quorum threshold exceeds 64-bit range".into()),
                 })?;
         let witness = ConsensusWitness::new(
-            block_hash,
+            normalized_block_hash.clone(),
             certificate.round,
             certificate.metadata.epoch,
             certificate.metadata.slot,
-            block_hash,
+            normalized_block_hash,
             quorum_threshold,
             pre_votes,
             pre_commits,
