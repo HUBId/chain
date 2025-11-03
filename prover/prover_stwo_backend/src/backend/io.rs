@@ -235,6 +235,36 @@ fn ensure_consensus_payload(proof: &StarkProof) -> BackendResult<()> {
 
 #[cfg(feature = "official")]
 fn ensure_consensus_witness_metadata(witness: &ConsensusWitness) -> BackendResult<()> {
+    if witness.vrf_entries.is_empty() {
+        return Err(BackendError::Failure(
+            "consensus witness missing VRF entries".into(),
+        ));
+    }
+
+    for (index, entry) in witness.vrf_entries.iter().enumerate() {
+        let ensure_present = |value: &str, label: &str| -> BackendResult<()> {
+            if value.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus witness vrf entry #{index} missing {label}",
+                )));
+            }
+            Ok(())
+        };
+
+        ensure_present(&entry.randomness, "randomness")?;
+        ensure_present(&entry.pre_output, "pre-output")?;
+        ensure_present(&entry.proof, "proof")?;
+        ensure_present(&entry.public_key, "public key")?;
+        ensure_present(&entry.input.last_block_header, "poseidon last block header")?;
+        ensure_present(&entry.input.tier_seed, "poseidon tier seed")?;
+
+        if entry.input.epoch != witness.epoch {
+            return Err(BackendError::Failure(format!(
+                "consensus witness vrf entry #{index} poseidon epoch mismatch",
+            )));
+        }
+    }
+
     witness
         .ensure_vrf_entries()
         .map_err(|error| BackendError::Failure(error.to_string()))?;
@@ -544,6 +574,22 @@ mod tests {
             matches!(result, Err(BackendError::Failure(message)) if message
             .contains("poseidon epoch mismatch"))
         );
+    }
+
+    #[test]
+    fn decode_consensus_witness_preserves_vrf_metadata() {
+        let witness = sample_consensus_witness();
+        let bytes = WitnessBytes::encode(
+            &WitnessHeader::new(ProofSystemKind::Stwo, CONSENSUS_CIRCUIT),
+            &witness,
+        )
+        .expect("encode witness");
+
+        let (_, decoded) = decode_consensus_witness(&bytes).expect("decode consensus witness");
+
+        assert_eq!(decoded.vrf_entries, witness.vrf_entries);
+        assert_eq!(decoded.witness_commitments, witness.witness_commitments);
+        assert_eq!(decoded.reputation_roots, witness.reputation_roots);
     }
 
     #[test]

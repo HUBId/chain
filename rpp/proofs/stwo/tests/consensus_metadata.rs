@@ -175,3 +175,15 @@ fn consensus_witness_rejects_randomness_mismatch() {
         .expect_err("randomness mismatch must fail");
     expect_err_message(err, "randomness mismatch");
 }
+
+#[test]
+fn consensus_witness_rejects_missing_public_key() {
+    let mut witness = valid_witness();
+    witness.vrf_entries[0].public_key.clear();
+
+    let circuit = ConsensusCircuit::new(witness);
+    let err = circuit
+        .evaluate_constraints()
+        .expect_err("missing public key must fail");
+    expect_err_message(err, "public key");
+}
