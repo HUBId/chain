@@ -31,9 +31,9 @@ pub struct ConsensusVrfWitnessEntry {
 /// Column headers for the consensus summary segment. The first eight entries map
 /// directly to fixed public inputs (block metadata and quorum digests) while the
 /// remaining names enumerate the VRF outputs, proofs, witness commitments, and
-/// reputation tree roots that are exposed as individual public inputs. The four
-/// trailing columns track the respective list lengths so the AIR can bind the
-/// per-segment multiplicities.
+/// reputation tree roots that are exposed as individual public inputs. The final
+/// columns track the respective list lengths and Poseidon bindings so the AIR can
+/// bind the per-segment multiplicities.
 fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
     let mut columns = vec![
         "block_hash".to_string(),
@@ -46,27 +46,26 @@ fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
         "quorum_signature_root".to_string(),
     ];
 
+    for index in 0..witness.vrf_entries.len() {
+        columns.push(format!("vrf_randomness_{index}"));
+        columns.push(format!("vrf_preoutput_{index}"));
+        columns.push(format!("vrf_proof_{index}"));
+        columns.push(format!("vrf_public_key_{index}"));
+        columns.push(format!("vrf_input_last_block_{index}"));
+        columns.push(format!("vrf_input_epoch_{index}"));
+        columns.push(format!("vrf_input_tier_seed_{index}"));
+    }
+
     let mut extend_with = |prefix: &str, len: usize| {
         for index in 0..len {
             columns.push(format!("{prefix}_{index}"));
         }
     };
 
-    extend_with("vrf_randomness", witness.vrf_entries.len());
-    extend_with("vrf_pre_output", witness.vrf_entries.len());
-    extend_with("vrf_proof", witness.vrf_entries.len());
-    extend_with("vrf_public_key", witness.vrf_entries.len());
-    extend_with("vrf_input_last_block_header", witness.vrf_entries.len());
-    extend_with("vrf_input_epoch", witness.vrf_entries.len());
-    extend_with("vrf_input_tier_seed", witness.vrf_entries.len());
     extend_with("witness_commitment", witness.witness_commitments.len());
     extend_with("reputation_root", witness.reputation_roots.len());
 
-    columns.push("vrf_output_count".to_string());
-    columns.push("vrf_pre_output_count".to_string());
-    columns.push("vrf_proof_count".to_string());
-    columns.push("vrf_public_key_count".to_string());
-    columns.push("vrf_input_count".to_string());
+    columns.push("vrf_entry_count".to_string());
     columns.push("witness_commitment_count".to_string());
     columns.push("reputation_root_count".to_string());
     columns.push("vrf_output_binding".to_string());
@@ -327,17 +326,9 @@ impl ConsensusCircuit {
 
         for entry in &witness.vrf_entries {
             inputs.push(string_to_field(parameters, &entry.randomness));
-        }
-        for entry in &witness.vrf_entries {
             inputs.push(string_to_field(parameters, &entry.pre_output));
-        }
-        for entry in &witness.vrf_entries {
             inputs.push(string_to_field(parameters, &entry.proof));
-        }
-        for entry in &witness.vrf_entries {
             inputs.push(string_to_field(parameters, &entry.public_key));
-        }
-        for entry in &witness.vrf_entries {
             inputs.push(string_to_field(parameters, &entry.input.last_block_header));
             inputs.push(parameters.element_from_u64(entry.input.epoch));
             inputs.push(string_to_field(parameters, &entry.input.tier_seed));
@@ -346,10 +337,6 @@ impl ConsensusCircuit {
         extend_with(&witness.reputation_roots);
 
         let entry_len = witness.vrf_entries.len() as u64;
-        inputs.push(parameters.element_from_u64(entry_len));
-        inputs.push(parameters.element_from_u64(entry_len));
-        inputs.push(parameters.element_from_u64(entry_len));
-        inputs.push(parameters.element_from_u64(entry_len));
         inputs.push(parameters.element_from_u64(entry_len));
         inputs.push(parameters.element_from_u64(witness.witness_commitments.len() as u64));
         inputs.push(parameters.element_from_u64(witness.reputation_roots.len() as u64));
@@ -461,7 +448,7 @@ impl StarkCircuit for ConsensusCircuit {
             self.witness
                 .vrf_entries
                 .iter()
-                .map(|entry| entry.randomness.as_str()),
+                .map(|entry| &entry.randomness),
             "vrf_outputs",
             "randomness",
         )?;
@@ -469,10 +456,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            self.witness
-                .vrf_entries
-                .iter()
-                .map(|entry| entry.proof.as_str()),
+            self.witness.vrf_entries.iter().map(|entry| &entry.proof),
             "vrf_proofs",
             "proof",
         )?;
@@ -480,10 +464,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            self.witness
-                .witness_commitments
-                .iter()
-                .map(|value| value.as_str()),
+            self.witness.witness_commitments.iter().map(|value| value),
             "witness_commitments",
             "commitment",
         )?;
@@ -491,10 +472,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            self.witness
-                .reputation_roots
-                .iter()
-                .map(|value| value.as_str()),
+            self.witness.reputation_roots.iter().map(|value| value),
             "reputation_roots",
             "root",
         )?;
@@ -502,7 +480,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            std::iter::once(self.witness.quorum_bitmap_root.as_str()),
+            std::iter::once(&self.witness.quorum_bitmap_root),
             "quorum_bitmap_binding",
             "root",
         )?;
@@ -510,7 +488,7 @@ impl StarkCircuit for ConsensusCircuit {
             parameters,
             &hasher,
             &block_hash,
-            std::iter::once(self.witness.quorum_signature_root.as_str()),
+            std::iter::once(&self.witness.quorum_signature_root),
             "quorum_signature_binding",
             "root",
         )?;
@@ -566,11 +544,7 @@ impl StarkCircuit for ConsensusCircuit {
 
         let summary_segment = "summary";
         let summary_block_hash = AirColumn::new(summary_segment, "block_hash");
-        let summary_vrf_output = AirColumn::new(summary_segment, "vrf_output_count");
-        let summary_vrf_pre_output = AirColumn::new(summary_segment, "vrf_pre_output_count");
-        let summary_vrf_proof = AirColumn::new(summary_segment, "vrf_proof_count");
-        let summary_vrf_public_key = AirColumn::new(summary_segment, "vrf_public_key_count");
-        let summary_vrf_input = AirColumn::new(summary_segment, "vrf_input_count");
+        let summary_vrf_entry_count = AirColumn::new(summary_segment, "vrf_entry_count");
         let summary_witness_commitment =
             AirColumn::new(summary_segment, "witness_commitment_count");
         let summary_reputation_root = AirColumn::new(summary_segment, "reputation_root_count");
@@ -615,28 +589,8 @@ impl StarkCircuit for ConsensusCircuit {
 
         let expected_counts = [
             (
-                "summary_vrf_output_count",
-                &summary_vrf_output,
-                vrf_output_len as u64,
-            ),
-            (
-                "summary_vrf_pre_output_count",
-                &summary_vrf_pre_output,
-                vrf_output_len as u64,
-            ),
-            (
-                "summary_vrf_proof_count",
-                &summary_vrf_proof,
-                vrf_proof_len as u64,
-            ),
-            (
-                "summary_vrf_public_key_count",
-                &summary_vrf_public_key,
-                vrf_output_len as u64,
-            ),
-            (
-                "summary_vrf_input_count",
-                &summary_vrf_input,
+                "summary_vrf_entry_count",
+                &summary_vrf_entry_count,
                 vrf_output_len as u64,
             ),
             (
@@ -663,36 +617,15 @@ impl StarkCircuit for ConsensusCircuit {
             ));
         }
 
-        let count_pairs = [
-            (
-                "summary_vrf_output_pre_output_count_match",
-                &summary_vrf_output,
-                &summary_vrf_pre_output,
+        constraints.push(AirConstraint::new(
+            "summary_vrf_entry_proof_count_match",
+            summary_segment,
+            ConstraintDomain::FirstRow,
+            AirExpression::difference(
+                summary_vrf_entry_count.expr(),
+                AirExpression::constant(parameters.element_from_u64(vrf_proof_len as u64)),
             ),
-            (
-                "summary_vrf_output_proof_count_match",
-                &summary_vrf_output,
-                &summary_vrf_proof,
-            ),
-            (
-                "summary_vrf_output_public_key_count_match",
-                &summary_vrf_output,
-                &summary_vrf_public_key,
-            ),
-            (
-                "summary_vrf_output_input_count_match",
-                &summary_vrf_output,
-                &summary_vrf_input,
-            ),
-        ];
-        for (name, left, right) in count_pairs {
-            constraints.push(AirConstraint::new(
-                name,
-                summary_segment,
-                ConstraintDomain::FirstRow,
-                AirExpression::difference(left.expr(), right.expr()),
-            ));
-        }
+        ));
 
         let mut add_binding_constraints = |segment: &str, summary_binding: &AirColumn| {
             let binding_in = AirColumn::new(segment, "binding_in");
@@ -784,43 +717,37 @@ impl ConsensusCircuit {
             parameters,
             hasher,
             block_hash,
-            witness
-                .vrf_entries
-                .iter()
-                .map(|entry| entry.randomness.as_str()),
+            witness.vrf_entries.iter().map(|entry| &entry.randomness),
         );
         let vrf_proof = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness.vrf_entries.iter().map(|entry| entry.proof.as_str()),
+            witness.vrf_entries.iter().map(|entry| &entry.proof),
         );
         let witness_commitment = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness
-                .witness_commitments
-                .iter()
-                .map(|value| value.as_str()),
+            witness.witness_commitments.iter().map(|value| value),
         );
         let reputation_root = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            witness.reputation_roots.iter().map(|value| value.as_str()),
+            witness.reputation_roots.iter().map(|value| value),
         );
         let quorum_bitmap = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::iter::once(witness.quorum_bitmap_root.as_str()),
+            std::iter::once(&witness.quorum_bitmap_root),
         );
         let quorum_signature = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::iter::once(witness.quorum_signature_root.as_str()),
+            std::iter::once(&witness.quorum_signature_root),
         );
 
         ConsensusBindingValues {
@@ -840,7 +767,7 @@ impl ConsensusCircuit {
         values: I,
     ) -> FieldElement
     where
-        I: IntoIterator<Item = &'a str>,
+        I: IntoIterator<Item = &'a String>,
     {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
@@ -860,7 +787,7 @@ impl ConsensusCircuit {
         value_column: &str,
     ) -> Result<(TraceSegment, FieldElement), CircuitError>
     where
-        I: IntoIterator<Item = &'a str>,
+        I: IntoIterator<Item = &'a String>,
     {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
