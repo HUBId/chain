@@ -1,7 +1,7 @@
 use hex;
 use rpp_consensus::messages::{
     compute_consensus_bindings, BlockId, ConsensusCertificate, ConsensusProofMetadata,
-    ConsensusVrfEntry, ConsensusVrfPoseidonInput,
+    ConsensusProofMetadataVrf, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
 };
 use rpp_consensus::proof_backend::ProofSystemKind;
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
@@ -33,7 +33,9 @@ fn metadata_fixture(
     quorum_signature_root: String,
 ) -> ConsensusProofMetadata {
     ConsensusProofMetadata {
-        vrf_entries,
+        vrf: ConsensusProofMetadataVrf {
+            entries: vrf_entries,
+        },
         witness_commitments,
         reputation_roots,
         epoch,
@@ -54,7 +56,7 @@ fn sample_metadata() -> ConsensusProofMetadata {
         "aa".repeat(32),
         "bb".repeat(32),
     );
-    for entry in metadata.vrf_entries.iter_mut() {
+    for entry in metadata.vrf.entries.iter_mut() {
         entry.poseidon.epoch = format!("{epoch}");
     }
     metadata
@@ -81,7 +83,7 @@ fn sample_certificate() -> ConsensusCertificate {
 }
 
 fn align_poseidon_last_block_header(metadata: &mut ConsensusProofMetadata, block_hash_hex: &str) {
-    for entry in metadata.vrf_entries.iter_mut() {
+    for entry in metadata.vrf.entries.iter_mut() {
         entry.poseidon.last_block_header = block_hash_hex.to_string();
     }
 }
@@ -115,7 +117,7 @@ fn consensus_public_inputs_include_structured_metadata() {
     );
 
     let mut buffer = [0u8; 32];
-    buffer.copy_from_slice(&hex::decode(&certificate.metadata.vrf_entries[0].randomness).unwrap());
+    buffer.copy_from_slice(&hex::decode(&certificate.metadata.vrf.entries[0].randomness).unwrap());
     assert_eq!(inputs.vrf_entries[0].randomness, buffer);
     assert_eq!(inputs.vrf_entries[0].proof.len(), VRF_PROOF_LENGTH);
 }
@@ -126,7 +128,9 @@ fn consensus_metadata_json_roundtrip_preserves_poseidon() {
     let json = serde_json::to_string(&metadata).expect("serialize metadata");
     let value: Value = serde_json::from_str(&json).expect("parse metadata json");
     let entries = value
-        .get("vrf_entries")
+        .get("vrf")
+        .and_then(Value::as_object)
+        .and_then(|vrf| vrf.get("entries"))
         .and_then(Value::as_array)
         .expect("vrf entries array");
     assert_eq!(entries.len(), 1);
@@ -134,7 +138,7 @@ fn consensus_metadata_json_roundtrip_preserves_poseidon() {
         .get("poseidon")
         .and_then(Value::as_object)
         .expect("poseidon object");
-    let expected = &metadata.vrf_entries[0].poseidon;
+    let expected = &metadata.vrf.entries[0].poseidon;
     assert_eq!(
         poseidon.get("digest").unwrap(),
         &Value::String(expected.digest.clone())

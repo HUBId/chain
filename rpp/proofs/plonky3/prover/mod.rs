@@ -381,7 +381,7 @@ impl ProofProver for Plonky3Prover {
         let block_hash_bytes = decode_digest("block hash", block_hash)?;
         let normalized_block_hash = hex::encode(&block_hash_bytes);
 
-        if certificate.metadata.vrf_entries.is_empty() {
+        if certificate.metadata.vrf.entries.is_empty() {
             return Err(ChainError::Crypto(
                 "consensus certificate missing VRF entries".into(),
             ));
@@ -397,9 +397,9 @@ impl ProofProver for Plonky3Prover {
             ));
         }
 
-        let mut vrf_entries = Vec::with_capacity(certificate.metadata.vrf_entries.len());
+        let mut vrf_entries = Vec::with_capacity(certificate.metadata.vrf.entries.len());
 
-        for (index, entry) in certificate.metadata.vrf_entries.iter().enumerate() {
+        for (index, entry) in certificate.metadata.vrf.entries.iter().enumerate() {
             let sanitize_entry_hex =
                 |value: &str, label: &str, expected_len: usize| -> ChainResult<Vec<u8>> {
                     let trimmed = value.trim();

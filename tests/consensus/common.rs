@@ -1,4 +1,6 @@
-use rpp_chain::consensus::{ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput};
+use rpp_chain::consensus::{
+    ConsensusProofMetadata, ConsensusProofMetadataVrf, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
+};
 use rpp_crypto_vrf::{generate_vrf, PoseidonVrfInput, VrfSecretKey};
 use std::convert::{TryFrom, TryInto};
 
@@ -119,7 +121,9 @@ impl ConsensusMetadataBuilder {
 
     pub fn build(self) -> ConsensusProofMetadata {
         ConsensusProofMetadata {
-            vrf_entries: self.vrf_entries,
+            vrf: ConsensusProofMetadataVrf {
+                entries: self.vrf_entries,
+            },
             witness_commitments: self.witness_commitments,
             reputation_roots: self.reputation_roots,
             epoch: self.epoch,
@@ -134,7 +138,7 @@ pub fn align_poseidon_last_block_header(
     metadata: &mut ConsensusProofMetadata,
     block_hash_hex: &str,
 ) {
-    for entry in metadata.vrf_entries.iter_mut() {
+    for entry in metadata.vrf.entries.iter_mut() {
         recompute_vrf_entry(entry, block_hash_hex);
     }
 }

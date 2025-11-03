@@ -404,8 +404,8 @@ pub struct ConsensusCertificate {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusProofMetadata {
-    #[serde(default)]
-    pub vrf_entries: Vec<ConsensusVrfEntry>,
+    #[serde(default, alias = "vrf_entries")]
+    pub vrf: ConsensusProofMetadataVrf,
     pub witness_commitments: Vec<String>,
     pub reputation_roots: Vec<String>,
     pub epoch: u64,
@@ -414,11 +414,44 @@ pub struct ConsensusProofMetadata {
     pub quorum_signature_root: String,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct ConsensusProofMetadataVrf {
+    pub entries: Vec<ConsensusVrfEntry>,
+}
+
+impl<'de> Deserialize<'de> for ConsensusProofMetadataVrf {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Struct { entries: Vec<ConsensusVrfEntry> },
+            Legacy(Vec<ConsensusVrfEntry>),
+        }
+
+        let entries = match Repr::deserialize(deserializer)? {
+            Repr::Struct { entries } | Repr::Legacy(entries) => entries,
+        };
+
+        Ok(Self { entries })
+    }
+}
+
+impl Default for ConsensusProofMetadataVrf {
+    fn default() -> Self {
+        Self {
+            entries: vec![ConsensusVrfEntry::default()],
+        }
+    }
+}
+
 impl Default for ConsensusProofMetadata {
     fn default() -> Self {
         let zero_digest = "00".repeat(32);
         Self {
-            vrf_entries: vec![ConsensusVrfEntry::default()],
+            vrf: ConsensusProofMetadataVrf::default(),
             witness_commitments: vec![zero_digest.clone()],
             reputation_roots: vec![zero_digest.clone()],
             epoch: 0,
@@ -459,7 +492,7 @@ impl ConsensusCertificate {
         let block_hash = decode_hash("block hash", &self.block_hash.0)?;
         let leader_proposal = block_hash;
 
-        if self.metadata.vrf_entries.is_empty() {
+        if self.metadata.vrf.entries.is_empty() {
             return Err(BackendError::Failure(
                 "consensus metadata missing VRF entries".into(),
             ));
@@ -475,9 +508,9 @@ impl ConsensusCertificate {
             ));
         }
 
-        let mut vrf_public_entries = Vec::with_capacity(self.metadata.vrf_entries.len());
+        let mut vrf_public_entries = Vec::with_capacity(self.metadata.vrf.entries.len());
 
-        for (index, entry) in self.metadata.vrf_entries.iter().enumerate() {
+        for (index, entry) in self.metadata.vrf.entries.iter().enumerate() {
             if entry.randomness.trim().is_empty() {
                 return Err(BackendError::Failure(format!(
                     "consensus metadata vrf entry #{index} missing randomness",

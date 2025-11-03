@@ -7007,7 +7007,7 @@ fn summarize_consensus_certificate(
     let block_hash = decode_digest("consensus block hash", &block_hash_hex)?;
     let metadata = &certificate.metadata;
 
-    let (mut vrf_entries, vrf_public_entries) = sanitize_vrf_entries(&metadata.vrf_entries)?;
+    let (mut vrf_entries, vrf_public_entries) = sanitize_vrf_entries(&metadata.vrf.entries)?;
     let vrf_entry_bindings = compute_vrf_entry_bindings(&block_hash, &vrf_public_entries)?;
     for (entry, bindings) in vrf_entries.iter_mut().zip(vrf_entry_bindings) {
         entry.bindings = Some(bindings);
@@ -7298,7 +7298,8 @@ mod tests {
     use std::path::Path;
 
     use crate::consensus::messages::{
-        BlockId, ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
+        BlockId, ConsensusProofMetadata, ConsensusProofMetadataVrf, ConsensusVrfEntry,
+        ConsensusVrfPoseidonInput,
     };
     use tempfile::tempdir;
 
@@ -7315,32 +7316,34 @@ mod tests {
         let proof_bytes = |byte: u8| hex::encode(vec![byte; VRF_PROOF_LENGTH]);
 
         let metadata = ConsensusProofMetadata {
-            vrf_entries: vec![
-                ConsensusVrfEntry {
-                    randomness: digest(0x11),
-                    pre_output: pre_output(0x11),
-                    proof: proof_bytes(0x21),
-                    public_key: digest(0x13),
-                    poseidon: ConsensusVrfPoseidonInput {
-                        digest: digest(0x31),
-                        last_block_header: digest(0x32),
-                        epoch: "49".into(),
-                        tier_seed: digest(0x33),
+            vrf: ConsensusProofMetadataVrf {
+                entries: vec![
+                    ConsensusVrfEntry {
+                        randomness: digest(0x11),
+                        pre_output: pre_output(0x11),
+                        proof: proof_bytes(0x21),
+                        public_key: digest(0x13),
+                        poseidon: ConsensusVrfPoseidonInput {
+                            digest: digest(0x31),
+                            last_block_header: digest(0x32),
+                            epoch: "49".into(),
+                            tier_seed: digest(0x33),
+                        },
                     },
-                },
-                ConsensusVrfEntry {
-                    randomness: digest(0x12),
-                    pre_output: pre_output(0x12),
-                    proof: proof_bytes(0x22),
-                    public_key: digest(0x14),
-                    poseidon: ConsensusVrfPoseidonInput {
-                        digest: digest(0x34),
-                        last_block_header: digest(0x35),
-                        epoch: "57".into(),
-                        tier_seed: digest(0x36),
+                    ConsensusVrfEntry {
+                        randomness: digest(0x12),
+                        pre_output: pre_output(0x12),
+                        proof: proof_bytes(0x22),
+                        public_key: digest(0x14),
+                        poseidon: ConsensusVrfPoseidonInput {
+                            digest: digest(0x34),
+                            last_block_header: digest(0x35),
+                            epoch: "57".into(),
+                            tier_seed: digest(0x36),
+                        },
                     },
-                },
-            ],
+                ],
+            },
             witness_commitments: vec![digest(0x33)],
             reputation_roots: vec![digest(0x44)],
             epoch: 5,
@@ -7375,9 +7378,9 @@ mod tests {
         let block_hash = decode_digest("block hash", &certificate.block_hash.0).unwrap();
         assert_eq!(
             status.vrf_entries.len(),
-            certificate.metadata.vrf_entries.len()
+            certificate.metadata.vrf.entries.len()
         );
-        let (_, backend_entries) = sanitize_vrf_entries(&certificate.metadata.vrf_entries)
+        let (_, backend_entries) = sanitize_vrf_entries(&certificate.metadata.vrf.entries)
             .expect("sanitize metadata vrf entries");
         let expected_entry_bindings =
             compute_vrf_entry_bindings(&block_hash, &backend_entries).expect("entry bindings");
@@ -7385,7 +7388,7 @@ mod tests {
         for ((status_entry, certificate_entry), expected_binding) in status
             .vrf_entries
             .iter()
-            .zip(&certificate.metadata.vrf_entries)
+            .zip(&certificate.metadata.vrf.entries)
             .zip(expected_entry_bindings.iter())
         {
             assert_eq!(status_entry.randomness, certificate_entry.randomness);
@@ -7417,14 +7420,16 @@ mod tests {
         }
         let expected_outputs: Vec<String> = certificate
             .metadata
-            .vrf_entries
+            .vrf
+            .entries
             .iter()
             .map(|entry| entry.pre_output.clone())
             .collect();
         assert_eq!(status.legacy_vrf_outputs(), expected_outputs);
         let expected_proofs: Vec<String> = certificate
             .metadata
-            .vrf_entries
+            .vrf
+            .entries
             .iter()
             .map(|entry| entry.proof.clone())
             .collect();

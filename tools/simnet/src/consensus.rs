@@ -8,8 +8,8 @@ use libp2p::PeerId;
 use rand::rngs::StdRng;
 use rand::{Rng, RngCore, SeedableRng};
 use rpp_chain::consensus::{
-    ConsensusCertificate, ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
-    TalliedVote,
+    ConsensusCertificate, ConsensusProofMetadata, ConsensusProofMetadataVrf, ConsensusVrfEntry,
+    ConsensusVrfPoseidonInput, TalliedVote,
 };
 use rpp_chain::consensus_engine::messages::BlockId;
 use rpp_chain::errors::ChainError;
@@ -390,7 +390,9 @@ fn build_metadata(
     quorum_signature_root: String,
 ) -> ConsensusProofMetadata {
     ConsensusProofMetadata {
-        vrf_entries,
+        vrf: ConsensusProofMetadataVrf {
+            entries: vrf_entries,
+        },
         witness_commitments,
         reputation_roots,
         epoch,

@@ -17,8 +17,8 @@ use super::evidence::EvidenceType;
 use super::leader::{Leader, LeaderContext};
 use super::messages::{
     compute_consensus_bindings, Block, BlockId, ConsensusCertificate, ConsensusProof,
-    ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput, PreCommit, PreVote,
-    ProofVerificationError, Proposal, TalliedVote,
+    ConsensusProofMetadata, ConsensusProofMetadataVrf, ConsensusVrfEntry,
+    ConsensusVrfPoseidonInput, PreCommit, PreVote, ProofVerificationError, Proposal, TalliedVote,
 };
 #[cfg(feature = "prover-stwo")]
 use super::messages::{Commit, Signature};
@@ -114,7 +114,9 @@ fn sample_vrf_entry(randomness_byte: u8, proof_byte: u8, epoch: u64) -> Consensu
 
 fn sample_certificate_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
     ConsensusProofMetadata {
-        vrf_entries: vec![sample_vrf_entry(0x11, 0x22, epoch)],
+        vrf: ConsensusProofMetadataVrf {
+            entries: vec![sample_vrf_entry(0x11, 0x22, epoch)],
+        },
         witness_commitments: vec!["33".repeat(32)],
         reputation_roots: vec!["44".repeat(32)],
         epoch,
@@ -125,7 +127,7 @@ fn sample_certificate_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata 
 }
 
 fn align_poseidon_last_block_header(metadata: &mut ConsensusProofMetadata, block_hash_hex: &str) {
-    for entry in metadata.vrf_entries.iter_mut() {
+    for entry in metadata.vrf.entries.iter_mut() {
         entry.poseidon.last_block_header = block_hash_hex.to_string();
     }
 }
@@ -158,7 +160,8 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
     let quorum_bitmap_root = decode_digest_hex(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest_hex(&metadata.quorum_signature_root);
     let vrf_public_entries: Vec<ConsensusVrfPublicEntry> = metadata
-        .vrf_entries
+        .vrf
+        .entries
         .iter()
         .map(|entry| ConsensusVrfPublicEntry {
             randomness: decode_digest_hex(&entry.randomness),
@@ -533,7 +536,7 @@ fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
 #[test]
 fn consensus_public_inputs_rejects_short_vrf_randomness() {
     let mut certificate = certificate_with_block("invalid-randomness");
-    certificate.metadata.vrf_entries[0].randomness = hex::encode(vec![0xAA; 31]);
+    certificate.metadata.vrf.entries[0].randomness = hex::encode(vec![0xAA; 31]);
 
     let error = certificate.consensus_public_inputs().unwrap_err();
     assert!(matches!(
@@ -545,7 +548,7 @@ fn consensus_public_inputs_rejects_short_vrf_randomness() {
 #[test]
 fn consensus_public_inputs_rejects_poseidon_epoch_mismatch() {
     let mut certificate = certificate_with_block("epoch-mismatch");
-    certificate.metadata.vrf_entries[0].poseidon.epoch =
+    certificate.metadata.vrf.entries[0].poseidon.epoch =
         format!("{}", certificate.metadata.epoch.saturating_add(1));
 
     let error = certificate.consensus_public_inputs().unwrap_err();
@@ -558,7 +561,7 @@ fn consensus_public_inputs_rejects_poseidon_epoch_mismatch() {
 #[test]
 fn consensus_public_inputs_rejects_poseidon_last_block_header_mismatch() {
     let mut certificate = certificate_with_block("block-mismatch");
-    certificate.metadata.vrf_entries[0]
+    certificate.metadata.vrf.entries[0]
         .poseidon
         .last_block_header = "ff".repeat(32);
 
