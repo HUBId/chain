@@ -43,8 +43,8 @@ pub use evidence::{
 pub use governance::{TimetokeRewardBudgets, TimetokeRewardGovernance};
 pub use leader::{Leader, LeaderContext};
 pub use messages::{
-    Block, Commit, ConsensusCertificate, ConsensusProof, PreCommit, PreVote,
-    ProofVerificationError, Proposal, Signature,
+    Block, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata,
+    ConsensusProofMetadataVrf, PreCommit, PreVote, ProofVerificationError, Proposal, Signature,
 };
 pub use reputation::{
     MalachiteReputationManager, SlashingEvent, SlashingHeuristics, SlashingKind, SlashingSnapshot,

@@ -1077,15 +1077,13 @@ impl ConsensusCircuit {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_vrf_entries, summary_columns, string_to_field, ConsensusCircuit,
+        parse_vrf_entries, string_to_field, summary_columns, ConsensusCircuit,
         ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower,
     };
     use crate::official::circuit::CircuitError;
     use crate::official::params::StarkParameters;
     use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
-    use rpp_crypto_vrf::{
-        generate_vrf, PoseidonVrfInput, VrfSecretKey, POSEIDON_VRF_DOMAIN,
-    };
+    use rpp_crypto_vrf::{generate_vrf, PoseidonVrfInput, VrfSecretKey, POSEIDON_VRF_DOMAIN};
     use serde_json::{from_value, to_value};
     use std::convert::{TryFrom, TryInto};
 
