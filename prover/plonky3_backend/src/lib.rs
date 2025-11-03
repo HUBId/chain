@@ -5,6 +5,12 @@ use thiserror::Error;
 
 mod circuits;
 
+#[cfg(feature = "plonky3-gpu")]
+mod gpu;
+
+#[cfg(feature = "plonky3-gpu")]
+pub use gpu::GpuResources;
+
 pub use circuits::consensus::{
     encode_consensus_public_inputs, validate_consensus_public_inputs, ConsensusBindings,
     ConsensusCircuit, ConsensusPublicInputs, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
