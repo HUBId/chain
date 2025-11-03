@@ -64,3 +64,14 @@ The pinned versions and licenses are captured in
 | `gpu-alloc` | MIT OR Apache-2.0 | crates.io v0.6.0 | GPU memory allocator used when `plonky3-gpu` is enabled |
 | `gpu-descriptor` | MIT OR Apache-2.0 | crates.io v0.3.2 | GPU descriptor heap utility used when `plonky3-gpu` is enabled |
 
+
+## Mirroring workflow
+
+Vendored copies of the upstream crates live under `third_party/plonky3/`. Refresh
+runs are orchestrated via [`scripts/vendor_plonky3/refresh.py`](../../scripts/vendor_plonky3/refresh.py),
+which shells out to `cargo vendor` with the dedicated manifest in
+[`scripts/vendor_plonky3/Cargo.toml`](../../scripts/vendor_plonky3/Cargo.toml). The
+resulting tree is checked into version control together with the generated
+`config.toml` snippet and a checksum manifest. See
+[`third_party/plonky3/README.md`](../../third_party/plonky3/README.md) for the
+exact command sequence and environment knobs.

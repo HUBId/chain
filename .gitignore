@@ -12,3 +12,4 @@ vendor/**/chunks/*.part*
 vendor/**/chunks/*.tmp
 validator-ui/node_modules/
 validator-ui/dist/
+scripts/vendor_plonky3/target/
