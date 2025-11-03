@@ -17,34 +17,45 @@ Consensus proofs expose the following public inputs:
 | `quorum_threshold` | Minimum voting power required for quorum. |
 | `quorum_bitmap_root` | Merkle root of the prevote bitmap. |
 | `quorum_signature_root` | Merkle root of aggregated vote signatures. |
-| `vrf_outputs[]` | VRF output commitments, one per participating validator. |
-| `vrf_proofs[]` | Raw Schnorrkel VRF proofs paired with the outputs. |
+| `vrf_entries[].randomness` | VRF randomness transcript emitted by each participating validator. |
+| `vrf_entries[].pre_output` | VRF pre-output commitments paired with the randomness element. |
+| `vrf_entries[].proof` | Raw Schnorrkel VRF proofs for the randomness/pre-output pair. |
+| `vrf_entries[].public_key` | Validator VRF public keys that authored the transcript. |
+| `vrf_entries[].poseidon.{randomness,pre_output,proof,public_key}` | Poseidon bindings that tie each transcript component to the `block_hash`. |
 | `witness_commitments[]` | Module witness commitments included in the block. |
 | `reputation_roots[]` | Pre/post reputation ledger roots. |
-| `vrf_output_count` | Declares how many entries populate `vrf_outputs[]`. |
-| `vrf_proof_count` | Mirrors `vrf_output_count` and anchors the proof list. |
+| `vrf_entry_count` | Declares how many transcripts populate `vrf_entries[]`. |
 | `witness_commitment_count` | Cardinality of the witness commitment vector. |
 | `reputation_root_count` | Cardinality of the reputation root vector. |
-| `vrf_output_binding` | Poseidon fold of `block_hash` with every VRF output digest. |
+| `vrf_output_binding` | Poseidon fold of `block_hash` with every VRF pre-output digest. |
 | `vrf_proof_binding` | Poseidon fold of `block_hash` with every VRF proof blob. |
 | `witness_commitment_binding` | Poseidon fold of `block_hash` with each witness commitment digest. |
 | `reputation_root_binding` | Poseidon fold of `block_hash` with the reputation tree digests. |
 | `quorum_bitmap_binding` | Poseidon commitment tying the prevote bitmap root to the `block_hash`. |
 | `quorum_signature_binding` | Poseidon commitment tying the aggregated signature root to the `block_hash`. |
 
-All metadata vectors must be non-empty; empty VRF digests, witness commitments,
-or reputation roots are treated as forged data. The verifier also expects each
-entry to be a 32-byte hexadecimal digest and will abort if any quorum root uses
-an invalid encoding.
+All metadata vectors must be non-empty; empty VRF transcripts, witness
+commitments, or reputation roots are treated as forged data. The verifier also
+expects each digest to be a 32-byte hexadecimal encoding (VRF proofs remain
+variable-length Schnorrkel transcripts) and will abort if any quorum root uses
+an invalid encoding. Validator public keys are exported as 32-byte hex strings
+and undergo the same validation before entering the circuit.
 
-Every proof must supply the same number of VRF outputs and proofs.  The STWO
-circuit enforces this relationship, verifies that the proofs are correctly
-formatted Schnorrkel transcripts, and constrains the count fields above so they
-exactly match the trace segment lengths for each vector.  In addition, the
-binding commitments above are recomputed inside the circuit by folding the
-`block_hash` with each metadata list using the Poseidon permutation.  Any
-attempt to alter a VRF digest, witness commitment, or quorum root without also
-recomputing the corresponding binding immediately violates the AIR relations.
+Legacy projections such as `vrf_outputs[]`/`vrf_proofs[]` remain available to the
+RPC layer for a transition period. They are derived directly from
+`vrf_entries[].pre_output` and `vrf_entries[].proof` so that downstream tooling
+can continue to consume the flatter shape while migrating to the richer
+transcript objects.
+
+Every proof must supply the same number of VRF transcripts.  The STWO circuit
+enforces this relationship, verifies that the proofs are correctly formatted
+Schnorrkel transcripts, and constrains the `vrf_entry_count` field so it exactly
+matches the trace segment lengths for each vector inside the transcript tuple.
+In addition, the binding commitments above are recomputed inside the circuit by
+folding the `block_hash` with each metadata list using the Poseidon permutation.
+Any attempt to alter a VRF digest, witness commitment, public key, or quorum
+root without also recomputing the corresponding binding immediately violates the
+AIR relations.
 
 ## Verifier Responsibilities
 

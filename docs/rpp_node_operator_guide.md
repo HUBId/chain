@@ -132,8 +132,16 @@ evidence roots inside the public inputs. Operators must ensure that
 - `epoch`/`slot` counters that match the fork-choice state machine.
 - Hex-encoded `quorum_bitmap_root` and `quorum_signature_root` digests from the
   aggregated vote sets.
-- Matching pairs of `vrf_outputs` and `vrf_proofs` for each validator included
-  in the certificate.
+- Vollständige `vrf_entries` inklusive Randomness, Pre-Output, Proof und Public
+  Key für jede Validator:in im Zertifikat. Ältere Clients können die bisherigen
+  `vrf_outputs`/`vrf_proofs` aus diesen Einträgen ableiten, solange sie das
+  Version-Flag `version=2` setzen.
+
+Setze bei RPC-Checks nach Möglichkeit `version=3`, um die strukturierten
+Einträge inklusive Public Keys und Poseidon-Digests zu erhalten. Temporäre
+Kompatibilitäts-Pipelines dürfen weiterhin `version=2` anfordern, sollten aber
+das Downstream-Mapping aus `vrf_entries` dokumentieren, um den Wechsel
+nachvollziehbar zu halten.
 
 Missing or inconsistent values cause the verifier to reject the consensus proof
 bundle, so double-check the witness payload when diagnosing failed block
