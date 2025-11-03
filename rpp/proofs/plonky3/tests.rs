@@ -316,6 +316,32 @@ fn consensus_witness_rejects_invalid_quorum_root() {
 }
 
 #[test]
+fn consensus_witness_preserves_enriched_vrf_metadata() {
+    let witness = consensus_witness_fixture();
+    let backend = witness
+        .to_backend()
+        .expect("consensus witness converts to backend");
+
+    assert_eq!(backend.vrf_entries, witness.vrf_entries);
+}
+
+#[test]
+fn consensus_witness_rejects_missing_vrf_public_key() {
+    let mut witness = consensus_witness_fixture();
+    if let Some(entry) = witness.vrf_entries.first_mut() {
+        entry.public_key.clear();
+    }
+
+    let err = witness
+        .validate_metadata()
+        .expect_err("missing vrf public key must fail");
+    assert!(
+        err.to_string().contains("public key"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn transaction_proof_rejects_tampered_verifying_key() {
     let prover = test_prover();
     let verifier = test_verifier();
