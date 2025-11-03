@@ -152,6 +152,42 @@ mod plonky3_backend {
         assert!(verifier
             .verify_consensus(&tampered_quorum_signature)
             .is_err());
+
+        let swapped_vrf_proofs = tamper_proof(&proof, |witness| {
+            if let Some(Value::Array(entries)) = witness.get_mut("vrf_entries") {
+                if let [Value::Object(first), Value::Object(second), ..] = entries.as_mut_slice()
+                {
+                    if let (
+                        Some(Value::String(first_proof)),
+                        Some(Value::String(second_proof)),
+                    ) = (first.get("proof"), second.get("proof"))
+                    {
+                        first.insert("proof".into(), Value::String(second_proof.clone()));
+                        second.insert("proof".into(), Value::String(first_proof.clone()));
+                    }
+                }
+            }
+        });
+        assert!(verifier.verify_consensus(&swapped_vrf_proofs).is_err());
+
+        let corrupted_vrf_proof = tamper_proof(&proof, |witness| {
+            if let Some(Value::Array(entries)) = witness.get_mut("vrf_entries") {
+                if let Some(Value::Object(first)) = entries.first_mut() {
+                    if let Some(proof_string) = first
+                        .get("proof")
+                        .and_then(Value::as_str)
+                        .map(|value| value.to_owned())
+                    {
+                        let mut bytes = hex::decode(&proof_string).expect("decode proof hex");
+                        if let Some(byte) = bytes.first_mut() {
+                            *byte ^= 0x01;
+                        }
+                        first.insert("proof".into(), Value::String(hex::encode(bytes)));
+                    }
+                }
+            }
+        });
+        assert!(verifier.verify_consensus(&corrupted_vrf_proof).is_err());
     }
 }
 
@@ -221,5 +257,24 @@ mod stwo_backend {
         assert!(verifier
             .verify_consensus(&tampered_quorum_signature)
             .is_err());
+
+        let swapped_vrf_proofs = tamper_proof(&proof, |witness| {
+            if let [first, second, ..] = witness.vrf_entries.as_mut_slice() {
+                std::mem::swap(&mut first.proof, &mut second.proof);
+            }
+        });
+        assert!(verifier.verify_consensus(&swapped_vrf_proofs).is_err());
+
+        let corrupted_vrf_proof = tamper_proof(&proof, |witness| {
+            if let Some(first) = witness.vrf_entries.first_mut() {
+                if let Ok(mut bytes) = hex::decode(&first.proof) {
+                    if let Some(byte) = bytes.first_mut() {
+                        *byte ^= 0x01;
+                    }
+                    first.proof = hex::encode(bytes);
+                }
+            }
+        });
+        assert!(verifier.verify_consensus(&corrupted_vrf_proof).is_err());
     }
 }
