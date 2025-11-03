@@ -892,10 +892,6 @@ fn rebuild_consensus_public_inputs(
     }
     let entry_len = inputs.vrf_entries.len() as u64;
     fields.push(parameters.element_from_u64(entry_len));
-    fields.push(parameters.element_from_u64(entry_len));
-    fields.push(parameters.element_from_u64(entry_len));
-    fields.push(parameters.element_from_u64(entry_len));
-    fields.push(parameters.element_from_u64(entry_len));
     fields.push(parameters.element_from_u64(inputs.witness_commitments.len() as u64));
     fields.push(parameters.element_from_u64(inputs.reputation_roots.len() as u64));
     fields.push(element_from_bytes(parameters, &inputs.vrf_output_binding));
@@ -1217,6 +1213,18 @@ mod tests {
                 &consensus_public_inputs(&witness),
             )
             .expect("consensus verification succeeds");
+    }
+
+    #[test]
+    fn consensus_public_inputs_rebuild_matches_circuit_vector() {
+        let parameters = StarkParameters::blueprint_default();
+        let witness = sample_consensus_witness();
+        let public_inputs = consensus_public_inputs(&witness);
+        let rebuilt = rebuild_consensus_public_inputs(&parameters, &public_inputs, &witness);
+        let circuit_inputs = ConsensusCircuit::public_inputs(&parameters, &witness)
+            .expect("consensus circuit public inputs");
+
+        assert_eq!(rebuilt, circuit_inputs);
     }
 
     #[test]
