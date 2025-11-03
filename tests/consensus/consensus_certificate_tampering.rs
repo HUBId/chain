@@ -57,9 +57,13 @@ fn sample_certificate() -> ConsensusCertificate {
 #[cfg(feature = "backend-plonky3")]
 mod plonky3_backend {
     use super::*;
+    use plonky3_backend::ConsensusCircuit;
     use rpp_chain::plonky3::proof::Plonky3Proof;
     use rpp_chain::plonky3::prover::Plonky3Prover;
     use rpp_chain::plonky3::verifier::Plonky3Verifier;
+    use rpp_chain::plonky3::{
+        circuit::consensus::ConsensusWitness as Plonky3ConsensusWitness, crypto,
+    };
     use serde_json::{Map, Value};
 
     fn tamper_proof(
@@ -76,6 +80,24 @@ mod plonky3_backend {
                     .and_then(Value::as_object_mut)
                     .expect("consensus witness payload");
                 mutator(witness);
+                let consensus_witness: Plonky3ConsensusWitness =
+                    serde_json::from_value(Value::Object(witness.clone()))
+                        .expect("consensus witness struct");
+                let backend_witness = consensus_witness
+                    .to_backend()
+                    .expect("prepare backend witness");
+                let circuit = ConsensusCircuit::new(backend_witness).expect("backend circuit");
+                let bindings = circuit.bindings().clone();
+                parsed
+                    .public_inputs
+                    .as_object_mut()
+                    .expect("public inputs object")
+                    .insert(
+                        "bindings".into(),
+                        serde_json::to_value(&bindings).expect("bindings value"),
+                    );
+                parsed.commitment =
+                    crypto::compute_commitment(&parsed.public_inputs).expect("compute commitment");
                 *value = parsed.into_value().expect("encode plonky3 proof");
             }
             other => panic!("expected Plonky3 proof, got {other:?}"),

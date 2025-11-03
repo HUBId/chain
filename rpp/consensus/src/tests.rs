@@ -14,7 +14,8 @@ use super::evidence::EvidenceType;
 use super::leader::{Leader, LeaderContext};
 use super::messages::{
     compute_consensus_bindings, Block, BlockId, ConsensusCertificate, ConsensusProof,
-    ConsensusProofMetadata, PreCommit, PreVote, ProofVerificationError, Proposal, TalliedVote,
+    ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput, PreCommit, PreVote,
+    ProofVerificationError, Proposal, TalliedVote,
 };
 #[cfg(feature = "prover-stwo")]
 use super::messages::{Commit, Signature};
@@ -91,10 +92,25 @@ fn deterministic_keypair(id: &str) -> VrfKeypair {
     }
 }
 
+fn sample_vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
+    let poseidon_seed = randomness_byte.wrapping_add(1);
+    ConsensusVrfEntry {
+        randomness: hex::encode([randomness_byte; 32]),
+        pre_output: hex::encode(vec![randomness_byte; rpp_crypto_vrf::VRF_PREOUTPUT_LENGTH]),
+        proof: hex::encode(vec![proof_byte; rpp_crypto_vrf::VRF_PROOF_LENGTH]),
+        public_key: hex::encode([randomness_byte.wrapping_add(2); 32]),
+        poseidon: ConsensusVrfPoseidonInput {
+            digest: hex::encode([poseidon_seed; 32]),
+            last_block_header: hex::encode([poseidon_seed.wrapping_add(1); 32]),
+            epoch: format!("{}", poseidon_seed),
+            tier_seed: hex::encode([poseidon_seed.wrapping_add(2); 32]),
+        },
+    }
+}
+
 fn sample_certificate_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
     ConsensusProofMetadata {
-        vrf_outputs: vec!["11".repeat(32)],
-        vrf_proofs: vec!["22".repeat(rpp_crypto_vrf::VRF_PROOF_LENGTH)],
+        vrf_entries: vec![sample_vrf_entry(0x11, 0x22)],
         witness_commitments: vec!["33".repeat(32)],
         reputation_roots: vec!["44".repeat(32)],
         epoch,
@@ -115,16 +131,17 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
     let block_hash_bytes = decode_digest_hex(&"aa".repeat(32));
     let quorum_bitmap_root = decode_digest_hex(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest_hex(&metadata.quorum_signature_root);
-    let vrf_outputs: Vec<[u8; 32]> = metadata
-        .vrf_outputs
+    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = metadata
+        .vrf_entries
         .iter()
-        .map(|value| decode_digest_hex(value))
-        .collect();
-    let vrf_proofs: Vec<Vec<u8>> = metadata
-        .vrf_proofs
-        .iter()
-        .map(|value| hex::decode(value).expect("decode vrf proof"))
-        .collect();
+        .map(|entry| {
+            let mut randomness = [0u8; 32];
+            randomness
+                .copy_from_slice(&hex::decode(&entry.randomness).expect("decode vrf randomness"));
+            let proof = hex::decode(&entry.proof).expect("decode vrf proof");
+            (randomness, proof)
+        })
+        .unzip();
     let witness_commitments: Vec<[u8; 32]> = metadata
         .witness_commitments
         .iter()

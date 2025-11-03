@@ -304,33 +304,22 @@ fn generate_certificate(
     let quorum_threshold = ((total_power * 2) / 3).saturating_add(1);
 
     let vrf_entries = (0..config.validators)
-        .map(|_| ConsensusVrfEntry {
-            randomness: random_hex(rng, 32),
-            pre_output: random_hex(rng, VRF_PREOUTPUT_LENGTH),
-            proof: random_hex(rng, VRF_PROOF_LENGTH),
-            public_key: random_hex(rng, 32),
-            poseidon: ConsensusVrfPoseidonInput {
-                digest: random_hex(rng, 32),
-                last_block_header: random_hex(rng, 32),
-                epoch: format!("{}", round / 32),
-                tier_seed: random_hex(rng, 32),
-            },
-        })
+        .map(|_| build_vrf_entry(rng, round))
         .collect();
 
-    let metadata = ConsensusProofMetadata {
+    let metadata = build_metadata(
         vrf_entries,
-        witness_commitments: (0..config.witness_commitments)
+        (0..config.witness_commitments)
             .map(|_| random_hex(rng, 32))
             .collect(),
-        reputation_roots: (0..DEFAULT_REPUTATION_ROOTS)
+        (0..DEFAULT_REPUTATION_ROOTS)
             .map(|_| random_hex(rng, 32))
             .collect(),
-        epoch: round / 32,
-        slot: round,
-        quorum_bitmap_root: random_hex(rng, 32),
-        quorum_signature_root: random_hex(rng, 32),
-    };
+        round / 32,
+        round,
+        random_hex(rng, 32),
+        random_hex(rng, 32),
+    );
 
     ConsensusCertificate {
         block_hash: BlockId(block_hash),
@@ -355,6 +344,43 @@ fn random_bytes(rng: &mut StdRng, bytes: usize) -> Vec<u8> {
     let mut buffer = vec![0u8; bytes];
     rng.fill_bytes(&mut buffer);
     buffer
+}
+
+fn build_vrf_entry(rng: &mut StdRng, round: u64) -> ConsensusVrfEntry {
+    let epoch = round / 32;
+    ConsensusVrfEntry {
+        randomness: random_hex(rng, 32),
+        pre_output: random_hex(rng, VRF_PREOUTPUT_LENGTH),
+        proof: random_hex(rng, VRF_PROOF_LENGTH),
+        public_key: random_hex(rng, 32),
+        poseidon: ConsensusVrfPoseidonInput {
+            digest: random_hex(rng, 32),
+            last_block_header: random_hex(rng, 32),
+            epoch: format!("{epoch}"),
+            tier_seed: random_hex(rng, 32),
+        },
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_metadata(
+    vrf_entries: Vec<ConsensusVrfEntry>,
+    witness_commitments: Vec<String>,
+    reputation_roots: Vec<String>,
+    epoch: u64,
+    slot: u64,
+    quorum_bitmap_root: String,
+    quorum_signature_root: String,
+) -> ConsensusProofMetadata {
+    ConsensusProofMetadata {
+        vrf_entries,
+        witness_commitments,
+        reputation_roots,
+        epoch,
+        slot,
+        quorum_bitmap_root,
+        quorum_signature_root,
+    }
 }
 
 fn tamper_vrf_payload(map: &mut Map<String, Value>) {
