@@ -14,7 +14,7 @@ use crate::types::{
     CanonicalPruningEnvelope, IdentityDeclaration, ProofSystem, PruningProof, PruningProofExt,
     RecursiveProof, ReputationUpdate, SignedTransaction, StoredBlock, TimetokeUpdate, UptimeProof,
 };
-use crate::vrf::VRF_PROOF_LENGTH;
+use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::{DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
 /// Outcome of executing storage migrations.
@@ -326,7 +326,9 @@ mod tests {
     use crate::rpp::ProofModule;
     use crate::storage::SCHEMA_VERSION_KEY;
     use crate::stwo::circuit::{
-        consensus::{ConsensusWitness, VotePower},
+        consensus::{
+            ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower,
+        },
         pruning::PruningWitness,
         recursive::RecursiveWitness,
         state::StateWitness,
@@ -479,8 +481,17 @@ mod tests {
                 }],
                 quorum_bitmap_root: "44".repeat(32),
                 quorum_signature_root: "55".repeat(32),
-                vrf_outputs: vec!["66".repeat(32)],
-                vrf_proofs: vec!["77".repeat(VRF_PROOF_LENGTH)],
+                vrf_entries: vec![ConsensusVrfWitnessEntry {
+                    randomness: "66".repeat(32),
+                    pre_output: "77".repeat(VRF_PREOUTPUT_LENGTH),
+                    proof: "77".repeat(VRF_PROOF_LENGTH),
+                    public_key: "88".repeat(32),
+                    input: ConsensusVrfPoseidonInput {
+                        last_block_header: "99".repeat(32),
+                        epoch: 2,
+                        tier_seed: "aa".repeat(32),
+                    },
+                }],
                 witness_commitments: vec!["88".repeat(32)],
                 reputation_roots: vec!["99".repeat(32)],
             }),

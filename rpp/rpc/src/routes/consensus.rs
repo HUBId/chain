@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use super::super::{to_http_error, ApiContext, ErrorResponse};
-use crate::runtime::node::ConsensusProofStatus;
+use crate::runtime::node::{ConsensusProofStatus, ConsensusProofVrfEntry};
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct ConsensusProofStatusQuery {
@@ -25,12 +25,15 @@ struct ConsensusProofStatusPayload {
     commit_power: String,
     epoch: u64,
     slot: u64,
-    vrf_outputs: Vec<String>,
-    vrf_proofs: Vec<String>,
+    vrf_entries: Vec<ConsensusProofVrfEntry>,
     witness_commitments: Vec<String>,
     reputation_roots: Vec<String>,
     quorum_bitmap_root: String,
     quorum_signature_root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vrf_outputs: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vrf_proofs: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     vrf_output: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -57,8 +60,9 @@ pub(super) async fn proof_status(
     Query(query): Query<ConsensusProofStatusQuery>,
 ) -> Result<Json<ConsensusProofStatusResponse>, (StatusCode, Json<ErrorResponse>)> {
     let requested = query.version.unwrap_or(2);
-    let version = requested.max(1).min(2);
+    let version = requested.max(1).min(3);
     let include_extended = version >= 2;
+    let include_legacy = version <= 2;
 
     let node = state.require_node()?;
     let status = node.consensus_proof_status().map_err(to_http_error)?;
@@ -72,6 +76,9 @@ pub(super) async fn proof_status(
         ));
     };
 
+    let legacy_outputs = status.legacy_vrf_outputs();
+    let legacy_proofs = status.legacy_vrf_proofs();
+
     let payload = ConsensusProofStatusPayload {
         height: status.height,
         round: status.round,
@@ -83,12 +90,13 @@ pub(super) async fn proof_status(
         commit_power: status.commit_power,
         epoch: status.epoch,
         slot: status.slot,
-        vrf_outputs: status.vrf_outputs,
-        vrf_proofs: status.vrf_proofs,
+        vrf_entries: status.vrf_entries,
         witness_commitments: status.witness_commitments,
         reputation_roots: status.reputation_roots,
         quorum_bitmap_root: status.quorum_bitmap_root,
         quorum_signature_root: status.quorum_signature_root,
+        vrf_outputs: include_legacy.then_some(legacy_outputs),
+        vrf_proofs: include_legacy.then_some(legacy_proofs),
         vrf_output: include_extended.then_some(status.vrf_output),
         vrf_proof: include_extended.then_some(status.vrf_proof),
         witness_commitment_root: include_extended.then_some(status.witness_commitment_root),

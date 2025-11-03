@@ -26,7 +26,7 @@ use crate::runtime::telemetry::metrics::RuntimeMetrics;
 use crate::state::merkle::compute_merkle_root;
 use crate::stwo::aggregation::StateCommitmentSnapshot;
 use crate::stwo::proof::ProofPayload;
-use crate::vrf::{VrfProof, VRF_PROOF_LENGTH};
+use crate::vrf::{VrfProof, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 use serde_json;
 
@@ -2487,7 +2487,11 @@ mod tests {
     use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
-        consensus::{ConsensusWitness as CircuitConsensusWitness, VotePower},
+        consensus::{
+            ConsensusVrfPoseidonInput as CircuitVrfPoseidonInput,
+            ConsensusVrfWitnessEntry as CircuitVrfWitnessEntry,
+            ConsensusWitness as CircuitConsensusWitness, VotePower,
+        },
         identity::{IdentityCircuit, IdentityWitness},
         pruning::PruningWitness,
         recursive::RecursiveWitness,
@@ -2878,8 +2882,17 @@ mod tests {
                 }],
                 quorum_bitmap_root: "ff".repeat(32),
                 quorum_signature_root: "11".repeat(32),
-                vrf_outputs: vec!["22".repeat(32)],
-                vrf_proofs: vec!["33".repeat(VRF_PROOF_LENGTH)],
+                vrf_entries: vec![CircuitVrfWitnessEntry {
+                    randomness: "22".repeat(32),
+                    pre_output: "33".repeat(VRF_PREOUTPUT_LENGTH),
+                    proof: "33".repeat(VRF_PROOF_LENGTH),
+                    public_key: "44".repeat(32),
+                    input: CircuitVrfPoseidonInput {
+                        last_block_header: "55".repeat(32),
+                        epoch: 1,
+                        tier_seed: "66".repeat(32),
+                    },
+                }],
                 witness_commitments: vec!["44".repeat(32)],
                 reputation_roots: vec!["55".repeat(32)],
             }),
