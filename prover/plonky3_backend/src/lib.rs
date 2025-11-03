@@ -46,6 +46,13 @@ pub enum BackendError {
 pub type BackendResult<T> = Result<T, BackendError>;
 
 #[derive(Clone, Debug)]
+pub struct ConsensusProof {
+    pub commitment: String,
+    pub public_inputs: Value,
+    pub proof: Proof,
+}
+
+#[derive(Clone, Debug)]
 pub struct VerifyingKey {
     bytes: Vec<u8>,
     hash: [u8; 32],
@@ -383,6 +390,43 @@ impl VerifierContext {
         }
         Ok(())
     }
+}
+
+fn encode_commitment_and_inputs(
+    circuit: &str,
+    public_inputs: &Value,
+) -> BackendResult<(String, Vec<u8>)> {
+    compute_commitment_and_inputs(public_inputs).map_err(|err| BackendError::InvalidPublicInputs {
+        circuit: circuit.to_string(),
+        message: format!("failed to encode canonical public inputs: {err}"),
+    })
+}
+
+pub fn prove_consensus(
+    context: &ProverContext,
+    circuit: &ConsensusCircuit,
+) -> BackendResult<ConsensusProof> {
+    let public_inputs = circuit.public_inputs_value()?;
+    let (commitment, encoded_inputs) =
+        encode_commitment_and_inputs(context.circuit(), &public_inputs)?;
+    let proof = context.prove(&commitment, &encoded_inputs)?;
+    Ok(ConsensusProof {
+        commitment,
+        public_inputs,
+        proof,
+    })
+}
+
+pub fn verify_consensus(context: &VerifierContext, proof: &ConsensusProof) -> BackendResult<()> {
+    validate_consensus_public_inputs(&proof.public_inputs)?;
+    let (commitment, encoded_inputs) =
+        encode_commitment_and_inputs(context.circuit(), &proof.public_inputs)?;
+    if proof.commitment != commitment {
+        return Err(BackendError::PublicInputDigestMismatch(
+            context.circuit().to_string(),
+        ));
+    }
+    context.verify(&proof.commitment, &encoded_inputs, &proof.proof)
 }
 
 pub fn compute_commitment_and_inputs(

@@ -1,8 +1,10 @@
 use plonky3_backend::{
-    encode_consensus_public_inputs, validate_consensus_public_inputs, ConsensusCircuit,
-    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, VotePower,
-    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    encode_consensus_public_inputs, prove_consensus, validate_consensus_public_inputs,
+    verify_consensus, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
+    ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey, VerifierContext,
+    VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
+use serde_json::json;
 use serde_json::Value;
 
 fn sample_vote(label: &str, weight: u64) -> VotePower {
@@ -43,6 +45,30 @@ fn sample_witness() -> ConsensusWitness {
     }
 }
 
+fn sample_keys() -> (VerifyingKey, ProvingKey) {
+    let verifying_key =
+        VerifyingKey::from_bytes(vec![0x11; 48], "consensus").expect("verifying key constructs");
+    let proving_key =
+        ProvingKey::from_bytes(vec![0x22; 64], "consensus").expect("proving key constructs");
+    (verifying_key, proving_key)
+}
+
+fn sample_contexts() -> (ProverContext, VerifierContext) {
+    let (verifying_key, proving_key) = sample_keys();
+    let prover = ProverContext::new("consensus", verifying_key.clone(), proving_key, 64, false)
+        .expect("prover context builds");
+    let verifier = prover.verifier();
+    (prover, verifier)
+}
+
+fn prove_sample_witness() -> (ConsensusProof, VerifierContext) {
+    let (prover, verifier) = sample_contexts();
+    let witness = sample_witness();
+    let circuit = ConsensusCircuit::new(witness).expect("consensus circuit");
+    let proof = prove_consensus(&prover, &circuit).expect("consensus proving succeeds");
+    (proof, verifier)
+}
+
 #[test]
 fn consensus_public_inputs_round_trip() {
     let witness = sample_witness();
@@ -76,6 +102,48 @@ fn consensus_public_inputs_round_trip() {
     assert_eq!(decoded.witness().round, witness.round);
     assert_eq!(decoded.vrf_entries().len(), witness.vrf_entries.len());
     assert_eq!(decoded.bindings().quorum_bitmap.len(), 64);
+}
+
+#[test]
+fn consensus_verification_rejects_tampered_vrf_randomness() {
+    let (proof, verifier) = prove_sample_witness();
+    verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
+
+    let mut tampered = proof.clone();
+    if let Value::Object(ref mut root) = tampered.public_inputs {
+        if let Some(Value::Array(ref mut entries)) = root.get_mut("vrf_entries") {
+            if let Some(Value::Object(entry)) = entries.first_mut() {
+                if let Some(Value::Array(randomness)) = entry.get_mut("randomness") {
+                    randomness[0] = json!(255u64);
+                }
+            }
+        }
+    }
+
+    let err = verify_consensus(&verifier, &tampered).expect_err("tampered VRF must fail");
+    assert!(matches!(
+        err,
+        plonky3_backend::BackendError::InvalidPublicInputs { .. }
+    ));
+}
+
+#[test]
+fn consensus_verification_rejects_tampered_quorum_digest() {
+    let (proof, verifier) = prove_sample_witness();
+    verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
+
+    let mut tampered = proof.clone();
+    if let Value::Object(ref mut root) = tampered.public_inputs {
+        if let Some(Value::Object(bindings)) = root.get_mut("bindings") {
+            bindings.insert("quorum_bitmap".into(), json!("deadbeef"));
+        }
+    }
+
+    let err = verify_consensus(&verifier, &tampered).expect_err("tampered quorum must fail");
+    assert!(matches!(
+        err,
+        plonky3_backend::BackendError::InvalidPublicInputs { .. }
+    ));
 }
 
 #[test]
