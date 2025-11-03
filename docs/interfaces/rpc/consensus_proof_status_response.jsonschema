@@ -16,8 +16,6 @@
     "commit_power",
     "epoch",
     "slot",
-    "vrf_outputs",
-    "vrf_proofs",
     "witness_commitments",
     "reputation_roots",
     "quorum_bitmap_root",
@@ -26,8 +24,8 @@
   "properties": {
     "version": {
       "type": "integer",
-      "enum": [1, 2],
-      "description": "Response schema version. Version 2 adds Poseidon binding digests alongside the raw metadata." 
+      "enum": [1, 2, 3],
+      "description": "Response schema version. Version 3 introduces structured VRF entries that include Poseidon bindings and validator public keys."
     },
     "height": {"type": "integer", "minimum": 0},
     "round": {"type": "integer", "minimum": 0},
@@ -43,14 +41,84 @@
     "commit_power": {"type": "string"},
     "epoch": {"type": "integer", "minimum": 0},
     "slot": {"type": "integer", "minimum": 0},
+    "vrf_entries": {
+      "type": "array",
+      "description": "VRF transcripts contributed by the validator set. Each entry includes the randomness transcript, pre-output commitment, proof transcript, validator public key, and the Poseidon bindings enforced by the proof circuits.",
+      "items": {
+        "type": "object",
+        "required": [
+          "randomness",
+          "pre_output",
+          "proof",
+          "public_key",
+          "poseidon"
+        ],
+        "properties": {
+          "randomness": {
+            "type": "string",
+            "description": "Hex-encoded Schnorrkel VRF randomness element (32 bytes).",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "pre_output": {
+            "type": "string",
+            "description": "Hex-encoded VRF pre-output digest produced prior to revealing the randomness.",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "proof": {
+            "type": "string",
+            "description": "Hex-encoded Schnorrkel VRF proof blob for the randomness/pre-output pair.",
+            "pattern": "^[0-9a-fA-F]+$"
+          },
+          "public_key": {
+            "type": "string",
+            "description": "Hex-encoded VRF public key for the validator that produced the transcript.",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "poseidon": {
+            "type": "object",
+            "description": "Poseidon binding digests that fold the transcript data with the block hash for circuit verification.",
+            "required": [
+              "randomness",
+              "pre_output",
+              "proof",
+              "public_key"
+            ],
+            "properties": {
+              "randomness": {
+                "type": "string",
+                "description": "Poseidon commitment that binds the VRF randomness to the block hash.",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              },
+              "pre_output": {
+                "type": "string",
+                "description": "Poseidon commitment that binds the VRF pre-output digest to the block hash.",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              },
+              "proof": {
+                "type": "string",
+                "description": "Poseidon commitment that binds the VRF proof blob to the block hash.",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              },
+              "public_key": {
+                "type": "string",
+                "description": "Poseidon commitment that binds the validator public key to the block hash.",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "vrf_outputs": {
       "type": "array",
-      "description": "VRF output digests contributed by the validator set.",
+      "description": "Legacy VRF output digests derived from `vrf_entries[].pre_output`. Present for compatibility with schema versions ≤ 2 or when clients request derived vectors.",
       "items": {"type": "string", "pattern": "^[0-9a-fA-F]{64}$"}
     },
     "vrf_proofs": {
       "type": "array",
-      "description": "VRF proofs that justify the outputs for the current round.",
+      "description": "Legacy VRF proofs derived from `vrf_entries[].proof`. Present for compatibility with schema versions ≤ 2 or when clients request derived vectors.",
       "items": {"type": "string", "pattern": "^[0-9a-fA-F]+$"}
     },
     "witness_commitments": {
@@ -75,12 +143,12 @@
     },
     "vrf_output": {
       "type": "string",
-      "description": "Poseidon binding digest folding the block hash with each VRF output. Present for version ≥ 2.",
+      "description": "Poseidon binding digest folding the block hash with every VRF pre-output. Present for version ≥ 2 and derivable from `vrf_entries[].poseidon.pre_output`.",
       "pattern": "^[0-9a-fA-F]{64}$"
     },
     "vrf_proof": {
       "type": "string",
-      "description": "Poseidon binding digest folding the block hash with each VRF proof blob. Present for version ≥ 2.",
+      "description": "Poseidon binding digest folding the block hash with every VRF proof blob. Present for version ≥ 2 and derivable from `vrf_entries[].poseidon.proof`.",
       "pattern": "^[0-9a-fA-F]{64}$"
     },
     "witness_commitment_root": {
@@ -104,19 +172,52 @@
       "pattern": "^[0-9a-fA-F]{64}$"
     }
   },
+  "dependentRequired": {
+    "vrf_outputs": ["vrf_entries"],
+    "vrf_proofs": ["vrf_entries"],
+    "vrf_output": ["vrf_entries"],
+    "vrf_proof": ["vrf_entries"]
+  },
   "allOf": [
     {
       "if": {
-        "properties": {"version": {"const": 2}}
+        "properties": {"version": {"enum": [1]}}
       },
       "then": {
         "required": [
+          "vrf_outputs",
+          "vrf_proofs"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {"version": {"enum": [2]}}
+      },
+      "then": {
+        "required": [
+          "vrf_outputs",
+          "vrf_proofs",
           "vrf_output",
           "vrf_proof",
           "witness_commitment_root",
           "reputation_root",
           "quorum_bitmap",
           "quorum_signature"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {"version": {"enum": [3]}}
+      },
+      "then": {
+        "required": [
+          "vrf_entries",
+          "witness_commitments",
+          "reputation_roots",
+          "quorum_bitmap_root",
+          "quorum_signature_root"
         ]
       }
     }

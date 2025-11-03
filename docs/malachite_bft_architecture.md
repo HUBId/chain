@@ -89,13 +89,13 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
    * APIs: `credit_uptime`, `debit_penalty`, `snapshot_state`, `sync_state(peer)`.
 
 3. **Validator Set Snapshot**
-   * `ValidatorCandidate { id, tier, reputation_score, timetoke_balance, vrf_output }`.
+   * `ValidatorCandidate { id, tier, reputation_score, timetoke_balance, vrf_entry }`.
    * `ValidatorSet { epoch, members: Vec<ValidatorCandidate>, witnesses: Vec<WitnessId> }`.
 
 ### Konsens- und Auswahlmodule
 1. **VRF Engine**
    * Input: `(secret_key, epoch_nonce, timetoke_balance, validator_id)`.
-   * Output: `(vrf_output, proof)`.
+   * Output: `vrf_entry { randomness, pre_output, proof, public_key, poseidon }`.
    * Threshold-Funktion: `threshold = f(timetoke_balance, network_params)` (z. B. logistischer Anstieg).
    * Interface: `trait VrfProvider { fn evaluate(&self, ctx: VrfContext) -> VrfResult; }`.
 
@@ -106,7 +106,7 @@ Diese Analyse übersetzt den aktualisierten Malachite-BFT-Blueprint (mit Leader-
 
 3. **Leader Selection**
    * Input: `ValidatorSet`.
-   * Algorithmus: sortiere nach `tier desc`, `timetoke desc`, `vrf_output asc`.
+   * Algorithmus: sortiere nach `tier desc`, `timetoke desc`, `vrf_entry.pre_output asc`.
    * Output: `LeaderAssignment { leader_id, witnesses, proof_ref }`.
    * Interface: `trait LeaderStrategy { fn elect(set: &ValidatorSet) -> LeaderAssignment; }`.
 
