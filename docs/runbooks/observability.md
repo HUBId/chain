@@ -26,6 +26,10 @@ and runtime protections remain enforced alongside the CI gates.
 
 ## Phase-2 consensus proof audits
 
+- Orientiere dich an der [Plonky3 Production Validation Checklist](../testing/plonky3_experimental_testplan.md#4-production-sign-off-checklist),
+  wenn du Phase‑2-Nachweise sammelst; die folgenden Schritte spiegeln die dort
+  verlangten Artefakte für Observability und Tamper-Belege wider.【F:docs/testing/plonky3_experimental_testplan.md†L1-L121】
+
 - [ ] **Tamper-Rejections lokal nachweisen.** Führe `cargo xtask test-consensus-manipulation`
       aus, um gültige sowie manipulierte VRF-/Quorum-Zeugen gegen beide Backends zu prüfen.
       Verwende `XTASK_FEATURES="prod,backend-plonky3"` bzw. `XTASK_FEATURES="prod,prover-stwo"`.

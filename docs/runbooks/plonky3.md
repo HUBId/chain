@@ -4,7 +4,9 @@ This runbook documents the operational procedures for the production Plonky3
 prover/verifier stack introduced in Phase 2. Use it alongside the
 [`rpp-node` operator guide](../rpp_node_operator_guide.md) and the
 [consensus performance report](../performance/consensus_proofs.md) when preparing
-or troubleshooting deployments.
+or troubleshooting deployments. The Phase‑2 production checklist lives in the
+[Plonky3 Production Validation Checklist](../testing/plonky3_experimental_testplan.md),
+which enumerates the artefacts and commands auditors expect before a rollout.【F:docs/testing/plonky3_experimental_testplan.md†L1-L121】
 
 ## 1. Validation before rollout
 
