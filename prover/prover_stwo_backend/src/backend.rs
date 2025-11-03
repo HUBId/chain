@@ -873,6 +873,7 @@ fn rebuild_consensus_public_inputs(
     ];
     for entry in &inputs.vrf_entries {
         fields.push(element_from_bytes(parameters, &entry.randomness));
+        fields.push(element_from_bytes(parameters, &entry.derived_randomness));
         fields.push(element_from_bytes(parameters, &entry.pre_output));
         fields.push(element_from_bytes(parameters, &entry.proof));
         fields.push(element_from_bytes(parameters, &entry.public_key));
