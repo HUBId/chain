@@ -415,10 +415,7 @@ fn tamper_vrf_payload(map: &mut Map<String, Value>) {
             if let Some(Value::Object(poseidon)) =
                 first.get_mut("poseidon").and_then(Value::as_object_mut)
             {
-                poseidon.insert(
-                    "digest".into(),
-                    Value::String("deadbeef".repeat(8)),
-                );
+                poseidon.insert("digest".into(), Value::String("deadbeef".repeat(8)));
             }
         }
     }

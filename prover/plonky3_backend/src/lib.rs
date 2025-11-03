@@ -8,8 +8,7 @@ mod circuits;
 pub use circuits::consensus::{
     encode_consensus_public_inputs, validate_consensus_public_inputs, ConsensusBindings,
     ConsensusCircuit, ConsensusPublicInputs, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
-    ConsensusVrfPoseidonPublicInput, ConsensusVrfPublicEntry, ConsensusWitness, VotePower,
-    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    ConsensusVrfPublicEntry, ConsensusWitness, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 
 pub const PROOF_BLOB_LEN: usize = 96;

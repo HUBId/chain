@@ -65,8 +65,7 @@ use crate::plonky3::prover::{
     telemetry_snapshot as plonky3_prover_telemetry, Plonky3BackendHealth,
 };
 use crate::proof_backend::{
-    Blake2sHasher, ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput,
-    ConsensusVrfPublicEntry as BackendVrfPublicEntry, ProofBytes,
+    Blake2sHasher, ConsensusVrfPublicEntry as BackendVrfPublicEntry, ProofBytes,
 };
 #[cfg(feature = "prover-stwo")]
 use crate::proof_backend::{
@@ -7143,12 +7142,10 @@ fn sanitize_vrf_entries(
             pre_output,
             proof,
             public_key,
-            poseidon: BackendVrfPoseidonInput {
-                digest: poseidon_digest,
-                last_block_header: poseidon_last_block_header,
-                epoch: poseidon_epoch,
-                tier_seed: poseidon_tier_seed,
-            },
+            poseidon_digest,
+            poseidon_last_block_header,
+            poseidon_epoch,
+            poseidon_tier_seed,
         });
     }
 

@@ -447,29 +447,43 @@ mod tests {
             voter: "validator".into(),
             weight: 1,
         };
+        let block_hash = "11".repeat(32);
         ConsensusWitness {
-            block_hash: "11".repeat(32),
+            block_hash: block_hash.clone(),
             round: 1,
             epoch: 0,
             slot: 1,
-            leader_proposal: "11".repeat(32),
+            leader_proposal: block_hash.clone(),
             quorum_threshold: 1,
             pre_votes: vec![vote.clone()],
             pre_commits: vec![vote.clone()],
             commit_votes: vec![vote],
             quorum_bitmap_root: "22".repeat(32),
             quorum_signature_root: "33".repeat(32),
-            vrf_entries: vec![ConsensusVrfWitnessEntry {
-                randomness: "44".repeat(32),
-                pre_output: "45".repeat(VRF_PREOUTPUT_LENGTH),
-                proof: "55".repeat(VRF_PROOF_LENGTH),
-                public_key: "46".repeat(32),
-                input: ConsensusVrfPoseidonInput {
-                    last_block_header: "11".repeat(32),
-                    epoch: 0,
-                    tier_seed: "47".repeat(32),
+            vrf_entries: vec![
+                ConsensusVrfWitnessEntry {
+                    randomness: "44".repeat(32),
+                    pre_output: "45".repeat(VRF_PREOUTPUT_LENGTH),
+                    proof: "55".repeat(VRF_PROOF_LENGTH),
+                    public_key: "46".repeat(32),
+                    input: ConsensusVrfPoseidonInput {
+                        last_block_header: block_hash.clone(),
+                        epoch: 0,
+                        tier_seed: "47".repeat(32),
+                    },
                 },
-            }],
+                ConsensusVrfWitnessEntry {
+                    randomness: "66".repeat(32),
+                    pre_output: "67".repeat(VRF_PREOUTPUT_LENGTH),
+                    proof: "68".repeat(VRF_PROOF_LENGTH),
+                    public_key: "69".repeat(32),
+                    input: ConsensusVrfPoseidonInput {
+                        last_block_header: block_hash,
+                        epoch: 0,
+                        tier_seed: "70".repeat(32),
+                    },
+                },
+            ],
             witness_commitments: vec!["66".repeat(32)],
             reputation_roots: vec!["77".repeat(32)],
         }

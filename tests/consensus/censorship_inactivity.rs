@@ -12,8 +12,7 @@ use rpp_consensus::messages::{
     ConsensusProofMetadata, PreVote,
 };
 use rpp_consensus::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ConsensusVrfPublicEntry,
     ProofBackend, ProofBytes, VerifyingKey,
 };
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
@@ -154,12 +153,10 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
             pre_output: decode_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
             proof: decode_vec(&entry.proof, VRF_PROOF_LENGTH),
             public_key: decode_digest(&entry.public_key),
-            poseidon: BackendVrfPoseidonInput {
-                digest: decode_digest(&entry.poseidon.digest),
-                last_block_header: decode_digest(&entry.poseidon.last_block_header),
-                epoch: entry.poseidon.epoch.parse().expect("decode epoch"),
-                tier_seed: decode_digest(&entry.poseidon.tier_seed),
-            },
+            poseidon_digest: decode_digest(&entry.poseidon.digest),
+            poseidon_last_block_header: decode_digest(&entry.poseidon.last_block_header),
+            poseidon_epoch: entry.poseidon.epoch.parse().expect("decode epoch"),
+            poseidon_tier_seed: decode_digest(&entry.poseidon.tier_seed),
         })
         .collect();
     let witness_commitments: Vec<[u8; 32]> = metadata

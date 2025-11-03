@@ -15,9 +15,8 @@ pub use io::{
 
 use prover_backend_interface::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonPublicInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
-    IdentityCircuitDef, IdentityPublicInputs, ProofBackend, ProofBytes, ProvingKey,
-    PruningCircuitDef, PruningPublicInputs, RecursiveCircuitDef, RecursivePublicInputs,
+    ConsensusVrfPublicEntry, IdentityCircuitDef, IdentityPublicInputs, ProofBackend, ProofBytes,
+    ProvingKey, PruningCircuitDef, PruningPublicInputs, RecursiveCircuitDef, RecursivePublicInputs,
     SecurityLevel, StateCircuitDef, StatePublicInputs, TxCircuitDef, TxPublicInputs,
     UptimeCircuitDef, UptimePublicInputs, VerifyingKey, WitnessBytes,
 };
@@ -596,13 +595,13 @@ impl ProofBackend for StwoBackend {
                         "consensus witness VRF entry #{index} Poseidon header has incorrect length"
                     ))
                         })?;
-                if witness_last_block != public_entry.poseidon.last_block_header {
+                if witness_last_block != public_entry.poseidon_last_block_header {
                     return Err(BackendError::Failure(format!(
                         "consensus VRF entry #{index} poseidon last block header mismatch public inputs"
                     )));
                 }
 
-                if witness_entry.input.epoch != public_entry.poseidon.epoch {
+                if witness_entry.input.epoch != public_entry.poseidon_epoch {
                     return Err(BackendError::Failure(format!(
                         "consensus VRF entry #{index} poseidon epoch mismatch public inputs"
                     )));
@@ -620,7 +619,7 @@ impl ProofBackend for StwoBackend {
                             "consensus witness VRF entry #{index} Poseidon tier seed has incorrect length"
                         ))
                     })?;
-                if witness_tier_seed != public_entry.poseidon.tier_seed {
+                if witness_tier_seed != public_entry.poseidon_tier_seed {
                     return Err(BackendError::Failure(format!(
                         "consensus VRF entry #{index} poseidon tier seed mismatch public inputs"
                     )));
@@ -632,7 +631,7 @@ impl ProofBackend for StwoBackend {
                     parameters.element_from_u64(witness_entry.input.epoch),
                     string_to_field(&parameters, &witness_entry.input.tier_seed),
                 ]);
-                if field_to_padded_bytes(&digest_field) != public_entry.poseidon.digest {
+                if field_to_padded_bytes(&digest_field) != public_entry.poseidon_digest {
                     return Err(BackendError::Failure(format!(
                         "consensus VRF entry #{index} poseidon digest mismatch public inputs"
                     )));
@@ -872,30 +871,19 @@ fn rebuild_consensus_public_inputs(
         element_from_bytes(parameters, &inputs.quorum_bitmap_root),
         element_from_bytes(parameters, &inputs.quorum_signature_root),
     ];
-    let mut randomness = Vec::with_capacity(inputs.vrf_entries.len());
-    let mut pre_outputs = Vec::with_capacity(inputs.vrf_entries.len());
-    let mut proofs = Vec::with_capacity(inputs.vrf_entries.len());
-    let mut public_keys = Vec::with_capacity(inputs.vrf_entries.len());
-    let mut poseidon_inputs = Vec::with_capacity(inputs.vrf_entries.len() * 3);
-
     for entry in &inputs.vrf_entries {
-        randomness.push(element_from_bytes(parameters, &entry.randomness));
-        pre_outputs.push(element_from_bytes(parameters, &entry.pre_output));
-        proofs.push(element_from_bytes(parameters, &entry.proof));
-        public_keys.push(element_from_bytes(parameters, &entry.public_key));
-        poseidon_inputs.push(element_from_bytes(
+        fields.push(element_from_bytes(parameters, &entry.randomness));
+        fields.push(element_from_bytes(parameters, &entry.pre_output));
+        fields.push(element_from_bytes(parameters, &entry.proof));
+        fields.push(element_from_bytes(parameters, &entry.public_key));
+        fields.push(element_from_bytes(parameters, &entry.poseidon_digest));
+        fields.push(element_from_bytes(
             parameters,
-            &entry.poseidon.last_block_header,
+            &entry.poseidon_last_block_header,
         ));
-        poseidon_inputs.push(parameters.element_from_u64(entry.poseidon.epoch));
-        poseidon_inputs.push(element_from_bytes(parameters, &entry.poseidon.tier_seed));
+        fields.push(parameters.element_from_u64(entry.poseidon_epoch));
+        fields.push(element_from_bytes(parameters, &entry.poseidon_tier_seed));
     }
-
-    fields.extend(randomness);
-    fields.extend(pre_outputs);
-    fields.extend(proofs);
-    fields.extend(public_keys);
-    fields.extend(poseidon_inputs);
     for digest in &inputs.witness_commitments {
         fields.push(element_from_bytes(parameters, digest));
     }
@@ -1596,24 +1584,37 @@ mod tests {
             round: 5,
             epoch: 2,
             slot: 11,
-            leader_proposal: block_hash,
+            leader_proposal: block_hash.clone(),
             quorum_threshold: 12,
             pre_votes: votes.clone(),
             pre_commits: votes.clone(),
             commit_votes: votes,
             quorum_bitmap_root: "aa".repeat(32),
             quorum_signature_root: "bb".repeat(32),
-            vrf_entries: vec![ConsensusVrfWitnessEntry {
-                randomness: "cc".repeat(32),
-                pre_output: "dd".repeat(VRF_PREOUTPUT_LENGTH),
-                proof: "ee".repeat(VRF_PROOF_LENGTH),
-                public_key: "ff".repeat(32),
-                input: ConsensusVrfPoseidonInput {
-                    last_block_header: "99".repeat(32),
-                    epoch: 2,
-                    tier_seed: "11".repeat(32),
+            vrf_entries: vec![
+                ConsensusVrfWitnessEntry {
+                    randomness: "cc".repeat(32),
+                    pre_output: "dd".repeat(VRF_PREOUTPUT_LENGTH),
+                    proof: "ee".repeat(VRF_PROOF_LENGTH),
+                    public_key: "ff".repeat(32),
+                    input: ConsensusVrfPoseidonInput {
+                        last_block_header: block_hash.clone(),
+                        epoch: 2,
+                        tier_seed: "11".repeat(32),
+                    },
                 },
-            }],
+                ConsensusVrfWitnessEntry {
+                    randomness: "01".repeat(32),
+                    pre_output: "02".repeat(VRF_PREOUTPUT_LENGTH),
+                    proof: "03".repeat(VRF_PROOF_LENGTH),
+                    public_key: "04".repeat(32),
+                    input: ConsensusVrfPoseidonInput {
+                        last_block_header: block_hash,
+                        epoch: 2,
+                        tier_seed: "05".repeat(32),
+                    },
+                },
+            ],
             witness_commitments: vec!["12".repeat(32)],
             reputation_roots: vec!["13".repeat(32)],
         }
@@ -1707,12 +1708,10 @@ mod tests {
                     pre_output,
                     proof,
                     public_key,
-                    poseidon: PublicConsensusVrfPoseidonInput {
-                        digest: field_to_padded_bytes(&digest),
-                        last_block_header,
-                        epoch,
-                        tier_seed,
-                    },
+                    poseidon_digest: field_to_padded_bytes(&digest),
+                    poseidon_last_block_header: last_block_header,
+                    poseidon_epoch: epoch,
+                    poseidon_tier_seed: tier_seed,
                 }
             })
             .collect();
