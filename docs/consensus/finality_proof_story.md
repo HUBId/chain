@@ -36,10 +36,12 @@ Consensus proofs expose the following public inputs:
 
 All metadata vectors must be non-empty; empty VRF transcripts, witness
 commitments, or reputation roots are treated as forged data. The verifier also
-expects each digest to be a 32-byte hexadecimal encoding (VRF proofs remain
-variable-length Schnorrkel transcripts) and will abort if any quorum root uses
-an invalid encoding. Validator public keys are exported as 32-byte hex strings
-and undergo the same validation before entering the circuit.
+expects each digest to be a 32-byte hexadecimal encoding and now enforces that
+every VRF proof encodes exactly `crate::vrf::VRF_PROOF_LENGTH` bytes. Truncated
+or oversized transcripts are rejected before the prover ever sees them, and the
+verifier will abort if any quorum root uses an invalid encoding. Validator
+public keys are exported as 32-byte hex strings and undergo the same validation
+before entering the circuit.
 
 Simnet fixtures and associated tooling now synthesise complete VRF transcript
 objects that mirror this shape. Every entry includes the validator's randomness,

@@ -12,9 +12,9 @@ use crate::proof_backend::{
     WitnessHeader,
 };
 use crate::validator::ValidatorId;
+use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_chain::stwo::params::StarkParameters;
 use rpp_chain::stwo::FieldElement;
-use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusVrfPoseidonInput {
@@ -172,15 +172,32 @@ fn decode_hex_array<const N: usize>(label: &str, value: &str) -> BackendResult<[
     Ok(array)
 }
 
-fn decode_hex_vec(label: &str, value: &str, expected: usize) -> BackendResult<Vec<u8>> {
-    let bytes = hex::decode(value)
-        .map_err(|err| BackendError::Failure(format!("invalid {label} encoding: {err}")))?;
-    if bytes.len() != expected {
-        return Err(BackendError::Failure(format!(
-            "{label} must encode {expected} bytes"
-        )));
-    }
-    Ok(bytes)
+fn decode_proofs(entries: &[ConsensusVrfEntry]) -> BackendResult<Vec<Vec<u8>>> {
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            if entry.proof.trim().is_empty() {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} missing proof",
+                )));
+            }
+
+            let label = format!("vrf proof #{index}");
+            let bytes = hex::decode(&entry.proof).map_err(|err| {
+                BackendError::Failure(format!("invalid {label} encoding: {err}",))
+            })?;
+            let expected = crate::vrf::VRF_PROOF_LENGTH;
+            if bytes.len() != expected {
+                return Err(BackendError::Failure(format!(
+                    "{label} must encode {expected} bytes (found {})",
+                    bytes.len(),
+                )));
+            }
+
+            Ok(bytes)
+        })
+        .collect()
 }
 
 fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
@@ -511,9 +528,17 @@ impl ConsensusCertificate {
             ));
         }
 
+        let proof_bytes = decode_proofs(&self.metadata.vrf.entries)?;
         let mut vrf_public_entries = Vec::with_capacity(self.metadata.vrf.entries.len());
 
-        for (index, entry) in self.metadata.vrf.entries.iter().enumerate() {
+        for (index, (entry, proof)) in self
+            .metadata
+            .vrf
+            .entries
+            .iter()
+            .zip(proof_bytes.into_iter())
+            .enumerate()
+        {
             if entry.randomness.trim().is_empty() {
                 return Err(BackendError::Failure(format!(
                     "consensus metadata vrf entry #{index} missing randomness",
@@ -522,11 +547,6 @@ impl ConsensusCertificate {
             if entry.pre_output.trim().is_empty() {
                 return Err(BackendError::Failure(format!(
                     "consensus metadata vrf entry #{index} missing pre-output",
-                )));
-            }
-            if entry.proof.trim().is_empty() {
-                return Err(BackendError::Failure(format!(
-                    "consensus metadata vrf entry #{index} missing proof",
                 )));
             }
             if entry.public_key.trim().is_empty() {
@@ -559,11 +579,6 @@ impl ConsensusCertificate {
             let pre_output = decode_hex_array::<VRF_PREOUTPUT_LENGTH>(
                 &format!("vrf pre-output #{index}"),
                 &entry.pre_output,
-            )?;
-            let proof = decode_hex_vec(
-                &format!("vrf proof #{index}"),
-                &entry.proof,
-                VRF_PROOF_LENGTH,
             )?;
             let public_key = decode_hex_array::<VRF_PUBLIC_KEY_LENGTH>(
                 &format!("vrf public key #{index}"),
@@ -657,5 +672,46 @@ impl ConsensusCertificate {
             quorum_bitmap_binding: bindings.quorum_bitmap,
             quorum_signature_binding: bindings.quorum_signature,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_proofs, ConsensusVrfEntry};
+    use crate::proof_backend::BackendError;
+    use crate::vrf::VRF_PROOF_LENGTH;
+
+    #[test]
+    fn decode_proofs_rejects_truncated_entries() {
+        let expected = VRF_PROOF_LENGTH;
+        let truncated = expected.saturating_sub(1);
+        let mut entry = ConsensusVrfEntry::default();
+        entry.proof = "aa".repeat(truncated);
+
+        let error = decode_proofs(&[entry]).expect_err("should reject truncated proof");
+        match error {
+            BackendError::Failure(message) => {
+                assert!(message.contains(&format!("must encode {expected} bytes")));
+                assert!(message.contains(&format!("found {truncated}")));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_proofs_rejects_oversized_entries() {
+        let expected = VRF_PROOF_LENGTH;
+        let oversized = expected + 1;
+        let mut entry = ConsensusVrfEntry::default();
+        entry.proof = "bb".repeat(oversized);
+
+        let error = decode_proofs(&[entry]).expect_err("should reject oversized proof");
+        match error {
+            BackendError::Failure(message) => {
+                assert!(message.contains(&format!("must encode {expected} bytes")));
+                assert!(message.contains(&format!("found {oversized}")));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

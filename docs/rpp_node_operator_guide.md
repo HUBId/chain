@@ -147,8 +147,10 @@ das Downstream-Mapping aus `vrf_entries` dokumentieren, um den Wechsel
 nachvollziehbar zu halten.
 
 Missing or inconsistent values cause the verifier to reject the consensus proof
-bundle, so double-check the witness payload when diagnosing failed block
-imports.【F:docs/consensus/finality_proof_story.md†L1-L38】
+bundle. The host now rejects VRF proof strings that do not expand to exactly
+`crate::vrf::VRF_PROOF_LENGTH` bytes before the prover is invoked, so truncated
+or padded transcripts surface as immediate metadata errors. Double-check the
+witness payload when diagnosing failed block imports.【F:docs/consensus/finality_proof_story.md†L33-L44】
 
 Release-Builds listen Circuit-Versionen, Constraint-Zählungen und unterstützte Backends
 in den [Release-Notizen](docs/release_notes.md); ziehe die Tabelle bei Audits oder
