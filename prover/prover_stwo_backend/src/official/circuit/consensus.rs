@@ -6,7 +6,9 @@ use std::{
     convert::{TryFrom, TryInto},
 };
 
-use rpp_crypto_vrf::{verify_vrf, PoseidonVrfInput, VrfError, VrfOutput, VrfPublicKey};
+use rpp_crypto_vrf::{
+    verify_vrf, PoseidonVrfInput, VrfError, VrfOutput, VrfPublicKey, POSEIDON_VRF_DOMAIN,
+};
 use schnorrkel::vrf::{VRFPreOut, VRFProof};
 
 use crate::official::air::{
@@ -58,6 +60,7 @@ fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
         columns.push(format!("vrf_preoutput_{index}"));
         columns.push(format!("vrf_proof_{index}"));
         columns.push(format!("vrf_public_key_{index}"));
+        columns.push(format!("vrf_poseidon_digest_{index}"));
         columns.push(format!("vrf_input_last_block_{index}"));
         columns.push(format!("vrf_input_epoch_{index}"));
         columns.push(format!("vrf_input_tier_seed_{index}"));
@@ -508,14 +511,29 @@ impl ConsensusCircuit {
             }
         };
 
+        let poseidon_domain = parameters.element_from_bytes(POSEIDON_VRF_DOMAIN);
+        let poseidon_hasher = parameters.poseidon_hasher();
         for (entry, output) in witness.vrf_entries.iter().zip(verified_outputs.iter()) {
             inputs.push(parameters.element_from_bytes(&output.randomness));
             inputs.push(parameters.element_from_bytes(&output.preoutput));
             inputs.push(parameters.element_from_bytes(&output.proof));
-            inputs.push(string_to_field(parameters, &entry.public_key));
-            inputs.push(string_to_field(parameters, &entry.input.last_block_header));
-            inputs.push(parameters.element_from_u64(entry.input.epoch));
-            inputs.push(string_to_field(parameters, &entry.input.tier_seed));
+            let public_key_field = string_to_field(parameters, &entry.public_key);
+            let last_block_field = string_to_field(parameters, &entry.input.last_block_header);
+            let epoch_field = parameters.element_from_u64(entry.input.epoch);
+            let tier_seed_field = string_to_field(parameters, &entry.input.tier_seed);
+            let digest_inputs = vec![
+                poseidon_domain.clone(),
+                last_block_field.clone(),
+                epoch_field.clone(),
+                tier_seed_field.clone(),
+            ];
+            let digest = poseidon_hasher.hash(&digest_inputs);
+
+            inputs.push(public_key_field);
+            inputs.push(digest);
+            inputs.push(last_block_field);
+            inputs.push(epoch_field);
+            inputs.push(tier_seed_field);
         }
         extend_with(&witness.witness_commitments);
         extend_with(&witness.reputation_roots);
@@ -525,10 +543,10 @@ impl ConsensusCircuit {
         inputs.push(parameters.element_from_u64(witness.witness_commitments.len() as u64));
         inputs.push(parameters.element_from_u64(witness.reputation_roots.len() as u64));
 
-        let hasher = parameters.poseidon_hasher();
+        let binding_hasher = parameters.poseidon_hasher();
         let bindings = ConsensusCircuit::compute_binding_values(
             parameters,
-            &hasher,
+            &binding_hasher,
             &block_hash,
             witness,
             &verified_outputs,
@@ -1059,12 +1077,15 @@ impl ConsensusCircuit {
 #[cfg(test)]
 mod tests {
     use super::{
-        parse_vrf_entries, ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness,
-        VotePower,
+        parse_vrf_entries, summary_columns, string_to_field, ConsensusCircuit,
+        ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower,
     };
     use crate::official::circuit::CircuitError;
+    use crate::official::params::StarkParameters;
     use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
-    use rpp_crypto_vrf::{generate_vrf, PoseidonVrfInput, VrfSecretKey};
+    use rpp_crypto_vrf::{
+        generate_vrf, PoseidonVrfInput, VrfSecretKey, POSEIDON_VRF_DOMAIN,
+    };
     use serde_json::{from_value, to_value};
     use std::convert::{TryFrom, TryInto};
 
@@ -1141,6 +1162,36 @@ mod tests {
         let witness = sample_witness();
         assert!(witness.ensure_vrf_entries().is_ok());
         assert!(parse_vrf_entries(&witness).is_ok());
+    }
+
+    #[test]
+    fn public_inputs_include_poseidon_digest_column() {
+        let witness = sample_witness();
+        let parameters = StarkParameters::blueprint_default();
+        let inputs = ConsensusCircuit::public_inputs(&parameters, &witness)
+            .expect("consensus public inputs");
+        let columns = summary_columns(&witness);
+        let digest_column = "vrf_poseidon_digest_0".to_string();
+        let digest_index = columns
+            .iter()
+            .position(|column| column == &digest_column)
+            .expect("digest column present");
+
+        let poseidon_hasher = parameters.poseidon_hasher();
+        let domain = parameters.element_from_bytes(POSEIDON_VRF_DOMAIN);
+        let entry = &witness.vrf_entries[0];
+        let last_block_field = string_to_field(&parameters, &entry.input.last_block_header);
+        let epoch_field = parameters.element_from_u64(entry.input.epoch);
+        let tier_seed_field = string_to_field(&parameters, &entry.input.tier_seed);
+        let digest_inputs = vec![
+            domain,
+            last_block_field.clone(),
+            epoch_field.clone(),
+            tier_seed_field.clone(),
+        ];
+        let expected_digest = poseidon_hasher.hash(&digest_inputs);
+
+        assert_eq!(inputs[digest_index], expected_digest);
     }
 
     #[test]
