@@ -12,11 +12,13 @@ use rpp_consensus::messages::{
     ConsensusProofMetadata, PreVote,
 };
 use rpp_consensus::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVrfPublicEntry, ConsensusVrfPoseidonInput as BackendVrfPoseidonInput, ProofBackend,
     ProofBytes, VerifyingKey,
 };
 use rpp_consensus::state::{ConsensusConfig, ConsensusState, GenesisConfig};
 use rpp_consensus::validator::{VRFOutput, ValidatorLedgerEntry};
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use serde_json::json;
 
 fn sample_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
@@ -143,16 +145,22 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
     let block_hash_bytes = decode_digest(&block_hash.0);
     let quorum_bitmap_root = decode_digest(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest(&metadata.quorum_signature_root);
-    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = metadata
+    let vrf_public_entries: Vec<ConsensusVrfPublicEntry> = metadata
         .vrf_entries
         .iter()
-        .map(|entry| {
-            (
-                decode_digest(&entry.randomness),
-                hex::decode(&entry.proof).expect("decode vrf proof"),
-            )
+        .map(|entry| ConsensusVrfPublicEntry {
+            randomness: decode_digest(&entry.randomness),
+            pre_output: decode_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
+            proof: decode_vec(&entry.proof, VRF_PROOF_LENGTH),
+            public_key: decode_digest(&entry.public_key),
+            poseidon: BackendVrfPoseidonInput {
+                digest: decode_digest(&entry.poseidon.digest),
+                last_block_header: decode_digest(&entry.poseidon.last_block_header),
+                epoch: entry.poseidon.epoch.parse().expect("decode epoch"),
+                tier_seed: decode_digest(&entry.poseidon.tier_seed),
+            },
         })
-        .unzip();
+        .collect();
     let witness_commitments: Vec<[u8; 32]> = metadata
         .witness_commitments
         .iter()
@@ -166,13 +174,13 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
 
     let bindings = compute_consensus_bindings(
         &block_hash_bytes,
-        &vrf_outputs,
-        &vrf_proofs,
+        &metadata.vrf_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
         &quorum_signature_root,
-    );
+    )
+    .expect("bindings");
 
     let proof = ConsensusProof::new(
         ProofBytes::new(vec![1, 2, 3]),
@@ -187,8 +195,7 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
             quorum_threshold: state.validator_set.quorum_threshold,
             quorum_bitmap_root,
             quorum_signature_root,
-            vrf_outputs,
-            vrf_proofs,
+            vrf_entries: vrf_public_entries,
             witness_commitments,
             reputation_roots,
             vrf_output_binding: bindings.vrf_output,
@@ -205,6 +212,20 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
         certificate,
         signatures: Vec::new(),
     }
+}
+
+fn decode_array<const N: usize>(value: &str) -> [u8; N] {
+    let bytes = hex::decode(value).expect("decode array");
+    assert_eq!(bytes.len(), N, "unexpected byte length");
+    let mut buffer = [0u8; N];
+    buffer.copy_from_slice(&bytes);
+    buffer
+}
+
+fn decode_vec(value: &str, expected: usize) -> Vec<u8> {
+    let bytes = hex::decode(value).expect("decode vec");
+    assert_eq!(bytes.len(), expected, "unexpected byte length");
+    bytes
 }
 
 fn record_prevote_for(state: &mut ConsensusState, validator: &str) {

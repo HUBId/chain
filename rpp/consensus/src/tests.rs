@@ -6,7 +6,10 @@ use std::time::Duration;
 
 use libp2p::identity::Keypair;
 use libp2p::PeerId;
-use rpp_crypto_vrf::{derive_tier_seed, generate_vrf, PoseidonVrfInput, VrfKeypair, VrfSecretKey};
+use rpp_crypto_vrf::{
+    derive_tier_seed, generate_vrf, PoseidonVrfInput, VrfKeypair, VrfSecretKey,
+    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+};
 
 use super::bft_loop::{run_bft_loop, shutdown, submit_precommit, submit_prevote, submit_proposal};
 use super::evidence::EvidenceType;
@@ -26,7 +29,8 @@ use super::validator::{
 };
 
 use crate::proof_backend::{
-    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs, ProofBackend,
+    BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVrfPoseidonInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry, ProofBackend,
     ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey, WitnessBytes,
 };
 
@@ -126,22 +130,41 @@ fn decode_digest_hex(value: &str) -> [u8; 32] {
     bytes
 }
 
+fn decode_array_hex<const N: usize>(value: &str) -> [u8; N] {
+    let bytes = hex::decode(value).expect("decode array");
+    assert_eq!(bytes.len(), N, "unexpected byte length");
+    let mut buffer = [0u8; N];
+    buffer.copy_from_slice(&bytes);
+    buffer
+}
+
+fn decode_vec_hex(value: &str, expected: usize) -> Vec<u8> {
+    let bytes = hex::decode(value).expect("decode vec");
+    assert_eq!(bytes.len(), expected, "unexpected byte length");
+    bytes
+}
+
 fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
     let metadata = sample_certificate_metadata(5, round);
     let block_hash_bytes = decode_digest_hex(&"aa".repeat(32));
     let quorum_bitmap_root = decode_digest_hex(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest_hex(&metadata.quorum_signature_root);
-    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = metadata
+    let vrf_public_entries: Vec<ConsensusVrfPublicEntry> = metadata
         .vrf_entries
         .iter()
-        .map(|entry| {
-            let mut randomness = [0u8; 32];
-            randomness
-                .copy_from_slice(&hex::decode(&entry.randomness).expect("decode vrf randomness"));
-            let proof = hex::decode(&entry.proof).expect("decode vrf proof");
-            (randomness, proof)
+        .map(|entry| ConsensusVrfPublicEntry {
+            randomness: decode_digest_hex(&entry.randomness),
+            pre_output: decode_array_hex::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
+            proof: decode_vec_hex(&entry.proof, VRF_PROOF_LENGTH),
+            public_key: decode_digest_hex(&entry.public_key),
+            poseidon: BackendVrfPoseidonInput {
+                digest: decode_digest_hex(&entry.poseidon.digest),
+                last_block_header: decode_digest_hex(&entry.poseidon.last_block_header),
+                epoch: entry.poseidon.epoch.parse().expect("decode poseidon epoch"),
+                tier_seed: decode_digest_hex(&entry.poseidon.tier_seed),
+            },
         })
-        .unzip();
+        .collect();
     let witness_commitments: Vec<[u8; 32]> = metadata
         .witness_commitments
         .iter()
@@ -155,13 +178,13 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
 
     let bindings = compute_consensus_bindings(
         &block_hash_bytes,
-        &vrf_outputs,
-        &vrf_proofs,
+        &metadata.vrf_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
         &quorum_signature_root,
-    );
+    )
+    .expect("bindings");
 
     ConsensusPublicInputs {
         block_hash: block_hash_bytes,
@@ -172,8 +195,7 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
         quorum_threshold: 1,
         quorum_bitmap_root,
         quorum_signature_root,
-        vrf_outputs,
-        vrf_proofs,
+        vrf_entries: vrf_public_entries,
         witness_commitments,
         reputation_roots,
         vrf_output_binding: bindings.vrf_output,

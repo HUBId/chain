@@ -10,8 +10,11 @@ use rpp_consensus::messages::{
 };
 use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
-    ConsensusCircuitDef, ConsensusPublicInputs, ProofBytes, VerifyingKey,
+    ConsensusCircuitDef, ConsensusPublicInputs,
+    ConsensusVrfPoseidonInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry, ProofBytes,
+    VerifyingKey,
 };
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_p2p::GossipTopic;
 use serde_json::json;
 use tokio::runtime::Builder;
@@ -47,16 +50,22 @@ fn sample_public_inputs(
     let block_hash_bytes = decode_digest(&block_hash.0);
     let quorum_bitmap_root = decode_digest(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest(&metadata.quorum_signature_root);
-    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = metadata
+    let vrf_public_entries: Vec<ConsensusVrfPublicEntry> = metadata
         .vrf_entries
         .iter()
-        .map(|entry| {
-            (
-                decode_digest(&entry.randomness),
-                hex::decode(&entry.proof).expect("decode vrf proof"),
-            )
+        .map(|entry| ConsensusVrfPublicEntry {
+            randomness: decode_digest(&entry.randomness),
+            pre_output: decode_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
+            proof: decode_vec(&entry.proof, VRF_PROOF_LENGTH),
+            public_key: decode_digest(&entry.public_key),
+            poseidon: BackendVrfPoseidonInput {
+                digest: decode_digest(&entry.poseidon.digest),
+                last_block_header: decode_digest(&entry.poseidon.last_block_header),
+                epoch: entry.poseidon.epoch.parse().expect("decode epoch"),
+                tier_seed: decode_digest(&entry.poseidon.tier_seed),
+            },
         })
-        .unzip();
+        .collect();
     let witness_commitments: Vec<[u8; 32]> = metadata
         .witness_commitments
         .iter()
@@ -70,13 +79,13 @@ fn sample_public_inputs(
 
     let bindings = compute_consensus_bindings(
         &block_hash_bytes,
-        &vrf_outputs,
-        &vrf_proofs,
+        &metadata.vrf_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
         &quorum_signature_root,
-    );
+    )
+    .expect("bindings");
 
     ConsensusPublicInputs {
         block_hash: block_hash_bytes,
@@ -87,8 +96,7 @@ fn sample_public_inputs(
         quorum_threshold: 67,
         quorum_bitmap_root,
         quorum_signature_root,
-        vrf_outputs,
-        vrf_proofs,
+        vrf_entries: vrf_public_entries,
         witness_commitments,
         reputation_roots,
         vrf_output_binding: bindings.vrf_output,
@@ -98,6 +106,20 @@ fn sample_public_inputs(
         quorum_bitmap_binding: bindings.quorum_bitmap,
         quorum_signature_binding: bindings.quorum_signature,
     }
+}
+
+fn decode_array<const N: usize>(value: &str) -> [u8; N] {
+    let bytes = hex::decode(value).expect("decode array");
+    assert_eq!(bytes.len(), N, "unexpected byte length");
+    let mut buffer = [0u8; N];
+    buffer.copy_from_slice(&bytes);
+    buffer
+}
+
+fn decode_vec(value: &str, expected: usize) -> Vec<u8> {
+    let bytes = hex::decode(value).expect("decode vec");
+    assert_eq!(bytes.len(), expected, "unexpected byte length");
+    bytes
 }
 
 fn sample_block(height: u64, round: u64) -> Block {

@@ -157,21 +157,73 @@ where
     accumulator
 }
 
+const VRF_PUBLIC_KEY_LENGTH: usize = 32;
+
+fn decode_hex_array<const N: usize>(label: &str, value: &str) -> BackendResult<[u8; N]> {
+    let bytes = hex::decode(value)
+        .map_err(|err| BackendError::Failure(format!("invalid {label} encoding: {err}")))?;
+    if bytes.len() != N {
+        return Err(BackendError::Failure(format!(
+            "{label} must encode {N} bytes"
+        )));
+    }
+    let mut array = [0u8; N];
+    array.copy_from_slice(&bytes);
+    Ok(array)
+}
+
+fn decode_hex_vec(label: &str, value: &str, expected: usize) -> BackendResult<Vec<u8>> {
+    let bytes = hex::decode(value)
+        .map_err(|err| BackendError::Failure(format!("invalid {label} encoding: {err}")))?;
+    if bytes.len() != expected {
+        return Err(BackendError::Failure(format!(
+            "{label} must encode {expected} bytes"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
+    decode_hex_array::<32>(label, value)
+}
+
 pub fn compute_consensus_bindings(
     block_hash: &[u8; 32],
-    vrf_outputs: &[[u8; 32]],
-    vrf_proofs: &[Vec<u8>],
+    vrf_entries: &[ConsensusVrfEntry],
     witness_commitments: &[[u8; 32]],
     reputation_roots: &[[u8; 32]],
     quorum_bitmap_root: &[u8; 32],
     quorum_signature_root: &[u8; 32],
-) -> ConsensusBindingDigests {
+) -> BackendResult<ConsensusBindingDigests> {
     let parameters = StarkParameters::blueprint_default();
     let hasher = parameters.poseidon_hasher();
     let block_hash_element = parameters.element_from_bytes(block_hash);
 
-    let vrf_output = binding_from_bytes(&parameters, &hasher, &block_hash_element, vrf_outputs);
-    let vrf_proof = binding_from_bytes(&parameters, &hasher, &block_hash_element, vrf_proofs);
+    let vrf_randomness: Vec<[u8; 32]> = vrf_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| decode_hash(&format!("vrf randomness #{index}"), &entry.randomness))
+        .collect::<BackendResult<_>>()?;
+    let vrf_proofs: Vec<Vec<u8>> = vrf_entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            decode_hex_vec(
+                &format!("vrf proof #{index}"),
+                &entry.proof,
+                VRF_PROOF_LENGTH,
+            )
+        })
+        .collect::<BackendResult<_>>()?;
+
+    let vrf_output = binding_from_bytes(
+        &parameters,
+        &hasher,
+        &block_hash_element,
+        vrf_randomness.iter().map(|value| value.as_slice()),
+    );
+    let vrf_proof =
+        binding_from_bytes(&parameters, &hasher, &block_hash_element, vrf_proofs.iter());
     let witness_commitment = binding_from_bytes(
         &parameters,
         &hasher,
@@ -193,14 +245,14 @@ pub fn compute_consensus_bindings(
         std::iter::once(quorum_signature_root.as_slice()),
     );
 
-    ConsensusBindingDigests {
+    Ok(ConsensusBindingDigests {
         vrf_output: field_to_array(&vrf_output),
         vrf_proof: field_to_array(&vrf_proof),
         witness_commitment: field_to_array(&witness_commitment),
         reputation_root: field_to_array(&reputation_root),
         quorum_bitmap: field_to_array(&quorum_bitmap),
         quorum_signature: field_to_array(&quorum_signature),
-    }
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -417,23 +469,6 @@ impl ConsensusCertificate {
     }
 
     pub fn consensus_public_inputs(&self) -> BackendResult<ConsensusPublicInputs> {
-        fn decode_array<const N: usize>(label: &str, value: &str) -> BackendResult<[u8; N]> {
-            let bytes = hex::decode(value)
-                .map_err(|err| BackendError::Failure(format!("invalid {label} encoding: {err}")))?;
-            if bytes.len() != N {
-                return Err(BackendError::Failure(format!(
-                    "{label} must encode {N} bytes"
-                )));
-            }
-            let mut array = [0u8; N];
-            array.copy_from_slice(&bytes);
-            Ok(array)
-        }
-
-        fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
-            decode_array::<32>(label, value)
-        }
-
         let block_hash = decode_hash("block hash", &self.block_hash.0)?;
         let leader_proposal = block_hash;
 
@@ -453,28 +488,6 @@ impl ConsensusCertificate {
             ));
         }
 
-        let decode_digests = |label: &str, values: &[String]| -> BackendResult<Vec<[u8; 32]>> {
-            values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| decode_hash(&format!("{label} #{index}"), value))
-                .collect()
-        };
-
-        let decode_proof = |index: usize, value: &str| -> BackendResult<Vec<u8>> {
-            let bytes = hex::decode(value).map_err(|err| {
-                BackendError::Failure(format!("invalid vrf proof #{index} encoding: {err}"))
-            })?;
-            if bytes.len() != VRF_PROOF_LENGTH {
-                return Err(BackendError::Failure(format!(
-                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
-                )));
-            }
-            Ok(bytes)
-        };
-
-        let mut vrf_outputs = Vec::with_capacity(self.metadata.vrf_entries.len());
-        let mut vrf_proofs = Vec::with_capacity(self.metadata.vrf_entries.len());
         let mut vrf_public_entries = Vec::with_capacity(self.metadata.vrf_entries.len());
 
         for (index, entry) in self.metadata.vrf_entries.iter().enumerate() {
@@ -520,12 +533,19 @@ impl ConsensusCertificate {
             }
 
             let randomness = decode_hash(&format!("vrf randomness #{index}"), &entry.randomness)?;
-            let pre_output = decode_array::<VRF_PREOUTPUT_LENGTH>(
+            let pre_output = decode_hex_array::<VRF_PREOUTPUT_LENGTH>(
                 &format!("vrf pre-output #{index}"),
                 &entry.pre_output,
             )?;
-            let proof = decode_proof(index, &entry.proof)?;
-            let public_key = decode_hash(&format!("vrf public key #{index}"), &entry.public_key)?;
+            let proof = decode_hex_vec(
+                &format!("vrf proof #{index}"),
+                &entry.proof,
+                VRF_PROOF_LENGTH,
+            )?;
+            let public_key = decode_hex_array::<VRF_PUBLIC_KEY_LENGTH>(
+                &format!("vrf public key #{index}"),
+                &entry.public_key,
+            )?;
             let poseidon_digest = decode_hash(
                 &format!("vrf poseidon digest #{index}"),
                 &entry.poseidon.digest,
@@ -542,8 +562,6 @@ impl ConsensusCertificate {
                 &entry.poseidon.tier_seed,
             )?;
 
-            vrf_outputs.push(randomness);
-            vrf_proofs.push(proof.clone());
             vrf_public_entries.push(ConsensusVrfPublicEntry {
                 randomness,
                 pre_output,
@@ -565,19 +583,26 @@ impl ConsensusCertificate {
             &self.metadata.quorum_signature_root,
         )?;
 
+        let decode_digests = |label: &str, values: &[String]| -> BackendResult<Vec<[u8; 32]>> {
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| decode_hash(&format!("{label} #{index}"), value))
+                .collect()
+        };
+
         let witness_commitments =
             decode_digests("witness commitment", &self.metadata.witness_commitments)?;
         let reputation_roots = decode_digests("reputation root", &self.metadata.reputation_roots)?;
 
         let bindings = compute_consensus_bindings(
             &block_hash,
-            &vrf_outputs,
-            &vrf_proofs,
+            &self.metadata.vrf_entries,
             &witness_commitments,
             &reputation_roots,
             &quorum_bitmap_root,
             &quorum_signature_root,
-        );
+        )?;
 
         Ok(ConsensusPublicInputs {
             block_hash,
