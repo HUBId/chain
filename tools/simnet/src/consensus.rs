@@ -7,7 +7,10 @@ use anyhow::{anyhow, Context, Result};
 use libp2p::PeerId;
 use rand::rngs::StdRng;
 use rand::{Rng, RngCore, SeedableRng};
-use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata, TalliedVote};
+use rpp_chain::consensus::{
+    ConsensusCertificate, ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
+    TalliedVote,
+};
 use rpp_chain::consensus_engine::messages::BlockId;
 use rpp_chain::errors::ChainError;
 use rpp_chain::plonky3::proof::Plonky3Proof;
@@ -16,7 +19,7 @@ use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::ProofProver;
 use rpp_chain::proof_system::ProofVerifier;
 use rpp_chain::types::ChainProof;
-use rpp_chain::vrf::VRF_PROOF_LENGTH;
+use rpp_chain::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -300,13 +303,23 @@ fn generate_certificate(
     }
     let quorum_threshold = ((total_power * 2) / 3).saturating_add(1);
 
+    let vrf_entries = (0..config.validators)
+        .map(|_| ConsensusVrfEntry {
+            randomness: random_hex(rng, 32),
+            pre_output: random_hex(rng, VRF_PREOUTPUT_LENGTH),
+            proof: random_hex(rng, VRF_PROOF_LENGTH),
+            public_key: random_hex(rng, 32),
+            poseidon: ConsensusVrfPoseidonInput {
+                digest: random_hex(rng, 32),
+                last_block_header: random_hex(rng, 32),
+                epoch: format!("{}", round / 32),
+                tier_seed: random_hex(rng, 32),
+            },
+        })
+        .collect();
+
     let metadata = ConsensusProofMetadata {
-        vrf_outputs: (0..config.validators)
-            .map(|_| random_hex(rng, 32))
-            .collect(),
-        vrf_proofs: (0..config.validators)
-            .map(|_| random_hex(rng, VRF_PROOF_LENGTH))
-            .collect(),
+        vrf_entries,
         witness_commitments: (0..config.witness_commitments)
             .map(|_| random_hex(rng, 32))
             .collect(),
@@ -345,8 +358,7 @@ fn random_bytes(rng: &mut StdRng, bytes: usize) -> Vec<u8> {
 }
 
 fn tamper_vrf_payload(map: &mut Map<String, Value>) {
-    map.insert("vrf_outputs".into(), Value::Array(Vec::new()));
-    map.insert("vrf_proofs".into(), Value::Array(Vec::new()));
+    map.insert("vrf_entries".into(), Value::Array(Vec::new()));
 }
 
 fn tamper_quorum_payload(map: &mut Map<String, Value>) {

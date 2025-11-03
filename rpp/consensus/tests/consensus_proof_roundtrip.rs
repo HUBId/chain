@@ -1,18 +1,31 @@
 use hex;
-use rpp_consensus::messages::{BlockId, ConsensusCertificate, ConsensusProofMetadata};
+use rpp_consensus::messages::{
+    BlockId, ConsensusCertificate, ConsensusProofMetadata, ConsensusVrfEntry,
+    ConsensusVrfPoseidonInput,
+};
 use rpp_consensus::proof_backend::ProofSystemKind;
-use rpp_crypto_vrf::VRF_PROOF_LENGTH;
+use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 fn sample_metadata() -> ConsensusProofMetadata {
     ConsensusProofMetadata {
-        vrf_outputs: vec!["11".repeat(32)],
-        vrf_proofs: vec!["22".repeat(VRF_PROOF_LENGTH)],
-        witness_commitments: vec!["22".repeat(32), "33".repeat(32)],
-        reputation_roots: vec!["44".repeat(32)],
+        vrf_entries: vec![ConsensusVrfEntry {
+            randomness: "11".repeat(32),
+            pre_output: "22".repeat(VRF_PREOUTPUT_LENGTH),
+            proof: "22".repeat(VRF_PROOF_LENGTH),
+            public_key: "33".repeat(32),
+            poseidon: ConsensusVrfPoseidonInput {
+                digest: "44".repeat(32),
+                last_block_header: "55".repeat(32),
+                epoch: "3".into(),
+                tier_seed: "66".repeat(32),
+            },
+        }],
+        witness_commitments: vec!["77".repeat(32), "88".repeat(32)],
+        reputation_roots: vec!["99".repeat(32)],
         epoch: 3,
         slot: 9,
-        quorum_bitmap_root: "55".repeat(32),
-        quorum_signature_root: "66".repeat(32),
+        quorum_bitmap_root: "aa".repeat(32),
+        quorum_signature_root: "bb".repeat(32),
     }
 }
 
@@ -62,7 +75,7 @@ fn consensus_public_inputs_include_structured_metadata() {
     );
 
     let mut buffer = [0u8; 32];
-    buffer.copy_from_slice(&hex::decode(&certificate.metadata.vrf_outputs[0]).unwrap());
+    buffer.copy_from_slice(&hex::decode(&certificate.metadata.vrf_entries[0].randomness).unwrap());
     assert_eq!(inputs.vrf_outputs[0], buffer);
 }
 

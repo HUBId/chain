@@ -393,8 +393,7 @@ pub struct ConsensusProofStatus {
     pub commit_power: String,
     pub epoch: u64,
     pub slot: u64,
-    pub vrf_outputs: Vec<String>,
-    pub vrf_proofs: Vec<String>,
+    pub vrf_entries: Vec<ConsensusProofVrfEntry>,
     pub witness_commitments: Vec<String>,
     pub reputation_roots: Vec<String>,
     pub quorum_bitmap_root: String,
@@ -405,6 +404,39 @@ pub struct ConsensusProofStatus {
     pub reputation_root: String,
     pub quorum_bitmap: String,
     pub quorum_signature: String,
+}
+
+impl ConsensusProofStatus {
+    pub fn legacy_vrf_outputs(&self) -> Vec<String> {
+        self.vrf_entries
+            .iter()
+            .map(|entry| entry.randomness.clone())
+            .collect()
+    }
+
+    pub fn legacy_vrf_proofs(&self) -> Vec<String> {
+        self.vrf_entries
+            .iter()
+            .map(|entry| entry.proof.clone())
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsensusProofVrfEntry {
+    pub randomness: String,
+    pub pre_output: String,
+    pub proof: String,
+    pub public_key: String,
+    pub poseidon: ConsensusProofVrfPoseidon,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsensusProofVrfPoseidon {
+    pub digest: String,
+    pub last_block_header: String,
+    pub epoch: String,
+    pub tier_seed: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -6955,6 +6987,8 @@ impl NodeInner {
     }
 }
 
+const VRF_PUBLIC_KEY_LENGTH: usize = 32;
+
 fn summarize_consensus_certificate(
     certificate: &ConsensusCertificate,
 ) -> ChainResult<ConsensusProofStatus> {
@@ -6962,8 +6996,7 @@ fn summarize_consensus_certificate(
     let block_hash = decode_digest("consensus block hash", &block_hash_hex)?;
     let metadata = &certificate.metadata;
 
-    let vrf_outputs = decode_digest_list("vrf output", &metadata.vrf_outputs)?;
-    let vrf_proofs = decode_vrf_proofs(&metadata.vrf_proofs)?;
+    let (vrf_entries, vrf_outputs, vrf_proofs) = sanitize_vrf_entries(&metadata.vrf_entries)?;
     let witness_commitments =
         decode_digest_list("witness commitment", &metadata.witness_commitments)?;
     let reputation_roots = decode_digest_list("reputation root", &metadata.reputation_roots)?;
@@ -6994,12 +7027,17 @@ fn summarize_consensus_certificate(
         commit_power: certificate.commit_power.to_string(),
         epoch: metadata.epoch,
         slot: metadata.slot,
-        vrf_outputs: metadata.vrf_outputs.clone(),
-        vrf_proofs: metadata.vrf_proofs.clone(),
-        witness_commitments: metadata.witness_commitments.clone(),
-        reputation_roots: metadata.reputation_roots.clone(),
-        quorum_bitmap_root: metadata.quorum_bitmap_root.clone(),
-        quorum_signature_root: metadata.quorum_signature_root.clone(),
+        vrf_entries,
+        witness_commitments: witness_commitments
+            .into_iter()
+            .map(|digest| hex::encode(digest))
+            .collect(),
+        reputation_roots: reputation_roots
+            .into_iter()
+            .map(|digest| hex::encode(digest))
+            .collect(),
+        quorum_bitmap_root: hex::encode(quorum_bitmap_root),
+        quorum_signature_root: hex::encode(quorum_signature_root),
         vrf_output: encode(bindings.vrf_output),
         vrf_proof: encode(bindings.vrf_proof),
         witness_commitment_root: encode(bindings.witness_commitment),
@@ -7028,21 +7066,100 @@ fn decode_digest_list(label: &str, values: &[String]) -> ChainResult<Vec<[u8; 32
         .collect()
 }
 
-fn decode_vrf_proofs(values: &[String]) -> ChainResult<Vec<Vec<u8>>> {
+fn decode_vrf_proof_list(values: &[String]) -> ChainResult<Vec<Vec<u8>>> {
     values
         .iter()
         .enumerate()
         .map(|(index, value)| {
-            let bytes = hex::decode(value)
-                .map_err(|err| ChainError::Crypto(format!("invalid vrf proof #{index}: {err}")))?;
-            if bytes.len() != VRF_PROOF_LENGTH {
-                return Err(ChainError::Crypto(format!(
-                    "vrf proof #{index} must encode {VRF_PROOF_LENGTH} bytes"
-                )));
-            }
-            Ok(bytes)
+            decode_hex_buffer(&format!("vrf proof #{index}"), value, VRF_PROOF_LENGTH)
         })
         .collect()
+}
+
+fn sanitize_vrf_entries(
+    entries: &[crate::consensus::messages::ConsensusVrfEntry],
+) -> ChainResult<(Vec<ConsensusProofVrfEntry>, Vec<[u8; 32]>, Vec<Vec<u8>>)> {
+    if entries.is_empty() {
+        return Err(ChainError::Crypto(
+            "consensus metadata missing VRF entries".into(),
+        ));
+    }
+
+    let mut sanitized_entries = Vec::with_capacity(entries.len());
+    let mut randomness_bytes = Vec::with_capacity(entries.len());
+    let mut proof_bytes = Vec::with_capacity(entries.len());
+
+    for (index, entry) in entries.iter().enumerate() {
+        let randomness = decode_digest(&format!("vrf randomness #{index}"), &entry.randomness)?;
+        let pre_output = decode_hex_array::<{ crate::vrf::VRF_PREOUTPUT_LENGTH }>(
+            &format!("vrf pre-output #{index}"),
+            &entry.pre_output,
+        )?;
+        let proof = decode_hex_buffer(
+            &format!("vrf proof #{index}"),
+            &entry.proof,
+            VRF_PROOF_LENGTH,
+        )?;
+        let public_key = decode_hex_array::<{ VRF_PUBLIC_KEY_LENGTH }>(
+            &format!("vrf public key #{index}"),
+            &entry.public_key,
+        )?;
+        let poseidon_digest = decode_digest(
+            &format!("vrf poseidon digest #{index}"),
+            &entry.poseidon.digest,
+        )?;
+        let poseidon_last_block_header = decode_digest(
+            &format!("vrf poseidon last block header #{index}"),
+            &entry.poseidon.last_block_header,
+        )?;
+        let poseidon_tier_seed = decode_digest(
+            &format!("vrf poseidon tier seed #{index}"),
+            &entry.poseidon.tier_seed,
+        )?;
+        let poseidon_epoch = entry.poseidon.epoch.parse::<u64>().map_err(|err| {
+            ChainError::Crypto(format!("invalid vrf poseidon epoch #{index}: {err}"))
+        })?;
+
+        sanitized_entries.push(ConsensusProofVrfEntry {
+            randomness: hex::encode(randomness),
+            pre_output: hex::encode(pre_output),
+            proof: hex::encode(&proof),
+            public_key: hex::encode(public_key),
+            poseidon: ConsensusProofVrfPoseidon {
+                digest: hex::encode(poseidon_digest),
+                last_block_header: hex::encode(poseidon_last_block_header),
+                epoch: poseidon_epoch.to_string(),
+                tier_seed: hex::encode(poseidon_tier_seed),
+            },
+        });
+
+        randomness_bytes.push(randomness);
+        proof_bytes.push(proof);
+    }
+
+    Ok((sanitized_entries, randomness_bytes, proof_bytes))
+}
+
+fn decode_hex_array<const N: usize>(label: &str, value: &str) -> ChainResult<[u8; N]> {
+    let bytes =
+        hex::decode(value).map_err(|err| ChainError::Crypto(format!("invalid {label}: {err}")))?;
+    if bytes.len() != N {
+        return Err(ChainError::Crypto(format!("{label} must encode {N} bytes")));
+    }
+    let mut buffer = [0u8; N];
+    buffer.copy_from_slice(&bytes);
+    Ok(buffer)
+}
+
+fn decode_hex_buffer(label: &str, value: &str, expected: usize) -> ChainResult<Vec<u8>> {
+    let bytes =
+        hex::decode(value).map_err(|err| ChainError::Crypto(format!("invalid {label}: {err}")))?;
+    if bytes.len() != expected {
+        return Err(ChainError::Crypto(format!(
+            "{label} must encode {expected} bytes"
+        )));
+    }
+    Ok(bytes)
 }
 
 fn is_double_spend(err: &ChainError) -> bool {
@@ -7129,7 +7246,9 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use crate::consensus::messages::{BlockId, ConsensusProofMetadata};
+    use crate::consensus::messages::{
+        BlockId, ConsensusProofMetadata, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
+    };
     use tempfile::tempdir;
 
     use crate::crypto::{address_from_public_key, generate_keypair, sign_message};
@@ -7141,11 +7260,36 @@ mod tests {
 
     fn sample_consensus_certificate() -> ConsensusCertificate {
         let digest = |byte: u8| hex::encode([byte; 32]);
+        let pre_output = |byte: u8| hex::encode(vec![byte; crate::vrf::VRF_PREOUTPUT_LENGTH]);
         let proof_bytes = |byte: u8| hex::encode(vec![byte; VRF_PROOF_LENGTH]);
 
         let metadata = ConsensusProofMetadata {
-            vrf_outputs: vec![digest(0x11), digest(0x12)],
-            vrf_proofs: vec![proof_bytes(0x21), proof_bytes(0x22)],
+            vrf_entries: vec![
+                ConsensusVrfEntry {
+                    randomness: digest(0x11),
+                    pre_output: pre_output(0x11),
+                    proof: proof_bytes(0x21),
+                    public_key: digest(0x13),
+                    poseidon: ConsensusVrfPoseidonInput {
+                        digest: digest(0x31),
+                        last_block_header: digest(0x32),
+                        epoch: "49".into(),
+                        tier_seed: digest(0x33),
+                    },
+                },
+                ConsensusVrfEntry {
+                    randomness: digest(0x12),
+                    pre_output: pre_output(0x12),
+                    proof: proof_bytes(0x22),
+                    public_key: digest(0x14),
+                    poseidon: ConsensusVrfPoseidonInput {
+                        digest: digest(0x34),
+                        last_block_header: digest(0x35),
+                        epoch: "57".into(),
+                        tier_seed: digest(0x36),
+                    },
+                },
+            ],
             witness_commitments: vec![digest(0x33)],
             reputation_roots: vec![digest(0x44)],
             epoch: 5,
@@ -7177,8 +7321,36 @@ mod tests {
         assert_eq!(status.height, certificate.height);
         assert_eq!(status.round, certificate.round);
         assert_eq!(status.block_hash, certificate.block_hash.0);
-        assert_eq!(status.vrf_outputs, certificate.metadata.vrf_outputs);
-        assert_eq!(status.vrf_proofs, certificate.metadata.vrf_proofs);
+        assert_eq!(
+            status.vrf_entries.len(),
+            certificate.metadata.vrf_entries.len()
+        );
+        for (status_entry, certificate_entry) in status
+            .vrf_entries
+            .iter()
+            .zip(&certificate.metadata.vrf_entries)
+        {
+            assert_eq!(status_entry.randomness, certificate_entry.randomness);
+            assert_eq!(status_entry.pre_output, certificate_entry.pre_output);
+            assert_eq!(status_entry.proof, certificate_entry.proof);
+            assert_eq!(status_entry.public_key, certificate_entry.public_key);
+            assert_eq!(
+                status_entry.poseidon.digest,
+                certificate_entry.poseidon.digest
+            );
+            assert_eq!(
+                status_entry.poseidon.last_block_header,
+                certificate_entry.poseidon.last_block_header
+            );
+            assert_eq!(
+                status_entry.poseidon.epoch,
+                certificate_entry.poseidon.epoch
+            );
+            assert_eq!(
+                status_entry.poseidon.tier_seed,
+                certificate_entry.poseidon.tier_seed
+            );
+        }
         assert_eq!(
             status.witness_commitments,
             certificate.metadata.witness_commitments
@@ -7197,8 +7369,8 @@ mod tests {
         );
 
         let block_hash = decode_digest("block hash", &certificate.block_hash.0).unwrap();
-        let vrf_outputs = decode_digest_list("vrf", &certificate.metadata.vrf_outputs).unwrap();
-        let vrf_proofs = decode_vrf_proofs(&certificate.metadata.vrf_proofs).unwrap();
+        let vrf_outputs = decode_digest_list("vrf", &status.legacy_vrf_outputs()).unwrap();
+        let vrf_proofs = decode_vrf_proof_list(&status.legacy_vrf_proofs()).unwrap();
         let witness_commitments =
             decode_digest_list("witness", &certificate.metadata.witness_commitments).unwrap();
         let reputation_roots =
