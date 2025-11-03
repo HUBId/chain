@@ -1,6 +1,9 @@
 //! BFT consensus circuit enforcing quorum aggregation for block proposals.
 
-use std::collections::HashSet;
+use std::{cell::RefCell, collections::HashSet};
+
+use rpp_crypto_vrf::{PoseidonVrfInput, VrfOutput, VrfPublicKey, verify_vrf};
+use schnorrkel::vrf::{VRFPreOut, VRFProof};
 
 use crate::official::air::{
     AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
