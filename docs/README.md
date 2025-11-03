@@ -17,6 +17,8 @@ configuration specifics, checklists, and runbooks as needed:
 For additional topics, explore the existing documentation tree (e.g. `docs/telemetry.md` and
 `docs/validator_quickstart.md`).
 
+- [Third-party compliance: Plonky3](third_party/plonky3.md)
+
 Security-focused references:
 
 - [Threat model](THREAT_MODEL.md)
