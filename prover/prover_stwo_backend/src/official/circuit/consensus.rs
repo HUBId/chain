@@ -1058,10 +1058,31 @@ impl ConsensusCircuit {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower};
+    use super::{
+        parse_vrf_entries, ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness,
+        VotePower,
+    };
     use crate::official::circuit::CircuitError;
     use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
+    use rpp_crypto_vrf::{generate_vrf, PoseidonVrfInput, VrfSecretKey};
     use serde_json::{from_value, to_value};
+    use std::convert::{TryFrom, TryInto};
+
+    const TEST_SECRET_KEY_BYTES: [u8; 32] = [
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E,
+        0x1F, 0x20,
+    ];
+
+    fn test_secret_key() -> VrfSecretKey {
+        VrfSecretKey::try_from(TEST_SECRET_KEY_BYTES).expect("valid VRF secret key")
+    }
+
+    fn decode_hex<const N: usize>(value: &str) -> [u8; N] {
+        let bytes = hex::decode(value).expect("decode hex");
+        let array: [u8; N] = bytes.as_slice().try_into().expect("hex length");
+        array
+    }
 
     fn sample_vote() -> VotePower {
         VotePower {
@@ -1071,15 +1092,27 @@ mod tests {
     }
 
     fn sample_vrf_entry() -> ConsensusVrfWitnessEntry {
+        let block_hash = "11".repeat(32);
+        let epoch = 7;
+        let tier_seed = "22".repeat(32);
+        let input = PoseidonVrfInput::new(
+            decode_hex::<32>(&block_hash),
+            epoch,
+            decode_hex::<32>(&tier_seed),
+        );
+        let secret = test_secret_key();
+        let public_key = secret.derive_public();
+        let output = generate_vrf(&input, &secret).expect("generate vrf output");
+
         ConsensusVrfWitnessEntry {
-            randomness: "aa".repeat(32),
-            pre_output: "bb".repeat(VRF_PREOUTPUT_LENGTH),
-            proof: "cc".repeat(VRF_PROOF_LENGTH),
-            public_key: "dd".repeat(32),
+            randomness: hex::encode(output.randomness),
+            pre_output: hex::encode(output.preoutput),
+            proof: hex::encode(output.proof),
+            public_key: hex::encode(public_key.to_bytes()),
             input: ConsensusVrfPoseidonInput {
-                last_block_header: "11".repeat(32),
-                epoch: 7,
-                tier_seed: "ee".repeat(32),
+                last_block_header: block_hash,
+                epoch,
+                tier_seed,
             },
         }
     }
@@ -1107,6 +1140,7 @@ mod tests {
     fn vrf_entries_validate_on_happy_path() {
         let witness = sample_witness();
         assert!(witness.ensure_vrf_entries().is_ok());
+        assert!(parse_vrf_entries(&witness).is_ok());
     }
 
     #[test]
@@ -1117,6 +1151,17 @@ mod tests {
             witness.ensure_vrf_entries(),
             Err(CircuitError::ConstraintViolation(message))
                 if message.contains("randomness")
+        ));
+    }
+
+    #[test]
+    fn parse_vrf_entries_reject_invalid_randomness_hex() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].randomness = "zz".into();
+        assert!(matches!(
+            parse_vrf_entries(&witness),
+            Err(CircuitError::InvalidWitness(message))
+                if message.contains("randomness encoding")
         ));
     }
 
@@ -1139,6 +1184,17 @@ mod tests {
             witness.ensure_vrf_entries(),
             Err(CircuitError::ConstraintViolation(message))
                 if message.contains("proof")
+        ));
+    }
+
+    #[test]
+    fn parse_vrf_entries_rejects_malformed_proof_bytes() {
+        let mut witness = sample_witness();
+        witness.vrf_entries[0].proof = "00".repeat(VRF_PROOF_LENGTH);
+        assert!(matches!(
+            parse_vrf_entries(&witness),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("proof is invalid")
         ));
     }
 
@@ -1172,6 +1228,19 @@ mod tests {
             witness.ensure_vrf_entries(),
             Err(CircuitError::ConstraintViolation(message))
                 if message.contains("public key")
+        ));
+    }
+
+    #[test]
+    fn parse_vrf_entries_rejects_randomness_mismatch() {
+        let mut witness = sample_witness();
+        let mut randomness_bytes = hex::decode(&witness.vrf_entries[0].randomness).unwrap();
+        randomness_bytes[0] ^= 0xFF;
+        witness.vrf_entries[0].randomness = hex::encode(randomness_bytes);
+        assert!(matches!(
+            parse_vrf_entries(&witness),
+            Err(CircuitError::ConstraintViolation(message))
+                if message.contains("randomness mismatch")
         ));
     }
 

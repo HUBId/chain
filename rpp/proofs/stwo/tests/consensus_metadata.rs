@@ -5,7 +5,48 @@ use crate::stwo::circuit::consensus::{
     ConsensusCircuit, ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness,
     VotePower,
 };
-use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
+use rpp_crypto_vrf::{generate_vrf, PoseidonVrfInput, VrfSecretKey};
+use std::convert::{TryFrom, TryInto};
+
+const TEST_SECRET_KEY_BYTES: [u8; 32] = [
+    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x10,
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+];
+
+fn test_secret_key() -> VrfSecretKey {
+    VrfSecretKey::try_from(TEST_SECRET_KEY_BYTES).expect("valid VRF secret key")
+}
+
+fn decode_hex<const N: usize>(value: &str) -> [u8; N] {
+    let bytes = hex::decode(value).expect("decode hex");
+    let array: [u8; N] = bytes.as_slice().try_into().expect("hex length");
+    array
+}
+
+fn build_vrf_entry(block_hash: &str, epoch: u64, tier_seed_byte: u8) -> ConsensusVrfWitnessEntry {
+    let tier_seed_bytes = vec![tier_seed_byte; 32];
+    let tier_seed_hex = hex::encode(&tier_seed_bytes);
+    let input = PoseidonVrfInput::new(
+        decode_hex::<32>(block_hash),
+        epoch,
+        decode_hex::<32>(&tier_seed_hex),
+    );
+    let secret = test_secret_key();
+    let output = generate_vrf(&input, &secret).expect("generate vrf output");
+    let public_key = secret.derive_public();
+
+    ConsensusVrfWitnessEntry {
+        randomness: hex::encode(output.randomness),
+        pre_output: hex::encode(output.preoutput),
+        proof: hex::encode(output.proof),
+        public_key: hex::encode(public_key.to_bytes()),
+        input: ConsensusVrfPoseidonInput {
+            last_block_header: block_hash.to_string(),
+            epoch,
+            tier_seed: tier_seed_hex,
+        },
+    }
+}
 
 fn sample_vote(weight: u64) -> VotePower {
     VotePower {
@@ -21,18 +62,7 @@ fn valid_witness() -> ConsensusWitness {
     let witness_commitment = "55".repeat(32);
     let reputation_root = "66".repeat(32);
 
-    let vrf_proof = hex::encode(vec![0x77; VRF_PROOF_LENGTH]);
-    let vrf_entry = ConsensusVrfWitnessEntry {
-        randomness: "44".repeat(32),
-        pre_output: "88".repeat(VRF_PREOUTPUT_LENGTH),
-        proof: vrf_proof,
-        public_key: "99".repeat(32),
-        input: ConsensusVrfPoseidonInput {
-            last_block_header: block_hash.clone(),
-            epoch: 7,
-            tier_seed: "aa".repeat(32),
-        },
-    };
+    let vrf_entry = build_vrf_entry(&block_hash, 7, 0xAA);
 
     ConsensusWitness {
         block_hash: block_hash.clone(),
@@ -106,4 +136,42 @@ fn consensus_witness_rejects_poseidon_epoch_mismatch() {
         .evaluate_constraints()
         .expect_err("poseidon epoch mismatch must fail");
     expect_err_message(err, "poseidon epoch");
+}
+
+#[test]
+fn consensus_witness_rejects_invalid_randomness_hex() {
+    let mut witness = valid_witness();
+    witness.vrf_entries[0].randomness = "zz".into();
+
+    let circuit = ConsensusCircuit::new(witness);
+    let err = circuit
+        .evaluate_constraints()
+        .expect_err("invalid randomness hex must fail");
+    expect_err_message(err, "randomness encoding");
+}
+
+#[test]
+fn consensus_witness_rejects_malformed_proof() {
+    let mut witness = valid_witness();
+    witness.vrf_entries[0].proof = "00".repeat(rpp_crypto_vrf::VRF_PROOF_LENGTH);
+
+    let circuit = ConsensusCircuit::new(witness);
+    let err = circuit
+        .evaluate_constraints()
+        .expect_err("malformed proof must fail");
+    expect_err_message(err, "proof is invalid");
+}
+
+#[test]
+fn consensus_witness_rejects_randomness_mismatch() {
+    let mut witness = valid_witness();
+    let mut randomness_bytes = hex::decode(&witness.vrf_entries[0].randomness).unwrap();
+    randomness_bytes[0] ^= 0xFF;
+    witness.vrf_entries[0].randomness = hex::encode(randomness_bytes);
+
+    let circuit = ConsensusCircuit::new(witness);
+    let err = circuit
+        .evaluate_constraints()
+        .expect_err("randomness mismatch must fail");
+    expect_err_message(err, "randomness mismatch");
 }
