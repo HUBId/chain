@@ -132,8 +132,9 @@ evidence roots inside the public inputs. Operators must ensure that
 - `epoch`/`slot` counters that match the fork-choice state machine.
 - Hex-encoded `quorum_bitmap_root` and `quorum_signature_root` digests from the
   aggregated vote sets.
-- Vollständige `vrf_entries` inklusive Randomness, Pre-Output, Proof und Public
-  Key für jede Validator:in im Zertifikat. Ältere Clients können die bisherigen
+- Vollständige `vrf_entries` inklusive Randomness, Pre-Output, Proof, Public
+  Key sowie Poseidon-Metadaten (`Digest`, `Last Block Header`, `Epoch`,
+  `Tier Seed`) für jede Validator:in im Zertifikat. Ältere Clients können die bisherigen
   `vrf_outputs`/`vrf_proofs` aus diesen Einträgen ableiten, solange sie das
   Version-Flag `version=2` setzen.
 

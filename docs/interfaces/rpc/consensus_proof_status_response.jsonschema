@@ -76,32 +76,32 @@
           },
           "poseidon": {
             "type": "object",
-            "description": "Poseidon binding digests that fold the transcript data with the block hash for circuit verification.",
+            "description": "Poseidon transcript inputs that bind the validator metadata to the advertised block hash.",
             "required": [
-              "randomness",
-              "pre_output",
-              "proof",
-              "public_key"
+              "digest",
+              "last_block_header",
+              "epoch",
+              "tier_seed"
             ],
             "properties": {
-              "randomness": {
+              "digest": {
                 "type": "string",
-                "description": "Poseidon commitment that binds the VRF randomness to the block hash.",
+                "description": "Poseidon digest emitted by the VRF circuit for the validator transcript.",
                 "pattern": "^[0-9a-fA-F]{64}$"
               },
-              "pre_output": {
+              "last_block_header": {
                 "type": "string",
-                "description": "Poseidon commitment that binds the VRF pre-output digest to the block hash.",
+                "description": "Poseidon commitment to the previous block header mixed into the VRF transcript.",
                 "pattern": "^[0-9a-fA-F]{64}$"
               },
-              "proof": {
+              "epoch": {
                 "type": "string",
-                "description": "Poseidon commitment that binds the VRF proof blob to the block hash.",
-                "pattern": "^[0-9a-fA-F]{64}$"
+                "description": "Decimal-encoded epoch folded into the VRF Poseidon transcript.",
+                "pattern": "^[0-9]+$"
               },
-              "public_key": {
+              "tier_seed": {
                 "type": "string",
-                "description": "Poseidon commitment that binds the validator public key to the block hash.",
+                "description": "Poseidon commitment to the validator's tier seed used for reputation weighting.",
                 "pattern": "^[0-9a-fA-F]{64}$"
               }
             },
@@ -143,12 +143,12 @@
     },
     "vrf_output": {
       "type": "string",
-      "description": "Poseidon binding digest folding the block hash with every VRF pre-output. Present for version ≥ 2 and derivable from `vrf_entries[].poseidon.pre_output`.",
+      "description": "Poseidon binding digest folding the block hash with every VRF randomness element. Present for version ≥ 2 and derivable from `vrf_entries[].randomness`.",
       "pattern": "^[0-9a-fA-F]{64}$"
     },
     "vrf_proof": {
       "type": "string",
-      "description": "Poseidon binding digest folding the block hash with every VRF proof blob. Present for version ≥ 2 and derivable from `vrf_entries[].poseidon.proof`.",
+      "description": "Poseidon binding digest folding the block hash with every VRF proof blob. Present for version ≥ 2 and derivable from `vrf_entries[].proof`.",
       "pattern": "^[0-9a-fA-F]{64}$"
     },
     "witness_commitment_root": {

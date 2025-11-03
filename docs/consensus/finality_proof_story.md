@@ -21,7 +21,7 @@ Consensus proofs expose the following public inputs:
 | `vrf_entries[].pre_output` | VRF pre-output commitments paired with the randomness element. |
 | `vrf_entries[].proof` | Raw Schnorrkel VRF proofs for the randomness/pre-output pair. |
 | `vrf_entries[].public_key` | Validator VRF public keys that authored the transcript. |
-| `vrf_entries[].poseidon.{randomness,pre_output,proof,public_key}` | Poseidon bindings that tie each transcript component to the `block_hash`. |
+| `vrf_entries[].poseidon.{digest,last_block_header,epoch,tier_seed}` | Poseidon transcript inputs that tie the validator metadata to the `block_hash`. |
 | `witness_commitments[]` | Module witness commitments included in the block. |
 | `reputation_roots[]` | Pre/post reputation ledger roots. |
 | `vrf_entry_count` | Declares how many transcripts populate `vrf_entries[]`. |
