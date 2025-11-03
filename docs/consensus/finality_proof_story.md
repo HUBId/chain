@@ -55,50 +55,40 @@ RPC layer for a transition period. They are derived directly from
 can continue to consume the flatter shape while migrating to the richer
 transcript objects.
 
-Every proof must supply the same number of VRF transcripts.  The STWO circuit
-enforces this relationship, replays the Schnorrkel verification for each
-transcript, and constrains the `vrf_entry_count` field so it exactly matches the
-trace segment lengths for each vector inside the transcript tuple. Replaying the
-VRF verification binds every `vrf_proof` to its associated Poseidon
-`vrf_output`/pre-output so a prover cannot reshuffle raw transcripts or tweak
-the proof bytes without breaking the AIR. In addition, the binding commitments
-above are recomputed inside the circuit by folding the `block_hash` with each
-metadata list using the Poseidon permutation. Any attempt to alter a VRF digest,
-witness commitment, public key, or quorum root without also recomputing the
-corresponding binding immediately violates the AIR relations.
+Every proof must supply the same number of VRF transcripts. The STWO circuit now
+mirrors that contract inside the AIR: it replays the Schnorrkel verification for
+each transcript, constrains the `vrf_entry_count` field so it exactly matches the
+trace segment lengths for every transcript component, and links the flattened
+public inputs to the witness columns. The AIR enforces that each
+`vrf_entries[].{randomness,pre_output,proof,public_key,poseidon.*}` value equals
+the corresponding trace element by reading the public inputs and the trace with
+matching offsets in the summary row. The same approach ties the quorum bitmap
+and quorum signature roots to the binding segments that fold them with the
+`block_hash`. Together with the Poseidon bindings, any attempt to alter a VRF
+digest, witness commitment, public key, or quorum root without recomputing the
+trace violates the AIR.
 
 ## Verifier Responsibilities
 
-Today the STWO and Plonky3 verifiers retain the legacy host-side shape checks,
-but they **do not yet** benefit from the circuit-level bindings described
-above. The missing gadgets for VRF bundle integrity and quorum thresholds are
-tracked as Phase 2 exit criteria and remain open in the
-[Malachite BFT architecture plan](../malachite_bft_architecture.md#acceptance-kriterien-vrf-quorum-proofs).
-Until those constraints land, the verifiers can only reject obviously malformed
-payloads (empty transcripts, invalid encodings, mismatched counts) and must
-trust that the prover supplies consistent VRF/quorum material. Any assurance
-beyond these shape checks is deferred to the upcoming STWO/Plonky3 circuit
-updates referenced above.
-
-> [!IMPORTANT]
-> Phase 2 owners should restore the stronger “AIR-enforced” language once the
-> circuit work and telemetry cited in the architecture plan have merged.
+The Plonky3 and STWO verifiers now benefit from the strengthened AIR. They still
+perform the legacy host-side shape checks, but the proof verification path now
+fails whenever the prover tampers with the public VRF transcripts or quorum
+roots. This behaviour is observable in the new regression suite
+`tests/consensus/consensus_proof_tampering.rs`, which mutates the public VRF
+randomness and quorum bitmap roots while keeping the proof commitments coherent.
+Both backends reject the tampered artifacts, demonstrating that the AIR bindings
+and the verifier cross-checks agree on the public input integrity.
 
 ## Tamper Tests
 
-Regression coverage is limited to pre-Phase 2 shape validation as well. The
-existing suites (`tests/consensus/consensus_proof_integrity.rs` and the
-backend-focused checks under `prover/prover_stwo_backend/src/backend.rs`) only
-exercise serializer tampering and continue to pass even if the prover reorders
-VRF proofs or weakens quorum bindings. The negative cases that would prove the
-stronger guarantees are still on the backlog alongside the circuit updates and
-are tracked in the
-[consensus regression plan](../testing/consensus_regressions.md) and the
-[Malachite BFT architecture task list](../malachite_bft_architecture.md#acceptance-kriterien-vrf-quorum-proofs).
-
-> [!TODO]
-> Phase 2 deliverables include Plonky3/STWO circuit updates and new regression
-> tests that flip VRF/quorum digests, then cite the resulting telemetry runs.
-> Once those land, update this section to describe the hardened behaviour and
-> reference the specific test cases and dashboards that demonstrate it.
+Regression coverage includes both the legacy serializer checks and the new
+public-input tampering scenarios. The existing suites
+(`tests/consensus/consensus_proof_integrity.rs` and the backend-focused coverage
+under `prover/prover_stwo_backend/src/backend.rs`) exercise witness-level
+manipulations. The new integration suite
+`tests/consensus/consensus_proof_tampering.rs` mutates VRF randomness and quorum
+roots directly inside the public input vectors and asserts that
+`verify_consensus` fails for both the STWO and Plonky3 backends. These tests
+serve as the Phase 2 regression anchor referenced in the
+[Malachite BFT architecture plan](../malachite_bft_architecture.md#acceptance-kriterien-vrf-quorum-proofs).
 
