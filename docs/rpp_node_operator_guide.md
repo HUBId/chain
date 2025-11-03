@@ -160,7 +160,9 @@ ausrollen.【F:docs/release_notes.md†L1-L160】
 ### Phase 2 consensus proof validation checks
 
 Phase 2 verlangt nachvollziehbare Belege, dass manipulierte VRF-/Quorum-Daten an
-der Validator-Schnittstelle scheitern.
+der Validator-Schnittstelle scheitern. Nutze zusätzlich die
+[Plonky3 Production Validation Checklist](./testing/plonky3_experimental_testplan.md#4-production-sign-off-checklist),
+um die erforderlichen Artefakte für das Freigabeprotokoll abzuhaken.【F:docs/testing/plonky3_experimental_testplan.md†L1-L121】
 
 #### Known-good vs. tampered replay drill
 

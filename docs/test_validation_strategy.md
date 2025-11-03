@@ -1,6 +1,6 @@
 # Test- und Validierungsstrategie
 
-Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig überprüft werden. Die Plonky3-Schritte validieren den produktiven Vendor-Prover/-Verifier, messen Tamper-Resilienz und dokumentieren die Acceptance-Kriterien für Phase 2.
+Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig überprüft werden. Die Plonky3-Schritte validieren den produktiven Vendor-Prover/-Verifier, messen Tamper-Resilienz und dokumentieren die Acceptance-Kriterien für Phase 2; Phase-2-Sign-off referenziert die [Plonky3 Production Validation Checklist](testing/plonky3_experimental_testplan.md#4-production-sign-off-checklist), die als Produktions-Checkliste in die Operator-Runbooks eingebunden ist.【F:docs/testing/plonky3_experimental_testplan.md†L1-L121】
 
 ## 1. Testebenen
 
