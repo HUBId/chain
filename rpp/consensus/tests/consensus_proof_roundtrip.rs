@@ -89,8 +89,7 @@ fn consensus_public_inputs_include_structured_metadata() {
         .consensus_public_inputs()
         .expect("public inputs");
 
-    assert_eq!(inputs.vrf_outputs.len(), 1);
-    assert_eq!(inputs.vrf_proofs.len(), 1);
+    assert_eq!(inputs.vrf_entries.len(), 1);
     assert_eq!(inputs.witness_commitments.len(), 2);
     assert_eq!(inputs.reputation_roots.len(), 1);
     assert_eq!(inputs.epoch, sample_metadata().epoch);
@@ -102,7 +101,8 @@ fn consensus_public_inputs_include_structured_metadata() {
 
     let mut buffer = [0u8; 32];
     buffer.copy_from_slice(&hex::decode(&certificate.metadata.vrf_entries[0].randomness).unwrap());
-    assert_eq!(inputs.vrf_outputs[0], buffer);
+    assert_eq!(inputs.vrf_entries[0].randomness, buffer);
+    assert_eq!(inputs.vrf_entries[0].proof.len(), VRF_PROOF_LENGTH);
 }
 
 #[test]
@@ -150,17 +150,6 @@ fn consensus_public_inputs_match_expected_bindings() {
         .expect("public inputs");
 
     let block_hash = hex_to_array(&certificate.block_hash.0);
-    let (vrf_outputs, vrf_proofs): (Vec<[u8; 32]>, Vec<Vec<u8>>) = certificate
-        .metadata
-        .vrf_entries
-        .iter()
-        .map(|entry| {
-            let mut randomness = [0u8; 32];
-            randomness.copy_from_slice(&hex::decode(&entry.randomness).expect("decode randomness"));
-            let proof = hex::decode(&entry.proof).expect("decode proof");
-            (randomness, proof)
-        })
-        .unzip();
     let witness_commitments: Vec<[u8; 32]> = certificate
         .metadata
         .witness_commitments
@@ -176,13 +165,13 @@ fn consensus_public_inputs_match_expected_bindings() {
 
     let bindings = compute_consensus_bindings(
         &block_hash,
-        &vrf_outputs,
-        &vrf_proofs,
+        &certificate.metadata.vrf_entries,
         &witness_commitments,
         &reputation_roots,
         &inputs.quorum_bitmap_root,
         &inputs.quorum_signature_root,
-    );
+    )
+    .expect("bindings");
 
     assert_eq!(inputs.vrf_output_binding, bindings.vrf_output);
     assert_eq!(inputs.vrf_proof_binding, bindings.vrf_proof);

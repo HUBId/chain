@@ -6996,7 +6996,7 @@ fn summarize_consensus_certificate(
     let block_hash = decode_digest("consensus block hash", &block_hash_hex)?;
     let metadata = &certificate.metadata;
 
-    let (vrf_entries, vrf_outputs, vrf_proofs) = sanitize_vrf_entries(&metadata.vrf_entries)?;
+    let vrf_entries = sanitize_vrf_entries(&metadata.vrf_entries)?;
     let witness_commitments =
         decode_digest_list("witness commitment", &metadata.witness_commitments)?;
     let reputation_roots = decode_digest_list("reputation root", &metadata.reputation_roots)?;
@@ -7006,13 +7006,12 @@ fn summarize_consensus_certificate(
 
     let bindings = compute_consensus_bindings(
         &block_hash,
-        &vrf_outputs,
-        &vrf_proofs,
+        &metadata.vrf_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
         &quorum_signature_root,
-    );
+    )?;
 
     let encode = |digest: [u8; 32]| hex::encode(digest);
 
@@ -7066,19 +7065,9 @@ fn decode_digest_list(label: &str, values: &[String]) -> ChainResult<Vec<[u8; 32
         .collect()
 }
 
-fn decode_vrf_proof_list(values: &[String]) -> ChainResult<Vec<Vec<u8>>> {
-    values
-        .iter()
-        .enumerate()
-        .map(|(index, value)| {
-            decode_hex_buffer(&format!("vrf proof #{index}"), value, VRF_PROOF_LENGTH)
-        })
-        .collect()
-}
-
 fn sanitize_vrf_entries(
     entries: &[crate::consensus::messages::ConsensusVrfEntry],
-) -> ChainResult<(Vec<ConsensusProofVrfEntry>, Vec<[u8; 32]>, Vec<Vec<u8>>)> {
+) -> ChainResult<Vec<ConsensusProofVrfEntry>> {
     if entries.is_empty() {
         return Err(ChainError::Crypto(
             "consensus metadata missing VRF entries".into(),
@@ -7086,8 +7075,6 @@ fn sanitize_vrf_entries(
     }
 
     let mut sanitized_entries = Vec::with_capacity(entries.len());
-    let mut randomness_bytes = Vec::with_capacity(entries.len());
-    let mut proof_bytes = Vec::with_capacity(entries.len());
 
     for (index, entry) in entries.iter().enumerate() {
         let randomness = decode_digest(&format!("vrf randomness #{index}"), &entry.randomness)?;
@@ -7132,12 +7119,9 @@ fn sanitize_vrf_entries(
                 tier_seed: hex::encode(poseidon_tier_seed),
             },
         });
-
-        randomness_bytes.push(randomness);
-        proof_bytes.push(proof);
     }
 
-    Ok((sanitized_entries, randomness_bytes, proof_bytes))
+    Ok(sanitized_entries)
 }
 
 fn decode_hex_array<const N: usize>(label: &str, value: &str) -> ChainResult<[u8; N]> {
@@ -7369,8 +7353,6 @@ mod tests {
         );
 
         let block_hash = decode_digest("block hash", &certificate.block_hash.0).unwrap();
-        let vrf_outputs = decode_digest_list("vrf", &status.legacy_vrf_outputs()).unwrap();
-        let vrf_proofs = decode_vrf_proof_list(&status.legacy_vrf_proofs()).unwrap();
         let witness_commitments =
             decode_digest_list("witness", &certificate.metadata.witness_commitments).unwrap();
         let reputation_roots =
@@ -7382,13 +7364,13 @@ mod tests {
 
         let expected = compute_consensus_bindings(
             &block_hash,
-            &vrf_outputs,
-            &vrf_proofs,
+            &certificate.metadata.vrf_entries,
             &witness_commitments,
             &reputation_roots,
             &bitmap_root,
             &signature_root,
-        );
+        )
+        .unwrap();
 
         assert_eq!(status.vrf_output, hex::encode(expected.vrf_output));
         assert_eq!(status.vrf_proof, hex::encode(expected.vrf_proof));
