@@ -1702,9 +1702,10 @@ mod tests {
             .iter()
             .zip(verified_outputs.iter())
             .map(|(entry, output)| {
-                let randomness = output.randomness;
-                let pre_output = output.preoutput;
-                let proof = output.proof.to_vec();
+                let randomness = output.output.randomness;
+                let derived_randomness = output.derived_randomness;
+                let pre_output = output.output.preoutput;
+                let proof = output.output.proof.to_vec();
                 let public_key = hex_to_array(&entry.public_key);
                 let last_block_header = hex_to_array(&entry.input.last_block_header);
                 let epoch = entry.input.epoch;
@@ -1718,6 +1719,7 @@ mod tests {
 
                 ConsensusVrfPublicEntry {
                     randomness,
+                    derived_randomness,
                     pre_output,
                     proof,
                     public_key,

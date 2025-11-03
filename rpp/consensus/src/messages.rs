@@ -203,7 +203,10 @@ pub fn compute_consensus_bindings(
         &parameters,
         &hasher,
         &block_hash_element,
-        vrf_entries.iter().map(|entry| entry.randomness.as_slice()),
+        vrf_entries.iter().flat_map(|entry| {
+            std::iter::once(entry.randomness.as_slice())
+                .chain(std::iter::once(entry.derived_randomness.as_slice()))
+        }),
     );
     let vrf_proof = binding_from_bytes(
         &parameters,
@@ -596,6 +599,7 @@ impl ConsensusCertificate {
 
             vrf_public_entries.push(ConsensusVrfPublicEntry {
                 randomness,
+                derived_randomness: randomness,
                 pre_output,
                 proof,
                 public_key,

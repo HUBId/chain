@@ -6,10 +6,11 @@ use std::{
     convert::{TryFrom, TryInto},
 };
 
-use rpp_crypto_vrf::{
-    verify_vrf, PoseidonVrfInput, VrfError, VrfOutput, VrfPublicKey, POSEIDON_VRF_DOMAIN,
+use rpp_crypto_vrf::{PoseidonVrfInput, VrfOutput, VrfPublicKey, POSEIDON_VRF_DOMAIN};
+use schnorrkel::{
+    context::signing_context,
+    vrf::{VRFPreOut, VRFProof},
 };
-use schnorrkel::vrf::{VRFPreOut, VRFProof};
 
 use crate::official::air::{
     AirColumn, AirConstraint, AirDefinition, AirExpression, ConstraintDomain,
@@ -18,6 +19,14 @@ use crate::official::params::{FieldElement, PoseidonHasher, StarkParameters};
 use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
+
+const VRF_RANDOMNESS_CONTEXT: &[u8] = b"chain.vrf.randomness";
+
+#[derive(Clone, Debug)]
+pub(crate) struct ConsensusVerifiedVrfOutput {
+    pub(crate) output: VrfOutput,
+    pub(crate) derived_randomness: [u8; 32],
+}
 
 /// Poseidon VRF tuple captured within each consensus witness entry.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -57,6 +66,7 @@ fn summary_columns(witness: &ConsensusWitness) -> Vec<String> {
 
     for index in 0..witness.vrf_entries.len() {
         columns.push(format!("vrf_randomness_{index}"));
+        columns.push(format!("vrf_randomness_derived_{index}"));
         columns.push(format!("vrf_preoutput_{index}"));
         columns.push(format!("vrf_proof_{index}"));
         columns.push(format!("vrf_public_key_{index}"));
@@ -277,7 +287,7 @@ impl ConsensusWitness {
 
 pub(crate) fn parse_vrf_entries(
     witness: &ConsensusWitness,
-) -> Result<Vec<VrfOutput>, CircuitError> {
+) -> Result<Vec<ConsensusVerifiedVrfOutput>, CircuitError> {
     if witness.vrf_entries.is_empty() {
         return Err(CircuitError::ConstraintViolation(
             "consensus witness missing VRF entries".into(),
@@ -342,7 +352,7 @@ pub(crate) fn parse_vrf_entries(
                     "vrf entry #{index} proof must encode {VRF_PROOF_LENGTH} bytes"
                 ))
             })?;
-        let _proof = VRFProof::from_bytes(&proof_array).map_err(|err| {
+        let proof = VRFProof::from_bytes(&proof_array).map_err(|err| {
             CircuitError::ConstraintViolation(format!("vrf entry #{index} proof is invalid: {err}"))
         })?;
 
@@ -411,31 +421,35 @@ pub(crate) fn parse_vrf_entries(
         })?;
 
         let poseidon_input = PoseidonVrfInput::new(last_block_header, entry.input.epoch, tier_seed);
+        let digest = poseidon_input.poseidon_digest_bytes();
+        let context = signing_context(POSEIDON_VRF_DOMAIN);
+        let pre_output = VRFPreOut(pre_output_array);
+        let (inout, _) = public_key
+            .as_public_key()
+            .vrf_verify(context.bytes(&digest), &pre_output, &proof)
+            .map_err(|err| {
+                CircuitError::ConstraintViolation(format!(
+                    "vrf entry #{index} verification backend error: {err}"
+                ))
+            })?;
+        let derived_randomness = inout.make_bytes(VRF_RANDOMNESS_CONTEXT);
+        if derived_randomness != randomness {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} randomness mismatch"
+            )));
+        }
+        let VRFPreOut(pre_output_array) = pre_output;
+
         let output = VrfOutput {
             randomness,
             preoutput: pre_output_array,
             proof: proof_array,
         };
 
-        verify_vrf(&poseidon_input, &public_key, &output).map_err(|err| {
-            let message = match err {
-                VrfError::VerificationFailed => {
-                    format!("vrf entry #{index} randomness mismatch")
-                }
-                VrfError::InvalidInput(reason) => {
-                    format!("vrf entry #{index} invalid VRF input: {reason}")
-                }
-                VrfError::Backend(reason) => {
-                    format!("vrf entry #{index} verification backend error: {reason}")
-                }
-                VrfError::NotImplemented => {
-                    format!("vrf entry #{index} verification not implemented")
-                }
-            };
-            CircuitError::ConstraintViolation(message)
-        })?;
-
-        outputs.push(output);
+        outputs.push(ConsensusVerifiedVrfOutput {
+            output,
+            derived_randomness,
+        });
     }
 
     Ok(outputs)
@@ -444,7 +458,7 @@ pub(crate) fn parse_vrf_entries(
 #[derive(Debug)]
 pub struct ConsensusCircuit {
     pub witness: ConsensusWitness,
-    verified_outputs: RefCell<Vec<VrfOutput>>,
+    verified_outputs: RefCell<Vec<ConsensusVerifiedVrfOutput>>,
 }
 
 impl ConsensusCircuit {
@@ -514,9 +528,10 @@ impl ConsensusCircuit {
         let poseidon_domain = parameters.element_from_bytes(POSEIDON_VRF_DOMAIN);
         let poseidon_hasher = parameters.poseidon_hasher();
         for (entry, output) in witness.vrf_entries.iter().zip(verified_outputs.iter()) {
-            inputs.push(parameters.element_from_bytes(&output.randomness));
-            inputs.push(parameters.element_from_bytes(&output.preoutput));
-            inputs.push(parameters.element_from_bytes(&output.proof));
+            inputs.push(parameters.element_from_bytes(&output.output.randomness));
+            inputs.push(parameters.element_from_bytes(&output.derived_randomness));
+            inputs.push(parameters.element_from_bytes(&output.output.preoutput));
+            inputs.push(parameters.element_from_bytes(&output.output.proof));
             let public_key_field = string_to_field(parameters, &entry.public_key);
             let last_block_field = string_to_field(parameters, &entry.input.last_block_header);
             let epoch_field = parameters.element_from_u64(entry.input.epoch);
@@ -562,7 +577,9 @@ impl ConsensusCircuit {
         Ok(inputs)
     }
 
-    pub fn verified_vrf_outputs(&self) -> Result<Ref<Vec<VrfOutput>>, CircuitError> {
+    pub fn verified_vrf_outputs(
+        &self,
+    ) -> Result<Ref<Vec<ConsensusVerifiedVrfOutput>>, CircuitError> {
         let cache = self.verified_outputs.borrow();
         if cache.is_empty() {
             return Err(CircuitError::ConstraintViolation(
@@ -666,64 +683,83 @@ impl StarkCircuit for ConsensusCircuit {
         let hasher = parameters.poseidon_hasher();
         let block_hash = string_to_field(parameters, &self.witness.block_hash);
         let verified_outputs = self.verified_vrf_outputs()?;
+        let mut randomness_rows = Vec::with_capacity(verified_outputs.len());
+        let mut proof_rows = Vec::with_capacity(verified_outputs.len());
+        for output in verified_outputs.iter() {
+            randomness_rows.push(vec![
+                parameters.element_from_bytes(&output.output.randomness),
+                parameters.element_from_bytes(&output.derived_randomness),
+            ]);
+            proof_rows.push(vec![parameters.element_from_bytes(&output.output.proof)]);
+        }
         let (vrf_outputs, _vrf_output_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            verified_outputs
-                .iter()
-                .map(|output| BindingInput::Bytes(output.randomness.as_ref())),
             "vrf_outputs",
-            "randomness",
+            vec!["randomness".to_string(), "derived_randomness".to_string()],
+            randomness_rows,
         )?;
         let (vrf_proofs, _vrf_proof_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            verified_outputs
-                .iter()
-                .map(|output| BindingInput::Bytes(output.proof.as_ref())),
             "vrf_proofs",
-            "proof",
+            vec!["proof".to_string()],
+            proof_rows,
         )?;
         drop(verified_outputs);
+        let witness_commitment_rows = self
+            .witness
+            .witness_commitments
+            .iter()
+            .map(|value| vec![string_to_field(parameters, value)])
+            .collect();
         let (witness_commitments, _witness_commitment_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            self.witness
-                .witness_commitments
-                .iter()
-                .map(|value| BindingInput::Hex(value)),
             "witness_commitments",
-            "commitment",
+            vec!["commitment".to_string()],
+            witness_commitment_rows,
         )?;
+        let reputation_root_rows = self
+            .witness
+            .reputation_roots
+            .iter()
+            .map(|value| vec![string_to_field(parameters, value)])
+            .collect();
         let (reputation_roots, _reputation_root_binding) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            self.witness
-                .reputation_roots
-                .iter()
-                .map(|value| BindingInput::Hex(value)),
             "reputation_roots",
-            "root",
+            vec!["root".to_string()],
+            reputation_root_rows,
         )?;
+        let quorum_bitmap_rows = vec![vec![string_to_field(
+            parameters,
+            &self.witness.quorum_bitmap_root,
+        )]];
         let (quorum_bitmap_binding, _bitmap_final) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            std::iter::once(BindingInput::Hex(&self.witness.quorum_bitmap_root)),
             "quorum_bitmap_binding",
-            "root",
+            vec!["root".to_string()],
+            quorum_bitmap_rows,
         )?;
+        let quorum_signature_rows = vec![vec![string_to_field(
+            parameters,
+            &self.witness.quorum_signature_root,
+        )]];
         let (quorum_signature_binding, _signature_final) = Self::build_binding_segment(
             parameters,
             &hasher,
             &block_hash,
-            std::iter::once(BindingInput::Hex(&self.witness.quorum_signature_root)),
             "quorum_signature_binding",
-            "root",
+            vec!["root".to_string()],
+            quorum_signature_rows,
         )?;
 
         let summary_columns = summary_columns(&self.witness);
@@ -891,6 +927,15 @@ impl StarkCircuit for ConsensusCircuit {
         add_binding_constraints("witness_commitments", &summary_witness_commitment_binding);
         add_binding_constraints("reputation_roots", &summary_reputation_root_binding);
 
+        let vrf_randomness = AirColumn::new("vrf_outputs", "randomness");
+        let vrf_randomness_derived = AirColumn::new("vrf_outputs", "derived_randomness");
+        constraints.push(AirConstraint::new(
+            "vrf_randomness_matches_derived",
+            "vrf_outputs",
+            ConstraintDomain::AllRows,
+            AirExpression::difference(vrf_randomness.expr(), vrf_randomness_derived.expr()),
+        ));
+
         for (segment, summary_root, summary_binding) in [
             (
                 "quorum_bitmap_binding",
@@ -939,49 +984,28 @@ pub(crate) struct ConsensusBindingValues {
     pub(crate) quorum_signature: FieldElement,
 }
 
-enum BindingInput<'a> {
-    Hex(&'a str),
-    Bytes(&'a [u8]),
-}
-
-impl<'a> BindingInput<'a> {
-    fn to_field(&self, parameters: &StarkParameters) -> FieldElement {
-        match self {
-            BindingInput::Hex(value) => string_to_field(parameters, value),
-            BindingInput::Bytes(bytes) => parameters.element_from_bytes(bytes),
-        }
-    }
-}
-
 impl ConsensusCircuit {
     pub(crate) fn compute_binding_values(
         parameters: &StarkParameters,
         hasher: &PoseidonHasher,
         block_hash: &FieldElement,
         witness: &ConsensusWitness,
-        verified_outputs: &[VrfOutput],
+        verified_outputs: &[ConsensusVerifiedVrfOutput],
     ) -> Result<ConsensusBindingValues, CircuitError> {
         if witness.vrf_entries.len() != verified_outputs.len() {
             return Err(CircuitError::ConstraintViolation(
                 "witness VRF entries and verified outputs differ".into(),
             ));
         }
-        let vrf_output = Self::fold_binding(
-            parameters,
-            hasher,
-            block_hash,
-            verified_outputs
-                .iter()
-                .map(|output| BindingInput::Bytes(output.randomness.as_ref())),
-        );
-        let vrf_proof = Self::fold_binding(
-            parameters,
-            hasher,
-            block_hash,
-            verified_outputs
-                .iter()
-                .map(|output| BindingInput::Bytes(output.proof.as_ref())),
-        );
+        let mut randomness_fields = Vec::with_capacity(verified_outputs.len() * 2);
+        let mut proof_fields = Vec::with_capacity(verified_outputs.len());
+        for output in verified_outputs {
+            randomness_fields.push(parameters.element_from_bytes(&output.output.randomness));
+            randomness_fields.push(parameters.element_from_bytes(&output.derived_randomness));
+            proof_fields.push(parameters.element_from_bytes(&output.output.proof));
+        }
+        let vrf_output = Self::fold_binding(parameters, hasher, block_hash, randomness_fields);
+        let vrf_proof = Self::fold_binding(parameters, hasher, block_hash, proof_fields);
         let witness_commitment = Self::fold_binding(
             parameters,
             hasher,
@@ -989,7 +1013,7 @@ impl ConsensusCircuit {
             witness
                 .witness_commitments
                 .iter()
-                .map(|value| BindingInput::Hex(value)),
+                .map(|value| string_to_field(parameters, value)),
         );
         let reputation_root = Self::fold_binding(
             parameters,
@@ -998,19 +1022,19 @@ impl ConsensusCircuit {
             witness
                 .reputation_roots
                 .iter()
-                .map(|value| BindingInput::Hex(value)),
+                .map(|value| string_to_field(parameters, value)),
         );
         let quorum_bitmap = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::iter::once(BindingInput::Hex(&witness.quorum_bitmap_root)),
+            std::iter::once(string_to_field(parameters, &witness.quorum_bitmap_root)),
         );
         let quorum_signature = Self::fold_binding(
             parameters,
             hasher,
             block_hash,
-            std::iter::once(BindingInput::Hex(&witness.quorum_signature_root)),
+            std::iter::once(string_to_field(parameters, &witness.quorum_signature_root)),
         );
 
         Ok(ConsensusBindingValues {
@@ -1023,53 +1047,53 @@ impl ConsensusCircuit {
         })
     }
 
-    fn fold_binding<'a, I>(
+    fn fold_binding<I>(
         parameters: &StarkParameters,
         hasher: &PoseidonHasher,
         block_hash: &FieldElement,
         values: I,
     ) -> FieldElement
     where
-        I: IntoIterator<Item = BindingInput<'a>>,
+        I: IntoIterator<Item = FieldElement>,
     {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
         for value in values {
-            let element = value.to_field(parameters);
-            accumulator = hasher.hash(&[accumulator, element, zero.clone()]);
+            accumulator = hasher.hash(&[accumulator, value, zero.clone()]);
         }
         accumulator
     }
 
-    fn build_binding_segment<'a, I>(
+    fn build_binding_segment(
         parameters: &StarkParameters,
         hasher: &PoseidonHasher,
         block_hash: &FieldElement,
-        values: I,
         name: &str,
-        value_column: &str,
-    ) -> Result<(TraceSegment, FieldElement), CircuitError>
-    where
-        I: IntoIterator<Item = BindingInput<'a>>,
-    {
+        mut value_columns: Vec<String>,
+        rows: Vec<Vec<FieldElement>>,
+    ) -> Result<(TraceSegment, FieldElement), CircuitError> {
         let zero = FieldElement::zero(parameters.modulus());
         let mut accumulator = block_hash.clone();
-        let mut rows = Vec::new();
-        for value in values {
-            let element = value.to_field(parameters);
-            let next = hasher.hash(&[accumulator.clone(), element.clone(), zero.clone()]);
-            rows.push(vec![element, accumulator.clone(), next.clone()]);
-            accumulator = next;
+        let mut segment_rows = Vec::with_capacity(rows.len());
+        for mut values in rows {
+            if values.len() != value_columns.len() {
+                return Err(CircuitError::ConstraintViolation(format!(
+                    "{name} row has {} values but expected {}",
+                    values.len(),
+                    value_columns.len()
+                )));
+            }
+            let binding_in = accumulator.clone();
+            for value in &values {
+                accumulator = hasher.hash(&[accumulator.clone(), value.clone(), zero.clone()]);
+            }
+            values.push(binding_in);
+            values.push(accumulator.clone());
+            segment_rows.push(values);
         }
-        let segment = TraceSegment::new(
-            name,
-            vec![
-                value_column.to_string(),
-                "binding_in".to_string(),
-                "binding_out".to_string(),
-            ],
-            rows,
-        )?;
+        value_columns.push("binding_in".to_string());
+        value_columns.push("binding_out".to_string());
+        let segment = TraceSegment::new(name, value_columns, segment_rows)?;
         Ok((segment, accumulator))
     }
 }
