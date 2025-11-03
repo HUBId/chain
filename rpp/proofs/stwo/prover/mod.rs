@@ -868,7 +868,8 @@ impl<'a> WalletProver<'a> {
         let air = circuit
             .define_air(&self.parameters, &trace)
             .map_err(map_circuit_error)?;
-        let inputs = ConsensusCircuit::public_inputs(&self.parameters, &witness);
+        let inputs = ConsensusCircuit::public_inputs(&self.parameters, &witness)
+            .map_err(map_circuit_error)?;
         let hasher = self.hasher();
         let fri_prover = FriProver::new(&self.parameters);
         let fri_output = fri_prover.prove(&air, &trace, &inputs);
