@@ -8,6 +8,8 @@ license = "MIT"
 
 [features]
 default = []
+backend-plonky3 = []
+backend-plonky3-gpu = ["backend-plonky3"]
 prover-stwo = []
 prover-stwo-simd = ["prover-stwo"]
 prover-mock = []

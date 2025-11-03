@@ -6,6 +6,11 @@ authors = ["Avalanche <info@avalabs.org>"]
 license = "Apache-2.0"
 description = "Simulation network orchestrator for RPP nodes and wallets"
 
+[features]
+default = ["backend-plonky3"]
+backend-plonky3 = ["rpp-chain/backend-plonky3"]
+backend-plonky3-gpu = ["backend-plonky3", "rpp-chain/backend-plonky3-gpu"]
+
 [dependencies]
 anyhow = "1.0"
 clap = { workspace = true }
@@ -14,7 +19,7 @@ hex = { workspace = true }
 chrono = { version = "=0.4.42", features = ["serde"] }
 html-escape = "=0.2.13"
 rand = { workspace = true, features = ["std_rng"] }
-rpp-chain = { path = "../../rpp/chain", default-features = false, features = ["backend-plonky3"] }
+rpp-chain = { path = "../../rpp/chain", default-features = false }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "time"] }
