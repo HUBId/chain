@@ -63,6 +63,10 @@ pub use validator::{
     ValidatorLedgerEntry, ValidatorSet,
 };
 
+pub mod vrf {
+    pub use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConsensusError {
     ChannelNotInitialized,
