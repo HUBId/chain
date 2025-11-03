@@ -1750,7 +1750,6 @@ mod tests {
         )
         .expect("consensus VRF bindings");
 
-        let poseidon_domain = element_from_bytes(&parameters, POSEIDON_VRF_DOMAIN);
         let vrf_entries = witness
             .vrf_entries
             .iter()
@@ -1764,12 +1763,6 @@ mod tests {
                 let last_block_header = hex_to_array(&entry.input.last_block_header);
                 let epoch = entry.input.epoch;
                 let tier_seed = hex_to_array(&entry.input.tier_seed);
-                let digest = hasher.hash(&[
-                    poseidon_domain.clone(),
-                    string_to_field(&parameters, &entry.input.last_block_header),
-                    parameters.element_from_u64(epoch),
-                    string_to_field(&parameters, &entry.input.tier_seed),
-                ]);
 
                 ConsensusVrfPublicEntry {
                     randomness,
@@ -1777,7 +1770,7 @@ mod tests {
                     pre_output,
                     proof,
                     public_key,
-                    poseidon_digest: field_to_padded_bytes(&digest),
+                    poseidon_digest: output.poseidon_digest,
                     poseidon_last_block_header: last_block_header,
                     poseidon_epoch: epoch,
                     poseidon_tier_seed: tier_seed,

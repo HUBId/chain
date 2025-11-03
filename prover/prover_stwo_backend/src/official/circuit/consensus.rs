@@ -26,6 +26,7 @@ const VRF_RANDOMNESS_CONTEXT: &[u8] = b"chain.vrf.randomness";
 pub(crate) struct ConsensusVerifiedVrfOutput {
     pub(crate) output: VrfOutput,
     pub(crate) derived_randomness: [u8; 32],
+    pub(crate) poseidon_digest: [u8; 32],
 }
 
 /// Poseidon VRF tuple captured within each consensus witness entry.
@@ -449,6 +450,7 @@ pub(crate) fn parse_vrf_entries(
         outputs.push(ConsensusVerifiedVrfOutput {
             output,
             derived_randomness,
+            poseidon_digest: digest,
         });
     }
 
@@ -525,8 +527,6 @@ impl ConsensusCircuit {
             }
         };
 
-        let poseidon_domain = parameters.element_from_bytes(POSEIDON_VRF_DOMAIN);
-        let poseidon_hasher = parameters.poseidon_hasher();
         for (entry, output) in witness.vrf_entries.iter().zip(verified_outputs.iter()) {
             inputs.push(parameters.element_from_bytes(&output.output.randomness));
             inputs.push(parameters.element_from_bytes(&output.derived_randomness));
@@ -536,16 +536,9 @@ impl ConsensusCircuit {
             let last_block_field = string_to_field(parameters, &entry.input.last_block_header);
             let epoch_field = parameters.element_from_u64(entry.input.epoch);
             let tier_seed_field = string_to_field(parameters, &entry.input.tier_seed);
-            let digest_inputs = vec![
-                poseidon_domain.clone(),
-                last_block_field.clone(),
-                epoch_field.clone(),
-                tier_seed_field.clone(),
-            ];
-            let digest = poseidon_hasher.hash(&digest_inputs);
 
             inputs.push(public_key_field);
-            inputs.push(digest);
+            inputs.push(parameters.element_from_bytes(&output.poseidon_digest));
             inputs.push(last_block_field);
             inputs.push(epoch_field);
             inputs.push(tier_seed_field);
@@ -685,12 +678,21 @@ impl StarkCircuit for ConsensusCircuit {
         let verified_outputs = self.verified_vrf_outputs()?;
         let mut randomness_rows = Vec::with_capacity(verified_outputs.len());
         let mut proof_rows = Vec::with_capacity(verified_outputs.len());
-        for output in verified_outputs.iter() {
+        let mut transcript_rows = Vec::with_capacity(verified_outputs.len());
+        for (entry, output) in self.witness.vrf_entries.iter().zip(verified_outputs.iter()) {
             randomness_rows.push(vec![
                 parameters.element_from_bytes(&output.output.randomness),
                 parameters.element_from_bytes(&output.derived_randomness),
             ]);
             proof_rows.push(vec![parameters.element_from_bytes(&output.output.proof)]);
+            transcript_rows.push(vec![
+                parameters.element_from_bytes(&output.output.preoutput),
+                string_to_field(parameters, &entry.public_key),
+                parameters.element_from_bytes(&output.poseidon_digest),
+                string_to_field(parameters, &entry.input.last_block_header),
+                parameters.element_from_u64(entry.input.epoch),
+                string_to_field(parameters, &entry.input.tier_seed),
+            ]);
         }
         let (vrf_outputs, _vrf_output_binding) = Self::build_binding_segment(
             parameters,
@@ -707,6 +709,18 @@ impl StarkCircuit for ConsensusCircuit {
             "vrf_proofs",
             vec!["proof".to_string()],
             proof_rows,
+        )?;
+        let vrf_transcripts = TraceSegment::new(
+            "vrf_transcripts",
+            vec![
+                "pre_output".to_string(),
+                "public_key".to_string(),
+                "poseidon_digest".to_string(),
+                "poseidon_last_block".to_string(),
+                "poseidon_epoch".to_string(),
+                "poseidon_tier_seed".to_string(),
+            ],
+            transcript_rows,
         )?;
         drop(verified_outputs);
         let witness_commitment_rows = self
@@ -772,6 +786,7 @@ impl StarkCircuit for ConsensusCircuit {
             commits,
             vrf_outputs,
             vrf_proofs,
+            vrf_transcripts,
             witness_commitments,
             reputation_roots,
             quorum_bitmap_binding,
@@ -843,6 +858,12 @@ impl StarkCircuit for ConsensusCircuit {
             .find(|segment| segment.name == "vrf_proofs")
             .map(|segment| segment.rows.len())
             .unwrap_or_default();
+        let vrf_transcript_len = trace
+            .segments
+            .iter()
+            .find(|segment| segment.name == "vrf_transcripts")
+            .map(|segment| segment.rows.len())
+            .unwrap_or_default();
         let witness_commitment_len = trace
             .segments
             .iter()
@@ -872,6 +893,11 @@ impl StarkCircuit for ConsensusCircuit {
                 &summary_reputation_root,
                 reputation_root_len as u64,
             ),
+            (
+                "summary_vrf_transcript_count",
+                &summary_vrf_entry_count,
+                vrf_transcript_len as u64,
+            ),
         ];
 
         for (name, column, value) in expected_counts {
@@ -895,6 +921,59 @@ impl StarkCircuit for ConsensusCircuit {
                 AirExpression::constant(parameters.element_from_u64(vrf_proof_len as u64)),
             ),
         ));
+
+        for index in 0..vrf_output_len {
+            let offset = index as isize;
+            let summary_randomness =
+                AirColumn::new(summary_segment, format!("vrf_randomness_{index}"));
+            let summary_randomness_derived =
+                AirColumn::new(summary_segment, format!("vrf_randomness_derived_{index}"));
+            let summary_preoutput =
+                AirColumn::new(summary_segment, format!("vrf_preoutput_{index}"));
+            let summary_proof = AirColumn::new(summary_segment, format!("vrf_proof_{index}"));
+            let summary_public_key =
+                AirColumn::new(summary_segment, format!("vrf_public_key_{index}"));
+            let summary_digest =
+                AirColumn::new(summary_segment, format!("vrf_poseidon_digest_{index}"));
+            let summary_last_block =
+                AirColumn::new(summary_segment, format!("vrf_input_last_block_{index}"));
+            let summary_epoch = AirColumn::new(summary_segment, format!("vrf_input_epoch_{index}"));
+            let summary_tier_seed =
+                AirColumn::new(summary_segment, format!("vrf_input_tier_seed_{index}"));
+
+            let vrf_randomness = AirColumn::new("vrf_outputs", "randomness");
+            let vrf_randomness_derived = AirColumn::new("vrf_outputs", "derived_randomness");
+            let vrf_preoutput = AirColumn::new("vrf_transcripts", "pre_output");
+            let vrf_proof = AirColumn::new("vrf_proofs", "proof");
+            let vrf_public_key = AirColumn::new("vrf_transcripts", "public_key");
+            let vrf_digest = AirColumn::new("vrf_transcripts", "poseidon_digest");
+            let vrf_last_block = AirColumn::new("vrf_transcripts", "poseidon_last_block");
+            let vrf_epoch = AirColumn::new("vrf_transcripts", "poseidon_epoch");
+            let vrf_tier_seed = AirColumn::new("vrf_transcripts", "poseidon_tier_seed");
+
+            let mut add_summary_match = |name: &str, summary: AirColumn, trace: AirColumn| {
+                constraints.push(AirConstraint::new(
+                    &format!("summary_{name}_{index}_matches_trace"),
+                    summary_segment,
+                    ConstraintDomain::FirstRow,
+                    AirExpression::difference(summary.expr(), trace.shifted(offset)),
+                ));
+            };
+
+            add_summary_match("vrf_randomness", summary_randomness, vrf_randomness.clone());
+            add_summary_match(
+                "vrf_randomness_derived",
+                summary_randomness_derived,
+                vrf_randomness_derived.clone(),
+            );
+            add_summary_match("vrf_preoutput", summary_preoutput, vrf_preoutput.clone());
+            add_summary_match("vrf_proof", summary_proof, vrf_proof.clone());
+            add_summary_match("vrf_public_key", summary_public_key, vrf_public_key.clone());
+            add_summary_match("vrf_digest", summary_digest, vrf_digest.clone());
+            add_summary_match("vrf_last_block", summary_last_block, vrf_last_block.clone());
+            add_summary_match("vrf_epoch", summary_epoch, vrf_epoch.clone());
+            add_summary_match("vrf_tier_seed", summary_tier_seed, vrf_tier_seed.clone());
+        }
 
         let mut add_binding_constraints = |segment: &str, summary_binding: &AirColumn| {
             let binding_in = AirColumn::new(segment, "binding_in");
