@@ -8,8 +8,8 @@ use std::fmt;
 
 use crate::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonPublicInput as PublicConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
-    ProofBackend, ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes, WitnessHeader,
+    ConsensusVrfPublicEntry, ProofBackend, ProofBytes, ProofSystemKind, VerifyingKey, WitnessBytes,
+    WitnessHeader,
 };
 use crate::validator::ValidatorId;
 use rpp_chain::stwo::params::StarkParameters;
@@ -566,12 +566,10 @@ impl ConsensusCertificate {
                 pre_output,
                 proof,
                 public_key,
-                poseidon: PublicConsensusVrfPoseidonInput {
-                    digest: poseidon_digest,
-                    last_block_header: poseidon_last_block_header,
-                    epoch: poseidon_epoch,
-                    tier_seed: poseidon_tier_seed,
-                },
+                poseidon_digest,
+                poseidon_last_block_header,
+                poseidon_epoch,
+                poseidon_tier_seed,
             });
         }
 

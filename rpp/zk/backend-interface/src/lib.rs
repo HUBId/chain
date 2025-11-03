@@ -366,19 +366,6 @@ pub struct UptimePublicInputs {
     pub commitment: [u8; 32],
 }
 
-/// Poseidon input tuple associated with a consensus VRF entry.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsensusVrfPoseidonPublicInput {
-    /// Poseidon digest derived from the VRF input tuple.
-    pub digest: [u8; 32],
-    /// Last block header hash folded into the Poseidon transcript.
-    pub last_block_header: [u8; 32],
-    /// Epoch identifier included in the Poseidon sponge.
-    pub epoch: u64,
-    /// Tier seed binding the validator selection round.
-    pub tier_seed: [u8; 32],
-}
-
 /// Public VRF material included in consensus proofs.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusVrfPublicEntry {
@@ -390,8 +377,14 @@ pub struct ConsensusVrfPublicEntry {
     pub proof: Vec<u8>,
     /// Validator VRF public key used to produce the proof.
     pub public_key: [u8; 32],
-    /// Poseidon metadata describing the VRF input tuple.
-    pub poseidon: ConsensusVrfPoseidonPublicInput,
+    /// Poseidon digest derived from the VRF input tuple.
+    pub poseidon_digest: [u8; 32],
+    /// Last block header hash folded into the Poseidon transcript.
+    pub poseidon_last_block_header: [u8; 32],
+    /// Epoch identifier included in the Poseidon sponge.
+    pub poseidon_epoch: u64,
+    /// Tier seed binding the validator selection round.
+    pub poseidon_tier_seed: [u8; 32],
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

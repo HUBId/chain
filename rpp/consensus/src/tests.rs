@@ -30,8 +30,8 @@ use super::validator::{
 
 use crate::proof_backend::{
     BackendError, BackendResult, ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry,
-    ProofBackend, ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey, WitnessBytes,
+    ConsensusVrfPublicEntry, ProofBackend, ProofBytes, ProofHeader, ProofSystemKind, VerifyingKey,
+    WitnessBytes,
 };
 
 #[cfg(feature = "prover-mock")]
@@ -165,12 +165,10 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
             pre_output: decode_array_hex::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
             proof: decode_vec_hex(&entry.proof, VRF_PROOF_LENGTH),
             public_key: decode_digest_hex(&entry.public_key),
-            poseidon: BackendVrfPoseidonInput {
-                digest: decode_digest_hex(&entry.poseidon.digest),
-                last_block_header: decode_digest_hex(&entry.poseidon.last_block_header),
-                epoch: entry.poseidon.epoch.parse().expect("decode poseidon epoch"),
-                tier_seed: decode_digest_hex(&entry.poseidon.tier_seed),
-            },
+            poseidon_digest: decode_digest_hex(&entry.poseidon.digest),
+            poseidon_last_block_header: decode_digest_hex(&entry.poseidon.last_block_header),
+            poseidon_epoch: entry.poseidon.epoch.parse().expect("decode poseidon epoch"),
+            poseidon_tier_seed: decode_digest_hex(&entry.poseidon.tier_seed),
         })
         .collect();
     let witness_commitments: Vec<[u8; 32]> = metadata

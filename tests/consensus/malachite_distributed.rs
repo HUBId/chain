@@ -10,9 +10,7 @@ use rpp_consensus::messages::{
 };
 use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
-    ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry,
-    ProofBytes, VerifyingKey,
+    ConsensusCircuitDef, ConsensusPublicInputs, ConsensusVrfPublicEntry, ProofBytes, VerifyingKey,
 };
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_p2p::GossipTopic;
@@ -58,12 +56,10 @@ fn sample_public_inputs(
             pre_output: decode_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
             proof: decode_vec(&entry.proof, VRF_PROOF_LENGTH),
             public_key: decode_digest(&entry.public_key),
-            poseidon: BackendVrfPoseidonInput {
-                digest: decode_digest(&entry.poseidon.digest),
-                last_block_header: decode_digest(&entry.poseidon.last_block_header),
-                epoch: entry.poseidon.epoch.parse().expect("decode epoch"),
-                tier_seed: decode_digest(&entry.poseidon.tier_seed),
-            },
+            poseidon_digest: decode_digest(&entry.poseidon.digest),
+            poseidon_last_block_header: decode_digest(&entry.poseidon.last_block_header),
+            poseidon_epoch: entry.poseidon.epoch.parse().expect("decode epoch"),
+            poseidon_tier_seed: decode_digest(&entry.poseidon.tier_seed),
         })
         .collect();
     let witness_commitments: Vec<[u8; 32]> = metadata

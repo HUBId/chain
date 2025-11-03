@@ -89,28 +89,15 @@ impl Default for ConsensusVrfEntry {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConsensusVrfPoseidonPublicInput {
-    pub digest: [u8; 32],
-    pub last_block_header: [u8; 32],
-    pub epoch: u64,
-    pub tier_seed: [u8; 32],
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusVrfPublicEntry {
     pub randomness: [u8; 32],
     pub pre_output: [u8; VRF_PREOUTPUT_LENGTH],
     pub proof: Vec<u8>,
     pub public_key: [u8; 32],
-    pub poseidon: ConsensusVrfPoseidonPublicInput,
-}
-
-#[derive(Clone, Debug)]
-struct SanitizedVrfPoseidonInput {
-    digest: [u8; 32],
-    last_block_header: [u8; 32],
-    epoch: u64,
-    tier_seed: [u8; 32],
+    pub poseidon_digest: [u8; 32],
+    pub poseidon_last_block_header: [u8; 32],
+    pub poseidon_epoch: u64,
+    pub poseidon_tier_seed: [u8; 32],
 }
 
 #[derive(Clone, Debug)]
@@ -119,7 +106,10 @@ struct SanitizedVrfEntry {
     pre_output: [u8; VRF_PREOUTPUT_LENGTH],
     proof: [u8; VRF_PROOF_LENGTH],
     public_key: [u8; 32],
-    poseidon: SanitizedVrfPoseidonInput,
+    poseidon_digest: [u8; 32],
+    poseidon_last_block_header: [u8; 32],
+    poseidon_epoch: u64,
+    poseidon_tier_seed: [u8; 32],
 }
 
 impl SanitizedVrfEntry {
@@ -137,12 +127,10 @@ impl SanitizedVrfEntry {
             pre_output: self.pre_output,
             proof: self.proof.to_vec(),
             public_key: self.public_key,
-            poseidon: ConsensusVrfPoseidonPublicInput {
-                digest: self.poseidon.digest,
-                last_block_header: self.poseidon.last_block_header,
-                epoch: self.poseidon.epoch,
-                tier_seed: self.poseidon.tier_seed,
-            },
+            poseidon_digest: self.poseidon_digest,
+            poseidon_last_block_header: self.poseidon_last_block_header,
+            poseidon_epoch: self.poseidon_epoch,
+            poseidon_tier_seed: self.poseidon_tier_seed,
         }
     }
 }
@@ -311,12 +299,10 @@ impl ConsensusWitness {
                 pre_output,
                 proof,
                 public_key,
-                poseidon: SanitizedVrfPoseidonInput {
-                    digest: poseidon_digest,
-                    last_block_header: poseidon_last_block_header,
-                    epoch: poseidon_epoch,
-                    tier_seed: poseidon_tier_seed,
-                },
+                poseidon_digest,
+                poseidon_last_block_header,
+                poseidon_epoch,
+                poseidon_tier_seed,
             });
         }
 
