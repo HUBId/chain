@@ -11,8 +11,8 @@ use rpp_consensus::messages::{
 use rpp_consensus::network::topics::{ConsensusStream, TopicRouter};
 use rpp_consensus::proof_backend::{
     ConsensusCircuitDef, ConsensusPublicInputs,
-    ConsensusVrfPoseidonInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry, ProofBytes,
-    VerifyingKey,
+    ConsensusVrfPoseidonPublicInput as BackendVrfPoseidonInput, ConsensusVrfPublicEntry,
+    ProofBytes, VerifyingKey,
 };
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_p2p::GossipTopic;

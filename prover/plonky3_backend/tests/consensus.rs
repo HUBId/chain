@@ -1,6 +1,6 @@
 use plonky3_backend::{
     encode_consensus_public_inputs, validate_consensus_public_inputs, ConsensusCircuit,
-    ConsensusVrfPoseidonWitness, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower,
+    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, VotePower,
     VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde_json::Value;
@@ -26,12 +26,12 @@ fn sample_witness() -> ConsensusWitness {
         commit_votes: vec![sample_vote("validator-a", 2)],
         quorum_bitmap_root: "33".repeat(32),
         quorum_signature_root: "44".repeat(32),
-        vrf_entries: vec![ConsensusVrfWitnessEntry {
+        vrf_entries: vec![ConsensusVrfEntry {
             randomness: "55".repeat(32),
             pre_output: "66".repeat(VRF_PREOUTPUT_LENGTH),
             proof: "77".repeat(VRF_PROOF_LENGTH),
             public_key: "88".repeat(32),
-            poseidon: ConsensusVrfPoseidonWitness {
+            poseidon: ConsensusVrfPoseidonInput {
                 digest: "99".repeat(32),
                 last_block_header: block_hash,
                 epoch: "3".to_string(),
@@ -96,6 +96,20 @@ fn consensus_rejects_invalid_poseidon_digest_length() {
 fn consensus_rejects_invalid_poseidon_epoch() {
     let mut witness = sample_witness();
     witness.vrf_entries[0].poseidon.epoch = "".into();
+    assert!(ConsensusCircuit::new(witness).is_err());
+}
+
+#[test]
+fn consensus_rejects_poseidon_epoch_mismatch() {
+    let mut witness = sample_witness();
+    witness.vrf_entries[0].poseidon.epoch = "999".into();
+    assert!(ConsensusCircuit::new(witness).is_err());
+}
+
+#[test]
+fn consensus_rejects_poseidon_last_block_header_mismatch() {
+    let mut witness = sample_witness();
+    witness.vrf_entries[0].poseidon.last_block_header = "aa".repeat(32);
     assert!(ConsensusCircuit::new(witness).is_err());
 }
 
