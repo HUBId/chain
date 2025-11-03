@@ -134,7 +134,9 @@ evidence roots inside the public inputs. Operators must ensure that
   aggregated vote sets.
 - Vollständige `vrf_entries` inklusive Randomness, Pre-Output, Proof, Public
   Key sowie Poseidon-Metadaten (`Digest`, `Last Block Header`, `Epoch`,
-  `Tier Seed`) für jede Validator:in im Zertifikat. Ältere Clients können die bisherigen
+  `Tier Seed`) für jede Validator:in im Zertifikat. `Last Block Header` muss dem
+  Zertifikats-`block_hash` entsprechen und die `Epoch`-Zeichenkette dem
+  exportierten `epoch`-Zähler. Ältere Clients können die bisherigen
   `vrf_outputs`/`vrf_proofs` aus diesen Einträgen ableiten, solange sie das
   Version-Flag `version=2` setzen.
 

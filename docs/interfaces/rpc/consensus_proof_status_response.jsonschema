@@ -43,7 +43,7 @@
     "slot": {"type": "integer", "minimum": 0},
     "vrf_entries": {
       "type": "array",
-      "description": "VRF transcripts contributed by the validator set. Each entry includes the randomness transcript, pre-output commitment, proof transcript, validator public key, and the Poseidon bindings enforced by the proof circuits.",
+      "description": "VRF transcripts contributed by the validator set. Each entry now bundles the randomness transcript, pre-output commitment, proof transcript, validator public key, and the Poseidon inputs enforced by the proof circuits so callers can reconstruct the full validator tuple without consulting legacy vectors.",
       "items": {
         "type": "object",
         "required": [
@@ -76,7 +76,7 @@
           },
           "poseidon": {
             "type": "object",
-            "description": "Poseidon transcript inputs that bind the validator metadata to the advertised block hash.",
+            "description": "Poseidon transcript inputs that bind the validator metadata to the advertised block hash. The `last_block_header` field mirrors `block_hash` and every entry's `epoch` string MUST match the top-level `epoch` counter exported with the certificate.",
             "required": [
               "digest",
               "last_block_header",
@@ -91,12 +91,12 @@
               },
               "last_block_header": {
                 "type": "string",
-                "description": "Poseidon commitment to the previous block header mixed into the VRF transcript.",
+                "description": "Poseidon commitment to the previous block header mixed into the VRF transcript (expected to equal the response `block_hash`).",
                 "pattern": "^[0-9a-fA-F]{64}$"
               },
               "epoch": {
                 "type": "string",
-                "description": "Decimal-encoded epoch folded into the VRF Poseidon transcript.",
+                "description": "Decimal-encoded epoch folded into the VRF Poseidon transcript (matches the top-level `epoch`).",
                 "pattern": "^[0-9]+$"
               },
               "tier_seed": {
