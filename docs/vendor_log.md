@@ -118,6 +118,13 @@ Weitere Schritte:
 ## Strategie-Update – Mehrstufige Vendor-Planung (2025-10-14)
 
 * Diff-Limit pro PR: ca. 2 000 geänderte Zeilen, damit Code-Reviews handhabbar bleiben.
+
+## Plonky3 Backend Dependencies (2026-02-18)
+
+* Toolchain: Der Prover-Workspace nutzt weiterhin `nightly-2025-07-14` gemäß `prover/rust-toolchain.toml`; Builds auf Stable (`1.79`) bleiben auf den Node-/Workspace-Teilen beschränkt.【F:prover/rust-toolchain.toml†L1-L5】【F:prover/Cargo.toml†L1-L8】
+* CPU-Pfad: Alle `p3-*`-Kerne stammen von crates.io in Version `0.3.0`, ergänzt um das git-Pin `p3-multilinear-util@80803612ff4b`, sodass die Plonky3-Primitiven reproduzierbar gelockt sind.【F:docs/third_party/plonky3_deps.json†L30-L217】
+* GPU-Option: Aktiviert durch `plonky3-gpu` beziehen wir `gpu-alloc@0.6.0` und `gpu-descriptor@0.3.2` aus crates.io; der Repository-Helper `GpuResources` hält die Initialisierung minimal.【F:docs/third_party/plonky3_gpu_deps.json†L21-L37】【F:prover/plonky3_backend/src/gpu.rs†L1-L37】
+* Lizenz- und Pin-Nachweise sind in `docs/third_party/plonky3_deps.json` und `docs/third_party/plonky3_gpu_deps.json` abgelegt, sodass Offline-Prüfungen ohne erneuten crates.io-Abruf möglich sind.【F:docs/third_party/plonky3_deps.json†L1-L307】【F:docs/third_party/plonky3_gpu_deps.json†L1-L325】
 * Segmentgröße: höchstens drei Crates pro Batch, um innerhalb des Diff-Limits zu bleiben.
 * Folgeaufgaben: Umsetzung der noch offenen Vendor-Schritte gemäß Abschnitt „Folgeaktionen“ im Abhängigkeits-Kompatibilitätsbericht.
 
