@@ -189,7 +189,7 @@ fn decode_hash(label: &str, value: &str) -> BackendResult<[u8; 32]> {
 
 pub fn compute_consensus_bindings(
     block_hash: &[u8; 32],
-    vrf_entries: &[ConsensusVrfEntry],
+    vrf_entries: &[ConsensusVrfPublicEntry],
     witness_commitments: &[[u8; 32]],
     reputation_roots: &[[u8; 32]],
     quorum_bitmap_root: &[u8; 32],
@@ -199,31 +199,18 @@ pub fn compute_consensus_bindings(
     let hasher = parameters.poseidon_hasher();
     let block_hash_element = parameters.element_from_bytes(block_hash);
 
-    let vrf_randomness: Vec<[u8; 32]> = vrf_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| decode_hash(&format!("vrf randomness #{index}"), &entry.randomness))
-        .collect::<BackendResult<_>>()?;
-    let vrf_proofs: Vec<Vec<u8>> = vrf_entries
-        .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            decode_hex_vec(
-                &format!("vrf proof #{index}"),
-                &entry.proof,
-                VRF_PROOF_LENGTH,
-            )
-        })
-        .collect::<BackendResult<_>>()?;
-
     let vrf_output = binding_from_bytes(
         &parameters,
         &hasher,
         &block_hash_element,
-        vrf_randomness.iter().map(|value| value.as_slice()),
+        vrf_entries.iter().map(|entry| entry.randomness.as_slice()),
     );
-    let vrf_proof =
-        binding_from_bytes(&parameters, &hasher, &block_hash_element, vrf_proofs.iter());
+    let vrf_proof = binding_from_bytes(
+        &parameters,
+        &hasher,
+        &block_hash_element,
+        vrf_entries.iter().map(|entry| entry.proof.as_slice()),
+    );
     let witness_commitment = binding_from_bytes(
         &parameters,
         &hasher,
@@ -562,6 +549,18 @@ impl ConsensusCertificate {
                 &entry.poseidon.tier_seed,
             )?;
 
+            if poseidon_last_block_header != block_hash {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} poseidon last block header mismatch block hash",
+                )));
+            }
+            if poseidon_epoch != self.metadata.epoch {
+                return Err(BackendError::Failure(format!(
+                    "consensus metadata vrf entry #{index} poseidon epoch {} does not match certificate epoch {}",
+                    poseidon_epoch, self.metadata.epoch
+                )));
+            }
+
             vrf_public_entries.push(ConsensusVrfPublicEntry {
                 randomness,
                 pre_output,
@@ -597,7 +596,7 @@ impl ConsensusCertificate {
 
         let bindings = compute_consensus_bindings(
             &block_hash,
-            &self.metadata.vrf_entries,
+            &vrf_public_entries,
             &witness_commitments,
             &reputation_roots,
             &quorum_bitmap_root,

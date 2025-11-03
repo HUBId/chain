@@ -64,7 +64,10 @@ use crate::plonky3::circuit::transaction::TransactionWitness as Plonky3Transacti
 use crate::plonky3::prover::{
     telemetry_snapshot as plonky3_prover_telemetry, Plonky3BackendHealth,
 };
-use crate::proof_backend::{Blake2sHasher, ProofBytes};
+use crate::proof_backend::{
+    Blake2sHasher, ConsensusVrfPoseidonInput as BackendVrfPoseidonInput,
+    ConsensusVrfPublicEntry as BackendVrfPublicEntry, ProofBytes,
+};
 #[cfg(feature = "prover-stwo")]
 use crate::proof_backend::{
     ConsensusCircuitDef, PruningCircuitDef, RecursiveCircuitDef, StateCircuitDef, WitnessBytes,
@@ -6996,7 +6999,7 @@ fn summarize_consensus_certificate(
     let block_hash = decode_digest("consensus block hash", &block_hash_hex)?;
     let metadata = &certificate.metadata;
 
-    let vrf_entries = sanitize_vrf_entries(&metadata.vrf_entries)?;
+    let (vrf_entries, vrf_public_entries) = sanitize_vrf_entries(&metadata.vrf_entries)?;
     let witness_commitments =
         decode_digest_list("witness commitment", &metadata.witness_commitments)?;
     let reputation_roots = decode_digest_list("reputation root", &metadata.reputation_roots)?;
@@ -7006,7 +7009,7 @@ fn summarize_consensus_certificate(
 
     let bindings = compute_consensus_bindings(
         &block_hash,
-        &metadata.vrf_entries,
+        &vrf_public_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
@@ -7067,7 +7070,7 @@ fn decode_digest_list(label: &str, values: &[String]) -> ChainResult<Vec<[u8; 32
 
 fn sanitize_vrf_entries(
     entries: &[crate::consensus::messages::ConsensusVrfEntry],
-) -> ChainResult<Vec<ConsensusProofVrfEntry>> {
+) -> ChainResult<(Vec<ConsensusProofVrfEntry>, Vec<BackendVrfPublicEntry>)> {
     if entries.is_empty() {
         return Err(ChainError::Crypto(
             "consensus metadata missing VRF entries".into(),
@@ -7075,6 +7078,7 @@ fn sanitize_vrf_entries(
     }
 
     let mut sanitized_entries = Vec::with_capacity(entries.len());
+    let mut backend_entries = Vec::with_capacity(entries.len());
 
     for (index, entry) in entries.iter().enumerate() {
         let randomness = decode_digest(&format!("vrf randomness #{index}"), &entry.randomness)?;
@@ -7119,9 +7123,22 @@ fn sanitize_vrf_entries(
                 tier_seed: hex::encode(poseidon_tier_seed),
             },
         });
+
+        backend_entries.push(BackendVrfPublicEntry {
+            randomness,
+            pre_output,
+            proof,
+            public_key,
+            poseidon: BackendVrfPoseidonInput {
+                digest: poseidon_digest,
+                last_block_header: poseidon_last_block_header,
+                epoch: poseidon_epoch,
+                tier_seed: poseidon_tier_seed,
+            },
+        });
     }
 
-    Ok(sanitized_entries)
+    Ok((sanitized_entries, backend_entries))
 }
 
 fn decode_hex_array<const N: usize>(label: &str, value: &str) -> ChainResult<[u8; N]> {
@@ -7376,9 +7393,10 @@ mod tests {
         let signature_root =
             decode_digest("signature", &certificate.metadata.quorum_signature_root).unwrap();
 
+        let (_, backend_entries) = sanitize_vrf_entries(&certificate.metadata.vrf_entries).unwrap();
         let expected = compute_consensus_bindings(
             &block_hash,
-            &certificate.metadata.vrf_entries,
+            &backend_entries,
             &witness_commitments,
             &reputation_roots,
             &bitmap_root,

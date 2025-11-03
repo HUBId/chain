@@ -1,7 +1,7 @@
 #[path = "common.rs"]
 mod common;
 
-use common::{digest, metadata_fixture, vrf_entry};
+use common::{align_poseidon_last_block_header, digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_consensus::malachite::distributed::{DistributedOrchestrator, NodeStreams, VoteMessage};
 use rpp_consensus::messages::{
@@ -22,7 +22,7 @@ use tokio::runtime::Builder;
 fn sample_metadata(round: u64) -> ConsensusProofMetadata {
     let seed = seed_from_round(round);
     metadata_fixture(
-        vec![vrf_entry(seed, seed)],
+        vec![vrf_entry(seed, seed, round)],
         vec![digest(seed.wrapping_add(1))],
         vec![digest(seed.wrapping_add(2))],
         round,
@@ -79,7 +79,7 @@ fn sample_public_inputs(
 
     let bindings = compute_consensus_bindings(
         &block_hash_bytes,
-        &metadata.vrf_entries,
+        &vrf_public_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
@@ -168,7 +168,8 @@ fn sample_certificate(
 fn sample_proposal(height: u64, round: u64, leader: &str) -> Proposal {
     let block = sample_block(height, round);
     let block_hash = block.hash();
-    let metadata = sample_metadata(round);
+    let mut metadata = sample_metadata(round);
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
     Proposal {
         block,
         proof: sample_proof(&block_hash, round, &metadata),
@@ -204,7 +205,7 @@ fn sample_commit(proposal: &Proposal, round: u64) -> Commit {
     Commit {
         block: proposal.block.clone(),
         proof: proposal.proof.clone(),
-        certificate: sample_certificate(proposal.block_hash(), proposal.block.height, round),
+        certificate: proposal.certificate.clone(),
         signatures: vec![Signature {
             validator_id: proposal.leader_id.clone(),
             peer_id: PeerId::random(),

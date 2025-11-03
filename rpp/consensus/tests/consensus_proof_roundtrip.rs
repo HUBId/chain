@@ -7,7 +7,7 @@ use rpp_consensus::proof_backend::ProofSystemKind;
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use serde_json::Value;
 
-fn vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
+fn vrf_entry(randomness_byte: u8, proof_byte: u8, epoch: u64) -> ConsensusVrfEntry {
     let poseidon_seed = randomness_byte.wrapping_add(1);
     ConsensusVrfEntry {
         randomness: hex::encode([randomness_byte; 32]),
@@ -17,7 +17,7 @@ fn vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
         poseidon: ConsensusVrfPoseidonInput {
             digest: hex::encode([poseidon_seed; 32]),
             last_block_header: hex::encode([poseidon_seed.wrapping_add(1); 32]),
-            epoch: format!("{}", poseidon_seed),
+            epoch: format!("{epoch}"),
             tier_seed: hex::encode([poseidon_seed.wrapping_add(2); 32]),
         },
     }
@@ -44,20 +44,29 @@ fn metadata_fixture(
 }
 
 fn sample_metadata() -> ConsensusProofMetadata {
-    metadata_fixture(
-        vec![vrf_entry(0x11, 0x22)],
+    let epoch = 3;
+    let mut metadata = metadata_fixture(
+        vec![vrf_entry(0x11, 0x22, epoch)],
         vec!["77".repeat(32), "88".repeat(32)],
         vec!["99".repeat(32)],
-        3,
+        epoch,
         9,
         "aa".repeat(32),
         "bb".repeat(32),
-    )
+    );
+    for entry in metadata.vrf_entries.iter_mut() {
+        entry.poseidon.epoch = format!("{epoch}");
+    }
+    metadata
 }
 
 fn sample_certificate() -> ConsensusCertificate {
+    let block_hash = BlockId("aa".repeat(32));
+    let mut metadata = sample_metadata();
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
+
     ConsensusCertificate {
-        block_hash: BlockId("aa".repeat(32)),
+        block_hash,
         height: 42,
         round: 7,
         total_power: 10,
@@ -67,7 +76,13 @@ fn sample_certificate() -> ConsensusCertificate {
         commit_power: 8,
         prevotes: Vec::new(),
         precommits: Vec::new(),
-        metadata: sample_metadata(),
+        metadata,
+    }
+}
+
+fn align_poseidon_last_block_header(metadata: &mut ConsensusProofMetadata, block_hash_hex: &str) {
+    for entry in metadata.vrf_entries.iter_mut() {
+        entry.poseidon.last_block_header = block_hash_hex.to_string();
     }
 }
 
@@ -165,7 +180,7 @@ fn consensus_public_inputs_match_expected_bindings() {
 
     let bindings = compute_consensus_bindings(
         &block_hash,
-        &certificate.metadata.vrf_entries,
+        &inputs.vrf_entries,
         &witness_commitments,
         &reputation_roots,
         &inputs.quorum_bitmap_root,

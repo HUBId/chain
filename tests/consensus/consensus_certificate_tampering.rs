@@ -1,7 +1,7 @@
 #[path = "common.rs"]
 mod common;
 
-use common::{digest, metadata_fixture, vrf_entry};
+use common::{align_poseidon_last_block_header, digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
 use rpp_chain::consensus_engine::messages::{BlockId, TalliedVote};
@@ -11,9 +11,9 @@ use rpp_chain::types::ChainProof;
 fn sample_metadata() -> ConsensusProofMetadata {
     metadata_fixture(
         vec![
-            vrf_entry(0xAA, 0x11),
-            vrf_entry(0xBB, 0x22),
-            vrf_entry(0xCC, 0x33),
+            vrf_entry(0xAA, 0x11, 17),
+            vrf_entry(0xBB, 0x22, 17),
+            vrf_entry(0xCC, 0x33, 17),
         ],
         vec![digest(0xDD)],
         vec![digest(0xEE)],
@@ -34,10 +34,12 @@ fn sample_vote(validator: &str, voting_power: u64) -> TalliedVote {
 }
 
 fn sample_certificate() -> ConsensusCertificate {
-    let metadata = sample_metadata();
+    let mut metadata = sample_metadata();
     let prevote = sample_vote("validator-1", 60);
     let precommit = sample_vote("validator-2", 60);
     let block_hash = BlockId("AA".repeat(32));
+
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
 
     ConsensusCertificate {
         block_hash,

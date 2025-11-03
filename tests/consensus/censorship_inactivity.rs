@@ -4,7 +4,7 @@ use std::sync::Arc;
 #[path = "common.rs"]
 mod common;
 
-use common::{digest, metadata_fixture, vrf_entry};
+use common::{align_poseidon_last_block_header, digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use rpp_consensus::evidence::{CensorshipStage, EvidenceKind, EvidenceType};
 use rpp_consensus::messages::{
@@ -23,7 +23,7 @@ use serde_json::json;
 
 fn sample_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
     metadata_fixture(
-        vec![vrf_entry(0x11, 0x22)],
+        vec![vrf_entry(0x11, 0x22, epoch)],
         vec![digest(0x33)],
         vec![digest(0x44)],
         epoch,
@@ -139,7 +139,8 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
         timestamp: 0,
     };
     let block_hash = block.hash();
-    let metadata = sample_metadata(state.epoch, state.round);
+    let mut metadata = sample_metadata(state.epoch, state.round);
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
     let certificate =
         state.build_certificate(&block_hash.0, block.height, state.round, metadata.clone());
     let block_hash_bytes = decode_digest(&block_hash.0);
@@ -174,7 +175,7 @@ fn dummy_commit(state: &ConsensusState, height: u64) -> Commit {
 
     let bindings = compute_consensus_bindings(
         &block_hash_bytes,
-        &metadata.vrf_entries,
+        &vrf_public_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,

@@ -13,7 +13,7 @@ pub fn proof_bytes(byte: u8) -> String {
     hex::encode(vec![byte; VRF_PROOF_LENGTH])
 }
 
-pub fn vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
+pub fn vrf_entry(randomness_byte: u8, proof_byte: u8, epoch: u64) -> ConsensusVrfEntry {
     let poseidon_seed = randomness_byte.wrapping_add(1);
     ConsensusVrfEntryBuilder::new()
         .with_randomness(digest(randomness_byte))
@@ -24,7 +24,7 @@ pub fn vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
             ConsensusVrfPoseidonInputBuilder::new()
                 .with_digest(digest(poseidon_seed))
                 .with_last_block_header(digest(poseidon_seed.wrapping_add(1)))
-                .with_epoch(format!("{}", poseidon_seed))
+                .with_epoch(format!("{epoch}"))
                 .with_tier_seed(digest(poseidon_seed.wrapping_add(2)))
                 .build(),
         )
@@ -107,6 +107,15 @@ impl ConsensusMetadataBuilder {
             quorum_bitmap_root: self.quorum_bitmap_root,
             quorum_signature_root: self.quorum_signature_root,
         }
+    }
+}
+
+pub fn align_poseidon_last_block_header(
+    metadata: &mut ConsensusProofMetadata,
+    block_hash_hex: &str,
+) {
+    for entry in metadata.vrf_entries.iter_mut() {
+        entry.poseidon.last_block_header = block_hash_hex.to_string();
     }
 }
 

@@ -96,7 +96,7 @@ fn deterministic_keypair(id: &str) -> VrfKeypair {
     }
 }
 
-fn sample_vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
+fn sample_vrf_entry(randomness_byte: u8, proof_byte: u8, epoch: u64) -> ConsensusVrfEntry {
     let poseidon_seed = randomness_byte.wrapping_add(1);
     ConsensusVrfEntry {
         randomness: hex::encode([randomness_byte; 32]),
@@ -106,7 +106,7 @@ fn sample_vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
         poseidon: ConsensusVrfPoseidonInput {
             digest: hex::encode([poseidon_seed; 32]),
             last_block_header: hex::encode([poseidon_seed.wrapping_add(1); 32]),
-            epoch: format!("{}", poseidon_seed),
+            epoch: format!("{epoch}"),
             tier_seed: hex::encode([poseidon_seed.wrapping_add(2); 32]),
         },
     }
@@ -114,13 +114,19 @@ fn sample_vrf_entry(randomness_byte: u8, proof_byte: u8) -> ConsensusVrfEntry {
 
 fn sample_certificate_metadata(epoch: u64, slot: u64) -> ConsensusProofMetadata {
     ConsensusProofMetadata {
-        vrf_entries: vec![sample_vrf_entry(0x11, 0x22)],
+        vrf_entries: vec![sample_vrf_entry(0x11, 0x22, epoch)],
         witness_commitments: vec!["33".repeat(32)],
         reputation_roots: vec!["44".repeat(32)],
         epoch,
         slot,
         quorum_bitmap_root: "55".repeat(32),
         quorum_signature_root: "66".repeat(32),
+    }
+}
+
+fn align_poseidon_last_block_header(metadata: &mut ConsensusProofMetadata, block_hash_hex: &str) {
+    for entry in metadata.vrf_entries.iter_mut() {
+        entry.poseidon.last_block_header = block_hash_hex.to_string();
     }
 }
 
@@ -145,8 +151,10 @@ fn decode_vec_hex(value: &str, expected: usize) -> Vec<u8> {
 }
 
 fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
-    let metadata = sample_certificate_metadata(5, round);
-    let block_hash_bytes = decode_digest_hex(&"aa".repeat(32));
+    let mut metadata = sample_certificate_metadata(5, round);
+    let block_hash_hex = "aa".repeat(32);
+    align_poseidon_last_block_header(&mut metadata, &block_hash_hex);
+    let block_hash_bytes = decode_digest_hex(&block_hash_hex);
     let quorum_bitmap_root = decode_digest_hex(&metadata.quorum_bitmap_root);
     let quorum_signature_root = decode_digest_hex(&metadata.quorum_signature_root);
     let vrf_public_entries: Vec<ConsensusVrfPublicEntry> = metadata
@@ -178,7 +186,7 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
 
     let bindings = compute_consensus_bindings(
         &block_hash_bytes,
-        &metadata.vrf_entries,
+        &vrf_public_entries,
         &witness_commitments,
         &reputation_roots,
         &quorum_bitmap_root,
@@ -383,6 +391,9 @@ fn certificate_for_block(block: &Block, round: u64) -> ConsensusCertificate {
     let prevotes = build_tallied_votes(&block_hash, round, block.height, "prevote", weights);
     let precommits = build_tallied_votes(&block_hash, round, block.height, "precommit", weights);
 
+    let mut metadata = sample_certificate_metadata(block.epoch, round);
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
+
     ConsensusCertificate {
         block_hash,
         height: block.height,
@@ -394,7 +405,7 @@ fn certificate_for_block(block: &Block, round: u64) -> ConsensusCertificate {
         commit_power: total_power,
         prevotes,
         precommits,
-        metadata: sample_certificate_metadata(block.epoch, round),
+        metadata,
     }
 }
 
@@ -496,6 +507,9 @@ fn certificate_with_block(label: &str) -> ConsensusCertificate {
         weights,
     );
 
+    let mut metadata = sample_certificate_metadata(0, CONSENSUS_DEFAULT_ROUND);
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
+
     ConsensusCertificate {
         block_hash,
         height: 1,
@@ -507,7 +521,7 @@ fn certificate_with_block(label: &str) -> ConsensusCertificate {
         commit_power: total_power,
         prevotes,
         precommits,
-        metadata: sample_certificate_metadata(0, CONSENSUS_DEFAULT_ROUND),
+        metadata,
     }
 }
 
@@ -516,6 +530,46 @@ fn acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .expect("lock poisoned")
+}
+
+#[test]
+fn consensus_public_inputs_rejects_short_vrf_randomness() {
+    let mut certificate = certificate_with_block("invalid-randomness");
+    certificate.metadata.vrf_entries[0].randomness = hex::encode(vec![0xAA; 31]);
+
+    let error = certificate.consensus_public_inputs().unwrap_err();
+    assert!(matches!(
+        error,
+        BackendError::Failure(message) if message.contains("vrf randomness #0 must encode 32 bytes")
+    ));
+}
+
+#[test]
+fn consensus_public_inputs_rejects_poseidon_epoch_mismatch() {
+    let mut certificate = certificate_with_block("epoch-mismatch");
+    certificate.metadata.vrf_entries[0].poseidon.epoch =
+        format!("{}", certificate.metadata.epoch.saturating_add(1));
+
+    let error = certificate.consensus_public_inputs().unwrap_err();
+    assert!(matches!(
+        error,
+        BackendError::Failure(message) if message.contains("poseidon epoch")
+    ));
+}
+
+#[test]
+fn consensus_public_inputs_rejects_poseidon_last_block_header_mismatch() {
+    let mut certificate = certificate_with_block("block-mismatch");
+    certificate.metadata.vrf_entries[0]
+        .poseidon
+        .last_block_header = "ff".repeat(32);
+
+    let error = certificate.consensus_public_inputs().unwrap_err();
+    assert!(matches!(
+        error,
+        BackendError::Failure(message)
+            if message.contains("poseidon last block header mismatch block hash")
+    ));
 }
 
 #[test]
