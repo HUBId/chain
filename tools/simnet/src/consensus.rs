@@ -401,7 +401,27 @@ fn build_metadata(
 }
 
 fn tamper_vrf_payload(map: &mut Map<String, Value>) {
-    map.insert("vrf_entries".into(), Value::Array(Vec::new()));
+    if let Some(Value::Array(entries)) = map.get_mut("vrf_entries") {
+        if entries.len() > 1 {
+            entries.rotate_left(1);
+            return;
+        }
+
+        if let Some(Value::Object(first)) = entries.first_mut() {
+            if let Some(Value::String(randomness)) = first.get_mut("randomness") {
+                *randomness = randomness.chars().rev().collect();
+            }
+
+            if let Some(Value::Object(poseidon)) =
+                first.get_mut("poseidon").and_then(Value::as_object_mut)
+            {
+                poseidon.insert(
+                    "digest".into(),
+                    Value::String("deadbeef".repeat(8)),
+                );
+            }
+        }
+    }
 }
 
 fn tamper_quorum_payload(map: &mut Map<String, Value>) {
