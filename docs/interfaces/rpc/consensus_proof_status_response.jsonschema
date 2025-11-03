@@ -106,6 +106,24 @@
               }
             },
             "additionalProperties": false
+          },
+          "bindings": {
+            "type": "object",
+            "description": "Derived Poseidon binding digests obtained by folding each VRF randomness and proof transcript into the block hash accumulator.",
+            "required": ["randomness", "proof"],
+            "properties": {
+              "randomness": {
+                "type": "string",
+                "description": "Intermediate Poseidon binding digest covering the block hash and VRF randomness transcript up to this entry.",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              },
+              "proof": {
+                "type": "string",
+                "description": "Intermediate Poseidon binding digest covering the block hash and VRF proof transcript up to this entry.",
+                "pattern": "^[0-9a-fA-F]{64}$"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

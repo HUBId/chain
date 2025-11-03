@@ -57,6 +57,7 @@ Poseidon roots; version 1 omits bindings entirely.
 | Field | Description |
 | --- | --- |
 | `vrf_entries[]` | Structured VRF transcripts containing randomness, pre-output, proof, public key, and Poseidon metadata (`digest`, `last_block_header`, `epoch`, `tier_seed`) for each validator. |
+| `vrf_entries[].bindings` | Per-entry Poseidon binding digests folding the block hash with the VRF randomness and proof transcripts (version ≥ 3). |
 | `vrf_output`, `vrf_proof` | Poseidon bindings folding the block hash with all VRF pre-outputs / proofs. Present for versions ≥ 2. |
 | `witness_commitment_root` | Binding digest over witness commitments. |
 | `reputation_root` | Binding digest over the reputation tree roots. |

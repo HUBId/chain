@@ -79,30 +79,60 @@ pub(super) async fn proof_status(
     let legacy_outputs = status.legacy_vrf_outputs();
     let legacy_proofs = status.legacy_vrf_proofs();
 
+    let ConsensusProofStatus {
+        height,
+        round,
+        block_hash,
+        total_power,
+        quorum_threshold,
+        prevote_power,
+        precommit_power,
+        commit_power,
+        epoch,
+        slot,
+        mut vrf_entries,
+        witness_commitments,
+        reputation_roots,
+        quorum_bitmap_root,
+        quorum_signature_root,
+        vrf_output,
+        vrf_proof,
+        witness_commitment_root,
+        reputation_root,
+        quorum_bitmap,
+        quorum_signature,
+    } = status;
+
+    if version < 3 {
+        for entry in &mut vrf_entries {
+            entry.bindings = None;
+        }
+    }
+
     let payload = ConsensusProofStatusPayload {
-        height: status.height,
-        round: status.round,
-        block_hash: status.block_hash,
-        total_power: status.total_power,
-        quorum_threshold: status.quorum_threshold,
-        prevote_power: status.prevote_power,
-        precommit_power: status.precommit_power,
-        commit_power: status.commit_power,
-        epoch: status.epoch,
-        slot: status.slot,
-        vrf_entries: status.vrf_entries,
-        witness_commitments: status.witness_commitments,
-        reputation_roots: status.reputation_roots,
-        quorum_bitmap_root: status.quorum_bitmap_root,
-        quorum_signature_root: status.quorum_signature_root,
+        height,
+        round,
+        block_hash,
+        total_power,
+        quorum_threshold,
+        prevote_power,
+        precommit_power,
+        commit_power,
+        epoch,
+        slot,
+        vrf_entries,
+        witness_commitments,
+        reputation_roots,
+        quorum_bitmap_root,
+        quorum_signature_root,
         vrf_outputs: include_legacy.then_some(legacy_outputs),
         vrf_proofs: include_legacy.then_some(legacy_proofs),
-        vrf_output: include_extended.then_some(status.vrf_output),
-        vrf_proof: include_extended.then_some(status.vrf_proof),
-        witness_commitment_root: include_extended.then_some(status.witness_commitment_root),
-        reputation_root: include_extended.then_some(status.reputation_root),
-        quorum_bitmap: include_extended.then_some(status.quorum_bitmap),
-        quorum_signature: include_extended.then_some(status.quorum_signature),
+        vrf_output: include_extended.then_some(vrf_output),
+        vrf_proof: include_extended.then_some(vrf_proof),
+        witness_commitment_root: include_extended.then_some(witness_commitment_root),
+        reputation_root: include_extended.then_some(reputation_root),
+        quorum_bitmap: include_extended.then_some(quorum_bitmap),
+        quorum_signature: include_extended.then_some(quorum_signature),
     };
 
     Ok(Json(ConsensusProofStatusResponse {
