@@ -54,47 +54,34 @@ can continue to consume the flatter shape while migrating to the richer
 transcript objects.
 
 Every proof must supply the same number of VRF transcripts.  The STWO circuit
-enforces this relationship, verifies that the proofs are correctly formatted
-Schnorrkel transcripts, and constrains the `vrf_entry_count` field so it exactly
-matches the trace segment lengths for each vector inside the transcript tuple.
-In addition, the binding commitments above are recomputed inside the circuit by
-folding the `block_hash` with each metadata list using the Poseidon permutation.
-Any attempt to alter a VRF digest, witness commitment, public key, or quorum
-root without also recomputing the corresponding binding immediately violates the
-AIR relations.
+enforces this relationship, replays the Schnorrkel verification for each
+transcript, and constrains the `vrf_entry_count` field so it exactly matches the
+trace segment lengths for each vector inside the transcript tuple. Replaying the
+VRF verification binds every `vrf_proof` to its associated Poseidon
+`vrf_output`/pre-output so a prover cannot reshuffle raw transcripts or tweak
+the proof bytes without breaking the AIR. In addition, the binding commitments
+above are recomputed inside the circuit by folding the `block_hash` with each
+metadata list using the Poseidon permutation. Any attempt to alter a VRF digest,
+witness commitment, public key, or quorum root without also recomputing the
+corresponding binding immediately violates the AIR relations.
 
 ## Verifier Responsibilities
 
-Today the STWO and Plonky3 verifiers only repeat the lightweight
-format/structure checks that the witness loader performs. They confirm that the
-VRF output/proof vectors are non-empty, length-matched, and filled with
-32-byte-encoded digests, and that the witness and reputation lists provide the
-declared number of entries. These checks prevent obviously malformed payloads
-from entering the recursion path, but they do not yet bind the VRF transcripts
-or quorum commitments to the block context.
-
-> **Gap – VRF/Quorum constraints pending:** Phase‑2 will extend the circuits to
-> re-derive the VRF transcripts and quorum roots inside the AIR so the verifiers
-> can reject semantically valid-looking forgeries. Progress is tracked in the
-> blueprint backlog under [`proofs.plonky3_vendor_backend`](../../rpp/proofs/blueprint/mod.rs#L133-L155). The section returns to
-> “complete” once all acceptance criteria are met:
-> 
-> - the Phase‑2 circuit updates bind VRF transcripts and quorum roots to the
->   block hash;
-> - the verifier APIs expose and enforce the new constraints end-to-end; and
-> - regression suites cover positive/negative paths with the new tamper tests
->   described for Phase‑2 (circuit updates plus fresh scenarios in the production
->   test plan).
+The STWO and Plonky3 verifiers now lean on the circuit guarantees above. They
+still reject malformed encodings up front, but once the transcript material
+passes basic shape checks the verifiers rely on the AIR to recompute Poseidon
+bindings and to re-run the Schnorrkel VRF checks that tie each proof to its
+output. Consensus proofs therefore fail as soon as a `vrf_proof` diverges from
+its `vrf_output`, even if the tampering preserves lengths and other superficial
+metadata.
 
 ## Tamper Tests
 
-`tests/consensus/consensus_proof_integrity.rs` currently limits itself to
-tampering with the vector sizes and digest encodings; both verifiers catch these
-format violations. The lower-level unit suites in
-`rpp/proofs/stwo/tests/consensus_metadata.rs` and
-`rpp/proofs/plonky3/tests.rs` exercise the same guards. Phase‑2 will add
-tampering scenarios that mutate VRF transcripts and quorum Merkle data without
-breaking the encoding so the updated circuits and verifiers can prove they
-reject realistic attacks, backed by the planned circuit changes and new tests
-listed in the production test plan.
+`tests/consensus/consensus_proof_integrity.rs` and the backend-focused unit
+tests in `prover/prover_stwo_backend/src/backend.rs` now tamper with valid VRF
+transcripts to prove the strengthened binding. The suites swap two
+`vrf_proof` blobs while leaving the outputs untouched and flip an individual
+proof byte without altering lengths. Both Plonky3 and STWO verifiers reject the
+tampered payloads, and the AIR-level tests cover the same scenarios to catch
+regressions before they reach production harnesses.
 

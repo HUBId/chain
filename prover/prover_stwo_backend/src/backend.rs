@@ -1261,6 +1261,59 @@ mod tests {
     }
 
     #[test]
+    fn consensus_verification_rejects_swapped_vrf_proofs() {
+        let backend = StwoBackend::new();
+        let witness = sample_consensus_witness();
+        let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
+        let witness_bytes =
+            WitnessBytes::encode(&header, &witness).expect("consensus witness encodes");
+        let (proof_bytes, verifying_key, circuit) = backend
+            .prove_consensus(&witness_bytes)
+            .expect("consensus proving succeeds");
+
+        let mut public_inputs = consensus_public_inputs(&witness);
+        let (first, rest) = public_inputs
+            .vrf_entries
+            .split_first_mut()
+            .expect("at least one vrf entry");
+        let second = rest
+            .first_mut()
+            .expect("second vrf entry available for swap");
+        std::mem::swap(&mut first.proof, &mut second.proof);
+
+        let err = backend
+            .verify_consensus(&verifying_key, &proof_bytes, &circuit, &public_inputs)
+            .expect_err("swapped vrf proofs should fail");
+        assert!(matches!(err, BackendError::Failure(_)));
+    }
+
+    #[test]
+    fn consensus_verification_rejects_corrupted_vrf_proof_bytes() {
+        let backend = StwoBackend::new();
+        let witness = sample_consensus_witness();
+        let header = WitnessHeader::new(ProofSystemKind::Stwo, "consensus");
+        let witness_bytes =
+            WitnessBytes::encode(&header, &witness).expect("consensus witness encodes");
+        let (proof_bytes, verifying_key, circuit) = backend
+            .prove_consensus(&witness_bytes)
+            .expect("consensus proving succeeds");
+
+        let mut public_inputs = consensus_public_inputs(&witness);
+        let first = public_inputs
+            .vrf_entries
+            .first_mut()
+            .expect("at least one vrf entry");
+        if let Some(byte) = first.proof.first_mut() {
+            *byte ^= 0x01;
+        }
+
+        let err = backend
+            .verify_consensus(&verifying_key, &proof_bytes, &circuit, &public_inputs)
+            .expect_err("corrupted vrf proof byte should fail");
+        assert!(matches!(err, BackendError::Failure(_)));
+    }
+
+    #[test]
     fn consensus_verification_rejects_quorum_bitmap_tampering() {
         let backend = StwoBackend::new();
         let witness = sample_consensus_witness();
