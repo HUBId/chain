@@ -1,7 +1,7 @@
 #[path = "common.rs"]
 mod common;
 
-use common::{digest, metadata_fixture, vrf_entry};
+use common::{align_poseidon_last_block_header, digest, metadata_fixture, vrf_entry};
 use libp2p::PeerId;
 use plonky3_backend::ConsensusCircuit;
 use rpp_chain::consensus::{ConsensusCertificate, ConsensusProofMetadata};
@@ -23,11 +23,12 @@ fn sample_vote(validator: &str, voting_power: u64) -> TalliedVote {
 }
 
 fn sample_metadata() -> ConsensusProofMetadata {
+    let epoch = 7;
     metadata_fixture(
-        vec![vrf_entry(0x11, 0x21)],
+        vec![vrf_entry(0x11, 0x21, epoch)],
         vec![digest(0x33)],
         vec![digest(0x44)],
-        7,
+        epoch,
         9,
         digest(0x55),
         digest(0x66),
@@ -36,8 +37,12 @@ fn sample_metadata() -> ConsensusProofMetadata {
 
 fn sample_certificate() -> ConsensusCertificate {
     let vote = sample_vote("validator-1", 10);
+    let block_hash = BlockId("99".repeat(32));
+    let mut metadata = sample_metadata();
+    align_poseidon_last_block_header(&mut metadata, &block_hash.0);
+
     ConsensusCertificate {
-        block_hash: BlockId("99".repeat(32)),
+        block_hash,
         height: 5,
         round: 3,
         total_power: 10,
@@ -47,7 +52,7 @@ fn sample_certificate() -> ConsensusCertificate {
         commit_power: 10,
         prevotes: vec![vote.clone()],
         precommits: vec![vote.clone()],
-        metadata: sample_metadata(),
+        metadata,
         commit_votes: vec![vote],
     }
 }
