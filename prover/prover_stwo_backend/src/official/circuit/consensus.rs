@@ -1,8 +1,12 @@
 //! BFT consensus circuit enforcing quorum aggregation for block proposals.
 
-use std::{cell::RefCell, collections::HashSet};
+use std::{
+    cell::{Ref, RefCell},
+    collections::HashSet,
+    convert::{TryFrom, TryInto},
+};
 
-use rpp_crypto_vrf::{PoseidonVrfInput, VrfOutput, VrfPublicKey, verify_vrf};
+use rpp_crypto_vrf::{verify_vrf, PoseidonVrfInput, VrfError, VrfOutput, VrfPublicKey};
 use schnorrkel::vrf::{VRFPreOut, VRFProof};
 
 use crate::official::air::{
@@ -268,14 +272,182 @@ impl ConsensusWitness {
     }
 }
 
+fn parse_vrf_entries(witness: &ConsensusWitness) -> Result<Vec<VrfOutput>, CircuitError> {
+    if witness.vrf_entries.is_empty() {
+        return Err(CircuitError::ConstraintViolation(
+            "consensus witness missing VRF entries".into(),
+        ));
+    }
+
+    let block_hash_lower = witness.block_hash.to_ascii_lowercase();
+    let mut outputs = Vec::with_capacity(witness.vrf_entries.len());
+
+    for (index, entry) in witness.vrf_entries.iter().enumerate() {
+        let randomness_bytes = hex::decode(&entry.randomness).map_err(|err| {
+            CircuitError::InvalidWitness(format!(
+                "invalid vrf entry #{index} randomness encoding: {err}"
+            ))
+        })?;
+        if randomness_bytes.len() != 32 {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} randomness must encode 32 bytes"
+            )));
+        }
+        let randomness: [u8; 32] = randomness_bytes.as_slice().try_into().map_err(|_| {
+            CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} randomness must encode 32 bytes"
+            ))
+        })?;
+
+        let pre_output_bytes = hex::decode(&entry.pre_output).map_err(|err| {
+            CircuitError::InvalidWitness(format!(
+                "invalid vrf entry #{index} pre-output encoding: {err}"
+            ))
+        })?;
+        if pre_output_bytes.len() != VRF_PREOUTPUT_LENGTH {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} pre-output must encode {VRF_PREOUTPUT_LENGTH} bytes"
+            )));
+        }
+        let pre_output_array = {
+            let array: [u8; VRF_PREOUTPUT_LENGTH] =
+                pre_output_bytes.as_slice().try_into().map_err(|_| {
+                    CircuitError::ConstraintViolation(format!(
+                        "vrf entry #{index} pre-output must encode {VRF_PREOUTPUT_LENGTH} bytes"
+                    ))
+                })?;
+            let pre_output = VRFPreOut(array);
+            let VRFPreOut(array) = pre_output;
+            array
+        };
+
+        let proof_bytes = hex::decode(&entry.proof).map_err(|err| {
+            CircuitError::InvalidWitness(format!(
+                "invalid vrf entry #{index} proof encoding: {err}"
+            ))
+        })?;
+        if proof_bytes.len() != VRF_PROOF_LENGTH {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} proof must encode {VRF_PROOF_LENGTH} bytes"
+            )));
+        }
+        let proof_array: [u8; VRF_PROOF_LENGTH] =
+            proof_bytes.as_slice().try_into().map_err(|_| {
+                CircuitError::ConstraintViolation(format!(
+                    "vrf entry #{index} proof must encode {VRF_PROOF_LENGTH} bytes"
+                ))
+            })?;
+        let _proof = VRFProof::from_bytes(&proof_array).map_err(|err| {
+            CircuitError::ConstraintViolation(format!("vrf entry #{index} proof is invalid: {err}"))
+        })?;
+
+        let public_key_bytes = hex::decode(&entry.public_key).map_err(|err| {
+            CircuitError::InvalidWitness(format!(
+                "invalid vrf entry #{index} public key encoding: {err}"
+            ))
+        })?;
+        if public_key_bytes.len() != 32 {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} public key must encode 32 bytes"
+            )));
+        }
+        let public_key_array: [u8; 32] = public_key_bytes.as_slice().try_into().map_err(|_| {
+            CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} public key must encode 32 bytes"
+            ))
+        })?;
+        let public_key = VrfPublicKey::try_from(public_key_array).map_err(|err| {
+            CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} public key bytes are invalid: {err}"
+            ))
+        })?;
+
+        let last_block_bytes = hex::decode(&entry.input.last_block_header).map_err(|err| {
+            CircuitError::InvalidWitness(format!(
+                "invalid vrf entry #{index} poseidon last block header encoding: {err}"
+            ))
+        })?;
+        if last_block_bytes.len() != 32 {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} poseidon last block header must encode 32 bytes"
+            )));
+        }
+        if entry.input.last_block_header.to_ascii_lowercase() != block_hash_lower {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} poseidon last block header must match block hash"
+            )));
+        }
+        let last_block_header: [u8; 32] = last_block_bytes.as_slice().try_into().map_err(|_| {
+            CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} poseidon last block header must encode 32 bytes"
+            ))
+        })?;
+
+        if entry.input.epoch != witness.epoch {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} poseidon epoch mismatch"
+            )));
+        }
+
+        let tier_seed_bytes = hex::decode(&entry.input.tier_seed).map_err(|err| {
+            CircuitError::InvalidWitness(format!(
+                "invalid vrf entry #{index} poseidon tier seed encoding: {err}"
+            ))
+        })?;
+        if tier_seed_bytes.len() != 32 {
+            return Err(CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} poseidon tier seed must encode 32 bytes"
+            )));
+        }
+        let tier_seed: [u8; 32] = tier_seed_bytes.as_slice().try_into().map_err(|_| {
+            CircuitError::ConstraintViolation(format!(
+                "vrf entry #{index} poseidon tier seed must encode 32 bytes"
+            ))
+        })?;
+
+        let poseidon_input = PoseidonVrfInput::new(last_block_header, entry.input.epoch, tier_seed);
+        let output = VrfOutput {
+            randomness,
+            preoutput: pre_output_array,
+            proof: proof_array,
+        };
+
+        verify_vrf(&poseidon_input, &public_key, &output).map_err(|err| {
+            let message = match err {
+                VrfError::VerificationFailed => {
+                    format!("vrf entry #{index} randomness mismatch")
+                }
+                VrfError::InvalidInput(reason) => {
+                    format!("vrf entry #{index} invalid VRF input: {reason}")
+                }
+                VrfError::Backend(reason) => {
+                    format!("vrf entry #{index} verification backend error: {reason}")
+                }
+                VrfError::NotImplemented => {
+                    format!("vrf entry #{index} verification not implemented")
+                }
+            };
+            CircuitError::ConstraintViolation(message)
+        })?;
+
+        outputs.push(output);
+    }
+
+    Ok(outputs)
+}
+
 #[derive(Debug)]
 pub struct ConsensusCircuit {
     pub witness: ConsensusWitness,
+    verified_outputs: RefCell<Vec<VrfOutput>>,
 }
 
 impl ConsensusCircuit {
     pub fn new(witness: ConsensusWitness) -> Self {
-        Self { witness }
+        Self {
+            witness,
+            verified_outputs: RefCell::new(Vec::new()),
+        }
     }
 
     fn compute_vote_totals(witness: &ConsensusWitness) -> (u128, u128, u128) {
@@ -358,6 +530,21 @@ impl ConsensusCircuit {
         inputs
     }
 
+    pub fn verified_vrf_outputs(&self) -> Result<Ref<Vec<VrfOutput>>, CircuitError> {
+        let cache = self.verified_outputs.borrow();
+        if !cache.is_empty() {
+            return Ok(cache);
+        }
+        drop(cache);
+
+        let verified_outputs = parse_vrf_entries(&self.witness)?;
+        {
+            let mut cache = self.verified_outputs.borrow_mut();
+            *cache = verified_outputs;
+        }
+        Ok(self.verified_outputs.borrow())
+    }
+
     fn build_vote_segment(
         parameters: &StarkParameters,
         name: &str,
@@ -418,7 +605,14 @@ impl StarkCircuit for ConsensusCircuit {
         self.witness.verify_quorum(pre_vote_total, "pre-vote")?;
         self.witness.verify_quorum(pre_commit_total, "pre-commit")?;
         self.witness.verify_quorum(commit_total, "commit")?;
-        self.witness.ensure_vrf_entries()?;
+        {
+            self.verified_outputs.borrow_mut().clear();
+        }
+        let verified_outputs = parse_vrf_entries(&self.witness)?;
+        {
+            let mut cache = self.verified_outputs.borrow_mut();
+            *cache = verified_outputs;
+        }
         self.witness
             .ensure_digest_set("witness commitment", &self.witness.witness_commitments)?;
         self.witness
