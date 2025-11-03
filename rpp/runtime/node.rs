@@ -135,6 +135,7 @@ use rpp::node::{
     LightClientVerificationEvent, LightClientVerifier, StateSyncVerificationReport,
     VerificationErrorKind,
 };
+use rpp_chain::stwo::{params::StarkParameters, FieldElement};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
@@ -432,6 +433,14 @@ pub struct ConsensusProofVrfEntry {
     pub proof: String,
     pub public_key: String,
     pub poseidon: ConsensusProofVrfPoseidon,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<ConsensusProofVrfBindings>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ConsensusProofVrfBindings {
+    pub randomness: String,
+    pub proof: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -6999,7 +7008,11 @@ fn summarize_consensus_certificate(
     let block_hash = decode_digest("consensus block hash", &block_hash_hex)?;
     let metadata = &certificate.metadata;
 
-    let (vrf_entries, vrf_public_entries) = sanitize_vrf_entries(&metadata.vrf_entries)?;
+    let (mut vrf_entries, vrf_public_entries) = sanitize_vrf_entries(&metadata.vrf_entries)?;
+    let vrf_entry_bindings = compute_vrf_entry_bindings(&block_hash, &vrf_public_entries)?;
+    for (entry, bindings) in vrf_entries.iter_mut().zip(vrf_entry_bindings) {
+        entry.bindings = Some(bindings);
+    }
     let witness_commitments =
         decode_digest_list("witness commitment", &metadata.witness_commitments)?;
     let reputation_roots = decode_digest_list("reputation root", &metadata.reputation_roots)?;
@@ -7122,6 +7135,7 @@ fn sanitize_vrf_entries(
                 epoch: poseidon_epoch.to_string(),
                 tier_seed: hex::encode(poseidon_tier_seed),
             },
+            bindings: None,
         });
 
         backend_entries.push(BackendVrfPublicEntry {
@@ -7139,6 +7153,45 @@ fn sanitize_vrf_entries(
     }
 
     Ok((sanitized_entries, backend_entries))
+}
+
+fn compute_vrf_entry_bindings(
+    block_hash: &[u8; 32],
+    entries: &[BackendVrfPublicEntry],
+) -> ChainResult<Vec<ConsensusProofVrfBindings>> {
+    let parameters = StarkParameters::blueprint_default();
+    let hasher = parameters.poseidon_hasher();
+    let zero = FieldElement::zero(parameters.modulus());
+    let mut randomness_accumulator = parameters.element_from_bytes(block_hash);
+    let mut proof_accumulator = randomness_accumulator.clone();
+
+    let mut bindings = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let randomness_element = parameters.element_from_bytes(entry.randomness.as_slice());
+        randomness_accumulator = hasher.hash(&[
+            randomness_accumulator.clone(),
+            randomness_element,
+            zero.clone(),
+        ]);
+
+        let proof_element = parameters.element_from_bytes(entry.proof.as_slice());
+        proof_accumulator = hasher.hash(&[proof_accumulator.clone(), proof_element, zero.clone()]);
+
+        bindings.push(ConsensusProofVrfBindings {
+            randomness: field_element_to_hex(&randomness_accumulator),
+            proof: field_element_to_hex(&proof_accumulator),
+        });
+    }
+
+    Ok(bindings)
+}
+
+fn field_element_to_hex(value: &FieldElement) -> String {
+    let bytes = value.to_bytes();
+    let mut buffer = [0u8; 32];
+    let offset = buffer.len().saturating_sub(bytes.len());
+    buffer[offset..offset + bytes.len()].copy_from_slice(&bytes);
+    hex::encode(buffer)
 }
 
 fn decode_hex_array<const N: usize>(label: &str, value: &str) -> ChainResult<[u8; N]> {
@@ -7322,14 +7375,21 @@ mod tests {
         assert_eq!(status.height, certificate.height);
         assert_eq!(status.round, certificate.round);
         assert_eq!(status.block_hash, certificate.block_hash.0);
+        let block_hash = decode_digest("block hash", &certificate.block_hash.0).unwrap();
         assert_eq!(
             status.vrf_entries.len(),
             certificate.metadata.vrf_entries.len()
         );
-        for (status_entry, certificate_entry) in status
+        let (_, backend_entries) = sanitize_vrf_entries(&certificate.metadata.vrf_entries)
+            .expect("sanitize metadata vrf entries");
+        let expected_entry_bindings =
+            compute_vrf_entry_bindings(&block_hash, &backend_entries).expect("entry bindings");
+
+        for ((status_entry, certificate_entry), expected_binding) in status
             .vrf_entries
             .iter()
             .zip(&certificate.metadata.vrf_entries)
+            .zip(expected_entry_bindings.iter())
         {
             assert_eq!(status_entry.randomness, certificate_entry.randomness);
             assert_eq!(status_entry.pre_output, certificate_entry.pre_output);
@@ -7351,6 +7411,12 @@ mod tests {
                 status_entry.poseidon.tier_seed,
                 certificate_entry.poseidon.tier_seed
             );
+            let bindings = status_entry
+                .bindings
+                .as_ref()
+                .expect("entry bindings populated");
+            assert_eq!(bindings.randomness, expected_binding.randomness);
+            assert_eq!(bindings.proof, expected_binding.proof);
         }
         let expected_outputs: Vec<String> = certificate
             .metadata
@@ -7383,7 +7449,6 @@ mod tests {
             certificate.metadata.quorum_signature_root
         );
 
-        let block_hash = decode_digest("block hash", &certificate.block_hash.0).unwrap();
         let witness_commitments =
             decode_digest_list("witness", &certificate.metadata.witness_commitments).unwrap();
         let reputation_roots =
@@ -7393,7 +7458,6 @@ mod tests {
         let signature_root =
             decode_digest("signature", &certificate.metadata.quorum_signature_root).unwrap();
 
-        let (_, backend_entries) = sanitize_vrf_entries(&certificate.metadata.vrf_entries).unwrap();
         let expected = compute_consensus_bindings(
             &block_hash,
             &backend_entries,
