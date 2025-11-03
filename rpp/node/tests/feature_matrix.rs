@@ -10,6 +10,11 @@ fn backend_plonky3_rejected_with_mock_prover() {
     assert_forbidden_features("backend-plonky3,prover-mock");
 }
 
+#[test]
+fn backend_plonky3_gpu_rejected_with_mock_prover() {
+    assert_forbidden_features("backend-plonky3-gpu,prover-mock");
+}
+
 fn assert_forbidden_features(features: &str) {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
 

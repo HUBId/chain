@@ -47,7 +47,13 @@ backend-plonky3 = [
     "dep:p3-util",
     "dep:plonky3-backend",
     "dep:flate2",
+    "prover-backend-interface/backend-plonky3",
     # Vendored via cargo/config.toml to keep the workspace buildable offline.
+]
+backend-plonky3-gpu = [
+    "backend-plonky3",
+    "plonky3-backend/plonky3-gpu",
+    "prover-backend-interface/backend-plonky3-gpu",
 ]
 backend-rpp-stark = ["dep:rpp-stark", "rpp-wallet?/backend-rpp-stark"]
 vendor_electrs = [

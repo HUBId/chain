@@ -67,6 +67,18 @@ prover-stwo-simd = [
     "rpp-node/prover-stwo-simd",
     "prover_stwo_backend/prover-stwo-simd",
 ]
+backend-plonky3 = [
+    "rpp-chain/backend-plonky3",
+    "rpp-node/backend-plonky3",
+    "simnet/backend-plonky3",
+]
+backend-plonky3-gpu = [
+    "backend-plonky3",
+    "rpp-chain/backend-plonky3-gpu",
+    "rpp-node/backend-plonky3-gpu",
+    "simnet/backend-plonky3-gpu",
+    "plonky3-backend/plonky3-gpu",
+]
 
 [workspace.package]
 version = "0.0.12"
