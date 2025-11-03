@@ -53,6 +53,7 @@ fn sample_public_inputs(
         .iter()
         .map(|entry| ConsensusVrfPublicEntry {
             randomness: decode_digest(&entry.randomness),
+            derived_randomness: decode_digest(&entry.randomness),
             pre_output: decode_array::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
             proof: decode_vec(&entry.proof, VRF_PROOF_LENGTH),
             public_key: decode_digest(&entry.public_key),

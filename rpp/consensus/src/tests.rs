@@ -165,6 +165,7 @@ fn sample_consensus_public_inputs(round: u64) -> ConsensusPublicInputs {
         .iter()
         .map(|entry| ConsensusVrfPublicEntry {
             randomness: decode_digest_hex(&entry.randomness),
+            derived_randomness: decode_digest_hex(&entry.randomness),
             pre_output: decode_array_hex::<VRF_PREOUTPUT_LENGTH>(&entry.pre_output),
             proof: decode_vec_hex(&entry.proof, VRF_PROOF_LENGTH),
             public_key: decode_digest_hex(&entry.public_key),

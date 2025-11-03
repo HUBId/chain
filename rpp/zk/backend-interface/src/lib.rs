@@ -371,6 +371,9 @@ pub struct UptimePublicInputs {
 pub struct ConsensusVrfPublicEntry {
     /// Poseidon randomness emitted by the VRF evaluation.
     pub randomness: [u8; 32],
+    /// Randomness independently re-derived from the VRF proof.
+    #[serde(default)]
+    pub derived_randomness: [u8; 32],
     /// Poseidon pre-output associated with the randomness.
     pub pre_output: [u8; 32],
     /// Raw VRF proof bytes attesting to the output.

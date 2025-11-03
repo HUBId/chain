@@ -91,6 +91,8 @@ impl Default for ConsensusVrfEntry {
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusVrfPublicEntry {
     pub randomness: [u8; 32],
+    #[serde(default)]
+    pub derived_randomness: [u8; 32],
     pub pre_output: [u8; VRF_PREOUTPUT_LENGTH],
     pub proof: Vec<u8>,
     pub public_key: [u8; 32],
@@ -124,6 +126,7 @@ impl SanitizedVrfEntry {
     fn to_public_entry(&self) -> ConsensusVrfPublicEntry {
         ConsensusVrfPublicEntry {
             randomness: self.randomness,
+            derived_randomness: self.randomness,
             pre_output: self.pre_output,
             proof: self.proof.to_vec(),
             public_key: self.public_key,
@@ -357,7 +360,10 @@ impl ConsensusBindings {
 
         let vrf_randomness: Vec<String> = vrf_entries
             .iter()
-            .map(SanitizedVrfEntry::randomness_hex)
+            .flat_map(|entry| {
+                let randomness = entry.randomness_hex();
+                std::iter::once(randomness.clone()).chain(std::iter::once(randomness))
+            })
             .collect();
         let vrf_proofs_hex: Vec<String> = vrf_entries
             .iter()
