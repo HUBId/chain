@@ -77,6 +77,24 @@ resulting tree is checked into version control together with the generated
 [`third_party/plonky3/README.md`](../../third_party/plonky3/README.md) for the
 exact command sequence and environment knobs.
 
+After each run:
+
+1. Inspect the captured log for warnings with
+   `rg --case-insensitive "warn" logs/vendor_plonky3_refresh.log`. Expected
+   resolver chatter can be acknowledged inline, but dependency or build warnings
+   must be triaged.
+2. Use `cargo tree -e features --locked -p <crate>` when a warning hints at a
+   feature or resolver conflict; the flag highlights the dependency path so you
+   can decide whether to pin, patch, or drop the offender quickly.
+3. Record every actionable warning in the "Plonky3" section of
+   [`docs/vendor_log.md`](../../docs/vendor_log.md) and capture potential
+   follow-up work, such as patching a crate or filing a revert.
+4. Open an operations ticket via the
+   ["Vendor refresh warning" template](../../docs/templates/vendor_refresh_warning.md)
+   when the warning requires coordination outside the mirror (for example,
+   downstream CI failures or policy reviews). Include the log excerpt, proposed
+   next steps, and any blocked releases so assignees have the full context.
+
 > **Note:** The initial stage of the mirror includes only the crates wired into
 > the build today (`p3-air`, `p3-challenger`, `p3-circle`, `p3-commit`, `p3-dft`,
 > `p3-field`, `p3-fri`, `p3-interpolation`, `p3-matrix`, `p3-maybe-rayon`,

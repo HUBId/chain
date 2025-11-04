@@ -65,3 +65,23 @@ python3 scripts/vendor_plonky3/refresh.py --check-only
 
 Commit the refreshed crates, updated checksums, and any config changes together
 so the checksum gate remains deterministic.
+
+## Post-Run Checks
+
+1. Inspect the captured log for warnings before considering the refresh
+   complete:
+   ```shell
+   rg --case-insensitive "warn" logs/vendor_plonky3_refresh.log
+   ```
+   Review each hit and confirm whether it is an expected `cargo vendor`
+   message (for example, feature resolution noise) or signals a dependency
+   regression that needs attention.
+2. For any warning that points at a dependency or build issue, add a row to the
+   "Plonky3" table in [`docs/vendor_log.md`](../../docs/vendor_log.md) so the
+   follow-up is visible to release managers. Summaries should capture the
+   affected crate, the warning text, and a proposed remediation or owner.
+3. When a follow-up is required, open a ticket in the internal operations queue
+   using the ["Vendor refresh warning" template](../../docs/templates/vendor_refresh_warning.md)
+   and reference the relevant log excerpt. Tickets should list potential
+   downstream impact (build failures, checksum churn, etc.) and track
+   resolution status.
