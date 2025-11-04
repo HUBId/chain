@@ -7,6 +7,68 @@ on:
   pull_request:
 
 jobs:
+  plonky3-setup:
+    name: Plonky3 setup reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate Plonky3 setup artifacts
+        run: |
+          set -euo pipefail
+          make plonky3-setup
+      - name: Verify manifest digests
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+root = Path('config/plonky3/setup')
+manifest_path = root / 'manifest.json'
+data = json.loads(manifest_path.read_text())
+
+expected = {}
+for entry in data.get('artifacts', []):
+    expected[entry['file']] = entry['sha256']
+
+missing = sorted(expected.keys())
+actual = {}
+for path in root.glob('*.json'):
+    if path.name == 'manifest.json':
+        continue
+    actual[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+
+errors = False
+for file, digest in sorted(actual.items()):
+    recorded = expected.get(file)
+    if recorded is None:
+        print(f"::error file={file}::Missing manifest entry", file=sys.stderr)
+        errors = True
+        continue
+    if recorded != digest:
+        print(f"::error file={file}::Digest mismatch: expected {recorded}, found {digest}", file=sys.stderr)
+        errors = True
+
+unexpected = sorted(set(expected.keys()) - set(actual.keys()))
+for file in unexpected:
+    print(f"::error file={file}::Manifest entry has no matching artifact", file=sys.stderr)
+    errors = True
+
+if errors:
+    sys.exit(1)
+PY
+      - name: Ensure setup artifacts are committed
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- config/plonky3/setup; then
+            git status --short config/plonky3/setup
+            git diff config/plonky3/setup
+            exit 1
+          fi
+
   dashboards-json:
     name: Validate dashboard exports
     runs-on: ubuntu-latest

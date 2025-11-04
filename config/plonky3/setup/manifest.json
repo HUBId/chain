@@ -1,0 +1,39 @@
+{
+  "artifacts": [
+    {
+      "circuit": "consensus",
+      "file": "consensus.json",
+      "sha256": "b177585bd7e638e04f5f1709a5428c85308f412895e1eacc52dedab5dfa6cd81"
+    },
+    {
+      "circuit": "identity",
+      "file": "identity.json",
+      "sha256": "2b57775254839fcca0f4285c2fcc292acf5872eeedff157697053e37087fa4b8"
+    },
+    {
+      "circuit": "pruning",
+      "file": "pruning.json",
+      "sha256": "87a432565d0793cb5888ea607ac473db1ae3847ee94f3213311b02ebb73e8471"
+    },
+    {
+      "circuit": "recursive",
+      "file": "recursive.json",
+      "sha256": "75d99f1b10fcea1bd3fa6727e1fd62f322425d7741518abb0fe607c80a158711"
+    },
+    {
+      "circuit": "state",
+      "file": "state.json",
+      "sha256": "5551c083fc5eb34091d0517cd279d428e908b29ce6fd8c741d1295936b93b4fb"
+    },
+    {
+      "circuit": "transaction",
+      "file": "transaction.json",
+      "sha256": "ef536bb7275104fb33067439847f18bf8bb96a71e8b537fd4e1d30050d5b443e"
+    },
+    {
+      "circuit": "uptime",
+      "file": "uptime.json",
+      "sha256": "b783481b11e57a325eb8fa30c96c275408cfd6017f6857c2d2d0f0955582d22f"
+    }
+  ]
+}

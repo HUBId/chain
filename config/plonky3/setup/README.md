@@ -17,13 +17,35 @@ python3 scripts/generate_plonky3_artifacts.py \
   --generator 'plonky3-keygen --circuit {circuit} --vk {verifying_key} --pk {proving_key}' \
   --generator-cwd /path/to/plonky3/toolchain \
   --pretty \
+  --toolchain-version "plonky3-keygen-v0" \
+  --git-sha toolchain=deadbeefcafebabe \
+  --signature-output config/plonky3/setup/manifest.json \
   config/plonky3/setup
 
 # Or ingest pre-built key material from disk.
 python3 scripts/generate_plonky3_artifacts.py \
   --artifact-dir /path/to/key/outputs \
   --pretty \
+  --signature-output config/plonky3/setup/manifest.json \
   config/plonky3/setup
+
+The script accepts optional metadata arguments:
+
+- `--toolchain-version <string>` stores the provenance of the Plonky3
+  toolchain used to build the key material.
+- `--git-sha name=sha` records upstream git revisions (repeat the flag for
+  multiple repositories).
+- `--signature`/`--signature-file` embed a detached signature covering the
+  manifest.
+- `--signature-output <path>` writes a deterministic manifest that captures the
+  SHA256 digest of each generated JSON artifact. The manifest can be signed and
+  serves as a quick change detector.
+
+For convenience you can run `cargo xtask plonky3-setup` (or `make plonky3-setup`)
+to rebuild the fixtures in-place. When no generator or artifact directory is
+provided, the xtask decodes the existing JSON fixtures into temporary
+`*.vk`/`*.pk` blobs and reserialises them, ensuring the workflow succeeds in CI
+without privileged access to the official toolchain.
 ```
 
 The script materialises one `*.json` document per circuit containing a

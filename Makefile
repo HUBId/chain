@@ -7,7 +7,7 @@ PROVER_CRATES ?= prover_stwo_backend
 
 EXCLUDE_PROVER_FLAGS := $(foreach crate,$(PROVER_CRATES),--exclude $(crate))
 
-.PHONY: build\:stable test\:stable build\:nightly test\:nightly vendor-plonky3
+.PHONY: build\:stable test\:stable build\:nightly test\:nightly vendor-plonky3 plonky3-setup
 
 ## Build all stable workspace crates (excluding prover backends) with the pinned toolchain.
 build\:stable:
@@ -28,6 +28,10 @@ test\:nightly:
 ## Refresh the Plonky3 vendor mirror under third_party/plonky3/.
 vendor-plonky3:
         python3 scripts/vendor_plonky3/refresh.py
+
+## Regenerate Plonky3 setup descriptors and signature manifest in config/plonky3/setup/.
+plonky3-setup:
+        cargo xtask plonky3-setup
 
 .PHONY: pruning-validation test\:unit test\:integration test\:simnet test\:all
 
