@@ -6,7 +6,8 @@
     "source": null,
     "id": "path+file:///workspace/chain/prover/plonky3_backend#plonky3-backend@0.1.0",
     "edition": "2021",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: prover/plonky3_backend (workspace). Export: local integration crate; no additional restrictions."
   },
   {
     "name": "blake3",
@@ -15,7 +16,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#blake3@1.8.2",
     "edition": "2021",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/blake3/1.8.2. Export: utility dependency; no additional restrictions."
   },
   {
     "name": "gpu-alloc",
@@ -24,7 +26,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#gpu-alloc@0.6.0",
     "edition": "2018",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/gpu-alloc/0.6.0. Export: GPU helper; no cryptographic material."
   },
   {
     "name": "gpu-descriptor",
@@ -33,7 +36,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#gpu-descriptor@0.3.2",
     "edition": "2018",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/gpu-descriptor/0.3.2. Export: GPU helper; no cryptographic material."
   },
   {
     "name": "hex",
@@ -42,7 +46,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#hex@0.4.3",
     "edition": "2018",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/hex/0.4.3. Export: utility dependency; no additional restrictions."
   },
   {
     "name": "p3-air",
@@ -51,7 +56,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-air@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-air/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-baby-bear",
@@ -60,7 +66,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-baby-bear@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-baby-bear/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-bn254-fr",
@@ -69,7 +76,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-bn254-fr@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-bn254-fr/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-challenger",
@@ -78,7 +86,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-challenger@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-challenger/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-circle",
@@ -87,7 +96,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-circle@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-circle/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-commit",
@@ -96,7 +106,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-commit@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-commit/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-dft",
@@ -105,7 +116,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-dft@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-dft/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-field",
@@ -114,7 +126,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-field@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-field/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-fri",
@@ -123,7 +136,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-fri@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-fri/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-goldilocks",
@@ -132,7 +146,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-goldilocks@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-goldilocks/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-interpolation",
@@ -141,7 +156,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-interpolation@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-interpolation/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-keccak",
@@ -150,7 +166,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-keccak@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-keccak/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-keccak-air",
@@ -159,7 +176,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-keccak-air@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-keccak-air/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-koala-bear",
@@ -168,7 +186,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-koala-bear@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-koala-bear/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-matrix",
@@ -177,7 +196,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-matrix@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-matrix/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-maybe-rayon",
@@ -186,7 +206,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-maybe-rayon@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-maybe-rayon/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-mds",
@@ -195,7 +216,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-mds@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-mds/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-merkle-tree",
@@ -204,7 +226,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-merkle-tree@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-merkle-tree/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-mersenne-31",
@@ -213,7 +236,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-mersenne-31@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-mersenne-31/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-monty-31",
@@ -222,7 +246,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-monty-31@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-monty-31/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-multilinear-util",
@@ -231,7 +256,8 @@
     "source": "git+https://github.com/0xPolygonZero/plonky3.git?rev=80803612ff4b6634519e12fa4bf075f679afcc1c#80803612ff4b6634519e12fa4bf075f679afcc1c",
     "id": "git+https://github.com/0xPolygonZero/plonky3.git?rev=80803612ff4b6634519e12fa4bf075f679afcc1c#p3-multilinear-util@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-multilinear-util/80803612ff4b6634519e12fa4bf075f679afcc1c. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-poseidon",
@@ -240,7 +266,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-poseidon@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-poseidon/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-poseidon2",
@@ -249,7 +276,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-poseidon2@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-poseidon2/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-poseidon2-air",
@@ -258,7 +286,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-poseidon2-air@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-poseidon2-air/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-rescue",
@@ -267,7 +296,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-rescue@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-rescue/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-sha256",
@@ -276,7 +306,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-sha256@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-sha256/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-uni-stark",
@@ -285,7 +316,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-uni-stark@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-uni-stark/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "p3-util",
@@ -294,7 +326,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#p3-util@0.3.0",
     "edition": "2024",
-    "rust_version": null
+    "rust_version": null,
+    "notes": "Offline mirror: third_party/plonky3/p3-util/0.3.0. Export: cryptographic primitive within Plonky3 suite."
   },
   {
     "name": "serde",
@@ -303,7 +336,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#serde@1.0.225",
     "edition": "2021",
-    "rust_version": "1.56"
+    "rust_version": "1.56",
+    "notes": "Offline mirror: third_party/plonky3/serde/1.0.225. Export: utility dependency; no additional restrictions."
   },
   {
     "name": "serde_json",
@@ -312,7 +346,8 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.145",
     "edition": "2021",
-    "rust_version": "1.61"
+    "rust_version": "1.61",
+    "notes": "Offline mirror: third_party/plonky3/serde_json/1.0.145. Export: utility dependency; no additional restrictions."
   },
   {
     "name": "thiserror",
@@ -321,6 +356,7 @@
     "source": "registry+https://github.com/rust-lang/crates.io-index",
     "id": "registry+https://github.com/rust-lang/crates.io-index#thiserror@1.0.69",
     "edition": "2021",
-    "rust_version": "1.61"
+    "rust_version": "1.61",
+    "notes": "Offline mirror: third_party/plonky3/thiserror/1.0.69. Export: utility dependency; no additional restrictions."
   }
 ]
