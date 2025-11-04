@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-swarm"
+name = "rpp-libp2p-swarm"
 edition.workspace = true
 rust-version = { workspace = true }
 description = "The libp2p swarm"
@@ -9,6 +9,9 @@ license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
 keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "libp2p_swarm"
 
 [dependencies]
 either = "1.11.0"
@@ -41,7 +44,7 @@ either = "1.11.0"
 futures = { workspace = true }
 libp2p-identify = { path = "../protocols/identify" }                # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
 libp2p-identity = { workspace = true, features = ["ed25519"] }
-libp2p-ping = { path = "../protocols/ping" }                        # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
+libp2p-ping = { package = "rpp-libp2p-ping", path = "../protocols/ping" }                        # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
 # Using the workspace definition avoids mismatched paths when compiling vendored crates
 # outside of the upstream release tooling.
 libp2p-swarm-derive = { workspace = true }

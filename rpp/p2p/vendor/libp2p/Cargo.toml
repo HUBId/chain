@@ -1,5 +1,5 @@
 [package]
-name = "libp2p"
+name = "rpp-libp2p"
 edition.workspace = true
 rust-version = { workspace = true }
 description = "Peer-to-peer networking library"
@@ -9,6 +9,9 @@ license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
 keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "libp2p"
 
 [features]
 full = [

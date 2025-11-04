@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-swarm-derive"
+name = "rpp-libp2p-swarm-derive-legacy"
 edition.workspace = true
 rust-version = { workspace = true }
 description = "Procedural macros of libp2p-swarm"
@@ -11,6 +11,7 @@ keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
 
 [lib]
+name = "libp2p_swarm_derive"
 proc-macro = true
 
 [dependencies]

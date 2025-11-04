@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-swarm-test"
+name = "rpp-libp2p-swarm-test"
 version = "0.1.0"
 edition = "2021"
 

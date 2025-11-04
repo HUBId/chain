@@ -1,3 +1,15 @@
-error: two packages named `libp2p-ping` in this workspace:
-- /workspace/chain/vendor/libp2p/protocols/ping/Cargo.toml
-- /workspace/chain/rpp/p2p/vendor/protocols/ping/Cargo.toml
+warning: /workspace/chain/Cargo.toml: unused manifest key: workspace.features
+error: failed to select a version for `toml`.
+    ... required by package `trybuild v1.0.112`
+    ... which satisfies dependency `trybuild = "=1.0.112"` of package `firewood-macros v0.0.12 (/workspace/chain/firewood-macros)`
+    ... which satisfies path dependency `firewood-macros` (locked to 0.0.12) of package `firewood v0.0.12 (/workspace/chain/firewood)`
+    ... which satisfies path dependency `firewood` (locked to 0.0.12) of package `firewood-benchmark v0.0.12 (/workspace/chain/benchmark)`
+versions that meet the requirements `^0.9` are: 0.9.8
+
+all possible versions conflict with previously selected packages.
+
+  previously selected package `toml v0.9.6`
+    ... which satisfies dependency `toml = "=0.9.6"` of package `rpp-chain v0.0.12 (/workspace/chain/rpp/chain)`
+    ... which satisfies path dependency `rpp-chain` (locked to 0.0.12) of package `rpp-node v0.1.0 (/workspace/chain/rpp/node)`
+
+failed to select a version for `toml` which could resolve this conflict
