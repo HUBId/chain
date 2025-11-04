@@ -39,7 +39,7 @@ Build options:
 Backends:
   default    Use the workspace default backend configuration
   stwo       Force the `prover-stwo` feature only
-  plonky3    Force the `backend-plonky3` feature only
+  plonky3    Force the `backend-plonky3` feature only (experimental matrix)
   rpp-stark  Force the `backend-rpp-stark` feature
 USAGE
 }
@@ -51,6 +51,58 @@ FEATURE_SET_SELECTED=""
 SUITES_SELECTED=()
 BACKENDS=()
 INTEGRATION_FOCUSED_TESTS=(reorg_regressions)
+
+value_requests_plonky3() {
+  local value="$1"
+  local alias
+  for alias in \
+    "backend-plonky3" \
+    "backend_plonky3" \
+    "backend-plonky3-gpu" \
+    "backend_plonky3_gpu"; do
+    if [[ "$value" == *"$alias"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+args_request_plonky3() {
+  local -n _args=$1
+  local i
+  for ((i = 0; i < ${#_args[@]}; i++)); do
+    local arg="${_args[i]}"
+    case "$arg" in
+      --features|-F)
+        if (( i + 1 < ${#_args[@]} )); then
+          if value_requests_plonky3 "${_args[i+1]}"; then
+            return 0
+          fi
+        fi
+        ((i++))
+        ;;
+      --features=*)
+        if value_requests_plonky3 "${arg#--features=}"; then
+          return 0
+        fi
+        ;;
+      -F*)
+        if value_requests_plonky3 "${arg#-F}"; then
+          return 0
+        fi
+        ;;
+      --all-features)
+        return 0
+        ;;
+      *)
+        if value_requests_plonky3 "$arg"; then
+          return 0
+        fi
+        ;;
+    esac
+  done
+  return 1
+}
 
 add_suite() {
   local suite="$1"
@@ -185,6 +237,26 @@ fi
 
 if [[ ${#BACKENDS[@]} -eq 0 ]]; then
   BACKENDS=(default stwo plonky3 rpp-stark)
+fi
+
+plonky3_features_requested=0
+if args_request_plonky3 FEATURE_ARGS || args_request_plonky3 PASSTHROUGH_ARGS; then
+  plonky3_features_requested=1
+fi
+
+if (( plonky3_features_requested )); then
+  for backend in "${BACKENDS[@]}"; do
+    if [[ "$backend" != "plonky3" ]]; then
+      echo "error: backend-plonky3 features are experimental and only supported via '--backend plonky3'." >&2
+      if [[ "$FEATURE_SET_SELECTED" == "full" ]]; then
+        echo "note: '--feature-set full' implicitly enables backend-plonky3. Re-run with '--backend plonky3 --feature-set full' or drop the full feature set." >&2
+      else
+        echo "note: remove backend-plonky3 from manual --features arguments or restrict '--backend' to 'plonky3' before retrying." >&2
+      fi
+      echo "Backout: run 'scripts/test.sh --backend plonky3' for the experimental matrix or rerun without backend-plonky3 features." >&2
+      exit 1
+    fi
+  done
 fi
 
 run_suite() {

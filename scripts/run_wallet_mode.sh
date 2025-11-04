@@ -34,6 +34,7 @@ fi
 
 rpp_assert_command "curl"
 rpp_assert_command "${BIN}"
+rpp_warn_experimental_backend
 
 CMD_ARGS=("$@")
 if ! rpp_has_flag "--config" "${CMD_ARGS[@]}"; then
