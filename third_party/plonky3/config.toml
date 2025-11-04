@@ -1,0 +1,62 @@
+# Cargo patch snippet for the staged Plonky3 mirror.
+# Paths are relative to this directory.
+
+[[patch.crates-io]]
+name = "p3-air"
+version = "0.3.0"
+path = "p3-air/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-challenger"
+version = "0.3.0"
+path = "p3-challenger/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-circle"
+version = "0.3.0"
+path = "p3-circle/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-commit"
+version = "0.3.0"
+path = "p3-commit/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-dft"
+version = "0.3.0"
+path = "p3-dft/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-field"
+version = "0.3.0"
+path = "p3-field/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-fri"
+version = "0.3.0"
+path = "p3-fri/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-interpolation"
+version = "0.3.0"
+path = "p3-interpolation/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-matrix"
+version = "0.3.0"
+path = "p3-matrix/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-maybe-rayon"
+version = "0.3.0"
+path = "p3-maybe-rayon/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-mds"
+version = "0.3.0"
+path = "p3-mds/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-merkle-tree"
+version = "0.3.0"
+path = "p3-merkle-tree/0.3.0"

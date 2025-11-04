@@ -77,6 +77,12 @@ resulting tree is checked into version control together with the generated
 [`third_party/plonky3/README.md`](../../third_party/plonky3/README.md) for the
 exact command sequence and environment knobs.
 
+> **Note:** The initial stage of the mirror includes only the crates wired into
+> the build today (`p3-air`, `p3-challenger`, `p3-circle`, `p3-commit`, `p3-dft`,
+> `p3-field`, `p3-fri`, `p3-interpolation`, `p3-matrix`, `p3-maybe-rayon`,
+> `p3-mds`, and `p3-merkle-tree`). Follow-up refreshes will expand the mirror to
+> cover the remaining Plonky3 packages listed above.
+
 ## Compliance notes
 
 For export-control and reproducibility reviews, point auditors at the
