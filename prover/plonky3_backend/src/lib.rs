@@ -1,6 +1,10 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use blake3::Hasher;
+use flate2::read::GzDecoder;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Number, Value};
+use std::io::Read;
 use thiserror::Error;
 
 mod circuits;
@@ -47,6 +51,12 @@ pub enum BackendError {
     InvalidWitness { circuit: String, message: String },
     #[error("invalid {circuit} public inputs: {message}")]
     InvalidPublicInputs { circuit: String, message: String },
+    #[error("invalid {kind} encoding for {circuit} circuit: {message}")]
+    InvalidKeyEncoding {
+        circuit: String,
+        kind: String,
+        message: String,
+    },
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;
@@ -75,12 +85,29 @@ impl VerifyingKey {
         })
     }
 
+    pub fn from_encoded_parts(
+        value: &str,
+        encoding: &str,
+        compression: Option<&str>,
+        circuit: &str,
+    ) -> BackendResult<Self> {
+        let bytes = decode_key_bytes(value, encoding, compression, circuit, "verifying key")?;
+        Self::from_bytes(bytes, circuit)
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
     pub fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+
+    pub fn json_schema() -> Value {
+        key_schema(
+            "Plonky3 Verifying Key",
+            "Descriptor for a verifying key artifact",
+        )
     }
 }
 
@@ -101,12 +128,29 @@ impl ProvingKey {
         })
     }
 
+    pub fn from_encoded_parts(
+        value: &str,
+        encoding: &str,
+        compression: Option<&str>,
+        circuit: &str,
+    ) -> BackendResult<Self> {
+        let bytes = decode_key_bytes(value, encoding, compression, circuit, "proving key")?;
+        Self::from_bytes(bytes, circuit)
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
 
     pub fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+
+    pub fn json_schema() -> Value {
+        key_schema(
+            "Plonky3 Proving Key",
+            "Descriptor for a proving key artifact",
+        )
     }
 }
 
@@ -154,6 +198,70 @@ impl ProofMetadata {
 
     pub fn use_gpu(&self) -> bool {
         self.use_gpu
+    }
+
+    pub fn json_schema() -> Value {
+        let mut schema = Map::new();
+        schema.insert(
+            "$schema".to_string(),
+            Value::String("https://json-schema.org/draft/2020-12/schema".into()),
+        );
+        schema.insert(
+            "title".to_string(),
+            Value::String("Plonky3 Proof Metadata".into()),
+        );
+        schema.insert("type".to_string(), Value::String("object".into()));
+        schema.insert(
+            "description".to_string(),
+            Value::String(
+                "Hex-encoded transcript and security parameters embedded in a Plonky3 proof payload.".into(),
+            ),
+        );
+
+        let mut properties = Map::new();
+        properties.insert(
+            "verifying_key_hash".into(),
+            hex32_schema("BLAKE3 digest of the verifying key referenced by the proof."),
+        );
+        properties.insert(
+            "public_inputs_hash".into(),
+            hex32_schema("BLAKE3 digest of the encoded public inputs."),
+        );
+        properties.insert(
+            "fri_digest".into(),
+            hex32_schema("BLAKE3 digest derived from the prover/verifier transcript."),
+        );
+        properties.insert(
+            "security_bits".into(),
+            integer_schema(
+                "Security parameter negotiated between prover and verifier.",
+                1,
+            ),
+        );
+        properties.insert(
+            "use_gpu".into(),
+            boolean_schema("Indicates whether the proof was constructed with GPU acceleration."),
+        );
+
+        schema.insert("properties".into(), Value::Object(properties));
+        schema.insert(
+            "required".into(),
+            Value::Array(
+                [
+                    "verifying_key_hash",
+                    "public_inputs_hash",
+                    "fri_digest",
+                    "security_bits",
+                    "use_gpu",
+                ]
+                .iter()
+                .map(|key| Value::String(key.to_string()))
+                .collect(),
+            ),
+        );
+        schema.insert("additionalProperties".into(), Value::Bool(false));
+
+        Value::Object(schema)
     }
 }
 
@@ -395,6 +503,189 @@ impl VerifierContext {
             return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
         Ok(())
+    }
+}
+
+fn decode_key_bytes(
+    value: &str,
+    encoding: &str,
+    compression: Option<&str>,
+    circuit: &str,
+    kind: &str,
+) -> BackendResult<Vec<u8>> {
+    let payload = value.trim();
+    if payload.is_empty() {
+        return Err(invalid_key_error(circuit, kind, "encoded payload is empty"));
+    }
+
+    let normalized_encoding = encoding.trim().to_ascii_lowercase();
+    if normalized_encoding.is_empty() {
+        return Err(invalid_key_error(
+            circuit,
+            kind,
+            "encoding must be provided",
+        ));
+    }
+
+    let mut bytes = match normalized_encoding.as_str() {
+        "base64" | "b64" => BASE64_STANDARD.decode(payload.as_bytes()).map_err(|err| {
+            invalid_key_error(circuit, kind, format!("invalid base64 payload: {err}"))
+        })?,
+        other => {
+            return Err(invalid_key_error(
+                circuit,
+                kind,
+                format!("unsupported encoding '{other}'"),
+            ))
+        }
+    };
+
+    if bytes.is_empty() {
+        return Err(invalid_key_error(circuit, kind, "decoded payload is empty"));
+    }
+
+    if let Some(compression) = compression
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+    {
+        match compression.as_str() {
+            "gzip" | "gz" => {
+                let mut decoder = GzDecoder::new(bytes.as_slice());
+                let mut decompressed = Vec::new();
+                decoder.read_to_end(&mut decompressed).map_err(|err| {
+                    invalid_key_error(
+                        circuit,
+                        kind,
+                        format!("failed to decompress gzip payload: {err}"),
+                    )
+                })?;
+                if decompressed.is_empty() {
+                    return Err(invalid_key_error(
+                        circuit,
+                        kind,
+                        "decompressed payload is empty",
+                    ));
+                }
+                bytes = decompressed;
+            }
+            "none" => {}
+            other => {
+                return Err(invalid_key_error(
+                    circuit,
+                    kind,
+                    format!("unsupported compression '{other}'"),
+                ))
+            }
+        }
+    }
+
+    Ok(bytes)
+}
+
+fn key_schema(title: &str, description: &str) -> Value {
+    let mut schema = Map::new();
+    schema.insert(
+        "$schema".to_string(),
+        Value::String("https://json-schema.org/draft/2020-12/schema".into()),
+    );
+    schema.insert("title".into(), Value::String(title.into()));
+    schema.insert("type".into(), Value::String("object".into()));
+    schema.insert("description".into(), Value::String(description.into()));
+
+    let mut properties = Map::new();
+
+    let mut encoding = Map::new();
+    encoding.insert("type".into(), Value::String("string".into()));
+    encoding.insert(
+        "enum".into(),
+        Value::Array(vec![Value::String("base64".into())]),
+    );
+    encoding.insert(
+        "description".into(),
+        Value::String("Encoding applied to the inline key material.".into()),
+    );
+    properties.insert("encoding".into(), Value::Object(encoding));
+
+    let mut value = Map::new();
+    value.insert("type".into(), Value::String("string".into()));
+    value.insert("contentEncoding".into(), Value::String("base64".into()));
+    value.insert(
+        "description".into(),
+        Value::String("Base64 payload containing the raw key bytes (compressed or raw).".into()),
+    );
+    properties.insert("value".into(), Value::Object(value));
+
+    properties.insert(
+        "byte_length".into(),
+        integer_schema("Length of the decoded key in bytes.", 1),
+    );
+
+    let mut compression = Map::new();
+    compression.insert("type".into(), Value::String("string".into()));
+    compression.insert(
+        "enum".into(),
+        Value::Array(vec![
+            Value::String("gzip".into()),
+            Value::String("none".into()),
+        ]),
+    );
+    compression.insert(
+        "description".into(),
+        Value::String(
+            "Compression applied before encoding; omit or set to 'none' when the payload is raw."
+                .into(),
+        ),
+    );
+    properties.insert("compression".into(), Value::Object(compression));
+
+    properties.insert(
+        "hash_blake3".into(),
+        hex32_schema("Optional BLAKE3 digest of the decoded key, useful for diagnostics."),
+    );
+
+    schema.insert("properties".into(), Value::Object(properties));
+    schema.insert(
+        "required".into(),
+        Value::Array(vec![
+            Value::String("encoding".into()),
+            Value::String("value".into()),
+            Value::String("byte_length".into()),
+        ]),
+    );
+    schema.insert("additionalProperties".into(), Value::Bool(false));
+
+    Value::Object(schema)
+}
+
+fn hex32_schema(description: &str) -> Value {
+    let mut object = Map::new();
+    object.insert("type".into(), Value::String("string".into()));
+    object.insert("pattern".into(), Value::String("^[0-9a-fA-F]{64}$".into()));
+    object.insert("description".into(), Value::String(description.into()));
+    Value::Object(object)
+}
+
+fn integer_schema(description: &str, minimum: u64) -> Value {
+    let mut object = Map::new();
+    object.insert("type".into(), Value::String("integer".into()));
+    object.insert("minimum".into(), Value::Number(Number::from(minimum)));
+    object.insert("description".into(), Value::String(description.into()));
+    Value::Object(object)
+}
+
+fn boolean_schema(description: &str) -> Value {
+    let mut object = Map::new();
+    object.insert("type".into(), Value::String("boolean".into()));
+    object.insert("description".into(), Value::String(description.into()));
+    Value::Object(object)
+}
+
+fn invalid_key_error(circuit: &str, kind: &str, message: impl Into<String>) -> BackendError {
+    BackendError::InvalidKeyEncoding {
+        circuit: circuit.to_string(),
+        kind: kind.to_string(),
+        message: message.into(),
     }
 }
 
