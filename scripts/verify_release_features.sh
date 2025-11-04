@@ -61,6 +61,10 @@ fi
 forbidden_features=(
   "prover-mock"
   "prover_mock"
+  "backend-plonky3"
+  "backend_plonky3"
+  "backend-plonky3-gpu"
+  "backend_plonky3_gpu"
 )
 
 check_metadata() {

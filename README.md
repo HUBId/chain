@@ -1,5 +1,15 @@
 # ztate
 
+> ⚠️ **Experimental backend guard**
+>
+> The `backend-plonky3` prover remains experimental and is confined to a dedicated
+> test matrix. Release and CI tooling abort if the feature leaks into other
+> builds. To recover from an accidental opt-in, run `cargo clean` followed by
+> `cargo build -p rpp-node --release --no-default-features --features prod,prover-stwo`
+> (or rerun `scripts/build_release.sh` without custom `RPP_RELEASE_FEATURES`). Use
+> `scripts/test.sh --backend plonky3` when you intentionally exercise the
+> experimental matrix.
+
 ztate is the reference implementation of the RPP blockchain stack. It packages the
 runtime node, consensus engine, libp2p networking, proof system, wallet
 orchestrator, and Firewood-backed storage that together power the network.
@@ -101,7 +111,12 @@ Build or check the crate with `--features backend-plonky3` (optionally paired
 with `dev`) to exercise the stubbed prover while keeping production profiles
 clean. The workspace now fails compilation if `backend-plonky3` is combined with
 the `prod` or `validator` features so the experimental backend cannot leak into
-release artifacts.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】
+release artifacts. Test tooling (`scripts/test.sh`) rejects manual
+`backend-plonky3` feature arguments unless the dedicated `plonky3` backend is
+selected, release packaging fails fast when the feature is detected, and a
+workspace smoke test (`tests/feature_guard.rs`) asserts the compile guard. The
+runtime launch helpers print an opt-in warning with backout instructions so the
+experimental backend stays out of production runs.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】【F:scripts/test.sh†L38-L47】【F:scripts/build_release.sh†L118-L142】【F:scripts/lib/rpp-node-mode-common.sh†L1-L36】【F:tests/feature_guard.rs†L1-L52】
 
 ## Wallet and Electrs integration
 

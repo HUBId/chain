@@ -117,10 +117,17 @@ fi
 
 declare -A FORBIDDEN_FEATURE_CANONICAL=(
   ["prover-mock"]="prover-mock"
+  ["prover_mock"]="prover-mock"
+  ["backend-plonky3"]="backend-plonky3"
+  ["backend_plonky3"]="backend-plonky3"
+  ["backend-plonky3-gpu"]="backend-plonky3-gpu"
+  ["backend_plonky3_gpu"]="backend-plonky3-gpu"
 )
 
 declare -A FORBIDDEN_FEATURE_MESSAGES=(
   ["prover-mock"]="error: prover-mock feature is not allowed for release builds"
+  ["backend-plonky3"]="error: backend-plonky3 is experimental and cannot be enabled for release builds"
+  ["backend-plonky3-gpu"]="error: backend-plonky3-gpu is experimental and cannot be enabled for release builds"
 )
 
 report_forbidden_feature() {

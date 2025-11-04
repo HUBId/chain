@@ -13,6 +13,20 @@ rpp_has_flag() {
   return 1
 }
 
+rpp_warn_experimental_backend() {
+  if [[ "${RPP_SUPPRESS_EXPERIMENTAL_BACKEND_WARNING:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  cat <<'WARNING' >&2
+⚠️  experimental backend notice: ensure your rpp-node binary was built without `backend-plonky3`.
+   The Plonky3 prover is for test-only matrices; rebuild with
+     cargo build -p rpp-node --release --no-default-features --features prod,prover-stwo
+   or rerun scripts/build_release.sh after clearing RPP_RELEASE_FEATURES to back out.
+   Set RPP_SUPPRESS_EXPERIMENTAL_BACKEND_WARNING=1 to silence this reminder.
+WARNING
+}
+
 rpp_assert_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "error: required command '$1' not found" >&2
