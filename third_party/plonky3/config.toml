@@ -101,43 +101,42 @@ name = "p3-util"
 version = "0.3.0"
 path = "p3-util/0.3.0"
 
-# Remaining crates stay commented until subsequent mirror stages land.
-# [[patch.crates-io]]
-# name = "p3-keccak"
-# version = "0.3.0"
-# path = "p3-keccak/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-keccak-air"
-# version = "0.3.0"
-# path = "p3-keccak-air/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-poseidon"
-# version = "0.3.0"
-# path = "p3-poseidon/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-poseidon2"
-# version = "0.3.0"
-# path = "p3-poseidon2/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-poseidon2-air"
-# version = "0.3.0"
-# path = "p3-poseidon2-air/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-rescue"
-# version = "0.3.0"
-# path = "p3-rescue/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-sha256"
-# version = "0.3.0"
-# path = "p3-sha256/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-uni-stark"
-# version = "0.3.0"
-# path = "p3-uni-stark/0.3.0"
+[[patch.crates-io]]
+name = "p3-keccak"
+version = "0.3.0"
+path = "p3-keccak/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-keccak-air"
+version = "0.3.0"
+path = "p3-keccak-air/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-poseidon"
+version = "0.3.0"
+path = "p3-poseidon/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-poseidon2"
+version = "0.3.0"
+path = "p3-poseidon2/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-poseidon2-air"
+version = "0.3.0"
+path = "p3-poseidon2-air/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-rescue"
+version = "0.3.0"
+path = "p3-rescue/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-sha256"
+version = "0.3.0"
+path = "p3-sha256/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-uni-stark"
+version = "0.3.0"
+path = "p3-uni-stark/0.3.0"
