@@ -21,6 +21,18 @@ sources:
 python3 scripts/vendor_plonky3/refresh.py --write-checksums
 ```
 
+From the repository root you can capture the run in the shared logging
+directory:
+
+```shell
+python3 scripts/vendor_plonky3/refresh.py --write-checksums | tee logs/vendor_plonky3_refresh.log
+```
+
+Redirect `2>&1` when invoking the command so both STDOUT and STDERR reach the
+`tee` process, and ensure the resulting log is stored under `logs/` for future
+audits. The logging convention mirrors the guidance in
+[`docs/third_party/plonky3.md`](../../docs/third_party/plonky3.md#mirroring-workflow).
+
 The command performs the following steps:
 
 1. Cleans stale files in `third_party/plonky3/` (preserving the README and
