@@ -4,7 +4,42 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[package.metadata.plonky3.crates]
+p3-air = "=0.3.0"
+p3-baby-bear = "=0.3.0"
+p3-bn254-fr = "=0.3.0"
+p3-challenger = "=0.3.0"
+p3-circle = "=0.3.0"
+p3-commit = "=0.3.0"
+p3-dft = "=0.3.0"
+p3-field = "=0.3.0"
+p3-fri = "=0.3.0"
+p3-goldilocks = "=0.3.0"
+p3-interpolation = "=0.3.0"
+p3-keccak = "=0.3.0"
+p3-keccak-air = "=0.3.0"
+p3-koala-bear = "=0.3.0"
+p3-matrix = "=0.3.0"
+p3-maybe-rayon = "=0.3.0"
+p3-mds = "=0.3.0"
+p3-merkle-tree = "=0.3.0"
+p3-mersenne-31 = "=0.3.0"
+p3-monty-31 = "=0.3.0"
+p3-poseidon = "=0.3.0"
+p3-poseidon2 = "=0.3.0"
+p3-poseidon2-air = "=0.3.0"
+p3-rescue = "=0.3.0"
+p3-sha256 = "=0.3.0"
+p3-uni-stark = "=0.3.0"
+p3-util = "=0.3.0"
+
+[package.metadata.plonky3.crates.p3-multilinear-util]
+version = "=0.3.0"
+git = "https://github.com/0xPolygonZero/plonky3.git"
+rev = "80803612ff4b6634519e12fa4bf075f679afcc1c"
+
 [dependencies]
+# Pinned versions for the Plonky3 crates are documented in [package.metadata.plonky3.crates].
 blake3 = "=1.8.2"
 gpu-alloc = { version = "=0.6.0", optional = true }
 gpu-descriptor = { version = "=0.3.2", optional = true }
@@ -29,7 +64,7 @@ p3-mds = "=0.3.0"
 p3-merkle-tree = "=0.3.0"
 p3-mersenne-31 = "=0.3.0"
 p3-monty-31 = "=0.3.0"
-p3-multilinear-util = { git = "https://github.com/0xPolygonZero/plonky3.git", package = "p3-multilinear-util", rev = "80803612ff4b6634519e12fa4bf075f679afcc1c" }
+p3-multilinear-util = { git = "https://github.com/0xPolygonZero/plonky3.git", package = "p3-multilinear-util", rev = "80803612ff4b6634519e12fa4bf075f679afcc1c" } # See [package.metadata.plonky3.crates.p3-multilinear-util].
 p3-poseidon = "=0.3.0"
 p3-poseidon2 = "=0.3.0"
 p3-poseidon2-air = "=0.3.0"
