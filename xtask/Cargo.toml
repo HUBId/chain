@@ -10,3 +10,4 @@ blake3 = "=1.8.2"
 flate2 = { version = "=1.0.34", default-features = false, features = ["rust_backend"] }
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { workspace = true }
+tempfile = "=3.23.0"

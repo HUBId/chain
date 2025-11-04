@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -13,6 +13,8 @@ use blake3::hash as blake3_hash;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
+use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -141,7 +143,7 @@ fn run_full_test_matrix() -> Result<()> {
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors",
     );
 }
 
@@ -167,12 +169,242 @@ fn main() -> Result<()> {
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
         "test-all" => run_full_test_matrix(),
         "proof-metadata" => generate_proof_metadata(&argv),
+        "plonky3-setup" => regenerate_plonky3_setup(&argv),
         "help" => {
             usage();
             Ok(())
         }
         other => bail!("unknown xtask command: {other}"),
     }
+}
+
+fn regenerate_plonky3_setup(args: &[String]) -> Result<()> {
+    let root = workspace_root();
+    let mut generator: Option<String> = None;
+    let mut generator_cwd: Option<PathBuf> = None;
+    let mut artifact_dir: Option<PathBuf> = None;
+    let mut circuits: Vec<String> = Vec::new();
+    let mut toolchain_version = env::var("PLONKY3_TOOLCHAIN_VERSION").ok();
+    let mut git_shas: Vec<String> = env_var_list("PLONKY3_GIT_SHAS");
+    let mut signature = env::var("PLONKY3_SIGNATURE")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let mut signature_file = env::var("PLONKY3_SIGNATURE_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    let mut signature_output: Option<PathBuf> =
+        Some(root.join("config/plonky3/setup/manifest.json"));
+    let mut pretty = true;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--generator" => {
+                generator = Some(
+                    iter.next()
+                        .ok_or_else(|| anyhow!("--generator requires a value"))?
+                        .to_string(),
+                );
+            }
+            "--generator-cwd" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--generator-cwd requires a value"))?;
+                generator_cwd = Some(PathBuf::from(value));
+            }
+            "--artifact-dir" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--artifact-dir requires a value"))?;
+                artifact_dir = Some(PathBuf::from(value));
+            }
+            "--circuits" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--circuits requires a value"))?;
+                circuits.extend(
+                    value
+                        .split(|ch| ch == ',' || ch.is_whitespace())
+                        .filter(|segment| !segment.trim().is_empty())
+                        .map(|segment| segment.trim().to_string()),
+                );
+            }
+            "--toolchain-version" => {
+                toolchain_version = Some(
+                    iter.next()
+                        .ok_or_else(|| anyhow!("--toolchain-version requires a value"))?
+                        .to_string(),
+                );
+            }
+            "--git-sha" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--git-sha requires a value"))?;
+                git_shas.push(value.to_string());
+            }
+            "--signature" => {
+                signature = Some(
+                    iter.next()
+                        .ok_or_else(|| anyhow!("--signature requires a value"))?
+                        .to_string(),
+                );
+                signature_file = None;
+            }
+            "--signature-file" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--signature-file requires a value"))?;
+                signature_file = Some(PathBuf::from(value));
+                signature = None;
+            }
+            "--signature-output" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--signature-output requires a value"))?;
+                signature_output = Some(PathBuf::from(value));
+            }
+            "--no-signature-output" => {
+                signature_output = None;
+            }
+            "--no-pretty" => {
+                pretty = false;
+            }
+            other => {
+                bail!("unknown argument '{other}' for plonky3-setup");
+            }
+        }
+    }
+
+    if signature.is_some() && signature_file.is_some() {
+        bail!("--signature and --signature-file cannot be combined");
+    }
+
+    let mut fixture_dir: Option<TempDir> = None;
+    if generator.is_none() && artifact_dir.is_none() {
+        let (dir_handle, path) = materialise_fixture_artifacts(&circuits)?;
+        artifact_dir = Some(path);
+        fixture_dir = Some(dir_handle);
+    }
+
+    let mut command = Command::new("python3");
+    command
+        .current_dir(&root)
+        .arg(root.join("scripts/generate_plonky3_artifacts.py"))
+        .arg(root.join("config/plonky3/setup"));
+
+    if !circuits.is_empty() {
+        command.arg("--circuits");
+        for circuit in &circuits {
+            command.arg(circuit);
+        }
+    }
+
+    if let Some(gen) = generator {
+        command.arg("--generator").arg(gen);
+    }
+
+    if let Some(cwd) = generator_cwd {
+        command.arg("--generator-cwd").arg(cwd);
+    }
+
+    if let Some(dir) = artifact_dir {
+        command.arg("--artifact-dir").arg(dir);
+    }
+
+    if pretty {
+        command.arg("--pretty");
+    }
+
+    if let Some(version) = toolchain_version.filter(|value| !value.trim().is_empty()) {
+        command.arg("--toolchain-version").arg(version);
+    }
+
+    for entry in git_shas {
+        if !entry.trim().is_empty() {
+            command.arg("--git-sha").arg(entry);
+        }
+    }
+
+    if let Some(sig) = signature.filter(|value| !value.trim().is_empty()) {
+        command.arg("--signature").arg(sig);
+    }
+
+    if let Some(sig_file) = signature_file {
+        command.arg("--signature-file").arg(sig_file);
+    }
+
+    if let Some(sig_out) = signature_output {
+        command.arg("--signature-output").arg(sig_out);
+    }
+
+    run_command(command, "generate Plonky3 setup artifacts")?;
+    drop(fixture_dir);
+    Ok(())
+}
+
+fn env_var_list(name: &str) -> Vec<String> {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            value
+                .split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+                .filter(|segment| !segment.trim().is_empty())
+                .map(|segment| segment.trim().to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn materialise_fixture_artifacts(circuits: &[String]) -> Result<(TempDir, PathBuf)> {
+    let root = workspace_root();
+    let setup_dir = root.join("config/plonky3/setup");
+    let selected: Option<HashSet<String>> = if circuits.is_empty() {
+        None
+    } else {
+        Some(circuits.iter().cloned().collect())
+    };
+
+    let temp_dir = tempfile::tempdir().context("create temporary Plonky3 artifact directory")?;
+    let mut generated: HashSet<String> = HashSet::new();
+
+    for entry in
+        fs::read_dir(&setup_dir).with_context(|| format!("read {}", setup_dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("read Plonky3 setup file {}", path.display()))?;
+        let doc: Plonky3ArtifactDoc = serde_json::from_str(&contents)
+            .with_context(|| format!("parse Plonky3 setup file {}", path.display()))?;
+        if let Some(selection) = &selected {
+            if !selection.contains(&doc.circuit) {
+                continue;
+            }
+        }
+        let verifying = load_plonky3_artifact(&setup_dir, &doc.verifying_key)?;
+        let proving = load_plonky3_artifact(&setup_dir, &doc.proving_key)?;
+        fs::write(
+            temp_dir.path().join(format!("{}.vk", doc.circuit)),
+            verifying,
+        )
+        .with_context(|| format!("write verifying key for {}", doc.circuit))?;
+        fs::write(temp_dir.path().join(format!("{}.pk", doc.circuit)), proving)
+            .with_context(|| format!("write proving key for {}", doc.circuit))?;
+        generated.insert(doc.circuit);
+    }
+
+    if let Some(selection) = &selected {
+        let missing: Vec<String> = selection.difference(&generated).cloned().collect();
+        if !missing.is_empty() {
+            bail!("no fixture data found for circuits: {}", missing.join(", "));
+        }
+    }
+
+    Ok((temp_dir, temp_dir.path().to_path_buf()))
 }
 
 fn generate_proof_metadata(args: &[String]) -> Result<()> {
@@ -494,6 +726,8 @@ struct Plonky3CircuitMetadata {
 #[derive(Debug, Deserialize)]
 struct Plonky3ArtifactDoc {
     circuit: String,
+    #[serde(default)]
+    metadata: Option<JsonValue>,
     verifying_key: Plonky3Artifact,
     proving_key: Plonky3Artifact,
 }

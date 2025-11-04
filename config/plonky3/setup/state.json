@@ -3,13 +3,13 @@
   "verifying_key": {
     "encoding": "base64",
     "byte_length": 96,
-    "value": "H4sIAHJjBmkC/wFgAJ//oUcHZ7S7Yl/g5lU4OnZhevYAOXjgckxCGfsik5CMGiZXEMfs/jLzl7Oi6DJJAwSBs/dWH4rkiajWcJferoz9b+M+7I40sSaUD+e9UfwtrAu+HBV5h8dqAyVzwDO7JYEYICY2LWAAAAA=",
+    "value": "H4sIALGJCmkC/wFgAJ//oUcHZ7S7Yl/g5lU4OnZhevYAOXjgckxCGfsik5CMGiZXEMfs/jLzl7Oi6DJJAwSBs/dWH4rkiajWcJferoz9b+M+7I40sSaUD+e9UfwtrAu+HBV5h8dqAyVzwDO7JYEYICY2LWAAAAA=",
     "compression": "gzip"
   },
   "proving_key": {
     "encoding": "base64",
     "byte_length": 224,
-    "value": "H4sIAHJjBmkC/wHgAB//WxhCqDQ/c306t582bIS4TYv9j56xWY/urO06Ca2OOfElailvNSZKKGySZoD5Ddlu5P6HhWX5+U6NL0m9tSSGpKtSWWhYp5NBXuQwtYI0lLtpDxTwe8qTsCMw1XbkpBfEpdlZeM/RRNdnZUu6zlLNYPulVCCcNTFWZIkzbQK4deOvm2sxfSoHAXo39YOhaDbyYgYcgrEgrlkGmuC/IyN+FEvJ8KGpz7xiD0Zg52CbAG40TzvmFFYwof2xKO9ik1CjAy5vfjXaTzbmTmyOZCNxxZ4Xi+yKagERdXeHTt2G2Lco2Mue4AAAAA==",
+    "value": "H4sIALGJCmkC/wHgAB//WxhCqDQ/c306t582bIS4TYv9j56xWY/urO06Ca2OOfElailvNSZKKGySZoD5Ddlu5P6HhWX5+U6NL0m9tSSGpKtSWWhYp5NBXuQwtYI0lLtpDxTwe8qTsCMw1XbkpBfEpdlZeM/RRNdnZUu6zlLNYPulVCCcNTFWZIkzbQK4deOvm2sxfSoHAXo39YOhaDbyYgYcgrEgrlkGmuC/IyN+FEvJ8KGpz7xiD0Zg52CbAG40TzvmFFYwof2xKO9ik1CjAy5vfjXaTzbmTmyOZCNxxZ4Xi+yKagERdXeHTt2G2Lco2Mue4AAAAA==",
     "compression": "gzip"
   }
 }

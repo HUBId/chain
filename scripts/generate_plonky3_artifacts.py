@@ -6,12 +6,14 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import json
 import os
 import shlex
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -113,6 +115,31 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Pretty-print JSON output with indentation",
     )
+    parser.add_argument(
+        "--toolchain-version",
+        help="Annotate outputs with the Plonky3 toolchain version",
+    )
+    parser.add_argument(
+        "--git-sha",
+        action="append",
+        default=[],
+        metavar="NAME=SHA",
+        help="Record git repository SHAs in metadata (repeatable)",
+    )
+    parser.add_argument(
+        "--signature",
+        help="Attach a signature blob to the metadata",
+    )
+    parser.add_argument(
+        "--signature-file",
+        type=Path,
+        help="Read the signature blob to embed from the provided file",
+    )
+    parser.add_argument(
+        "--signature-output",
+        type=Path,
+        help="Emit a deterministic manifest for signing to the given path",
+    )
     return parser.parse_args()
 
 
@@ -194,14 +221,20 @@ def encode_bytes(data: bytes, compression: str) -> ArtifactEncoding:
     raise ValueError(f"Unsupported compression: {compression}")
 
 
-def artifact_to_document(artifact: Artifact, compression: str) -> Dict[str, object]:
+def artifact_to_document(
+    artifact: Artifact,
+    compression: str,
+    metadata: Optional[Dict[str, object]],
+) -> Dict[str, object]:
+    document: "OrderedDict[str, object]" = OrderedDict()
+    document["circuit"] = artifact.circuit
+    if metadata:
+        document["metadata"] = metadata
     verifying_encoding = encode_bytes(artifact.verifying_key, compression)
     proving_encoding = encode_bytes(artifact.proving_key, compression)
-    return {
-        "circuit": artifact.circuit,
-        "verifying_key": verifying_encoding.to_json(),
-        "proving_key": proving_encoding.to_json(),
-    }
+    document["verifying_key"] = verifying_encoding.to_json()
+    document["proving_key"] = proving_encoding.to_json()
+    return document
 
 
 def emit_artifact(
@@ -209,16 +242,78 @@ def emit_artifact(
     artifact: Artifact,
     compression: str,
     pretty: bool,
-) -> None:
-    document = artifact_to_document(artifact, compression)
+    metadata: Optional[Dict[str, object]],
+) -> Tuple[Path, str]:
+    document = artifact_to_document(artifact, compression, metadata)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{artifact.circuit}.json"
-    serialized = json.dumps(document, indent=2 if pretty else None, sort_keys=False)
     if pretty:
+        serialized = json.dumps(document, indent=2, sort_keys=False)
         serialized += "\n"
     else:
+        serialized = json.dumps(document, indent=None, sort_keys=False, separators=(",", ":"))
         serialized = f"{serialized}\n"
     output_path.write_text(serialized, encoding="utf-8")
+    return output_path, serialized
+
+
+def parse_git_shas(values: Iterable[str]) -> "OrderedDict[str, str]":
+    mapping: Dict[str, str] = {}
+    for entry in values:
+        if "=" not in entry:
+            raise ValueError(f"--git-sha expects NAME=SHA, received '{entry}'")
+        name, sha = entry.split("=", 1)
+        key = name.strip()
+        value = sha.strip()
+        if not key or not value:
+            raise ValueError(f"--git-sha expects NAME=SHA, received '{entry}'")
+        mapping[key] = value
+    ordered = OrderedDict(sorted(mapping.items(), key=lambda item: item[0]))
+    return ordered
+
+
+def build_metadata(args: argparse.Namespace) -> Optional[Dict[str, object]]:
+    metadata: "OrderedDict[str, object]" = OrderedDict()
+    if args.toolchain_version:
+        metadata["toolchain_version"] = args.toolchain_version
+    if args.git_sha:
+        metadata["git_shas"] = parse_git_shas(args.git_sha)
+    signature_payload: Optional[str] = None
+    if args.signature and args.signature_file:
+        raise ValueError("--signature and --signature-file cannot be combined")
+    if args.signature:
+        signature_payload = args.signature
+    if args.signature_file:
+        signature_payload = args.signature_file.read_text(encoding="utf-8").strip()
+    if signature_payload:
+        metadata["signature"] = signature_payload
+    return metadata or None
+
+
+def write_signature_manifest(
+    output_path: Path,
+    artifacts: List[Tuple[Path, str]],
+    metadata: Optional[Dict[str, object]],
+) -> None:
+    entries: List[Dict[str, object]] = []
+    for path, payload in sorted(artifacts, key=lambda item: item[0].name):
+        digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        entries.append(
+            OrderedDict(
+                (
+                    ("circuit", path.stem),
+                    ("file", path.name),
+                    ("sha256", digest),
+                )
+            )
+        )
+    manifest: "OrderedDict[str, object]" = OrderedDict()
+    if metadata:
+        manifest["metadata"] = metadata
+    manifest["artifacts"] = entries
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    serialized = json.dumps(manifest, indent=2, sort_keys=False)
+    output_path.write_text(f"{serialized}\n", encoding="utf-8")
 
 
 def gather_artifacts(args: argparse.Namespace) -> List[Artifact]:
@@ -254,9 +349,15 @@ def gather_artifacts(args: argparse.Namespace) -> List[Artifact]:
 
 def main() -> None:
     args = parse_args()
+    metadata = build_metadata(args)
     artifacts = gather_artifacts(args)
+    emitted: List[Tuple[Path, str]] = []
     for artifact in artifacts:
-        emit_artifact(args.output, artifact, args.compression, args.pretty)
+        emitted.append(
+            emit_artifact(args.output, artifact, args.compression, args.pretty, metadata)
+        )
+    if args.signature_output:
+        write_signature_manifest(args.signature_output, emitted, metadata)
 
 
 if __name__ == "__main__":
