@@ -179,21 +179,6 @@ path = "../third_party/plonky3/p3-merkle-tree/0.3.0"
 
 # Remaining crates stay commented until subsequent mirror stages land.
 # [[patch.crates-io]]
-# name = "p3-baby-bear"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-baby-bear/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-bn254-fr"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-bn254-fr/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-goldilocks"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-goldilocks/0.3.0"
-#
-# [[patch.crates-io]]
 # name = "p3-keccak"
 # version = "0.3.0"
 # path = "../third_party/plonky3/p3-keccak/0.3.0"
@@ -203,26 +188,41 @@ path = "../third_party/plonky3/p3-merkle-tree/0.3.0"
 # version = "0.3.0"
 # path = "../third_party/plonky3/p3-keccak-air/0.3.0"
 #
-# [[patch.crates-io]]
-# name = "p3-koala-bear"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-koala-bear/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-mersenne-31"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-mersenne-31/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-monty-31"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-monty-31/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-multilinear-util"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-multilinear-util/80803612ff4b6634519e12fa4bf075f679afcc1c"
-#
+[[patch.crates-io]]
+name = "p3-baby-bear"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-baby-bear/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-bn254-fr"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-bn254-fr/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-goldilocks"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-goldilocks/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-koala-bear"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-koala-bear/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-mersenne-31"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-mersenne-31/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-monty-31"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-monty-31/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-multilinear-util"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-multilinear-util/80803612ff4b6634519e12fa4bf075f679afcc1c"
+
 # [[patch.crates-io]]
 # name = "p3-poseidon"
 # version = "0.3.0"
@@ -253,8 +253,8 @@ path = "../third_party/plonky3/p3-merkle-tree/0.3.0"
 # version = "0.3.0"
 # path = "../third_party/plonky3/p3-uni-stark/0.3.0"
 #
-# [[patch.crates-io]]
-# name = "p3-util"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-util/0.3.0"
+[[patch.crates-io]]
+name = "p3-util"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-util/0.3.0"
 #

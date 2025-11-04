@@ -80,3 +80,9 @@ thiserror = "=1.0.69"
 default = ["plonky3-cpu-only"]
 plonky3-cpu-only = []
 plonky3-gpu = ["dep:gpu-alloc", "dep:gpu-descriptor"]
+
+[patch."https://github.com/0xPolygonZero/plonky3"]
+p3-baby-bear = "=0.3.0"
+p3-field = "=0.3.0"
+p3-maybe-rayon = "=0.3.0"
+p3-util = "=0.3.0"
