@@ -5,6 +5,37 @@ The pinned Rust toolchain requires the following components to be installed:
 - rustfmt
 - clippy
 
+## Toolchain- und Vendor-Prüfung
+
+Führe nach dem Einrichten der Rust-Umgebung folgende Checks aus, um sicherzustellen,
+dass die minimal unterstützte Stable-Version sowie die fixierte Nightly-Toolchain
+verfügbar sind und `cargo vendor` korrekt ausgeführt werden kann:
+
+```bash
+rustup toolchain list
+```
+
+Die Ausgabe muss mindestens `1.79.0-x86_64-unknown-linux-gnu` und
+`nightly-2025-07-14-x86_64-unknown-linux-gnu` enthalten. Installiere fehlende
+Toolchains mit `rustup toolchain install 1.79.0 nightly-2025-07-14`.
+
+Da `scripts/vendor_plonky3/refresh.py` ausschließlich Standardmodule verwendet,
+reicht eine funktionierende Python-3-Installation aus:
+
+```bash
+python3 --version
+```
+
+Abschließend prüfst du die Erreichbarkeit von `cargo vendor` ohne Änderungen am
+Vendor-Verzeichnis:
+
+```bash
+python3 scripts/vendor_plonky3/refresh.py --check-only
+```
+
+Der Dry-Run bestätigt mit `Plonky3 vendor tree is up to date.`, dass keine
+zusätzlichen Systemabhängigkeiten fehlen.
+
 ## Vendored libp2p stack checks
 
 The integration tests rely on the vendored libp2p transport stack being
