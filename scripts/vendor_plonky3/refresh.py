@@ -87,6 +87,14 @@ def write_checksum_manifest(path: Path, mapping: Dict[str, str]) -> None:
         handle.write("\n")
 
 
+def _write_stderr(payload: str | None) -> None:
+    if not payload:
+        return
+    sys.stderr.write(payload)
+    if not payload.endswith("\n"):
+        sys.stderr.write("\n")
+
+
 def run_cargo_vendor(manifest: Path, vendor_dir: Path) -> str:
     cmd = [
         "cargo",
@@ -96,7 +104,20 @@ def run_cargo_vendor(manifest: Path, vendor_dir: Path) -> str:
         "--versioned-dirs",
         str(vendor_dir),
     ]
-    proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        # Forward cargo's diagnostics directly so warnings/errors stay visible.
+        _write_stderr(exc.stderr or exc.stdout)
+        raise
+
+    _write_stderr(proc.stderr)
     return proc.stdout
 
 
@@ -136,7 +157,6 @@ def main(argv: list[str]) -> int:
         try:
             config_payload = run_cargo_vendor(manifest, vendor_dir)
         except subprocess.CalledProcessError as exc:
-            print(exc.stderr or exc.stdout, file=sys.stderr)
             return exc.returncode
         write_config(config_path, config_payload)
 
