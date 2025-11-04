@@ -117,11 +117,67 @@ path = "../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
 # Uncomment the desired entries once the mirror under `third_party/plonky3/`
 # has been refreshed and you want builds to resolve the crates offline.
 #
-# [[patch.crates-io]]
-# name = "p3-air"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-air/0.3.0"
-#
+[[patch.crates-io]]
+name = "p3-air"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-air/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-challenger"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-challenger/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-circle"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-circle/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-commit"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-commit/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-dft"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-dft/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-field"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-field/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-fri"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-fri/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-interpolation"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-interpolation/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-matrix"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-matrix/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-maybe-rayon"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-maybe-rayon/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-mds"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-mds/0.3.0"
+
+[[patch.crates-io]]
+name = "p3-merkle-tree"
+version = "0.3.0"
+path = "../third_party/plonky3/p3-merkle-tree/0.3.0"
+
+# Remaining crates stay commented until subsequent mirror stages land.
 # [[patch.crates-io]]
 # name = "p3-baby-bear"
 # version = "0.3.0"
@@ -133,44 +189,9 @@ path = "../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
 # path = "../third_party/plonky3/p3-bn254-fr/0.3.0"
 #
 # [[patch.crates-io]]
-# name = "p3-challenger"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-challenger/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-circle"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-circle/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-commit"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-commit/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-dft"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-dft/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-field"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-field/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-fri"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-fri/0.3.0"
-#
-# [[patch.crates-io]]
 # name = "p3-goldilocks"
 # version = "0.3.0"
 # path = "../third_party/plonky3/p3-goldilocks/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-interpolation"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-interpolation/0.3.0"
 #
 # [[patch.crates-io]]
 # name = "p3-keccak"
@@ -186,26 +207,6 @@ path = "../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
 # name = "p3-koala-bear"
 # version = "0.3.0"
 # path = "../third_party/plonky3/p3-koala-bear/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-matrix"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-matrix/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-maybe-rayon"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-maybe-rayon/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-mds"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-mds/0.3.0"
-#
-# [[patch.crates-io]]
-# name = "p3-merkle-tree"
-# version = "0.3.0"
-# path = "../third_party/plonky3/p3-merkle-tree/0.3.0"
 #
 # [[patch.crates-io]]
 # name = "p3-mersenne-31"
@@ -256,4 +257,4 @@ path = "../prover/prover_stwo_backend/vendor/stwo-dev/0.1.1/crates/stwo"
 # name = "p3-util"
 # version = "0.3.0"
 # path = "../third_party/plonky3/p3-util/0.3.0"
-
+#
