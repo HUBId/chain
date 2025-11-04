@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-ping"
+name = "rpp-libp2p-ping"
 edition = "2021"
 description = "Ping protocol for libp2p"
 version = "0.47.0"
@@ -8,6 +8,9 @@ license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
 keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "libp2p_ping"
 
 [dependencies]
 futures = { workspace = true }

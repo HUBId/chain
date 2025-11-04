@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-identity"
+name = "rpp-libp2p-identity"
 version = "0.2.12"
 edition = "2021" # MUST NOT inherit from workspace because we don't want to publish breaking changes to `libp2p-identity`.
 description = "Data structures and algorithms for identifying peers in libp2p."
@@ -27,6 +27,9 @@ serde = { version = "1", optional = true, features = ["derive"] }
 sha2 = { version = "0.10.8", optional = true }
 thiserror = { workspace = true, optional = true }
 zeroize = { version = "1.8", optional = true }
+
+[lib]
+name = "libp2p_identity"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ring = { workspace = true, features = ["alloc", "std"], optional = true }

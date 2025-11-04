@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-core"
+name = "rpp-libp2p-core"
 edition.workspace = true
 rust-version = { workspace = true }
 description = "Core traits and structs of libp2p"
@@ -9,6 +9,9 @@ license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
 keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "libp2p_core"
 
 [dependencies]
 either = "1.11"
@@ -39,7 +42,7 @@ url = { version = "2.1.0", default-features = false }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
 libp2p-mplex = { path = "../muxers/mplex" } # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
-libp2p-noise = { path = "../transports/noise" } # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
+libp2p-noise = { package = "rpp-libp2p-noise-transport", path = "../transports/noise" } # Using `path` here because this is a cyclic dev-dependency which otherwise breaks releasing.
 multihash = { workspace = true, features = ["arb"] }
 libp2p-identity = { workspace = true, features = ["ed25519", "rand"] }
 

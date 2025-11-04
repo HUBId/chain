@@ -1,5 +1,5 @@
 [package]
-name = "libp2p-gossipsub"
+name = "rpp-libp2p-gossipsub"
 edition.workspace = true
 rust-version = { workspace = true }
 description = "Gossipsub protocol for libp2p"
@@ -9,6 +9,9 @@ license = "MIT"
 repository = "https://github.com/libp2p/rust-libp2p"
 keywords = ["peer-to-peer", "libp2p", "networking"]
 categories = ["network-programming", "asynchronous"]
+
+[lib]
+name = "libp2p_gossipsub"
 
 [features]
 wasm-bindgen = ["getrandom/js", "futures-timer/wasm-bindgen"]
@@ -44,7 +47,7 @@ prometheus-client = { workspace = true, optional = true }
 
 [dev-dependencies]
 libp2p-core = { workspace = true }
-libp2p-swarm-test = { path = "../../swarm-test" }
+libp2p-swarm-test = { package = "rpp-libp2p-swarm-test", path = "../../swarm-test" }
 quickcheck = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros"] }
