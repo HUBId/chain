@@ -73,9 +73,14 @@ make build:stable    # cargo +1.79.0 build --workspace (excludes prover crates)
 make test:stable     # cargo +1.79.0 test --workspace (excludes prover crates)
 make build:nightly   # cargo +nightly-2025-07-14 build --manifest-path prover/Cargo.toml
 make test:nightly    # cargo +nightly-2025-07-14 test  --manifest-path prover/Cargo.toml
+make vendor-plonky3  # python3 scripts/vendor_plonky3/refresh.py (refreshes the Plonky3 mirror)
 ```
 
 Nightly toolchains are only needed when modifying the prover workspace.
+The `vendor-plonky3` target regenerates the offline mirror under
+`third_party/plonky3/`, including the `config.toml` snippet that can be exported
+via `CARGO_CONFIG` to route Plonky3 crates to the mirror during
+`scripts/build.sh --backend plonky3` runs.【F:scripts/build.sh†L15-L55】【F:Makefile†L9-L27】
 Additional development workflow details live in [`docs/development_guide.md`](./docs/development_guide.md).
 
 ## Running a local node
