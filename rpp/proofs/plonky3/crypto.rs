@@ -443,9 +443,7 @@ pub fn verifying_key(circuit: &str) -> ChainResult<Vec<u8>> {
     circuit_artifact(circuit).map(|artifact| artifact.verifying_key.bytes().to_vec())
 }
 
-pub(crate) fn circuit_keys(
-    circuit: &str,
-) -> ChainResult<(backend::VerifyingKey, backend::ProvingKey)> {
+pub fn circuit_keys(circuit: &str) -> ChainResult<(backend::VerifyingKey, backend::ProvingKey)> {
     circuit_artifact(circuit)
         .map(|artifact| (artifact.verifying_key.clone(), artifact.proving_key.clone()))
 }

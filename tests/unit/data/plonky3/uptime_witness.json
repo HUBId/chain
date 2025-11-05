@@ -1,0 +1,9 @@
+{
+  "wallet_address": "fixture-validator-0001",
+  "node_clock": 1024,
+  "epoch": 3,
+  "head_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "window_start": 1000,
+  "window_end": 1100,
+  "commitment": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+}

@@ -1,0 +1,6 @@
+{
+  "genesis": {
+    "wallet_address": "fixture-wallet-0001",
+    "genesis_block": "fixture-block-0001"
+  }
+}

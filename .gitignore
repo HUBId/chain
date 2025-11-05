@@ -1,6 +1,8 @@
 target/
 **/*.rs.bk
 data/
+!tests/unit/data/
+!tests/unit/data/**
 keys/
 logs/
 ci-artifacts/
