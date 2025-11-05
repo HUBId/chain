@@ -2,11 +2,12 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::hash;
 use flate2::read::GzDecoder;
-use plonky3_backend::{ProofMetadata, ProvingKey, VerifyingKey};
+use plonky3_backend::{AirMetadata, ProofMetadata, ProverContext, ProvingKey, VerifyingKey};
 use serde::Deserialize;
 use serde_json::json;
 use std::fs;
 use std::io::Read;
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct FixtureKey {
@@ -57,6 +58,8 @@ fn verifying_key_roundtrip_base64_gzip() {
     let raw = decompress_gzip(&encoded_blob);
     assert_eq!(key.bytes(), raw.as_slice());
     assert_eq!(key.hash(), *hash(&encoded_blob).as_bytes());
+    let metadata = key.metadata();
+    assert_eq!(metadata.digest().is_some(), !metadata.is_empty());
 }
 
 #[test]
@@ -74,6 +77,8 @@ fn proving_key_roundtrip_base64_gzip() {
     let raw = decompress_gzip(&encoded_blob);
     assert_eq!(key.bytes(), raw.as_slice());
     assert_eq!(key.hash(), *hash(&encoded_blob).as_bytes());
+    let metadata = key.metadata();
+    assert_eq!(metadata.digest().is_some(), !metadata.is_empty());
 }
 
 #[test]
@@ -196,4 +201,38 @@ fn json_schemas_are_deterministic() {
         "additionalProperties": false
     });
     assert_eq!(metadata, expected_metadata);
+}
+
+#[test]
+fn prover_context_rejects_mismatched_metadata() {
+    let fixture = load_consensus_fixture();
+    let verifying_blob = decode_base64(&fixture.verifying_key.value);
+    let verifying_key =
+        VerifyingKey::from_bytes(verifying_blob, &fixture.circuit).expect("verifying key decodes");
+    let verifying_metadata = verifying_key.metadata();
+    let proving_blob = decode_base64(&fixture.proving_key.value);
+    let proving_key =
+        ProvingKey::from_bytes(proving_blob, &fixture.circuit, Some(&verifying_metadata))
+            .expect("proving key decodes");
+
+    let tampered: AirMetadata = serde_json::from_value(json!({
+        "air": {"log_blowup": 7},
+        "generator": "poseidon",
+    }))
+    .expect("metadata parses");
+    let tampered = Arc::new(tampered);
+    let verifying_key = verifying_key.with_metadata(Arc::clone(&tampered));
+
+    let err = ProverContext::new(&fixture.circuit, verifying_key, proving_key, 64, false)
+        .expect_err("metadata mismatch must fail");
+    match err {
+        plonky3_backend::BackendError::InvalidKeyEncoding { kind, message, .. } => {
+            assert_eq!(kind, "proving key");
+            assert!(
+                message.contains("metadata digest"),
+                "unexpected mismatch message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

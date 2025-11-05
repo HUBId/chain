@@ -251,7 +251,7 @@ fn transaction_proof_roundtrip() {
         ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
     };
     let verifying_key = crypto::verifying_key("transaction").unwrap();
-    let verifying_hash = blake3_hash(&verifying_key);
+    let verifying_hash = blake3_hash(verifying_key.bytes());
     assert!(parsed.payload.proof_blob.len() >= crypto::PROOF_BLOB_LEN);
     assert_eq!(&parsed.payload.proof_blob[..32], verifying_hash.as_bytes());
     assert_eq!(

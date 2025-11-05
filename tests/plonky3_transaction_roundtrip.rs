@@ -44,7 +44,7 @@ fn transaction_roundtrip_produces_stable_commitment() {
     let parsed = Plonky3Proof::from_value(value).unwrap();
     assert_eq!(parsed.circuit, "transaction");
     let verifying_key = crypto::verifying_key("transaction").unwrap();
-    let verifying_hash = blake3::hash(&verifying_key);
+    let verifying_hash = blake3::hash(verifying_key.bytes());
     assert!(!parsed.payload.proof_blob.is_empty());
     assert_eq!(
         parsed.payload.metadata.verifying_key_hash,

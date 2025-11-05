@@ -445,8 +445,8 @@ fn circuit_artifact(circuit: &str) -> ChainResult<&'static CircuitArtifact> {
     })
 }
 
-pub fn verifying_key(circuit: &str) -> ChainResult<Vec<u8>> {
-    circuit_artifact(circuit).map(|artifact| artifact.verifying_key.bytes().to_vec())
+pub fn verifying_key(circuit: &str) -> ChainResult<backend::VerifyingKey> {
+    circuit_artifact(circuit).map(|artifact| artifact.verifying_key.clone())
 }
 
 pub fn circuit_air_metadata(circuit: &str) -> ChainResult<Option<Arc<AirMetadata>>> {
