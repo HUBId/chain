@@ -3,11 +3,11 @@ use p3_field::QuotientMap;
 use p3_matrix::Matrix;
 use plonky3_backend::circuits::consensus::load_consensus_trace_layout;
 use plonky3_backend::{
-    decode_consensus_instance, encode_consensus_public_inputs, prove_consensus,
-    require_circuit_air_metadata, validate_consensus_public_inputs, verify_consensus, AirMetadata,
-    BackendError, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
-    ConsensusWitness, ProverContext, ProvingKey, VerifierContext, VerifyingKey, VotePower,
-    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    compute_commitment_and_inputs, decode_consensus_instance, encode_consensus_public_inputs,
+    prove_consensus, require_circuit_air_metadata, validate_consensus_public_inputs,
+    verify_consensus, AirMetadata, BackendError, ConsensusCircuit, ConsensusProof,
+    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey,
+    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -284,27 +284,49 @@ fn consensus_prover_context_rejects_metadata_mismatch() {
 fn consensus_instance_decoding_matches_metadata_layout() {
     use plonky3_backend::circuits::consensus::ConsensusTraceLayout;
 
-    fn parse_dimension(
-        air: &Map<String, Value>,
-        trace_obj: Option<&Map<String, Value>>,
-        top_level_keys: &[&str],
-        nested_keys: &[&str],
-        label: &str,
-    ) -> usize {
-        for key in top_level_keys {
-            if let Some(value) = air.get(*key) {
+    fn parse_numeric_dimension(map: &Map<String, Value>, keys: &[&str]) -> Option<usize> {
+        for key in keys {
+            if let Some(Value::Number(value)) = map.get(*key) {
                 if let Some(dimension) = value.as_u64() {
-                    return dimension as usize;
+                    return Some(dimension as usize);
                 }
             }
         }
-        if let Some(trace) = trace_obj {
-            for key in nested_keys {
-                if let Some(value) = trace.get(*key) {
-                    if let Some(dimension) = value.as_u64() {
-                        return dimension as usize;
-                    }
+        None
+    }
+
+    fn parse_log_dimension(map: &Map<String, Value>, keys: &[&str]) -> Option<usize> {
+        for key in keys {
+            if let Some(Value::Number(value)) = map.get(*key) {
+                if let Some(log_length) = value.as_u64() {
+                    return Some(1usize << log_length);
                 }
+            }
+        }
+        None
+    }
+
+    fn parse_dimension(
+        air: &Map<String, Value>,
+        trace_obj: Option<&Map<String, Value>>,
+        direct_keys: &[&str],
+        trace_keys: &[&str],
+        log_keys: &[&str],
+        trace_log_keys: &[&str],
+        label: &str,
+    ) -> usize {
+        if let Some(dimension) = parse_numeric_dimension(air, direct_keys) {
+            return dimension;
+        }
+        if let Some(dimension) = parse_log_dimension(air, log_keys) {
+            return dimension;
+        }
+        if let Some(trace) = trace_obj {
+            if let Some(dimension) = parse_numeric_dimension(trace, trace_keys) {
+                return dimension;
+            }
+            if let Some(dimension) = parse_log_dimension(trace, trace_log_keys) {
+                return dimension;
             }
         }
         panic!("missing {label} in consensus AIR metadata");
@@ -352,37 +374,18 @@ fn consensus_instance_decoding_matches_metadata_layout() {
         }
     }
 
-    let metadata = require_circuit_air_metadata("consensus").expect("load consensus metadata");
-    let air = metadata.air().expect("consensus AIR descriptor");
-    let trace_obj = air.get("trace").and_then(Value::as_object);
-    let declared_height = parse_dimension(
-        air,
-        trace_obj,
-        &["trace_height"],
-        &["height"],
-        "trace height",
-    );
-    let declared_width =
-        parse_dimension(air, trace_obj, &["trace_width"], &["width"], "trace width");
-
-    let layout = load_consensus_trace_layout().expect("consensus trace layout");
-    assert_eq!(
-        layout.height, declared_height,
-        "layout height must match metadata"
-    );
-    assert_eq!(
-        layout.width, declared_width,
-        "layout width must match metadata"
-    );
-
     let witness = sample_witness();
     let baseline = ConsensusCircuit::new(witness).expect("construct consensus circuit");
     let public_inputs = baseline
         .public_inputs_value()
         .expect("encode consensus public inputs");
+    let (baseline_commitment, canonical_bytes) =
+        compute_commitment_and_inputs(&public_inputs).expect("canonical commitment computation");
+    let canonical_inputs: Value =
+        serde_json::from_slice(&canonical_bytes).expect("canonical public inputs decode");
 
     let (decoded, trace, flattened_inputs) =
-        decode_consensus_instance::<plonky3_backend::CircuitStarkConfig>(&public_inputs)
+        decode_consensus_instance::<plonky3_backend::CircuitStarkConfig>(&canonical_inputs)
             .expect("decode consensus instance");
 
     assert_eq!(
@@ -410,17 +413,64 @@ fn consensus_instance_decoding_matches_metadata_layout() {
     );
     assert_eq!(input_layout.total_values, flattened_inputs.len());
 
+    let (decoded_inputs, decoded_layout) = decoded
+        .flatten_public_inputs_for_config::<plonky3_backend::CircuitStarkConfig>()
+        .expect("flatten decoded inputs");
+    assert_eq!(decoded_inputs, flattened_inputs);
+    assert_eq!(decoded_layout.total_values, flattened_inputs.len());
+
+    let (round_trip_commitment, round_trip_bytes) =
+        compute_commitment_and_inputs(&canonical_inputs).expect("round-trip canonical encoding");
+    assert_eq!(round_trip_commitment, baseline_commitment);
+    assert_eq!(round_trip_bytes, canonical_bytes);
+
+    let recovered_public_inputs = decoded
+        .public_inputs_value()
+        .expect("re-encode public inputs");
+    let (recovered_commitment, recovered_bytes) =
+        compute_commitment_and_inputs(&recovered_public_inputs)
+            .expect("recovered canonical encoding");
+    assert_eq!(recovered_commitment, baseline_commitment);
+    assert_eq!(recovered_bytes, canonical_bytes);
+
+    let (verifying_key, _) = sample_keys();
+    let metadata = verifying_key.air_metadata();
+    let air = metadata.air().expect("consensus AIR descriptor");
+    let trace_obj = air.get("trace").and_then(Value::as_object);
+    let declared_height = parse_dimension(
+        air,
+        trace_obj,
+        &["trace_height", "trace_length", "trace_len"],
+        &["height", "length", "rows"],
+        &["log_trace_length", "log_trace_height"],
+        &["log_length"],
+        "trace height",
+    );
+    let declared_width = parse_dimension(
+        air,
+        trace_obj,
+        &["trace_width", "column_count", "columns"],
+        &["width", "columns"],
+        &[],
+        &[],
+        "trace width",
+    );
+
     assert_eq!(
         trace.height(),
-        layout.height,
+        declared_height,
         "trace height must match metadata"
     );
     assert_eq!(
         trace.width(),
-        layout.width,
+        declared_width,
         "trace width must match metadata"
     );
-    assert_eq!(trace.values.len(), layout.height * layout.width);
+    assert_eq!(trace.values.len(), declared_height * declared_width);
+
+    let layout = load_consensus_trace_layout().expect("consensus trace layout");
+    assert_eq!(layout.height, declared_height);
+    assert_eq!(layout.width, declared_width);
 
     let mut previous_end = 0usize;
     for segment in &layout.segments {
@@ -521,4 +571,23 @@ fn consensus_instance_decoding_matches_metadata_layout() {
         saw_padding,
         "expected at least one zero-padded segment in trace"
     );
+}
+
+#[test]
+fn consensus_instance_decoding_rejects_malformed_inputs() {
+    let malformed = Value::Null;
+    let err = decode_consensus_instance::<plonky3_backend::CircuitStarkConfig>(&malformed)
+        .expect_err("malformed inputs must fail");
+    assert!(matches!(err, BackendError::InvalidPublicInputs { .. }));
+
+    let mut invalid_bindings = sample_witness();
+    invalid_bindings.quorum_bitmap_root = "".into();
+    let payload = json!({
+        "witness": invalid_bindings,
+        "bindings": json!({"quorum_bitmap": "00"}),
+        "vrf_entries": [],
+    });
+    let err = decode_consensus_instance::<plonky3_backend::CircuitStarkConfig>(&payload)
+        .expect_err("invalid payload must fail");
+    assert!(matches!(err, BackendError::InvalidPublicInputs { .. }));
 }
