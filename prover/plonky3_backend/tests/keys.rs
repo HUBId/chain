@@ -45,40 +45,97 @@ fn decompress_gzip(bytes: &[u8]) -> Vec<u8> {
 }
 
 #[test]
-fn verifying_key_roundtrip_base64_gzip() {
+fn consensus_fixture_descriptor_decodes_typed_keys() {
     let fixture = load_consensus_fixture();
-    let encoded_blob = decode_base64(&fixture.verifying_key.value);
-    let key = VerifyingKey::from_encoded_parts(
+
+    let verifying_encoded = decode_base64(&fixture.verifying_key.value);
+    let verifying_key = VerifyingKey::from_encoded_parts(
         &fixture.verifying_key.value,
         "base64",
         fixture.verifying_key.compression.as_deref(),
         &fixture.circuit,
     )
     .expect("verifying key decodes");
-    let raw = decompress_gzip(&encoded_blob);
-    assert_eq!(key.bytes(), raw.as_slice());
-    assert_eq!(key.hash(), *hash(&encoded_blob).as_bytes());
-    let metadata = key.metadata();
-    assert_eq!(metadata.digest().is_some(), !metadata.is_empty());
-}
+    let verifying_raw = decompress_gzip(&verifying_encoded);
+    assert_eq!(verifying_key.bytes(), verifying_raw.as_slice());
+    assert_eq!(verifying_key.hash(), *hash(&verifying_encoded).as_bytes());
 
-#[test]
-fn proving_key_roundtrip_base64_gzip() {
-    let fixture = load_consensus_fixture();
-    let encoded_blob = decode_base64(&fixture.proving_key.value);
-    let key = ProvingKey::from_encoded_parts(
+    let verifying_typed = verifying_key.typed();
+    assert_eq!(verifying_typed.len(), verifying_raw.len());
+    let verifying_typed_again = verifying_key.typed();
+    assert!(Arc::ptr_eq(&verifying_typed, &verifying_typed_again));
+
+    let verifying_metadata = verifying_key.metadata();
+    assert_eq!(verifying_metadata.digest().is_some(), !verifying_metadata.is_empty());
+    let verifying_metadata_again = verifying_key.metadata();
+    assert!(Arc::ptr_eq(&verifying_metadata, &verifying_metadata_again));
+
+    let proving_encoded = decode_base64(&fixture.proving_key.value);
+    let proving_key = ProvingKey::from_encoded_parts(
         &fixture.proving_key.value,
         "base64",
         fixture.proving_key.compression.as_deref(),
         &fixture.circuit,
-        None,
+        Some(&verifying_metadata),
     )
     .expect("proving key decodes");
-    let raw = decompress_gzip(&encoded_blob);
-    assert_eq!(key.bytes(), raw.as_slice());
-    assert_eq!(key.hash(), *hash(&encoded_blob).as_bytes());
-    let metadata = key.metadata();
-    assert_eq!(metadata.digest().is_some(), !metadata.is_empty());
+    let proving_raw = decompress_gzip(&proving_encoded);
+    assert_eq!(proving_key.bytes(), proving_raw.as_slice());
+    assert_eq!(proving_key.hash(), *hash(&proving_encoded).as_bytes());
+
+    let proving_typed = proving_key.typed();
+    assert_eq!(proving_typed.len(), proving_raw.len());
+    let proving_typed_again = proving_key.typed();
+    assert!(Arc::ptr_eq(&proving_typed, &proving_typed_again));
+
+    let proving_metadata = proving_key.metadata();
+    assert!(Arc::ptr_eq(&verifying_metadata, &proving_metadata));
+}
+
+#[test]
+fn contexts_debug_and_clone_preserve_metadata() {
+    let fixture = load_consensus_fixture();
+
+    let verifying_key = VerifyingKey::from_encoded_parts(
+        &fixture.verifying_key.value,
+        "base64",
+        fixture.verifying_key.compression.as_deref(),
+        &fixture.circuit,
+    )
+    .expect("verifying key decodes");
+    let verifying_metadata = verifying_key.metadata();
+    let proving_key = ProvingKey::from_encoded_parts(
+        &fixture.proving_key.value,
+        "base64",
+        fixture.proving_key.compression.as_deref(),
+        &fixture.circuit,
+        Some(&verifying_metadata),
+    )
+    .expect("proving key decodes");
+
+    let prover = ProverContext::new(
+        &fixture.circuit,
+        verifying_key.clone(),
+        proving_key.clone(),
+        64,
+        false,
+    )
+    .expect("prover context builds");
+    let prover_debug = format!("{prover:?}");
+    assert!(prover_debug.contains("ProverContext"));
+    let prover_verifying_metadata = prover.verifying_metadata();
+    let prover_proving_metadata = prover.proving_metadata();
+    assert!(Arc::ptr_eq(&prover_verifying_metadata, &prover_proving_metadata));
+    assert!(Arc::ptr_eq(&prover_verifying_metadata, &verifying_metadata));
+
+    let verifier = prover.verifier();
+    let verifier_debug = format!("{verifier:?}");
+    assert!(verifier_debug.contains("VerifierContext"));
+    let verifier_clone = verifier.clone();
+    let verifier_metadata = verifier.metadata();
+    let verifier_clone_metadata = verifier_clone.metadata();
+    assert!(Arc::ptr_eq(&verifier_metadata, &verifier_clone_metadata));
+    assert_eq!(verifier_metadata.as_ref(), prover_verifying_metadata.as_ref());
 }
 
 #[test]
