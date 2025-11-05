@@ -45,24 +45,48 @@ impl Plonky3Proof {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ProofPayload {
     #[serde(with = "serde_base64_vec")]
-    pub proof_blob: Vec<u8>,
-    #[serde(with = "serde_base64_vec")]
-    pub fri_transcript: Vec<u8>,
-    #[serde(with = "serde_base64_vec")]
-    pub openings: Vec<u8>,
+    pub stark_proof: Vec<u8>,
     pub metadata: ProofMetadata,
+}
+
+impl<'de> Deserialize<'de> for ProofPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct CurrentPayload {
+            #[serde(with = "serde_base64_vec")]
+            stark_proof: Vec<u8>,
+            metadata: ProofMetadata,
+        }
+
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Ok(current) = CurrentPayload::deserialize(value.clone()) {
+            return Ok(Self {
+                stark_proof: current.stark_proof,
+                metadata: current.metadata,
+            });
+        }
+
+        if value.get("proof_blob").is_some() {
+            return Err(serde::de::Error::custom(
+                "legacy Plonky3 proof payload detected; re-export the proof with the updated format",
+            ));
+        }
+
+        Err(serde::de::Error::custom("invalid Plonky3 proof payload"))
+    }
 }
 
 impl ProofPayload {
     pub fn from_backend(proof: backend::Proof) -> Self {
         let parts = proof.into_parts();
         Self {
-            proof_blob: parts.proof_blob,
-            fri_transcript: parts.fri_transcript,
-            openings: parts.openings,
+            stark_proof: parts.stark_proof,
             metadata: parts.metadata.into(),
         }
     }
@@ -70,21 +94,16 @@ impl ProofPayload {
     pub fn to_backend(&self, circuit: &str) -> backend::BackendResult<backend::Proof> {
         backend::Proof::from_parts(
             circuit,
-            ProofParts::new(
-                self.proof_blob.clone(),
-                self.fri_transcript.clone(),
-                self.openings.clone(),
-                self.metadata.clone().into(),
-            ),
+            ProofParts::new(self.stark_proof.clone(), self.metadata.clone().into()),
         )
     }
 
     pub fn validate(&self) -> ChainResult<()> {
-        if self.proof_blob.len() < backend::PROOF_BLOB_LEN {
+        let min_len = 3 * backend::COMMITMENT_LEN;
+        if self.stark_proof.len() < min_len {
             return Err(ChainError::Crypto(format!(
-                "proof blob must be at least {} bytes, found {}",
-                backend::PROOF_BLOB_LEN,
-                self.proof_blob.len()
+                "proof payload must be at least {min_len} bytes, found {}",
+                self.stark_proof.len()
             )));
         }
         self.metadata.validate()?;
@@ -95,11 +114,13 @@ impl ProofPayload {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProofMetadata {
     #[serde(with = "serde_hex_32")]
-    pub verifying_key_hash: [u8; 32],
+    pub trace_commitment: [u8; 32],
+    #[serde(with = "serde_hex_32")]
+    pub quotient_commitment: [u8; 32],
+    #[serde(with = "serde_hex_32")]
+    pub fri_commitment: [u8; 32],
     #[serde(with = "serde_hex_32")]
     pub public_inputs_hash: [u8; 32],
-    #[serde(with = "serde_hex_32")]
-    pub fri_digest: [u8; 32],
     #[serde(default = "default_hash_format")]
     pub hash_format: HashFormat,
     pub security_bits: u32,
@@ -109,9 +130,10 @@ pub struct ProofMetadata {
 impl From<backend::ProofMetadata> for ProofMetadata {
     fn from(value: backend::ProofMetadata) -> Self {
         Self {
-            verifying_key_hash: *value.verifying_key_hash(),
+            trace_commitment: *value.trace_commitment(),
+            quotient_commitment: *value.quotient_commitment(),
+            fri_commitment: *value.fri_commitment(),
             public_inputs_hash: *value.public_inputs_hash(),
-            fri_digest: *value.fri_digest(),
             hash_format: value.hash_format(),
             security_bits: value.security_bits(),
             use_gpu: value.use_gpu(),
@@ -122,9 +144,10 @@ impl From<backend::ProofMetadata> for ProofMetadata {
 impl From<ProofMetadata> for backend::ProofMetadata {
     fn from(value: ProofMetadata) -> Self {
         backend::ProofMetadata::with_hash_format(
-            value.verifying_key_hash,
+            value.trace_commitment,
+            value.quotient_commitment,
+            value.fri_commitment,
             value.public_inputs_hash,
-            value.fri_digest,
             value.hash_format,
             value.security_bits,
             value.use_gpu,
@@ -135,13 +158,13 @@ impl From<ProofMetadata> for backend::ProofMetadata {
 impl ProofMetadata {
     pub fn validate(&self) -> ChainResult<()> {
         match self.hash_format {
-            HashFormat::Blake3 => Ok(()),
+            HashFormat::PoseidonMerkleCap => Ok(()),
         }
     }
 }
 
 fn default_hash_format() -> HashFormat {
-    HashFormat::Blake3
+    HashFormat::PoseidonMerkleCap
 }
 
 mod serde_base64_vec {

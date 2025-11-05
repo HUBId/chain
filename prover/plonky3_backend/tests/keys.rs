@@ -313,22 +313,32 @@ fn json_schemas_are_deterministic() {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Plonky3 Proof Metadata",
         "type": "object",
-        "description": "Hex-encoded transcript and security parameters embedded in a Plonky3 proof payload.",
+        "description": "Hex-encoded transcript commitments and security parameters embedded in a Plonky3 proof payload.",
         "properties": {
-            "verifying_key_hash": {
+            "trace_commitment": {
                 "type": "string",
                 "pattern": "^[0-9a-fA-F]{64}$",
-                "description": "BLAKE3 digest of the verifying key referenced by the proof."
+                "description": "Poseidon Merkle cap commitment for the execution trace."
+            },
+            "quotient_commitment": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "description": "Poseidon Merkle cap commitment for the quotient domain."
+            },
+            "fri_commitment": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F]{64}$",
+                "description": "Poseidon Merkle cap commitment representing the FRI transcript."
             },
             "public_inputs_hash": {
                 "type": "string",
                 "pattern": "^[0-9a-fA-F]{64}$",
                 "description": "BLAKE3 digest of the encoded public inputs."
             },
-            "fri_digest": {
+            "hash_format": {
                 "type": "string",
-                "pattern": "^[0-9a-fA-F]{64}$",
-                "description": "BLAKE3 digest derived from the prover/verifier transcript."
+                "enum": ["poseidon_merkle_cap"],
+                "description": "Digest algorithm used for transcript commitments (header order preserved)."
             },
             "security_bits": {
                 "type": "integer",
@@ -341,11 +351,13 @@ fn json_schemas_are_deterministic() {
             }
         },
         "required": [
-            "verifying_key_hash",
+            "trace_commitment",
+            "quotient_commitment",
+            "fri_commitment",
             "public_inputs_hash",
-            "fri_digest",
             "security_bits",
-            "use_gpu"
+            "use_gpu",
+            "hash_format"
         ],
         "additionalProperties": false
     });

@@ -8,6 +8,7 @@
 //! keep the generated witnesses stable across CI runs.
 
 use ed25519_dalek::{Keypair, Signer};
+use std::convert::TryInto;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde_json::Value;
@@ -223,12 +224,26 @@ fn plonky3_recursive_flow_roundtrip() {
     // Recursive proof must embed the same sub-proofs inside its witness payload.
     if let ChainProof::Plonky3(value) = &bundle.recursive_proof {
         let parsed = Plonky3Proof::from_value(value).unwrap();
-        assert!(!parsed.payload.proof_blob.is_empty());
+        assert!(!parsed.payload.stark_proof.is_empty());
         let verifying_key = crypto::verifying_key("recursive").unwrap();
-        let verifying_hash = blake3::hash(verifying_key.bytes());
+        let verifying_bytes = verifying_key.bytes();
+        let header_len = 3 * crypto::COMMITMENT_LEN;
+        assert!(parsed.payload.stark_proof.len() >= header_len);
         assert_eq!(
-            parsed.payload.metadata.verifying_key_hash,
-            *verifying_hash.as_bytes()
+            parsed.payload.metadata.trace_commitment,
+            verifying_bytes[..crypto::COMMITMENT_LEN].try_into().unwrap()
+        );
+        assert_eq!(
+            parsed.payload.metadata.quotient_commitment,
+            verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
+                .try_into()
+                .unwrap()
+        );
+        assert_eq!(
+            parsed.payload.metadata.fri_commitment,
+            verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
+                .try_into()
+                .unwrap()
         );
         let public_inputs = value
             .get("public_inputs")
@@ -263,8 +278,8 @@ fn recursive_bundle_rejects_wrong_verifying_key() {
     let mut tampered = recursive_proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.metadata.verifying_key_hash[0] ^= 0x08;
-        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+        parsed.payload.metadata.trace_commitment[0] ^= 0x08;
+        if let Some(first) = parsed.payload.stark_proof.first_mut() {
             *first ^= 0x01;
         }
         *value = parsed.into_value().unwrap();
@@ -305,14 +320,14 @@ fn recursive_bundle_rejects_commitment_mismatch() {
 }
 
 #[test]
-fn recursive_bundle_rejects_oversized_proof_blob() {
+fn recursive_bundle_rejects_oversized_proof_payload() {
     let (verifier, transaction_proof, state_proof, pruning_proof, recursive_proof) =
         recursive_artifacts_for_tests();
 
     let mut oversized = recursive_proof.clone();
     if let ChainProof::Plonky3(value) = &mut oversized {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.proof_blob.push(0);
+        parsed.payload.stark_proof.push(0);
         *value = parsed.into_value().unwrap();
     }
 
@@ -344,8 +359,8 @@ fn consensus_proof_roundtrip_catches_tampering() {
     let mut wrong_key = proof.clone();
     if let ChainProof::Plonky3(value) = &mut wrong_key {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.metadata.verifying_key_hash[0] ^= 0x04;
-        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+        parsed.payload.metadata.trace_commitment[0] ^= 0x04;
+        if let Some(first) = parsed.payload.stark_proof.first_mut() {
             *first ^= 0x01;
         }
         *value = parsed.into_value().unwrap();
@@ -363,7 +378,7 @@ fn consensus_proof_roundtrip_catches_tampering() {
     let mut oversized = proof;
     if let ChainProof::Plonky3(value) = &mut oversized {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.proof_blob.push(0);
+        parsed.payload.stark_proof.push(0);
         *value = parsed.into_value().unwrap();
     }
     assert!(verifier.verify_consensus(&oversized).is_err());

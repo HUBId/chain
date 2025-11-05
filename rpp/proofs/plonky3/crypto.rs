@@ -12,7 +12,7 @@ use serde_json::Value;
 use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
-pub use plonky3_backend::PROOF_BLOB_LEN;
+pub use plonky3_backend::COMMITMENT_LEN;
 use plonky3_backend::{self as backend, AirMetadata};
 
 use super::params::Plonky3Parameters;
