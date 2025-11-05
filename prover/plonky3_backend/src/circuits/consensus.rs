@@ -3,18 +3,296 @@ use std::convert::TryInto;
 use std::ops::Range;
 
 use blake3::Hasher;
+use once_cell::sync::OnceLock;
 use p3_baby_bear::BabyBear;
 use p3_field::QuotientMap;
 use p3_uni_stark::config::{StarkGenericConfig, Val};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use crate::{BackendError, BackendResult};
+use crate::{require_circuit_air_metadata, AirMetadata, BackendError, BackendResult};
 
 pub const VRF_PROOF_LENGTH: usize = 80;
 pub const VRF_PREOUTPUT_LENGTH: usize = 32;
 
 const CIRCUIT_NAME: &str = "consensus";
+
+static CONSENSUS_TRACE_LAYOUT: OnceLock<ConsensusTraceLayout> = OnceLock::new();
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusTraceSegment {
+    pub label: String,
+    pub row_range: Range<usize>,
+    pub column_range: Range<usize>,
+}
+
+impl ConsensusTraceSegment {
+    pub fn width(&self) -> usize {
+        self.column_range.end - self.column_range.start
+    }
+
+    pub fn height(&self) -> usize {
+        self.row_range.end - self.row_range.start
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusTraceLayout {
+    pub height: usize,
+    pub width: usize,
+    pub segments: Vec<ConsensusTraceSegment>,
+}
+
+impl ConsensusTraceLayout {
+    pub fn segment(&self, label: &str) -> Option<&ConsensusTraceSegment> {
+        self.segments.iter().find(|segment| segment.label == label)
+    }
+}
+
+pub fn load_consensus_trace_layout() -> BackendResult<&'static ConsensusTraceLayout> {
+    CONSENSUS_TRACE_LAYOUT.get_or_try_init(|| {
+        let metadata = require_circuit_air_metadata(CIRCUIT_NAME)?;
+        parse_consensus_trace_layout(&metadata)
+    })
+}
+
+fn parse_consensus_trace_layout(metadata: &AirMetadata) -> BackendResult<ConsensusTraceLayout> {
+    let air = metadata.air().ok_or_else(|| {
+        BackendError::InvalidAirMetadata(
+            "consensus circuit metadata is missing the 'air' descriptor".into(),
+        )
+    })?;
+
+    let trace_obj = air.get("trace").and_then(Value::as_object);
+
+    let trace_height = parse_required_dimension(
+        locate_trace_field(air, trace_obj, &["trace_height"], &["height"]),
+        "trace height",
+    )?;
+    let trace_width = parse_required_dimension(
+        locate_trace_field(air, trace_obj, &["trace_width"], &["width"]),
+        "trace width",
+    )?;
+
+    if trace_height == 0 {
+        return Err(BackendError::InvalidAirMetadata(
+            "consensus trace height must be greater than zero".into(),
+        ));
+    }
+    if trace_width == 0 {
+        return Err(BackendError::InvalidAirMetadata(
+            "consensus trace width must be greater than zero".into(),
+        ));
+    }
+
+    let segments_value = locate_trace_field(
+        air,
+        trace_obj,
+        &["trace_segments", "segments"],
+        &["segments"],
+    )
+    .ok_or_else(|| {
+        BackendError::InvalidAirMetadata(
+            "consensus trace metadata is missing segment descriptors".into(),
+        )
+    })?;
+
+    let segment_array = segments_value.as_array().ok_or_else(|| {
+        BackendError::InvalidAirMetadata(
+            "consensus trace segments must be provided as an array".into(),
+        )
+    })?;
+
+    let mut segments = Vec::with_capacity(segment_array.len());
+    let mut next_offset = 0usize;
+    for (index, entry) in segment_array.iter().enumerate() {
+        segments.push(parse_consensus_trace_segment(
+            entry,
+            index,
+            trace_height,
+            trace_width,
+            &mut next_offset,
+        )?);
+    }
+
+    Ok(ConsensusTraceLayout {
+        height: trace_height,
+        width: trace_width,
+        segments,
+    })
+}
+
+fn parse_consensus_trace_segment(
+    value: &Value,
+    index: usize,
+    trace_height: usize,
+    trace_width: usize,
+    next_offset: &mut usize,
+) -> BackendResult<ConsensusTraceSegment> {
+    let object = value.as_object().ok_or_else(|| {
+        BackendError::InvalidAirMetadata(format!(
+            "consensus trace segment #{index} must be an object"
+        ))
+    })?;
+
+    let label = parse_required_string(
+        object,
+        &["label", "name", "segment"],
+        &format!("segment #{index} label"),
+    )?;
+
+    let width = parse_required_dimension(
+        locate_segment_field(object, &["width", "columns", "column_count"]),
+        &format!("segment '{label}' column width"),
+    )?;
+    if width == 0 {
+        return Err(BackendError::InvalidAirMetadata(format!(
+            "segment '{label}' column width must be greater than zero"
+        )));
+    }
+
+    let offset = parse_optional_dimension(
+        locate_segment_field(object, &["offset", "column_offset", "column_start"]),
+        &format!("segment '{label}' column offset"),
+    )?
+    .unwrap_or(*next_offset);
+
+    let row_count = parse_optional_dimension(
+        locate_segment_field(object, &["rows", "height", "row_count"]),
+        &format!("segment '{label}' row count"),
+    )?
+    .unwrap_or(trace_height);
+    if row_count == 0 {
+        return Err(BackendError::InvalidAirMetadata(format!(
+            "segment '{label}' row count must be greater than zero"
+        )));
+    }
+
+    let row_offset = parse_optional_dimension(
+        locate_segment_field(object, &["row_offset", "row_start", "start"]),
+        &format!("segment '{label}' row offset"),
+    )?
+    .unwrap_or(0);
+
+    let column_end = offset.checked_add(width).ok_or_else(|| {
+        BackendError::InvalidAirMetadata(format!(
+            "segment '{label}' column range exceeds usize bounds"
+        ))
+    })?;
+    if column_end > trace_width {
+        return Err(BackendError::InvalidAirMetadata(format!(
+            "segment '{label}' column range {offset}..{column_end} exceeds trace width {trace_width}"
+        )));
+    }
+
+    let row_end = row_offset.checked_add(row_count).ok_or_else(|| {
+        BackendError::InvalidAirMetadata(format!(
+            "segment '{label}' row range exceeds usize bounds"
+        ))
+    })?;
+    if row_end > trace_height {
+        return Err(BackendError::InvalidAirMetadata(format!(
+            "segment '{label}' row range {row_offset}..{row_end} exceeds trace height {trace_height}"
+        )));
+    }
+
+    *next_offset = column_end;
+
+    Ok(ConsensusTraceSegment {
+        label,
+        row_range: row_offset..row_end,
+        column_range: offset..column_end,
+    })
+}
+
+fn locate_trace_field<'a>(
+    air: &'a Map<String, Value>,
+    trace_obj: Option<&'a Map<String, Value>>,
+    top_level_keys: &[&str],
+    nested_keys: &[&str],
+) -> Option<&'a Value> {
+    for key in top_level_keys {
+        if let Some(value) = air.get(*key) {
+            if !value.is_null() {
+                return Some(value);
+            }
+        }
+    }
+    if let Some(trace) = trace_obj {
+        for key in nested_keys {
+            if let Some(value) = trace.get(*key) {
+                if !value.is_null() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn locate_segment_field<'a>(segment: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a Value> {
+    for key in keys {
+        if let Some(value) = segment.get(*key) {
+            if !value.is_null() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
+fn parse_required_dimension(value: Option<&Value>, label: &str) -> BackendResult<usize> {
+    match value {
+        Some(value) => parse_dimension(value, label),
+        None => Err(BackendError::InvalidAirMetadata(format!(
+            "missing {label} in consensus trace metadata"
+        ))),
+    }
+}
+
+fn parse_optional_dimension(value: Option<&Value>, label: &str) -> BackendResult<Option<usize>> {
+    match value {
+        Some(value) => parse_dimension(value, label).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn parse_dimension(value: &Value, label: &str) -> BackendResult<usize> {
+    let number = value.as_u64().ok_or_else(|| {
+        BackendError::InvalidAirMetadata(format!(
+            "{label} must be an unsigned integer, found {value}"
+        ))
+    })?;
+    usize::try_from(number).map_err(|_| {
+        BackendError::InvalidAirMetadata(format!("{label} value {number} exceeds usize capacity"))
+    })
+}
+
+fn parse_required_string(
+    segment: &Map<String, Value>,
+    keys: &[&str],
+    label: &str,
+) -> BackendResult<String> {
+    for key in keys {
+        if let Some(value) = segment.get(*key) {
+            if value.is_null() {
+                continue;
+            }
+            let text = value.as_str().ok_or_else(|| {
+                BackendError::InvalidAirMetadata(format!("{label} must be a string, found {value}"))
+            })?;
+            if text.trim().is_empty() {
+                return Err(BackendError::InvalidAirMetadata(format!(
+                    "{label} must not be empty"
+                )));
+            }
+            return Ok(text.to_string());
+        }
+    }
+    Err(BackendError::InvalidAirMetadata(format!(
+        "missing {label} in consensus trace metadata"
+    )))
+}
 
 fn invalid_witness(message: impl Into<String>) -> BackendError {
     BackendError::InvalidWitness {
