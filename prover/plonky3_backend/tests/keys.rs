@@ -60,15 +60,18 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     assert_eq!(verifying_key.bytes(), verifying_raw.as_slice());
     assert_eq!(verifying_key.hash(), *hash(&verifying_encoded).as_bytes());
 
-    let verifying_typed = verifying_key.typed();
-    assert_eq!(verifying_typed.len(), verifying_raw.len());
-    let verifying_typed_again = verifying_key.typed();
-    assert!(Arc::ptr_eq(&verifying_typed, &verifying_typed_again));
+    let verifying_stark = verifying_key.stark_key();
+    assert_eq!(verifying_stark.len(), verifying_raw.len());
+    let verifying_stark_again = verifying_key.stark_key();
+    assert!(Arc::ptr_eq(verifying_stark, verifying_stark_again));
 
-    let verifying_metadata = verifying_key.metadata();
-    assert_eq!(verifying_metadata.digest().is_some(), !verifying_metadata.is_empty());
-    let verifying_metadata_again = verifying_key.metadata();
-    assert!(Arc::ptr_eq(&verifying_metadata, &verifying_metadata_again));
+    let verifying_metadata = verifying_key.air_metadata();
+    assert_eq!(
+        verifying_metadata.digest().is_some(),
+        !verifying_metadata.is_empty()
+    );
+    let verifying_metadata_again = verifying_key.air_metadata();
+    assert!(Arc::ptr_eq(verifying_metadata, verifying_metadata_again));
 
     let proving_encoded = decode_base64(&fixture.proving_key.value);
     let proving_key = ProvingKey::from_encoded_parts(
@@ -76,20 +79,20 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
         "base64",
         fixture.proving_key.compression.as_deref(),
         &fixture.circuit,
-        Some(&verifying_metadata),
+        Some(verifying_metadata),
     )
     .expect("proving key decodes");
     let proving_raw = decompress_gzip(&proving_encoded);
     assert_eq!(proving_key.bytes(), proving_raw.as_slice());
     assert_eq!(proving_key.hash(), *hash(&proving_encoded).as_bytes());
 
-    let proving_typed = proving_key.typed();
-    assert_eq!(proving_typed.len(), proving_raw.len());
-    let proving_typed_again = proving_key.typed();
-    assert!(Arc::ptr_eq(&proving_typed, &proving_typed_again));
+    let proving_stark = proving_key.stark_key();
+    assert_eq!(proving_stark.len(), proving_raw.len());
+    let proving_stark_again = proving_key.stark_key();
+    assert!(Arc::ptr_eq(proving_stark, proving_stark_again));
 
-    let proving_metadata = proving_key.metadata();
-    assert!(Arc::ptr_eq(&verifying_metadata, &proving_metadata));
+    let proving_metadata = proving_key.air_metadata();
+    assert!(Arc::ptr_eq(verifying_metadata, proving_metadata));
 }
 
 #[test]
@@ -103,13 +106,13 @@ fn contexts_debug_and_clone_preserve_metadata() {
         &fixture.circuit,
     )
     .expect("verifying key decodes");
-    let verifying_metadata = verifying_key.metadata();
+    let verifying_metadata = Arc::clone(verifying_key.air_metadata());
     let proving_key = ProvingKey::from_encoded_parts(
         &fixture.proving_key.value,
         "base64",
         fixture.proving_key.compression.as_deref(),
         &fixture.circuit,
-        Some(&verifying_metadata),
+        Some(verifying_key.air_metadata()),
     )
     .expect("proving key decodes");
 
@@ -125,7 +128,10 @@ fn contexts_debug_and_clone_preserve_metadata() {
     assert!(prover_debug.contains("ProverContext"));
     let prover_verifying_metadata = prover.verifying_metadata();
     let prover_proving_metadata = prover.proving_metadata();
-    assert!(Arc::ptr_eq(&prover_verifying_metadata, &prover_proving_metadata));
+    assert!(Arc::ptr_eq(
+        &prover_verifying_metadata,
+        &prover_proving_metadata
+    ));
     assert!(Arc::ptr_eq(&prover_verifying_metadata, &verifying_metadata));
 
     let verifier = prover.verifier();
@@ -135,7 +141,10 @@ fn contexts_debug_and_clone_preserve_metadata() {
     let verifier_metadata = verifier.metadata();
     let verifier_clone_metadata = verifier_clone.metadata();
     assert!(Arc::ptr_eq(&verifier_metadata, &verifier_clone_metadata));
-    assert_eq!(verifier_metadata.as_ref(), prover_verifying_metadata.as_ref());
+    assert_eq!(
+        verifier_metadata.as_ref(),
+        prover_verifying_metadata.as_ref()
+    );
 }
 
 #[test]
@@ -266,11 +275,14 @@ fn prover_context_rejects_mismatched_metadata() {
     let verifying_blob = decode_base64(&fixture.verifying_key.value);
     let verifying_key =
         VerifyingKey::from_bytes(verifying_blob, &fixture.circuit).expect("verifying key decodes");
-    let verifying_metadata = verifying_key.metadata();
+    let verifying_metadata = Arc::clone(verifying_key.air_metadata());
     let proving_blob = decode_base64(&fixture.proving_key.value);
-    let proving_key =
-        ProvingKey::from_bytes(proving_blob, &fixture.circuit, Some(&verifying_metadata))
-            .expect("proving key decodes");
+    let proving_key = ProvingKey::from_bytes(
+        proving_blob,
+        &fixture.circuit,
+        Some(verifying_key.air_metadata()),
+    )
+    .expect("proving key decodes");
 
     let tampered: AirMetadata = serde_json::from_value(json!({
         "air": {"log_blowup": 7},

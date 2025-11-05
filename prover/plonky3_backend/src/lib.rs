@@ -620,12 +620,20 @@ impl VerifyingKey {
         self.hash
     }
 
+    pub fn stark_key(&self) -> &Arc<BackendStarkVerifyingKey> {
+        &self.typed
+    }
+
+    pub fn air_metadata(&self) -> &Arc<AirMetadata> {
+        &self.metadata
+    }
+
     pub fn typed(&self) -> Arc<BackendStarkVerifyingKey> {
-        Arc::clone(&self.typed)
+        Arc::clone(self.stark_key())
     }
 
     pub fn metadata(&self) -> Arc<AirMetadata> {
-        Arc::clone(&self.metadata)
+        Arc::clone(self.air_metadata())
     }
 
     pub fn with_metadata(mut self, metadata: Arc<AirMetadata>) -> Self {
@@ -736,12 +744,20 @@ impl ProvingKey {
         self.hash
     }
 
+    pub fn stark_key(&self) -> &Arc<BackendStarkProvingKey> {
+        &self.typed
+    }
+
+    pub fn air_metadata(&self) -> &Arc<AirMetadata> {
+        &self.metadata
+    }
+
     pub fn typed(&self) -> Arc<BackendStarkProvingKey> {
-        Arc::clone(&self.typed)
+        Arc::clone(self.stark_key())
     }
 
     pub fn metadata(&self) -> Arc<AirMetadata> {
-        Arc::clone(&self.metadata)
+        Arc::clone(self.air_metadata())
     }
 
     pub fn align_metadata(&mut self, shared: &Arc<AirMetadata>) {
@@ -1136,10 +1152,10 @@ impl ProverContext {
         if name.is_empty() {
             return Err(BackendError::EmptyCircuit);
         }
-        let verifying_metadata = verifying_key.metadata();
+        let verifying_metadata = Arc::clone(verifying_key.air_metadata());
         let mut proving_key = proving_key;
         proving_key.align_metadata(&verifying_metadata);
-        let proving_metadata = proving_key.metadata();
+        let proving_metadata = Arc::clone(proving_key.air_metadata());
         ensure_metadata_alignment(
             "verifying key",
             &verifying_metadata,
@@ -1282,7 +1298,7 @@ impl VerifierContext {
         if name.is_empty() {
             return Err(BackendError::EmptyCircuit);
         }
-        let metadata = verifying_key.metadata();
+        let metadata = Arc::clone(verifying_key.air_metadata());
         Ok(Self {
             name,
             verifying_key,

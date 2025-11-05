@@ -364,12 +364,12 @@ fn plonky3_param_digests_match_setup() {
         );
         if let Some(expected_metadata) = fixture.metadata.as_ref() {
             assert_eq!(
-                verifying_key.metadata().as_ref(),
+                verifying_key.air_metadata().as_ref(),
                 expected_metadata,
                 "verifying key metadata must match fixture"
             );
             assert_eq!(
-                proving_key.metadata().as_ref(),
+                proving_key.air_metadata().as_ref(),
                 expected_metadata,
                 "proving key metadata must match fixture"
             );

@@ -74,13 +74,12 @@ fn sample_keys() -> (VerifyingKey, ProvingKey) {
         &fixture.circuit,
     )
     .expect("verifying key constructs");
-    let verifying_metadata = verifying_key.metadata();
     let proving_key = ProvingKey::from_encoded_parts(
         &fixture.proving_key.value,
         &fixture.proving_key.encoding,
         fixture.proving_key.compression.as_deref(),
         &fixture.circuit,
-        Some(&verifying_metadata),
+        Some(verifying_key.air_metadata()),
     )
     .expect("proving key constructs");
     (verifying_key, proving_key)
