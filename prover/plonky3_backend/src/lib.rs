@@ -109,20 +109,20 @@ pub type CircuitStarkProvingKey = StarkProvingKey<CircuitStarkConfig>;
 
 #[derive(Clone)]
 pub struct BackendStarkVerifyingKey {
-    key: Arc<TypedStarkVerifyingKey>,
+    key: TypedStarkVerifyingKey,
     serialized_len: usize,
 }
 
 impl BackendStarkVerifyingKey {
     fn new(key: TypedStarkVerifyingKey, serialized_len: usize) -> Self {
         Self {
-            key: Arc::new(key),
+            key,
             serialized_len,
         }
     }
 
-    pub fn key(&self) -> Arc<CircuitStarkVerifyingKey> {
-        self.key.key()
+    pub fn key(&self) -> &TypedStarkVerifyingKey {
+        &self.key
     }
 
     pub fn air(&self) -> ToolchainAir {
@@ -147,20 +147,20 @@ impl fmt::Debug for BackendStarkVerifyingKey {
 
 #[derive(Clone)]
 pub struct BackendStarkProvingKey {
-    key: Arc<TypedStarkProvingKey>,
+    key: TypedStarkProvingKey,
     serialized_len: usize,
 }
 
 impl BackendStarkProvingKey {
     fn new(key: TypedStarkProvingKey, serialized_len: usize) -> Self {
         Self {
-            key: Arc::new(key),
+            key,
             serialized_len,
         }
     }
 
-    pub fn key(&self) -> Arc<CircuitStarkProvingKey> {
-        self.key.key()
+    pub fn key(&self) -> &TypedStarkProvingKey {
+        &self.key
     }
 
     pub fn air(&self) -> ToolchainAir {
@@ -650,8 +650,8 @@ impl VerifyingKey {
         &self.metadata
     }
 
-    pub fn typed(&self) -> Arc<BackendStarkVerifyingKey> {
-        Arc::clone(self.stark_key())
+    pub fn typed(&self) -> TypedStarkVerifyingKey {
+        self.typed.key().clone()
     }
 
     pub fn metadata(&self) -> Arc<AirMetadata> {
@@ -774,8 +774,8 @@ impl ProvingKey {
         &self.metadata
     }
 
-    pub fn typed(&self) -> Arc<BackendStarkProvingKey> {
-        Arc::clone(self.stark_key())
+    pub fn typed(&self) -> TypedStarkProvingKey {
+        self.typed.key().clone()
     }
 
     pub fn metadata(&self) -> Arc<AirMetadata> {
