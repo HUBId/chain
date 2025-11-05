@@ -17,6 +17,9 @@ use plonky3_backend::{self as backend};
 
 use super::params::Plonky3Parameters;
 
+pub use super::public_inputs::compute_commitment;
+pub(crate) use super::public_inputs::compute_commitment_and_inputs;
+
 #[derive(Clone)]
 struct CircuitArtifact {
     verifying_key: backend::VerifyingKey,
@@ -447,21 +450,8 @@ pub(crate) fn circuit_keys(
         .map(|artifact| (artifact.verifying_key.clone(), artifact.proving_key.clone()))
 }
 
-pub(crate) fn canonical_public_inputs(public_inputs: &Value) -> ChainResult<(String, Vec<u8>)> {
-    backend::compute_commitment_and_inputs(public_inputs).map_err(|err| {
-        ChainError::Crypto(format!(
-            "failed to encode Plonky3 public inputs for commitment: {err}"
-        ))
-    })
-}
-
-pub fn compute_commitment(public_inputs: &Value) -> ChainResult<String> {
-    canonical_public_inputs(public_inputs).map(|(commitment, _)| commitment)
-}
-
 pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::proof::Plonky3Proof> {
     let artifact = circuit_artifact(&circuit)?;
-    let (commitment, encoded_inputs) = canonical_public_inputs(&public_inputs)?;
     let params = Plonky3Parameters::default();
     let context = backend::ProverContext::new(
         circuit.clone(),
@@ -475,7 +465,7 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
             "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
         ))
     })?;
-    let backend_proof = context.prove(&commitment, &encoded_inputs).map_err(|err| {
+    let (commitment, backend_proof) = context.prove(&public_inputs).map_err(|err| {
         ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
     })?;
     super::proof::Plonky3Proof::from_backend(circuit, commitment, public_inputs, backend_proof)
@@ -483,13 +473,6 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
 
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
     let artifact = circuit_artifact(&proof.circuit)?;
-    let (expected_commitment, encoded_inputs) = canonical_public_inputs(&proof.public_inputs)?;
-    if proof.commitment != expected_commitment {
-        return Err(ChainError::Crypto(format!(
-            "plonky3 proof commitment mismatch: expected {expected_commitment}, found {}",
-            proof.commitment
-        )));
-    }
     let params = Plonky3Parameters::default();
     let verifier = backend::VerifierContext::new(
         proof.circuit.clone(),
@@ -510,7 +493,7 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         ))
     })?;
     verifier
-        .verify(&expected_commitment, &encoded_inputs, &backend_proof)
+        .verify(&proof.commitment, &proof.public_inputs, &backend_proof)
         .map_err(|err| {
             ChainError::Crypto(format!(
                 "plonky3 proof verification failed for {} circuit: {err}",

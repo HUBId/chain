@@ -10,6 +10,7 @@ pub mod crypto;
 pub mod params;
 pub mod proof;
 pub mod prover;
+pub mod public_inputs;
 pub mod verifier;
 
 #[cfg(test)]

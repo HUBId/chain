@@ -2,12 +2,12 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::Hasher;
 use flate2::read::GzDecoder;
-use serde::Serialize;
 use serde_json::{Map, Number, Value};
 use std::io::Read;
 use thiserror::Error;
 
 mod circuits;
+mod public_inputs;
 
 #[cfg(feature = "plonky3-gpu")]
 mod gpu;
@@ -22,6 +22,8 @@ pub use circuits::consensus::{
 };
 
 pub const PROOF_BLOB_LEN: usize = 96;
+
+pub use public_inputs::{compute_commitment_and_inputs, encode_canonical_json};
 
 #[derive(Debug, Error)]
 pub enum BackendError {
@@ -384,7 +386,14 @@ impl ProverContext {
         transcript
     }
 
-    pub fn prove(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<Proof> {
+    pub fn prove(&self, public_inputs: &Value) -> BackendResult<(String, Proof)> {
+        let (commitment, encoded_inputs) =
+            encode_commitment_and_inputs(self.circuit(), public_inputs)?;
+        let proof = self.prove_with_encoded(&commitment, &encoded_inputs)?;
+        Ok((commitment, proof))
+    }
+
+    fn prove_with_encoded(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<Proof> {
         let message = self.transcript_message(commitment, encoded_inputs);
         let inputs_digest = blake3::hash(encoded_inputs);
         let mut fri_hasher = Hasher::new_keyed(&self.verifying_key.hash);
@@ -463,6 +472,20 @@ impl VerifierContext {
     }
 
     pub fn verify(
+        &self,
+        commitment: &str,
+        public_inputs: &Value,
+        proof: &Proof,
+    ) -> BackendResult<()> {
+        let (expected_commitment, encoded_inputs) =
+            encode_commitment_and_inputs(self.circuit(), public_inputs)?;
+        if commitment != expected_commitment {
+            return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
+        }
+        self.verify_with_encoded(commitment, &encoded_inputs, proof)
+    }
+
+    fn verify_with_encoded(
         &self,
         commitment: &str,
         encoded_inputs: &[u8],
@@ -704,9 +727,7 @@ pub fn prove_consensus(
     circuit: &ConsensusCircuit,
 ) -> BackendResult<ConsensusProof> {
     let public_inputs = circuit.public_inputs_value()?;
-    let (commitment, encoded_inputs) =
-        encode_commitment_and_inputs(context.circuit(), &public_inputs)?;
-    let proof = context.prove(&commitment, &encoded_inputs)?;
+    let (commitment, proof) = context.prove(&public_inputs)?;
     Ok(ConsensusProof {
         commitment,
         public_inputs,
@@ -716,65 +737,5 @@ pub fn prove_consensus(
 
 pub fn verify_consensus(context: &VerifierContext, proof: &ConsensusProof) -> BackendResult<()> {
     validate_consensus_public_inputs(&proof.public_inputs)?;
-    let (commitment, encoded_inputs) =
-        encode_commitment_and_inputs(context.circuit(), &proof.public_inputs)?;
-    if proof.commitment != commitment {
-        return Err(BackendError::PublicInputDigestMismatch(
-            context.circuit().to_string(),
-        ));
-    }
-    context.verify(&proof.commitment, &encoded_inputs, &proof.proof)
-}
-
-pub fn compute_commitment_and_inputs(
-    public_inputs: &Value,
-) -> serde_json::Result<(String, Vec<u8>)> {
-    let encoded = encode_canonical_json(public_inputs)?;
-    let mut hasher = Hasher::new();
-    hasher.update(&encoded);
-    let commitment = hasher.finalize().to_hex().to_string();
-    Ok((commitment, encoded))
-}
-
-fn encode_canonical_json(value: &Value) -> serde_json::Result<Vec<u8>> {
-    let canonical = CanonicalValue(value);
-    let mut buffer = Vec::new();
-    {
-        let mut serializer = serde_json::Serializer::new(&mut buffer);
-        canonical.serialize(&mut serializer)?;
-    }
-    Ok(buffer)
-}
-
-struct CanonicalValue<'a>(&'a Value);
-
-impl<'a> serde::Serialize for CanonicalValue<'a> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::{SerializeMap, SerializeSeq};
-        match self.0 {
-            Value::Null => serializer.serialize_unit(),
-            Value::Bool(value) => serializer.serialize_bool(*value),
-            Value::Number(value) => value.serialize(serializer),
-            Value::String(value) => serializer.serialize_str(value),
-            Value::Array(values) => {
-                let mut seq = serializer.serialize_seq(Some(values.len()))?;
-                for value in values {
-                    seq.serialize_element(&CanonicalValue(value))?;
-                }
-                seq.end()
-            }
-            Value::Object(map) => {
-                let mut entries: Vec<_> = map.iter().collect();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                let mut object = serializer.serialize_map(Some(entries.len()))?;
-                for (key, value) in entries {
-                    object.serialize_entry(key, &CanonicalValue(value))?;
-                }
-                object.end()
-            }
-        }
-    }
+    context.verify(&proof.commitment, &proof.public_inputs, &proof.proof)
 }

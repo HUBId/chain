@@ -19,13 +19,14 @@ use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
 use crate::plonky3::prover::Plonky3Prover;
 use crate::plonky3::verifier::Plonky3Verifier;
-use crate::plonky3::{crypto, proof::Plonky3Proof};
+use crate::plonky3::{crypto, proof::Plonky3Proof, public_inputs};
 use crate::proof_system::{ProofProver, ProofVerifier};
 use crate::rpp::GlobalStateCommitments;
 use crate::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
+use plonky3_backend::{BackendError, ProverContext as BackendProverContext};
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
 
@@ -161,6 +162,81 @@ fn compute_commitment_is_stable_for_map_ordering() {
 }
 
 #[test]
+fn backend_context_roundtrip_matches_shared_commitment() {
+    let params = Plonky3Parameters::default();
+    let (verifying_key, proving_key) = crypto::circuit_keys("transaction").unwrap();
+    let context = BackendProverContext::new(
+        "transaction",
+        verifying_key,
+        proving_key,
+        params.security_bits,
+        params.use_gpu_acceleration,
+    )
+    .unwrap();
+
+    let public_inputs = json!({
+        "witness": {
+            "payload": "deadbeef",
+            "nonce": 42,
+        },
+        "meta": [1, 2, 3, 4],
+    });
+
+    let (commitment, proof) = context.prove(&public_inputs).unwrap();
+    let computed = public_inputs::compute_commitment(&public_inputs).unwrap();
+    assert_eq!(commitment, computed);
+
+    context
+        .verifier()
+        .verify(&commitment, &public_inputs, &proof)
+        .unwrap();
+}
+
+#[test]
+fn backend_context_detects_tampered_inputs() {
+    let params = Plonky3Parameters::default();
+    let (verifying_key, proving_key) = crypto::circuit_keys("transaction").unwrap();
+    let context = BackendProverContext::new(
+        "transaction",
+        verifying_key,
+        proving_key,
+        params.security_bits,
+        params.use_gpu_acceleration,
+    )
+    .unwrap();
+
+    let public_inputs = json!({
+        "witness": {
+            "payload": "feedface",
+            "nonce": 7,
+        },
+        "meta": {
+            "height": 10,
+            "network": "localnet",
+        },
+    });
+
+    let (commitment, proof) = context.prove(&public_inputs).unwrap();
+    let verifier = context.verifier();
+
+    let tampered_commitment = format!("{commitment}00");
+    assert!(matches!(
+        verifier.verify(&tampered_commitment, &public_inputs, &proof),
+        Err(BackendError::PublicInputDigestMismatch(_))
+    ));
+
+    let mut tampered_inputs = public_inputs.clone();
+    tampered_inputs
+        .as_object_mut()
+        .unwrap()
+        .insert("meta".into(), json!({"height": 11, "network": "localnet"}));
+    assert!(matches!(
+        verifier.verify(&commitment, &tampered_inputs, &proof),
+        Err(BackendError::PublicInputDigestMismatch(_))
+    ));
+}
+
+#[test]
 fn transaction_proof_roundtrip() {
     let prover = test_prover();
     let verifier = test_verifier();
@@ -182,7 +258,8 @@ fn transaction_proof_roundtrip() {
         parsed.payload.metadata.verifying_key_hash,
         *verifying_hash.as_bytes()
     );
-    let (_, encoded_inputs) = crypto::canonical_public_inputs(&parsed.public_inputs).unwrap();
+    let (_, encoded_inputs) =
+        public_inputs::compute_commitment_and_inputs(&parsed.public_inputs).unwrap();
     let inputs_hash = blake3_hash(&encoded_inputs);
     assert_eq!(
         parsed.payload.metadata.public_inputs_hash,
