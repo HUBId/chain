@@ -371,7 +371,7 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
             .metadata
             .as_ref()
             .map(|value| Arc::new(value.clone()));
-        let verifying_metadata = verifying_key.metadata();
+        let verifying_metadata = Arc::clone(verifying_key.air_metadata());
         if let Some(expected) = &air_metadata {
             if verifying_metadata.as_ref() != expected.as_ref() {
                 return Err(ChainError::Crypto(format!(
