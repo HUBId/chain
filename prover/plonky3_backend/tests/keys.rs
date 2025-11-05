@@ -5,9 +5,9 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use plonky3_backend::{
-    build_circuit_stark_config, AirMetadata, BackendError, CircuitBaseField,
+    build_circuit_stark_config, resolve_toolchain_air, AirMetadata, BackendError, CircuitBaseField,
     CircuitStarkProvingKey, CircuitStarkVerifyingKey, ProofMetadata, ProverContext, ProvingKey,
-    VerifyingKey,
+    ToolchainAir, VerifyingKey,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -92,6 +92,7 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     );
 
     let verifying_stark = verifying_key.stark_key();
+    assert_eq!(verifying_stark.air(), ToolchainAir::Consensus);
     assert_eq!(verifying_stark.len(), verifying_raw.len());
     let verifying_stark_again = verifying_key.stark_key();
     assert!(Arc::ptr_eq(verifying_stark, verifying_stark_again));
@@ -129,6 +130,7 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     assert_eq!(proving_key.hash(), *hash(&proving_raw).as_bytes());
 
     let proving_stark = proving_key.stark_key();
+    assert_eq!(proving_stark.air(), ToolchainAir::Consensus);
     assert_eq!(proving_stark.len(), proving_raw.len());
     let proving_stark_again = proving_key.stark_key();
     assert!(Arc::ptr_eq(proving_stark, proving_stark_again));
@@ -140,6 +142,21 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
         bincode::serialize(&(proving_metadata.as_ref(), proving_stark.key().as_ref()))
             .expect("reserialize proving tuple");
     assert_eq!(proving_reserialized, proving_raw);
+}
+
+#[test]
+fn metadata_dispatch_selects_consensus_air() {
+    let metadata: AirMetadata = serde_json::from_value(json!({
+        "air": {
+            "module": "toolchain::consensus",
+            "name": "ConsensusAir",
+            "version": "0.1.0",
+        }
+    }))
+    .expect("metadata deserialises");
+
+    let air = resolve_toolchain_air("consensus", &metadata).expect("air resolves");
+    assert_eq!(air, ToolchainAir::Consensus);
 }
 
 #[test]
