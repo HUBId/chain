@@ -5,7 +5,10 @@ use std::ops::Range;
 use blake3::Hasher;
 use once_cell::sync::OnceLock;
 use p3_baby_bear::BabyBear;
-use p3_field::QuotientMap;
+use p3_baby_bear::{default_babybear_poseidon2_16, BabyBear, Poseidon2BabyBear};
+use p3_field::{Field, PrimeField32, QuotientMap};
+use p3_matrix::dense::RowMajorMatrix;
+use p3_symmetric::{hasher::CryptographicHasher, PaddingFreeSponge};
 use p3_uni_stark::config::{StarkGenericConfig, Val};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1023,6 +1026,522 @@ pub fn encode_consensus_public_inputs(witness: ConsensusWitness) -> BackendResul
 
 pub fn validate_consensus_public_inputs(value: &Value) -> BackendResult<()> {
     ConsensusCircuit::from_public_inputs_value(value).map(|_| ())
+}
+
+pub fn decode_consensus_instance<SC: StarkGenericConfig>(
+    value: &Value,
+) -> BackendResult<(ConsensusCircuit, RowMajorMatrix<Val<SC>>, Vec<Val<SC>>)>
+where
+    Val<SC>: Field
+        + Default
+        + PrimeField32
+        + QuotientMap<u8>
+        + QuotientMap<u16>
+        + QuotientMap<u32>
+        + QuotientMap<u64>
+        + QuotientMap<u128>
+        + Copy,
+{
+    let circuit = ConsensusCircuit::from_public_inputs_value(value)?;
+    let (public_inputs, _layout) = circuit.flatten_public_inputs_for_config::<SC>()?;
+    let layout = load_consensus_trace_layout()?;
+    let mut trace = RowMajorMatrix::default(layout.width, layout.height);
+
+    let block_hash_seed = string_to_field_element::<SC>(&circuit.witness().block_hash)?;
+    let summary_values = build_summary_row::<SC>(&circuit)?;
+
+    populate_vote_segment::<SC>(
+        &mut trace,
+        &layout,
+        "pre_votes",
+        &circuit.witness().pre_votes,
+    )?;
+    populate_vote_segment::<SC>(
+        &mut trace,
+        &layout,
+        "pre_commits",
+        &circuit.witness().pre_commits,
+    )?;
+    populate_vote_segment::<SC>(
+        &mut trace,
+        &layout,
+        "commits",
+        &circuit.witness().commit_votes,
+    )?;
+
+    populate_vrf_segments::<SC>(&mut trace, &layout, &circuit, block_hash_seed)?;
+
+    populate_binding_segments::<SC>(&mut trace, &layout, &circuit, block_hash_seed)?;
+
+    populate_summary_segment::<SC>(&mut trace, &layout, &summary_values)?;
+
+    Ok((circuit, trace, public_inputs))
+}
+
+fn bytes_to_field_element<SC>(bytes: &[u8]) -> Val<SC>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field + QuotientMap<u8> + QuotientMap<u16> + Copy,
+{
+    let mut acc = Val::<SC>::ZERO;
+    let base = <Val<SC> as QuotientMap<u16>>::from_int(256);
+    for &byte in bytes {
+        let digit = <Val<SC> as QuotientMap<u8>>::from_int(byte);
+        acc = acc * base + digit;
+    }
+    acc
+}
+
+fn string_to_field_element<SC>(value: &str) -> BackendResult<Val<SC>>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field + QuotientMap<u8> + QuotientMap<u16> + Copy,
+{
+    let bytes = match hex::decode(value) {
+        Ok(decoded) => decoded,
+        Err(_) => value.as_bytes().to_vec(),
+    };
+    Ok(bytes_to_field_element::<SC>(&bytes))
+}
+
+fn val_to_babybear<SC>(value: Val<SC>) -> BabyBear
+where
+    SC: StarkGenericConfig,
+    Val<SC>: PrimeField32,
+{
+    BabyBear::from_u32(value.as_canonical_u32())
+}
+
+fn babybear_to_val<SC>(value: BabyBear) -> Val<SC>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: QuotientMap<u32> + Copy,
+{
+    <Val<SC> as QuotientMap<u32>>::from_int(value.as_canonical_u32())
+}
+
+fn fill_segment_rows<SC>(
+    trace: &mut RowMajorMatrix<Val<SC>>,
+    segment: &ConsensusTraceSegment,
+    rows: &[Vec<Val<SC>>],
+) -> BackendResult<()>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field + Copy,
+{
+    if rows.len() > segment.height() {
+        return Err(invalid_witness(format!(
+            "segment '{}' has {} rows but metadata allows {}",
+            segment.label,
+            rows.len(),
+            segment.height()
+        )));
+    }
+
+    for (offset, values) in rows.iter().enumerate() {
+        if values.len() != segment.width() {
+            return Err(invalid_witness(format!(
+                "segment '{}' row has {} columns but metadata expects {}",
+                segment.label,
+                values.len(),
+                segment.width()
+            )));
+        }
+        let row_index = segment.row_range.start + offset;
+        let mut slice = trace.row_mut(row_index);
+        let start = segment.column_range.start;
+        let end = segment.column_range.end;
+        slice[start..end].copy_from_slice(values);
+    }
+
+    Ok(())
+}
+
+fn populate_vote_segment<SC>(
+    trace: &mut RowMajorMatrix<Val<SC>>,
+    layout: &ConsensusTraceLayout,
+    label: &str,
+    votes: &[VotePower],
+) -> BackendResult<()>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field
+        + PrimeField32
+        + QuotientMap<u8>
+        + QuotientMap<u16>
+        + QuotientMap<u64>
+        + QuotientMap<u128>
+        + Copy,
+{
+    let segment = layout.segment(label).ok_or_else(|| {
+        invalid_witness(format!(
+            "consensus trace missing '{label}' segment metadata"
+        ))
+    })?;
+    let mut rows = Vec::with_capacity(votes.len());
+    let mut cumulative: u128 = 0;
+    for vote in votes {
+        cumulative = cumulative
+            .checked_add(vote.weight as u128)
+            .ok_or_else(|| invalid_witness("vote weight overflow"))?;
+        let voter = string_to_field_element::<SC>(&vote.voter)?;
+        let weight = <Val<SC> as QuotientMap<u64>>::from_int(vote.weight);
+        let cumulative_val = <Val<SC> as QuotientMap<u128>>::from_int(cumulative);
+        rows.push(vec![voter, weight, cumulative_val]);
+    }
+    fill_segment_rows::<SC>(trace, segment, &rows)
+}
+
+fn populate_vrf_segments<SC>(
+    trace: &mut RowMajorMatrix<Val<SC>>,
+    layout: &ConsensusTraceLayout,
+    circuit: &ConsensusCircuit,
+    block_hash: Val<SC>,
+) -> BackendResult<()>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field
+        + Default
+        + PrimeField32
+        + QuotientMap<u8>
+        + QuotientMap<u16>
+        + QuotientMap<u32>
+        + QuotientMap<u64>
+        + QuotientMap<u128>
+        + Copy,
+{
+    let sanitized = circuit.sanitized_vrf_entries();
+    let public_entries = circuit.vrf_entries();
+    if sanitized.len() != public_entries.len() {
+        return Err(invalid_witness(
+            "sanitized VRF entries mismatch public entry cache",
+        ));
+    }
+
+    let outputs_segment = layout
+        .segment("vrf_outputs")
+        .ok_or_else(|| invalid_witness("consensus trace missing 'vrf_outputs' segment metadata"))?;
+    let proofs_segment = layout
+        .segment("vrf_proofs")
+        .ok_or_else(|| invalid_witness("consensus trace missing 'vrf_proofs' segment metadata"))?;
+    let transcripts_segment = layout.segment("vrf_transcripts").ok_or_else(|| {
+        invalid_witness("consensus trace missing 'vrf_transcripts' segment metadata")
+    })?;
+
+    let mut randomness_rows = Vec::with_capacity(sanitized.len());
+    let mut proof_rows = Vec::with_capacity(sanitized.len());
+    let mut transcript_rows = Vec::with_capacity(sanitized.len());
+    for (entry, public) in sanitized.iter().zip(public_entries.iter()) {
+        let randomness = bytes_to_field_element::<SC>(&entry.randomness);
+        let derived_randomness = bytes_to_field_element::<SC>(&public.derived_randomness);
+        let proof = bytes_to_field_element::<SC>(&entry.proof);
+        let pre_output = bytes_to_field_element::<SC>(&entry.pre_output);
+        let public_key = bytes_to_field_element::<SC>(&entry.public_key);
+        let poseidon_digest = bytes_to_field_element::<SC>(&entry.poseidon_digest);
+        let poseidon_last_block = bytes_to_field_element::<SC>(&entry.poseidon_last_block_header);
+        let poseidon_epoch = <Val<SC> as QuotientMap<u64>>::from_int(entry.poseidon_epoch);
+        let poseidon_tier_seed = bytes_to_field_element::<SC>(&entry.poseidon_tier_seed);
+
+        randomness_rows.push(vec![randomness, derived_randomness]);
+        proof_rows.push(vec![proof]);
+        transcript_rows.push(vec![
+            pre_output,
+            public_key,
+            poseidon_digest,
+            poseidon_last_block,
+            poseidon_epoch,
+            poseidon_tier_seed,
+        ]);
+    }
+
+    let hasher = create_poseidon_sponge();
+    let zero = BabyBear::ZERO;
+    let mut accumulator = val_to_babybear::<SC>(block_hash);
+    let mut output_rows_with_binding = Vec::with_capacity(randomness_rows.len());
+    for mut values in randomness_rows {
+        let binding_in = accumulator;
+        let mut extended = values;
+        for &value in &extended {
+            let bb_value = val_to_babybear::<SC>(value);
+            accumulator = hasher.hash_slice(&[accumulator, bb_value, zero])[0];
+        }
+        extended.push(babybear_to_val::<SC>(binding_in));
+        extended.push(babybear_to_val::<SC>(accumulator));
+        output_rows_with_binding.push(extended);
+    }
+
+    let expected_vrf_binding = string_to_field_element::<SC>(&circuit.bindings().vrf_outputs)?;
+    if babybear_to_val::<SC>(accumulator) != expected_vrf_binding {
+        return Err(invalid_witness(
+            "vrf output binding digest mismatch public inputs",
+        ));
+    }
+
+    fill_segment_rows::<SC>(trace, outputs_segment, &output_rows_with_binding)?;
+
+    let mut proof_rows_with_binding = Vec::with_capacity(proof_rows.len());
+    accumulator = val_to_babybear::<SC>(block_hash);
+    for mut values in proof_rows {
+        let binding_in = accumulator;
+        let mut extended = values;
+        for &value in &extended {
+            let bb_value = val_to_babybear::<SC>(value);
+            accumulator = hasher.hash_slice(&[accumulator, bb_value, zero])[0];
+        }
+        extended.push(babybear_to_val::<SC>(binding_in));
+        extended.push(babybear_to_val::<SC>(accumulator));
+        proof_rows_with_binding.push(extended);
+    }
+
+    let expected_proof_binding = string_to_field_element::<SC>(&circuit.bindings().vrf_proofs)?;
+    if babybear_to_val::<SC>(accumulator) != expected_proof_binding {
+        return Err(invalid_witness(
+            "vrf proof binding digest mismatch public inputs",
+        ));
+    }
+
+    fill_segment_rows::<SC>(trace, proofs_segment, &proof_rows_with_binding)?;
+    fill_segment_rows::<SC>(trace, transcripts_segment, &transcript_rows)
+}
+
+fn populate_binding_segments<SC>(
+    trace: &mut RowMajorMatrix<Val<SC>>,
+    layout: &ConsensusTraceLayout,
+    circuit: &ConsensusCircuit,
+    block_hash: Val<SC>,
+) -> BackendResult<()>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field
+        + Default
+        + PrimeField32
+        + QuotientMap<u8>
+        + QuotientMap<u16>
+        + QuotientMap<u32>
+        + QuotientMap<u64>
+        + Copy,
+{
+    let witness_rows: Vec<Vec<Val<SC>>> = circuit
+        .witness()
+        .witness_commitments
+        .iter()
+        .map(|value| string_to_field_element::<SC>(value).map(|field| vec![field]))
+        .collect::<BackendResult<_>>()?;
+    fill_binding_segment::<SC>(
+        trace,
+        layout,
+        "witness_commitments",
+        witness_rows,
+        &circuit.bindings().witness_commitments,
+        block_hash,
+    )?;
+
+    let reputation_rows: Vec<Vec<Val<SC>>> = circuit
+        .witness()
+        .reputation_roots
+        .iter()
+        .map(|value| string_to_field_element::<SC>(value).map(|field| vec![field]))
+        .collect::<BackendResult<_>>()?;
+    fill_binding_segment::<SC>(
+        trace,
+        layout,
+        "reputation_roots",
+        reputation_rows,
+        &circuit.bindings().reputation_roots,
+        block_hash,
+    )?;
+
+    let quorum_bitmap_rows = vec![vec![string_to_field_element::<SC>(
+        &circuit.witness().quorum_bitmap_root,
+    )?]];
+    fill_binding_segment::<SC>(
+        trace,
+        layout,
+        "quorum_bitmap_binding",
+        quorum_bitmap_rows,
+        &circuit.bindings().quorum_bitmap,
+        block_hash,
+    )?;
+
+    let quorum_signature_rows = vec![vec![string_to_field_element::<SC>(
+        &circuit.witness().quorum_signature_root,
+    )?]];
+    fill_binding_segment::<SC>(
+        trace,
+        layout,
+        "quorum_signature_binding",
+        quorum_signature_rows,
+        &circuit.bindings().quorum_signature,
+        block_hash,
+    )
+}
+
+fn fill_binding_segment<SC>(
+    trace: &mut RowMajorMatrix<Val<SC>>,
+    layout: &ConsensusTraceLayout,
+    label: &str,
+    rows: Vec<Vec<Val<SC>>>,
+    expected_digest_hex: &str,
+    block_hash: Val<SC>,
+) -> BackendResult<()>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field + PrimeField32 + QuotientMap<u8> + QuotientMap<u16> + QuotientMap<u32> + Copy,
+{
+    let segment = layout.segment(label).ok_or_else(|| {
+        invalid_witness(format!(
+            "consensus trace missing '{label}' segment metadata"
+        ))
+    })?;
+    let extended = extend_with_binding::<SC>(rows, block_hash)?;
+    let expected_digest = string_to_field_element::<SC>(expected_digest_hex)?;
+    let actual_digest = if let Some(last_row) = extended.last() {
+        *last_row
+            .last()
+            .ok_or_else(|| invalid_witness("binding row missing output column"))?
+    } else {
+        block_hash
+    };
+    if actual_digest != expected_digest {
+        return Err(invalid_witness(format!(
+            "{label} binding digest mismatch public inputs"
+        )));
+    }
+    fill_segment_rows::<SC>(trace, segment, &extended)
+}
+
+fn extend_with_binding<SC>(
+    rows: Vec<Vec<Val<SC>>>,
+    seed: Val<SC>,
+) -> BackendResult<Vec<Vec<Val<SC>>>>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field + PrimeField32 + QuotientMap<u32> + Copy,
+{
+    let hasher = create_poseidon_sponge();
+    let zero = BabyBear::ZERO;
+    let mut accumulator = val_to_babybear::<SC>(seed);
+    let mut extended_rows = Vec::with_capacity(rows.len());
+    for mut values in rows {
+        let binding_in = accumulator;
+        let mut expanded = values;
+        for value in &expanded {
+            let bb_value = val_to_babybear::<SC>(*value);
+            accumulator = hasher.hash_slice(&[accumulator, bb_value, zero])[0];
+        }
+        expanded.push(babybear_to_val::<SC>(binding_in));
+        expanded.push(babybear_to_val::<SC>(accumulator));
+        extended_rows.push(expanded);
+    }
+    Ok(extended_rows)
+}
+
+fn populate_summary_segment<SC>(
+    trace: &mut RowMajorMatrix<Val<SC>>,
+    layout: &ConsensusTraceLayout,
+    values: &[Val<SC>],
+) -> BackendResult<()>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field + Copy,
+{
+    let segment = layout
+        .segment("summary")
+        .ok_or_else(|| invalid_witness("consensus trace missing 'summary' segment metadata"))?;
+    if values.len() != segment.width() {
+        return Err(invalid_witness(format!(
+            "summary row has {} values but metadata expects {}",
+            values.len(),
+            segment.width()
+        )));
+    }
+    fill_segment_rows::<SC>(trace, segment, &[values.to_vec()])
+}
+
+fn build_summary_row<SC>(circuit: &ConsensusCircuit) -> BackendResult<Vec<Val<SC>>>
+where
+    SC: StarkGenericConfig,
+    Val<SC>: Field
+        + Default
+        + PrimeField32
+        + QuotientMap<u8>
+        + QuotientMap<u16>
+        + QuotientMap<u32>
+        + QuotientMap<u64>
+        + QuotientMap<u128>
+        + Copy,
+{
+    let witness = circuit.witness();
+    let bindings = circuit.bindings();
+    let sanitized = circuit.sanitized_vrf_entries();
+    let public_entries = circuit.vrf_entries();
+    if sanitized.len() != public_entries.len() {
+        return Err(invalid_witness(
+            "sanitized VRF entries mismatch public entry cache",
+        ));
+    }
+
+    let mut values = Vec::new();
+    values.push(string_to_field_element::<SC>(&witness.block_hash)?);
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(witness.round));
+    values.push(string_to_field_element::<SC>(&witness.leader_proposal)?);
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(witness.epoch));
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(witness.slot));
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(
+        witness.quorum_threshold,
+    ));
+    values.push(string_to_field_element::<SC>(&witness.quorum_bitmap_root)?);
+    values.push(string_to_field_element::<SC>(
+        &witness.quorum_signature_root,
+    )?);
+
+    for (entry, public) in sanitized.iter().zip(public_entries.iter()) {
+        values.push(bytes_to_field_element::<SC>(&entry.randomness));
+        values.push(bytes_to_field_element::<SC>(&public.derived_randomness));
+        values.push(bytes_to_field_element::<SC>(&entry.pre_output));
+        values.push(bytes_to_field_element::<SC>(&entry.proof));
+        values.push(bytes_to_field_element::<SC>(&entry.public_key));
+        values.push(bytes_to_field_element::<SC>(&entry.poseidon_digest));
+        values.push(bytes_to_field_element::<SC>(
+            &entry.poseidon_last_block_header,
+        ));
+        values.push(<Val<SC> as QuotientMap<u64>>::from_int(
+            entry.poseidon_epoch,
+        ));
+        values.push(bytes_to_field_element::<SC>(&entry.poseidon_tier_seed));
+    }
+
+    for commitment in &witness.witness_commitments {
+        values.push(string_to_field_element::<SC>(commitment)?);
+    }
+    for root in &witness.reputation_roots {
+        values.push(string_to_field_element::<SC>(root)?);
+    }
+
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(
+        sanitized.len() as u64
+    ));
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(
+        witness.witness_commitments.len() as u64,
+    ));
+    values.push(<Val<SC> as QuotientMap<u64>>::from_int(
+        witness.reputation_roots.len() as u64,
+    ));
+
+    values.push(string_to_field_element::<SC>(&bindings.vrf_outputs)?);
+    values.push(string_to_field_element::<SC>(&bindings.vrf_proofs)?);
+    values.push(string_to_field_element::<SC>(
+        &bindings.witness_commitments,
+    )?);
+    values.push(string_to_field_element::<SC>(&bindings.reputation_roots)?);
+    values.push(string_to_field_element::<SC>(&bindings.quorum_bitmap)?);
+    values.push(string_to_field_element::<SC>(&bindings.quorum_signature)?);
+
+    Ok(values)
+}
+
+fn create_poseidon_sponge() -> PaddingFreeSponge<Poseidon2BabyBear<16>, 16, 8, 8> {
+    PaddingFreeSponge::new(default_babybear_poseidon2_16())
 }
 
 #[cfg(test)]

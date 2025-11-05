@@ -29,10 +29,10 @@ mod gpu;
 pub use gpu::GpuResources;
 
 pub use circuits::consensus::{
-    encode_consensus_public_inputs, validate_consensus_public_inputs, ConsensusBindingLayout,
-    ConsensusBindings, ConsensusCircuit, ConsensusPublicInputLayout, ConsensusPublicInputs,
-    ConsensusVrfEntry, ConsensusVrfEntryLayout, ConsensusVrfPoseidonInput, ConsensusVrfPublicEntry,
-    ConsensusWitness, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    decode_consensus_instance, encode_consensus_public_inputs, validate_consensus_public_inputs,
+    ConsensusBindingLayout, ConsensusBindings, ConsensusCircuit, ConsensusPublicInputLayout,
+    ConsensusPublicInputs, ConsensusVrfEntry, ConsensusVrfEntryLayout, ConsensusVrfPoseidonInput,
+    ConsensusVrfPublicEntry, ConsensusWitness, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 
 /// Number of bytes encoded in the deterministic commitment header extracted
