@@ -1,36 +1,79 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::hash;
-use flate2::{write::GzEncoder, Compression};
+use flate2::read::GzDecoder;
 use plonky3_backend::{ProofMetadata, ProvingKey, VerifyingKey};
+use serde::Deserialize;
 use serde_json::json;
-use std::io::Write;
+use std::fs;
+use std::io::Read;
 
-fn encode_gzip_base64(bytes: &[u8]) -> String {
-    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-    encoder.write_all(bytes).expect("write raw bytes");
-    let compressed = encoder.finish().expect("finish gzip");
-    BASE64_STANDARD.encode(compressed)
+#[derive(Deserialize)]
+struct FixtureKey {
+    value: String,
+    #[serde(default)]
+    compression: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct FixtureDoc {
+    circuit: String,
+    verifying_key: FixtureKey,
+    proving_key: FixtureKey,
+}
+
+fn load_consensus_fixture() -> FixtureDoc {
+    let contents =
+        fs::read_to_string("config/plonky3/setup/consensus.json").expect("read consensus fixture");
+    serde_json::from_str(&contents).expect("parse consensus fixture")
+}
+
+fn decode_base64(value: &str) -> Vec<u8> {
+    BASE64_STANDARD
+        .decode(value.as_bytes())
+        .expect("decode base64 value")
+}
+
+fn decompress_gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("decompress gzip payload");
+    decompressed
 }
 
 #[test]
 fn verifying_key_roundtrip_base64_gzip() {
-    let raw = vec![0x11; 48];
-    let encoded = encode_gzip_base64(&raw);
-    let key = VerifyingKey::from_encoded_parts(&encoded, "base64", Some("gzip"), "consensus")
-        .expect("verifying key decodes");
+    let fixture = load_consensus_fixture();
+    let encoded_blob = decode_base64(&fixture.verifying_key.value);
+    let key = VerifyingKey::from_encoded_parts(
+        &fixture.verifying_key.value,
+        "base64",
+        fixture.verifying_key.compression.as_deref(),
+        &fixture.circuit,
+    )
+    .expect("verifying key decodes");
+    let raw = decompress_gzip(&encoded_blob);
     assert_eq!(key.bytes(), raw.as_slice());
-    assert_eq!(key.hash(), *hash(&raw).as_bytes());
+    assert_eq!(key.hash(), *hash(&encoded_blob).as_bytes());
 }
 
 #[test]
 fn proving_key_roundtrip_base64_gzip() {
-    let raw = vec![0x22; 96];
-    let encoded = encode_gzip_base64(&raw);
-    let key = ProvingKey::from_encoded_parts(&encoded, "base64", Some("gzip"), "consensus")
-        .expect("proving key decodes");
+    let fixture = load_consensus_fixture();
+    let encoded_blob = decode_base64(&fixture.proving_key.value);
+    let key = ProvingKey::from_encoded_parts(
+        &fixture.proving_key.value,
+        "base64",
+        fixture.proving_key.compression.as_deref(),
+        &fixture.circuit,
+        None,
+    )
+    .expect("proving key decodes");
+    let raw = decompress_gzip(&encoded_blob);
     assert_eq!(key.bytes(), raw.as_slice());
-    assert_eq!(key.hash(), *hash(&raw).as_bytes());
+    assert_eq!(key.hash(), *hash(&encoded_blob).as_bytes());
 }
 
 #[test]

@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use flate2::read::GzDecoder;
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serde_json::Value;
@@ -108,37 +107,6 @@ fn normalize_compression(compression: Option<&str>) -> Option<String> {
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
-}
-
-fn decompress_bytes(
-    bytes: Vec<u8>,
-    compression: Option<&str>,
-    circuit: &str,
-    kind: &str,
-) -> ChainResult<Vec<u8>> {
-    let Some(compression) = normalize_compression(compression) else {
-        return Ok(bytes);
-    };
-    match compression.as_str() {
-        "gzip" | "gz" => {
-            let mut decoder = GzDecoder::new(bytes.as_slice());
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed).map_err(|err| {
-                ChainError::Crypto(format!(
-                    "failed to decompress {kind} for {circuit} circuit: {err}"
-                ))
-            })?;
-            if decompressed.is_empty() {
-                return Err(ChainError::Crypto(format!(
-                    "{kind} for {circuit} circuit decompressed to zero bytes"
-                )));
-            }
-            Ok(decompressed)
-        }
-        other => Err(ChainError::Crypto(format!(
-            "unsupported compression '{other}' for {kind} in {circuit} circuit"
-        ))),
-    }
 }
 
 fn decode_blob(value: &str, encoding: Option<&str>) -> Option<Vec<u8>> {
@@ -334,7 +302,18 @@ fn decode_artifact_descriptor(
         ))
     })?;
 
-    decompress_bytes(bytes, descriptor.compression.as_deref(), circuit, kind)
+    if let Some(compression) = normalize_compression(descriptor.compression.as_deref()) {
+        match compression.as_str() {
+            "gzip" | "gz" | "none" => {}
+            other => {
+                return Err(ChainError::Crypto(format!(
+                    "unsupported compression '{other}' for {kind} in {circuit} circuit",
+                )))
+            }
+        }
+    }
+
+    Ok(bytes)
 }
 fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -379,27 +358,42 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
         )?;
         let proving_key_bytes =
             decode_artifact_bytes(&path, &config.proving_key, &config.circuit, "proving key")?;
-        let mut verifying_key = backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit)
-            .map_err(|err| {
-                ChainError::Crypto(format!(
-                    "failed to decode Plonky3 verifying key for {} circuit: {err}",
-                    config.circuit
-                ))
-            })?;
-        let proving_key = backend::ProvingKey::from_bytes(proving_key_bytes, &config.circuit)
-            .map_err(|err| {
-                ChainError::Crypto(format!(
-                    "failed to decode Plonky3 proving key for {} circuit: {err}",
-                    config.circuit
-                ))
-            })?;
-        let air_metadata = config
+        let mut verifying_key =
+            backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit).map_err(
+                |err| {
+                    ChainError::Crypto(format!(
+                        "failed to decode Plonky3 verifying key for {} circuit: {err}",
+                        config.circuit
+                    ))
+                },
+            )?;
+        let mut air_metadata = config
             .metadata
             .as_ref()
             .map(|value| Arc::new(value.clone()));
-        if let Some(metadata) = &air_metadata {
-            verifying_key = verifying_key.with_metadata(Arc::clone(metadata));
+        let verifying_metadata = verifying_key.metadata();
+        if let Some(expected) = &air_metadata {
+            if verifying_metadata.as_ref() != expected.as_ref() {
+                return Err(ChainError::Crypto(format!(
+                    "Plonky3 verifying key metadata for {} circuit does not match fixture metadata",
+                    config.circuit
+                )));
+            }
+            verifying_key = verifying_key.with_metadata(Arc::clone(expected));
+        } else if !verifying_metadata.is_empty() {
+            air_metadata = Some(Arc::clone(&verifying_metadata));
         }
+        let proving_key = backend::ProvingKey::from_bytes(
+            proving_key_bytes,
+            &config.circuit,
+            air_metadata.as_ref(),
+        )
+        .map_err(|err| {
+            ChainError::Crypto(format!(
+                "failed to decode Plonky3 proving key for {} circuit: {err}",
+                config.circuit
+            ))
+        })?;
         if artifacts
             .insert(
                 config.circuit.clone(),

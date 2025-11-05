@@ -111,20 +111,24 @@ pub type CircuitStarkProvingKey = StarkProvingKey<CircuitStarkConfig>;
 
 #[derive(Clone)]
 pub struct BackendStarkVerifyingKey {
-    bytes: Arc<[u8]>,
+    key: Arc<CircuitStarkVerifyingKey>,
+    serialized_len: usize,
 }
 
 impl BackendStarkVerifyingKey {
-    fn new(bytes: Arc<[u8]>) -> Self {
-        Self { bytes }
+    fn new(key: CircuitStarkVerifyingKey, serialized_len: usize) -> Self {
+        Self {
+            key: Arc::new(key),
+            serialized_len,
+        }
     }
 
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    pub fn key(&self) -> Arc<CircuitStarkVerifyingKey> {
+        Arc::clone(&self.key)
     }
 
     pub fn len(&self) -> usize {
-        self.bytes.len()
+        self.serialized_len
     }
 }
 
@@ -136,20 +140,24 @@ impl fmt::Debug for BackendStarkVerifyingKey {
 
 #[derive(Clone)]
 pub struct BackendStarkProvingKey {
-    bytes: Arc<[u8]>,
+    key: Arc<CircuitStarkProvingKey>,
+    serialized_len: usize,
 }
 
 impl BackendStarkProvingKey {
-    fn new(bytes: Arc<[u8]>) -> Self {
-        Self { bytes }
+    fn new(key: CircuitStarkProvingKey, serialized_len: usize) -> Self {
+        Self {
+            key: Arc::new(key),
+            serialized_len,
+        }
     }
 
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    pub fn key(&self) -> Arc<CircuitStarkProvingKey> {
+        Arc::clone(&self.key)
     }
 
     pub fn len(&self) -> usize {
-        self.bytes.len()
+        self.serialized_len
     }
 }
 
@@ -165,7 +173,7 @@ impl fmt::Debug for BackendStarkProvingKey {
 /// clients can cross-check evaluation domains and challenge layouts without
 /// having to deserialize the binary keys eagerly.  Existing fixtures in the
 /// repository omit the `metadata` field, hence the optional accessors.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct AirMetadata {
     #[serde(default)]
     air: Value,
@@ -197,6 +205,98 @@ impl Default for AirMetadata {
             extra: HashMap::new(),
         }
     }
+}
+
+#[derive(Deserialize)]
+struct EncodedVerifyingKeyPayload {
+    key: CircuitStarkVerifyingKey,
+    #[serde(default)]
+    metadata: Option<AirMetadata>,
+}
+
+#[derive(Deserialize)]
+struct EncodedProvingKeyPayload {
+    key: CircuitStarkProvingKey,
+    #[serde(default)]
+    metadata: Option<AirMetadata>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyCompression {
+    None,
+    Gzip,
+}
+
+impl KeyCompression {
+    fn from_hint(hint: Option<&str>) -> Result<Self, String> {
+        let Some(value) = hint
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(Self::None);
+        };
+        let normalized = value.to_ascii_lowercase();
+        match normalized.as_str() {
+            "gzip" | "gz" => Ok(Self::Gzip),
+            "none" => Ok(Self::None),
+            other => Err(format!("unsupported compression '{other}'")),
+        }
+    }
+
+    fn infer(bytes: &[u8]) -> Self {
+        if bytes.len() >= 2 && bytes[0] == 0x1f && bytes[1] == 0x8b {
+            Self::Gzip
+        } else {
+            Self::None
+        }
+    }
+
+    fn decompress_owned(self, bytes: Vec<u8>) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::None => Ok(bytes),
+            Self::Gzip => decompress_gzip(&bytes),
+        }
+    }
+
+    fn decompress_ref(self, bytes: &[u8]) -> std::io::Result<Vec<u8>> {
+        match self {
+            Self::None => Ok(bytes.to_vec()),
+            Self::Gzip => decompress_gzip(bytes),
+        }
+    }
+}
+
+struct EncodedKeyBytes {
+    payload: Vec<u8>,
+    compression: KeyCompression,
+}
+
+impl EncodedKeyBytes {
+    fn new(payload: Vec<u8>, compression: KeyCompression) -> Self {
+        Self {
+            payload,
+            compression,
+        }
+    }
+
+    fn payload(&self) -> &[u8] {
+        &self.payload
+    }
+
+    fn compression(&self) -> KeyCompression {
+        self.compression
+    }
+
+    fn into_parts(self) -> (Vec<u8>, KeyCompression) {
+        (self.payload, self.compression)
+    }
+}
+
+fn decompress_gzip(bytes: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut decoder = GzDecoder::new(bytes);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed)?;
+    Ok(decompressed)
 }
 
 #[derive(Clone)]
@@ -376,7 +476,7 @@ fn decode_fixture_key(
     kind: &str,
 ) -> BackendResult<Vec<u8>> {
     let encoding = descriptor.encoding.as_deref().unwrap_or("base64");
-    let bytes = decode_key_bytes(
+    let encoded = decode_key_bytes(
         &descriptor.value,
         encoding,
         descriptor.compression.as_deref(),
@@ -387,18 +487,32 @@ fn decode_fixture_key(
         circuit: doc.circuit.clone(),
         message: format!("failed to decode {kind}: {err}"),
     })?;
+    let decompressed = encoded
+        .compression()
+        .decompress_ref(encoded.payload())
+        .map_err(|err| BackendError::SetupArtifactMismatch {
+            circuit: doc.circuit.clone(),
+            message: format!("failed to decompress {kind}: {err}"),
+        })?;
+    if decompressed.is_empty() {
+        return Err(BackendError::SetupArtifactMismatch {
+            circuit: doc.circuit.clone(),
+            message: format!("{kind} decompressed to zero bytes"),
+        });
+    }
     if let Some(expected) = descriptor.byte_length {
-        if bytes.len() != expected as usize {
+        if decompressed.len() != expected as usize {
             return Err(BackendError::SetupArtifactMismatch {
                 circuit: doc.circuit.clone(),
                 message: format!(
                     "{kind} length mismatch: expected {expected} bytes, found {}",
-                    bytes.len()
+                    decompressed.len()
                 ),
             });
         }
     }
-    Ok(bytes)
+    let (payload, _) = encoded.into_parts();
+    Ok(payload)
 }
 
 #[derive(Clone, Debug)]
@@ -421,15 +535,8 @@ impl VerifyingKey {
         if bytes.is_empty() {
             return Err(BackendError::MissingVerifyingKey(circuit.to_string()));
         }
-        let hash = *blake3::hash(&bytes).as_bytes();
-        let bytes: Arc<[u8]> = bytes.into();
-        let typed = Arc::new(BackendStarkVerifyingKey::new(Arc::clone(&bytes)));
-        Ok(Self {
-            hash,
-            bytes,
-            typed,
-            metadata: Arc::new(AirMetadata::default()),
-        })
+        let compression = KeyCompression::infer(&bytes);
+        Self::from_compressed_bytes(bytes, compression, circuit)
     }
 
     pub fn from_encoded_parts(
@@ -438,8 +545,9 @@ impl VerifyingKey {
         compression: Option<&str>,
         circuit: &str,
     ) -> BackendResult<Self> {
-        let bytes = decode_key_bytes(value, encoding, compression, circuit, "verifying key")?;
-        Self::from_bytes(bytes, circuit)
+        let encoded = decode_key_bytes(value, encoding, compression, circuit, "verifying key")?;
+        let (bytes, compression) = encoded.into_parts();
+        Self::from_compressed_bytes(bytes, compression, circuit)
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -469,6 +577,47 @@ impl VerifyingKey {
             "Descriptor for a verifying key artifact",
         )
     }
+
+    fn from_compressed_bytes(
+        bytes: Vec<u8>,
+        compression: KeyCompression,
+        circuit: &str,
+    ) -> BackendResult<Self> {
+        let kind = "verifying key";
+        let hash = *blake3::hash(&bytes).as_bytes();
+        let decompressed = compression.decompress_owned(bytes).map_err(|err| {
+            invalid_key_error(
+                circuit,
+                kind,
+                format!("failed to decompress {kind} payload: {err}"),
+            )
+        })?;
+        if decompressed.is_empty() {
+            return Err(invalid_key_error(
+                circuit,
+                kind,
+                "decompressed payload is empty",
+            ));
+        }
+        let payload: EncodedVerifyingKeyPayload =
+            bincode::deserialize(&decompressed).map_err(|err| {
+                invalid_key_error(
+                    circuit,
+                    kind,
+                    format!("failed to decode {kind} payload: {err}"),
+                )
+            })?;
+        let metadata = Arc::new(payload.metadata.unwrap_or_default());
+        let serialized_len = decompressed.len();
+        let typed = Arc::new(BackendStarkVerifyingKey::new(payload.key, serialized_len));
+        let bytes: Arc<[u8]> = decompressed.into();
+        Ok(Self {
+            hash,
+            bytes,
+            typed,
+            metadata,
+        })
+    }
 }
 
 impl fmt::Debug for VerifyingKey {
@@ -495,17 +644,20 @@ pub struct ProvingKey {
     bytes: Arc<[u8]>,
     hash: [u8; 32],
     typed: Arc<BackendStarkProvingKey>,
+    metadata: Arc<AirMetadata>,
 }
 
 impl ProvingKey {
-    pub fn from_bytes(bytes: Vec<u8>, circuit: &str) -> BackendResult<Self> {
+    pub fn from_bytes(
+        bytes: Vec<u8>,
+        circuit: &str,
+        expected_metadata: Option<&Arc<AirMetadata>>,
+    ) -> BackendResult<Self> {
         if bytes.is_empty() {
             return Err(BackendError::MissingProvingKey(circuit.to_string()));
         }
-        let hash = *blake3::hash(&bytes).as_bytes();
-        let bytes: Arc<[u8]> = bytes.into();
-        let typed = Arc::new(BackendStarkProvingKey::new(Arc::clone(&bytes)));
-        Ok(Self { hash, bytes, typed })
+        let compression = KeyCompression::infer(&bytes);
+        Self::from_compressed_bytes(bytes, compression, circuit, expected_metadata)
     }
 
     pub fn from_encoded_parts(
@@ -513,9 +665,11 @@ impl ProvingKey {
         encoding: &str,
         compression: Option<&str>,
         circuit: &str,
+        expected_metadata: Option<&Arc<AirMetadata>>,
     ) -> BackendResult<Self> {
-        let bytes = decode_key_bytes(value, encoding, compression, circuit, "proving key")?;
-        Self::from_bytes(bytes, circuit)
+        let encoded = decode_key_bytes(value, encoding, compression, circuit, "proving key")?;
+        let (bytes, compression) = encoded.into_parts();
+        Self::from_compressed_bytes(bytes, compression, circuit, expected_metadata)
     }
 
     pub fn bytes(&self) -> &[u8] {
@@ -530,20 +684,94 @@ impl ProvingKey {
         Arc::clone(&self.typed)
     }
 
+    pub fn metadata(&self) -> Arc<AirMetadata> {
+        Arc::clone(&self.metadata)
+    }
+
+    pub fn align_metadata(&mut self, shared: &Arc<AirMetadata>) {
+        if self.metadata.as_ref() == shared.as_ref() {
+            self.metadata = Arc::clone(shared);
+        }
+    }
+
     pub fn json_schema() -> Value {
         key_schema(
             "Plonky3 Proving Key",
             "Descriptor for a proving key artifact",
         )
     }
+
+    fn from_compressed_bytes(
+        bytes: Vec<u8>,
+        compression: KeyCompression,
+        circuit: &str,
+        expected_metadata: Option<&Arc<AirMetadata>>,
+    ) -> BackendResult<Self> {
+        let kind = "proving key";
+        let hash = *blake3::hash(&bytes).as_bytes();
+        let decompressed = compression.decompress_owned(bytes).map_err(|err| {
+            invalid_key_error(
+                circuit,
+                kind,
+                format!("failed to decompress {kind} payload: {err}"),
+            )
+        })?;
+        if decompressed.is_empty() {
+            return Err(invalid_key_error(
+                circuit,
+                kind,
+                "decompressed payload is empty",
+            ));
+        }
+        let payload: EncodedProvingKeyPayload =
+            bincode::deserialize(&decompressed).map_err(|err| {
+                invalid_key_error(
+                    circuit,
+                    kind,
+                    format!("failed to decode {kind} payload: {err}"),
+                )
+            })?;
+        let metadata_value = payload.metadata.unwrap_or_default();
+        let metadata = match expected_metadata {
+            Some(expected) => {
+                if &metadata_value != expected.as_ref() {
+                    return Err(invalid_key_error(
+                        circuit,
+                        kind,
+                        "decoded AIR metadata does not match expected fixture metadata",
+                    ));
+                }
+                Arc::clone(expected)
+            }
+            None => Arc::new(metadata_value),
+        };
+        let serialized_len = decompressed.len();
+        let typed = Arc::new(BackendStarkProvingKey::new(payload.key, serialized_len));
+        let bytes: Arc<[u8]> = decompressed.into();
+        Ok(Self {
+            hash,
+            bytes,
+            typed,
+            metadata,
+        })
+    }
 }
 
 impl fmt::Debug for ProvingKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = self.metadata.as_ref();
+        let metadata_summary = if metadata.is_empty() {
+            "empty".to_string()
+        } else {
+            let air_fields = metadata.air.as_object().map(|map| map.len()).unwrap_or(0);
+            let extra_fields = metadata.extra.len();
+            format!("air_fields={air_fields}, extra_fields={extra_fields}")
+        };
         f.debug_struct("ProvingKey")
             .field("hash", &hex::encode(self.hash))
             .field("bytes_len", &self.bytes.len())
             .field("typed_len", &self.typed.len())
+            .field("metadata", &metadata_summary)
             .finish()
     }
 }
@@ -832,6 +1060,9 @@ impl ProverContext {
         if name.is_empty() {
             return Err(BackendError::EmptyCircuit);
         }
+        let verifying_metadata = verifying_key.metadata();
+        let mut proving_key = proving_key;
+        proving_key.align_metadata(&verifying_metadata);
         Ok(Self {
             name,
             verifying_key,
@@ -1029,7 +1260,7 @@ fn decode_key_bytes(
     compression: Option<&str>,
     circuit: &str,
     kind: &str,
-) -> BackendResult<Vec<u8>> {
+) -> BackendResult<EncodedKeyBytes> {
     let payload = value.trim();
     if payload.is_empty() {
         return Err(invalid_key_error(circuit, kind, "encoded payload is empty"));
@@ -1044,7 +1275,7 @@ fn decode_key_bytes(
         ));
     }
 
-    let mut bytes = match normalized_encoding.as_str() {
+    let bytes = match normalized_encoding.as_str() {
         "base64" | "b64" => BASE64_STANDARD.decode(payload.as_bytes()).map_err(|err| {
             invalid_key_error(circuit, kind, format!("invalid base64 payload: {err}"))
         })?,
@@ -1061,43 +1292,10 @@ fn decode_key_bytes(
         return Err(invalid_key_error(circuit, kind, "decoded payload is empty"));
     }
 
-    if let Some(compression) = compression
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
-    {
-        match compression.as_str() {
-            "gzip" | "gz" => {
-                let mut decoder = GzDecoder::new(bytes.as_slice());
-                let mut decompressed = Vec::new();
-                decoder.read_to_end(&mut decompressed).map_err(|err| {
-                    invalid_key_error(
-                        circuit,
-                        kind,
-                        format!("failed to decompress gzip payload: {err}"),
-                    )
-                })?;
-                if decompressed.is_empty() {
-                    return Err(invalid_key_error(
-                        circuit,
-                        kind,
-                        "decompressed payload is empty",
-                    ));
-                }
-                bytes = decompressed;
-            }
-            "none" => {}
-            other => {
-                return Err(invalid_key_error(
-                    circuit,
-                    kind,
-                    format!("unsupported compression '{other}'"),
-                ))
-            }
-        }
-    }
+    let compression = KeyCompression::from_hint(compression.map(|value| value.trim()))
+        .map_err(|message| invalid_key_error(circuit, kind, message))?;
 
-    Ok(bytes)
+    Ok(EncodedKeyBytes::new(bytes, compression))
 }
 
 fn key_schema(title: &str, description: &str) -> Value {
