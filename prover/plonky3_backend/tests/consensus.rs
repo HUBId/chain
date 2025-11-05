@@ -1,6 +1,8 @@
 use p3_baby_bear::BabyBear;
+use p3_field::PrimeField32;
 use p3_field::QuotientMap;
 use p3_matrix::Matrix;
+use p3_symmetric::Hash as CircuitHash;
 use plonky3_backend::circuits::consensus::load_consensus_trace_layout;
 use plonky3_backend::{
     compute_commitment_and_inputs, decode_consensus_instance, encode_consensus_public_inputs,
@@ -14,6 +16,38 @@ use serde_json::json;
 use serde_json::{Map, Value};
 use std::fs;
 use std::sync::Arc;
+
+#[derive(Deserialize)]
+struct StarkProofCommitments {
+    trace: CircuitHash<BabyBear, BabyBear, 8>,
+    quotient_chunks: CircuitHash<BabyBear, BabyBear, 8>,
+    random: Option<CircuitHash<BabyBear, BabyBear, 8>>,
+}
+
+#[derive(Deserialize)]
+struct StarkProofFriCommitments {
+    commit_phase_commits: Vec<CircuitHash<BabyBear, BabyBear, 8>>,
+    query_proofs: serde::de::IgnoredAny,
+    final_poly: serde::de::IgnoredAny,
+    pow_witness: serde::de::IgnoredAny,
+}
+
+#[derive(Deserialize)]
+struct StarkProofInspection {
+    commitments: StarkProofCommitments,
+    opened_values: serde::de::IgnoredAny,
+    opening_proof: StarkProofFriCommitments,
+    degree_bits: usize,
+}
+
+fn hash_commitment_to_bytes(hash: &CircuitHash<BabyBear, BabyBear, 8>) -> [u8; 32] {
+    let mut bytes = [0u8; 32];
+    for (index, element) in hash.as_ref().iter().enumerate() {
+        let offset = index * 4;
+        bytes[offset..offset + 4].copy_from_slice(&element.as_canonical_u32().to_le_bytes());
+    }
+    bytes
+}
 
 fn sample_vote(label: &str, weight: u64) -> VotePower {
     VotePower {
@@ -129,6 +163,66 @@ fn prove_sample_witness() -> (ConsensusProof, VerifierContext) {
     let circuit = ConsensusCircuit::new(witness).expect("consensus circuit");
     let proof = prove_consensus(&prover, &circuit).expect("consensus proving succeeds");
     (proof, verifier)
+}
+
+#[test]
+fn consensus_proof_commitments_match_metadata() {
+    let (proof, _) = prove_sample_witness();
+    let metadata = proof.proof.metadata();
+    let stark_proof = proof.proof.stark_proof();
+    let header_len = 3 * 32;
+    assert!(
+        stark_proof.len() > header_len,
+        "proof payload must include serialized STARK proof"
+    );
+    let (trace_segment, rest) = stark_proof.split_at(32);
+    assert_eq!(trace_segment, metadata.trace_commitment());
+    let (quotient_segment, rest) = rest.split_at(32);
+    assert_eq!(quotient_segment, metadata.quotient_commitment());
+    let (fri_segment, serialized_proof) = rest.split_at(32);
+    assert_eq!(fri_segment, metadata.fri_commitment());
+
+    let inspection: StarkProofInspection =
+        bincode::deserialize(serialized_proof).expect("decode backend proof for inspection");
+    assert_eq!(
+        hash_commitment_to_bytes(&inspection.commitments.trace),
+        metadata.trace_commitment(),
+        "trace commitment must match metadata"
+    );
+    assert_eq!(
+        hash_commitment_to_bytes(&inspection.commitments.quotient_chunks),
+        metadata.quotient_commitment(),
+        "quotient commitment must match metadata"
+    );
+    let fri_commitment = inspection
+        .opening_proof
+        .commit_phase_commits
+        .first()
+        .expect("fri commitment available");
+    assert_eq!(
+        hash_commitment_to_bytes(fri_commitment),
+        metadata.fri_commitment(),
+        "fri commitment must match metadata"
+    );
+
+    let decoded: p3_uni_stark::Proof<plonky3_backend::CircuitStarkConfig> =
+        bincode::deserialize(serialized_proof).expect("deserialize backend proof");
+    let reserialized = bincode::serialize(&decoded).expect("reserialize backend proof");
+    assert_eq!(
+        serialized_proof.len(),
+        reserialized.len(),
+        "reserialized proof length must match original"
+    );
+    assert_eq!(
+        stark_proof.len(),
+        header_len + reserialized.len(),
+        "full proof must equal header plus serialized payload"
+    );
+    assert_eq!(
+        serialized_proof,
+        reserialized.as_slice(),
+        "serialized proof must remain stable"
+    );
 }
 
 #[test]
