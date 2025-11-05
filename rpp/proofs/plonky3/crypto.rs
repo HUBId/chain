@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -13,7 +14,7 @@ use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
 pub use plonky3_backend::PROOF_BLOB_LEN;
-use plonky3_backend::{self as backend};
+use plonky3_backend::{self as backend, AirMetadata};
 
 use super::params::Plonky3Parameters;
 
@@ -24,6 +25,7 @@ pub(crate) use super::public_inputs::compute_commitment_and_inputs;
 struct CircuitArtifact {
     verifying_key: backend::VerifyingKey,
     proving_key: backend::ProvingKey,
+    air_metadata: Option<Arc<AirMetadata>>,
 }
 
 #[derive(Deserialize)]
@@ -33,6 +35,8 @@ struct CircuitArtifactConfig {
     _constraints: Option<String>,
     verifying_key: ArtifactLocation,
     proving_key: ArtifactLocation,
+    #[serde(default)]
+    metadata: Option<AirMetadata>,
 }
 
 #[derive(Deserialize)]
@@ -389,12 +393,17 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
                     config.circuit
                 ))
             })?;
+        let air_metadata = config
+            .metadata
+            .as_ref()
+            .map(|value| Arc::new(value.clone()));
         if artifacts
             .insert(
                 config.circuit.clone(),
                 CircuitArtifact {
                     verifying_key,
                     proving_key,
+                    air_metadata,
                 },
             )
             .is_some()
@@ -441,6 +450,10 @@ fn circuit_artifact(circuit: &str) -> ChainResult<&'static CircuitArtifact> {
 
 pub fn verifying_key(circuit: &str) -> ChainResult<Vec<u8>> {
     circuit_artifact(circuit).map(|artifact| artifact.verifying_key.bytes().to_vec())
+}
+
+pub fn circuit_air_metadata(circuit: &str) -> ChainResult<Option<Arc<AirMetadata>>> {
+    circuit_artifact(circuit).map(|artifact| artifact.air_metadata.as_ref().map(Arc::clone))
 }
 
 pub fn circuit_keys(circuit: &str) -> ChainResult<(backend::VerifyingKey, backend::ProvingKey)> {
