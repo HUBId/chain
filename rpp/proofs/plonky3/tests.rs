@@ -285,8 +285,9 @@ fn transaction_proof_roundtrip() {
             .try_into()
             .unwrap()
     );
-    let (_, encoded_inputs) =
+    let (_, expected_digest, encoded_inputs) =
         public_inputs::compute_commitment_and_inputs(&parsed.public_inputs).unwrap();
+    assert_eq!(parsed.payload.metadata.public_inputs_hash, expected_digest);
     let inputs_hash = blake3_hash(&encoded_inputs);
     assert_eq!(
         parsed.payload.metadata.public_inputs_hash,

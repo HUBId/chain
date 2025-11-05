@@ -89,6 +89,13 @@ pub enum BackendError {
     UnsupportedProvingAir { circuit: String, air: ToolchainAir },
     #[error("failed to construct {circuit} STARK proof: {message}")]
     StarkProofConstruction { circuit: String, message: String },
+    #[error("prover failure for {circuit} circuit ({context}): {source}")]
+    ProverFailure {
+        circuit: String,
+        context: String,
+        #[source]
+        source: Box<BackendError>,
+    },
     #[error("failed to load Plonky3 setup manifest: {0}")]
     SetupManifest(String),
     #[error("Plonky3 setup manifest missing {0} circuit entry")]
@@ -1247,32 +1254,41 @@ impl ProverContext {
     }
 
     pub fn prove(&self, public_inputs: &Value) -> BackendResult<(String, Proof)> {
-        let (commitment, encoded_inputs) =
+        let (commitment, inputs_digest, encoded_inputs) =
             encode_commitment_and_inputs(self.circuit(), public_inputs)?;
-        let proof = self.prove_with_encoded(&commitment, &encoded_inputs, public_inputs)?;
+        let proof =
+            self.prove_with_encoded(&commitment, inputs_digest, &encoded_inputs, public_inputs)?;
         Ok((commitment, proof))
     }
 
     fn prove_with_encoded(
         &self,
         _commitment: &str,
-        encoded_inputs: &[u8],
+        inputs_digest: [u8; 32],
+        _encoded_inputs: &[u8],
         public_inputs: &Value,
     ) -> BackendResult<Proof> {
-        let inputs_digest = blake3::hash(encoded_inputs);
         let config = build_circuit_stark_config(&self.proving_metadata)?;
         let typed_key = self.proving_key.typed();
         let proving_key = typed_key.key();
 
         let proof = match typed_key.air() {
             ToolchainAir::Consensus => {
-                let (_circuit, trace, public_values) =
-                    decode_consensus_instance::<CircuitStarkConfig>(public_inputs)?;
+                let (_circuit, trace, public_values) = decode_consensus_instance::<
+                    CircuitStarkConfig,
+                >(public_inputs)
+                .map_err(|err| prover_failure(&self.name, "decode consensus public inputs", err))?;
                 prove(&config, proving_key.as_ref(), trace, &public_values)
                     .into_stark_proof()
-                    .map_err(|err| BackendError::StarkProofConstruction {
-                        circuit: self.name.clone(),
-                        message: format!("failed to build STARK proof: {err}"),
+                    .map_err(|err| {
+                        prover_failure(
+                            &self.name,
+                            "generate STARK proof",
+                            BackendError::StarkProofConstruction {
+                                circuit: self.name.clone(),
+                                message: format!("failed to build STARK proof: {err}"),
+                            },
+                        )
                     })?
             }
             other => {
@@ -1305,7 +1321,7 @@ impl ProverContext {
             trace_commitment,
             quotient_commitment,
             fri_commitment,
-            *inputs_digest.as_bytes(),
+            inputs_digest,
             self.security_bits,
             self.use_gpu,
         );
@@ -1396,12 +1412,12 @@ impl VerifierContext {
         proof: &Proof,
     ) -> BackendResult<()> {
         self.ensure_signed_fixture()?;
-        let (expected_commitment, encoded_inputs) =
+        let (expected_commitment, inputs_digest, encoded_inputs) =
             encode_commitment_and_inputs(self.circuit(), public_inputs)?;
         if commitment != expected_commitment {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
         }
-        self.verify_with_encoded(commitment, &encoded_inputs, proof)
+        self.verify_with_encoded(commitment, &encoded_inputs, &inputs_digest, proof)
     }
 
     fn ensure_signed_fixture(&self) -> BackendResult<()> {
@@ -1433,7 +1449,8 @@ impl VerifierContext {
     fn verify_with_encoded(
         &self,
         commitment: &str,
-        encoded_inputs: &[u8],
+        _encoded_inputs: &[u8],
+        inputs_digest: &[u8; 32],
         proof: &Proof,
     ) -> BackendResult<()> {
         if proof.metadata().security_bits() != self.security_bits {
@@ -1458,8 +1475,7 @@ impl VerifierContext {
         if proof.metadata().fri_commitment() != &verifying_bytes[(2 * COMMITMENT_LEN)..header_len] {
             return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
-        let inputs_digest = blake3::hash(encoded_inputs);
-        if proof.metadata().public_inputs_hash() != inputs_digest.as_bytes() {
+        if proof.metadata().public_inputs_hash() != inputs_digest {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
         }
         Ok(())
@@ -1652,10 +1668,22 @@ fn invalid_key_error(circuit: &str, kind: &str, message: impl Into<String>) -> B
     }
 }
 
+fn prover_failure(circuit: &str, context: impl Into<String>, err: BackendError) -> BackendError {
+    let context = context.into();
+    match err {
+        BackendError::ProverFailure { .. } => err,
+        other => BackendError::ProverFailure {
+            circuit: circuit.to_string(),
+            context,
+            source: Box::new(other),
+        },
+    }
+}
+
 fn encode_commitment_and_inputs(
     circuit: &str,
     public_inputs: &Value,
-) -> BackendResult<(String, Vec<u8>)> {
+) -> BackendResult<(String, [u8; 32], Vec<u8>)> {
     compute_commitment_and_inputs(public_inputs).map_err(|err| BackendError::InvalidPublicInputs {
         circuit: circuit.to_string(),
         message: format!("failed to encode canonical public inputs: {err}"),
