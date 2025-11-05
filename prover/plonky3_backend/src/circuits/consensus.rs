@@ -1028,6 +1028,41 @@ pub fn validate_consensus_public_inputs(value: &Value) -> BackendResult<()> {
     ConsensusCircuit::from_public_inputs_value(value).map(|_| ())
 }
 
+/// Reconstructs the `ExecutionTrace` that STWO expects for the consensus circuit.
+///
+/// The helper walks the ordered segment descriptors provided by the AIR metadata
+/// (`pre_votes`, `pre_commits`, `commits`, `vrf_outputs`, `vrf_proofs`,
+/// `vrf_transcripts`, `witness_commitments`, `reputation_roots`,
+/// `quorum_bitmap_binding`, `quorum_signature_binding`, and finally `summary`).
+/// For each segment it materializes the column layout used inside STWO:
+///
+/// * Vote segments expose `[voter, weight, cumulative_weight]` columns.
+/// * `vrf_outputs` extends `[randomness, derived_randomness]` with the Poseidon
+///   chaining inputs/outputs that bind each row.
+/// * `vrf_proofs` contains `[proof]` plus the same binding columns.
+/// * `vrf_transcripts` expands each sanitized VRF entry into
+///   `[pre_output, public_key, poseidon_digest, poseidon_last_block_header,
+///   poseidon_epoch, poseidon_tier_seed]`.
+/// * Binding segments (`witness_commitments`, `reputation_roots`,
+///   `quorum_bitmap_binding`, `quorum_signature_binding`) add the Poseidon
+///   chaining inputs/outputs after the data column they anchor.
+/// * The terminal `summary` row concatenates the circuit header, every sanitized
+///   VRF field, all witness commitments, reputation roots, their counts, and the
+///   published binding digests.
+///
+/// Byte-oriented fields are packed into a single field element using base-256
+/// accumulation (see [`bytes_to_field_element`]) so their canonical byte order
+/// matches the STWO trace. Numeric scalars rely on the `QuotientMap` instances to
+/// map integer widths into the field.
+///
+/// Segment dimensions come from the AIR metadata, so any trace shorter than the
+/// declared height is implicitly padded with zeros by the underlying
+/// `RowMajorMatrix`. This mirrors the STWO trace contract where unused rows in a
+/// segment remain zeroed but the column ordering is fixed by the metadata.
+///
+/// Internally the function reuses the sanitized VRF material and Poseidon sponge
+/// bindings constructed by [`ConsensusCircuit`], ensuring that the trace-level
+/// chaining hashes remain consistent with the public input digests.
 pub fn decode_consensus_instance<SC: StarkGenericConfig>(
     value: &Value,
 ) -> BackendResult<(ConsensusCircuit, RowMajorMatrix<Val<SC>>, Vec<Val<SC>>)>
