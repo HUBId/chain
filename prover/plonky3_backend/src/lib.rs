@@ -196,6 +196,31 @@ impl AirMetadata {
     pub fn is_empty(&self) -> bool {
         self.air.is_null() && self.extra.is_empty()
     }
+
+    /// Computes a digest that summarises the metadata contents.
+    pub fn digest(&self) -> Option<[u8; 32]> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut root = Map::new();
+        root.insert("air".into(), self.air.clone());
+
+        if !self.extra.is_empty() {
+            let mut extra = Map::new();
+            let mut entries: Vec<_> = self.extra.iter().collect();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            for (key, value) in entries {
+                extra.insert(key.clone(), value.clone());
+            }
+            root.insert("extra".into(), Value::Object(extra));
+        }
+
+        let encoded = serde_json::to_vec(&Value::Object(root))
+            .expect("serialising AIR metadata must not fail");
+        let digest = blake3::hash(&encoded);
+        Some(*digest.as_bytes())
+    }
 }
 
 impl Default for AirMetadata {
@@ -1039,11 +1064,38 @@ impl Proof {
     }
 }
 
-#[derive(Clone, Debug)]
+fn metadata_digest_hex(metadata: &Arc<AirMetadata>) -> Option<String> {
+    metadata.digest().map(hex::encode)
+}
+
+fn ensure_metadata_alignment<F>(
+    expected_label: &str,
+    expected: &Arc<AirMetadata>,
+    actual_label: &str,
+    actual: &Arc<AirMetadata>,
+    build_error: F,
+) -> BackendResult<()>
+where
+    F: FnOnce(String) -> BackendError,
+{
+    if expected.as_ref() == actual.as_ref() {
+        return Ok(());
+    }
+
+    let expected_digest = metadata_digest_hex(expected).unwrap_or_else(|| "empty".into());
+    let actual_digest = metadata_digest_hex(actual).unwrap_or_else(|| "empty".into());
+    Err(build_error(format!(
+        "{expected_label} metadata digest {expected_digest} does not match {actual_label} metadata digest {actual_digest}",
+    )))
+}
+
+#[derive(Clone)]
 pub struct ProverContext {
     name: String,
     verifying_key: VerifyingKey,
+    verifying_metadata: Arc<AirMetadata>,
     proving_key: ProvingKey,
+    proving_metadata: Arc<AirMetadata>,
     security_bits: u32,
     use_gpu: bool,
 }
@@ -1063,10 +1115,24 @@ impl ProverContext {
         let verifying_metadata = verifying_key.metadata();
         let mut proving_key = proving_key;
         proving_key.align_metadata(&verifying_metadata);
+        let proving_metadata = proving_key.metadata();
+        ensure_metadata_alignment(
+            "verifying key",
+            &verifying_metadata,
+            "proving key",
+            &proving_metadata,
+            |message| BackendError::InvalidKeyEncoding {
+                circuit: name.clone(),
+                kind: "proving key".into(),
+                message,
+            },
+        )?;
         Ok(Self {
             name,
             verifying_key,
+            verifying_metadata,
             proving_key,
+            proving_metadata,
             security_bits,
             use_gpu,
         })
@@ -1082,6 +1148,14 @@ impl ProverContext {
 
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
+    }
+
+    pub fn verifying_metadata(&self) -> Arc<AirMetadata> {
+        Arc::clone(&self.verifying_metadata)
+    }
+
+    pub fn proving_metadata(&self) -> Arc<AirMetadata> {
+        Arc::clone(&self.proving_metadata)
     }
 
     fn transcript_message(&self, commitment: &str, encoded_inputs: &[u8]) -> Vec<u8> {
@@ -1140,16 +1214,35 @@ impl ProverContext {
         VerifierContext {
             name: self.name.clone(),
             verifying_key: self.verifying_key.clone(),
+            metadata: self.verifying_metadata(),
             security_bits: self.security_bits,
             use_gpu: self.use_gpu,
         }
     }
 }
 
-#[derive(Clone, Debug)]
+impl fmt::Debug for ProverContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = metadata_digest_hex(&self.verifying_metadata);
+        f.debug_struct("ProverContext")
+            .field("circuit", &self.name)
+            .field(
+                "verifying_key_hash",
+                &hex::encode(self.verifying_key.hash()),
+            )
+            .field("proving_key_hash", &hex::encode(self.proving_key.hash()))
+            .field("metadata_digest", &metadata)
+            .field("security_bits", &self.security_bits)
+            .field("use_gpu", &self.use_gpu)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct VerifierContext {
     name: String,
     verifying_key: VerifyingKey,
+    metadata: Arc<AirMetadata>,
     security_bits: u32,
     use_gpu: bool,
 }
@@ -1165,9 +1258,11 @@ impl VerifierContext {
         if name.is_empty() {
             return Err(BackendError::EmptyCircuit);
         }
+        let metadata = verifying_key.metadata();
         Ok(Self {
             name,
             verifying_key,
+            metadata,
             security_bits,
             use_gpu,
         })
@@ -1179,6 +1274,10 @@ impl VerifierContext {
 
     pub fn verifying_key(&self) -> &VerifyingKey {
         &self.verifying_key
+    }
+
+    pub fn metadata(&self) -> Arc<AirMetadata> {
+        Arc::clone(&self.metadata)
     }
 
     pub fn verify(
@@ -1206,6 +1305,18 @@ impl VerifierContext {
                 circuit: self.name.clone(),
                 message: "verifying key hash mismatch".into(),
             });
+        }
+        if let Some(expected) = &entry.air_metadata {
+            ensure_metadata_alignment(
+                "signed fixture",
+                expected,
+                "verifying key",
+                &self.metadata,
+                |message| BackendError::SetupArtifactMismatch {
+                    circuit: self.name.clone(),
+                    message,
+                },
+            )?;
         }
         Ok(())
     }
@@ -1251,6 +1362,22 @@ impl VerifierContext {
             return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
         Ok(())
+    }
+}
+
+impl fmt::Debug for VerifierContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = metadata_digest_hex(&self.metadata);
+        f.debug_struct("VerifierContext")
+            .field("circuit", &self.name)
+            .field(
+                "verifying_key_hash",
+                &hex::encode(self.verifying_key.hash()),
+            )
+            .field("metadata_digest", &metadata)
+            .field("security_bits", &self.security_bits)
+            .field("use_gpu", &self.use_gpu)
+            .finish()
     }
 }
 

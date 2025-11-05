@@ -225,7 +225,7 @@ fn plonky3_recursive_flow_roundtrip() {
         let parsed = Plonky3Proof::from_value(value).unwrap();
         assert!(!parsed.payload.proof_blob.is_empty());
         let verifying_key = crypto::verifying_key("recursive").unwrap();
-        let verifying_hash = blake3::hash(&verifying_key);
+        let verifying_hash = blake3::hash(verifying_key.bytes());
         assert_eq!(
             parsed.payload.metadata.verifying_key_hash,
             *verifying_hash.as_bytes()

@@ -340,8 +340,9 @@ fn uptime_fixture_roundtrip() {
 fn plonky3_param_digests_match_setup() {
     for (name, params) in circuit_matrix() {
         let fixture = circuit_fixture(name);
-        let verifying_bytes = crypto::verifying_key(name).expect("load verifying key");
-        assert_eq!(verifying_bytes.as_slice(), fixture.verifying_key.as_slice());
+        let verifying_key = crypto::verifying_key(name).expect("load verifying key");
+        let verifying_bytes = verifying_key.bytes();
+        assert_eq!(verifying_bytes, fixture.verifying_key.as_slice());
         assert!(
             verifying_bytes.len() >= 96,
             "verifying key must expose FRI/domain digests"
@@ -361,5 +362,17 @@ fn plonky3_param_digests_match_setup() {
             blake3_hash(proving_key.bytes()).as_bytes(),
             &params.proving_key_hash
         );
+        if let Some(expected_metadata) = fixture.metadata.as_ref() {
+            assert_eq!(
+                verifying_key.metadata().as_ref(),
+                expected_metadata,
+                "verifying key metadata must match fixture"
+            );
+            assert_eq!(
+                proving_key.metadata().as_ref(),
+                expected_metadata,
+                "proving key metadata must match fixture"
+            );
+        }
     }
 }

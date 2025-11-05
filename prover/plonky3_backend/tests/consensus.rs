@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
 use std::fs;
+use std::sync::Arc;
 
 fn sample_vote(label: &str, weight: u64) -> VotePower {
     VotePower {
@@ -83,6 +84,17 @@ fn sample_contexts() -> (ProverContext, VerifierContext) {
     let prover = ProverContext::new("consensus", verifying_key.clone(), proving_key, 64, false)
         .expect("prover context builds");
     let verifier = prover.verifier();
+    let prover_metadata = prover.verifying_metadata();
+    let proving_metadata = prover.proving_metadata();
+    assert!(
+        Arc::ptr_eq(&prover_metadata, &proving_metadata),
+        "prover context must share metadata Arc"
+    );
+    assert_eq!(
+        prover_metadata.as_ref(),
+        verifier.metadata().as_ref(),
+        "verifier must reuse prover metadata"
+    );
     (prover, verifier)
 }
 
