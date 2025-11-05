@@ -197,14 +197,11 @@ impl Plonky3Backend {
                 ))
             })?;
         }
-        let (commitment, encoded_inputs) = crypto::canonical_public_inputs(&public_inputs)?;
-        let backend_proof = compiled
-            .prove(&commitment, &encoded_inputs)
-            .map_err(|err| {
-                let message = format!("failed to generate Plonky3 {circuit} proof: {err}");
-                PLONKY3_TELEMETRY.record_failure(message.clone());
-                ChainError::Crypto(message)
-            })?;
+        let (commitment, backend_proof) = compiled.prove(&public_inputs).map_err(|err| {
+            let message = format!("failed to generate Plonky3 {circuit} proof: {err}");
+            PLONKY3_TELEMETRY.record_failure(message.clone());
+            ChainError::Crypto(message)
+        })?;
         let proof = Plonky3Proof::from_backend(
             circuit.to_string(),
             commitment,
