@@ -271,6 +271,90 @@ fn consensus_prover_context_serializes_stark_proof() {
 }
 
 #[test]
+fn consensus_proof_metadata_tracks_commitment_digest() {
+    let (prover, _) = sample_contexts();
+    let circuit = ConsensusCircuit::new(sample_witness()).expect("consensus circuit");
+    let public_inputs = circuit
+        .public_inputs_value()
+        .expect("encode consensus public inputs");
+    let (commitment, proof) = prover
+        .prove(&public_inputs)
+        .expect("consensus proving succeeds");
+    let (expected_commitment, expected_digest, _) =
+        compute_commitment_and_inputs(&public_inputs).expect("canonical commitment computation");
+    assert_eq!(commitment, expected_commitment);
+    assert_eq!(proof.metadata().public_inputs_hash(), &expected_digest);
+    assert_eq!(
+        hex::encode(proof.metadata().public_inputs_hash()),
+        commitment
+    );
+}
+
+#[test]
+fn consensus_prover_reports_trace_height_mismatch() {
+    let (prover, _) = sample_contexts();
+    let layout = load_consensus_trace_layout().expect("consensus layout");
+    let vrf_segment = layout
+        .segment("vrf_outputs")
+        .expect("vrf_outputs segment metadata");
+    let overflow_len = vrf_segment.height() + 1;
+
+    let mut witness = sample_witness();
+    let base_entry = witness
+        .vrf_entries
+        .first()
+        .cloned()
+        .expect("sample witness vrf entry");
+    witness.vrf_entries = (0..overflow_len)
+        .map(|index| {
+            let mut entry = base_entry.clone();
+            let byte = (index & 0xff) as u8;
+            entry.randomness = format!("{:02x}", byte).repeat(32);
+            entry.pre_output = format!("{:02x}", byte.wrapping_add(1)).repeat(VRF_PREOUTPUT_LENGTH);
+            entry.proof = format!("{:02x}", byte.wrapping_add(2)).repeat(VRF_PROOF_LENGTH);
+            entry.public_key = format!("{:02x}", byte.wrapping_add(3)).repeat(32);
+            entry.poseidon.digest = format!("{:02x}", byte.wrapping_add(4)).repeat(32);
+            entry.poseidon.tier_seed = format!("{:02x}", byte.wrapping_add(5)).repeat(32);
+            entry
+        })
+        .collect();
+
+    let circuit = ConsensusCircuit::new(witness).expect("expanded consensus circuit");
+    let public_inputs = circuit
+        .public_inputs_value()
+        .expect("encode consensus public inputs");
+
+    let err = prover
+        .prove(&public_inputs)
+        .expect_err("trace height mismatch must fail");
+
+    match err {
+        BackendError::ProverFailure {
+            circuit,
+            context,
+            source,
+        } => {
+            assert_eq!(circuit, "consensus");
+            assert!(
+                context.contains("decode"),
+                "unexpected prover failure context: {context}"
+            );
+            match *source {
+                BackendError::InvalidWitness { circuit, message } => {
+                    assert_eq!(circuit, "consensus");
+                    assert!(
+                        message.contains("vrf_outputs") && message.contains("metadata allows"),
+                        "unexpected witness error: {message}"
+                    );
+                }
+                other => panic!("unexpected prover failure source: {other:?}"),
+            }
+        }
+        other => panic!("expected prover failure, found {other:?}"),
+    }
+}
+
+#[test]
 fn consensus_prover_context_rejects_retargeted_air() {
     let contents =
         fs::read_to_string("config/plonky3/setup/consensus.json").expect("read consensus fixture");
@@ -584,7 +668,7 @@ fn consensus_instance_decoding_matches_metadata_layout() {
     let public_inputs = baseline
         .public_inputs_value()
         .expect("encode consensus public inputs");
-    let (baseline_commitment, canonical_bytes) =
+    let (baseline_commitment, baseline_digest, canonical_bytes) =
         compute_commitment_and_inputs(&public_inputs).expect("canonical commitment computation");
     let canonical_inputs: Value =
         serde_json::from_slice(&canonical_bytes).expect("canonical public inputs decode");
@@ -624,18 +708,20 @@ fn consensus_instance_decoding_matches_metadata_layout() {
     assert_eq!(decoded_inputs, flattened_inputs);
     assert_eq!(decoded_layout.total_values, flattened_inputs.len());
 
-    let (round_trip_commitment, round_trip_bytes) =
+    let (round_trip_commitment, round_trip_digest, round_trip_bytes) =
         compute_commitment_and_inputs(&canonical_inputs).expect("round-trip canonical encoding");
     assert_eq!(round_trip_commitment, baseline_commitment);
+    assert_eq!(round_trip_digest, baseline_digest);
     assert_eq!(round_trip_bytes, canonical_bytes);
 
     let recovered_public_inputs = decoded
         .public_inputs_value()
         .expect("re-encode public inputs");
-    let (recovered_commitment, recovered_bytes) =
+    let (recovered_commitment, recovered_digest, recovered_bytes) =
         compute_commitment_and_inputs(&recovered_public_inputs)
             .expect("recovered canonical encoding");
     assert_eq!(recovered_commitment, baseline_commitment);
+    assert_eq!(recovered_digest, baseline_digest);
     assert_eq!(recovered_bytes, canonical_bytes);
 
     let (verifying_key, _) = sample_keys();

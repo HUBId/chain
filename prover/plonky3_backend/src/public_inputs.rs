@@ -4,12 +4,15 @@ use serde_json::Value;
 
 pub fn compute_commitment_and_inputs(
     public_inputs: &Value,
-) -> serde_json::Result<(String, Vec<u8>)> {
+) -> serde_json::Result<(String, [u8; 32], Vec<u8>)> {
     let encoded = encode_canonical_json(public_inputs)?;
     let mut hasher = Hasher::new();
     hasher.update(&encoded);
-    let commitment = hasher.finalize().to_hex().to_string();
-    Ok((commitment, encoded))
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(digest.as_bytes());
+    let commitment = digest.to_hex().to_string();
+    Ok((commitment, bytes, encoded))
 }
 
 pub fn encode_canonical_json(value: &Value) -> serde_json::Result<Vec<u8>> {
