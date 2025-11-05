@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,56 @@ pub type CircuitStarkVerifyingKey = StarkVerifyingKey<CircuitStarkConfig>;
 /// once full circuit integration lands.
 pub type CircuitStarkProvingKey = StarkProvingKey<CircuitStarkConfig>;
 
+#[derive(Clone)]
+pub struct BackendStarkVerifyingKey {
+    bytes: Arc<[u8]>,
+}
+
+impl BackendStarkVerifyingKey {
+    fn new(bytes: Arc<[u8]>) -> Self {
+        Self { bytes }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+impl fmt::Debug for BackendStarkVerifyingKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BackendStarkVerifyingKey(len={})", self.len())
+    }
+}
+
+#[derive(Clone)]
+pub struct BackendStarkProvingKey {
+    bytes: Arc<[u8]>,
+}
+
+impl BackendStarkProvingKey {
+    fn new(bytes: Arc<[u8]>) -> Self {
+        Self { bytes }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+impl fmt::Debug for BackendStarkProvingKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "BackendStarkProvingKey(len={})", self.len())
+    }
+}
+
 /// Metadata describing the AIR that produced a proving/verifying key pair.
 ///
 /// `plonky3-keygen` emits this information alongside every fixture so that
@@ -136,6 +187,15 @@ impl AirMetadata {
     /// Indicates whether the metadata payload is effectively empty.
     pub fn is_empty(&self) -> bool {
         self.air.is_null() && self.extra.is_empty()
+    }
+}
+
+impl Default for AirMetadata {
+    fn default() -> Self {
+        Self {
+            air: Value::Null,
+            extra: HashMap::new(),
+        }
     }
 }
 
@@ -348,10 +408,12 @@ pub struct ConsensusProof {
     pub proof: Proof,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct VerifyingKey {
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     hash: [u8; 32],
+    typed: Arc<BackendStarkVerifyingKey>,
+    metadata: Arc<AirMetadata>,
 }
 
 impl VerifyingKey {
@@ -359,9 +421,14 @@ impl VerifyingKey {
         if bytes.is_empty() {
             return Err(BackendError::MissingVerifyingKey(circuit.to_string()));
         }
+        let hash = *blake3::hash(&bytes).as_bytes();
+        let bytes: Arc<[u8]> = bytes.into();
+        let typed = Arc::new(BackendStarkVerifyingKey::new(Arc::clone(&bytes)));
         Ok(Self {
-            hash: *blake3::hash(&bytes).as_bytes(),
+            hash,
             bytes,
+            typed,
+            metadata: Arc::new(AirMetadata::default()),
         })
     }
 
@@ -383,6 +450,19 @@ impl VerifyingKey {
         self.hash
     }
 
+    pub fn typed(&self) -> Arc<BackendStarkVerifyingKey> {
+        Arc::clone(&self.typed)
+    }
+
+    pub fn metadata(&self) -> Arc<AirMetadata> {
+        Arc::clone(&self.metadata)
+    }
+
+    pub fn with_metadata(mut self, metadata: Arc<AirMetadata>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     pub fn json_schema() -> Value {
         key_schema(
             "Plonky3 Verifying Key",
@@ -391,10 +471,30 @@ impl VerifyingKey {
     }
 }
 
-#[derive(Clone, Debug)]
+impl fmt::Debug for VerifyingKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = self.metadata.as_ref();
+        let metadata_summary = if metadata.is_empty() {
+            "empty".to_string()
+        } else {
+            let air_fields = metadata.air.as_object().map(|map| map.len()).unwrap_or(0);
+            let extra_fields = metadata.extra.len();
+            format!("air_fields={air_fields}, extra_fields={extra_fields}")
+        };
+        f.debug_struct("VerifyingKey")
+            .field("hash", &hex::encode(self.hash))
+            .field("bytes_len", &self.bytes.len())
+            .field("typed_len", &self.typed.len())
+            .field("metadata", &metadata_summary)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct ProvingKey {
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     hash: [u8; 32],
+    typed: Arc<BackendStarkProvingKey>,
 }
 
 impl ProvingKey {
@@ -402,10 +502,10 @@ impl ProvingKey {
         if bytes.is_empty() {
             return Err(BackendError::MissingProvingKey(circuit.to_string()));
         }
-        Ok(Self {
-            hash: *blake3::hash(&bytes).as_bytes(),
-            bytes,
-        })
+        let hash = *blake3::hash(&bytes).as_bytes();
+        let bytes: Arc<[u8]> = bytes.into();
+        let typed = Arc::new(BackendStarkProvingKey::new(Arc::clone(&bytes)));
+        Ok(Self { hash, bytes, typed })
     }
 
     pub fn from_encoded_parts(
@@ -426,11 +526,25 @@ impl ProvingKey {
         self.hash
     }
 
+    pub fn typed(&self) -> Arc<BackendStarkProvingKey> {
+        Arc::clone(&self.typed)
+    }
+
     pub fn json_schema() -> Value {
         key_schema(
             "Plonky3 Proving Key",
             "Descriptor for a proving key artifact",
         )
+    }
+}
+
+impl fmt::Debug for ProvingKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProvingKey")
+            .field("hash", &hex::encode(self.hash))
+            .field("bytes_len", &self.bytes.len())
+            .field("typed_len", &self.typed.len())
+            .finish()
     }
 }
 
