@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -85,9 +86,9 @@ pub enum BackendError {
         message: String,
     },
     #[error("Plonky3 prover does not support {air:?} circuits (requested {circuit})")]
-    UnsupportedToolchainAir { circuit: String, air: ToolchainAir },
-    #[error("failed to assemble {circuit} Plonky3 proof: {message}")]
-    ProofAssembly { circuit: String, message: String },
+    UnsupportedProvingAir { circuit: String, air: ToolchainAir },
+    #[error("failed to construct {circuit} STARK proof: {message}")]
+    StarkProofConstruction { circuit: String, message: String },
     #[error("failed to load Plonky3 setup manifest: {0}")]
     SetupManifest(String),
     #[error("Plonky3 setup manifest missing {0} circuit entry")]
@@ -99,6 +100,31 @@ pub enum BackendError {
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;
+
+trait StarkProofOutcome<SC> {
+    type Error: fmt::Display;
+
+    fn into_stark_proof(self) -> Result<p3_uni_stark::Proof<SC>, Self::Error>;
+}
+
+impl<SC> StarkProofOutcome<SC> for p3_uni_stark::Proof<SC> {
+    type Error = Infallible;
+
+    fn into_stark_proof(self) -> Result<p3_uni_stark::Proof<SC>, Self::Error> {
+        Ok(self)
+    }
+}
+
+impl<SC, E> StarkProofOutcome<SC> for Result<p3_uni_stark::Proof<SC>, E>
+where
+    E: fmt::Display,
+{
+    type Error = E;
+
+    fn into_stark_proof(self) -> Result<p3_uni_stark::Proof<SC>, Self::Error> {
+        self
+    }
+}
 
 pub use config::{
     build_circuit_stark_config, CircuitBaseField, CircuitChallengeField, CircuitChallenger,
@@ -1243,9 +1269,14 @@ impl ProverContext {
                 let (_circuit, trace, public_values) =
                     decode_consensus_instance::<CircuitStarkConfig>(public_inputs)?;
                 prove(&config, proving_key.as_ref(), trace, &public_values)
+                    .into_stark_proof()
+                    .map_err(|err| BackendError::StarkProofConstruction {
+                        circuit: self.name.clone(),
+                        message: format!("failed to build STARK proof: {err}"),
+                    })?
             }
             other => {
-                return Err(BackendError::UnsupportedToolchainAir {
+                return Err(BackendError::UnsupportedProvingAir {
                     circuit: self.name.clone(),
                     air: other,
                 })
@@ -1258,14 +1289,14 @@ impl ProverContext {
             .opening_proof
             .commit_phase_commits
             .first()
-            .ok_or_else(|| BackendError::ProofAssembly {
+            .ok_or_else(|| BackendError::StarkProofConstruction {
                 circuit: self.name.clone(),
                 message: "missing FRI commit-phase commitment".into(),
             })?;
         let fri_commitment = hash_to_bytes(fri_commitment_hash);
 
         let serialized_proof =
-            bincode::serialize(&proof).map_err(|err| BackendError::ProofAssembly {
+            bincode::serialize(&proof).map_err(|err| BackendError::StarkProofConstruction {
                 circuit: self.name.clone(),
                 message: format!("failed to serialize STARK proof: {err}"),
             })?;
