@@ -27,7 +27,9 @@ use crate::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
-use plonky3_backend::{BackendError, HashFormat, ProverContext as BackendProverContext};
+use plonky3_backend::{
+    BackendError, CircuitStarkConfig, HashFormat, ProverContext as BackendProverContext,
+};
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
 
@@ -254,19 +256,7 @@ fn transaction_proof_roundtrip() {
     let verifying_key = crypto::verifying_key("transaction").unwrap();
     let verifying_bytes = verifying_key.bytes();
     let header_len = 3 * crypto::COMMITMENT_LEN;
-    assert!(parsed.payload.stark_proof.len() >= header_len);
-    assert_eq!(
-        &parsed.payload.stark_proof[..crypto::COMMITMENT_LEN],
-        &verifying_bytes[..crypto::COMMITMENT_LEN]
-    );
-    assert_eq!(
-        &parsed.payload.stark_proof[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)],
-        &verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
-    );
-    assert_eq!(
-        &parsed.payload.stark_proof[(2 * crypto::COMMITMENT_LEN)..header_len],
-        &verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
-    );
+    assert!(verifying_bytes.len() >= header_len);
     assert_eq!(
         parsed.payload.metadata.trace_commitment,
         verifying_bytes[..crypto::COMMITMENT_LEN]
@@ -285,6 +275,12 @@ fn transaction_proof_roundtrip() {
             .try_into()
             .unwrap()
     );
+    assert!(!parsed.payload.stark_proof.is_empty());
+    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
+        bincode::deserialize(&parsed.payload.stark_proof).unwrap();
+    let reserialized = bincode::serialize(&decoded).unwrap();
+    assert_eq!(parsed.payload.stark_proof, reserialized);
+    assert!(parsed.payload.auxiliary_payloads.is_empty());
     let (_, expected_digest, encoded_inputs) =
         public_inputs::compute_commitment_and_inputs(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.payload.metadata.public_inputs_hash, expected_digest);
@@ -326,6 +322,10 @@ fn transaction_payload_serialization_roundtrip() {
     let recovered: crate::plonky3::proof::ProofPayload = serde_json::from_str(&serialized).unwrap();
     assert_eq!(recovered.stark_proof, parsed.payload.stark_proof);
     assert_eq!(
+        recovered.auxiliary_payloads,
+        parsed.payload.auxiliary_payloads
+    );
+    assert_eq!(
         recovered.metadata.hash_format,
         HashFormat::PoseidonMerkleCap
     );
@@ -334,7 +334,12 @@ fn transaction_payload_serialization_roundtrip() {
     let fixture: crate::plonky3::proof::ProofPayload =
         serde_json::from_str(include_str!("fixtures/transaction_payload_v1.json")).unwrap();
     fixture.validate().unwrap();
-    assert!(fixture.stark_proof.len() >= header_len);
+    assert!(!fixture.stark_proof.is_empty());
+    assert!(fixture.auxiliary_payloads.is_empty());
+    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
+        bincode::deserialize(&fixture.stark_proof).unwrap();
+    let reserialized = bincode::serialize(&decoded).unwrap();
+    assert_eq!(fixture.stark_proof, reserialized);
     assert_eq!(fixture.metadata.hash_format, HashFormat::PoseidonMerkleCap);
     fixture.to_backend("transaction").unwrap();
 }
@@ -488,9 +493,6 @@ fn transaction_proof_rejects_tampered_verifying_key() {
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
         parsed.payload.metadata.trace_commitment[0] ^= 0x80;
-        if let Some(first) = parsed.payload.stark_proof.first_mut() {
-            *first ^= 0x01;
-        }
         *value = parsed.into_value().unwrap();
     }
 
@@ -563,7 +565,9 @@ fn transaction_proof_rejects_truncated_payload() {
 
     let verify_err = verifier.verify_transaction(&truncated).unwrap_err();
     assert!(
-        verify_err.to_string().contains("proof payload must be"),
+        verify_err
+            .to_string()
+            .contains("failed to decode Plonky3 transaction proof payload"),
         "unexpected verifier error: {verify_err:?}"
     );
 }
@@ -585,7 +589,9 @@ fn transaction_proof_rejects_oversized_payload() {
 
     let verify_err = verifier.verify_transaction(&oversized).unwrap_err();
     assert!(
-        verify_err.to_string().contains("proof payload must be"),
+        verify_err
+            .to_string()
+            .contains("failed to decode Plonky3 transaction proof payload"),
         "unexpected verifier error: {verify_err:?}"
     );
 }
