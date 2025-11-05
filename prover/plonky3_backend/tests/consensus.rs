@@ -1,3 +1,8 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use p3_baby_bear::BabyBear;
 use p3_field::PrimeField32;
 use p3_field::QuotientMap;
@@ -7,38 +12,18 @@ use plonky3_backend::circuits::consensus::load_consensus_trace_layout;
 use plonky3_backend::{
     compute_commitment_and_inputs, decode_consensus_instance, encode_consensus_public_inputs,
     prove_consensus, require_circuit_air_metadata, validate_consensus_public_inputs,
-    verify_consensus, AirMetadata, BackendError, ConsensusCircuit, ConsensusProof,
-    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey,
-    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    verify_consensus, AirMetadata, BackendError, CircuitStarkConfig, CircuitStarkProvingKey,
+    CircuitStarkVerifyingKey, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
+    ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProverContext, ProvingKey, ToolchainAir,
+    VerifierContext, VerifyingKey, VotePower, COMMITMENT_LEN, VRF_PREOUTPUT_LENGTH,
+    VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::{Map, Value};
 use std::fs;
+use std::io::{Read, Write};
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-struct StarkProofCommitments {
-    trace: CircuitHash<BabyBear, BabyBear, 8>,
-    quotient_chunks: CircuitHash<BabyBear, BabyBear, 8>,
-    random: Option<CircuitHash<BabyBear, BabyBear, 8>>,
-}
-
-#[derive(Deserialize)]
-struct StarkProofFriCommitments {
-    commit_phase_commits: Vec<CircuitHash<BabyBear, BabyBear, 8>>,
-    query_proofs: serde::de::IgnoredAny,
-    final_poly: serde::de::IgnoredAny,
-    pow_witness: serde::de::IgnoredAny,
-}
-
-#[derive(Deserialize)]
-struct StarkProofInspection {
-    commitments: StarkProofCommitments,
-    opened_values: serde::de::IgnoredAny,
-    opening_proof: StarkProofFriCommitments,
-    degree_bits: usize,
-}
 
 fn hash_commitment_to_bytes(hash: &CircuitHash<BabyBear, BabyBear, 8>) -> [u8; 32] {
     let mut bytes = [0u8; 32];
@@ -47,6 +32,113 @@ fn hash_commitment_to_bytes(hash: &CircuitHash<BabyBear, BabyBear, 8>) -> [u8; 3
         bytes[offset..offset + 4].copy_from_slice(&element.as_canonical_u32().to_le_bytes());
     }
     bytes
+}
+
+fn decode_fixture_key_bytes(key: &FixtureKey) -> Vec<u8> {
+    let decoded = match key.encoding.as_str() {
+        "base64" => BASE64_STANDARD
+            .decode(key.value.as_bytes())
+            .expect("decode base64 fixture"),
+        other => panic!("unsupported fixture encoding: {other}"),
+    };
+    match key.compression.as_deref() {
+        Some("gzip") => {
+            let mut decoder = GzDecoder::new(decoded.as_slice());
+            let mut decompressed = Vec::new();
+            decoder
+                .read_to_end(&mut decompressed)
+                .expect("decompress fixture payload");
+            decompressed
+        }
+        Some("none") | None => decoded,
+        Some(other) => panic!("unsupported fixture compression: {other}"),
+    }
+}
+
+fn encode_fixture_key_bytes(bytes: &[u8], key: &FixtureKey) -> String {
+    let compressed = match key.compression.as_deref() {
+        Some("gzip") => {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            encoder.write_all(bytes).expect("compress fixture payload");
+            encoder.finish().expect("finalize gzip payload")
+        }
+        Some("none") | None => bytes.to_vec(),
+        Some(other) => panic!("unsupported fixture compression: {other}"),
+    };
+    match key.encoding.as_str() {
+        "base64" => BASE64_STANDARD.encode(&compressed),
+        other => panic!("unsupported fixture encoding: {other}"),
+    }
+}
+
+fn retarget_fixture_metadata(metadata: &AirMetadata, module: &str, name: &str) -> AirMetadata {
+    let mut value = serde_json::to_value(metadata).expect("serialize metadata to value");
+    let version = metadata
+        .air_field("version")
+        .and_then(Value::as_str)
+        .unwrap_or("0.1.0");
+    let identity_air = json!({
+        "module": module,
+        "name": name,
+        "version": version,
+    });
+    match value {
+        Value::Object(ref mut root) => {
+            root.insert("air".into(), identity_air);
+        }
+        _ => {
+            value = json!({ "air": identity_air });
+        }
+    }
+    serde_json::from_value(value).expect("rebuild metadata object")
+}
+
+fn assert_stark_proof_matches_metadata(proof: &Proof) -> p3_uni_stark::Proof<CircuitStarkConfig> {
+    let metadata = proof.metadata();
+    let stark_proof = proof.stark_proof();
+    let header_len = 3 * COMMITMENT_LEN;
+    assert!(
+        stark_proof.len() > header_len,
+        "proof payload must include serialized STARK proof"
+    );
+    let (trace_segment, rest) = stark_proof.split_at(COMMITMENT_LEN);
+    assert_eq!(trace_segment, metadata.trace_commitment());
+    let (quotient_segment, rest) = rest.split_at(COMMITMENT_LEN);
+    assert_eq!(quotient_segment, metadata.quotient_commitment());
+    let (fri_segment, serialized_proof) = rest.split_at(COMMITMENT_LEN);
+    assert_eq!(fri_segment, metadata.fri_commitment());
+
+    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
+        bincode::deserialize(serialized_proof).expect("deserialize backend proof");
+    assert_eq!(
+        hash_commitment_to_bytes(&decoded.commitments.trace),
+        metadata.trace_commitment(),
+        "trace commitment must match metadata"
+    );
+    assert_eq!(
+        hash_commitment_to_bytes(&decoded.commitments.quotient_chunks),
+        metadata.quotient_commitment(),
+        "quotient commitment must match metadata"
+    );
+    let fri_commitment = decoded
+        .opening_proof
+        .commit_phase_commits
+        .first()
+        .expect("fri commitment available");
+    assert_eq!(
+        hash_commitment_to_bytes(fri_commitment),
+        metadata.fri_commitment(),
+        "fri commitment must match metadata"
+    );
+
+    let reserialized = bincode::serialize(&decoded).expect("reserialize backend proof");
+    assert_eq!(
+        serialized_proof,
+        reserialized.as_slice(),
+        "serialized proof must remain stable"
+    );
+
+    decoded
 }
 
 fn sample_vote(label: &str, weight: u64) -> VotePower {
@@ -166,63 +258,82 @@ fn prove_sample_witness() -> (ConsensusProof, VerifierContext) {
 }
 
 #[test]
+fn consensus_prover_context_serializes_stark_proof() {
+    let (prover, _) = sample_contexts();
+    let circuit = ConsensusCircuit::new(sample_witness()).expect("consensus circuit");
+    let public_inputs = circuit
+        .public_inputs_value()
+        .expect("encode consensus public inputs");
+    let (_, proof) = prover
+        .prove(&public_inputs)
+        .expect("ProverContext proves consensus witness");
+    assert_stark_proof_matches_metadata(&proof);
+}
+
+#[test]
+fn consensus_prover_context_rejects_retargeted_air() {
+    let contents =
+        fs::read_to_string("config/plonky3/setup/consensus.json").expect("read consensus fixture");
+    let fixture: FixtureDoc = serde_json::from_str(&contents).expect("parse consensus fixture");
+
+    let verifying_raw = decode_fixture_key_bytes(&fixture.verifying_key);
+    let (metadata, verifying_key_raw): (AirMetadata, CircuitStarkVerifyingKey) =
+        bincode::deserialize(&verifying_raw).expect("decode verifying key payload");
+    let proving_raw = decode_fixture_key_bytes(&fixture.proving_key);
+    let (_, proving_key_raw): (AirMetadata, CircuitStarkProvingKey) =
+        bincode::deserialize(&proving_raw).expect("decode proving key payload");
+
+    let retargeted_metadata =
+        retarget_fixture_metadata(&metadata, "toolchain::identity", "IdentityAir");
+    let verifying_serialized =
+        bincode::serialize(&(retargeted_metadata.clone(), &verifying_key_raw))
+            .expect("serialize retargeted verifying key");
+    let proving_serialized = bincode::serialize(&(retargeted_metadata.clone(), &proving_key_raw))
+        .expect("serialize retargeted proving key");
+
+    let verifying_encoded = encode_fixture_key_bytes(&verifying_serialized, &fixture.verifying_key);
+    let proving_encoded = encode_fixture_key_bytes(&proving_serialized, &fixture.proving_key);
+
+    let verifying_key = VerifyingKey::from_encoded_parts(
+        &verifying_encoded,
+        &fixture.verifying_key.encoding,
+        fixture.verifying_key.compression.as_deref(),
+        &fixture.circuit,
+    )
+    .expect("retargeted verifying key decodes");
+    let verifying_metadata = verifying_key.air_metadata();
+
+    let proving_key = ProvingKey::from_encoded_parts(
+        &proving_encoded,
+        &fixture.proving_key.encoding,
+        fixture.proving_key.compression.as_deref(),
+        &fixture.circuit,
+        Some(verifying_metadata),
+    )
+    .expect("retargeted proving key decodes");
+
+    let prover = ProverContext::new(&fixture.circuit, verifying_key, proving_key, 64, false)
+        .expect("ProverContext builds with retargeted AIR");
+    let circuit = ConsensusCircuit::new(sample_witness()).expect("consensus circuit");
+    let public_inputs = circuit
+        .public_inputs_value()
+        .expect("encode consensus public inputs");
+
+    let err = prover
+        .prove(&public_inputs)
+        .expect_err("retargeted AIR must be unsupported");
+    match err {
+        BackendError::UnsupportedProvingAir { air, .. } => {
+            assert_eq!(air, ToolchainAir::Identity);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn consensus_proof_commitments_match_metadata() {
     let (proof, _) = prove_sample_witness();
-    let metadata = proof.proof.metadata();
-    let stark_proof = proof.proof.stark_proof();
-    let header_len = 3 * 32;
-    assert!(
-        stark_proof.len() > header_len,
-        "proof payload must include serialized STARK proof"
-    );
-    let (trace_segment, rest) = stark_proof.split_at(32);
-    assert_eq!(trace_segment, metadata.trace_commitment());
-    let (quotient_segment, rest) = rest.split_at(32);
-    assert_eq!(quotient_segment, metadata.quotient_commitment());
-    let (fri_segment, serialized_proof) = rest.split_at(32);
-    assert_eq!(fri_segment, metadata.fri_commitment());
-
-    let inspection: StarkProofInspection =
-        bincode::deserialize(serialized_proof).expect("decode backend proof for inspection");
-    assert_eq!(
-        hash_commitment_to_bytes(&inspection.commitments.trace),
-        metadata.trace_commitment(),
-        "trace commitment must match metadata"
-    );
-    assert_eq!(
-        hash_commitment_to_bytes(&inspection.commitments.quotient_chunks),
-        metadata.quotient_commitment(),
-        "quotient commitment must match metadata"
-    );
-    let fri_commitment = inspection
-        .opening_proof
-        .commit_phase_commits
-        .first()
-        .expect("fri commitment available");
-    assert_eq!(
-        hash_commitment_to_bytes(fri_commitment),
-        metadata.fri_commitment(),
-        "fri commitment must match metadata"
-    );
-
-    let decoded: p3_uni_stark::Proof<plonky3_backend::CircuitStarkConfig> =
-        bincode::deserialize(serialized_proof).expect("deserialize backend proof");
-    let reserialized = bincode::serialize(&decoded).expect("reserialize backend proof");
-    assert_eq!(
-        serialized_proof.len(),
-        reserialized.len(),
-        "reserialized proof length must match original"
-    );
-    assert_eq!(
-        stark_proof.len(),
-        header_len + reserialized.len(),
-        "full proof must equal header plus serialized payload"
-    );
-    assert_eq!(
-        serialized_proof,
-        reserialized.as_slice(),
-        "serialized proof must remain stable"
-    );
+    assert_stark_proof_matches_metadata(&proof.proof);
 }
 
 #[test]
