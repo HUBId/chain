@@ -49,6 +49,8 @@ impl Plonky3Proof {
 pub struct ProofPayload {
     #[serde(with = "serde_base64_vec")]
     pub stark_proof: Vec<u8>,
+    #[serde(default, with = "serde_base64_vec_vec")]
+    pub auxiliary_payloads: Vec<Vec<u8>>,
     pub metadata: ProofMetadata,
 }
 
@@ -61,6 +63,8 @@ impl<'de> Deserialize<'de> for ProofPayload {
         struct CurrentPayload {
             #[serde(with = "serde_base64_vec")]
             stark_proof: Vec<u8>,
+            #[serde(default, with = "serde_base64_vec_vec")]
+            auxiliary_payloads: Vec<Vec<u8>>,
             metadata: ProofMetadata,
         }
 
@@ -68,6 +72,7 @@ impl<'de> Deserialize<'de> for ProofPayload {
         if let Ok(current) = CurrentPayload::deserialize(value.clone()) {
             return Ok(Self {
                 stark_proof: current.stark_proof,
+                auxiliary_payloads: current.auxiliary_payloads,
                 metadata: current.metadata,
             });
         }
@@ -86,7 +91,8 @@ impl ProofPayload {
     pub fn from_backend(proof: backend::Proof) -> Self {
         let parts = proof.into_parts();
         Self {
-            stark_proof: parts.stark_proof,
+            stark_proof: parts.serialized_proof,
+            auxiliary_payloads: parts.auxiliary_payloads,
             metadata: parts.metadata.into(),
         }
     }
@@ -94,18 +100,15 @@ impl ProofPayload {
     pub fn to_backend(&self, circuit: &str) -> backend::BackendResult<backend::Proof> {
         backend::Proof::from_parts(
             circuit,
-            ProofParts::new(self.stark_proof.clone(), self.metadata.clone().into()),
+            ProofParts::new(
+                self.stark_proof.clone(),
+                self.metadata.clone().into(),
+                self.auxiliary_payloads.clone(),
+            ),
         )
     }
 
     pub fn validate(&self) -> ChainResult<()> {
-        let min_len = 3 * backend::COMMITMENT_LEN;
-        if self.stark_proof.len() < min_len {
-            return Err(ChainError::Crypto(format!(
-                "proof payload must be at least {min_len} bytes, found {}",
-                self.stark_proof.len()
-            )));
-        }
         self.metadata.validate()?;
         Ok(())
     }
@@ -216,5 +219,40 @@ mod serde_hex_32 {
         let mut array = [0u8; 32];
         array.copy_from_slice(&bytes);
         Ok(array)
+    }
+}
+
+mod serde_base64_vec_vec {
+    use super::*;
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S>(payloads: &Vec<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let encoded: Vec<String> = payloads
+            .iter()
+            .map(|payload| BASE64_STANDARD.encode(payload))
+            .collect();
+        encoded.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = Option::<Vec<String>>::deserialize(deserializer)?;
+        match encoded {
+            Some(values) => values
+                .into_iter()
+                .map(|value| {
+                    let trimmed = value.trim();
+                    BASE64_STANDARD
+                        .decode(trimmed.as_bytes())
+                        .map_err(serde::de::Error::custom)
+                })
+                .collect(),
+            None => Ok(Vec::new()),
+        }
     }
 }

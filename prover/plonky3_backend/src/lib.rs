@@ -1080,22 +1080,29 @@ impl ProofMetadata {
 
 #[derive(Clone, Debug)]
 pub struct Proof {
-    stark_proof: Vec<u8>,
+    serialized_proof: Vec<u8>,
     metadata: ProofMetadata,
+    auxiliary_payloads: Vec<Vec<u8>>,
 }
 
 /// Discrete proof sections used to assemble and disassemble [`Proof`] values.
 #[derive(Clone, Debug)]
 pub struct ProofParts {
-    pub stark_proof: Vec<u8>,
+    pub serialized_proof: Vec<u8>,
     pub metadata: ProofMetadata,
+    pub auxiliary_payloads: Vec<Vec<u8>>,
 }
 
 impl ProofParts {
-    pub fn new(stark_proof: Vec<u8>, metadata: ProofMetadata) -> Self {
+    pub fn new(
+        serialized_proof: Vec<u8>,
+        metadata: ProofMetadata,
+        auxiliary_payloads: Vec<Vec<u8>>,
+    ) -> Self {
         Self {
-            stark_proof,
+            serialized_proof,
             metadata,
+            auxiliary_payloads,
         }
     }
 }
@@ -1103,45 +1110,40 @@ impl ProofParts {
 impl Proof {
     pub fn from_parts(circuit: &str, parts: ProofParts) -> BackendResult<Self> {
         let ProofParts {
-            stark_proof,
+            serialized_proof,
             metadata,
+            auxiliary_payloads,
         } = parts;
-        let header_len = 3 * COMMITMENT_LEN;
-        if stark_proof.len() < header_len {
-            return Err(BackendError::InvalidProofLength {
-                circuit: circuit.to_string(),
-                expected: header_len,
-                actual: stark_proof.len(),
-            });
-        }
-        let (trace_segment, rest) = stark_proof.split_at(COMMITMENT_LEN);
-        if trace_segment != metadata.trace_commitment() {
-            return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
-        }
-        let (quotient_segment, rest) = rest.split_at(COMMITMENT_LEN);
-        if quotient_segment != metadata.quotient_commitment() {
-            return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
-        }
-        let (fri_segment, _) = rest.split_at(COMMITMENT_LEN);
-        if fri_segment != metadata.fri_commitment() {
-            return Err(BackendError::FriDigestMismatch(circuit.to_string()));
-        }
+        ensure_proof_metadata_alignment(circuit, &metadata, &serialized_proof)?;
         Ok(Self {
-            stark_proof,
+            serialized_proof,
             metadata,
+            auxiliary_payloads,
         })
     }
 
+    pub fn serialized_proof(&self) -> &[u8] {
+        &self.serialized_proof
+    }
+
     pub fn stark_proof(&self) -> &[u8] {
-        &self.stark_proof
+        self.serialized_proof()
     }
 
     pub fn metadata(&self) -> &ProofMetadata {
         &self.metadata
     }
 
+    pub fn auxiliary_payloads(&self) -> &[Vec<u8>] {
+        &self.auxiliary_payloads
+    }
+
     pub fn into_parts(self) -> ProofParts {
-        ProofParts::new(self.stark_proof, self.metadata)
+        ProofParts::new(
+            self.serialized_proof,
+            self.metadata,
+            self.auxiliary_payloads,
+        )
     }
 }
 
@@ -1157,6 +1159,52 @@ where
         bytes[offset..offset + 4].copy_from_slice(&element.as_canonical_u32().to_le_bytes());
     }
     bytes
+}
+
+fn ensure_proof_metadata_alignment(
+    circuit: &str,
+    metadata: &ProofMetadata,
+    serialized_proof: &[u8],
+) -> BackendResult<()> {
+    if serialized_proof.is_empty() {
+        return Err(BackendError::InvalidProofLength {
+            circuit: circuit.to_string(),
+            expected: 1,
+            actual: 0,
+        });
+    }
+
+    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
+        bincode::deserialize(serialized_proof).map_err(|err| {
+            BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: format!("failed to decode STARK proof: {err}"),
+            }
+        })?;
+
+    let trace_commitment = hash_to_bytes(&decoded.commitments.trace);
+    if &trace_commitment != metadata.trace_commitment() {
+        return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
+    }
+
+    let quotient_commitment = hash_to_bytes(&decoded.commitments.quotient_chunks);
+    if &quotient_commitment != metadata.quotient_commitment() {
+        return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
+    }
+
+    let fri_commitment = decoded
+        .opening_proof
+        .commit_phase_commits
+        .first()
+        .ok_or_else(|| BackendError::StarkProofConstruction {
+            circuit: circuit.to_string(),
+            message: "missing FRI commit-phase commitment".into(),
+        })?;
+    if &hash_to_bytes(fri_commitment) != metadata.fri_commitment() {
+        return Err(BackendError::FriDigestMismatch(circuit.to_string()));
+    }
+
+    Ok(())
 }
 
 fn metadata_digest_hex(metadata: &Arc<AirMetadata>) -> Option<String> {
@@ -1326,13 +1374,10 @@ impl ProverContext {
             self.use_gpu,
         );
 
-        let mut stark_proof = Vec::with_capacity(3 * COMMITMENT_LEN + serialized_proof.len());
-        stark_proof.extend_from_slice(metadata.trace_commitment());
-        stark_proof.extend_from_slice(metadata.quotient_commitment());
-        stark_proof.extend_from_slice(metadata.fri_commitment());
-        stark_proof.extend_from_slice(&serialized_proof);
-
-        Proof::from_parts(&self.name, ProofParts::new(stark_proof, metadata))
+        Proof::from_parts(
+            &self.name,
+            ProofParts::new(serialized_proof, metadata, Vec::new()),
+        )
     }
 
     pub fn verifier(&self) -> VerifierContext {

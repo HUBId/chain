@@ -15,8 +15,7 @@ use plonky3_backend::{
     verify_consensus, AirMetadata, BackendError, CircuitStarkConfig, CircuitStarkProvingKey,
     CircuitStarkVerifyingKey, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
     ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProverContext, ProvingKey, ToolchainAir,
-    VerifierContext, VerifyingKey, VotePower, COMMITMENT_LEN, VRF_PREOUTPUT_LENGTH,
-    VRF_PROOF_LENGTH,
+    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -95,21 +94,14 @@ fn retarget_fixture_metadata(metadata: &AirMetadata, module: &str, name: &str) -
 
 fn assert_stark_proof_matches_metadata(proof: &Proof) -> p3_uni_stark::Proof<CircuitStarkConfig> {
     let metadata = proof.metadata();
-    let stark_proof = proof.stark_proof();
-    let header_len = 3 * COMMITMENT_LEN;
+    let serialized = proof.serialized_proof();
     assert!(
-        stark_proof.len() > header_len,
+        !serialized.is_empty(),
         "proof payload must include serialized STARK proof"
     );
-    let (trace_segment, rest) = stark_proof.split_at(COMMITMENT_LEN);
-    assert_eq!(trace_segment, metadata.trace_commitment());
-    let (quotient_segment, rest) = rest.split_at(COMMITMENT_LEN);
-    assert_eq!(quotient_segment, metadata.quotient_commitment());
-    let (fri_segment, serialized_proof) = rest.split_at(COMMITMENT_LEN);
-    assert_eq!(fri_segment, metadata.fri_commitment());
 
     let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
-        bincode::deserialize(serialized_proof).expect("deserialize backend proof");
+        bincode::deserialize(serialized).expect("deserialize backend proof");
     assert_eq!(
         hash_commitment_to_bytes(&decoded.commitments.trace),
         metadata.trace_commitment(),
@@ -133,9 +125,14 @@ fn assert_stark_proof_matches_metadata(proof: &Proof) -> p3_uni_stark::Proof<Cir
 
     let reserialized = bincode::serialize(&decoded).expect("reserialize backend proof");
     assert_eq!(
-        serialized_proof,
+        serialized,
         reserialized.as_slice(),
         "serialized proof must remain stable"
+    );
+
+    assert!(
+        proof.auxiliary_payloads().is_empty(),
+        "auxiliary payloads must round-trip"
     );
 
     decoded
