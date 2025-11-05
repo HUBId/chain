@@ -103,7 +103,7 @@ pub struct ConsensusVrfPublicEntry {
 }
 
 #[derive(Clone, Debug)]
-struct SanitizedVrfEntry {
+pub(crate) struct SanitizedVrfEntry {
     randomness: [u8; 32],
     pre_output: [u8; VRF_PREOUTPUT_LENGTH],
     proof: [u8; VRF_PROOF_LENGTH],
@@ -451,6 +451,7 @@ pub struct ConsensusPublicInputs {
 pub struct ConsensusCircuit {
     witness: ConsensusWitness,
     bindings: ConsensusBindings,
+    cached_sanitized_vrf_entries: Vec<SanitizedVrfEntry>,
     vrf_public_entries: Vec<ConsensusVrfPublicEntry>,
 }
 
@@ -466,6 +467,7 @@ impl ConsensusCircuit {
         Ok(Self {
             witness,
             bindings,
+            cached_sanitized_vrf_entries: sanitized_vrf_entries,
             vrf_public_entries,
         })
     }
@@ -513,6 +515,10 @@ impl ConsensusCircuit {
 
     pub fn vrf_entries(&self) -> &[ConsensusVrfPublicEntry] {
         &self.vrf_public_entries
+    }
+
+    pub(crate) fn sanitized_vrf_entries(&self) -> &[SanitizedVrfEntry] {
+        &self.cached_sanitized_vrf_entries
     }
 
     pub fn public_inputs_value(&self) -> BackendResult<Value> {
