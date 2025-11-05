@@ -1,12 +1,17 @@
+use p3_baby_bear::BabyBear;
+use p3_field::QuotientMap;
+use p3_matrix::Matrix;
+use plonky3_backend::circuits::consensus::load_consensus_trace_layout;
 use plonky3_backend::{
-    encode_consensus_public_inputs, prove_consensus, validate_consensus_public_inputs,
-    verify_consensus, AirMetadata, BackendError, ConsensusCircuit, ConsensusProof,
-    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey,
-    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    decode_consensus_instance, encode_consensus_public_inputs, prove_consensus,
+    require_circuit_air_metadata, validate_consensus_public_inputs, verify_consensus, AirMetadata,
+    BackendError, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry, ConsensusVrfPoseidonInput,
+    ConsensusWitness, ProverContext, ProvingKey, VerifierContext, VerifyingKey, VotePower,
+    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::fs;
 use std::sync::Arc;
 
@@ -273,4 +278,247 @@ fn consensus_prover_context_rejects_metadata_mismatch() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn consensus_instance_decoding_matches_metadata_layout() {
+    use plonky3_backend::circuits::consensus::ConsensusTraceLayout;
+
+    fn parse_dimension(
+        air: &Map<String, Value>,
+        trace_obj: Option<&Map<String, Value>>,
+        top_level_keys: &[&str],
+        nested_keys: &[&str],
+        label: &str,
+    ) -> usize {
+        for key in top_level_keys {
+            if let Some(value) = air.get(*key) {
+                if let Some(dimension) = value.as_u64() {
+                    return dimension as usize;
+                }
+            }
+        }
+        if let Some(trace) = trace_obj {
+            for key in nested_keys {
+                if let Some(value) = trace.get(*key) {
+                    if let Some(dimension) = value.as_u64() {
+                        return dimension as usize;
+                    }
+                }
+            }
+        }
+        panic!("missing {label} in consensus AIR metadata");
+    }
+
+    fn bytes_to_babybear(bytes: &[u8]) -> BabyBear {
+        let mut acc = BabyBear::ZERO;
+        let base = <BabyBear as QuotientMap<u16>>::from_int(256);
+        for &byte in bytes {
+            let digit = <BabyBear as QuotientMap<u8>>::from_int(byte);
+            acc = acc * base + digit;
+        }
+        acc
+    }
+
+    fn hex_to_babybear(value: &str) -> BabyBear {
+        let bytes = hex::decode(value).expect("decode hex digest");
+        bytes_to_babybear(&bytes)
+    }
+
+    fn trace_index(layout: &ConsensusTraceLayout, row: usize, column: usize) -> usize {
+        row * layout.width + column
+    }
+
+    fn assert_zero_padding(
+        layout: &ConsensusTraceLayout,
+        trace: &[BabyBear],
+        segment: &plonky3_backend::circuits::consensus::ConsensusTraceSegment,
+        populated_rows: usize,
+    ) {
+        if populated_rows >= segment.height() {
+            return;
+        }
+        for row in segment.row_range.start + populated_rows..segment.row_range.end {
+            let start = trace_index(layout, row, segment.column_range.start);
+            let end = trace_index(layout, row, segment.column_range.end);
+            assert!(
+                trace[start..end]
+                    .iter()
+                    .all(|value| *value == BabyBear::ZERO),
+                "segment '{}' row {} must remain zero padded",
+                segment.label,
+                row
+            );
+        }
+    }
+
+    let metadata = require_circuit_air_metadata("consensus").expect("load consensus metadata");
+    let air = metadata.air().expect("consensus AIR descriptor");
+    let trace_obj = air.get("trace").and_then(Value::as_object);
+    let declared_height = parse_dimension(
+        air,
+        trace_obj,
+        &["trace_height"],
+        &["height"],
+        "trace height",
+    );
+    let declared_width =
+        parse_dimension(air, trace_obj, &["trace_width"], &["width"], "trace width");
+
+    let layout = load_consensus_trace_layout().expect("consensus trace layout");
+    assert_eq!(
+        layout.height, declared_height,
+        "layout height must match metadata"
+    );
+    assert_eq!(
+        layout.width, declared_width,
+        "layout width must match metadata"
+    );
+
+    let witness = sample_witness();
+    let baseline = ConsensusCircuit::new(witness).expect("construct consensus circuit");
+    let public_inputs = baseline
+        .public_inputs_value()
+        .expect("encode consensus public inputs");
+
+    let (decoded, trace, flattened_inputs) =
+        decode_consensus_instance::<plonky3_backend::CircuitStarkConfig>(&public_inputs)
+            .expect("decode consensus instance");
+
+    assert_eq!(
+        decoded.witness(),
+        baseline.witness(),
+        "witness must round-trip"
+    );
+    assert_eq!(
+        decoded.bindings(),
+        baseline.bindings(),
+        "bindings must round-trip"
+    );
+    assert_eq!(
+        decoded.vrf_entries(),
+        baseline.vrf_entries(),
+        "VRF entries must round-trip"
+    );
+
+    let (expected_inputs, input_layout) = baseline
+        .flatten_public_inputs_for_config::<plonky3_backend::CircuitStarkConfig>()
+        .expect("flatten baseline inputs");
+    assert_eq!(
+        flattened_inputs, expected_inputs,
+        "public inputs must match baseline"
+    );
+    assert_eq!(input_layout.total_values, flattened_inputs.len());
+
+    assert_eq!(
+        trace.height(),
+        layout.height,
+        "trace height must match metadata"
+    );
+    assert_eq!(
+        trace.width(),
+        layout.width,
+        "trace width must match metadata"
+    );
+    assert_eq!(trace.values.len(), layout.height * layout.width);
+
+    let mut previous_end = 0usize;
+    for segment in &layout.segments {
+        assert!(
+            segment.column_range.start >= previous_end,
+            "segment '{}' must not overlap previous columns",
+            segment.label
+        );
+        assert!(
+            segment.column_range.end <= layout.width,
+            "segment '{}' exceeds matrix width",
+            segment.label
+        );
+        assert!(
+            segment.row_range.end <= layout.height,
+            "segment '{}' exceeds matrix height",
+            segment.label
+        );
+        previous_end = segment.column_range.end;
+    }
+    assert!(previous_end <= layout.width);
+
+    let vrf_outputs = layout
+        .segment("vrf_outputs")
+        .expect("metadata defines vrf_outputs segment");
+    assert!(
+        !decoded.vrf_entries().is_empty(),
+        "sample witness must include VRF entries"
+    );
+    let randomness_index = trace_index(
+        &layout,
+        vrf_outputs.row_range.start,
+        vrf_outputs.column_range.start,
+    );
+    let expected_randomness = bytes_to_babybear(&decoded.vrf_entries()[0].randomness);
+    assert_eq!(
+        trace.values[randomness_index], expected_randomness,
+        "first VRF randomness cell must match sanitized entry",
+    );
+
+    let pre_votes = layout
+        .segment("pre_votes")
+        .expect("metadata defines pre_votes segment");
+    assert!(
+        !baseline.witness().pre_votes.is_empty(),
+        "sample witness must include pre-votes"
+    );
+    let cumulative_index = trace_index(
+        &layout,
+        pre_votes.row_range.start,
+        pre_votes.column_range.start + 2,
+    );
+    let expected_cumulative =
+        <BabyBear as QuotientMap<u128>>::from_int(baseline.witness().pre_votes[0].weight as u128);
+    assert_eq!(
+        trace.values[cumulative_index], expected_cumulative,
+        "pre-vote cumulative sum must match STWO accumulation",
+    );
+
+    let witness_commitments = layout
+        .segment("witness_commitments")
+        .expect("metadata defines witness_commitments segment");
+    assert!(
+        !baseline.witness().witness_commitments.is_empty(),
+        "sample witness must include witness commitments"
+    );
+    let binding_row =
+        witness_commitments.row_range.start + baseline.witness().witness_commitments.len() - 1;
+    let binding_index = trace_index(
+        &layout,
+        binding_row,
+        witness_commitments.column_range.end - 1,
+    );
+    let expected_binding = hex_to_babybear(&decoded.bindings().witness_commitments);
+    assert_eq!(
+        trace.values[binding_index], expected_binding,
+        "binding segment must expose cached digest",
+    );
+
+    let mut saw_padding = false;
+    for segment in &layout.segments {
+        let populated_rows = match segment.label.as_str() {
+            "pre_votes" => baseline.witness().pre_votes.len(),
+            "pre_commits" => baseline.witness().pre_commits.len(),
+            "commits" => baseline.witness().commit_votes.len(),
+            "vrf_outputs" | "vrf_proofs" | "vrf_transcripts" => decoded.vrf_entries().len(),
+            "witness_commitments" => baseline.witness().witness_commitments.len(),
+            "reputation_roots" => baseline.witness().reputation_roots.len(),
+            "quorum_bitmap_binding" | "quorum_signature_binding" | "summary" => 1,
+            _ => continue,
+        };
+        if segment.height() > populated_rows {
+            saw_padding = true;
+            assert_zero_padding(&layout, &trace.values, segment, populated_rows);
+        }
+    }
+    assert!(
+        saw_padding,
+        "expected at least one zero-padded segment in trace"
+    );
 }
