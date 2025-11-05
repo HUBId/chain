@@ -1,7 +1,11 @@
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::ops::Range;
 
 use blake3::Hasher;
+use p3_baby_bear::BabyBear;
+use p3_field::QuotientMap;
+use p3_uni_stark::config::{StarkGenericConfig, Val};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -455,6 +459,50 @@ pub struct ConsensusCircuit {
     vrf_public_entries: Vec<ConsensusVrfPublicEntry>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusPublicInputLayout {
+    pub block_hash: Range<usize>,
+    pub round: usize,
+    pub leader_proposal: Range<usize>,
+    pub epoch: usize,
+    pub slot: usize,
+    pub quorum_threshold: usize,
+    pub quorum_bitmap_root: Range<usize>,
+    pub quorum_signature_root: Range<usize>,
+    pub vrf_entry_count: usize,
+    pub vrf_entries: Vec<ConsensusVrfEntryLayout>,
+    pub witness_commitment_count: usize,
+    pub witness_commitments: Vec<Range<usize>>,
+    pub reputation_root_count: usize,
+    pub reputation_roots: Vec<Range<usize>>,
+    pub bindings: ConsensusBindingLayout,
+    pub block_height: Option<usize>,
+    pub total_values: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusVrfEntryLayout {
+    pub randomness: Range<usize>,
+    pub derived_randomness: Range<usize>,
+    pub pre_output: Range<usize>,
+    pub proof: Range<usize>,
+    pub public_key: Range<usize>,
+    pub poseidon_digest: Range<usize>,
+    pub poseidon_last_block_header: Range<usize>,
+    pub poseidon_epoch: usize,
+    pub poseidon_tier_seed: Range<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsensusBindingLayout {
+    pub vrf_outputs: Range<usize>,
+    pub vrf_proofs: Range<usize>,
+    pub witness_commitments: Range<usize>,
+    pub reputation_roots: Range<usize>,
+    pub quorum_bitmap: Range<usize>,
+    pub quorum_signature: Range<usize>,
+}
+
 impl ConsensusCircuit {
     pub fn new(witness: ConsensusWitness) -> BackendResult<Self> {
         witness.validate()?;
@@ -536,6 +584,159 @@ impl ConsensusCircuit {
     pub fn into_public_inputs(self) -> BackendResult<Value> {
         self.public_inputs_value()
     }
+
+    pub fn flatten_public_inputs_babybear(
+        &self,
+    ) -> BackendResult<(Vec<BabyBear>, ConsensusPublicInputLayout)> {
+        self.flatten_public_inputs_field()
+    }
+
+    pub fn flatten_public_inputs_for_config<SC: StarkGenericConfig>(
+        &self,
+    ) -> BackendResult<(Vec<Val<SC>>, ConsensusPublicInputLayout)> {
+        self.flatten_public_inputs_field()
+    }
+
+    fn flatten_public_inputs_field<F>(&self) -> BackendResult<(Vec<F>, ConsensusPublicInputLayout)>
+    where
+        F: Copy + QuotientMap<u8> + QuotientMap<u64>,
+    {
+        let mut values = Vec::new();
+
+        let mut push_bytes = |bytes: &[u8]| {
+            let start = values.len();
+            for &byte in bytes {
+                values.push(<F as QuotientMap<u8>>::from_int(byte));
+            }
+            start..values.len()
+        };
+
+        let mut push_u64 = |value: u64| {
+            let index = values.len();
+            values.push(<F as QuotientMap<u64>>::from_int(value));
+            index
+        };
+
+        let block_hash_bytes = self
+            .cached_sanitized_vrf_entries
+            .first()
+            .map(|entry| entry.poseidon_last_block_header.to_vec())
+            .ok_or_else(|| invalid_witness("consensus witness missing VRF entries"))?;
+        let block_hash = push_bytes(&block_hash_bytes);
+
+        let round = push_u64(self.witness.round);
+
+        let leader_proposal_bytes =
+            ConsensusWitness::ensure_digest("leader proposal", &self.witness.leader_proposal)?;
+        let leader_proposal = push_bytes(&leader_proposal_bytes);
+
+        let epoch = push_u64(self.witness.epoch);
+        let slot = push_u64(self.witness.slot);
+        let quorum_threshold = push_u64(self.witness.quorum_threshold);
+
+        let quorum_bitmap_root_bytes = ConsensusWitness::ensure_digest(
+            "quorum bitmap root",
+            &self.witness.quorum_bitmap_root,
+        )?;
+        let quorum_bitmap_root = push_bytes(&quorum_bitmap_root_bytes);
+        let quorum_signature_root_bytes = ConsensusWitness::ensure_digest(
+            "quorum signature root",
+            &self.witness.quorum_signature_root,
+        )?;
+        let quorum_signature_root = push_bytes(&quorum_signature_root_bytes);
+
+        let vrf_entry_count = push_u64(self.vrf_public_entries.len() as u64);
+        let mut vrf_layouts = Vec::with_capacity(self.vrf_public_entries.len());
+        for entry in &self.vrf_public_entries {
+            let randomness = push_bytes(&entry.randomness);
+            let derived_randomness = push_bytes(&entry.derived_randomness);
+            let pre_output = push_bytes(&entry.pre_output);
+            let proof = push_bytes(&entry.proof);
+            let public_key = push_bytes(&entry.public_key);
+            let poseidon_digest = push_bytes(&entry.poseidon_digest);
+            let poseidon_last_block_header = push_bytes(&entry.poseidon_last_block_header);
+            let poseidon_epoch = push_u64(entry.poseidon_epoch);
+            let poseidon_tier_seed = push_bytes(&entry.poseidon_tier_seed);
+
+            vrf_layouts.push(ConsensusVrfEntryLayout {
+                randomness,
+                derived_randomness,
+                pre_output,
+                proof,
+                public_key,
+                poseidon_digest,
+                poseidon_last_block_header,
+                poseidon_epoch,
+                poseidon_tier_seed,
+            });
+        }
+
+        let witness_commitment_count = push_u64(self.witness.witness_commitments.len() as u64);
+        let mut witness_commitments = Vec::with_capacity(self.witness.witness_commitments.len());
+        for commitment in &self.witness.witness_commitments {
+            let digest = ConsensusWitness::ensure_digest("witness commitment", commitment)?;
+            witness_commitments.push(push_bytes(&digest));
+        }
+
+        let reputation_root_count = push_u64(self.witness.reputation_roots.len() as u64);
+        let mut reputation_roots = Vec::with_capacity(self.witness.reputation_roots.len());
+        for root in &self.witness.reputation_roots {
+            let digest = ConsensusWitness::ensure_digest("reputation root", root)?;
+            reputation_roots.push(push_bytes(&digest));
+        }
+
+        let vrf_output_binding =
+            ConsensusWitness::ensure_digest("vrf output binding", &self.bindings.vrf_outputs)?;
+        let vrf_proof_binding =
+            ConsensusWitness::ensure_digest("vrf proof binding", &self.bindings.vrf_proofs)?;
+        let witness_commitment_binding = ConsensusWitness::ensure_digest(
+            "witness commitment binding",
+            &self.bindings.witness_commitments,
+        )?;
+        let reputation_root_binding = ConsensusWitness::ensure_digest(
+            "reputation root binding",
+            &self.bindings.reputation_roots,
+        )?;
+        let quorum_bitmap_binding =
+            ConsensusWitness::ensure_digest("quorum bitmap binding", &self.bindings.quorum_bitmap)?;
+        let quorum_signature_binding = ConsensusWitness::ensure_digest(
+            "quorum signature binding",
+            &self.bindings.quorum_signature,
+        )?;
+
+        let bindings = ConsensusBindingLayout {
+            vrf_outputs: push_bytes(&vrf_output_binding),
+            vrf_proofs: push_bytes(&vrf_proof_binding),
+            witness_commitments: push_bytes(&witness_commitment_binding),
+            reputation_roots: push_bytes(&reputation_root_binding),
+            quorum_bitmap: push_bytes(&quorum_bitmap_binding),
+            quorum_signature: push_bytes(&quorum_signature_binding),
+        };
+
+        let block_height = Some(push_u64(self.witness.round));
+
+        let layout = ConsensusPublicInputLayout {
+            block_hash,
+            round,
+            leader_proposal,
+            epoch,
+            slot,
+            quorum_threshold,
+            quorum_bitmap_root,
+            quorum_signature_root,
+            vrf_entry_count,
+            vrf_entries: vrf_layouts,
+            witness_commitment_count,
+            witness_commitments,
+            reputation_root_count,
+            reputation_roots,
+            bindings,
+            block_height,
+            total_values: values.len(),
+        };
+
+        Ok((values, layout))
+    }
 }
 
 pub fn encode_consensus_public_inputs(witness: ConsensusWitness) -> BackendResult<Value> {
@@ -544,4 +745,155 @@ pub fn encode_consensus_public_inputs(witness: ConsensusWitness) -> BackendResul
 
 pub fn validate_consensus_public_inputs(value: &Value) -> BackendResult<()> {
     ConsensusCircuit::from_public_inputs_value(value).map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CircuitStarkConfig;
+    use p3_field::{PrimeField32, PrimeField64};
+
+    fn sample_vote(label: &str, weight: u64) -> VotePower {
+        VotePower {
+            voter: label.to_string(),
+            weight,
+        }
+    }
+
+    fn sample_witness() -> ConsensusWitness {
+        let block_hash = "11".repeat(32);
+        ConsensusWitness {
+            block_hash: block_hash.clone(),
+            round: 7,
+            epoch: 3,
+            slot: 9,
+            leader_proposal: "22".repeat(32),
+            quorum_threshold: 2,
+            pre_votes: vec![sample_vote("validator-a", 2)],
+            pre_commits: vec![sample_vote("validator-a", 2)],
+            commit_votes: vec![sample_vote("validator-a", 2)],
+            quorum_bitmap_root: "33".repeat(32),
+            quorum_signature_root: "44".repeat(32),
+            vrf_entries: vec![ConsensusVrfEntry {
+                randomness: "55".repeat(32),
+                pre_output: "66".repeat(VRF_PREOUTPUT_LENGTH),
+                proof: "77".repeat(VRF_PROOF_LENGTH),
+                public_key: "88".repeat(32),
+                poseidon: ConsensusVrfPoseidonInput {
+                    digest: "99".repeat(32),
+                    last_block_header: block_hash,
+                    epoch: "3".to_string(),
+                    tier_seed: "aa".repeat(32),
+                },
+            }],
+            witness_commitments: vec!["bb".repeat(32)],
+            reputation_roots: vec!["cc".repeat(32)],
+        }
+    }
+
+    #[test]
+    fn flatten_public_inputs_babybear_layout_matches_witness() {
+        let circuit = ConsensusCircuit::new(sample_witness()).expect("consensus circuit");
+        let (values, layout) = circuit
+            .flatten_public_inputs_babybear()
+            .expect("flattened values");
+
+        assert_eq!(layout.total_values, values.len());
+        assert_eq!(layout.vrf_entries.len(), circuit.vrf_entries().len());
+        assert_eq!(
+            layout.witness_commitments.len(),
+            circuit.witness().witness_commitments.len()
+        );
+        assert_eq!(
+            layout.reputation_roots.len(),
+            circuit.witness().reputation_roots.len()
+        );
+
+        let expected_block_hash = circuit.sanitized_vrf_entries()[0].poseidon_last_block_header;
+        let actual_block_hash: Vec<u8> = layout
+            .block_hash
+            .clone()
+            .map(|index| values[index].as_canonical_u32() as u8)
+            .collect();
+        assert_eq!(actual_block_hash, expected_block_hash.to_vec());
+
+        assert_eq!(
+            values[layout.round].as_canonical_u64(),
+            circuit.witness().round
+        );
+        assert_eq!(
+            values[layout.epoch].as_canonical_u64(),
+            circuit.witness().epoch
+        );
+        assert_eq!(
+            values[layout.slot].as_canonical_u64(),
+            circuit.witness().slot
+        );
+
+        let vrf_count = values[layout.vrf_entry_count].as_canonical_u64() as usize;
+        assert_eq!(vrf_count, circuit.vrf_entries().len());
+        let vrf_layout = &layout.vrf_entries[0];
+        let vrf_entry = &circuit.vrf_entries()[0];
+        let randomness: Vec<u8> = vrf_layout
+            .randomness
+            .clone()
+            .map(|index| values[index].as_canonical_u32() as u8)
+            .collect();
+        assert_eq!(randomness, vrf_entry.randomness.to_vec());
+        let proof: Vec<u8> = vrf_layout
+            .proof
+            .clone()
+            .map(|index| values[index].as_canonical_u32() as u8)
+            .collect();
+        assert_eq!(proof.len(), VRF_PROOF_LENGTH);
+        assert_eq!(proof, vrf_entry.proof);
+        assert_eq!(
+            values[vrf_layout.poseidon_epoch].as_canonical_u64(),
+            vrf_entry.poseidon_epoch,
+        );
+
+        let witness_commitment_count =
+            values[layout.witness_commitment_count].as_canonical_u64() as usize;
+        assert_eq!(
+            witness_commitment_count,
+            circuit.witness().witness_commitments.len(),
+        );
+        let reputation_root_count =
+            values[layout.reputation_root_count].as_canonical_u64() as usize;
+        assert_eq!(
+            reputation_root_count,
+            circuit.witness().reputation_roots.len(),
+        );
+
+        let binding_randomness: Vec<u8> = layout
+            .bindings
+            .vrf_outputs
+            .clone()
+            .map(|index| values[index].as_canonical_u32() as u8)
+            .collect();
+        assert_eq!(binding_randomness.len(), 32);
+
+        let block_height_index = layout.block_height.expect("block height index");
+        assert_eq!(
+            values[block_height_index].as_canonical_u64(),
+            circuit.witness().round,
+        );
+    }
+
+    #[test]
+    fn flatten_public_inputs_generic_matches_babybear() {
+        let circuit = ConsensusCircuit::new(sample_witness()).expect("consensus circuit");
+        let (babybear_values, babybear_layout) = circuit
+            .flatten_public_inputs_babybear()
+            .expect("babybear values");
+        let (generic_values, generic_layout) = circuit
+            .flatten_public_inputs_for_config::<CircuitStarkConfig>()
+            .expect("generic values");
+
+        assert_eq!(babybear_layout, generic_layout);
+        assert_eq!(babybear_values.len(), generic_values.len());
+        for (expected, actual) in babybear_values.iter().zip(generic_values.iter()) {
+            assert_eq!(expected.as_canonical_u64(), actual.as_canonical_u64());
+        }
+    }
 }
