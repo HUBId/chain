@@ -2,6 +2,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::Hasher;
 use flate2::read::GzDecoder;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use std::io::Read;
 use thiserror::Error;
@@ -21,6 +22,18 @@ pub use circuits::consensus::{
     ConsensusVrfPublicEntry, ConsensusWitness, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 
+/// Number of bytes that form the deterministic proof header.
+///
+/// The header currently stores three 32-byte digests in the following order:
+///
+/// * verifying key hash
+/// * canonical public inputs hash
+/// * FRI transcript digest
+///
+/// The serialized proof blob may contain additional sections after the header
+/// to accommodate future commitment data without breaking backwards
+/// compatibility. Consumers must therefore treat the constant as a **minimum**
+/// length guarantee instead of an exact size check.
 pub const PROOF_BLOB_LEN: usize = 96;
 
 pub use public_inputs::{compute_commitment_and_inputs, encode_canonical_json};
@@ -156,11 +169,32 @@ impl ProvingKey {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HashFormat {
+    Blake3,
+}
+
+impl Default for HashFormat {
+    fn default() -> Self {
+        Self::Blake3
+    }
+}
+
+impl HashFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Blake3 => "blake3",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProofMetadata {
     verifying_key_hash: [u8; 32],
     public_inputs_hash: [u8; 32],
     fri_digest: [u8; 32],
+    hash_format: HashFormat,
     security_bits: u32,
     use_gpu: bool,
 }
@@ -173,10 +207,29 @@ impl ProofMetadata {
         security_bits: u32,
         use_gpu: bool,
     ) -> Self {
+        Self::with_hash_format(
+            verifying_key_hash,
+            public_inputs_hash,
+            fri_digest,
+            HashFormat::default(),
+            security_bits,
+            use_gpu,
+        )
+    }
+
+    pub fn with_hash_format(
+        verifying_key_hash: [u8; 32],
+        public_inputs_hash: [u8; 32],
+        fri_digest: [u8; 32],
+        hash_format: HashFormat,
+        security_bits: u32,
+        use_gpu: bool,
+    ) -> Self {
         Self {
             verifying_key_hash,
             public_inputs_hash,
             fri_digest,
+            hash_format,
             security_bits,
             use_gpu,
         }
@@ -192,6 +245,10 @@ impl ProofMetadata {
 
     pub fn fri_digest(&self) -> &[u8; 32] {
         &self.fri_digest
+    }
+
+    pub fn hash_format(&self) -> HashFormat {
+        self.hash_format
     }
 
     pub fn security_bits(&self) -> u32 {
@@ -244,6 +301,12 @@ impl ProofMetadata {
             "use_gpu".into(),
             boolean_schema("Indicates whether the proof was constructed with GPU acceleration."),
         );
+        properties.insert(
+            "hash_format".into(),
+            hash_format_schema(
+                "Digest algorithm used for all 32-byte metadata hashes (header order preserved).",
+            ),
+        );
 
         schema.insert("properties".into(), Value::Object(properties));
         schema.insert(
@@ -255,6 +318,7 @@ impl ProofMetadata {
                     "fri_digest",
                     "security_bits",
                     "use_gpu",
+                    "hash_format",
                 ]
                 .iter()
                 .map(|key| Value::String(key.to_string()))
@@ -275,22 +339,55 @@ pub struct Proof {
     metadata: ProofMetadata,
 }
 
-impl Proof {
-    pub fn from_parts(
-        circuit: &str,
+/// Discrete proof sections used to assemble and disassemble [`Proof`] values.
+///
+/// The `proof_blob` starts with the deterministic 96-byte header that stores
+/// the verifying key hash, canonical public inputs hash and FRI transcript
+/// digest. Additional sections may follow the header to capture future
+/// commitment payloads. The other vectors (`fri_transcript`, `openings`) may
+/// have arbitrary lengths, mirroring the dynamic payloads produced by the
+/// backend.
+#[derive(Clone, Debug)]
+pub struct ProofParts {
+    pub proof_blob: Vec<u8>,
+    pub fri_transcript: Vec<u8>,
+    pub openings: Vec<u8>,
+    pub metadata: ProofMetadata,
+}
+
+impl ProofParts {
+    pub fn new(
         proof_blob: Vec<u8>,
         fri_transcript: Vec<u8>,
         openings: Vec<u8>,
         metadata: ProofMetadata,
-    ) -> BackendResult<Self> {
-        if proof_blob.len() != PROOF_BLOB_LEN {
+    ) -> Self {
+        Self {
+            proof_blob,
+            fri_transcript,
+            openings,
+            metadata,
+        }
+    }
+}
+
+impl Proof {
+    pub fn from_parts(circuit: &str, parts: ProofParts) -> BackendResult<Self> {
+        let ProofParts {
+            proof_blob,
+            fri_transcript,
+            openings,
+            metadata,
+        } = parts;
+        if proof_blob.len() < PROOF_BLOB_LEN {
             return Err(BackendError::InvalidProofLength {
                 circuit: circuit.to_string(),
                 expected: PROOF_BLOB_LEN,
                 actual: proof_blob.len(),
             });
         }
-        let (key_segment, rest) = proof_blob.split_at(32);
+        let (header, _) = proof_blob.split_at(PROOF_BLOB_LEN);
+        let (key_segment, rest) = header.split_at(32);
         if key_segment != metadata.verifying_key_hash() {
             return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
         }
@@ -325,8 +422,8 @@ impl Proof {
         &self.metadata
     }
 
-    pub fn into_parts(self) -> (Vec<u8>, Vec<u8>, Vec<u8>, ProofMetadata) {
-        (
+    pub fn into_parts(self) -> ProofParts {
+        ProofParts::new(
             self.proof_blob,
             self.fri_transcript,
             self.openings,
@@ -423,7 +520,10 @@ impl ProverContext {
         let openings_digest = openings_hasher.finalize();
         let openings = openings_digest.as_bytes().to_vec();
 
-        Proof::from_parts(&self.name, proof_blob, fri_transcript, openings, metadata)
+        Proof::from_parts(
+            &self.name,
+            ProofParts::new(proof_blob, fri_transcript, openings, metadata),
+        )
     }
 
     pub fn verifier(&self) -> VerifierContext {
@@ -500,7 +600,7 @@ impl VerifierContext {
         if proof.metadata().verifying_key_hash() != &self.verifying_key.hash {
             return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
         }
-        if proof.proof_blob().len() != PROOF_BLOB_LEN {
+        if proof.proof_blob().len() < PROOF_BLOB_LEN {
             return Err(BackendError::InvalidProofLength {
                 circuit: self.name.clone(),
                 expected: PROOF_BLOB_LEN,
@@ -702,6 +802,26 @@ fn boolean_schema(description: &str) -> Value {
     object.insert("type".into(), Value::String("boolean".into()));
     object.insert("description".into(), Value::String(description.into()));
     Value::Object(object)
+}
+
+fn enum_schema(description: &str, variants: &[&str]) -> Value {
+    let mut object = Map::new();
+    object.insert("type".into(), Value::String("string".into()));
+    object.insert(
+        "enum".into(),
+        Value::Array(
+            variants
+                .iter()
+                .map(|value| Value::String((*value).into()))
+                .collect(),
+        ),
+    );
+    object.insert("description".into(), Value::String(description.into()));
+    Value::Object(object)
+}
+
+fn hash_format_schema(description: &str) -> Value {
+    enum_schema(description, &[HashFormat::Blake3.as_str()])
 }
 
 fn invalid_key_error(circuit: &str, kind: &str, message: impl Into<String>) -> BackendError {

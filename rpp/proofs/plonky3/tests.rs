@@ -26,7 +26,7 @@ use crate::types::{
     pruning_from_previous, BlockHeader, BlockProofBundle, ChainProof, PruningProof,
     SignedTransaction, Transaction,
 };
-use plonky3_backend::{BackendError, ProverContext as BackendProverContext};
+use plonky3_backend::{BackendError, HashFormat, ProverContext as BackendProverContext};
 use rpp_crypto_vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 use rpp_pruning::Envelope;
 
@@ -252,7 +252,7 @@ fn transaction_proof_roundtrip() {
     };
     let verifying_key = crypto::verifying_key("transaction").unwrap();
     let verifying_hash = blake3_hash(&verifying_key);
-    assert_eq!(parsed.payload.proof_blob.len(), crypto::PROOF_BLOB_LEN);
+    assert!(parsed.payload.proof_blob.len() >= crypto::PROOF_BLOB_LEN);
     assert_eq!(&parsed.payload.proof_blob[..32], verifying_hash.as_bytes());
     assert_eq!(
         parsed.payload.metadata.verifying_key_hash,
@@ -268,6 +268,7 @@ fn transaction_proof_roundtrip() {
     let params = Plonky3Parameters::default();
     assert_eq!(parsed.payload.metadata.security_bits, params.security_bits);
     assert_eq!(parsed.payload.metadata.use_gpu, params.use_gpu_acceleration);
+    parsed.payload.validate().unwrap();
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.commitment, computed);
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(
@@ -279,6 +280,34 @@ fn transaction_proof_roundtrip() {
     )
     .unwrap();
     assert_eq!(decoded.transaction, tx);
+}
+
+#[test]
+fn transaction_payload_serialization_roundtrip() {
+    let prover = test_prover();
+    let tx = sample_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let parsed = match &proof {
+        ChainProof::Plonky3(value) => Plonky3Proof::from_value(value).unwrap(),
+        ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
+    };
+
+    let serialized = serde_json::to_string_pretty(&parsed.payload).unwrap();
+    let recovered: crate::plonky3::proof::ProofPayload = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(recovered.proof_blob, parsed.payload.proof_blob);
+    assert_eq!(recovered.fri_transcript, parsed.payload.fri_transcript);
+    assert_eq!(recovered.openings, parsed.payload.openings);
+    assert_eq!(recovered.metadata.hash_format, HashFormat::Blake3);
+    recovered.validate().unwrap();
+
+    let fixture: crate::plonky3::proof::ProofPayload =
+        serde_json::from_str(include_str!("fixtures/transaction_payload_v1.json")).unwrap();
+    fixture.validate().unwrap();
+    assert!(fixture.proof_blob.len() >= crypto::PROOF_BLOB_LEN);
+    assert_eq!(fixture.metadata.hash_format, HashFormat::Blake3);
+    fixture.to_backend("transaction").unwrap();
 }
 
 fn consensus_witness_fixture() -> ConsensusWitness {
