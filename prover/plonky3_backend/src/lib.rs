@@ -3,6 +3,7 @@ use base64::Engine;
 use blake3::Hasher;
 use flate2::read::GzDecoder;
 use once_cell::sync::OnceLock;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
@@ -233,17 +234,53 @@ impl Default for AirMetadata {
 }
 
 #[derive(Deserialize)]
-struct EncodedVerifyingKeyPayload {
-    key: CircuitStarkVerifyingKey,
+struct LegacyEncodedKeyPayload<K> {
+    key: K,
     #[serde(default)]
     metadata: Option<AirMetadata>,
 }
 
-#[derive(Deserialize)]
-struct EncodedProvingKeyPayload {
-    key: CircuitStarkProvingKey,
-    #[serde(default)]
-    metadata: Option<AirMetadata>,
+fn validate_air_metadata(metadata: &AirMetadata) -> Result<(), String> {
+    if metadata.is_empty() {
+        return Ok(());
+    }
+
+    if metadata.air().is_none() {
+        return Err("decoded AIR metadata missing air descriptor".into());
+    }
+
+    Ok(())
+}
+
+fn parse_key_payload<K>(
+    decompressed: &[u8],
+    circuit: &str,
+    kind: &str,
+) -> BackendResult<(K, AirMetadata)>
+where
+    K: DeserializeOwned,
+{
+    match bincode::deserialize::<(AirMetadata, K)>(decompressed) {
+        Ok((metadata, key)) => {
+            validate_air_metadata(&metadata)
+                .map_err(|message| invalid_key_error(circuit, kind, message))?;
+            Ok((key, metadata))
+        }
+        Err(err) => {
+            if let Ok(payload) = bincode::deserialize::<LegacyEncodedKeyPayload<K>>(decompressed) {
+                let metadata = payload.metadata.unwrap_or_default();
+                validate_air_metadata(&metadata)
+                    .map_err(|message| invalid_key_error(circuit, kind, message))?;
+                Ok((payload.key, metadata))
+            } else {
+                Err(invalid_key_error(
+                    circuit,
+                    kind,
+                    format!("failed to decode {kind} payload: {err}"),
+                ))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -624,17 +661,11 @@ impl VerifyingKey {
                 "decompressed payload is empty",
             ));
         }
-        let payload: EncodedVerifyingKeyPayload =
-            bincode::deserialize(&decompressed).map_err(|err| {
-                invalid_key_error(
-                    circuit,
-                    kind,
-                    format!("failed to decode {kind} payload: {err}"),
-                )
-            })?;
-        let metadata = Arc::new(payload.metadata.unwrap_or_default());
         let serialized_len = decompressed.len();
-        let typed = Arc::new(BackendStarkVerifyingKey::new(payload.key, serialized_len));
+        let (key, metadata_value) =
+            parse_key_payload::<CircuitStarkVerifyingKey>(&decompressed, circuit, kind)?;
+        let metadata = Arc::new(metadata_value);
+        let typed = Arc::new(BackendStarkVerifyingKey::new(key, serialized_len));
         let bytes: Arc<[u8]> = decompressed.into();
         Ok(Self {
             hash,
@@ -748,15 +779,8 @@ impl ProvingKey {
                 "decompressed payload is empty",
             ));
         }
-        let payload: EncodedProvingKeyPayload =
-            bincode::deserialize(&decompressed).map_err(|err| {
-                invalid_key_error(
-                    circuit,
-                    kind,
-                    format!("failed to decode {kind} payload: {err}"),
-                )
-            })?;
-        let metadata_value = payload.metadata.unwrap_or_default();
+        let (key, metadata_value) =
+            parse_key_payload::<CircuitStarkProvingKey>(&decompressed, circuit, kind)?;
         let metadata = match expected_metadata {
             Some(expected) => {
                 if &metadata_value != expected.as_ref() {
@@ -771,7 +795,7 @@ impl ProvingKey {
             None => Arc::new(metadata_value),
         };
         let serialized_len = decompressed.len();
-        let typed = Arc::new(BackendStarkProvingKey::new(payload.key, serialized_len));
+        let typed = Arc::new(BackendStarkProvingKey::new(key, serialized_len));
         let bytes: Arc<[u8]> = decompressed.into();
         Ok(Self {
             hash,
