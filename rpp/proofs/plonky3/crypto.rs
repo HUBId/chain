@@ -379,7 +379,7 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
         )?;
         let proving_key_bytes =
             decode_artifact_bytes(&path, &config.proving_key, &config.circuit, "proving key")?;
-        let verifying_key = backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit)
+        let mut verifying_key = backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit)
             .map_err(|err| {
                 ChainError::Crypto(format!(
                     "failed to decode Plonky3 verifying key for {} circuit: {err}",
@@ -397,6 +397,9 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
             .metadata
             .as_ref()
             .map(|value| Arc::new(value.clone()));
+        if let Some(metadata) = &air_metadata {
+            verifying_key = verifying_key.with_metadata(Arc::clone(metadata));
+        }
         if artifacts
             .insert(
                 config.circuit.clone(),
