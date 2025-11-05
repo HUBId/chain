@@ -2,11 +2,16 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::hash;
 use flate2::read::GzDecoder;
-use plonky3_backend::{AirMetadata, ProofMetadata, ProverContext, ProvingKey, VerifyingKey};
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use plonky3_backend::{
+    AirMetadata, BackendError, CircuitStarkProvingKey, CircuitStarkVerifyingKey, ProofMetadata,
+    ProverContext, ProvingKey, VerifyingKey,
+};
 use serde::Deserialize;
 use serde_json::json;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
 #[derive(Deserialize)]
@@ -44,21 +49,46 @@ fn decompress_gzip(bytes: &[u8]) -> Vec<u8> {
     decompressed
 }
 
+fn compress_gzip(bytes: &[u8]) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(bytes).expect("compress gzip payload");
+    encoder.finish().expect("finalize gzip payload")
+}
+
 #[test]
 fn consensus_fixture_descriptor_decodes_typed_keys() {
     let fixture = load_consensus_fixture();
 
-    let verifying_encoded = decode_base64(&fixture.verifying_key.value);
+    let verifying_fixture_encoded = decode_base64(&fixture.verifying_key.value);
+    let verifying_fixture_raw = decompress_gzip(&verifying_fixture_encoded);
+    let (fixture_metadata, fixture_verifying_key): (AirMetadata, CircuitStarkVerifyingKey) =
+        bincode::deserialize(&verifying_fixture_raw).expect("parse verifying key fixture");
+
+    let proving_fixture_encoded = decode_base64(&fixture.proving_key.value);
+    let proving_fixture_raw = decompress_gzip(&proving_fixture_encoded);
+    let (proving_metadata, fixture_proving_key): (AirMetadata, CircuitStarkProvingKey) =
+        bincode::deserialize(&proving_fixture_raw).expect("parse proving key fixture");
+    assert_eq!(fixture_metadata, proving_metadata);
+    let metadata = fixture_metadata;
+
+    let verifying_raw = bincode::serialize(&(metadata.clone(), &fixture_verifying_key))
+        .expect("serialize verifying tuple");
+    let verifying_compressed = compress_gzip(&verifying_raw);
+    let verifying_base64 = BASE64_STANDARD.encode(verifying_compressed.as_slice());
+
     let verifying_key = VerifyingKey::from_encoded_parts(
-        &fixture.verifying_key.value,
+        &verifying_base64,
         "base64",
-        fixture.verifying_key.compression.as_deref(),
+        Some("gzip"),
         &fixture.circuit,
     )
     .expect("verifying key decodes");
-    let verifying_raw = decompress_gzip(&verifying_encoded);
     assert_eq!(verifying_key.bytes(), verifying_raw.as_slice());
-    assert_eq!(verifying_key.hash(), *hash(&verifying_encoded).as_bytes());
+    assert_eq!(verifying_key.bytes().len(), verifying_raw.len());
+    assert_eq!(
+        verifying_key.hash(),
+        *hash(&verifying_compressed).as_bytes()
+    );
 
     let verifying_stark = verifying_key.stark_key();
     assert_eq!(verifying_stark.len(), verifying_raw.len());
@@ -70,21 +100,32 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
         verifying_metadata.digest().is_some(),
         !verifying_metadata.is_empty()
     );
+    assert_eq!(verifying_metadata.as_ref(), &metadata);
     let verifying_metadata_again = verifying_key.air_metadata();
     assert!(Arc::ptr_eq(verifying_metadata, verifying_metadata_again));
 
-    let proving_encoded = decode_base64(&fixture.proving_key.value);
+    let verifying_reserialized =
+        bincode::serialize(&(verifying_metadata.as_ref(), verifying_stark.key().as_ref()))
+            .expect("reserialize verifying tuple");
+    assert_eq!(verifying_reserialized, verifying_raw);
+
+    let verifying_metadata_arc = Arc::clone(verifying_metadata);
+
+    let proving_raw = bincode::serialize(&(metadata.clone(), &fixture_proving_key))
+        .expect("serialize proving tuple");
+    let proving_base64 = BASE64_STANDARD.encode(proving_raw.as_slice());
+
     let proving_key = ProvingKey::from_encoded_parts(
-        &fixture.proving_key.value,
+        &proving_base64,
         "base64",
-        fixture.proving_key.compression.as_deref(),
+        Some("none"),
         &fixture.circuit,
-        Some(verifying_metadata),
+        Some(&verifying_metadata_arc),
     )
     .expect("proving key decodes");
-    let proving_raw = decompress_gzip(&proving_encoded);
     assert_eq!(proving_key.bytes(), proving_raw.as_slice());
-    assert_eq!(proving_key.hash(), *hash(&proving_encoded).as_bytes());
+    assert_eq!(proving_key.bytes().len(), proving_raw.len());
+    assert_eq!(proving_key.hash(), *hash(&proving_raw).as_bytes());
 
     let proving_stark = proving_key.stark_key();
     assert_eq!(proving_stark.len(), proving_raw.len());
@@ -93,6 +134,48 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
 
     let proving_metadata = proving_key.air_metadata();
     assert!(Arc::ptr_eq(verifying_metadata, proving_metadata));
+
+    let proving_reserialized =
+        bincode::serialize(&(proving_metadata.as_ref(), proving_stark.key().as_ref()))
+            .expect("reserialize proving tuple");
+    assert_eq!(proving_reserialized, proving_raw);
+}
+
+#[test]
+fn malformed_key_payloads_surface_encoding_errors() {
+    let circuit = "sample";
+    let invalid_payload = vec![0xde, 0xad, 0xbe, 0xef];
+    let invalid_base64 = BASE64_STANDARD.encode(invalid_payload);
+
+    let verifying_error =
+        VerifyingKey::from_encoded_parts(&invalid_base64, "base64", None, circuit)
+            .expect_err("invalid verifying key must error");
+    match verifying_error {
+        BackendError::InvalidKeyEncoding {
+            circuit: err_circuit,
+            kind,
+            ..
+        } => {
+            assert_eq!(err_circuit, circuit);
+            assert_eq!(kind, "verifying key");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let proving_error =
+        ProvingKey::from_encoded_parts(&invalid_base64, "base64", None, circuit, None)
+            .expect_err("invalid proving key must error");
+    match proving_error {
+        BackendError::InvalidKeyEncoding {
+            circuit: err_circuit,
+            kind,
+            ..
+        } => {
+            assert_eq!(err_circuit, circuit);
+            assert_eq!(kind, "proving key");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]
