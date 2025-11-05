@@ -18,6 +18,7 @@ use thiserror::Error;
 mod circuits;
 mod config;
 mod public_inputs;
+mod typed_keys;
 
 use p3_uni_stark::{StarkProvingKey, StarkVerifyingKey};
 
@@ -40,6 +41,10 @@ pub use circuits::consensus::{
 pub const COMMITMENT_LEN: usize = 32;
 
 pub use public_inputs::{compute_commitment_and_inputs, encode_canonical_json};
+pub use typed_keys::{
+    decode_typed_key, resolve_toolchain_air, ToolchainAir, ToolchainKey, TypedStarkProvingKey,
+    TypedStarkVerifyingKey,
+};
 
 #[derive(Debug, Error)]
 pub enum BackendError {
@@ -104,12 +109,12 @@ pub type CircuitStarkProvingKey = StarkProvingKey<CircuitStarkConfig>;
 
 #[derive(Clone)]
 pub struct BackendStarkVerifyingKey {
-    key: Arc<CircuitStarkVerifyingKey>,
+    key: Arc<TypedStarkVerifyingKey>,
     serialized_len: usize,
 }
 
 impl BackendStarkVerifyingKey {
-    fn new(key: CircuitStarkVerifyingKey, serialized_len: usize) -> Self {
+    fn new(key: TypedStarkVerifyingKey, serialized_len: usize) -> Self {
         Self {
             key: Arc::new(key),
             serialized_len,
@@ -117,7 +122,11 @@ impl BackendStarkVerifyingKey {
     }
 
     pub fn key(&self) -> Arc<CircuitStarkVerifyingKey> {
-        Arc::clone(&self.key)
+        self.key.key()
+    }
+
+    pub fn air(&self) -> ToolchainAir {
+        self.key.air()
     }
 
     pub fn len(&self) -> usize {
@@ -127,18 +136,23 @@ impl BackendStarkVerifyingKey {
 
 impl fmt::Debug for BackendStarkVerifyingKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BackendStarkVerifyingKey(len={})", self.len())
+        write!(
+            f,
+            "BackendStarkVerifyingKey(len={}, air={:?})",
+            self.len(),
+            self.air()
+        )
     }
 }
 
 #[derive(Clone)]
 pub struct BackendStarkProvingKey {
-    key: Arc<CircuitStarkProvingKey>,
+    key: Arc<TypedStarkProvingKey>,
     serialized_len: usize,
 }
 
 impl BackendStarkProvingKey {
-    fn new(key: CircuitStarkProvingKey, serialized_len: usize) -> Self {
+    fn new(key: TypedStarkProvingKey, serialized_len: usize) -> Self {
         Self {
             key: Arc::new(key),
             serialized_len,
@@ -146,7 +160,11 @@ impl BackendStarkProvingKey {
     }
 
     pub fn key(&self) -> Arc<CircuitStarkProvingKey> {
-        Arc::clone(&self.key)
+        self.key.key()
+    }
+
+    pub fn air(&self) -> ToolchainAir {
+        self.key.air()
     }
 
     pub fn len(&self) -> usize {
@@ -156,7 +174,12 @@ impl BackendStarkProvingKey {
 
 impl fmt::Debug for BackendStarkProvingKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BackendStarkProvingKey(len={})", self.len())
+        write!(
+            f,
+            "BackendStarkProvingKey(len={}, air={:?})",
+            self.len(),
+            self.air()
+        )
     }
 }
 
@@ -250,20 +273,27 @@ fn parse_key_payload<K>(
     kind: &str,
 ) -> BackendResult<(K, AirMetadata)>
 where
-    K: DeserializeOwned,
+    K: ToolchainKey,
+    K::Raw: DeserializeOwned,
 {
-    match bincode::deserialize::<(AirMetadata, K)>(decompressed) {
-        Ok((metadata, key)) => {
+    match bincode::deserialize::<(AirMetadata, K::Raw)>(decompressed) {
+        Ok((metadata, raw_key)) => {
             validate_air_metadata(&metadata)
                 .map_err(|message| invalid_key_error(circuit, kind, message))?;
+            let key = decode_typed_key::<K>(circuit, &metadata, raw_key)
+                .map_err(|err| invalid_key_error(circuit, kind, err.to_string()))?;
             Ok((key, metadata))
         }
         Err(err) => {
-            if let Ok(payload) = bincode::deserialize::<LegacyEncodedKeyPayload<K>>(decompressed) {
+            if let Ok(payload) =
+                bincode::deserialize::<LegacyEncodedKeyPayload<K::Raw>>(decompressed)
+            {
                 let metadata = payload.metadata.unwrap_or_default();
                 validate_air_metadata(&metadata)
                     .map_err(|message| invalid_key_error(circuit, kind, message))?;
-                Ok((payload.key, metadata))
+                let key = decode_typed_key::<K>(circuit, &metadata, payload.key)
+                    .map_err(|err| invalid_key_error(circuit, kind, err.to_string()))?;
+                Ok((key, metadata))
             } else {
                 Err(invalid_key_error(
                     circuit,
@@ -663,7 +693,7 @@ impl VerifyingKey {
         }
         let serialized_len = decompressed.len();
         let (key, metadata_value) =
-            parse_key_payload::<CircuitStarkVerifyingKey>(&decompressed, circuit, kind)?;
+            parse_key_payload::<TypedStarkVerifyingKey>(&decompressed, circuit, kind)?;
         let metadata = Arc::new(metadata_value);
         let typed = Arc::new(BackendStarkVerifyingKey::new(key, serialized_len));
         let bytes: Arc<[u8]> = decompressed.into();
@@ -788,7 +818,7 @@ impl ProvingKey {
             ));
         }
         let (key, metadata_value) =
-            parse_key_payload::<CircuitStarkProvingKey>(&decompressed, circuit, kind)?;
+            parse_key_payload::<TypedStarkProvingKey>(&decompressed, circuit, kind)?;
         let metadata = match expected_metadata {
             Some(expected) => {
                 if &metadata_value != expected.as_ref() {
