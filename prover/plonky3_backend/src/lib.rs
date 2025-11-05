@@ -1,6 +1,5 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use blake3::Hasher;
 use flate2::read::GzDecoder;
 use once_cell::sync::OnceLock;
 use serde::de::DeserializeOwned;
@@ -8,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -32,19 +32,11 @@ pub use circuits::consensus::{
     ConsensusVrfPublicEntry, ConsensusWitness, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 
-/// Number of bytes that form the deterministic proof header.
-///
-/// The header currently stores three 32-byte digests in the following order:
-///
-/// * verifying key hash
-/// * canonical public inputs hash
-/// * FRI transcript digest
-///
-/// The serialized proof blob may contain additional sections after the header
-/// to accommodate future commitment data without breaking backwards
-/// compatibility. Consumers must therefore treat the constant as a **minimum**
-/// length guarantee instead of an exact size check.
-pub const PROOF_BLOB_LEN: usize = 96;
+/// Number of bytes encoded in the deterministic commitment header extracted
+/// from the verifying key. The stub backend uses these values to emulate the
+/// transcript commitments that a real Plonky3 prover would embed in the
+/// serialized proof.
+pub const COMMITMENT_LEN: usize = 32;
 
 pub use public_inputs::{compute_commitment_and_inputs, encode_canonical_json};
 
@@ -56,7 +48,9 @@ pub enum BackendError {
     MissingVerifyingKey(String),
     #[error("proving key missing for {0} circuit")]
     MissingProvingKey(String),
-    #[error("proof blob must be {expected} bytes for {circuit} circuit, found {actual}")]
+    #[error(
+        "proof payload must be at least {expected} bytes for {circuit} circuit, found {actual}"
+    )]
     InvalidProofLength {
         circuit: String,
         expected: usize,
@@ -844,28 +838,29 @@ impl fmt::Debug for ProvingKey {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HashFormat {
-    Blake3,
+    PoseidonMerkleCap,
 }
 
 impl Default for HashFormat {
     fn default() -> Self {
-        Self::Blake3
+        Self::PoseidonMerkleCap
     }
 }
 
 impl HashFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Blake3 => "blake3",
+            Self::PoseidonMerkleCap => "poseidon_merkle_cap",
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ProofMetadata {
-    verifying_key_hash: [u8; 32],
+    trace_commitment: [u8; 32],
+    quotient_commitment: [u8; 32],
+    fri_commitment: [u8; 32],
     public_inputs_hash: [u8; 32],
-    fri_digest: [u8; 32],
     hash_format: HashFormat,
     security_bits: u32,
     use_gpu: bool,
@@ -873,16 +868,18 @@ pub struct ProofMetadata {
 
 impl ProofMetadata {
     pub fn new(
-        verifying_key_hash: [u8; 32],
+        trace_commitment: [u8; 32],
+        quotient_commitment: [u8; 32],
+        fri_commitment: [u8; 32],
         public_inputs_hash: [u8; 32],
-        fri_digest: [u8; 32],
         security_bits: u32,
         use_gpu: bool,
     ) -> Self {
         Self::with_hash_format(
-            verifying_key_hash,
+            trace_commitment,
+            quotient_commitment,
+            fri_commitment,
             public_inputs_hash,
-            fri_digest,
             HashFormat::default(),
             security_bits,
             use_gpu,
@@ -890,33 +887,39 @@ impl ProofMetadata {
     }
 
     pub fn with_hash_format(
-        verifying_key_hash: [u8; 32],
+        trace_commitment: [u8; 32],
+        quotient_commitment: [u8; 32],
+        fri_commitment: [u8; 32],
         public_inputs_hash: [u8; 32],
-        fri_digest: [u8; 32],
         hash_format: HashFormat,
         security_bits: u32,
         use_gpu: bool,
     ) -> Self {
         Self {
-            verifying_key_hash,
+            trace_commitment,
+            quotient_commitment,
+            fri_commitment,
             public_inputs_hash,
-            fri_digest,
             hash_format,
             security_bits,
             use_gpu,
         }
     }
 
-    pub fn verifying_key_hash(&self) -> &[u8; 32] {
-        &self.verifying_key_hash
+    pub fn trace_commitment(&self) -> &[u8; 32] {
+        &self.trace_commitment
+    }
+
+    pub fn quotient_commitment(&self) -> &[u8; 32] {
+        &self.quotient_commitment
+    }
+
+    pub fn fri_commitment(&self) -> &[u8; 32] {
+        &self.fri_commitment
     }
 
     pub fn public_inputs_hash(&self) -> &[u8; 32] {
         &self.public_inputs_hash
-    }
-
-    pub fn fri_digest(&self) -> &[u8; 32] {
-        &self.fri_digest
     }
 
     pub fn hash_format(&self) -> HashFormat {
@@ -945,22 +948,26 @@ impl ProofMetadata {
         schema.insert(
             "description".to_string(),
             Value::String(
-                "Hex-encoded transcript and security parameters embedded in a Plonky3 proof payload.".into(),
+                "Hex-encoded transcript commitments and security parameters embedded in a Plonky3 proof payload.".into(),
             ),
         );
 
         let mut properties = Map::new();
         properties.insert(
-            "verifying_key_hash".into(),
-            hex32_schema("BLAKE3 digest of the verifying key referenced by the proof."),
+            "trace_commitment".into(),
+            hex32_schema("Poseidon Merkle cap commitment for the execution trace."),
+        );
+        properties.insert(
+            "quotient_commitment".into(),
+            hex32_schema("Poseidon Merkle cap commitment for the quotient domain."),
+        );
+        properties.insert(
+            "fri_commitment".into(),
+            hex32_schema("Poseidon Merkle cap commitment representing the FRI transcript."),
         );
         properties.insert(
             "public_inputs_hash".into(),
             hex32_schema("BLAKE3 digest of the encoded public inputs."),
-        );
-        properties.insert(
-            "fri_digest".into(),
-            hex32_schema("BLAKE3 digest derived from the prover/verifier transcript."),
         );
         properties.insert(
             "security_bits".into(),
@@ -976,7 +983,7 @@ impl ProofMetadata {
         properties.insert(
             "hash_format".into(),
             hash_format_schema(
-                "Digest algorithm used for all 32-byte metadata hashes (header order preserved).",
+                "Digest algorithm used for transcript commitments (header order preserved).",
             ),
         );
 
@@ -985,9 +992,10 @@ impl ProofMetadata {
             "required".into(),
             Value::Array(
                 [
-                    "verifying_key_hash",
+                    "trace_commitment",
+                    "quotient_commitment",
+                    "fri_commitment",
                     "public_inputs_hash",
-                    "fri_digest",
                     "security_bits",
                     "use_gpu",
                     "hash_format",
@@ -1005,39 +1013,21 @@ impl ProofMetadata {
 
 #[derive(Clone, Debug)]
 pub struct Proof {
-    proof_blob: Vec<u8>,
-    fri_transcript: Vec<u8>,
-    openings: Vec<u8>,
+    stark_proof: Vec<u8>,
     metadata: ProofMetadata,
 }
 
 /// Discrete proof sections used to assemble and disassemble [`Proof`] values.
-///
-/// The `proof_blob` starts with the deterministic 96-byte header that stores
-/// the verifying key hash, canonical public inputs hash and FRI transcript
-/// digest. Additional sections may follow the header to capture future
-/// commitment payloads. The other vectors (`fri_transcript`, `openings`) may
-/// have arbitrary lengths, mirroring the dynamic payloads produced by the
-/// backend.
 #[derive(Clone, Debug)]
 pub struct ProofParts {
-    pub proof_blob: Vec<u8>,
-    pub fri_transcript: Vec<u8>,
-    pub openings: Vec<u8>,
+    pub stark_proof: Vec<u8>,
     pub metadata: ProofMetadata,
 }
 
 impl ProofParts {
-    pub fn new(
-        proof_blob: Vec<u8>,
-        fri_transcript: Vec<u8>,
-        openings: Vec<u8>,
-        metadata: ProofMetadata,
-    ) -> Self {
+    pub fn new(stark_proof: Vec<u8>, metadata: ProofMetadata) -> Self {
         Self {
-            proof_blob,
-            fri_transcript,
-            openings,
+            stark_proof,
             metadata,
         }
     }
@@ -1046,48 +1036,37 @@ impl ProofParts {
 impl Proof {
     pub fn from_parts(circuit: &str, parts: ProofParts) -> BackendResult<Self> {
         let ProofParts {
-            proof_blob,
-            fri_transcript,
-            openings,
+            stark_proof,
             metadata,
         } = parts;
-        if proof_blob.len() < PROOF_BLOB_LEN {
+        let header_len = 3 * COMMITMENT_LEN;
+        if stark_proof.len() < header_len {
             return Err(BackendError::InvalidProofLength {
                 circuit: circuit.to_string(),
-                expected: PROOF_BLOB_LEN,
-                actual: proof_blob.len(),
+                expected: header_len,
+                actual: stark_proof.len(),
             });
         }
-        let (header, _) = proof_blob.split_at(PROOF_BLOB_LEN);
-        let (key_segment, rest) = header.split_at(32);
-        if key_segment != metadata.verifying_key_hash() {
+        let (trace_segment, rest) = stark_proof.split_at(COMMITMENT_LEN);
+        if trace_segment != metadata.trace_commitment() {
             return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
         }
-        let (inputs_segment, fri_segment) = rest.split_at(32);
-        if inputs_segment != metadata.public_inputs_hash() {
-            return Err(BackendError::PublicInputDigestMismatch(circuit.to_string()));
+        let (quotient_segment, rest) = rest.split_at(COMMITMENT_LEN);
+        if quotient_segment != metadata.quotient_commitment() {
+            return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
         }
-        if fri_segment != metadata.fri_digest() {
+        let (fri_segment, _) = rest.split_at(COMMITMENT_LEN);
+        if fri_segment != metadata.fri_commitment() {
             return Err(BackendError::FriDigestMismatch(circuit.to_string()));
         }
         Ok(Self {
-            proof_blob,
-            fri_transcript,
-            openings,
+            stark_proof,
             metadata,
         })
     }
 
-    pub fn proof_blob(&self) -> &[u8] {
-        &self.proof_blob
-    }
-
-    pub fn fri_transcript(&self) -> &[u8] {
-        &self.fri_transcript
-    }
-
-    pub fn openings(&self) -> &[u8] {
-        &self.openings
+    pub fn stark_proof(&self) -> &[u8] {
+        &self.stark_proof
     }
 
     pub fn metadata(&self) -> &ProofMetadata {
@@ -1095,12 +1074,7 @@ impl Proof {
     }
 
     pub fn into_parts(self) -> ProofParts {
-        ProofParts::new(
-            self.proof_blob,
-            self.fri_transcript,
-            self.openings,
-            self.metadata,
-        )
+        ProofParts::new(self.stark_proof, self.metadata)
     }
 }
 
@@ -1198,15 +1172,6 @@ impl ProverContext {
         Arc::clone(&self.proving_metadata)
     }
 
-    fn transcript_message(&self, commitment: &str, encoded_inputs: &[u8]) -> Vec<u8> {
-        let mut transcript =
-            Vec::with_capacity(self.name.len() + commitment.len() + encoded_inputs.len());
-        transcript.extend_from_slice(self.name.as_bytes());
-        transcript.extend_from_slice(commitment.as_bytes());
-        transcript.extend_from_slice(encoded_inputs);
-        transcript
-    }
-
     pub fn prove(&self, public_inputs: &Value) -> BackendResult<(String, Proof)> {
         let (commitment, encoded_inputs) =
             encode_commitment_and_inputs(self.circuit(), public_inputs)?;
@@ -1215,39 +1180,40 @@ impl ProverContext {
     }
 
     fn prove_with_encoded(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<Proof> {
-        let message = self.transcript_message(commitment, encoded_inputs);
         let inputs_digest = blake3::hash(encoded_inputs);
-        let mut fri_hasher = Hasher::new_keyed(&self.verifying_key.hash);
-        fri_hasher.update(&message);
-        let fri_digest = fri_hasher.finalize();
+        let verifying_bytes = self.verifying_key.bytes();
+        let header_len = 3 * COMMITMENT_LEN;
+        if verifying_bytes.len() < header_len {
+            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
+        }
+        let trace_commitment: [u8; 32] = verifying_bytes[..COMMITMENT_LEN]
+            .try_into()
+            .expect("trace commitment slice length");
+        let quotient_commitment: [u8; 32] = verifying_bytes[COMMITMENT_LEN..(2 * COMMITMENT_LEN)]
+            .try_into()
+            .expect("quotient commitment slice length");
+        let fri_commitment: [u8; 32] = verifying_bytes[(2 * COMMITMENT_LEN)..header_len]
+            .try_into()
+            .expect("fri commitment slice length");
 
         let metadata = ProofMetadata::new(
-            self.verifying_key.hash(),
+            trace_commitment,
+            quotient_commitment,
+            fri_commitment,
             *inputs_digest.as_bytes(),
-            *fri_digest.as_bytes(),
             self.security_bits,
             self.use_gpu,
         );
 
-        let mut proof_blob = Vec::with_capacity(PROOF_BLOB_LEN);
-        proof_blob.extend_from_slice(metadata.verifying_key_hash());
-        proof_blob.extend_from_slice(metadata.public_inputs_hash());
-        proof_blob.extend_from_slice(metadata.fri_digest());
+        let mut stark_proof =
+            Vec::with_capacity(header_len + commitment.len() + encoded_inputs.len());
+        stark_proof.extend_from_slice(metadata.trace_commitment());
+        stark_proof.extend_from_slice(metadata.quotient_commitment());
+        stark_proof.extend_from_slice(metadata.fri_commitment());
+        stark_proof.extend_from_slice(commitment.as_bytes());
+        stark_proof.extend_from_slice(encoded_inputs);
 
-        let mut fri_transcript = Vec::with_capacity(message.len() + self.proving_key.bytes().len());
-        fri_transcript.extend_from_slice(&message);
-        fri_transcript.extend_from_slice(self.proving_key.bytes());
-
-        let mut openings_hasher = Hasher::new_keyed(metadata.public_inputs_hash());
-        openings_hasher.update(self.proving_key.bytes());
-        openings_hasher.update(&fri_transcript);
-        let openings_digest = openings_hasher.finalize();
-        let openings = openings_digest.as_bytes().to_vec();
-
-        Proof::from_parts(
-            &self.name,
-            ProofParts::new(proof_blob, fri_transcript, openings, metadata),
-        )
+        Proof::from_parts(&self.name, ProofParts::new(stark_proof, metadata))
     }
 
     pub fn verifier(&self) -> VerifierContext {
@@ -1373,33 +1339,25 @@ impl VerifierContext {
         if proof.metadata().use_gpu() != self.use_gpu {
             return Err(BackendError::GpuModeMismatch(self.name.clone()));
         }
-        if proof.metadata().verifying_key_hash() != &self.verifying_key.hash {
+        let verifying_bytes = self.verifying_key.bytes();
+        let header_len = 3 * COMMITMENT_LEN;
+        if verifying_bytes.len() < header_len {
             return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
         }
-        if proof.proof_blob().len() < PROOF_BLOB_LEN {
-            return Err(BackendError::InvalidProofLength {
-                circuit: self.name.clone(),
-                expected: PROOF_BLOB_LEN,
-                actual: proof.proof_blob().len(),
-            });
+        if proof.metadata().trace_commitment() != &verifying_bytes[..COMMITMENT_LEN] {
+            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
+        }
+        if proof.metadata().quotient_commitment()
+            != &verifying_bytes[COMMITMENT_LEN..(2 * COMMITMENT_LEN)]
+        {
+            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
+        }
+        if proof.metadata().fri_commitment() != &verifying_bytes[(2 * COMMITMENT_LEN)..header_len] {
+            return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
         let inputs_digest = blake3::hash(encoded_inputs);
         if proof.metadata().public_inputs_hash() != inputs_digest.as_bytes() {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
-        }
-        let message = {
-            let mut transcript =
-                Vec::with_capacity(self.name.len() + commitment.len() + encoded_inputs.len());
-            transcript.extend_from_slice(self.name.as_bytes());
-            transcript.extend_from_slice(commitment.as_bytes());
-            transcript.extend_from_slice(encoded_inputs);
-            transcript
-        };
-        let mut fri_hasher = Hasher::new_keyed(&self.verifying_key.hash);
-        fri_hasher.update(&message);
-        let expected_fri = fri_hasher.finalize();
-        if proof.metadata().fri_digest() != expected_fri.as_bytes() {
-            return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
         Ok(())
     }
@@ -1580,7 +1538,7 @@ fn enum_schema(description: &str, variants: &[&str]) -> Value {
 }
 
 fn hash_format_schema(description: &str) -> Value {
-    enum_schema(description, &[HashFormat::Blake3.as_str()])
+    enum_schema(description, &[HashFormat::PoseidonMerkleCap.as_str()])
 }
 
 fn invalid_key_error(circuit: &str, kind: &str, message: impl Into<String>) -> BackendError {

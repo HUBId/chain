@@ -6,6 +6,7 @@
 //! commitments and proof blobs across runs.
 
 use ed25519_dalek::{Keypair, Signer};
+use std::convert::TryInto;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rpp_chain::crypto::address_from_public_key;
@@ -44,11 +45,24 @@ fn transaction_roundtrip_produces_stable_commitment() {
     let parsed = Plonky3Proof::from_value(value).unwrap();
     assert_eq!(parsed.circuit, "transaction");
     let verifying_key = crypto::verifying_key("transaction").unwrap();
-    let verifying_hash = blake3::hash(verifying_key.bytes());
-    assert!(!parsed.payload.proof_blob.is_empty());
+    let verifying_bytes = verifying_key.bytes();
+    let header_len = 3 * crypto::COMMITMENT_LEN;
+    assert!(parsed.payload.stark_proof.len() >= header_len);
     assert_eq!(
-        parsed.payload.metadata.verifying_key_hash,
-        *verifying_hash.as_bytes()
+        parsed.payload.metadata.trace_commitment,
+        verifying_bytes[..crypto::COMMITMENT_LEN].try_into().unwrap()
+    );
+    assert_eq!(
+        parsed.payload.metadata.quotient_commitment,
+        verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
+            .try_into()
+            .unwrap()
+    );
+    assert_eq!(
+        parsed.payload.metadata.fri_commitment,
+        verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
+            .try_into()
+            .unwrap()
     );
 
     let commitment = crypto::compute_commitment(&parsed.public_inputs).unwrap();
@@ -106,8 +120,8 @@ fn transaction_roundtrip_rejects_truncated_proof() {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
         parsed
             .payload
-            .proof_blob
-            .truncate(parsed.payload.proof_blob.len().saturating_sub(1));
+            .stark_proof
+            .truncate(parsed.payload.stark_proof.len().saturating_sub(1));
         *value = parsed.into_value().unwrap();
     }
 
@@ -126,8 +140,8 @@ fn transaction_roundtrip_rejects_wrong_verifying_key() {
     let mut tampered = proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.metadata.verifying_key_hash[0] ^= 0x40;
-        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+        parsed.payload.metadata.trace_commitment[0] ^= 0x40;
+        if let Some(first) = parsed.payload.stark_proof.first_mut() {
             *first ^= 0x02;
         }
         *value = parsed.into_value().unwrap();
@@ -175,13 +189,13 @@ fn transaction_roundtrip_rejects_oversized_proof() {
     let mut tampered = proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.proof_blob.push(0);
+        parsed.payload.stark_proof.push(0);
         *value = parsed.into_value().unwrap();
     }
 
     let err = verifier.verify_transaction(&tampered).unwrap_err();
     assert!(
-        err.to_string().contains("proof blob must be"),
+        err.to_string().contains("proof payload must be"),
         "unexpected verifier error: {err:?}"
     );
 }

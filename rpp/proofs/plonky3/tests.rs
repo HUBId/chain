@@ -10,6 +10,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde_json::json;
 use serde_json::Value;
+use std::convert::TryInto;
 
 use crate::crypto::address_from_public_key;
 use crate::plonky3::circuit::consensus::{
@@ -251,12 +252,38 @@ fn transaction_proof_roundtrip() {
         ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
     };
     let verifying_key = crypto::verifying_key("transaction").unwrap();
-    let verifying_hash = blake3_hash(verifying_key.bytes());
-    assert!(parsed.payload.proof_blob.len() >= crypto::PROOF_BLOB_LEN);
-    assert_eq!(&parsed.payload.proof_blob[..32], verifying_hash.as_bytes());
+    let verifying_bytes = verifying_key.bytes();
+    let header_len = 3 * crypto::COMMITMENT_LEN;
+    assert!(parsed.payload.stark_proof.len() >= header_len);
     assert_eq!(
-        parsed.payload.metadata.verifying_key_hash,
-        *verifying_hash.as_bytes()
+        &parsed.payload.stark_proof[..crypto::COMMITMENT_LEN],
+        &verifying_bytes[..crypto::COMMITMENT_LEN]
+    );
+    assert_eq!(
+        &parsed.payload.stark_proof[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)],
+        &verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
+    );
+    assert_eq!(
+        &parsed.payload.stark_proof[(2 * crypto::COMMITMENT_LEN)..header_len],
+        &verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
+    );
+    assert_eq!(
+        parsed.payload.metadata.trace_commitment,
+        verifying_bytes[..crypto::COMMITMENT_LEN]
+            .try_into()
+            .unwrap()
+    );
+    assert_eq!(
+        parsed.payload.metadata.quotient_commitment,
+        verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
+            .try_into()
+            .unwrap()
+    );
+    assert_eq!(
+        parsed.payload.metadata.fri_commitment,
+        verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
+            .try_into()
+            .unwrap()
     );
     let (_, encoded_inputs) =
         public_inputs::compute_commitment_and_inputs(&parsed.public_inputs).unwrap();
@@ -296,17 +323,18 @@ fn transaction_payload_serialization_roundtrip() {
 
     let serialized = serde_json::to_string_pretty(&parsed.payload).unwrap();
     let recovered: crate::plonky3::proof::ProofPayload = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(recovered.proof_blob, parsed.payload.proof_blob);
-    assert_eq!(recovered.fri_transcript, parsed.payload.fri_transcript);
-    assert_eq!(recovered.openings, parsed.payload.openings);
-    assert_eq!(recovered.metadata.hash_format, HashFormat::Blake3);
+    assert_eq!(recovered.stark_proof, parsed.payload.stark_proof);
+    assert_eq!(
+        recovered.metadata.hash_format,
+        HashFormat::PoseidonMerkleCap
+    );
     recovered.validate().unwrap();
 
     let fixture: crate::plonky3::proof::ProofPayload =
         serde_json::from_str(include_str!("fixtures/transaction_payload_v1.json")).unwrap();
     fixture.validate().unwrap();
-    assert!(fixture.proof_blob.len() >= crypto::PROOF_BLOB_LEN);
-    assert_eq!(fixture.metadata.hash_format, HashFormat::Blake3);
+    assert!(fixture.stark_proof.len() >= header_len);
+    assert_eq!(fixture.metadata.hash_format, HashFormat::PoseidonMerkleCap);
     fixture.to_backend("transaction").unwrap();
 }
 
@@ -458,8 +486,8 @@ fn transaction_proof_rejects_tampered_verifying_key() {
     let mut tampered = proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.metadata.verifying_key_hash[0] ^= 0x80;
-        if let Some(first) = parsed.payload.proof_blob.first_mut() {
+        parsed.payload.metadata.trace_commitment[0] ^= 0x80;
+        if let Some(first) = parsed.payload.stark_proof.first_mut() {
             *first ^= 0x01;
         }
         *value = parsed.into_value().unwrap();
@@ -515,7 +543,7 @@ fn transaction_proof_rejects_malformed_witness() {
 }
 
 #[test]
-fn transaction_proof_rejects_truncated_blob() {
+fn transaction_proof_rejects_truncated_payload() {
     let prover = test_prover();
     let verifier = test_verifier();
     let tx = sample_transaction();
@@ -527,20 +555,20 @@ fn transaction_proof_rejects_truncated_blob() {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
         parsed
             .payload
-            .proof_blob
-            .truncate(parsed.payload.proof_blob.len().saturating_sub(1));
+            .stark_proof
+            .truncate(parsed.payload.stark_proof.len().saturating_sub(1));
         *value = parsed.into_value().unwrap();
     }
 
     let verify_err = verifier.verify_transaction(&truncated).unwrap_err();
     assert!(
-        verify_err.to_string().contains("proof blob must be"),
+        verify_err.to_string().contains("proof payload must be"),
         "unexpected verifier error: {verify_err:?}"
     );
 }
 
 #[test]
-fn transaction_proof_rejects_oversized_blob() {
+fn transaction_proof_rejects_oversized_payload() {
     let prover = test_prover();
     let verifier = test_verifier();
     let tx = sample_transaction();
@@ -550,13 +578,13 @@ fn transaction_proof_rejects_oversized_blob() {
     let mut oversized = proof;
     if let ChainProof::Plonky3(value) = &mut oversized {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.proof_blob.push(0);
+        parsed.payload.stark_proof.push(0);
         *value = parsed.into_value().unwrap();
     }
 
     let verify_err = verifier.verify_transaction(&oversized).unwrap_err();
     assert!(
-        verify_err.to_string().contains("proof blob must be"),
+        verify_err.to_string().contains("proof payload must be"),
         "unexpected verifier error: {verify_err:?}"
     );
 }
@@ -667,7 +695,7 @@ fn recursive_bundle_verification_detects_tampering() {
         if let Some(object) = value.as_object_mut() {
             if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
                 if let Some(metadata) = payload.get_mut("metadata").and_then(Value::as_object_mut) {
-                    metadata.insert("verifying_key_hash".into(), json!("00".repeat(32)));
+                    metadata.insert("trace_commitment".into(), json!("00".repeat(32)));
                 }
             }
         }
@@ -691,7 +719,7 @@ fn recursive_bundle_verification_detects_tampering() {
     let mut oversized = recursive_proof.clone();
     if let ChainProof::Plonky3(value) = &mut oversized {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.proof_blob.push(0);
+        parsed.payload.stark_proof.push(0);
         *value = parsed.into_value().unwrap();
     }
     let oversized_bundle = BlockProofBundle::new(
@@ -761,7 +789,7 @@ fn recursive_roundtrip_spans_state_and_transactions() {
     if let ChainProof::Plonky3(value) = &mut broken_state {
         if let Some(object) = value.as_object_mut() {
             if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
-                payload.insert("proof_blob".into(), json!("ZG9nZ29nb28="));
+                payload.insert("stark_proof".into(), json!("ZG9nZ29nb28="));
             }
         }
     }
