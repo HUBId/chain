@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::fmt;
 use std::fs;
 use std::io::Read;
@@ -20,7 +19,9 @@ mod config;
 mod public_inputs;
 mod typed_keys;
 
-use p3_uni_stark::{StarkProvingKey, StarkVerifyingKey};
+use p3_field::PrimeField32;
+use p3_symmetric::Hash;
+use p3_uni_stark::{prove, StarkProvingKey, StarkVerifyingKey};
 
 #[cfg(feature = "plonky3-gpu")]
 mod gpu;
@@ -83,6 +84,10 @@ pub enum BackendError {
         kind: String,
         message: String,
     },
+    #[error("Plonky3 prover does not support {air:?} circuits (requested {circuit})")]
+    UnsupportedToolchainAir { circuit: String, air: ToolchainAir },
+    #[error("failed to assemble {circuit} Plonky3 proof: {message}")]
+    ProofAssembly { circuit: String, message: String },
     #[error("failed to load Plonky3 setup manifest: {0}")]
     SetupManifest(String),
     #[error("Plonky3 setup manifest missing {0} circuit entry")]
@@ -1107,6 +1112,20 @@ impl Proof {
     }
 }
 
+fn hash_to_bytes<F, const DIGEST_ELEMS: usize>(
+    hash: &Hash<F, F, DIGEST_ELEMS>,
+) -> [u8; DIGEST_ELEMS * 4]
+where
+    F: PrimeField32,
+{
+    let mut bytes = [0u8; DIGEST_ELEMS * 4];
+    for (index, element) in hash.as_ref().iter().enumerate() {
+        let offset = index * 4;
+        bytes[offset..offset + 4].copy_from_slice(&element.as_canonical_u32().to_le_bytes());
+    }
+    bytes
+}
+
 fn metadata_digest_hex(metadata: &Arc<AirMetadata>) -> Option<String> {
     metadata.digest().map(hex::encode)
 }
@@ -1204,26 +1223,52 @@ impl ProverContext {
     pub fn prove(&self, public_inputs: &Value) -> BackendResult<(String, Proof)> {
         let (commitment, encoded_inputs) =
             encode_commitment_and_inputs(self.circuit(), public_inputs)?;
-        let proof = self.prove_with_encoded(&commitment, &encoded_inputs)?;
+        let proof = self.prove_with_encoded(&commitment, &encoded_inputs, public_inputs)?;
         Ok((commitment, proof))
     }
 
-    fn prove_with_encoded(&self, commitment: &str, encoded_inputs: &[u8]) -> BackendResult<Proof> {
+    fn prove_with_encoded(
+        &self,
+        _commitment: &str,
+        encoded_inputs: &[u8],
+        public_inputs: &Value,
+    ) -> BackendResult<Proof> {
         let inputs_digest = blake3::hash(encoded_inputs);
-        let verifying_bytes = self.verifying_key.bytes();
-        let header_len = 3 * COMMITMENT_LEN;
-        if verifying_bytes.len() < header_len {
-            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
-        }
-        let trace_commitment: [u8; 32] = verifying_bytes[..COMMITMENT_LEN]
-            .try_into()
-            .expect("trace commitment slice length");
-        let quotient_commitment: [u8; 32] = verifying_bytes[COMMITMENT_LEN..(2 * COMMITMENT_LEN)]
-            .try_into()
-            .expect("quotient commitment slice length");
-        let fri_commitment: [u8; 32] = verifying_bytes[(2 * COMMITMENT_LEN)..header_len]
-            .try_into()
-            .expect("fri commitment slice length");
+        let config = build_circuit_stark_config(&self.proving_metadata)?;
+        let typed_key = self.proving_key.typed();
+        let proving_key = typed_key.key();
+
+        let proof = match typed_key.air() {
+            ToolchainAir::Consensus => {
+                let (_circuit, trace, public_values) =
+                    decode_consensus_instance::<CircuitStarkConfig>(public_inputs)?;
+                prove(&config, proving_key.as_ref(), trace, &public_values)
+            }
+            other => {
+                return Err(BackendError::UnsupportedToolchainAir {
+                    circuit: self.name.clone(),
+                    air: other,
+                })
+            }
+        };
+
+        let trace_commitment = hash_to_bytes(&proof.commitments.trace);
+        let quotient_commitment = hash_to_bytes(&proof.commitments.quotient_chunks);
+        let fri_commitment_hash = proof
+            .opening_proof
+            .commit_phase_commits
+            .first()
+            .ok_or_else(|| BackendError::ProofAssembly {
+                circuit: self.name.clone(),
+                message: "missing FRI commit-phase commitment".into(),
+            })?;
+        let fri_commitment = hash_to_bytes(fri_commitment_hash);
+
+        let serialized_proof =
+            bincode::serialize(&proof).map_err(|err| BackendError::ProofAssembly {
+                circuit: self.name.clone(),
+                message: format!("failed to serialize STARK proof: {err}"),
+            })?;
 
         let metadata = ProofMetadata::new(
             trace_commitment,
@@ -1234,13 +1279,11 @@ impl ProverContext {
             self.use_gpu,
         );
 
-        let mut stark_proof =
-            Vec::with_capacity(header_len + commitment.len() + encoded_inputs.len());
+        let mut stark_proof = Vec::with_capacity(3 * COMMITMENT_LEN + serialized_proof.len());
         stark_proof.extend_from_slice(metadata.trace_commitment());
         stark_proof.extend_from_slice(metadata.quotient_commitment());
         stark_proof.extend_from_slice(metadata.fri_commitment());
-        stark_proof.extend_from_slice(commitment.as_bytes());
-        stark_proof.extend_from_slice(encoded_inputs);
+        stark_proof.extend_from_slice(&serialized_proof);
 
         Proof::from_parts(&self.name, ProofParts::new(stark_proof, metadata))
     }
