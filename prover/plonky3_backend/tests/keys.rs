@@ -5,8 +5,9 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use plonky3_backend::{
-    AirMetadata, BackendError, CircuitStarkProvingKey, CircuitStarkVerifyingKey, ProofMetadata,
-    ProverContext, ProvingKey, VerifyingKey,
+    build_circuit_stark_config, AirMetadata, BackendError, CircuitBaseField,
+    CircuitStarkProvingKey, CircuitStarkVerifyingKey, ProofMetadata, ProverContext, ProvingKey,
+    VerifyingKey,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -399,4 +400,56 @@ fn prover_context_rejects_mismatched_metadata() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[test]
+fn stark_config_builder_parses_metadata() {
+    let metadata: AirMetadata = serde_json::from_value(json!({
+        "air": {
+            "challenge_extension_degree": 4,
+            "fri": {
+                "log_blowup": 6,
+                "log_final_poly_len": 3,
+                "num_queries": 88,
+                "proof_of_work_bits": 21,
+            },
+            "challenger": {
+                "width": 24,
+                "rate": 16,
+            }
+        }
+    }))
+    .expect("metadata parses");
+
+    let config = build_circuit_stark_config(&metadata).expect("config builds");
+    let pcs_debug = format!("{:?}", config.pcs());
+    assert!(
+        pcs_debug.contains("log_blowup: 6"),
+        "unexpected pcs debug output: {pcs_debug}"
+    );
+    assert!(
+        pcs_debug.contains("log_final_poly_len: 3"),
+        "unexpected pcs debug output: {pcs_debug}"
+    );
+    assert!(
+        pcs_debug.contains("num_queries: 88"),
+        "unexpected pcs debug output: {pcs_debug}"
+    );
+    assert!(
+        pcs_debug.contains("proof_of_work_bits: 21"),
+        "unexpected pcs debug output: {pcs_debug}"
+    );
+
+    let mut challenger = config.initialise_challenger();
+    assert_eq!(challenger.sponge_state.len(), 24);
+    assert!(challenger.input_buffer.is_empty());
+
+    for _ in 0..15 {
+        challenger.observe(CircuitBaseField::ONE);
+    }
+    assert_eq!(challenger.input_buffer.len(), 15);
+
+    challenger.observe(CircuitBaseField::ONE);
+    assert!(challenger.input_buffer.is_empty());
+    assert_eq!(challenger.output_buffer.len(), 16);
 }

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use thiserror::Error;
 
 mod circuits;
+mod config;
 mod public_inputs;
 
 use p3_uni_stark::{StarkProvingKey, StarkVerifyingKey};
@@ -82,19 +83,16 @@ pub enum BackendError {
     SetupManifestMissing(String),
     #[error("Plonky3 setup artifact mismatch for {circuit} circuit: {message}")]
     SetupArtifactMismatch { circuit: String, message: String },
+    #[error("invalid AIR metadata: {0}")]
+    InvalidAirMetadata(String),
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;
 
-/// STARK configuration placeholder matching the baby-bear based fixtures wired
-/// into the experimental circuits (see [`circuits::consensus`] for the
-/// canonical parameters baked into the JSON assets).
-///
-/// The concrete PCS and challenger wiring have not been stabilised yet, but we
-/// expose the alias so downstream tooling can deserialize
-/// [`StarkVerifyingKey`] / [`StarkProvingKey`] payloads without guessing the
-/// configuration generics.
-pub type CircuitStarkConfig = ();
+pub use config::{
+    build_circuit_stark_config, CircuitBaseField, CircuitChallengeField, CircuitChallenger,
+    CircuitFriPcs, CircuitMerkleTreeMmcs, CircuitStarkConfig,
+};
 
 /// Convenience alias for verifying key handles emitted by the Plonky3 toolchain
 /// once full circuit integration lands.
