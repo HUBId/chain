@@ -10,6 +10,7 @@ use base64::Engine;
 use blake3::hash as blake3_hash;
 use flate2::read::GzDecoder;
 use once_cell::sync::Lazy;
+use plonky3_backend::AirMetadata;
 use rpp_chain::plonky3::circuit::{
     consensus::ConsensusCircuit,
     identity::{IdentityCircuit, IdentityWitness},
@@ -61,11 +62,14 @@ struct CircuitSetup {
     circuit: String,
     verifying_key: ArtifactLocation,
     proving_key: ArtifactLocation,
+    #[serde(default)]
+    metadata: Option<AirMetadata>,
 }
 
 struct CircuitFixture {
     verifying_key: Vec<u8>,
     proving_key: Vec<u8>,
+    metadata: Option<AirMetadata>,
 }
 
 static CIRCUIT_FIXTURES: Lazy<HashMap<String, CircuitFixture>> = Lazy::new(|| {
@@ -81,6 +85,7 @@ static CIRCUIT_FIXTURES: Lazy<HashMap<String, CircuitFixture>> = Lazy::new(|| {
         "uptime",
     ] {
         let setup = load_circuit_setup(&base, circuit);
+        let metadata = setup.metadata.clone();
         fixtures.insert(
             circuit.to_string(),
             CircuitFixture {
@@ -91,6 +96,7 @@ static CIRCUIT_FIXTURES: Lazy<HashMap<String, CircuitFixture>> = Lazy::new(|| {
                     &setup.verifying_key,
                 ),
                 proving_key: decode_artifact(&base, circuit, "proving key", &setup.proving_key),
+                metadata,
             },
         );
     }

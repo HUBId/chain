@@ -10,10 +10,13 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use thiserror::Error;
 
 mod circuits;
 mod public_inputs;
+
+use p3_uni_stark::{StarkProvingKey, StarkVerifyingKey};
 
 #[cfg(feature = "plonky3-gpu")]
 mod gpu;
@@ -87,9 +90,59 @@ pub enum BackendError {
 
 pub type BackendResult<T> = Result<T, BackendError>;
 
+/// STARK configuration placeholder matching the baby-bear based fixtures wired
+/// into the experimental circuits (see [`circuits::consensus`] for the
+/// canonical parameters baked into the JSON assets).
+///
+/// The concrete PCS and challenger wiring have not been stabilised yet, but we
+/// expose the alias so downstream tooling can deserialize
+/// [`StarkVerifyingKey`] / [`StarkProvingKey`] payloads without guessing the
+/// configuration generics.
+pub type CircuitStarkConfig = ();
+
+/// Convenience alias for verifying key handles emitted by the Plonky3 toolchain
+/// once full circuit integration lands.
+pub type CircuitStarkVerifyingKey = StarkVerifyingKey<CircuitStarkConfig>;
+
+/// Convenience alias for proving key handles emitted by the Plonky3 toolchain
+/// once full circuit integration lands.
+pub type CircuitStarkProvingKey = StarkProvingKey<CircuitStarkConfig>;
+
+/// Metadata describing the AIR that produced a proving/verifying key pair.
+///
+/// `plonky3-keygen` emits this information alongside every fixture so that
+/// clients can cross-check evaluation domains and challenge layouts without
+/// having to deserialize the binary keys eagerly.  Existing fixtures in the
+/// repository omit the `metadata` field, hence the optional accessors.
+#[derive(Clone, Debug, Deserialize)]
+pub struct AirMetadata {
+    #[serde(default)]
+    air: Value,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+impl AirMetadata {
+    /// Returns the nested `air` object emitted by the key generator if present.
+    pub fn air(&self) -> Option<&Map<String, Value>> {
+        self.air.as_object()
+    }
+
+    /// Looks up a field inside the nested `air` metadata object.
+    pub fn air_field(&self, key: &str) -> Option<&Value> {
+        self.air().and_then(|object| object.get(key))
+    }
+
+    /// Indicates whether the metadata payload is effectively empty.
+    pub fn is_empty(&self) -> bool {
+        self.air.is_null() && self.extra.is_empty()
+    }
+}
+
 #[derive(Clone)]
 struct SignedFixture {
     verifying_key_hash: [u8; 32],
+    air_metadata: Option<Arc<AirMetadata>>,
 }
 
 static SIGNED_FIXTURES: OnceLock<HashMap<String, SignedFixture>> = OnceLock::new();
@@ -111,6 +164,8 @@ struct SetupManifestEntry {
 #[derive(Deserialize)]
 struct SetupFixtureDoc {
     circuit: String,
+    #[serde(default)]
+    metadata: Option<AirMetadata>,
     verifying_key: SetupFixtureKey,
     proving_key: SetupFixtureKey,
 }
@@ -134,6 +189,42 @@ fn setup_directory() -> PathBuf {
 
 fn signed_fixtures() -> BackendResult<&'static HashMap<String, SignedFixture>> {
     SIGNED_FIXTURES.get_or_try_init(load_signed_fixtures)
+}
+
+/// Returns the parsed AIR metadata for a given circuit if present in the
+/// bundled fixtures.
+pub fn circuit_air_metadata(circuit: &str) -> BackendResult<Option<Arc<AirMetadata>>> {
+    let fixtures = signed_fixtures()?;
+    let Some(entry) = fixtures.get(circuit) else {
+        return Err(BackendError::SetupManifestMissing(circuit.to_string()));
+    };
+    let Some(metadata) = &entry.air_metadata else {
+        return Ok(None);
+    };
+    if metadata.is_empty() {
+        return Err(BackendError::SetupArtifactMismatch {
+            circuit: circuit.to_string(),
+            message: "setup artifact metadata payload is empty".into(),
+        });
+    }
+    if metadata.air().is_none() {
+        return Err(BackendError::SetupArtifactMismatch {
+            circuit: circuit.to_string(),
+            message: "setup artifact metadata missing air descriptor".into(),
+        });
+    }
+    Ok(Some(Arc::clone(metadata)))
+}
+
+/// Convenience helper for callers that require AIR metadata to be available.
+pub fn require_circuit_air_metadata(circuit: &str) -> BackendResult<Arc<AirMetadata>> {
+    match circuit_air_metadata(circuit)? {
+        Some(metadata) => Ok(metadata),
+        None => Err(BackendError::SetupArtifactMismatch {
+            circuit: circuit.to_string(),
+            message: "setup artifact missing AIR metadata".into(),
+        }),
+    }
 }
 
 fn load_signed_fixtures() -> BackendResult<HashMap<String, SignedFixture>> {
@@ -189,6 +280,11 @@ fn load_signed_fixtures() -> BackendResult<HashMap<String, SignedFixture>> {
             });
         }
 
+        let metadata = fixture
+            .metadata
+            .as_ref()
+            .map(|value| Arc::new(value.clone()));
+
         let verifying_bytes =
             decode_fixture_key(&fixture, &fixture.verifying_key, "verifying key")?;
         decode_fixture_key(&fixture, &fixture.proving_key, "proving key")?;
@@ -199,6 +295,7 @@ fn load_signed_fixtures() -> BackendResult<HashMap<String, SignedFixture>> {
                 fixture.circuit.clone(),
                 SignedFixture {
                     verifying_key_hash: *verifying_hash.as_bytes(),
+                    air_metadata: metadata,
                 },
             )
             .is_some()
