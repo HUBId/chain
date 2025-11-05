@@ -1,17 +1,32 @@
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use plonky3_backend::{
     encode_consensus_public_inputs, prove_consensus, validate_consensus_public_inputs,
     verify_consensus, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
     ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey, VerifierContext,
     VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
+use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
+use std::fs;
 
 fn sample_vote(label: &str, weight: u64) -> VotePower {
     VotePower {
         voter: label.to_string(),
         weight,
     }
+}
+
+#[derive(Deserialize)]
+struct FixtureKey {
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct FixtureDoc {
+    verifying_key: FixtureKey,
+    proving_key: FixtureKey,
 }
 
 fn sample_witness() -> ConsensusWitness {
@@ -46,10 +61,20 @@ fn sample_witness() -> ConsensusWitness {
 }
 
 fn sample_keys() -> (VerifyingKey, ProvingKey) {
+    let contents =
+        fs::read_to_string("config/plonky3/setup/consensus.json").expect("read consensus fixture");
+    let fixture: FixtureDoc = serde_json::from_str(&contents).expect("parse consensus fixture");
+    let verifying_bytes = BASE64_STANDARD
+        .decode(fixture.verifying_key.value.as_bytes())
+        .expect("decode verifying key");
     let verifying_key =
-        VerifyingKey::from_bytes(vec![0x11; 48], "consensus").expect("verifying key constructs");
-    let proving_key =
-        ProvingKey::from_bytes(vec![0x22; 64], "consensus").expect("proving key constructs");
+        VerifyingKey::from_bytes(verifying_bytes, "consensus").expect("verifying key constructs");
+    let verifying_metadata = verifying_key.metadata();
+    let proving_bytes = BASE64_STANDARD
+        .decode(fixture.proving_key.value.as_bytes())
+        .expect("decode proving key");
+    let proving_key = ProvingKey::from_bytes(proving_bytes, "consensus", Some(&verifying_metadata))
+        .expect("proving key constructs");
     (verifying_key, proving_key)
 }
 
