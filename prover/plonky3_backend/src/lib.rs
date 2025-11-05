@@ -2,9 +2,14 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::Hasher;
 use flate2::read::GzDecoder;
+use once_cell::sync::OnceLock;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::fs;
 use std::io::Read;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 mod circuits;
@@ -72,9 +77,172 @@ pub enum BackendError {
         kind: String,
         message: String,
     },
+    #[error("failed to load Plonky3 setup manifest: {0}")]
+    SetupManifest(String),
+    #[error("Plonky3 setup manifest missing {0} circuit entry")]
+    SetupManifestMissing(String),
+    #[error("Plonky3 setup artifact mismatch for {circuit} circuit: {message}")]
+    SetupArtifactMismatch { circuit: String, message: String },
 }
 
 pub type BackendResult<T> = Result<T, BackendError>;
+
+#[derive(Clone)]
+struct SignedFixture {
+    verifying_key_hash: [u8; 32],
+}
+
+static SIGNED_FIXTURES: OnceLock<HashMap<String, SignedFixture>> = OnceLock::new();
+
+#[derive(Deserialize)]
+struct SetupManifestDoc {
+    #[serde(default)]
+    metadata: Option<Value>,
+    artifacts: Vec<SetupManifestEntry>,
+}
+
+#[derive(Deserialize)]
+struct SetupManifestEntry {
+    circuit: String,
+    file: String,
+    sha256: String,
+}
+
+#[derive(Deserialize)]
+struct SetupFixtureDoc {
+    circuit: String,
+    verifying_key: SetupFixtureKey,
+    proving_key: SetupFixtureKey,
+}
+
+#[derive(Deserialize)]
+struct SetupFixtureKey {
+    value: String,
+    #[serde(default)]
+    encoding: Option<String>,
+    #[serde(default)]
+    compression: Option<String>,
+    #[serde(default)]
+    byte_length: Option<u64>,
+}
+
+fn setup_directory() -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("../../config/plonky3/setup");
+    path
+}
+
+fn signed_fixtures() -> BackendResult<&'static HashMap<String, SignedFixture>> {
+    SIGNED_FIXTURES.get_or_try_init(load_signed_fixtures)
+}
+
+fn load_signed_fixtures() -> BackendResult<HashMap<String, SignedFixture>> {
+    let dir = setup_directory();
+    let manifest_path = dir.join("manifest.json");
+    let manifest_contents = fs::read_to_string(&manifest_path).map_err(|err| {
+        BackendError::SetupManifest(format!("{}: {err}", manifest_path.display()))
+    })?;
+    let manifest: SetupManifestDoc = serde_json::from_str(&manifest_contents).map_err(|err| {
+        BackendError::SetupManifest(format!("{}: {err}", manifest_path.display()))
+    })?;
+
+    let mut fixtures = HashMap::new();
+    for entry in manifest.artifacts {
+        let file_path = dir.join(&entry.file);
+        let payload = fs::read_to_string(&file_path).map_err(|err| {
+            BackendError::SetupManifest(format!("{}: {err}", file_path.display()))
+        })?;
+        let mut hasher = Sha256::new();
+        hasher.update(payload.as_bytes());
+        let digest = hasher.finalize();
+        let expected_bytes = hex::decode(entry.sha256.trim()).map_err(|err| {
+            BackendError::SetupManifest(format!(
+                "manifest entry for {} has invalid sha256: {err}",
+                entry.circuit
+            ))
+        })?;
+        let expected: [u8; 32] = expected_bytes.try_into().map_err(|_| {
+            BackendError::SetupManifest(format!(
+                "manifest entry for {} must encode a 32-byte sha256 digest",
+                entry.circuit
+            ))
+        })?;
+        if digest.as_slice() != expected {
+            return Err(BackendError::SetupArtifactMismatch {
+                circuit: entry.circuit.clone(),
+                message: "artifact sha256 does not match manifest".into(),
+            });
+        }
+
+        let fixture: SetupFixtureDoc =
+            serde_json::from_str(&payload).map_err(|err| BackendError::SetupArtifactMismatch {
+                circuit: entry.circuit.clone(),
+                message: format!("invalid setup artifact JSON: {err}"),
+            })?;
+        if fixture.circuit != entry.circuit {
+            return Err(BackendError::SetupArtifactMismatch {
+                circuit: entry.circuit.clone(),
+                message: format!(
+                    "manifest circuit '{}' does not match fixture circuit '{}'",
+                    entry.circuit, fixture.circuit
+                ),
+            });
+        }
+
+        let verifying_bytes =
+            decode_fixture_key(&fixture, &fixture.verifying_key, "verifying key")?;
+        decode_fixture_key(&fixture, &fixture.proving_key, "proving key")?;
+
+        let verifying_hash = blake3::hash(&verifying_bytes);
+        if fixtures
+            .insert(
+                fixture.circuit.clone(),
+                SignedFixture {
+                    verifying_key_hash: *verifying_hash.as_bytes(),
+                },
+            )
+            .is_some()
+        {
+            return Err(BackendError::SetupManifest(format!(
+                "duplicate circuit '{}' in manifest",
+                fixture.circuit
+            )));
+        }
+    }
+
+    Ok(fixtures)
+}
+
+fn decode_fixture_key(
+    doc: &SetupFixtureDoc,
+    descriptor: &SetupFixtureKey,
+    kind: &str,
+) -> BackendResult<Vec<u8>> {
+    let encoding = descriptor.encoding.as_deref().unwrap_or("base64");
+    let bytes = decode_key_bytes(
+        &descriptor.value,
+        encoding,
+        descriptor.compression.as_deref(),
+        &doc.circuit,
+        kind,
+    )
+    .map_err(|err| BackendError::SetupArtifactMismatch {
+        circuit: doc.circuit.clone(),
+        message: format!("failed to decode {kind}: {err}"),
+    })?;
+    if let Some(expected) = descriptor.byte_length {
+        if bytes.len() != expected as usize {
+            return Err(BackendError::SetupArtifactMismatch {
+                circuit: doc.circuit.clone(),
+                message: format!(
+                    "{kind} length mismatch: expected {expected} bytes, found {}",
+                    bytes.len()
+                ),
+            });
+        }
+    }
+    Ok(bytes)
+}
 
 #[derive(Clone, Debug)]
 pub struct ConsensusProof {
@@ -577,12 +745,27 @@ impl VerifierContext {
         public_inputs: &Value,
         proof: &Proof,
     ) -> BackendResult<()> {
+        self.ensure_signed_fixture()?;
         let (expected_commitment, encoded_inputs) =
             encode_commitment_and_inputs(self.circuit(), public_inputs)?;
         if commitment != expected_commitment {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
         }
         self.verify_with_encoded(commitment, &encoded_inputs, proof)
+    }
+
+    fn ensure_signed_fixture(&self) -> BackendResult<()> {
+        let fixtures = signed_fixtures()?;
+        let Some(entry) = fixtures.get(self.circuit()) else {
+            return Err(BackendError::SetupManifestMissing(self.name.clone()));
+        };
+        if entry.verifying_key_hash != self.verifying_key.hash {
+            return Err(BackendError::SetupArtifactMismatch {
+                circuit: self.name.clone(),
+                message: "verifying key hash mismatch".into(),
+            });
+        }
+        Ok(())
     }
 
     fn verify_with_encoded(

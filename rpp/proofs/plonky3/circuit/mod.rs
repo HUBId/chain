@@ -19,6 +19,30 @@ pub mod state;
 pub mod transaction;
 pub mod uptime;
 
+/// Canonical metadata describing the stub Plonky3 circuit fixtures.
+///
+/// The current backend ships with fixed verifying/proving-key fixtures that
+/// encode the evaluation domain and FRI transcript digests used when generating
+/// deterministic proofs.  Recording the digests in code helps documentation and
+/// gives the unit tests a stable reference when sanity-checking the assets
+/// checked into `config/plonky3/setup/`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CircuitParams {
+    /// Digest describing the evaluation domain committed to by the fixture
+    /// verifying key (first 32 bytes of the decoded payload).
+    pub domain_root: [u8; 32],
+    /// Digest covering the quotient domain for the circuit (second 32 bytes of
+    /// the verifying key payload).
+    pub quotient_root: [u8; 32],
+    /// Digest of the canonical FRI transcript seed baked into the verifying
+    /// key (final 32 bytes of the verifying key payload).
+    pub fri_digest: [u8; 32],
+    /// BLAKE3 hash of the decoded verifying key bytes.
+    pub verifying_key_hash: [u8; 32],
+    /// BLAKE3 hash of the decoded proving key bytes.
+    pub proving_key_hash: [u8; 32],
+}
+
 /// Helper trait implemented by all Plonky3 witness structures.
 ///
 /// Each witness exposes its circuit identifier and the JSON structure that
