@@ -1,8 +1,8 @@
 use plonky3_backend::{
     encode_consensus_public_inputs, prove_consensus, validate_consensus_public_inputs,
-    verify_consensus, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
-    ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey, VerifierContext,
-    VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    verify_consensus, AirMetadata, BackendError, ConsensusCircuit, ConsensusProof,
+    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, ProverContext, ProvingKey,
+    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -82,6 +82,20 @@ fn sample_keys() -> (VerifyingKey, ProvingKey) {
         Some(verifying_key.air_metadata()),
     )
     .expect("proving key constructs");
+    let verifying_typed = verifying_key.typed();
+    let verifying_typed_again = verifying_key.typed();
+    assert_eq!(verifying_typed.air(), verifying_typed_again.air());
+    assert!(Arc::ptr_eq(
+        &verifying_typed.key(),
+        &verifying_typed_again.key()
+    ));
+    let proving_typed = proving_key.typed();
+    let proving_typed_again = proving_key.typed();
+    assert_eq!(proving_typed.air(), proving_typed_again.air());
+    assert!(Arc::ptr_eq(
+        &proving_typed.key(),
+        &proving_typed_again.key()
+    ));
     (verifying_key, proving_key)
 }
 
@@ -234,4 +248,29 @@ fn consensus_rejects_binding_tampering() {
         .expect("bindings object");
     bindings.insert("quorum_bitmap".into(), Value::String("99".repeat(32)));
     assert!(validate_consensus_public_inputs(&public_inputs).is_err());
+}
+
+#[test]
+fn consensus_prover_context_rejects_metadata_mismatch() {
+    let (verifying_key, proving_key) = sample_keys();
+    let tampered: AirMetadata = serde_json::from_value(json!({
+        "air": {"log_blowup": 8},
+        "generator": "poseidon",
+    }))
+    .expect("metadata parses");
+    let tampered = Arc::new(tampered);
+    let verifying_key = verifying_key.with_metadata(Arc::clone(&tampered));
+
+    let err = ProverContext::new("consensus", verifying_key, proving_key, 64, false)
+        .expect_err("metadata mismatch must fail");
+    match err {
+        BackendError::InvalidKeyEncoding { kind, message, .. } => {
+            assert_eq!(kind, "proving key");
+            assert!(
+                message.contains("metadata digest"),
+                "unexpected mismatch message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

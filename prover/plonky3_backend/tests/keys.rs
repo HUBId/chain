@@ -97,6 +97,15 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     let verifying_stark_again = verifying_key.stark_key();
     assert!(Arc::ptr_eq(verifying_stark, verifying_stark_again));
 
+    let verifying_typed = verifying_key.typed();
+    assert_eq!(verifying_typed.air(), ToolchainAir::Consensus);
+    let verifying_typed_again = verifying_key.typed();
+    assert_eq!(verifying_typed.air(), verifying_typed_again.air());
+    assert!(Arc::ptr_eq(
+        &verifying_typed.key(),
+        &verifying_typed_again.key()
+    ));
+
     let verifying_metadata = verifying_key.air_metadata();
     assert_eq!(
         verifying_metadata.digest().is_some(),
@@ -107,7 +116,7 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     assert!(Arc::ptr_eq(verifying_metadata, verifying_metadata_again));
 
     let verifying_reserialized =
-        bincode::serialize(&(verifying_metadata.as_ref(), verifying_stark.key().as_ref()))
+        bincode::serialize(&(verifying_metadata.as_ref(), verifying_typed.key().as_ref()))
             .expect("reserialize verifying tuple");
     assert_eq!(verifying_reserialized, verifying_raw);
 
@@ -135,11 +144,20 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     let proving_stark_again = proving_key.stark_key();
     assert!(Arc::ptr_eq(proving_stark, proving_stark_again));
 
+    let proving_typed = proving_key.typed();
+    assert_eq!(proving_typed.air(), ToolchainAir::Consensus);
+    let proving_typed_again = proving_key.typed();
+    assert_eq!(proving_typed.air(), proving_typed_again.air());
+    assert!(Arc::ptr_eq(
+        &proving_typed.key(),
+        &proving_typed_again.key()
+    ));
+
     let proving_metadata = proving_key.air_metadata();
     assert!(Arc::ptr_eq(verifying_metadata, proving_metadata));
 
     let proving_reserialized =
-        bincode::serialize(&(proving_metadata.as_ref(), proving_stark.key().as_ref()))
+        bincode::serialize(&(proving_metadata.as_ref(), proving_typed.key().as_ref()))
             .expect("reserialize proving tuple");
     assert_eq!(proving_reserialized, proving_raw);
 }
