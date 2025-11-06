@@ -241,6 +241,10 @@ impl Plonky3Backend {
                 return Err(err);
             }
         };
+        if let Err(detail) = proof.payload.metadata.ensure_alignment(&self.params) {
+            PLONKY3_TELEMETRY.record_failure(detail.clone());
+            return Err(ChainError::Crypto(detail));
+        }
         PLONKY3_TELEMETRY.record_success();
         Ok(proof)
     }

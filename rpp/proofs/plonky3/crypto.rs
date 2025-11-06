@@ -830,12 +830,16 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
             "Plonky3 backend commitment mismatch: expected {expected_commitment}, found {commitment}"
         )));
     }
-    super::proof::Plonky3Proof::from_backend(
+    let proof = super::proof::Plonky3Proof::from_backend(
         circuit,
         commitment,
         canonical_public_inputs,
         backend_proof,
-    )
+    )?;
+    if let Err(detail) = proof.payload.metadata.ensure_alignment(&params) {
+        return Err(ChainError::Crypto(detail));
+    }
+    Ok(proof)
 }
 
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
@@ -852,12 +856,17 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         PLONKY3_VERIFIER_TELEMETRY.record_failure(BackendErrorCategory::Input, message.clone());
         ChainError::InvalidProof(message)
     })?;
+    if let Err(detail) = proof.payload.metadata.ensure_alignment(&params) {
+        PLONKY3_VERIFIER_TELEMETRY.record_failure(BackendErrorCategory::Input, detail.clone());
+        return Err(ChainError::InvalidProof(detail));
+    }
+    let metadata = &proof.payload.metadata;
 
     let verifier = backend::VerifierContext::new(
         proof.circuit.clone(),
         artifact.verifying_key.clone(),
-        params.security_bits,
-        params.use_gpu_acceleration,
+        metadata.security_bits,
+        metadata.use_gpu,
     )
     .map_err(|err| {
         let message = format!(

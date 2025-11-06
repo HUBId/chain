@@ -6,6 +6,8 @@ use serde_json::Value;
 use crate::errors::{ChainError, ChainResult};
 use plonky3_backend::{self as backend, HashFormat, ProofParts};
 
+use super::params::Plonky3Parameters;
+
 /// Generic representation of a Plonky3 proof artifact.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Plonky3Proof {
@@ -45,6 +47,36 @@ impl Plonky3Proof {
     }
 }
 
+/// Canonical serialization of Plonky3 proof payloads.
+///
+/// The JSON representation is compatible with the node and wallet APIs:
+///
+/// ```json
+/// {
+///   "circuit": "transaction",
+///   "commitment": "<hex>",
+///   "public_inputs": { "witness": { /* circuit dependent */ } },
+///   "payload": {
+///     "stark_proof": "<base64>",
+///     "auxiliary_payloads": ["<base64>", "<base64>", ...],
+///     "metadata": {
+///       "trace_commitment": "<hex>",
+///       "quotient_commitment": "<hex>",
+///       "random_commitment": "<hex>",
+///       "fri_commitments": ["<hex>", "<hex>", ...],
+///       "canonical_public_inputs": "<base64>",
+///       "transcript": { /* transcript checkpoints */ },
+///       "hash_format": "poseidon_merkle_cap",
+///       "security_bits": 128,
+///       "derived_security_bits": 128,
+///       "use_gpu": false
+///     }
+///   }
+/// }
+/// ```
+///
+/// Byte-oriented sections are base64 encoded while all hash digests remain
+/// hex encoded to preserve backwards compatibility with existing tooling.
 #[derive(Clone, Debug, Serialize)]
 pub struct ProofPayload {
     #[serde(with = "serde_base64_vec")]
@@ -306,11 +338,42 @@ impl ProofMetadata {
             HashFormat::PoseidonMerkleCap => {}
         }
 
+        if self.derived_security_bits < self.security_bits {
+            return Err(ChainError::Crypto(
+                "derived security cannot undershoot negotiated security".into(),
+            ));
+        }
+
         ensure_challenge_length(&self.transcript.alpha, "alpha")?;
         ensure_challenge_length(&self.transcript.zeta, "zeta")?;
         ensure_challenge_length(&self.transcript.pcs_alpha, "pcs_alpha")?;
         for (index, challenge) in self.transcript.fri_challenges.iter().enumerate() {
             ensure_challenge_length(challenge, &format!("fri_challenge[{index}]"))?;
+        }
+
+        Ok(())
+    }
+}
+
+impl ProofMetadata {
+    pub fn ensure_alignment(&self, params: &Plonky3Parameters) -> Result<(), String> {
+        if self.security_bits != params.security_bits {
+            return Err(format!(
+                "plonky3 proof negotiated {} security bits but {} were requested",
+                self.security_bits, params.security_bits
+            ));
+        }
+        if self.derived_security_bits < params.security_bits {
+            return Err(format!(
+                "plonky3 proof derived security {} bits below requested {} bits",
+                self.derived_security_bits, params.security_bits
+            ));
+        }
+        if self.use_gpu != params.use_gpu_acceleration {
+            return Err(format!(
+                "plonky3 proof GPU flag {} does not match requested {}",
+                self.use_gpu, params.use_gpu_acceleration
+            ));
         }
 
         Ok(())

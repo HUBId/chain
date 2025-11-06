@@ -19,7 +19,7 @@ use crate::plonky3::circuit::pruning::PruningWitness;
 use crate::plonky3::params::Plonky3Parameters;
 use crate::plonky3::prover::Plonky3Prover;
 use crate::plonky3::verifier::Plonky3Verifier;
-use crate::plonky3::{crypto, proof::Plonky3Proof, public_inputs};
+use crate::plonky3::{crypto, crypto::COMMITMENT_LEN, proof::Plonky3Proof, public_inputs};
 use crate::proof_system::{ProofProver, ProofVerifier};
 use crate::rpp::GlobalStateCommitments;
 use crate::types::{
@@ -261,6 +261,10 @@ fn transaction_proof_roundtrip() {
         "transaction proofs must expose challenger checkpoints"
     );
     assert!(!parsed.payload.stark_proof.is_empty());
+    assert!(
+        parsed.payload.stark_proof.len() > 1024,
+        "transaction proofs must include non-trivial STARK payloads"
+    );
     let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
         bincode::deserialize(&parsed.payload.stark_proof).unwrap();
     let reserialized = bincode::serialize(&decoded).unwrap();
@@ -279,9 +283,19 @@ fn transaction_proof_roundtrip() {
         "derived security cannot undershoot negotiated security"
     );
     assert_eq!(parsed.payload.metadata.use_gpu, params.use_gpu_acceleration);
+    parsed
+        .payload
+        .metadata
+        .ensure_alignment(&params)
+        .expect("metadata aligns with prover configuration");
     parsed.payload.validate().unwrap();
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();
     assert_eq!(parsed.commitment, computed);
+    assert_eq!(
+        parsed.commitment.len(),
+        COMMITMENT_LEN * 2,
+        "hex-encoded commitments must expose full digest length"
+    );
     let decoded: crate::plonky3::circuit::transaction::TransactionWitness = serde_json::from_value(
         parsed
             .public_inputs
@@ -291,6 +305,22 @@ fn transaction_proof_roundtrip() {
     )
     .unwrap();
     assert_eq!(decoded.transaction, tx);
+}
+
+#[test]
+fn transaction_proof_json_roundtrip() {
+    let prover = test_prover();
+    let tx = sample_transaction();
+    let witness = prover.build_transaction_witness(&tx).unwrap();
+    let proof = prover.prove_transaction(witness).unwrap();
+
+    let encoded = match &proof {
+        ChainProof::Plonky3(value) => value.clone(),
+        ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
+    };
+    let parsed = Plonky3Proof::from_value(&encoded).unwrap();
+    let roundtrip = parsed.clone().into_value().unwrap();
+    assert_eq!(roundtrip, encoded);
 }
 
 #[test]
@@ -364,6 +394,14 @@ fn consensus_witness_fixture() -> ConsensusWitness {
         vec!["ff".repeat(32)],
         vec!["11".repeat(32)],
     )
+}
+
+fn consensus_proof_fixture() -> Plonky3Proof {
+    let witness = consensus_witness_fixture();
+    let public_inputs = witness
+        .public_inputs()
+        .expect("consensus witness public inputs");
+    Plonky3Proof::new("consensus", public_inputs).expect("construct consensus proof")
 }
 
 #[test]
@@ -465,6 +503,64 @@ fn consensus_witness_rejects_missing_vrf_public_key() {
     assert!(
         err.to_string().contains("public key"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn consensus_proof_rejects_tampered_vrf_metadata() {
+    let verifier = test_verifier();
+    let proof = consensus_proof_fixture();
+    let mut tampered = proof.clone();
+    if let Value::Object(ref mut root) = tampered.public_inputs {
+        if let Some(entries) = root.get_mut("vrf_entries").and_then(Value::as_array_mut) {
+            if let Some(Value::Object(entry)) = entries.first_mut() {
+                entry.insert("proof".into(), Value::String("00".repeat(VRF_PROOF_LENGTH)));
+            }
+        }
+    }
+    tampered.commitment = crypto::compute_commitment(&tampered.public_inputs).unwrap();
+    let tampered_proof = ChainProof::Plonky3(tampered.into_value().unwrap());
+
+    let err = verifier
+        .verify_consensus(&tampered_proof)
+        .expect_err("tampered VRF metadata must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid consensus public inputs")
+            || message.contains("proof verification failed"),
+        "unexpected verifier error: {err:?}"
+    );
+}
+
+#[test]
+fn consensus_proof_rejects_tampered_quorum_binding() {
+    let verifier = test_verifier();
+    let proof = consensus_proof_fixture();
+    let mut tampered = proof.clone();
+    if let Value::Object(ref mut root) = tampered.public_inputs {
+        if let Some(bindings) = root.get_mut("bindings").and_then(Value::as_object_mut) {
+            if let Some(value) = bindings.get_mut("quorum_bitmap") {
+                if let Some(original) = value.as_str() {
+                    let mut mutated = original.to_string();
+                    if mutated.len() >= 2 {
+                        mutated.replace_range(0..2, "ff");
+                    }
+                    *value = Value::String(mutated);
+                }
+            }
+        }
+    }
+    tampered.commitment = crypto::compute_commitment(&tampered.public_inputs).unwrap();
+    let tampered_proof = ChainProof::Plonky3(tampered.into_value().unwrap());
+
+    let err = verifier
+        .verify_consensus(&tampered_proof)
+        .expect_err("tampered quorum bindings must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("invalid consensus public inputs")
+            || message.contains("proof verification failed"),
+        "unexpected verifier error: {err:?}"
     );
 }
 
