@@ -63,6 +63,22 @@ mod plonky3_backend {
     };
     use serde_json::{Map, Value};
 
+    fn tamper_payload(
+        original: &ChainProof,
+        mutator: impl FnOnce(&mut Plonky3Proof),
+    ) -> ChainProof {
+        let mut tampered = original.clone();
+        match &mut tampered {
+            ChainProof::Plonky3(value) => {
+                let mut parsed = Plonky3Proof::from_value(value).expect("decode plonky3 proof");
+                mutator(&mut parsed);
+                *value = parsed.into_value().expect("encode plonky3 proof");
+            }
+            _ => panic!("expected Plonky3 proof"),
+        }
+        tampered
+    }
+
     fn tamper_proof(
         original: &ChainProof,
         mutator: impl FnOnce(&mut Map<String, Value>),
@@ -80,8 +96,9 @@ mod plonky3_backend {
                 let consensus_witness: Plonky3ConsensusWitness =
                     serde_json::from_value(Value::Object(witness.clone()))
                         .expect("consensus witness struct");
-                let backend_witness =
-                    consensus_witness.to_backend().expect("prepare backend witness");
+                let backend_witness = consensus_witness
+                    .to_backend()
+                    .expect("prepare backend witness");
                 let circuit = ConsensusCircuit::new(backend_witness).expect("backend circuit");
                 let bindings = circuit.bindings().clone();
                 parsed
@@ -155,12 +172,9 @@ mod plonky3_backend {
 
         let swapped_vrf_proofs = tamper_proof(&proof, |witness| {
             if let Some(Value::Array(entries)) = witness.get_mut("vrf_entries") {
-                if let [Value::Object(first), Value::Object(second), ..] = entries.as_mut_slice()
-                {
-                    if let (
-                        Some(Value::String(first_proof)),
-                        Some(Value::String(second_proof)),
-                    ) = (first.get("proof"), second.get("proof"))
+                if let [Value::Object(first), Value::Object(second), ..] = entries.as_mut_slice() {
+                    if let (Some(Value::String(first_proof)), Some(Value::String(second_proof))) =
+                        (first.get("proof"), second.get("proof"))
                     {
                         first.insert("proof".into(), Value::String(second_proof.clone()));
                         second.insert("proof".into(), Value::String(first_proof.clone()));
@@ -188,6 +202,29 @@ mod plonky3_backend {
             }
         });
         assert!(verifier.verify_consensus(&corrupted_vrf_proof).is_err());
+    }
+
+    #[test]
+    fn plonky3_rejects_payload_commitment_tampering() {
+        let prover = Plonky3Prover::new();
+        let verifier = Plonky3Verifier::default();
+
+        let certificate = sample_certificate();
+        let block_hash = certificate.block_hash.0.clone();
+        let witness = prover
+            .build_consensus_witness(&block_hash, &certificate)
+            .expect("build consensus witness");
+        let proof = prover.prove_consensus(witness).expect("prove consensus");
+
+        verifier
+            .verify_consensus(&proof)
+            .expect("baseline consensus proof should verify");
+
+        let tampered = tamper_payload(&proof, |parsed| {
+            parsed.payload.metadata.trace_commitment[0] ^= 0xFF;
+        });
+
+        assert!(verifier.verify_consensus(&tampered).is_err());
     }
 }
 

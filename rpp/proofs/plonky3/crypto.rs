@@ -20,6 +20,62 @@ use super::params::Plonky3Parameters;
 pub use super::public_inputs::compute_commitment;
 pub(crate) use super::public_inputs::compute_commitment_and_inputs;
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BackendErrorCategory {
+    Key,
+    Input,
+    Runtime,
+}
+
+fn categorize_backend_error(err: &backend::BackendError) -> BackendErrorCategory {
+    use backend::BackendError as Error;
+
+    match err {
+        Error::EmptyCircuit
+        | Error::MissingVerifyingKey(_)
+        | Error::MissingProvingKey(_)
+        | Error::VerifyingKeyMismatch(_)
+        | Error::InvalidKeyEncoding { .. }
+        | Error::UnsupportedProvingAir { .. }
+        | Error::SetupManifest(_)
+        | Error::SetupManifestMissing(_)
+        | Error::SetupArtifactMismatch { .. }
+        | Error::InvalidAirMetadata(_)
+        | Error::InsufficientSecurity { .. } => BackendErrorCategory::Key,
+        Error::InvalidProofLength { .. }
+        | Error::PublicInputDigestMismatch(_)
+        | Error::CanonicalPublicInputMismatch(_)
+        | Error::FriDigestMismatch(_)
+        | Error::TranscriptMismatch(_)
+        | Error::InvalidProofShape { .. }
+        | Error::OpeningArgumentMismatch { .. }
+        | Error::ConstraintMismatch { .. }
+        | Error::RandomizationInconsistency { .. }
+        | Error::SecurityParameterMismatch(_)
+        | Error::GpuModeMismatch(_)
+        | Error::InvalidWitness { .. }
+        | Error::InvalidPublicInputs { .. }
+        | Error::StarkVerificationError { .. } => BackendErrorCategory::Input,
+        Error::StarkProvingError { .. }
+        | Error::GpuInitialization { .. }
+        | Error::ProverFailure { .. } => BackendErrorCategory::Runtime,
+    }
+}
+
+pub(crate) fn map_backend_error(
+    err: backend::BackendError,
+    context: impl FnOnce(&str) -> String,
+) -> ChainError {
+    let category = categorize_backend_error(&err);
+    let detail = err.to_string();
+    let message = context(&detail);
+    match category {
+        BackendErrorCategory::Key => ChainError::Config(message),
+        BackendErrorCategory::Input => ChainError::InvalidProof(message),
+        BackendErrorCategory::Runtime => ChainError::Crypto(message),
+    }
+}
+
 #[derive(Clone)]
 struct CircuitArtifact {
     verifying_key: backend::VerifyingKey,
@@ -192,13 +248,13 @@ fn decode_from_path(
     for path in candidate_paths(base, value) {
         if path.exists() {
             let data = fs::read(&path).map_err(|err| {
-                ChainError::Crypto(format!(
+                ChainError::Config(format!(
                     "unable to read {kind} for {circuit} circuit from {}: {err}",
                     path.display()
                 ))
             })?;
             if data.is_empty() {
-                return Err(ChainError::Crypto(format!(
+                return Err(ChainError::Config(format!(
                     "{kind} for {circuit} circuit at {} is empty",
                     path.display()
                 )));
@@ -230,7 +286,7 @@ fn decode_artifact_string(
     kind: &str,
 ) -> ChainResult<Vec<u8>> {
     if value.trim().is_empty() {
-        return Err(ChainError::Crypto(format!(
+        return Err(ChainError::Config(format!(
             "{kind} for {circuit} circuit is empty"
         )));
     }
@@ -240,7 +296,7 @@ fn decode_artifact_string(
     if let Some(bytes) = decode_blob(value, None) {
         return Ok(bytes);
     }
-    Err(ChainError::Crypto(format!(
+    Err(ChainError::Config(format!(
         "{kind} for {circuit} circuit must reference a file or contain hex/base64 data",
     )))
 }
@@ -297,7 +353,7 @@ fn decode_artifact_descriptor(
     }
 
     let bytes = candidate.ok_or_else(|| {
-        ChainError::Crypto(format!(
+        ChainError::Config(format!(
             "{kind} for {circuit} circuit must provide a file path or an encoded value",
         ))
     })?;
@@ -306,7 +362,7 @@ fn decode_artifact_descriptor(
         match compression.as_str() {
             "gzip" | "gz" | "none" => {}
             other => {
-                return Err(ChainError::Crypto(format!(
+                return Err(ChainError::Config(format!(
                     "unsupported compression '{other}' for {kind} in {circuit} circuit",
                 )))
             }
@@ -319,7 +375,7 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("config/plonky3/setup");
     let entries = fs::read_dir(&path).map_err(|err| {
-        ChainError::Crypto(format!(
+        ChainError::Config(format!(
             "unable to read Plonky3 setup artifacts from {}: {err}",
             path.display()
         ))
@@ -327,25 +383,25 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
     let mut artifacts = HashMap::new();
     for entry in entries {
         let entry = entry
-            .map_err(|err| ChainError::Crypto(format!("invalid Plonky3 setup entry: {err}")))?;
+            .map_err(|err| ChainError::Config(format!("invalid Plonky3 setup entry: {err}")))?;
         let file_path = entry.path();
         if file_path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
         let contents = fs::read_to_string(&file_path).map_err(|err| {
-            ChainError::Crypto(format!(
+            ChainError::Config(format!(
                 "unable to read Plonky3 setup artifact {}: {err}",
                 file_path.display()
             ))
         })?;
         let config: CircuitArtifactConfig = serde_json::from_str(&contents).map_err(|err| {
-            ChainError::Crypto(format!(
+            ChainError::Config(format!(
                 "invalid Plonky3 setup artifact {}: {err}",
                 file_path.display()
             ))
         })?;
         if config.circuit.is_empty() {
-            return Err(ChainError::Crypto(format!(
+            return Err(ChainError::Config(format!(
                 "Plonky3 setup artifact {} missing circuit name",
                 file_path.display()
             )));
@@ -361,7 +417,7 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
         let mut verifying_key =
             backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit).map_err(
                 |err| {
-                    ChainError::Crypto(format!(
+                    ChainError::Config(format!(
                         "failed to decode Plonky3 verifying key for {} circuit: {err}",
                         config.circuit
                     ))
@@ -374,7 +430,7 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
         let verifying_metadata = Arc::clone(verifying_key.air_metadata());
         if let Some(expected) = &air_metadata {
             if verifying_metadata.as_ref() != expected.as_ref() {
-                return Err(ChainError::Crypto(format!(
+                return Err(ChainError::Config(format!(
                     "Plonky3 verifying key metadata for {} circuit does not match fixture metadata",
                     config.circuit
                 )));
@@ -389,7 +445,7 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
             air_metadata.as_ref(),
         )
         .map_err(|err| {
-            ChainError::Crypto(format!(
+            ChainError::Config(format!(
                 "failed to decode Plonky3 proving key for {} circuit: {err}",
                 config.circuit
             ))
@@ -405,20 +461,20 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
             )
             .is_some()
         {
-            return Err(ChainError::Crypto(format!(
+            return Err(ChainError::Config(format!(
                 "duplicate Plonky3 setup artifact for {} circuit",
                 config.circuit
             )));
         }
     }
     if artifacts.is_empty() {
-        return Err(ChainError::Crypto(
+        return Err(ChainError::Config(
             "no Plonky3 setup artifacts were found; expected at least one circuit".into(),
         ));
     }
     for required in REQUIRED_CIRCUITS {
         if !artifacts.contains_key(*required) {
-            return Err(ChainError::Crypto(format!(
+            return Err(ChainError::Config(format!(
                 "missing Plonky3 setup artifact for required {required} circuit"
             )));
         }
@@ -441,7 +497,7 @@ fn circuit_artifact(circuit: &str) -> ChainResult<&'static CircuitArtifact> {
     artifacts.get(circuit).ok_or_else(|| {
         let message = format!("no Plonky3 setup artifact registered for {circuit} circuit");
         error!("{message}");
-        ChainError::Crypto(message)
+        ChainError::Config(message)
     })
 }
 
@@ -469,9 +525,9 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
         params.use_gpu_acceleration,
     )
     .map_err(|err| {
-        ChainError::Crypto(format!(
-            "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
-        ))
+        map_backend_error(err, |detail| {
+            format!("failed to prepare Plonky3 {circuit} circuit for proving: {detail}")
+        })
     })?;
     let (expected_commitment, _, canonical_bytes) =
         super::public_inputs::compute_commitment_and_inputs(&public_inputs)?;
@@ -483,14 +539,16 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
         })?;
     if circuit == "consensus" {
         validate_consensus_public_inputs(&canonical_public_inputs).map_err(|err| {
-            ChainError::Crypto(format!(
-                "invalid consensus public inputs supplied to Plonky3 prover: {err}"
-            ))
+            map_backend_error(err, |detail| {
+                format!("invalid consensus public inputs supplied to Plonky3 prover: {detail}")
+            })
         })?;
     }
-    let (commitment, backend_proof) = context
-        .prove(&canonical_public_inputs)
-        .map_err(|err| ChainError::Crypto(err.to_string()))?;
+    let (commitment, backend_proof) = context.prove(&canonical_public_inputs).map_err(|err| {
+        map_backend_error(err, |detail| {
+            format!("failed to produce Plonky3 {circuit} proof: {detail}")
+        })
+    })?;
     if commitment != expected_commitment {
         return Err(ChainError::CommitmentMismatch(format!(
             "Plonky3 backend commitment mismatch: expected {expected_commitment}, found {commitment}"
@@ -507,6 +565,13 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
     let artifact = circuit_artifact(&proof.circuit)?;
     let params = Plonky3Parameters::default();
+    proof.payload.validate().map_err(|err| {
+        ChainError::InvalidProof(format!(
+            "plonky3 {} proof payload invalid: {err}",
+            proof.circuit
+        ))
+    })?;
+
     let verifier = backend::VerifierContext::new(
         proof.circuit.clone(),
         artifact.verifying_key.clone(),
@@ -514,16 +579,29 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         params.use_gpu_acceleration,
     )
     .map_err(|err| {
-        ChainError::Crypto(format!(
-            "failed to prepare Plonky3 {} circuit for verification: {err}",
-            proof.circuit
-        ))
+        map_backend_error(err, |detail| {
+            format!(
+                "failed to prepare Plonky3 {} circuit for verification: {detail}",
+                proof.circuit
+            )
+        })
     })?;
-    let backend_proof = proof
-        .payload
-        .to_backend(&proof.circuit)
-        .map_err(|err| ChainError::Crypto(err.to_string()))?;
+    let backend_proof = proof.payload.to_backend(&proof.circuit).map_err(|err| {
+        map_backend_error(err, |detail| {
+            format!(
+                "failed to decode Plonky3 {} proof payload: {detail}",
+                proof.circuit
+            )
+        })
+    })?;
     verifier
         .verify(&proof.commitment, &proof.public_inputs, &backend_proof)
-        .map_err(|err| ChainError::Crypto(err.to_string()))
+        .map_err(|err| {
+            map_backend_error(err, |detail| {
+                format!(
+                    "Plonky3 {} proof verification failed: {detail}",
+                    proof.circuit
+                )
+            })
+        })
 }
