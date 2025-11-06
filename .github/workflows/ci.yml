@@ -60,6 +60,13 @@ for file in unexpected:
 if errors:
     sys.exit(1)
 PY
+      - name: Cross-check embedded hash manifests
+        run: |
+          set -euo pipefail
+          python3 scripts/generate_plonky3_artifacts.py \
+            config/plonky3/setup \
+            --verify \
+            --hash-output target/plonky3-setup-hashes.json
       - name: Ensure setup artifacts are committed
         run: |
           set -euo pipefail

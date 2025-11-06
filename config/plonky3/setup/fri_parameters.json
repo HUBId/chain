@@ -1,0 +1,67 @@
+{
+  "circuits": [
+    {
+      "circuit": "consensus",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    },
+    {
+      "circuit": "identity",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    },
+    {
+      "circuit": "pruning",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    },
+    {
+      "circuit": "recursive",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    },
+    {
+      "circuit": "state",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    },
+    {
+      "circuit": "transaction",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    },
+    {
+      "circuit": "uptime",
+      "parameters": {
+        "log_blowup": 5,
+        "log_final_poly_len": 0,
+        "num_queries": 120,
+        "proof_of_work_bits": 16
+      }
+    }
+  ]
+}

@@ -64,6 +64,10 @@ schema returned by `plonky3_backend::VerifyingKey::json_schema()` and
 - `hash_manifest`: nested metadata describing the raw (decompressed) proving
   and verifying key payloads. Each entry stores the expected `byte_length` and
   a mandatory `sha256` digest (plus an optional `blake3` digest when available).
+- `fri_parameters`: the FRI security knobs that the circuit metadata exposes
+  (log blowup, final polynomial length, query budget, proof-of-work bits).
+  The helper also writes an aggregate `fri_parameters.json` file that mirrors
+  these values for every circuit so CI and release tooling can diff them quickly.
 
 Custom tooling can call the backend helpers
 `plonky3_backend::VerifyingKey::from_encoded_parts` and
@@ -85,7 +89,9 @@ The release pipeline publishes a consolidated hash manifest that mirrors the
 `hash_manifest` data from every circuit document. During a release
 `scripts/build_release.sh` verifies the JSON fixtures and writes
 `plonky3-setup-hashes.json`, which is subsequently signed and attached to the
-GitHub release alongside the checksum bundle.
+GitHub release alongside the checksum bundle. The same step cross-checks
+`fri_parameters.json` so any change to the FRI configuration is captured in the
+hash manifest.
 
 To regenerate the manifest locally or to assert that the repository matches the
 release artefacts, run the helper in verification mode:
