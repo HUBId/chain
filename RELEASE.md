@@ -104,6 +104,11 @@ Before publishing release artifacts, double-check the following guardrails:
    `rpp-node hybrid --dry-run`) to see the runtime guard in action—startup fails
    immediately if the STWO backend was omitted, ensuring the published artifacts
    activate the supported prover path.【F:rpp/node/src/lib.rs†L508-L536】
+7. Capture the Plonky3 graduation evidence bundle: archive the
+   `target/simnet/consensus-quorum` artefacts produced by the stress harness,
+   export the Grafana dashboard JSON described in the Plonky3 runbook, and note
+   the backout steps (feature guard, cache eviction, and incident checklist)
+   referenced in the runbook/test plan so rollbacks remain auditable.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:scripts/analyze_simnet.py†L1-L200】【F:docs/runbooks/plonky3.md†L1-L200】【F:docs/testing/plonky3_experimental_testplan.md†L1-L160】
 
 ## Branching and tagging
 

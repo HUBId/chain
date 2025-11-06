@@ -17,6 +17,10 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Capture the Plonky3 production graduation, including updated telemetry
+  metrics, artefact paths, and supply-chain gates in the README, runbook, and
+  ADR so operators can point auditors at the final proof flow and dashboard
+  evidence.【F:README.md†L1-L21】【F:docs/runbooks/plonky3.md†L1-L120】【F:docs/architecture/adr/0001-zk-backend-status.md†L1-L80】
 - Capture the Plonky3 STARK verification flow, transcript specification, and
   RPP module integration guidelines for operators and client developers.【F:docs/zk_verification.md†L1-L56】
 - Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】

@@ -1,14 +1,11 @@
 # ztate
 
-> ⚠️ **Experimental backend guard**
+> ✅ **Production Plonky3 backend**
 >
-> The `backend-plonky3` prover remains experimental and is confined to a dedicated
-> test matrix. Release and CI tooling abort if the feature leaks into other
-> builds. To recover from an accidental opt-in, run `cargo clean` followed by
-> `cargo build -p rpp-node --release --no-default-features --features prod,prover-stwo`
-> (or rerun `scripts/build_release.sh` without custom `RPP_RELEASE_FEATURES`). Use
-> `scripts/test.sh --backend plonky3` when you intentionally exercise the
-> experimental matrix.
+> The vendor Plonky3 prover/verifier has graduated to the production profile.
+> Runtime snapshots under `/status/node` expose prover and verifier health, and
+> release tooling rejects artefacts that ship forbidden mock features so the
+> signed bundles always include one of the supported production backends.【F:rpp/runtime/node.rs†L4862-L4894】【F:rpp/proofs/plonky3/prover/mod.rs†L19-L520】【F:scripts/verify_release_features.sh†L1-L146】
 
 ztate is the reference implementation of the RPP blockchain stack. It packages the
 runtime node, consensus engine, libp2p networking, proof system, wallet
@@ -111,17 +108,15 @@ Validator and hybrid modes require the STWO prover backend and abort during
 startup when the corresponding feature (`prover-stwo` or `prover-stwo-simd`) is
 missing.
 
-The experimental Plonky3 backend remains available for non-production testing.
-Build or check the crate with `--features backend-plonky3` (optionally paired
-with `dev`) to exercise the stubbed prover while keeping production profiles
-clean. The workspace now fails compilation if `backend-plonky3` is combined with
-the `prod` or `validator` features so the experimental backend cannot leak into
-release artifacts. Test tooling (`scripts/test.sh`) rejects manual
-`backend-plonky3` feature arguments unless the dedicated `plonky3` backend is
-selected, release packaging fails fast when the feature is detected, and a
-workspace smoke test (`tests/feature_guard.rs`) asserts the compile guard. The
-runtime launch helpers print an opt-in warning with backout instructions so the
-experimental backend stays out of production runs.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】【F:scripts/test.sh†L38-L47】【F:scripts/build_release.sh†L118-L142】【F:scripts/lib/rpp-node-mode-common.sh†L1-L36】【F:tests/feature_guard.rs†L1-L52】
+The Plonky3 backend now mirrors the STWO production pipeline. Build or check
+the crate with `--features backend-plonky3` (optionally paired with `dev`) to
+exercise the vendor prover end-to-end. Compile-time guards still refuse to pair
+the backend with the deterministic mock prover so production artefacts contain
+only real provers, and the feature-matrix tests keep that restriction enforced
+during CI.【F:rpp/node/src/feature_guard.rs†L1-L7】【F:rpp/node/Cargo.toml†L9-L21】【F:scripts/test.sh†L38-L47】【F:tests/feature_guard.rs†L1-L52】 Runtime launch
+helpers continue to emit explicit warnings and backout guidance when the prover
+feature set is misconfigured so operators can recover quickly during staged or
+production rollouts.【F:scripts/lib/rpp-node-mode-common.sh†L1-L36】
 
 ## Wallet and Electrs integration
 

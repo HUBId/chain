@@ -4,7 +4,12 @@ This runbook documents the operational procedures for the production Plonky3
 prover/verifier stack introduced in Phase 2. Use it alongside the
 [`rpp-node` operator guide](../rpp_node_operator_guide.md) and the
 [consensus performance report](../performance/consensus_proofs.md) when preparing
-or troubleshooting deployments. The Phase‑2 production checklist lives in the
+or troubleshooting deployments. Release builds package the binaries and
+telemetry manifests under `dist/artifacts/<target>/` (see
+`scripts/build_release.sh`), and cache directories default to
+`data/proofs` as configured by `proof_cache_dir` in the sample node
+configuration.【F:scripts/build_release.sh†L1-L118】【F:config/node.toml†L5-L20】
+The Phase‑2 production checklist lives in the
 [Plonky3 Production Validation Checklist](../testing/plonky3_experimental_testplan.md),
 which enumerates the artefacts and commands auditors expect before a rollout.【F:docs/testing/plonky3_experimental_testplan.md†L1-L121】
 
@@ -21,15 +26,18 @@ which enumerates the artefacts and commands auditors expect before a rollout.【
 
 1. **Build artefacts**
    - Compile the release binary with `--features prod,backend-plonky3` (see
-     `scripts/build_release.sh`).
+     `scripts/build_release.sh`). The script emits platform-specific tarballs
+     and SBOMs under `dist/artifacts/<target>/`, mirroring the layout consumed
+     by the release workflow.【F:scripts/build_release.sh†L10-L118】
    - Run `scripts/verify_release_features.sh` to ensure that mock features are
      absent and that `backend-plonky3` is present in the metadata.
 2. **Key material**
    - Seed proving/verifying key caches by executing
      `rpp-node validator proofs preload --backend plonky3` or by letting the
      first production block generation populate `backend_health.plonky3.*`.
-   - Verify that the cache directory contains all circuit families listed in the
-     blueprint (transaction, state, pruning, uptime, consensus).
+   - Verify that the cache directory at `proof_cache_dir` (default
+     `data/proofs/`) contains all circuit families listed in the
+     blueprint (transaction, state, pruning, uptime, consensus).【F:config/node.toml†L5-L20】
 3. **Integration checks**
    - Run `scripts/test.sh --backend plonky3 --unit --integration`.
    - Execute the consensus stress harness:
@@ -41,19 +49,24 @@ which enumerates the artefacts and commands auditors expect before a rollout.【
 ## 2. Monitoring & dashboards
 
 * **Metrics**
-  - `rpp.runtime.proof.generation.latency_ms{backend="plonky3",proof="<kind>"}`
-    (p50/p95/avg counters exported via Prometheus).
-  - `rpp.runtime.proof.verification.latency_ms{backend="plonky3"}` for verifier
-    latency.
-  - `rpp.runtime.proof.generation.failures_total{backend="plonky3"}` and
-    `rpp.runtime.proof.verification.failures_total{backend="plonky3"}` for
-    failure counts.
+  - `rpp.runtime.proof.generation.duration{backend="plonky3",proof_kind="<kind>"}`
+    histogram (exported as `rpp_runtime_proof_generation_duration_*`) for
+    proving latency; use percentile queries in Grafana or Prometheus to track
+    the documented SLOs.【F:rpp/runtime/telemetry/metrics.rs†L426-L520】
+  - `rpp.runtime.proof.generation.size{backend="plonky3",proof_kind="<kind>"}`
+    and the accompanying `rpp.runtime.proof.generation.count` counter to
+    monitor proof volume per circuit.【F:rpp/runtime/telemetry/metrics.rs†L426-L520】
+  - Verification telemetry is exported as
+    `rpp_stark_verify_duration_seconds`, `rpp_stark_proof_total_bytes`, and the
+    associated segment histograms, all labelled with
+    `proof_backend="rpp-stark"` and `proof_kind="<kind>"`. Use them to confirm
+    on-chain verification stays within expected budgets.【F:rpp/runtime/telemetry/metrics.rs†L445-L520】
   - `backend_health.plonky3` fields exposed via `/status/node` for cache size,
-    last key rotation timestamp, and active circuits.
+    last key rotation timestamp, and active circuits.【F:rpp/runtime/node.rs†L4862-L4894】
 * **Dashboards**
   - Import `docs/dashboards/consensus_proof_validation.json` into Grafana.
-    Panels track prove/verify latency percentiles, proof sizes, cache hit rates,
-    and tamper rejection counters.
+    Panels track prove/verify latency percentiles, proof sizes, proof volume,
+    and verifier payload trends.
   - Embed the dashboard in the production overview so acceptance evidence is
     available to stakeholders.
 * **Alerts**

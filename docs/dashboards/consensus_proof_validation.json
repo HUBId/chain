@@ -5,28 +5,41 @@
   "version": 1,
   "refresh": "30s",
   "timezone": "browser",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "type": "timeseries",
       "title": "Prover Latency (p50/p95)",
       "description": "Latency quantiles for Plonky3 consensus proof generation.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": { "unit": "ms" },
+        "defaults": {
+          "unit": "ms"
+        },
         "overrides": []
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.50, sum(rate(rpp_runtime_proof_generation_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(rpp_runtime_proof_generation_duration_bucket{backend=\"plonky3\",proof_kind=\"consensus\"}[5m])) by (le))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum(rate(rpp_runtime_proof_generation_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(rpp_runtime_proof_generation_duration_bucket{backend=\"plonky3\",proof_kind=\"consensus\"}[5m])) by (le))",
           "legendFormat": "p95"
         }
       ],
@@ -42,21 +55,31 @@
       "type": "timeseries",
       "title": "Verifier Latency (p50/p95)",
       "description": "Latency quantiles for Plonky3 consensus verification.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "fieldConfig": {
-        "defaults": { "unit": "ms" },
+        "defaults": {
+          "unit": "ms"
+        },
         "overrides": []
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.50, sum(rate(rpp_runtime_proof_verification_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend=\"rpp-stark\",proof_kind=\"consensus\"}[5m])) by (le))",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum(rate(rpp_runtime_proof_verification_latency_ms_bucket{backend=\"plonky3\",proof=\"consensus\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(rpp_stark_verify_duration_seconds_bucket{proof_backend=\"rpp-stark\",proof_kind=\"consensus\"}[5m])) by (le))",
           "legendFormat": "p95"
         }
       ],
@@ -72,16 +95,26 @@
       "type": "timeseries",
       "title": "Proof Size",
       "description": "Average consensus proof size emitted by the Plonky3 backend.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
       "fieldConfig": {
-        "defaults": { "unit": "bytes" },
+        "defaults": {
+          "unit": "bytes"
+        },
         "overrides": []
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(rpp_runtime_proof_generation_proof_bytes_sum{backend=\"plonky3\",proof=\"consensus\"}[5m])) / sum(rate(rpp_runtime_proof_generation_proof_bytes_count{backend=\"plonky3\",proof=\"consensus\"}[5m]))",
+          "expr": "sum(rate(rpp_runtime_proof_generation_size_sum{backend=\"plonky3\",proof_kind=\"consensus\"}[5m])) / sum(rate(rpp_runtime_proof_generation_size_count{backend=\"plonky3\",proof_kind=\"consensus\"}[5m]))",
           "legendFormat": "avg"
         }
       ],
@@ -94,18 +127,34 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Tamper Rejections",
-      "description": "Latest counts for rejected tamper attempts (VRF/quorum).",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "title": "Proof Volume (5m)",
+      "description": "Proofs generated per five-minute window by the Plonky3 backend.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 8
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
             ]
           }
         },
@@ -114,34 +163,56 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rpp_runtime_proof_generation_tamper_rejected_total{backend=\"plonky3\",tamper=\"vrf\"})",
-          "legendFormat": "VRF"
+          "expr": "sum(increase(rpp_runtime_proof_generation_count_total{backend=\"plonky3\",proof_kind=\"consensus\"}[5m]))",
+          "legendFormat": "Consensus"
         },
         {
           "refId": "B",
-          "expr": "sum(rpp_runtime_proof_generation_tamper_rejected_total{backend=\"plonky3\",tamper=\"quorum\"})",
-          "legendFormat": "Quorum"
+          "expr": "sum(increase(rpp_runtime_proof_generation_count_total{backend=\"plonky3\",proof_kind=\"transaction\"}[5m]))",
+          "legendFormat": "Transactions"
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       }
     },
     {
       "id": 5,
       "type": "stat",
-      "title": "Unexpected Accepts",
-      "description": "Should stay at zero; alerts fire otherwise.",
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "title": "Verifier Payload Size",
+      "description": "Average payload bytes observed during Plonky3 consensus verification.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 8
+      },
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 }
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
             ]
           }
         },
@@ -150,12 +221,18 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rpp_runtime_proof_generation_tamper_unexpected_total{backend=\"plonky3\"})",
-          "legendFormat": "Unexpected"
+          "expr": "sum(rate(rpp_stark_payload_bytes_sum{proof_backend=\"rpp-stark\",proof_kind=\"consensus\"}[5m])) / sum(rate(rpp_stark_payload_bytes_count{proof_backend=\"rpp-stark\",proof_kind=\"consensus\"}[5m]))",
+          "legendFormat": "Payload"
         }
       ],
       "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
       }
     }
   ]

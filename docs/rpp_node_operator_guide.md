@@ -85,9 +85,10 @@ Operator-Workflow:
 - Circuit-Caches vorbereiten (`rpp-node` legt Proving-/Verifying-Keys im
   Artefaktverzeichnis ab und spiegelt den Zustand über
   `backend_health.plonky3.*`).
-- Proof-Generierung und -Verifikation überwachen (`rpp.runtime.proof.generation.*`
-  und `rpp.runtime.proof.verification.*` mit Labels `backend="plonky3"`,
-  `proof="transaction|state|pruning|consensus"`).
+- Proof-Generierung und -Verifikation überwachen (`rpp.runtime.proof.generation.duration`
+  / `.size` / `.count` mit `backend="plonky3"`, `proof_kind="transaction|state|pruning|consensus"`
+  sowie `rpp_stark_verify_duration_seconds` und die zugehörigen Byte-Histogramme
+  mit `proof_kind="*"`).【F:rpp/runtime/telemetry/metrics.rs†L426-L520】
 - Acceptance-Kriterien prüfen: die Phase‑2-Grenzwerte orientieren sich an den
   Messwerten aus `tools/simnet/scenarios/consensus_quorum_stress.ron` und sind in
   `performance/consensus_proofs.md` dokumentiert.
