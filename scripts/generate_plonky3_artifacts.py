@@ -12,6 +12,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from collections import OrderedDict
@@ -62,6 +63,15 @@ class ArtifactEncoding:
         return payload
 
 
+def build_hash_manifest_entry(data: bytes) -> "OrderedDict[str, object]":
+    entry: "OrderedDict[str, object]" = OrderedDict()
+    entry["byte_length"] = len(data)
+    entry["sha256"] = hashlib.sha256(data).hexdigest()
+    if blake3:
+        entry["blake3"] = blake3(data).hexdigest()
+    return entry
+
+
 BASE64_ALPHABET = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
 
 
@@ -106,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "output",
         type=Path,
-        help="Directory where JSON artifacts should be written",
+        help="Directory where JSON artifacts should be written or verified",
     )
     parser.add_argument(
         "--circuits",
@@ -179,6 +189,16 @@ def parse_args() -> argparse.Namespace:
         "--signature-output",
         type=Path,
         help="Emit a deterministic manifest for signing to the given path",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Verify existing JSON artifacts instead of generating new ones",
+    )
+    parser.add_argument(
+        "--hash-output",
+        type=Path,
+        help="Write an aggregated hash manifest when running in --verify mode",
     )
     return parser.parse_args()
 
@@ -278,6 +298,12 @@ def artifact_to_document(
     proving_encoding = encode_bytes(artifact.proving_key, compression)
     document["verifying_key"] = verifying_encoding.to_json()
     document["proving_key"] = proving_encoding.to_json()
+    document["hash_manifest"] = OrderedDict(
+        (
+            ("verifying_key", build_hash_manifest_entry(artifact.verifying_key)),
+            ("proving_key", build_hash_manifest_entry(artifact.proving_key)),
+        )
+    )
     return document
 
 
@@ -360,6 +386,140 @@ def write_signature_manifest(
     output_path.write_text(f"{serialized}\n", encoding="utf-8")
 
 
+def decode_artifact_descriptor(descriptor: Dict[str, object]) -> bytes:
+    encoding = descriptor.get("encoding")
+    if encoding != "base64":
+        raise ValueError(f"Unsupported encoding '{encoding}', expected base64")
+    value = descriptor.get("value")
+    if not isinstance(value, str):
+        raise ValueError("Artifact encoding missing base64 value")
+    try:
+        payload = base64.b64decode(value.encode("ascii"))
+    except (binascii.Error, UnicodeError) as exc:  # pragma: no cover - defensive.
+        raise ValueError("Failed to decode base64 payload") from exc
+    compression = descriptor.get("compression")
+    if compression in (None, "none"):
+        decoded = payload
+    elif compression == "gzip":
+        decoded = gzip.decompress(payload)
+    else:
+        raise ValueError(f"Unsupported compression '{compression}'")
+    declared_length = descriptor.get("byte_length")
+    if declared_length is not None and int(declared_length) != len(decoded):
+        raise ValueError(
+            "Decoded payload length does not match declared byte_length"
+        )
+    expected_blake3 = descriptor.get("hash_blake3")
+    if expected_blake3:
+        if not blake3:
+            print(
+                "warning: skipping BLAKE3 verification because the blake3 module is unavailable",
+                file=sys.stderr,
+            )
+        else:
+            digest = blake3(decoded).hexdigest()
+            if digest != expected_blake3:
+                raise ValueError("Decoded payload does not match hash_blake3 digest")
+    return decoded
+
+
+def validate_hash_manifest_entry(
+    manifest: Dict[str, object],
+    data: bytes,
+    field: str,
+    circuit: str,
+) -> "OrderedDict[str, object]":
+    expected_entry = manifest.get(field)
+    if not isinstance(expected_entry, dict):
+        raise ValueError(
+            f"Artifact '{circuit}' is missing hash_manifest.{field} metadata"
+        )
+    actual_entry = build_hash_manifest_entry(data)
+    expected_length = expected_entry.get("byte_length")
+    if expected_length is not None and int(expected_length) != actual_entry["byte_length"]:
+        raise ValueError(
+            f"Artifact '{circuit}' {field} byte_length mismatch: expected {expected_length},"
+            f" observed {actual_entry['byte_length']}"
+        )
+    expected_sha = expected_entry.get("sha256")
+    if not isinstance(expected_sha, str):
+        raise ValueError(
+            f"Artifact '{circuit}' {field} manifest is missing a sha256 digest"
+        )
+    if expected_sha != actual_entry["sha256"]:
+        raise ValueError(
+            f"Artifact '{circuit}' {field} sha256 mismatch: expected {expected_sha},"
+            f" observed {actual_entry['sha256']}"
+        )
+    expected_blake3 = expected_entry.get("blake3")
+    if expected_blake3 is not None:
+        if not blake3:
+            print(
+                f"warning: skipping BLAKE3 verification for {circuit}:{field} because the blake3 module is unavailable",
+                file=sys.stderr,
+            )
+        elif expected_blake3 != actual_entry.get("blake3"):
+            raise ValueError(
+                f"Artifact '{circuit}' {field} blake3 mismatch: expected {expected_blake3},"
+                f" observed {actual_entry.get('blake3')}"
+            )
+    return actual_entry
+
+
+def write_hash_manifest_output(
+    output_path: Path,
+    entries: List["OrderedDict[str, object]"],
+    metadata: Optional[Dict[str, object]],
+) -> None:
+    payload: "OrderedDict[str, object]" = OrderedDict()
+    if metadata:
+        payload["metadata"] = metadata
+    payload["artifacts"] = entries
+    serialized = json.dumps(payload, indent=2, sort_keys=False)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(f"{serialized}\n", encoding="utf-8")
+
+
+def verify_existing_artifacts(args: argparse.Namespace) -> None:
+    base_dir = args.output
+    if not base_dir.exists() or not base_dir.is_dir():
+        raise FileNotFoundError(f"Artifact directory '{base_dir}' does not exist")
+    circuits = ensure_circuits(args.circuits)
+    aggregated: List["OrderedDict[str, object]"] = []
+    metadata: Optional[Dict[str, object]] = None
+    for circuit in circuits:
+        path = base_dir / f"{circuit}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Artifact JSON for circuit '{circuit}' not found at {path}")
+        document = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=OrderedDict,
+        )
+        verifying_descriptor = document.get("verifying_key")
+        proving_descriptor = document.get("proving_key")
+        if not isinstance(verifying_descriptor, dict) or not isinstance(proving_descriptor, dict):
+            raise ValueError(f"Artifact '{circuit}' is missing verifying/proving key descriptors")
+        verifying_bytes = decode_artifact_descriptor(verifying_descriptor)
+        proving_bytes = decode_artifact_descriptor(proving_descriptor)
+        manifest = document.get("hash_manifest")
+        if not isinstance(manifest, dict):
+            raise ValueError(f"Artifact '{circuit}' is missing hash_manifest metadata")
+        verifying_entry = validate_hash_manifest_entry(manifest, verifying_bytes, "verifying_key", circuit)
+        proving_entry = validate_hash_manifest_entry(manifest, proving_bytes, "proving_key", circuit)
+        if metadata is None and isinstance(document.get("metadata"), dict):
+            metadata = document["metadata"]
+        aggregated_entry: "OrderedDict[str, object]" = OrderedDict()
+        aggregated_entry["circuit"] = circuit
+        if isinstance(document.get("metadata"), dict):
+            aggregated_entry["metadata"] = document["metadata"]
+        aggregated_entry["verifying_key"] = verifying_entry
+        aggregated_entry["proving_key"] = proving_entry
+        aggregated.append(aggregated_entry)
+    if args.hash_output:
+        sorted_entries = sorted(aggregated, key=lambda item: item["circuit"])
+        write_hash_manifest_output(args.hash_output, sorted_entries, metadata)
+
+
 def gather_artifacts(args: argparse.Namespace) -> List[Artifact]:
     circuits = ensure_circuits(args.circuits)
     artifacts: List[Artifact] = []
@@ -393,6 +553,13 @@ def gather_artifacts(args: argparse.Namespace) -> List[Artifact]:
 
 def main() -> None:
     args = parse_args()
+    if args.verify:
+        if args.signature_output:
+            raise ValueError("--signature-output cannot be combined with --verify")
+        verify_existing_artifacts(args)
+        return
+    if args.hash_output:
+        raise ValueError("--hash-output is only supported with --verify")
     metadata = build_metadata(args)
     artifacts = gather_artifacts(args)
     emitted: List[Tuple[Path, str]] = []

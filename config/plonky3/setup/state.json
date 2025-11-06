@@ -11,5 +11,15 @@
     "byte_length": 224,
     "value": "H4sIAHJaDGkC/wHgAB//WxhCqDQ/c306t582bIS4TYv9j56xWY/urO06Ca2OOfElailvNSZKKGySZoD5Ddlu5P6HhWX5+U6NL0m9tSSGpKtSWWhYp5NBXuQwtYI0lLtpDxTwe8qTsCMw1XbkpBfEpdlZeM/RRNdnZUu6zlLNYPulVCCcNTFWZIkzbQK4deOvm2sxfSoHAXo39YOhaDbyYgYcgrEgrlkGmuC/IyN+FEvJ8KGpz7xiD0Zg52CbAG40TzvmFFYwof2xKO9ik1CjAy5vfjXaTzbmTmyOZCNxxZ4Xi+yKagERdXeHTt2G2Lco2Mue4AAAAA==",
     "compression": "gzip"
+  },
+  "hash_manifest": {
+    "verifying_key": {
+      "byte_length": 96,
+      "sha256": "9c5f2ff69b436a9d132b9b14d5690948ed48b8c3b398dfbd50dd150e087030c7"
+    },
+    "proving_key": {
+      "byte_length": 224,
+      "sha256": "2cb02d943a1bab8ae8d35188b39ad7fefe0cbdf6f8fdd9a514a9a896f8725756"
+    }
   }
 }

@@ -238,6 +238,13 @@ for binary in "${BINARIES[@]}"; do
   echo "Packaged $tar_path"
 done
 
+HASH_OUTPUT="$OUT_DIR/$TARGET/plonky3-setup-hashes.json"
+echo "Verifying Plonky3 setup artifacts and emitting hash manifest at $HASH_OUTPUT"
+python3 "$(dirname "$0")/generate_plonky3_artifacts.py" \
+  "config/plonky3/setup" \
+  --verify \
+  --hash-output "$HASH_OUTPUT"
+
 if [[ $GENERATE_SBOM -eq 1 ]]; then
   if ! command -v cargo-cyclonedx >/dev/null 2>&1; then
     echo "warning: cargo-cyclonedx not installed, skipping SBOM generation" >&2

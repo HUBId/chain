@@ -61,6 +61,9 @@ schema returned by `plonky3_backend::VerifyingKey::json_schema()` and
   `gzip`, use `none` for raw base64).
 - `hash_blake3` (optional): a diagnostic digest emitted when the Python
   `blake3` module is available.
+- `hash_manifest`: nested metadata describing the raw (decompressed) proving
+  and verifying key payloads. Each entry stores the expected `byte_length` and
+  a mandatory `sha256` digest (plus an optional `blake3` digest when available).
 
 Custom tooling can call the backend helpers
 `plonky3_backend::VerifyingKey::from_encoded_parts` and
@@ -75,3 +78,27 @@ starts.
 
 Use `--compression none` if you need uncompressed base64 output (for example,
 when diffing against upstream snapshots).
+
+## Hash manifest and CI validation
+
+The release pipeline publishes a consolidated hash manifest that mirrors the
+`hash_manifest` data from every circuit document. During a release
+`scripts/build_release.sh` verifies the JSON fixtures and writes
+`plonky3-setup-hashes.json`, which is subsequently signed and attached to the
+GitHub release alongside the checksum bundle.
+
+To regenerate the manifest locally or to assert that the repository matches the
+release artefacts, run the helper in verification mode:
+
+```shell
+python3 scripts/generate_plonky3_artifacts.py \
+  config/plonky3/setup \
+  --verify \
+  --hash-output dist/plonky3-setup-hashes.json
+```
+
+The nightly CI workflow downloads the latest release, verifies the Cosign
+signatures for `plonky3-setup-hashes.json` and `SHA256SUMS.txt`, re-computes the
+manifest from this repository, and fails the job if the digests diverge. This
+ensures that any tampering with the mirrored proving or verifying keys is
+detected automatically.

@@ -220,6 +220,19 @@ jobs:
           pattern: artifacts-*
           path: dist/artifacts
           merge-multiple: true
+      - name: Generate Plonky3 hash manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/generate_plonky3_artifacts.py \
+            config/plonky3/setup \
+            --verify \
+            --hash-output dist/plonky3-setup-hashes.json
+      - name: Remove per-target hash manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist/artifacts -name 'plonky3-setup-hashes.json' -delete
       - uses: sigstore/cosign-installer@v3
         with:
           cosign-release: 'v2.4.0'
@@ -232,6 +245,9 @@ jobs:
             echo "error: no artifacts found to checksum" >&2
             exit 1
           fi
+          if [[ -f dist/plonky3-setup-hashes.json ]]; then
+            files+=("dist/plonky3-setup-hashes.json")
+          fi
           ./scripts/checksums.sh --output dist/SHA256SUMS.txt "${files[@]}"
           ./scripts/verify_checksums.sh --manifest dist/SHA256SUMS.txt
       - name: Sign artifacts and checksums
@@ -241,9 +257,17 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < <(find dist/artifacts -type f \( -name '*.tar.gz' -o -name '*.json' \) -print | sort)
+          if [[ -f dist/plonky3-setup-hashes.json ]]; then
+            files+=("dist/plonky3-setup-hashes.json")
+          fi
           for file in "${files[@]}"; do
             cosign sign-blob --yes --output-signature "${file}.sig" --output-certificate "${file}.pem" "$file"
-            target="$(basename "$(dirname "$file")")"
+            target_dir="$(basename "$(dirname "$file")")"
+            if [[ "$target_dir" == "dist" ]]; then
+              target="plonky3-hashes"
+            else
+              target="$target_dir"
+            fi
             subject="$(basename "$file")"
             ./scripts/provenance_attest.sh --artifact "$file" --target "$target" --subject "$subject"
           done
@@ -258,6 +282,12 @@ jobs:
             dist/SHA256SUMS.txt
             dist/SHA256SUMS.txt.sig
             dist/SHA256SUMS.txt.pem
+            dist/plonky3-setup-hashes.json
+            dist/plonky3-setup-hashes.json.sig
+            dist/plonky3-setup-hashes.json.pem
+            dist/plonky3-setup-hashes.json.intoto.jsonl
+            dist/plonky3-setup-hashes.json.intoto.jsonl.sig
+            dist/plonky3-setup-hashes.json.intoto.jsonl.pem
             dist/artifacts/**/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
