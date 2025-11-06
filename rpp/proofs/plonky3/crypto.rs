@@ -2,14 +2,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use blake3::hash as blake3_hash;
 use flate2::read::GzDecoder;
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
+use parking_lot::RwLock;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::error;
@@ -28,6 +31,16 @@ enum BackendErrorCategory {
     Key,
     Input,
     Runtime,
+}
+
+impl BackendErrorCategory {
+    fn as_str(&self) -> &'static str {
+        match self {
+            BackendErrorCategory::Key => "key",
+            BackendErrorCategory::Input => "input",
+            BackendErrorCategory::Runtime => "runtime",
+        }
+    }
 }
 
 fn categorize_backend_error(err: &backend::BackendError) -> BackendErrorCategory {
@@ -77,6 +90,94 @@ pub(crate) fn map_backend_error(
         BackendErrorCategory::Input => ChainError::InvalidProof(message),
         BackendErrorCategory::Runtime => ChainError::Crypto(message),
     }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Plonky3VerifierError {
+    pub message: String,
+    pub category: String,
+    pub at_ms: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Plonky3VerifierHealth {
+    pub proofs_verified: u64,
+    pub key_failures: u64,
+    pub input_failures: u64,
+    pub runtime_failures: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<Plonky3VerifierError>,
+}
+
+#[derive(Default)]
+struct VerifierTelemetry {
+    proofs_verified: AtomicU64,
+    key_failures: AtomicU64,
+    input_failures: AtomicU64,
+    runtime_failures: AtomicU64,
+    last_success_ms: AtomicU64,
+    last_error: RwLock<Option<Plonky3VerifierError>>,
+}
+
+fn now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+impl VerifierTelemetry {
+    fn record_success(&self) {
+        self.proofs_verified.fetch_add(1, Ordering::SeqCst);
+        self.last_success_ms.store(now_ms(), Ordering::SeqCst);
+        self.last_error.write().take();
+    }
+
+    fn record_failure(&self, category: BackendErrorCategory, message: String) {
+        let counter = match category {
+            BackendErrorCategory::Key => &self.key_failures,
+            BackendErrorCategory::Input => &self.input_failures,
+            BackendErrorCategory::Runtime => &self.runtime_failures,
+        };
+        counter.fetch_add(1, Ordering::SeqCst);
+        *self.last_error.write() = Some(Plonky3VerifierError {
+            message,
+            category: category.as_str().to_string(),
+            at_ms: now_ms(),
+        });
+    }
+
+    fn snapshot(&self) -> Plonky3VerifierHealth {
+        let proofs_verified = self.proofs_verified.load(Ordering::SeqCst);
+        let key_failures = self.key_failures.load(Ordering::SeqCst);
+        let input_failures = self.input_failures.load(Ordering::SeqCst);
+        let runtime_failures = self.runtime_failures.load(Ordering::SeqCst);
+        let last_success_raw = self.last_success_ms.load(Ordering::SeqCst);
+        let last_success_ms = if last_success_raw == 0 {
+            None
+        } else {
+            Some(last_success_raw)
+        };
+        let last_error = self.last_error.read().clone();
+        Plonky3VerifierHealth {
+            proofs_verified,
+            key_failures,
+            input_failures,
+            runtime_failures,
+            last_success_ms,
+            last_error,
+        }
+    }
+}
+
+static PLONKY3_VERIFIER_TELEMETRY: Lazy<VerifierTelemetry> = Lazy::new(VerifierTelemetry::default);
+
+pub fn verifier_telemetry_snapshot() -> Plonky3VerifierHealth {
+    PLONKY3_VERIFIER_TELEMETRY.snapshot()
 }
 
 #[derive(Clone)]
@@ -738,13 +839,18 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
 }
 
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
-    let artifact = circuit_artifact(&proof.circuit)?;
+    let artifact = match circuit_artifact(&proof.circuit) {
+        Ok(artifact) => artifact,
+        Err(err) => {
+            PLONKY3_VERIFIER_TELEMETRY.record_failure(BackendErrorCategory::Key, err.to_string());
+            return Err(err);
+        }
+    };
     let params = Plonky3Parameters::default();
     proof.payload.validate().map_err(|err| {
-        ChainError::InvalidProof(format!(
-            "plonky3 {} proof payload invalid: {err}",
-            proof.circuit
-        ))
+        let message = format!("plonky3 {} proof payload invalid: {err}", proof.circuit);
+        PLONKY3_VERIFIER_TELEMETRY.record_failure(BackendErrorCategory::Input, message.clone());
+        ChainError::InvalidProof(message)
     })?;
 
     let verifier = backend::VerifierContext::new(
@@ -754,29 +860,30 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
         params.use_gpu_acceleration,
     )
     .map_err(|err| {
-        map_backend_error(err, |detail| {
-            format!(
-                "failed to prepare Plonky3 {} circuit for verification: {detail}",
-                proof.circuit
-            )
-        })
+        let message = format!(
+            "failed to prepare Plonky3 {} circuit for verification: {detail}",
+            proof.circuit,
+            detail = err
+        );
+        PLONKY3_VERIFIER_TELEMETRY.record_failure(BackendErrorCategory::Key, message.clone());
+        map_backend_error(err, |_| message)
     })?;
     let backend_proof = proof.payload.to_backend(&proof.circuit).map_err(|err| {
-        map_backend_error(err, |detail| {
-            format!(
-                "failed to decode Plonky3 {} proof payload: {detail}",
-                proof.circuit
-            )
-        })
+        let message = format!(
+            "failed to decode Plonky3 {} proof payload: {err}",
+            proof.circuit
+        );
+        PLONKY3_VERIFIER_TELEMETRY.record_failure(BackendErrorCategory::Input, message.clone());
+        map_backend_error(err, |_| message)
     })?;
     verifier
         .verify(&proof.commitment, &proof.public_inputs, &backend_proof)
         .map_err(|err| {
-            map_backend_error(err, |detail| {
-                format!(
-                    "Plonky3 {} proof verification failed: {detail}",
-                    proof.circuit
-                )
-            })
-        })
+            let message = format!("Plonky3 {} proof verification failed: {err}", proof.circuit);
+            let category = categorize_backend_error(&err);
+            PLONKY3_VERIFIER_TELEMETRY.record_failure(category, message.clone());
+            map_backend_error(err, |_| message)
+        })?;
+    PLONKY3_VERIFIER_TELEMETRY.record_success();
+    Ok(())
 }

@@ -12,7 +12,10 @@ use parking_lot::{Mutex, RwLock};
 use serde::Serialize;
 use serde_json::Value;
 
-use plonky3_backend::{validate_consensus_public_inputs, ProverContext as BackendProverContext};
+use plonky3_backend::{
+    validate_consensus_public_inputs, ConsensusCircuit as BackendConsensusCircuit,
+    ProverContext as BackendProverContext,
+};
 
 use crate::consensus::ConsensusCertificate;
 use crate::errors::{ChainError, ChainResult};
@@ -204,6 +207,14 @@ impl Plonky3Backend {
                     "invalid consensus public inputs supplied to Plonky3 prover: {err}"
                 ))
             })?;
+
+            BackendConsensusCircuit::from_public_inputs_value(&canonical_public_inputs).map_err(
+                |err| {
+                    ChainError::Crypto(format!(
+                        "failed to instantiate consensus circuit for Plonky3 prover: {err}"
+                    ))
+                },
+            )?;
         }
         let (commitment, backend_proof) =
             compiled.prove(&canonical_public_inputs).map_err(|err| {

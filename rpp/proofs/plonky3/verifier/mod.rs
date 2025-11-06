@@ -16,6 +16,10 @@ use plonky3_backend::validate_consensus_public_inputs;
 #[derive(Clone, Debug)]
 pub struct Plonky3Verifier;
 
+pub fn telemetry_snapshot() -> crypto::Plonky3VerifierHealth {
+    crypto::verifier_telemetry_snapshot()
+}
+
 impl Plonky3Verifier {
     fn malformed(circuit: &str, detail: impl Into<String>) -> ChainError {
         ChainError::InvalidProof(format!(
