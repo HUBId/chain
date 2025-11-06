@@ -218,7 +218,7 @@ pub struct CircuitConfig {
     fri: FriConfigKnobs,
     derived_security_bits: u32,
     #[cfg(feature = "plonky3-gpu")]
-    gpu: Option<GpuResources>,
+    gpu: Option<&'static GpuResources>,
 }
 
 impl CircuitConfig {
@@ -235,7 +235,7 @@ impl CircuitConfig {
     }
 
     #[cfg(feature = "plonky3-gpu")]
-    pub fn gpu_resources(&self) -> Option<&GpuResources> {
+    pub fn gpu_resources(&self) -> Option<&'static GpuResources> {
         self.gpu.as_ref()
     }
 }
@@ -279,7 +279,12 @@ impl<'a> CircuitConfigBuilder<'a> {
 
         #[cfg(feature = "plonky3-gpu")]
         let gpu = if self.use_gpu {
-            Some(GpuResources::new())
+            Some(
+                GpuResources::acquire().map_err(|message| BackendError::GpuInitialization {
+                    circuit: circuit.to_string(),
+                    message,
+                })?,
+            )
         } else {
             None
         };

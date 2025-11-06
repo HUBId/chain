@@ -123,6 +123,28 @@ jobs:
           fi
           cargo xtask test-all
 
+  plonky3-gpu:
+    name: Plonky3 GPU smoke
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build GPU backend
+        run: |
+          set -euo pipefail
+          cargo build -p plonky3-backend --no-default-features --features plonky3-gpu
+
+      - name: GPU backend smoke test
+        run: |
+          set -euo pipefail
+          cargo test -p plonky3-backend --no-default-features --features plonky3-gpu -- consensus_proof_metadata_tracks_commitment_digest
+
   simnet:
     name: Simnet harness (prod, prover-stwo, plonky3)
     runs-on: ubuntu-latest

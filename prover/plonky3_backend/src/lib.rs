@@ -1848,6 +1848,17 @@ impl ProverContext {
         if name.is_empty() {
             return Err(BackendError::EmptyCircuit);
         }
+        #[cfg(feature = "plonky3-gpu")]
+        let use_gpu = if use_gpu && gpu::GpuResources::disabled_via_env() {
+            info!(
+                circuit = %name,
+                env = gpu::GPU_DISABLE_ENV,
+                "GPU proving disabled via environment override"
+            );
+            false
+        } else {
+            use_gpu
+        };
         let verifying_metadata = Arc::clone(verifying_key.air_metadata());
         let mut proving_key = proving_key;
         proving_key.align_metadata(&verifying_metadata);
@@ -2020,6 +2031,17 @@ impl VerifierContext {
         if name.is_empty() {
             return Err(BackendError::EmptyCircuit);
         }
+        #[cfg(feature = "plonky3-gpu")]
+        let use_gpu = if use_gpu && gpu::GpuResources::disabled_via_env() {
+            info!(
+                circuit = %name,
+                env = gpu::GPU_DISABLE_ENV,
+                "GPU verification disabled via environment override"
+            );
+            false
+        } else {
+            use_gpu
+        };
         let metadata = Arc::clone(verifying_key.air_metadata());
         Ok(Self {
             name,
