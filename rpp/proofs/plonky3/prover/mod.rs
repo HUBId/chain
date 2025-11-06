@@ -189,25 +189,47 @@ impl Plonky3Backend {
     ) -> ChainResult<Plonky3Proof> {
         let circuit = witness.circuit();
         let compiled = self.ensure_compiled(params, circuit)?;
-        let public_inputs = witness.public_inputs()?;
+        let raw_public_inputs = witness.public_inputs()?;
+        let (expected_commitment, _, canonical_bytes) =
+            super::public_inputs::compute_commitment_and_inputs(&raw_public_inputs)?;
+        let canonical_public_inputs: Value =
+            serde_json::from_slice(&canonical_bytes).map_err(|err| {
+                ChainError::Crypto(format!(
+                    "failed to decode canonical Plonky3 public inputs: {err}"
+                ))
+            })?;
         if circuit == "consensus" {
-            validate_consensus_public_inputs(&public_inputs).map_err(|err| {
+            validate_consensus_public_inputs(&canonical_public_inputs).map_err(|err| {
                 ChainError::Crypto(format!(
                     "invalid consensus public inputs supplied to Plonky3 prover: {err}"
                 ))
             })?;
         }
-        let (commitment, backend_proof) = compiled.prove(&public_inputs).map_err(|err| {
-            let message = format!("failed to generate Plonky3 {circuit} proof: {err}");
+        let (commitment, backend_proof) =
+            compiled.prove(&canonical_public_inputs).map_err(|err| {
+                let message = err.to_string();
+                PLONKY3_TELEMETRY.record_failure(message.clone());
+                ChainError::Crypto(message)
+            })?;
+        if commitment != expected_commitment {
+            let message = format!(
+                "Plonky3 backend commitment mismatch: expected {expected_commitment}, found {commitment}"
+            );
             PLONKY3_TELEMETRY.record_failure(message.clone());
-            ChainError::Crypto(message)
-        })?;
-        let proof = Plonky3Proof::from_backend(
+            return Err(ChainError::CommitmentMismatch(message));
+        }
+        let proof = match Plonky3Proof::from_backend(
             circuit.to_string(),
             commitment,
-            public_inputs,
+            canonical_public_inputs,
             backend_proof,
-        )?;
+        ) {
+            Ok(proof) => proof,
+            Err(err) => {
+                PLONKY3_TELEMETRY.record_failure(err.to_string());
+                return Err(err);
+            }
+        };
         PLONKY3_TELEMETRY.record_success();
         Ok(proof)
     }

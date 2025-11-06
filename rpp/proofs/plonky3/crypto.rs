@@ -13,7 +13,7 @@ use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
 pub use plonky3_backend::COMMITMENT_LEN;
-use plonky3_backend::{self as backend, AirMetadata};
+use plonky3_backend::{self as backend, validate_consensus_public_inputs, AirMetadata};
 
 use super::params::Plonky3Parameters;
 
@@ -473,10 +473,35 @@ pub fn finalize(circuit: String, public_inputs: Value) -> ChainResult<super::pro
             "failed to prepare Plonky3 {circuit} circuit for proving: {err}"
         ))
     })?;
-    let (commitment, backend_proof) = context.prove(&public_inputs).map_err(|err| {
-        ChainError::Crypto(format!("failed to generate Plonky3 {circuit} proof: {err}"))
-    })?;
-    super::proof::Plonky3Proof::from_backend(circuit, commitment, public_inputs, backend_proof)
+    let (expected_commitment, _, canonical_bytes) =
+        super::public_inputs::compute_commitment_and_inputs(&public_inputs)?;
+    let canonical_public_inputs: Value =
+        serde_json::from_slice(&canonical_bytes).map_err(|err| {
+            ChainError::Crypto(format!(
+                "failed to decode canonical Plonky3 public inputs: {err}"
+            ))
+        })?;
+    if circuit == "consensus" {
+        validate_consensus_public_inputs(&canonical_public_inputs).map_err(|err| {
+            ChainError::Crypto(format!(
+                "invalid consensus public inputs supplied to Plonky3 prover: {err}"
+            ))
+        })?;
+    }
+    let (commitment, backend_proof) = context
+        .prove(&canonical_public_inputs)
+        .map_err(|err| ChainError::Crypto(err.to_string()))?;
+    if commitment != expected_commitment {
+        return Err(ChainError::CommitmentMismatch(format!(
+            "Plonky3 backend commitment mismatch: expected {expected_commitment}, found {commitment}"
+        )));
+    }
+    super::proof::Plonky3Proof::from_backend(
+        circuit,
+        commitment,
+        canonical_public_inputs,
+        backend_proof,
+    )
 }
 
 pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
@@ -494,18 +519,11 @@ pub fn verify_proof(proof: &super::proof::Plonky3Proof) -> ChainResult<()> {
             proof.circuit
         ))
     })?;
-    let backend_proof = proof.payload.to_backend(&proof.circuit).map_err(|err| {
-        ChainError::Crypto(format!(
-            "failed to decode Plonky3 {} proof payload: {err}",
-            proof.circuit
-        ))
-    })?;
+    let backend_proof = proof
+        .payload
+        .to_backend(&proof.circuit)
+        .map_err(|err| ChainError::Crypto(err.to_string()))?;
     verifier
         .verify(&proof.commitment, &proof.public_inputs, &backend_proof)
-        .map_err(|err| {
-            ChainError::Crypto(format!(
-                "plonky3 proof verification failed for {} circuit: {err}",
-                proof.circuit
-            ))
-        })
+        .map_err(|err| ChainError::Crypto(err.to_string()))
 }
