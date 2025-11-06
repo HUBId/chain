@@ -6,12 +6,17 @@
 //! commitments and proof blobs across runs.
 
 use ed25519_dalek::{Keypair, Signer};
+use plonky3_backend::HashFormat;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rpp_chain::crypto::address_from_public_key;
+use rpp_chain::plonky3::circuit::transaction::{TransactionCircuit, TransactionWitness};
 use rpp_chain::plonky3::crypto;
+use rpp_chain::plonky3::experimental::force_enable_for_tests;
+use rpp_chain::plonky3::params::Plonky3Parameters;
 use rpp_chain::plonky3::proof::Plonky3Proof;
 use rpp_chain::plonky3::prover::Plonky3Prover;
+use rpp_chain::plonky3::public_inputs;
 use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::{ChainProof, SignedTransaction, Transaction};
@@ -30,6 +35,7 @@ fn deterministic_transaction() -> SignedTransaction {
 
 #[test]
 fn transaction_roundtrip_produces_stable_commitment() {
+    force_enable_for_tests();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();
@@ -44,30 +50,68 @@ fn transaction_roundtrip_produces_stable_commitment() {
     };
     let parsed = Plonky3Proof::from_value(value).unwrap();
     assert_eq!(parsed.circuit, "transaction");
-    assert!(
-        parsed.payload.metadata.fri_commitments.len() >= 1,
-        "transaction proofs must record FRI commit-phase digests"
-    );
-    assert!(
-        !parsed.payload.metadata.transcript.checkpoints.is_empty(),
-        "transaction proofs must expose challenger checkpoints"
-    );
-    assert!(
-        parsed.payload.metadata.derived_security_bits >= parsed.payload.metadata.security_bits,
-        "derived security cannot undershoot negotiated security"
+
+    let (commitment, _, canonical_bytes) =
+        public_inputs::compute_commitment_and_inputs(&parsed.public_inputs).unwrap();
+    assert_eq!(commitment, parsed.commitment);
+    assert_eq!(
+        parsed.payload.metadata.canonical_public_inputs,
+        canonical_bytes
     );
 
-    let commitment = crypto::compute_commitment(&parsed.public_inputs).unwrap();
-    assert_eq!(commitment, parsed.commitment);
+    let canonical_inputs: serde_json::Value =
+        serde_json::from_slice(&parsed.payload.metadata.canonical_public_inputs).unwrap();
+    assert_eq!(canonical_inputs, parsed.public_inputs);
 
     let witness_value = parsed
         .public_inputs
         .get("witness")
         .cloned()
         .expect("witness payload");
-    let decoded: rpp_chain::plonky3::circuit::transaction::TransactionWitness =
-        serde_json::from_value(witness_value).unwrap();
+    let decoded: TransactionWitness = serde_json::from_value(witness_value).unwrap();
     assert_eq!(decoded.transaction, tx);
+
+    let params = Plonky3Parameters::default();
+    assert_eq!(parsed.payload.metadata.security_bits, params.security_bits);
+    assert_eq!(parsed.payload.metadata.use_gpu, params.use_gpu_acceleration);
+    assert!(
+        parsed.payload.metadata.derived_security_bits >= params.security_bits,
+        "derived security cannot undershoot negotiated security"
+    );
+
+    assert_eq!(
+        parsed.payload.metadata.hash_format,
+        HashFormat::PoseidonMerkleCap
+    );
+    assert!(
+        !parsed.payload.metadata.transcript.checkpoints.is_empty(),
+        "transaction proofs must expose challenger checkpoints"
+    );
+    assert!(
+        !parsed.payload.metadata.fri_commitments.is_empty(),
+        "transaction proofs must record FRI commit-phase digests"
+    );
+
+    let expected_params = TransactionCircuit::PARAMS;
+    assert_eq!(
+        parsed.payload.metadata.trace_commitment, expected_params.domain_root,
+        "trace commitment must match fixture domain digest"
+    );
+    assert_eq!(
+        parsed.payload.metadata.quotient_commitment, expected_params.quotient_root,
+        "quotient commitment must match fixture quotient digest"
+    );
+    assert_eq!(
+        parsed
+            .payload
+            .metadata
+            .fri_commitments
+            .first()
+            .copied()
+            .expect("fri digest"),
+        expected_params.fri_digest,
+        "FRI digest must match fixture transcript digest"
+    );
 
     assert!(matches!(parsed.public_inputs.get("block_height"), None));
     assert!(matches!(parsed.public_inputs.get("commitments"), None));
@@ -75,6 +119,7 @@ fn transaction_roundtrip_produces_stable_commitment() {
 
 #[test]
 fn transaction_roundtrip_rejects_tampered_public_inputs() {
+    force_enable_for_tests();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();
@@ -101,6 +146,7 @@ fn transaction_roundtrip_rejects_tampered_public_inputs() {
 
 #[test]
 fn transaction_roundtrip_rejects_truncated_proof() {
+    force_enable_for_tests();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();
@@ -110,10 +156,13 @@ fn transaction_roundtrip_rejects_truncated_proof() {
     let mut tampered = proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed
+        let backend_proof = parsed
             .payload
-            .stark_proof
-            .truncate(parsed.payload.stark_proof.len().saturating_sub(1));
+            .to_backend(&parsed.circuit)
+            .expect("decode backend proof");
+        let mut truncated = backend_proof.serialized_proof().to_vec();
+        truncated.truncate(truncated.len().saturating_sub(1));
+        parsed.payload.stark_proof = truncated;
         *value = parsed.into_value().unwrap();
     }
 
@@ -122,7 +171,7 @@ fn transaction_roundtrip_rejects_truncated_proof() {
 
 #[test]
 fn transaction_roundtrip_rejects_wrong_verifying_key() {
-    enable_experimental_backend();
+    force_enable_for_tests();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();
@@ -133,8 +182,8 @@ fn transaction_roundtrip_rejects_wrong_verifying_key() {
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
         parsed.payload.metadata.trace_commitment[0] ^= 0x40;
-        if let Some(first) = parsed.payload.stark_proof.first_mut() {
-            *first ^= 0x02;
+        if let Some(first) = parsed.payload.metadata.fri_commitments.first_mut() {
+            first[0] ^= 0x80;
         }
         *value = parsed.into_value().unwrap();
     }
@@ -148,7 +197,7 @@ fn transaction_roundtrip_rejects_wrong_verifying_key() {
 
 #[test]
 fn transaction_roundtrip_rejects_mismatched_commitment() {
-    enable_experimental_backend();
+    force_enable_for_tests();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();
@@ -171,7 +220,7 @@ fn transaction_roundtrip_rejects_mismatched_commitment() {
 
 #[test]
 fn transaction_roundtrip_rejects_oversized_proof() {
-    enable_experimental_backend();
+    force_enable_for_tests();
     let prover = Plonky3Prover::new();
     let verifier = Plonky3Verifier::default();
     let tx = deterministic_transaction();
@@ -181,7 +230,13 @@ fn transaction_roundtrip_rejects_oversized_proof() {
     let mut tampered = proof.clone();
     if let ChainProof::Plonky3(value) = &mut tampered {
         let mut parsed = Plonky3Proof::from_value(value).unwrap();
-        parsed.payload.stark_proof.push(0);
+        let backend_proof = parsed
+            .payload
+            .to_backend(&parsed.circuit)
+            .expect("decode backend proof");
+        let mut expanded = backend_proof.serialized_proof().to_vec();
+        expanded.push(0);
+        parsed.payload.stark_proof = expanded;
         *value = parsed.into_value().unwrap();
     }
 
