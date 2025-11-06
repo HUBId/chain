@@ -79,6 +79,7 @@ pub struct RuntimeMetrics {
     consensus_round_duration: Histogram<f64>,
     consensus_quorum_latency: Histogram<f64>,
     consensus_vrf_verification_time: Histogram<f64>,
+    consensus_vrf_verifications_total: Counter<u64>,
     consensus_quorum_verifications_total: Counter<u64>,
     consensus_leader_changes: Counter<u64>,
     consensus_witness_events: Counter<u64>,
@@ -176,6 +177,11 @@ impl RuntimeMetrics {
                 )
                 .with_unit("ms")
                 .build(),
+            consensus_vrf_verifications_total: meter
+                .u64_counter("consensus_vrf_verifications_total")
+                .with_description("Total VRF verification attempts grouped by result")
+                .with_unit("1")
+                .build(),
             consensus_quorum_verifications_total: meter
                 .u64_counter("consensus_quorum_verifications_total")
                 .with_description("Consensus quorum verification attempts grouped by result")
@@ -217,6 +223,14 @@ impl RuntimeMetrics {
                 .with_unit("1")
                 .build(),
         }
+    }
+
+    /// Construct a new metrics handle from the provided meter.
+    ///
+    /// This helper primarily exists to support integration tests that need to
+    /// attach `RuntimeMetrics` to custom in-memory exporters.
+    pub fn from_meter_for_testing(meter: &Meter) -> Self {
+        Self::from_meter(meter)
     }
 
     pub fn proofs(&self) -> &ProofMetrics {
@@ -316,6 +330,7 @@ impl RuntimeMetrics {
     /// Record the outcome of verifying the VRF portion of a consensus certificate.
     pub fn record_consensus_vrf_verification_success(&self, duration: Duration) {
         let attributes = [KeyValue::new("result", "success")];
+        self.consensus_vrf_verifications_total.add(1, &attributes);
         self.consensus_vrf_verification_time
             .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
     }
@@ -330,6 +345,7 @@ impl RuntimeMetrics {
             KeyValue::new("result", "failure"),
             KeyValue::new("reason", reason),
         ];
+        self.consensus_vrf_verifications_total.add(1, &attributes);
         self.consensus_vrf_verification_time
             .record(duration.as_secs_f64() * MILLIS_PER_SECOND, &attributes);
     }
