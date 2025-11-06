@@ -7,13 +7,24 @@
     "fri_commitments": [
       "0000000000000000000000000000000000000000000000000000000000000000"
     ],
-    "public_inputs_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+    "canonical_public_inputs": "AA==",
+    "transcript": {
+      "degree_bits": 1,
+      "trace_length_bits": 1,
+      "alpha": [0, 0, 0, 0],
+      "zeta": [0, 0, 0, 0],
+      "pcs_alpha": [0, 0, 0, 0],
+      "fri_challenges": [[0, 0, 0, 0]],
+      "query_indices": [0],
+      "checkpoints": [
+        {"stage": "after_public_values", "state": "AA=="},
+        {"stage": "after_commitments", "state": "AA=="},
+        {"stage": "after_query_sampling", "state": "AA=="}
+      ]
+    },
     "hash_format": "poseidon_merkle_cap",
     "security_bits": 64,
     "derived_security_bits": 64,
-    "challenger_digests": [
-      "2222222222222222222222222222222222222222222222222222222222222222"
-    ],
     "use_gpu": false
   }
 }

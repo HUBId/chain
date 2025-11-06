@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### ⚙️ Miscellaneous Tasks
 
+- Rebuild the Plonky3 verification path on top of `p3_uni_stark::verify`,
+  reconstructing Stark configs from the verifying key, replaying challenger
+  transcripts, and mapping upstream errors into backend variants with
+  structured logging for RPP modules.【F:prover/plonky3_backend/src/lib.rs†L2055-L2224】【F:prover/plonky3_backend/src/lib.rs†L2489-L2523】
 - Update documentation and automation to reference the new `ava-labs/chain` repository path across tooling and guides.
 - Wire the Simnet regression orchestrator and CI/nightly job to chain VRF/quorum stress, snapshot rebuild, and gossip backpressure scenarios while exporting HTML/JSON artifacts for audit trails.【F:tools/simnet/src/bin/regression.rs†L1-L220】【F:.github/workflows/ci.yml†L1-L120】【F:.github/workflows/nightly.yml†L1-L130】
 - Align all nightly Rust toolchain references on `nightly-2025-07-14`, update CI to guard the pin, and document the one-time cache cleanup required after installing the new compiler.
@@ -13,6 +17,8 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Capture the Plonky3 STARK verification flow, transcript specification, and
+  RPP module integration guidelines for operators and client developers.【F:docs/zk_verification.md†L1-L56】
 - Document the Phase 2 regression harness, VRF/quorum alert playbook, acceptance checklist, and proof metadata release notes so operators and auditors can trace readiness artifacts.【F:docs/testing/simulations.md†L1-L120】【F:docs/observability/alerts/consensus_vrf.yaml†L1-L120】【F:docs/runbooks/phase2_acceptance.md†L1-L200】【F:docs/release_notes.md†L1-L80】【F:docs/runbooks/observability.md†L1-L160】
 - Mark the Phase 1 blueprint milestone as completed in the roadmap, weekly status report, and coverage index so stakeholders can follow the handover into Phase 2.【F:docs/roadmap_implementation_plan.md†L3-L26】【F:docs/status/weekly.md†L1-L20】【F:docs/blueprint_coverage.md†L1-L115】
 - Point operators to the VRF telemetry endpoints exposed by `/status/node` and

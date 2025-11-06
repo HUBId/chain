@@ -403,7 +403,7 @@ fn json_schemas_are_deterministic() {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Plonky3 Proof Metadata",
         "type": "object",
-        "description": "Transcript commitments, challenger digests, and security parameters embedded in a Plonky3 proof payload.",
+        "description": "Transcript commitments, challenger checkpoints, and security parameters embedded in a Plonky3 proof payload.",
         "properties": {
             "trace_commitment": {
                 "type": "string",
@@ -430,20 +430,122 @@ fn json_schemas_are_deterministic() {
                 "minItems": 1,
                 "description": "Sequence of Merkle cap commitments binding every folding layer of the FRI transcript."
             },
-            "public_inputs_hash": {
+            "canonical_public_inputs": {
                 "type": "string",
-                "pattern": "^[0-9a-fA-F]{64}$",
-                "description": "BLAKE3 digest of the encoded public inputs."
+                "contentEncoding": "base64",
+                "description": "Canonical JSON encoding of the public inputs observed by the verifier."
             },
-            "challenger_digests": {
-                "type": "array",
-                "items": {
-                    "type": "string",
-                    "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "BLAKE3 digests of the Poseidon sponge state after major transcript milestones (Fiat-Shamir checkpoints)."
+            "transcript": {
+                "type": "object",
+                "properties": {
+                    "degree_bits": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Binary logarithm of the low-degree extension used during proof generation."
+                    },
+                    "trace_length_bits": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Binary logarithm of the execution trace length observed by the verifier."
+                    },
+                    "alpha": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Little-endian BabyBear limb"
+                        },
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "description": "Main relation challenge alpha sampled from the transcript."
+                    },
+                    "zeta": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Little-endian BabyBear limb"
+                        },
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "description": "Evaluation challenge zeta binding the quotient polynomial."
+                    },
+                    "pcs_alpha": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Little-endian BabyBear limb"
+                        },
+                        "minItems": 4,
+                        "maxItems": 4,
+                        "description": "Polynomial commitment challenge alpha issued before FRI."
+                    },
+                    "fri_challenges": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "description": "Little-endian BabyBear limb"
+                            },
+                            "minItems": 4,
+                            "maxItems": 4,
+                            "description": "FRI folding challenge"
+                        },
+                        "minItems": 1,
+                        "description": "Sequence of FRI folding challenges sampled for each commit-phase round."
+                    },
+                    "query_indices": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Unsigned 32-bit integer"
+                        },
+                        "minItems": 1,
+                        "description": "Indices sampled during the Fiat-Shamir query phase (little-endian representation)."
+                    },
+                    "checkpoints": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "stage": {
+                                    "type": "string",
+                                    "enum": [
+                                        "after_public_values",
+                                        "after_commitments",
+                                        "after_zeta_sampling",
+                                        "after_query_sampling"
+                                    ],
+                                    "description": "Transcript stage identifier capturing the challenger state."
+                                },
+                                "state": {
+                                    "type": "string",
+                                    "contentEncoding": "base64",
+                                    "description": "Little-endian BabyBear encoding of the challenger sponge, input buffer, and output buffer at the recorded stage."
+                                }
+                            },
+                            "required": ["stage", "state"],
+                            "additionalProperties": false
+                        },
+                        "minItems": 3,
+                        "description": "Deterministic checkpoints of the Fiat-Shamir challenger transcript used for external auditing."
+                    }
                 },
-                "minItems": 1,
-                "description": "Deterministic checkpoints of the challenger transcript useful for external auditing."
+                "required": [
+                    "degree_bits",
+                    "trace_length_bits",
+                    "alpha",
+                    "zeta",
+                    "pcs_alpha",
+                    "fri_challenges",
+                    "query_indices",
+                    "checkpoints"
+                ],
+                "additionalProperties": false
             },
             "hash_format": {
                 "type": "string",
@@ -469,8 +571,8 @@ fn json_schemas_are_deterministic() {
             "trace_commitment",
             "quotient_commitment",
             "fri_commitments",
-            "public_inputs_hash",
-            "challenger_digests",
+            "canonical_public_inputs",
+            "transcript",
             "security_bits",
             "derived_security_bits",
             "use_gpu",

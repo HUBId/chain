@@ -4,7 +4,6 @@
 //! helper below seeds `StdRng` with fixed byte arrays to keep CI runs
 //! reproducible without depending on JSON fixtures.
 
-use blake3::hash as blake3_hash;
 use ed25519_dalek::{Keypair, Signer};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -258,7 +257,7 @@ fn transaction_proof_roundtrip() {
         "transaction proofs must record FRI commit-phase digests"
     );
     assert!(
-        parsed.payload.metadata.challenger_digests.len() >= 1,
+        !parsed.payload.metadata.transcript.checkpoints.is_empty(),
         "transaction proofs must expose challenger checkpoints"
     );
     assert!(!parsed.payload.stark_proof.is_empty());
@@ -267,13 +266,11 @@ fn transaction_proof_roundtrip() {
     let reserialized = bincode::serialize(&decoded).unwrap();
     assert_eq!(parsed.payload.stark_proof, reserialized);
     assert!(parsed.payload.auxiliary_payloads.is_empty());
-    let (_, expected_digest, encoded_inputs) =
+    let (_, _, encoded_inputs) =
         public_inputs::compute_commitment_and_inputs(&parsed.public_inputs).unwrap();
-    assert_eq!(parsed.payload.metadata.public_inputs_hash, expected_digest);
-    let inputs_hash = blake3_hash(&encoded_inputs);
     assert_eq!(
-        parsed.payload.metadata.public_inputs_hash,
-        *inputs_hash.as_bytes()
+        parsed.payload.metadata.canonical_public_inputs,
+        encoded_inputs
     );
     let params = Plonky3Parameters::default();
     assert_eq!(parsed.payload.metadata.security_bits, params.security_bits);

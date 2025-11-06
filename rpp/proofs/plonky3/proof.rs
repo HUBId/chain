@@ -98,11 +98,18 @@ impl ProofPayload {
     }
 
     pub fn to_backend(&self, circuit: &str) -> backend::BackendResult<backend::Proof> {
+        self.metadata
+            .validate()
+            .map_err(|err| backend::BackendError::InvalidPublicInputs {
+                circuit: circuit.to_string(),
+                message: err.to_string(),
+            })?;
+        let metadata = self.metadata.clone().into_backend(circuit)?;
         backend::Proof::from_parts(
             circuit,
             ProofParts::new(
                 self.stark_proof.clone(),
-                self.metadata.clone().into(),
+                metadata,
                 self.auxiliary_payloads.clone(),
             ),
         )
@@ -124,15 +131,42 @@ pub struct ProofMetadata {
     pub random_commitment: Option<[u8; 32]>,
     #[serde(with = "serde_hex_32_vec")]
     pub fri_commitments: Vec<[u8; 32]>,
-    #[serde(with = "serde_hex_32")]
-    pub public_inputs_hash: [u8; 32],
+    #[serde(with = "serde_base64_vec")]
+    pub canonical_public_inputs: Vec<u8>,
+    pub transcript: TranscriptMetadata,
     #[serde(default = "default_hash_format")]
     pub hash_format: HashFormat,
     pub security_bits: u32,
     pub derived_security_bits: u32,
     pub use_gpu: bool,
-    #[serde(with = "serde_hex_32_vec")]
-    pub challenger_digests: Vec<[u8; 32]>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TranscriptMetadata {
+    pub degree_bits: u32,
+    pub trace_length_bits: u32,
+    pub alpha: Vec<u32>,
+    pub zeta: Vec<u32>,
+    pub pcs_alpha: Vec<u32>,
+    pub fri_challenges: Vec<Vec<u32>>,
+    pub query_indices: Vec<u32>,
+    pub checkpoints: Vec<TranscriptCheckpointMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TranscriptCheckpointMetadata {
+    pub stage: TranscriptStageMetadata,
+    #[serde(with = "serde_base64_vec")]
+    pub state: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptStageMetadata {
+    AfterPublicValues,
+    AfterCommitments,
+    AfterZetaSampling,
+    AfterQuerySampling,
 }
 
 impl From<backend::ProofMetadata> for ProofMetadata {
@@ -142,38 +176,185 @@ impl From<backend::ProofMetadata> for ProofMetadata {
             quotient_commitment: *value.quotient_commitment(),
             random_commitment: value.random_commitment().copied(),
             fri_commitments: value.fri_commitments().to_vec(),
-            public_inputs_hash: *value.public_inputs_hash(),
+            canonical_public_inputs: value.canonical_public_inputs().to_vec(),
+            transcript: TranscriptMetadata::from(value.transcript().clone()),
             hash_format: value.hash_format(),
             security_bits: value.security_bits(),
             derived_security_bits: value.derived_security_bits(),
             use_gpu: value.use_gpu(),
-            challenger_digests: value.challenger_digests().to_vec(),
         }
     }
 }
 
-impl From<ProofMetadata> for backend::ProofMetadata {
-    fn from(value: ProofMetadata) -> Self {
-        backend::ProofMetadata::assemble(
-            value.trace_commitment,
-            value.quotient_commitment,
-            value.random_commitment,
-            value.fri_commitments,
-            value.public_inputs_hash,
-            value.challenger_digests,
-            value.hash_format,
-            value.security_bits,
-            value.derived_security_bits,
-            value.use_gpu,
-        )
+impl From<backend::TranscriptSnapshot> for TranscriptMetadata {
+    fn from(snapshot: backend::TranscriptSnapshot) -> Self {
+        Self {
+            degree_bits: snapshot.degree_bits(),
+            trace_length_bits: snapshot.trace_length_bits(),
+            alpha: snapshot.alpha().limbs().to_vec(),
+            zeta: snapshot.zeta().limbs().to_vec(),
+            pcs_alpha: snapshot.pcs_alpha().limbs().to_vec(),
+            fri_challenges: snapshot
+                .fri_challenges()
+                .iter()
+                .map(|challenge| challenge.limbs().to_vec())
+                .collect(),
+            query_indices: snapshot.query_indices().to_vec(),
+            checkpoints: snapshot
+                .checkpoints()
+                .iter()
+                .cloned()
+                .map(TranscriptCheckpointMetadata::from)
+                .collect(),
+        }
     }
+}
+
+impl From<backend::TranscriptCheckpoint> for TranscriptCheckpointMetadata {
+    fn from(checkpoint: backend::TranscriptCheckpoint) -> Self {
+        Self {
+            stage: TranscriptStageMetadata::from(checkpoint.stage()),
+            state: checkpoint.state().to_vec(),
+        }
+    }
+}
+
+impl From<backend::TranscriptStage> for TranscriptStageMetadata {
+    fn from(stage: backend::TranscriptStage) -> Self {
+        match stage {
+            backend::TranscriptStage::AfterPublicValues => Self::AfterPublicValues,
+            backend::TranscriptStage::AfterCommitments => Self::AfterCommitments,
+            backend::TranscriptStage::AfterZetaSampling => Self::AfterZetaSampling,
+            backend::TranscriptStage::AfterQuerySampling => Self::AfterQuerySampling,
+        }
+    }
+}
+
+impl TranscriptMetadata {
+    fn into_backend(self, circuit: &str) -> backend::BackendResult<backend::TranscriptSnapshot> {
+        let alpha = limbs_to_challenge(circuit, self.alpha)?;
+        let zeta = limbs_to_challenge(circuit, self.zeta)?;
+        let pcs_alpha = limbs_to_challenge(circuit, self.pcs_alpha)?;
+        let fri_challenges: backend::BackendResult<Vec<_>> = self
+            .fri_challenges
+            .into_iter()
+            .map(|value| limbs_to_challenge(circuit, value))
+            .collect();
+        let checkpoints: backend::BackendResult<Vec<_>> = self
+            .checkpoints
+            .into_iter()
+            .map(|checkpoint| checkpoint.into_backend(circuit))
+            .collect();
+
+        Ok(backend::TranscriptSnapshot::new(
+            self.degree_bits,
+            self.trace_length_bits,
+            alpha,
+            zeta,
+            pcs_alpha,
+            fri_challenges?,
+            self.query_indices,
+            checkpoints?,
+        ))
+    }
+}
+
+impl TranscriptCheckpointMetadata {
+    fn into_backend(self, circuit: &str) -> backend::BackendResult<backend::TranscriptCheckpoint> {
+        let stage = backend::TranscriptStage::from_str(self.stage.as_str()).ok_or_else(|| {
+            backend::BackendError::InvalidPublicInputs {
+                circuit: circuit.to_string(),
+                message: format!("unknown transcript stage {}", self.stage.as_str()),
+            }
+        })?;
+        Ok(backend::TranscriptCheckpoint::new(stage, self.state))
+    }
+
+    fn stage(&self) -> TranscriptStageMetadata {
+        self.stage
+    }
+}
+
+impl TranscriptStageMetadata {
+    fn as_str(self) -> &'static str {
+        match self {
+            TranscriptStageMetadata::AfterPublicValues => "after_public_values",
+            TranscriptStageMetadata::AfterCommitments => "after_commitments",
+            TranscriptStageMetadata::AfterZetaSampling => "after_zeta_sampling",
+            TranscriptStageMetadata::AfterQuerySampling => "after_query_sampling",
+        }
+    }
+}
+
+fn limbs_to_challenge(
+    circuit: &str,
+    values: Vec<u32>,
+) -> backend::BackendResult<backend::ChallengeValue> {
+    use backend::BackendError;
+    let limbs: [u32; 4] = values
+        .try_into()
+        .map_err(|_| BackendError::InvalidPublicInputs {
+            circuit: circuit.to_string(),
+            message: "challenge vector must contain exactly four limbs".into(),
+        })?;
+    Ok(backend::ChallengeValue::from_limbs(limbs))
 }
 
 impl ProofMetadata {
     pub fn validate(&self) -> ChainResult<()> {
         match self.hash_format {
-            HashFormat::PoseidonMerkleCap => Ok(()),
+            HashFormat::PoseidonMerkleCap => {}
         }
+
+        ensure_challenge_length(&self.transcript.alpha, "alpha")?;
+        ensure_challenge_length(&self.transcript.zeta, "zeta")?;
+        ensure_challenge_length(&self.transcript.pcs_alpha, "pcs_alpha")?;
+        for (index, challenge) in self.transcript.fri_challenges.iter().enumerate() {
+            ensure_challenge_length(challenge, &format!("fri_challenge[{index}]"))?;
+        }
+
+        Ok(())
+    }
+}
+
+fn ensure_challenge_length(values: &[u32], label: &str) -> ChainResult<()> {
+    if values.len() == 4 {
+        Ok(())
+    } else {
+        Err(ChainError::Crypto(format!(
+            "{label} challenge must contain four limbs"
+        )))
+    }
+}
+
+impl ProofMetadata {
+    fn into_backend(self, circuit: &str) -> backend::BackendResult<backend::ProofMetadata> {
+        let ProofMetadata {
+            trace_commitment,
+            quotient_commitment,
+            random_commitment,
+            fri_commitments,
+            canonical_public_inputs,
+            transcript,
+            hash_format,
+            security_bits,
+            derived_security_bits,
+            use_gpu,
+        } = self;
+
+        let transcript = transcript.into_backend(circuit)?;
+        Ok(backend::ProofMetadata::assemble(
+            trace_commitment,
+            quotient_commitment,
+            random_commitment,
+            fri_commitments,
+            canonical_public_inputs,
+            transcript,
+            hash_format,
+            security_bits,
+            derived_security_bits,
+            use_gpu,
+        ))
     }
 }
 
