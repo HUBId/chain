@@ -8,6 +8,15 @@ or troubleshooting deployments. The Phase‑2 production checklist lives in the
 [Plonky3 Production Validation Checklist](../testing/plonky3_experimental_testplan.md),
 which enumerates the artefacts and commands auditors expect before a rollout.【F:docs/testing/plonky3_experimental_testplan.md†L1-L121】
 
+## GPU acceleration
+
+* **Hardware requirements**
+  - Provision a PCIe-attached NVIDIA data-centre GPU with at least 16 GiB of VRAM (A10/A40 class). Double-precision is not required, but CUDA compute capability 7.0+ keeps the vendor kernels within supported ranges. Pair the card with 16 vCPUs and 64 GiB RAM to feed the proof generation pipeline and to absorb witness decoding overhead.
+  - Install the corresponding NVIDIA driver (≥ 535.xx) and CUDA runtime on the host so the `gpu-alloc` and `gpu-descriptor` helpers can initialise memory pools without falling back to CPU stubs.【F:prover/plonky3_backend/src/gpu.rs†L1-L86】
+* **Operational toggles**
+  - Runtime parameters inherit the boolean `use_gpu_acceleration` switch from the validator configuration. Setting the flag to `false` pins the prover to CPU execution for all circuits. This mirrors the default shipping profile and remains the quickest way to exclude the GPU path during scheduled maintenance.【F:rpp/proofs/plonky3/params.rs†L5-L16】【F:rpp/proofs/plonky3/prover/mod.rs†L150-L249】
+  - Emergency override: export `PLONKY3_GPU_DISABLE=1` (or any truthy value) in the prover service environment. The backend detects the override, emits an informational log entry per circuit, and automatically downgrades to CPU proving/verification without requiring a binary rebuild.【F:prover/plonky3_backend/src/gpu.rs†L24-L66】【F:prover/plonky3_backend/src/lib.rs†L1869-L1911】
+
 ## 1. Validation before rollout
 
 1. **Build artefacts**
