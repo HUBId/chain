@@ -112,15 +112,28 @@ fn assert_stark_proof_matches_metadata(proof: &Proof) -> p3_uni_stark::Proof<Cir
         metadata.quotient_commitment(),
         "quotient commitment must match metadata"
     );
-    let fri_commitment = decoded
+    assert!(
+        metadata.random_commitment().is_none(),
+        "consensus proofs do not enable random commitments"
+    );
+    let fri_commitments: Vec<[u8; 32]> = decoded
         .opening_proof
         .commit_phase_commits
-        .first()
-        .expect("fri commitment available");
+        .iter()
+        .map(hash_commitment_to_bytes)
+        .collect();
     assert_eq!(
-        hash_commitment_to_bytes(fri_commitment),
-        metadata.fri_commitment(),
-        "fri commitment must match metadata"
+        fri_commitments,
+        metadata.fri_commitments(),
+        "fri commit-phase commitments must match metadata"
+    );
+    assert!(
+        !metadata.challenger_digests().is_empty(),
+        "challenger checkpoints must be captured"
+    );
+    assert!(
+        metadata.derived_security_bits() >= metadata.security_bits(),
+        "derived security bits should not undercut negotiated security"
     );
 
     let reserialized = bincode::serialize(&decoded).expect("reserialize backend proof");

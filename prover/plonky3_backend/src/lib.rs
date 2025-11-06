@@ -20,9 +20,10 @@ mod config;
 mod public_inputs;
 mod typed_keys;
 
+use crate::config::{extract_fri_config, FriConfigKnobs};
 use p3_field::PrimeField32;
 use p3_symmetric::Hash;
-use p3_uni_stark::{prove, StarkProvingKey, StarkVerifyingKey};
+use p3_uni_stark::{config::Val, prove, StarkProvingKey, StarkVerifyingKey};
 
 #[cfg(feature = "plonky3-gpu")]
 mod gpu;
@@ -926,49 +927,39 @@ impl HashFormat {
 pub struct ProofMetadata {
     trace_commitment: [u8; 32],
     quotient_commitment: [u8; 32],
-    fri_commitment: [u8; 32],
+    random_commitment: Option<[u8; 32]>,
+    fri_commitments: Vec<[u8; 32]>,
     public_inputs_hash: [u8; 32],
+    challenger_digests: Vec<[u8; 32]>,
     hash_format: HashFormat,
     security_bits: u32,
+    derived_security_bits: u32,
     use_gpu: bool,
 }
 
 impl ProofMetadata {
-    pub fn new(
+    pub fn assemble(
         trace_commitment: [u8; 32],
         quotient_commitment: [u8; 32],
-        fri_commitment: [u8; 32],
+        random_commitment: Option<[u8; 32]>,
+        fri_commitments: Vec<[u8; 32]>,
         public_inputs_hash: [u8; 32],
-        security_bits: u32,
-        use_gpu: bool,
-    ) -> Self {
-        Self::with_hash_format(
-            trace_commitment,
-            quotient_commitment,
-            fri_commitment,
-            public_inputs_hash,
-            HashFormat::default(),
-            security_bits,
-            use_gpu,
-        )
-    }
-
-    pub fn with_hash_format(
-        trace_commitment: [u8; 32],
-        quotient_commitment: [u8; 32],
-        fri_commitment: [u8; 32],
-        public_inputs_hash: [u8; 32],
+        challenger_digests: Vec<[u8; 32]>,
         hash_format: HashFormat,
         security_bits: u32,
+        derived_security_bits: u32,
         use_gpu: bool,
     ) -> Self {
         Self {
             trace_commitment,
             quotient_commitment,
-            fri_commitment,
+            random_commitment,
+            fri_commitments,
             public_inputs_hash,
+            challenger_digests,
             hash_format,
             security_bits,
+            derived_security_bits,
             use_gpu,
         }
     }
@@ -981,12 +972,20 @@ impl ProofMetadata {
         &self.quotient_commitment
     }
 
-    pub fn fri_commitment(&self) -> &[u8; 32] {
-        &self.fri_commitment
+    pub fn random_commitment(&self) -> Option<&[u8; 32]> {
+        self.random_commitment.as_ref()
+    }
+
+    pub fn fri_commitments(&self) -> &[[u8; 32]] {
+        &self.fri_commitments
     }
 
     pub fn public_inputs_hash(&self) -> &[u8; 32] {
         &self.public_inputs_hash
+    }
+
+    pub fn challenger_digests(&self) -> &[[u8; 32]] {
+        &self.challenger_digests
     }
 
     pub fn hash_format(&self) -> HashFormat {
@@ -997,8 +996,117 @@ impl ProofMetadata {
         self.security_bits
     }
 
+    pub fn derived_security_bits(&self) -> u32 {
+        self.derived_security_bits
+    }
+
     pub fn use_gpu(&self) -> bool {
         self.use_gpu
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_stark_proof(
+        circuit: &str,
+        proof: &p3_uni_stark::Proof<CircuitStarkConfig>,
+        public_values: &[Val<CircuitStarkConfig>],
+        inputs_digest: [u8; 32],
+        config: &CircuitStarkConfig,
+        fri: FriConfigKnobs,
+        security_bits: u32,
+        use_gpu: bool,
+    ) -> BackendResult<Self> {
+        let trace_commitment = hash_to_bytes(&proof.commitments.trace);
+        let quotient_commitment = hash_to_bytes(&proof.commitments.quotient_chunks);
+        let random_commitment = proof
+            .commitments
+            .random
+            .as_ref()
+            .map(|hash| hash_to_bytes(hash));
+        let fri_commitments: Vec<[u8; 32]> = proof
+            .opening_proof
+            .commit_phase_commits
+            .iter()
+            .map(hash_to_bytes)
+            .collect();
+
+        if fri_commitments.is_empty() {
+            return Err(BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: "FRI transcript missing commit-phase commitments".into(),
+            });
+        }
+
+        let num_queries = proof.opening_proof.query_proofs.len();
+        if num_queries != fri.num_queries {
+            return Err(BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: format!(
+                    "FRI query count {num_queries} does not match AIR metadata ({})",
+                    fri.num_queries
+                ),
+            });
+        }
+
+        let final_poly_len = proof.opening_proof.final_poly.len();
+        let expected_final_len = 1usize << fri.log_final_poly_len;
+        if final_poly_len != expected_final_len {
+            return Err(BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: format!(
+                    "FRI final polynomial length {final_poly_len} does not match AIR metadata ({expected_final_len})"
+                ),
+            });
+        }
+
+        let rounds = proof.opening_proof.commit_phase_commits.len();
+        let expected_log_initial = fri.log_final_poly_len + rounds;
+        let log_ext_degree = proof.degree_bits + config.is_zk();
+        if expected_log_initial != log_ext_degree + fri.log_blowup {
+            return Err(BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: format!(
+                    "FRI metadata inconsistent: rounds={rounds}, log_final_poly_len={}, log_blowup={}, degree_bits={}, is_zk={}",
+                    fri.log_final_poly_len,
+                    fri.log_blowup,
+                    proof.degree_bits,
+                    config.is_zk(),
+                ),
+            });
+        }
+
+        let challenge_checkpoints =
+            replay_challenger_transcript(circuit, proof, config, &fri, public_values)?;
+
+        let query_contrib = fri.log_blowup.checked_mul(num_queries).ok_or_else(|| {
+            BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: "derived security bits exceed usize range".into(),
+            }
+        })?;
+        let total_security = query_contrib
+            .checked_add(fri.proof_of_work_bits)
+            .ok_or_else(|| BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: "derived security bits overflow".into(),
+            })?;
+        let derived_security_bits =
+            u32::try_from(total_security).map_err(|_| BackendError::StarkProofConstruction {
+                circuit: circuit.to_string(),
+                message: "derived security bits exceed 32-bit range".into(),
+            })?;
+
+        Ok(Self::assemble(
+            trace_commitment,
+            quotient_commitment,
+            random_commitment,
+            fri_commitments,
+            inputs_digest,
+            challenge_checkpoints,
+            HashFormat::default(),
+            security_bits,
+            derived_security_bits,
+            use_gpu,
+        ))
     }
 
     pub fn json_schema() -> Value {
@@ -1015,7 +1123,7 @@ impl ProofMetadata {
         schema.insert(
             "description".to_string(),
             Value::String(
-                "Hex-encoded transcript commitments and security parameters embedded in a Plonky3 proof payload.".into(),
+                "Transcript commitments, challenger digests, and security parameters embedded in a Plonky3 proof payload.".into(),
             ),
         );
 
@@ -1029,17 +1137,61 @@ impl ProofMetadata {
             hex32_schema("Poseidon Merkle cap commitment for the quotient domain."),
         );
         properties.insert(
-            "fri_commitment".into(),
-            hex32_schema("Poseidon Merkle cap commitment representing the FRI transcript."),
+            "random_commitment".into(),
+            optional_hex32_schema(
+                "Optional Poseidon Merkle cap commitment for the randomizer domain when zero-knowledge is enabled.",
+            ),
         );
+        let mut fri_commitments = Map::new();
+        fri_commitments.insert("type".into(), Value::String("array".into()));
+        fri_commitments.insert(
+            "items".into(),
+            hex32_schema(
+                "Poseidon Merkle cap commitment generated for each FRI commit-phase round (oldest to newest).",
+            ),
+        );
+        fri_commitments.insert("minItems".into(), Value::Number(Number::from(1)));
+        fri_commitments.insert(
+            "description".into(),
+            Value::String(
+                "Sequence of Merkle cap commitments binding every folding layer of the FRI transcript.".into(),
+            ),
+        );
+        properties.insert("fri_commitments".into(), Value::Object(fri_commitments));
         properties.insert(
             "public_inputs_hash".into(),
             hex32_schema("BLAKE3 digest of the encoded public inputs."),
+        );
+        let mut challenger_digests = Map::new();
+        challenger_digests.insert("type".into(), Value::String("array".into()));
+        challenger_digests.insert(
+            "items".into(),
+            hex32_schema(
+                "BLAKE3 digests of the Poseidon sponge state after major transcript milestones (Fiat-Shamir checkpoints).",
+            ),
+        );
+        challenger_digests.insert("minItems".into(), Value::Number(Number::from(1)));
+        challenger_digests.insert(
+            "description".into(),
+            Value::String(
+                "Deterministic checkpoints of the challenger transcript useful for external auditing.".into(),
+            ),
+        );
+        properties.insert(
+            "challenger_digests".into(),
+            Value::Object(challenger_digests),
         );
         properties.insert(
             "security_bits".into(),
             integer_schema(
                 "Security parameter negotiated between prover and verifier.",
+                1,
+            ),
+        );
+        properties.insert(
+            "derived_security_bits".into(),
+            integer_schema(
+                "Security level inferred from the circuit configuration, query schedule, and proof of work.",
                 1,
             ),
         );
@@ -1061,9 +1213,11 @@ impl ProofMetadata {
                 [
                     "trace_commitment",
                     "quotient_commitment",
-                    "fri_commitment",
+                    "fri_commitments",
                     "public_inputs_hash",
+                    "challenger_digests",
                     "security_bits",
+                    "derived_security_bits",
                     "use_gpu",
                     "hash_format",
                 ]
@@ -1161,6 +1315,125 @@ where
     bytes
 }
 
+fn append_field_bytes(buffer: &mut Vec<u8>, value: CircuitBaseField) {
+    buffer.extend_from_slice(&value.as_canonical_u32().to_le_bytes());
+}
+
+fn challenger_checkpoint(challenger: &CircuitChallenger) -> [u8; 32] {
+    let mut data = Vec::with_capacity(
+        (challenger.sponge_state.len()
+            + challenger.input_buffer.len()
+            + challenger.output_buffer.len()
+            + 2)
+            * core::mem::size_of::<u32>(),
+    );
+
+    for element in challenger.sponge_state {
+        append_field_bytes(&mut data, element);
+    }
+
+    data.extend_from_slice(&(challenger.input_buffer.len() as u32).to_le_bytes());
+    for &element in &challenger.input_buffer {
+        append_field_bytes(&mut data, element);
+    }
+
+    data.extend_from_slice(&(challenger.output_buffer.len() as u32).to_le_bytes());
+    for &element in &challenger.output_buffer {
+        append_field_bytes(&mut data, element);
+    }
+
+    let digest = blake3::hash(&data);
+    *digest.as_bytes()
+}
+
+fn replay_challenger_transcript(
+    circuit: &str,
+    proof: &p3_uni_stark::Proof<CircuitStarkConfig>,
+    config: &CircuitStarkConfig,
+    fri: &FriConfigKnobs,
+    public_values: &[Val<CircuitStarkConfig>],
+) -> BackendResult<Vec<[u8; 32]>> {
+    use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
+
+    let mut challenger = config.initialise_challenger();
+    let mut checkpoints = Vec::new();
+
+    challenger.observe(Val::<CircuitStarkConfig>::from_usize(proof.degree_bits));
+    challenger.observe(Val::<CircuitStarkConfig>::from_usize(
+        proof.degree_bits - config.is_zk(),
+    ));
+    challenger.observe(proof.commitments.trace.clone());
+    challenger.observe_slice(public_values);
+    checkpoints.push(challenger_checkpoint(&challenger));
+
+    let _alpha: CircuitChallengeField = challenger.sample_algebra_element();
+    challenger.observe(proof.commitments.quotient_chunks.clone());
+    if let Some(random) = proof.commitments.random.clone() {
+        challenger.observe(random);
+    }
+    checkpoints.push(challenger_checkpoint(&challenger));
+
+    let _zeta: CircuitChallengeField = challenger.sample_algebra_element();
+    checkpoints.push(challenger_checkpoint(&challenger));
+
+    for value in &proof.opened_values.trace_local {
+        challenger.observe_algebra_element(*value);
+    }
+    for value in &proof.opened_values.trace_next {
+        challenger.observe_algebra_element(*value);
+    }
+    for chunk in &proof.opened_values.quotient_chunks {
+        for &value in chunk {
+            challenger.observe_algebra_element(value);
+        }
+    }
+    if let Some(random) = &proof.opened_values.random {
+        for &value in random {
+            challenger.observe_algebra_element(value);
+        }
+    }
+
+    let _pcs_alpha: CircuitChallengeField = challenger.sample_algebra_element();
+
+    for commit in &proof.opening_proof.commit_phase_commits {
+        challenger.observe(commit.clone());
+        let _: CircuitChallengeField = challenger.sample_algebra_element();
+    }
+
+    if proof.opening_proof.final_poly.len() != (1 << fri.log_final_poly_len) {
+        return Err(BackendError::StarkProofConstruction {
+            circuit: circuit.to_string(),
+            message: format!(
+                "unexpected FRI final polynomial length {}; expected {}",
+                proof.opening_proof.final_poly.len(),
+                1 << fri.log_final_poly_len
+            ),
+        });
+    }
+
+    for &coeff in &proof.opening_proof.final_poly {
+        challenger.observe_algebra_element(coeff);
+    }
+
+    if !challenger.check_witness(fri.proof_of_work_bits, proof.opening_proof.pow_witness) {
+        return Err(BackendError::StarkProofConstruction {
+            circuit: circuit.to_string(),
+            message: "proof-of-work witness failed transcript check".into(),
+        });
+    }
+
+    let log_max_height =
+        proof.opening_proof.commit_phase_commits.len() + fri.log_blowup + fri.log_final_poly_len;
+
+    for _ in &proof.opening_proof.query_proofs {
+        let _ = challenger.sample_bits(log_max_height);
+    }
+
+    checkpoints.push(challenger_checkpoint(&challenger));
+
+    Ok(checkpoints)
+}
+
 fn ensure_proof_metadata_alignment(
     circuit: &str,
     metadata: &ProofMetadata,
@@ -1174,13 +1447,13 @@ fn ensure_proof_metadata_alignment(
         });
     }
 
-    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
-        bincode::deserialize(serialized_proof).map_err(|err| {
-            BackendError::StarkProofConstruction {
-                circuit: circuit.to_string(),
-                message: format!("failed to decode STARK proof: {err}"),
-            }
-        })?;
+    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> = bincode::deserialize(serialized_proof)
+        .map_err(|err| {
+        BackendError::StarkProofConstruction {
+            circuit: circuit.to_string(),
+            message: format!("failed to decode STARK proof: {err}"),
+        }
+    })?;
 
     let trace_commitment = hash_to_bytes(&decoded.commitments.trace);
     if &trace_commitment != metadata.trace_commitment() {
@@ -1192,15 +1465,29 @@ fn ensure_proof_metadata_alignment(
         return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
     }
 
-    let fri_commitment = decoded
-        .opening_proof
-        .commit_phase_commits
-        .first()
-        .ok_or_else(|| BackendError::StarkProofConstruction {
+    let decoded_random = decoded.commitments.random.as_ref().map(hash_to_bytes);
+    match (metadata.random_commitment(), decoded_random.as_ref()) {
+        (None, None) => {}
+        (Some(expected), Some(actual)) if expected == actual => {}
+        _ => {
+            return Err(BackendError::VerifyingKeyMismatch(circuit.to_string()));
+        }
+    }
+
+    if decoded.opening_proof.commit_phase_commits.is_empty() {
+        return Err(BackendError::StarkProofConstruction {
             circuit: circuit.to_string(),
             message: "missing FRI commit-phase commitment".into(),
-        })?;
-    if &hash_to_bytes(fri_commitment) != metadata.fri_commitment() {
+        });
+    }
+
+    let fri_commitments: Vec<[u8; 32]> = decoded
+        .opening_proof
+        .commit_phase_commits
+        .iter()
+        .map(hash_to_bytes)
+        .collect();
+    if metadata.fri_commitments() != fri_commitments.as_slice() {
         return Err(BackendError::FriDigestMismatch(circuit.to_string()));
     }
 
@@ -1317,6 +1604,7 @@ impl ProverContext {
         public_inputs: &Value,
     ) -> BackendResult<Proof> {
         let config = build_circuit_stark_config(&self.proving_metadata)?;
+        let fri = extract_fri_config(&self.proving_metadata)?;
         let typed_key = self.proving_key.typed();
         let proving_key = typed_key.key();
 
@@ -1347,32 +1635,22 @@ impl ProverContext {
             }
         };
 
-        let trace_commitment = hash_to_bytes(&proof.commitments.trace);
-        let quotient_commitment = hash_to_bytes(&proof.commitments.quotient_chunks);
-        let fri_commitment_hash = proof
-            .opening_proof
-            .commit_phase_commits
-            .first()
-            .ok_or_else(|| BackendError::StarkProofConstruction {
-                circuit: self.name.clone(),
-                message: "missing FRI commit-phase commitment".into(),
-            })?;
-        let fri_commitment = hash_to_bytes(fri_commitment_hash);
+        let metadata = ProofMetadata::from_stark_proof(
+            &self.name,
+            &proof,
+            &public_values,
+            inputs_digest,
+            &config,
+            fri,
+            self.security_bits,
+            self.use_gpu,
+        )?;
 
         let serialized_proof =
             bincode::serialize(&proof).map_err(|err| BackendError::StarkProofConstruction {
                 circuit: self.name.clone(),
                 message: format!("failed to serialize STARK proof: {err}"),
             })?;
-
-        let metadata = ProofMetadata::new(
-            trace_commitment,
-            quotient_commitment,
-            fri_commitment,
-            inputs_digest,
-            self.security_bits,
-            self.use_gpu,
-        );
 
         Proof::from_parts(
             &self.name,
@@ -1503,22 +1781,6 @@ impl VerifierContext {
         }
         if proof.metadata().use_gpu() != self.use_gpu {
             return Err(BackendError::GpuModeMismatch(self.name.clone()));
-        }
-        let verifying_bytes = self.verifying_key.bytes();
-        let header_len = 3 * COMMITMENT_LEN;
-        if verifying_bytes.len() < header_len {
-            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
-        }
-        if proof.metadata().trace_commitment() != &verifying_bytes[..COMMITMENT_LEN] {
-            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
-        }
-        if proof.metadata().quotient_commitment()
-            != &verifying_bytes[COMMITMENT_LEN..(2 * COMMITMENT_LEN)]
-        {
-            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
-        }
-        if proof.metadata().fri_commitment() != &verifying_bytes[(2 * COMMITMENT_LEN)..header_len] {
-            return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
         if proof.metadata().public_inputs_hash() != inputs_digest {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
@@ -1665,6 +1927,20 @@ fn key_schema(title: &str, description: &str) -> Value {
 fn hex32_schema(description: &str) -> Value {
     let mut object = Map::new();
     object.insert("type".into(), Value::String("string".into()));
+    object.insert("pattern".into(), Value::String("^[0-9a-fA-F]{64}$".into()));
+    object.insert("description".into(), Value::String(description.into()));
+    Value::Object(object)
+}
+
+fn optional_hex32_schema(description: &str) -> Value {
+    let mut object = Map::new();
+    object.insert(
+        "type".into(),
+        Value::Array(vec![
+            Value::String("string".into()),
+            Value::String("null".into()),
+        ]),
+    );
     object.insert("pattern".into(), Value::String("^[0-9a-fA-F]{64}$".into()));
     object.insert("description".into(), Value::String(description.into()));
     Value::Object(object)
