@@ -14,8 +14,9 @@ use plonky3_backend::{
     prove_consensus, require_circuit_air_metadata, validate_consensus_public_inputs,
     verify_consensus, AirMetadata, BackendError, CircuitStarkConfig, CircuitStarkProvingKey,
     CircuitStarkVerifyingKey, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
-    ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProverContext, ProvingKey, ToolchainAir,
-    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProofMetadata, ProofParts, ProverContext,
+    ProvingKey, ToolchainAir, VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH,
+    VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -265,6 +266,23 @@ fn prove_sample_witness() -> (ConsensusProof, VerifierContext) {
     let circuit = ConsensusCircuit::new(witness).expect("consensus circuit");
     let proof = prove_consensus(&prover, &circuit).expect("consensus proving succeeds");
     (proof, verifier)
+}
+
+fn rebuild_proof_with_metadata<F>(proof: &Proof, circuit: &str, mutate: F) -> Proof
+where
+    F: FnOnce(&ProofMetadata) -> ProofMetadata,
+{
+    let ProofParts {
+        serialized_proof,
+        metadata,
+        auxiliary_payloads,
+    } = proof.clone().into_parts();
+    let updated_metadata = mutate(&metadata);
+    Proof::from_parts(
+        circuit,
+        ProofParts::new(serialized_proof, updated_metadata, auxiliary_payloads),
+    )
+    .expect("rebuild proof with modified metadata")
 }
 
 #[test]
@@ -891,4 +909,154 @@ fn consensus_instance_decoding_rejects_malformed_inputs() {
     let err = decode_consensus_instance::<plonky3_backend::CircuitStarkConfig>(&payload)
         .expect_err("invalid payload must fail");
     assert!(matches!(err, BackendError::InvalidPublicInputs { .. }));
+}
+
+#[test]
+fn consensus_verifier_accepts_round_trip_proof_parts() {
+    let (proof_bundle, verifier) = prove_sample_witness();
+    let ConsensusProof {
+        commitment,
+        public_inputs,
+        proof,
+    } = proof_bundle;
+
+    let rebuilt = Proof::from_parts(verifier.circuit(), proof.clone().into_parts())
+        .expect("rebuild consensus proof from parts");
+
+    verifier
+        .verify(&commitment, &public_inputs, &rebuilt)
+        .expect("verifier accepts round-tripped proof");
+}
+
+#[test]
+fn consensus_verifier_rejects_security_metadata_mismatch() {
+    let (proof_bundle, verifier) = prove_sample_witness();
+    let ConsensusProof {
+        commitment,
+        public_inputs,
+        proof,
+    } = proof_bundle;
+
+    let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
+        let security_bits = metadata.security_bits() ^ 1;
+        ProofMetadata::assemble(
+            *metadata.trace_commitment(),
+            *metadata.quotient_commitment(),
+            metadata.random_commitment().copied(),
+            metadata.fri_commitments().to_vec(),
+            *metadata.public_inputs_hash(),
+            metadata.challenger_digests().to_vec(),
+            metadata.hash_format(),
+            security_bits,
+            metadata.derived_security_bits(),
+            metadata.use_gpu(),
+        )
+    });
+
+    let err = verifier
+        .verify(&commitment, &public_inputs, &tampered)
+        .expect_err("verifier must reject modified security bits");
+    assert!(
+        matches!(err, BackendError::SecurityParameterMismatch(circuit) if circuit == verifier.circuit())
+    );
+}
+
+#[test]
+fn consensus_verifier_rejects_public_input_hash_mismatch() {
+    let (proof_bundle, verifier) = prove_sample_witness();
+    let ConsensusProof {
+        commitment,
+        public_inputs,
+        proof,
+    } = proof_bundle;
+
+    let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
+        let mut hash = *metadata.public_inputs_hash();
+        hash[0] ^= 0x01;
+        ProofMetadata::assemble(
+            *metadata.trace_commitment(),
+            *metadata.quotient_commitment(),
+            metadata.random_commitment().copied(),
+            metadata.fri_commitments().to_vec(),
+            hash,
+            metadata.challenger_digests().to_vec(),
+            metadata.hash_format(),
+            metadata.security_bits(),
+            metadata.derived_security_bits(),
+            metadata.use_gpu(),
+        )
+    });
+
+    let err = verifier
+        .verify(&commitment, &public_inputs, &tampered)
+        .expect_err("verifier must reject modified public input hash");
+    assert!(
+        matches!(err, BackendError::PublicInputDigestMismatch(circuit) if circuit == verifier.circuit())
+    );
+}
+
+#[test]
+fn consensus_verifier_rejects_gpu_flag_mismatch() {
+    let (proof_bundle, verifier) = prove_sample_witness();
+    let ConsensusProof {
+        commitment,
+        public_inputs,
+        proof,
+    } = proof_bundle;
+
+    let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
+        ProofMetadata::assemble(
+            *metadata.trace_commitment(),
+            *metadata.quotient_commitment(),
+            metadata.random_commitment().copied(),
+            metadata.fri_commitments().to_vec(),
+            *metadata.public_inputs_hash(),
+            metadata.challenger_digests().to_vec(),
+            metadata.hash_format(),
+            metadata.security_bits(),
+            metadata.derived_security_bits(),
+            !metadata.use_gpu(),
+        )
+    });
+
+    let err = verifier
+        .verify(&commitment, &public_inputs, &tampered)
+        .expect_err("verifier must reject modified GPU flag");
+    assert!(matches!(err, BackendError::GpuModeMismatch(circuit) if circuit == verifier.circuit()));
+}
+
+#[test]
+fn consensus_verifier_rejects_challenger_digest_mismatch() {
+    let (proof_bundle, verifier) = prove_sample_witness();
+    let ConsensusProof {
+        commitment,
+        public_inputs,
+        proof,
+    } = proof_bundle;
+
+    let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
+        let mut digests = metadata.challenger_digests().to_vec();
+        digests
+            .first_mut()
+            .expect("metadata exposes challenger digests")[0] ^= 0x01;
+        ProofMetadata::assemble(
+            *metadata.trace_commitment(),
+            *metadata.quotient_commitment(),
+            metadata.random_commitment().copied(),
+            metadata.fri_commitments().to_vec(),
+            *metadata.public_inputs_hash(),
+            digests,
+            metadata.hash_format(),
+            metadata.security_bits(),
+            metadata.derived_security_bits(),
+            metadata.use_gpu(),
+        )
+    });
+
+    let err = verifier
+        .verify(&commitment, &public_inputs, &tampered)
+        .expect_err("verifier must reject modified challenger digests");
+    assert!(
+        matches!(err, BackendError::FriDigestMismatch(circuit) if circuit == verifier.circuit())
+    );
 }
