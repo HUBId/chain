@@ -676,14 +676,34 @@ pub struct ConsensusWitness {
     pub height: u64,
     pub round: u64,
     pub participants: Vec<Address>,
+    pub vrf_outputs: Vec<String>,
+    pub vrf_proofs: Vec<String>,
+    pub witness_commitments: Vec<String>,
+    pub quorum_bitmap_root: String,
+    pub quorum_signature_root: String,
 }
 
 impl ConsensusWitness {
-    pub fn new(height: u64, round: u64, participants: Vec<Address>) -> Self {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        height: u64,
+        round: u64,
+        participants: Vec<Address>,
+        vrf_outputs: Vec<String>,
+        vrf_proofs: Vec<String>,
+        witness_commitments: Vec<String>,
+        quorum_bitmap_root: String,
+        quorum_signature_root: String,
+    ) -> Self {
         Self {
             height,
             round,
             participants,
+            vrf_outputs,
+            vrf_proofs,
+            witness_commitments,
+            quorum_bitmap_root,
+            quorum_signature_root,
         }
     }
 }
@@ -1760,6 +1780,11 @@ mod tests {
             42,
             3,
             vec!["alice".into(), "bob".into()],
+            vec!["aa".repeat(32)],
+            vec!["bb".repeat(32)],
+            vec!["cc".repeat(32)],
+            "dd".repeat(32),
+            "ee".repeat(32),
         ));
 
         bundle

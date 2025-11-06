@@ -169,8 +169,7 @@ where
 
 pub use config::{
     CircuitBaseField, CircuitChallengeField, CircuitChallenger, CircuitConfig,
-    CircuitConfigBuilder, CircuitFriPcs, CircuitMerkleTreeMmcs, CircuitStarkConfig,
-    FriConfigKnobs,
+    CircuitConfigBuilder, CircuitFriPcs, CircuitMerkleTreeMmcs, CircuitStarkConfig, FriConfigKnobs,
 };
 
 /// Convenience alias for verifying key handles emitted by the Plonky3 toolchain

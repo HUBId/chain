@@ -1246,8 +1246,18 @@ impl Ledger {
         Ok(artifacts)
     }
 
-    pub fn record_consensus_witness(&self, height: u64, round: u64, participants: Vec<Address>) {
-        let witness = ConsensusWitness::new(height, round, participants);
+    pub fn record_consensus_witness(&self, bundle: &crate::consensus::ConsensusWitnessBundle) {
+        let participants: Vec<Address> = bundle.participants.iter().cloned().collect();
+        let witness = ConsensusWitness::new(
+            bundle.height,
+            bundle.round,
+            participants,
+            bundle.vrf_outputs.clone(),
+            bundle.vrf_proofs.clone(),
+            bundle.witness_commitments.clone(),
+            bundle.quorum_bitmap_root.clone(),
+            bundle.quorum_signature_root.clone(),
+        );
         let mut book = self.module_witnesses.write();
         book.record_consensus(witness);
     }
@@ -2482,6 +2492,11 @@ mod tests {
             42,
             3,
             vec!["alice".into(), "bob".into()],
+            vec!["aa".repeat(32)],
+            vec!["bb".repeat(32)],
+            vec!["cc".repeat(32)],
+            "dd".repeat(32),
+            "ee".repeat(32),
         ));
 
         bundle

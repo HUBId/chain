@@ -1621,6 +1621,11 @@ mod tests {
             height,
             height,
             vec![address.clone()],
+            vec!["aa".repeat(32)],
+            vec!["bb".repeat(32)],
+            vec!["cc".repeat(32)],
+            "dd".repeat(32),
+            "ee".repeat(32),
         ));
         let proof_artifacts = module_witnesses
             .expected_artifacts()

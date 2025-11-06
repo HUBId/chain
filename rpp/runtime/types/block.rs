@@ -3088,7 +3088,21 @@ mod tests {
             recursive_chain,
         );
         let mut witnesses = ModuleWitnessBundle::default();
-        witnesses.record_consensus(ConsensusWitness::new(1, 1, vec![address.clone()]));
+        let vrf_outputs = vec!["aa".repeat(32)];
+        let vrf_proofs = vec!["bb".repeat(32)];
+        let witness_commitments = vec!["cc".repeat(32)];
+        let quorum_bitmap_root = "dd".repeat(32);
+        let quorum_signature_root = "ee".repeat(32);
+        witnesses.record_consensus(ConsensusWitness::new(
+            1,
+            1,
+            vec![address.clone()],
+            vrf_outputs.clone(),
+            vrf_proofs.clone(),
+            witness_commitments.clone(),
+            quorum_bitmap_root.clone(),
+            quorum_signature_root.clone(),
+        ));
         let block = Block::new(
             header,
             Vec::new(),
@@ -3126,7 +3140,16 @@ mod tests {
 
         let mut mismatched_witness_block = block.clone();
         let mut mismatched_bundle = ModuleWitnessBundle::default();
-        mismatched_bundle.record_consensus(ConsensusWitness::new(1, 1, vec!["cafebabe".repeat(4)]));
+        mismatched_bundle.record_consensus(ConsensusWitness::new(
+            1,
+            1,
+            vec!["cafebabe".repeat(4)],
+            vrf_outputs.clone(),
+            vrf_proofs.clone(),
+            witness_commitments.clone(),
+            quorum_bitmap_root.clone(),
+            quorum_signature_root.clone(),
+        ));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
         assert!(mismatched_witness_block
             .verify_consensus(Some(&prev_block), &registry)
@@ -3161,10 +3184,20 @@ mod tests {
 
         let mut mismatched_witness_block = block.clone();
         let mut mismatched_bundle = ModuleWitnessBundle::default();
+        let reference_witness = block
+            .module_witnesses
+            .consensus
+            .first()
+            .expect("consensus witness present");
         mismatched_bundle.record_consensus(ConsensusWitness::new(
             block.header.height,
             block.consensus.round,
             vec!["cafebabe".repeat(4)],
+            reference_witness.vrf_outputs.clone(),
+            reference_witness.vrf_proofs.clone(),
+            reference_witness.witness_commitments.clone(),
+            reference_witness.quorum_bitmap_root.clone(),
+            reference_witness.quorum_signature_root.clone(),
         ));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
         assert!(mismatched_witness_block.verify_consensus_light().is_err());

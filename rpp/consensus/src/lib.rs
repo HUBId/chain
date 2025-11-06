@@ -28,6 +28,7 @@ pub mod leader;
 pub mod malachite;
 pub mod messages;
 pub mod network;
+pub mod proofs;
 pub mod reputation;
 pub mod rewards;
 pub mod state;
@@ -44,8 +45,10 @@ pub use governance::{TimetokeRewardBudgets, TimetokeRewardGovernance};
 pub use leader::{Leader, LeaderContext};
 pub use messages::{
     Block, Commit, ConsensusCertificate, ConsensusProof, ConsensusProofMetadata,
-    ConsensusProofMetadataVrf, PreCommit, PreVote, ProofVerificationError, Proposal, Signature,
+    ConsensusProofMetadataVrf, ConsensusWitnessBundle, PreCommit, PreVote, ProofVerificationError,
+    Proposal, Signature,
 };
+pub use proofs::build_consensus_witness;
 pub use reputation::{
     MalachiteReputationManager, SlashingEvent, SlashingHeuristics, SlashingKind, SlashingSnapshot,
     SlashingTrigger, UptimeObservation, UptimeOutcome,

@@ -575,6 +575,50 @@ fn consensus_public_inputs_rejects_poseidon_last_block_header_mismatch() {
 }
 
 #[test]
+fn build_consensus_witness_includes_certificate_metadata() {
+    let certificate = certificate_with_block("witness-metadata");
+    let participants = vec!["validator-1".to_string(), "validator-2".to_string()];
+    let bundle = crate::build_consensus_witness(
+        certificate.height,
+        certificate.round,
+        participants.clone(),
+        &certificate,
+    );
+
+    assert_eq!(bundle.height, certificate.height);
+    assert_eq!(bundle.round, certificate.round);
+    assert_eq!(bundle.participants, participants);
+    let expected_outputs: Vec<String> = certificate
+        .metadata
+        .vrf
+        .entries
+        .iter()
+        .map(|entry| entry.pre_output.clone())
+        .collect();
+    assert_eq!(bundle.vrf_outputs, expected_outputs);
+    let expected_proofs: Vec<String> = certificate
+        .metadata
+        .vrf
+        .entries
+        .iter()
+        .map(|entry| entry.proof.clone())
+        .collect();
+    assert_eq!(bundle.vrf_proofs, expected_proofs);
+    assert_eq!(
+        bundle.witness_commitments,
+        certificate.metadata.witness_commitments
+    );
+    assert_eq!(
+        bundle.quorum_bitmap_root,
+        certificate.metadata.quorum_bitmap_root
+    );
+    assert_eq!(
+        bundle.quorum_signature_root,
+        certificate.metadata.quorum_signature_root
+    );
+}
+
+#[test]
 fn bft_flow_reaches_commit() {
     let _guard = acquire_test_lock();
     let vrf_outputs = vec![

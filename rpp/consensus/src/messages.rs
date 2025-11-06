@@ -423,6 +423,18 @@ pub struct ConsensusCertificate {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsensusWitnessBundle {
+    pub height: u64,
+    pub round: u64,
+    pub participants: Vec<ValidatorId>,
+    pub vrf_outputs: Vec<String>,
+    pub vrf_proofs: Vec<String>,
+    pub witness_commitments: Vec<String>,
+    pub quorum_bitmap_root: String,
+    pub quorum_signature_root: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusProofMetadata {
     #[serde(default, alias = "vrf_entries")]
     pub vrf: ConsensusProofMetadataVrf,
