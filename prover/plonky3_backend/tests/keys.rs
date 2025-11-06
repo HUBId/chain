@@ -4,6 +4,7 @@ use blake3::hash;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use hex::decode as hex_decode;
 use plonky3_backend::{
     build_circuit_stark_config, resolve_toolchain_air, AirMetadata, BackendError, CircuitBaseField,
     CircuitStarkProvingKey, CircuitStarkVerifyingKey, ProofMetadata, ProverContext, ProvingKey,
@@ -17,9 +18,12 @@ use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct FixtureKey {
+    byte_length: usize,
     value: String,
     #[serde(default)]
     compression: Option<String>,
+    #[serde(default)]
+    hash_blake3: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +45,15 @@ fn decode_base64(value: &str) -> Vec<u8> {
         .expect("decode base64 value")
 }
 
+fn decode_fixture_key_bytes(key: &FixtureKey) -> Vec<u8> {
+    let decoded = decode_base64(&key.value);
+    match key.compression.as_deref() {
+        Some("gzip") => decompress_gzip(&decoded),
+        Some("none") | None => decoded,
+        Some(other) => panic!("unsupported fixture compression: {other}"),
+    }
+}
+
 fn decompress_gzip(bytes: &[u8]) -> Vec<u8> {
     let mut decoder = GzDecoder::new(bytes);
     let mut decompressed = Vec::new();
@@ -60,13 +73,50 @@ fn compress_gzip(bytes: &[u8]) -> Vec<u8> {
 fn consensus_fixture_descriptor_decodes_typed_keys() {
     let fixture = load_consensus_fixture();
 
-    let verifying_fixture_encoded = decode_base64(&fixture.verifying_key.value);
-    let verifying_fixture_raw = decompress_gzip(&verifying_fixture_encoded);
+    assert_ne!(
+        fixture.verifying_key.byte_length, 0,
+        "consensus verifying fixture must advertise a non-zero payload length",
+    );
+    let verifying_fixture_raw = decode_fixture_key_bytes(&fixture.verifying_key);
+    assert_eq!(
+        verifying_fixture_raw.len(),
+        fixture.verifying_key.byte_length,
+        "decompressed verifying payload length must match advertised byte_length",
+    );
+    let expected_verifying_hash = fixture
+        .verifying_key
+        .hash_blake3
+        .as_ref()
+        .expect("consensus verifying fixture must include BLAKE3 digest");
+    let expected_verifying_hash =
+        hex_decode(expected_verifying_hash).expect("consensus verifying hash must be valid hex");
+    assert_eq!(
+        expected_verifying_hash.as_slice(),
+        hash(&verifying_fixture_raw).as_bytes(),
+        "verifying key payload digest must match fixture hash",
+    );
     let (fixture_metadata, fixture_verifying_key): (AirMetadata, CircuitStarkVerifyingKey) =
         bincode::deserialize(&verifying_fixture_raw).expect("parse verifying key fixture");
 
-    let proving_fixture_encoded = decode_base64(&fixture.proving_key.value);
-    let proving_fixture_raw = decompress_gzip(&proving_fixture_encoded);
+    assert_ne!(
+        fixture.proving_key.byte_length, 0,
+        "consensus proving fixture must advertise a non-zero payload length",
+    );
+    let proving_fixture_raw = decode_fixture_key_bytes(&fixture.proving_key);
+    assert_eq!(
+        proving_fixture_raw.len(),
+        fixture.proving_key.byte_length,
+        "decompressed proving payload length must match advertised byte_length",
+    );
+    if let Some(expected_hash) = &fixture.proving_key.hash_blake3 {
+        let expected_hash =
+            hex_decode(expected_hash).expect("consensus proving hash must be valid hex");
+        assert_eq!(
+            expected_hash.as_slice(),
+            hash(&proving_fixture_raw).as_bytes(),
+            "proving key payload digest must match fixture hash",
+        );
+    }
     let (proving_metadata, fixture_proving_key): (AirMetadata, CircuitStarkProvingKey) =
         bincode::deserialize(&proving_fixture_raw).expect("parse proving key fixture");
     assert_eq!(fixture_metadata, proving_metadata);
@@ -74,13 +124,17 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
 
     let verifying_raw = bincode::serialize(&(metadata.clone(), &fixture_verifying_key))
         .expect("serialize verifying tuple");
-    let verifying_compressed = compress_gzip(&verifying_raw);
+    let verifying_compressed = match fixture.verifying_key.compression.as_deref() {
+        Some("gzip") => compress_gzip(&verifying_raw),
+        Some("none") | None => verifying_raw.clone(),
+        Some(other) => panic!("unsupported fixture compression: {other}"),
+    };
     let verifying_base64 = BASE64_STANDARD.encode(verifying_compressed.as_slice());
 
     let verifying_key = VerifyingKey::from_encoded_parts(
         &verifying_base64,
         "base64",
-        Some("gzip"),
+        fixture.verifying_key.compression.as_deref(),
         &fixture.circuit,
     )
     .expect("verifying key decodes");
