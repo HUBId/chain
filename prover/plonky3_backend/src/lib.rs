@@ -36,6 +36,10 @@ mod gpu;
 #[cfg(feature = "plonky3-gpu")]
 pub use gpu::GpuResources;
 
+/// Environment flag that forces the backend into CPU mode even when the
+/// `plonky3-gpu` feature is enabled at compile time.
+pub const GPU_DISABLE_ENV: &str = "PLONKY3_GPU_DISABLE";
+
 pub use circuits::consensus::{
     decode_consensus_instance, encode_consensus_public_inputs, validate_consensus_public_inputs,
     ConsensusBindingLayout, ConsensusBindings, ConsensusCircuit, ConsensusPublicInputLayout,
@@ -166,6 +170,7 @@ where
 pub use config::{
     CircuitBaseField, CircuitChallengeField, CircuitChallenger, CircuitConfig,
     CircuitConfigBuilder, CircuitFriPcs, CircuitMerkleTreeMmcs, CircuitStarkConfig,
+    FriConfigKnobs,
 };
 
 /// Convenience alias for verifying key handles emitted by the Plonky3 toolchain
@@ -1852,7 +1857,7 @@ impl ProverContext {
         let use_gpu = if use_gpu && gpu::GpuResources::disabled_via_env() {
             info!(
                 circuit = %name,
-                env = gpu::GPU_DISABLE_ENV,
+                env = GPU_DISABLE_ENV,
                 "GPU proving disabled via environment override"
             );
             false
@@ -2035,7 +2040,7 @@ impl VerifierContext {
         let use_gpu = if use_gpu && gpu::GpuResources::disabled_via_env() {
             info!(
                 circuit = %name,
-                env = gpu::GPU_DISABLE_ENV,
+                env = GPU_DISABLE_ENV,
                 "GPU verification disabled via environment override"
             );
             false

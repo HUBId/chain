@@ -1691,6 +1691,7 @@ dependencies = [
  "p3-poseidon2-air",
  "p3-rescue",
  "p3-sha256",
+ "p3-symmetric",
  "p3-uni-stark",
  "p3-util 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
