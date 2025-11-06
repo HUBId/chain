@@ -308,6 +308,34 @@ where
     .expect("rebuild proof with modified metadata")
 }
 
+fn rebuild_proof_with_public_inputs(
+    proof: &ConsensusProof,
+    public_inputs: Value,
+) -> ConsensusProof {
+    let (commitment, _, _) =
+        compute_commitment_and_inputs(&public_inputs).expect("canonical encode tampered inputs");
+    let mut tampered = proof.clone();
+    tampered.public_inputs = public_inputs;
+    tampered.commitment = commitment;
+    tampered
+}
+
+fn tamper_public_inputs_with_witness(
+    proof: &ConsensusProof,
+    mutate: impl FnOnce(&mut ConsensusWitness),
+) -> ConsensusProof {
+    let circuit = ConsensusCircuit::from_public_inputs_value(&proof.public_inputs)
+        .expect("decode consensus public inputs");
+    let mut witness = circuit.witness().clone();
+    mutate(&mut witness);
+    let tampered_circuit =
+        ConsensusCircuit::new(witness).expect("rebuild circuit from tampered witness");
+    let public_inputs = tampered_circuit
+        .public_inputs_value()
+        .expect("encode tampered public inputs");
+    rebuild_proof_with_public_inputs(proof, public_inputs)
+}
+
 #[test]
 fn consensus_prover_context_serializes_stark_proof() {
     let (prover, _) = sample_contexts();
@@ -614,22 +642,26 @@ fn consensus_verification_rejects_tampered_vrf_randomness() {
     let (proof, verifier) = prove_sample_witness();
     verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
 
-    let mut tampered = proof.clone();
-    if let Value::Object(ref mut root) = tampered.public_inputs {
-        if let Some(Value::Array(ref mut entries)) = root.get_mut("vrf_entries") {
-            if let Some(Value::Object(entry)) = entries.first_mut() {
-                if let Some(Value::Array(randomness)) = entry.get_mut("randomness") {
-                    randomness[0] = json!(255u64);
-                }
+    let tampered = tamper_public_inputs_with_witness(&proof, |witness| {
+        if let Some(first) = witness.vrf_entries.first_mut() {
+            if first.randomness.len() < 2 {
+                panic!("sample VRF randomness must encode at least one byte");
             }
+            first.randomness.replace_range(0..2, "ff");
         }
-    }
+    });
+
+    validate_consensus_public_inputs(&tampered.public_inputs)
+        .expect("tampered public inputs must remain well-formed");
 
     let err = verify_consensus(&verifier, &tampered).expect_err("tampered VRF must fail");
-    assert!(matches!(
-        err,
-        plonky3_backend::BackendError::InvalidPublicInputs { .. }
-    ));
+    match err {
+        BackendError::ConstraintMismatch { circuit, .. }
+        | BackendError::OpeningArgumentMismatch { circuit, .. } => {
+            assert_eq!(circuit, "consensus");
+        }
+        other => panic!("unexpected verification error: {other:?}"),
+    }
 }
 
 #[test]
@@ -637,18 +669,24 @@ fn consensus_verification_rejects_tampered_quorum_digest() {
     let (proof, verifier) = prove_sample_witness();
     verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
 
-    let mut tampered = proof.clone();
-    if let Value::Object(ref mut root) = tampered.public_inputs {
-        if let Some(Value::Object(bindings)) = root.get_mut("bindings") {
-            bindings.insert("quorum_bitmap".into(), json!("deadbeef"));
+    let tampered = tamper_public_inputs_with_witness(&proof, |witness| {
+        if witness.quorum_bitmap_root.len() < 2 {
+            panic!("quorum bitmap root must encode at least one byte");
         }
-    }
+        witness.quorum_bitmap_root.replace_range(0..2, "de");
+    });
+
+    validate_consensus_public_inputs(&tampered.public_inputs)
+        .expect("tampered public inputs must remain well-formed");
 
     let err = verify_consensus(&verifier, &tampered).expect_err("tampered quorum must fail");
-    assert!(matches!(
-        err,
-        plonky3_backend::BackendError::InvalidPublicInputs { .. }
-    ));
+    match err {
+        BackendError::ConstraintMismatch { circuit, .. }
+        | BackendError::OpeningArgumentMismatch { circuit, .. } => {
+            assert_eq!(circuit, "consensus");
+        }
+        other => panic!("unexpected verification error: {other:?}"),
+    }
 }
 
 #[test]
