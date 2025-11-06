@@ -46,8 +46,8 @@ use crate::config::{
 };
 use crate::consensus::messages::compute_consensus_bindings;
 use crate::consensus::{
-    aggregate_total_stake, classify_participants, evaluate_vrf, BftVote, BftVoteKind,
-    ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
+    aggregate_total_stake, build_consensus_witness, classify_participants, evaluate_vrf, BftVote,
+    BftVoteKind, ConsensusCertificate, ConsensusRound, EvidenceKind, EvidencePool, EvidenceRecord,
     SignedBftVote, ValidatorCandidate,
 };
 use crate::crypto::{
@@ -6349,9 +6349,10 @@ impl NodeInner {
             .ok_or_else(|| ChainError::Config("firewood pruning envelope missing".into()))?;
         let previous_block = self.storage.read_block(parent_height)?;
         let participants = round.commit_participants();
-        self.ledger
-            .record_consensus_witness(height, round.round(), participants);
         let consensus_certificate = round.certificate();
+        let witness_bundle =
+            build_consensus_witness(height, round.round(), participants, &consensus_certificate);
+        self.ledger.record_consensus_witness(&witness_bundle);
         let LocalProofArtifacts {
             bundle: stark_bundle,
             consensus_proof,
@@ -6735,8 +6736,9 @@ impl NodeInner {
         self.ledger.sync_epoch_for_height(height);
 
         let participants = round.commit_participants();
-        self.ledger
-            .record_consensus_witness(height, round_number, participants);
+        let witness_bundle =
+            build_consensus_witness(height, round_number, participants, &block.consensus);
+        self.ledger.record_consensus_witness(&witness_bundle);
 
         for request in &block.identities {
             self.ledger.register_identity(
