@@ -1740,7 +1740,7 @@ impl VerifierContext {
         if commitment != expected_commitment {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
         }
-        self.verify_with_encoded(commitment, &encoded_inputs, &inputs_digest, proof)
+        self.verify_with_encoded(&encoded_inputs, &inputs_digest, proof)
     }
 
     fn ensure_signed_fixture(&self) -> BackendResult<()> {
@@ -1771,20 +1771,108 @@ impl VerifierContext {
 
     fn verify_with_encoded(
         &self,
-        commitment: &str,
-        _encoded_inputs: &[u8],
+        encoded_inputs: &[u8],
         inputs_digest: &[u8; 32],
         proof: &Proof,
     ) -> BackendResult<()> {
-        if proof.metadata().security_bits() != self.security_bits {
-            return Err(BackendError::SecurityParameterMismatch(self.name.clone()));
+        let config = build_circuit_stark_config(&self.metadata)?;
+        let fri = extract_fri_config(&self.metadata)?;
+
+        let typed_key = self.verifying_key.typed();
+        let verifying_key = typed_key.key();
+
+        let stark_proof: p3_uni_stark::Proof<CircuitStarkConfig> =
+            bincode::deserialize(proof.serialized_proof()).map_err(|err| {
+                BackendError::StarkProofConstruction {
+                    circuit: self.name.clone(),
+                    message: format!("failed to decode STARK proof: {err}"),
+                }
+            })?;
+
+        let canonical_inputs: Value = serde_json::from_slice(encoded_inputs).map_err(|err| {
+            BackendError::InvalidPublicInputs {
+                circuit: self.name.clone(),
+                message: format!("failed to decode canonical public inputs: {err}"),
+            }
+        })?;
+
+        let public_values = match typed_key.air() {
+            ToolchainAir::Consensus => {
+                let (_, _, public_values) =
+                    decode_consensus_instance::<CircuitStarkConfig>(&canonical_inputs)?;
+                public_values
+            }
+            other => {
+                return Err(BackendError::UnsupportedProvingAir {
+                    circuit: self.name.clone(),
+                    air: other,
+                })
+            }
+        };
+
+        let air = verifying_key.air();
+        p3_uni_stark::verify(&config, air.as_ref(), &stark_proof, &public_values).map_err(
+            |err| BackendError::StarkProofConstruction {
+                circuit: self.name.clone(),
+                message: format!("STARK verification failed: {err}"),
+            },
+        )?;
+
+        let recomputed_metadata = ProofMetadata::from_stark_proof(
+            &self.name,
+            &stark_proof,
+            &public_values,
+            *inputs_digest,
+            &config,
+            fri,
+            self.security_bits,
+            self.use_gpu,
+        )?;
+
+        let stored_metadata = proof.metadata();
+
+        if stored_metadata.trace_commitment() != recomputed_metadata.trace_commitment() {
+            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
         }
-        if proof.metadata().use_gpu() != self.use_gpu {
-            return Err(BackendError::GpuModeMismatch(self.name.clone()));
+
+        if stored_metadata.quotient_commitment() != recomputed_metadata.quotient_commitment() {
+            return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
         }
-        if proof.metadata().public_inputs_hash() != inputs_digest {
+
+        match (
+            stored_metadata.random_commitment(),
+            recomputed_metadata.random_commitment(),
+        ) {
+            (None, None) => {}
+            (Some(expected), Some(actual)) if expected == actual => {}
+            _ => {
+                return Err(BackendError::VerifyingKeyMismatch(self.name.clone()));
+            }
+        }
+
+        if stored_metadata.fri_commitments() != recomputed_metadata.fri_commitments() {
+            return Err(BackendError::FriDigestMismatch(self.name.clone()));
+        }
+
+        if stored_metadata.challenger_digests() != recomputed_metadata.challenger_digests() {
+            return Err(BackendError::FriDigestMismatch(self.name.clone()));
+        }
+
+        if stored_metadata.public_inputs_hash() != recomputed_metadata.public_inputs_hash() {
             return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
         }
+
+        if stored_metadata.security_bits() != recomputed_metadata.security_bits()
+            || stored_metadata.derived_security_bits()
+                != recomputed_metadata.derived_security_bits()
+        {
+            return Err(BackendError::SecurityParameterMismatch(self.name.clone()));
+        }
+
+        if stored_metadata.use_gpu() != recomputed_metadata.use_gpu() {
+            return Err(BackendError::GpuModeMismatch(self.name.clone()));
+        }
+
         Ok(())
     }
 }
