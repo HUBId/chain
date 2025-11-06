@@ -1,0 +1,4 @@
+# Keep raw Plonky3 key material encoded as base64 text so reviewers do not have to
+# download binary blobs from the PR interface.
+*.pk
+*.vk

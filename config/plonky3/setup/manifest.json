@@ -3,37 +3,37 @@
     {
       "circuit": "consensus",
       "file": "consensus.json",
-      "sha256": "b177585bd7e638e04f5f1709a5428c85308f412895e1eacc52dedab5dfa6cd81"
+      "sha256": "b12da4c44f8717701f8cbd672a6d58d9db6eb02a527c84c0803f2fcc5a4c5a77"
     },
     {
       "circuit": "identity",
       "file": "identity.json",
-      "sha256": "2b57775254839fcca0f4285c2fcc292acf5872eeedff157697053e37087fa4b8"
+      "sha256": "b88fda416a7cbddc4ec2a1036b0313278641b71bc8d8337b50db967b0f02c191"
     },
     {
       "circuit": "pruning",
       "file": "pruning.json",
-      "sha256": "87a432565d0793cb5888ea607ac473db1ae3847ee94f3213311b02ebb73e8471"
+      "sha256": "f0c079624f543428644867d4a1271e1867cd371edfe6d2a25d87a1ebaca65273"
     },
     {
       "circuit": "recursive",
       "file": "recursive.json",
-      "sha256": "75d99f1b10fcea1bd3fa6727e1fd62f322425d7741518abb0fe607c80a158711"
+      "sha256": "523e2b881e4247a4e8e8e572ca2ed0d43969b6f9f625005bf5a18181071f7699"
     },
     {
       "circuit": "state",
       "file": "state.json",
-      "sha256": "5551c083fc5eb34091d0517cd279d428e908b29ce6fd8c741d1295936b93b4fb"
+      "sha256": "c0e6087aaf6cedce8bb30ca8aae446b4930eb9ecad69315b2b2ddf9404f02010"
     },
     {
       "circuit": "transaction",
       "file": "transaction.json",
-      "sha256": "ef536bb7275104fb33067439847f18bf8bb96a71e8b537fd4e1d30050d5b443e"
+      "sha256": "4eeceae507d50743f72b2b31d6290e471ce258cbe1cba6db54dda0a0b47d2eda"
     },
     {
       "circuit": "uptime",
       "file": "uptime.json",
-      "sha256": "b783481b11e57a325eb8fa30c96c275408cfd6017f6857c2d2d0f0955582d22f"
+      "sha256": "acba127384a323f6c87e52db4e5d2a870c74ca496e04a23590eccb910d6ef6a2"
     }
   ]
 }

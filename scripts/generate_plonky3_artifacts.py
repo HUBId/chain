@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import gzip
 import hashlib
 import json
@@ -59,6 +60,45 @@ class ArtifactEncoding:
         if self.hash_blake3:
             payload["hash_blake3"] = self.hash_blake3
         return payload
+
+
+BASE64_ALPHABET = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=")
+
+
+def _decode_base64_bytes(data: bytes, path: Path) -> bytes:
+    stripped = b"".join(data.split())
+    try:
+        return base64.b64decode(stripped, validate=True)
+    except binascii.Error as exc:  # pragma: no cover - defensive programming.
+        raise ValueError(f"Artifact {path} is marked as base64 but failed to decode") from exc
+
+
+def _looks_like_base64(data: bytes) -> bool:
+    stripped = b"".join(data.split())
+    if not stripped or len(stripped) % 4:
+        return False
+    return all(byte in BASE64_ALPHABET for byte in stripped)
+
+
+def resolve_artifact_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    b64_path = path.with_suffix(path.suffix + ".b64")
+    if b64_path.exists():
+        return b64_path
+    raise FileNotFoundError(path)
+
+
+def read_artifact_bytes(path: Path) -> bytes:
+    payload = path.read_bytes()
+    if path.suffix == ".b64":
+        return _decode_base64_bytes(payload, path)
+    if _looks_like_base64(payload):
+        try:
+            return _decode_base64_bytes(payload, path)
+        except ValueError:
+            pass
+    return payload
 
 
 def parse_args() -> argparse.Namespace:
@@ -189,13 +229,17 @@ def load_from_artifact_dir(
         "artifact_dir": str(artifact_dir),
         "circuit": circuit,
     }
-    vk_path = Path(verifying_pattern.format(**context))
-    pk_path = Path(proving_pattern.format(**context))
-    if not vk_path.exists():
-        raise FileNotFoundError(f"Missing verifying key for {circuit} at {vk_path}")
-    if not pk_path.exists():
-        raise FileNotFoundError(f"Missing proving key for {circuit} at {pk_path}")
-    return vk_path.read_bytes(), pk_path.read_bytes()
+    vk_candidate = Path(verifying_pattern.format(**context))
+    pk_candidate = Path(proving_pattern.format(**context))
+    try:
+        vk_path = resolve_artifact_path(vk_candidate)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing verifying key for {circuit} at {vk_candidate}") from exc
+    try:
+        pk_path = resolve_artifact_path(pk_candidate)
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"Missing proving key for {circuit} at {pk_candidate}") from exc
+    return read_artifact_bytes(vk_path), read_artifact_bytes(pk_path)
 
 
 def encode_bytes(data: bytes, compression: str) -> ArtifactEncoding:
