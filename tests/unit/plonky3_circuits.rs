@@ -24,6 +24,7 @@ use rpp_chain::plonky3::circuit::{
 use rpp_chain::plonky3::crypto;
 use rpp_chain::types::IdentityGenesis;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 const IDENTITY_WITNESS_JSON: &str = include_str!("data/plonky3/identity_witness.json");
 const UPTIME_WITNESS_JSON: &str = include_str!("data/plonky3/uptime_witness.json");
@@ -57,6 +58,24 @@ struct ArtifactDescriptor {
     byte_length: Option<u64>,
 }
 
+#[derive(Clone, Deserialize, Default)]
+struct ArtifactHashEntry {
+    #[serde(default)]
+    byte_length: Option<u64>,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    blake3: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct CircuitHashManifest {
+    #[serde(default)]
+    verifying_key: Option<ArtifactHashEntry>,
+    #[serde(default)]
+    proving_key: Option<ArtifactHashEntry>,
+}
+
 #[derive(Deserialize)]
 struct CircuitSetup {
     circuit: String,
@@ -64,12 +83,15 @@ struct CircuitSetup {
     proving_key: ArtifactLocation,
     #[serde(default)]
     metadata: Option<AirMetadata>,
+    #[serde(default)]
+    hash_manifest: Option<CircuitHashManifest>,
 }
 
 struct CircuitFixture {
     verifying_key: Vec<u8>,
     proving_key: Vec<u8>,
     metadata: Option<AirMetadata>,
+    hash_manifest: CircuitHashManifest,
 }
 
 static CIRCUIT_FIXTURES: Lazy<HashMap<String, CircuitFixture>> = Lazy::new(|| {
@@ -86,6 +108,7 @@ static CIRCUIT_FIXTURES: Lazy<HashMap<String, CircuitFixture>> = Lazy::new(|| {
     ] {
         let setup = load_circuit_setup(&base, circuit);
         let metadata = setup.metadata.clone();
+        let hash_manifest = setup.hash_manifest.clone().unwrap_or_default();
         fixtures.insert(
             circuit.to_string(),
             CircuitFixture {
@@ -97,6 +120,7 @@ static CIRCUIT_FIXTURES: Lazy<HashMap<String, CircuitFixture>> = Lazy::new(|| {
                 ),
                 proving_key: decode_artifact(&base, circuit, "proving key", &setup.proving_key),
                 metadata,
+                hash_manifest,
             },
         );
     }
@@ -239,6 +263,32 @@ fn decode_blob(
     bytes
 }
 
+fn assert_hash_entry(entry: &ArtifactHashEntry, payload: &[u8], circuit: &str, kind: &str) {
+    if let Some(expected_len) = entry.byte_length {
+        assert_eq!(
+            payload.len() as u64,
+            expected_len,
+            "{kind} length mismatch for {circuit} circuit",
+        );
+    }
+    if let Some(expected_sha) = entry.sha256.as_deref() {
+        let actual_sha = hex::encode(Sha256::digest(payload));
+        assert!(
+            expected_sha.eq_ignore_ascii_case(&actual_sha),
+            "{kind} SHA-256 mismatch for {circuit} circuit: expected {expected_sha}, found {actual_sha}",
+        );
+    } else {
+        panic!("{kind} hash manifest for {circuit} circuit missing SHA-256 digest");
+    }
+    if let Some(expected_blake3) = entry.blake3.as_deref() {
+        let actual_blake3 = hex::encode(blake3_hash(payload));
+        assert!(
+            expected_blake3.eq_ignore_ascii_case(&actual_blake3),
+            "{kind} BLAKE3 mismatch for {circuit} circuit: expected {expected_blake3}, found {actual_blake3}",
+        );
+    }
+}
+
 fn circuit_fixture(name: &str) -> &'static CircuitFixture {
     CIRCUIT_FIXTURES
         .get(name)
@@ -374,5 +424,28 @@ fn plonky3_param_digests_match_setup() {
                 "proving key metadata must match fixture"
             );
         }
+    }
+}
+
+#[test]
+fn plonky3_hash_manifest_matches_payloads() {
+    for (name, _) in circuit_matrix() {
+        let fixture = circuit_fixture(name);
+        let manifest = &fixture.hash_manifest;
+        let verifying_entry = manifest
+            .verifying_key
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing verifying key hash manifest for {name} circuit"));
+        assert_hash_entry(
+            verifying_entry,
+            &fixture.verifying_key,
+            name,
+            "verifying key",
+        );
+        let proving_entry = manifest
+            .proving_key
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing proving key hash manifest for {name} circuit"));
+        assert_hash_entry(proving_entry, &fixture.proving_key, name, "proving key");
     }
 }

@@ -6,9 +6,12 @@ use std::sync::Arc;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use blake3::hash as blake3_hash;
+use flate2::read::GzDecoder;
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tracing::error;
 
 use crate::errors::{ChainError, ChainResult};
@@ -92,6 +95,8 @@ struct CircuitArtifactConfig {
     proving_key: ArtifactLocation,
     #[serde(default)]
     metadata: Option<AirMetadata>,
+    #[serde(default)]
+    hash_manifest: Option<ArtifactHashManifest>,
 }
 
 #[derive(Deserialize)]
@@ -123,6 +128,30 @@ struct ArtifactDescriptor {
     byte_length: Option<u64>,
     #[serde(default)]
     hash_blake3: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ArtifactHashEntry {
+    #[serde(default)]
+    byte_length: Option<u64>,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    blake3: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct ArtifactHashManifest {
+    #[serde(default)]
+    verifying_key: Option<ArtifactHashEntry>,
+    #[serde(default)]
+    proving_key: Option<ArtifactHashEntry>,
+}
+
+struct DecodedArtifact {
+    bytes: Vec<u8>,
+    compression: Option<String>,
+    declared_length: Option<u64>,
 }
 
 const REQUIRED_CIRCUITS: &[&str] = &[
@@ -270,7 +299,7 @@ fn decode_artifact_bytes(
     location: &ArtifactLocation,
     circuit: &str,
     kind: &str,
-) -> ChainResult<Vec<u8>> {
+) -> ChainResult<DecodedArtifact> {
     match location {
         ArtifactLocation::Inline(value) => decode_artifact_string(base, value, circuit, kind),
         ArtifactLocation::Descriptor(descriptor) => {
@@ -284,17 +313,25 @@ fn decode_artifact_string(
     value: &str,
     circuit: &str,
     kind: &str,
-) -> ChainResult<Vec<u8>> {
+) -> ChainResult<DecodedArtifact> {
     if value.trim().is_empty() {
         return Err(ChainError::Config(format!(
             "{kind} for {circuit} circuit is empty"
         )));
     }
     if let Some(bytes) = decode_from_path(base, value, circuit, kind)? {
-        return Ok(bytes);
+        return Ok(DecodedArtifact {
+            bytes,
+            compression: None,
+            declared_length: None,
+        });
     }
     if let Some(bytes) = decode_blob(value, None) {
-        return Ok(bytes);
+        return Ok(DecodedArtifact {
+            bytes,
+            compression: None,
+            declared_length: None,
+        });
     }
     Err(ChainError::Config(format!(
         "{kind} for {circuit} circuit must reference a file or contain hex/base64 data",
@@ -306,7 +343,7 @@ fn decode_artifact_descriptor(
     descriptor: &ArtifactDescriptor,
     circuit: &str,
     kind: &str,
-) -> ChainResult<Vec<u8>> {
+) -> ChainResult<DecodedArtifact> {
     let mut candidate: Option<Vec<u8>> = None;
 
     if let Some(path) = descriptor
@@ -358,8 +395,9 @@ fn decode_artifact_descriptor(
         ))
     })?;
 
-    if let Some(compression) = normalize_compression(descriptor.compression.as_deref()) {
-        match compression.as_str() {
+    let mut compression = normalize_compression(descriptor.compression.as_deref());
+    if let Some(normalized) = compression.as_deref() {
+        match normalized {
             "gzip" | "gz" | "none" => {}
             other => {
                 return Err(ChainError::Config(format!(
@@ -369,7 +407,121 @@ fn decode_artifact_descriptor(
         }
     }
 
-    Ok(bytes)
+    if compression.as_deref() == Some("none") {
+        compression = None;
+    }
+    if compression.is_none() {
+        if let Some(expected) = descriptor.byte_length {
+            if bytes.len() as u64 != expected {
+                return Err(ChainError::Config(format!(
+                    "{kind} for {circuit} circuit declares {expected} bytes but decoded payload has length {}",
+                    bytes.len(),
+                )));
+            }
+        }
+    }
+
+    Ok(DecodedArtifact {
+        bytes,
+        compression,
+        declared_length: descriptor.byte_length,
+    })
+}
+
+fn decompress_artifact_bytes(
+    bytes: &[u8],
+    compression: Option<&str>,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<Vec<u8>> {
+    match compression {
+        None => Ok(bytes.to_vec()),
+        Some("gzip") | Some("gz") => {
+            let mut decoder = GzDecoder::new(bytes);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).map_err(|err| {
+                ChainError::Config(format!(
+                    "failed to decompress {kind} for {circuit} circuit: {err}",
+                ))
+            })?;
+            if decompressed.is_empty() {
+                return Err(ChainError::Config(format!(
+                    "{kind} for {circuit} circuit decompressed to zero bytes",
+                )));
+            }
+            Ok(decompressed)
+        }
+        Some("none") => Ok(bytes.to_vec()),
+        Some(other) => Err(ChainError::Config(format!(
+            "unsupported compression '{other}' for {kind} in {circuit} circuit",
+        ))),
+    }
+}
+
+fn digests_match(expected: &str, actual: &str) -> bool {
+    expected.trim().eq_ignore_ascii_case(actual.trim())
+}
+
+fn validate_hash_manifest_entry(
+    entry: Option<&ArtifactHashEntry>,
+    artifact: &DecodedArtifact,
+    circuit: &str,
+    kind: &str,
+) -> ChainResult<()> {
+    let entry = entry.ok_or_else(|| {
+        ChainError::Config(format!(
+            "Plonky3 setup artifact for {circuit} circuit is missing hash manifest metadata for {kind}",
+        ))
+    })?;
+
+    let decompressed = decompress_artifact_bytes(
+        &artifact.bytes,
+        artifact.compression.as_deref(),
+        circuit,
+        kind,
+    )?;
+
+    if let Some(expected) = entry.byte_length {
+        if decompressed.len() as u64 != expected {
+            return Err(ChainError::Config(format!(
+                "{kind} for {circuit} circuit expected {expected} bytes after decompression, found {}",
+                decompressed.len(),
+            )));
+        }
+    }
+
+    if let Some(declared) = artifact.declared_length {
+        if decompressed.len() as u64 != declared {
+            return Err(ChainError::Config(format!(
+                "{kind} for {circuit} circuit decoded length mismatch: descriptor declared {declared} bytes, found {}",
+                decompressed.len(),
+            )));
+        }
+    }
+
+    if let Some(expected_sha) = entry.sha256.as_deref() {
+        let actual_sha = hex::encode(Sha256::digest(&decompressed));
+        if !digests_match(expected_sha, &actual_sha) {
+            return Err(ChainError::Config(format!(
+                "{kind} for {circuit} circuit SHA-256 mismatch: expected {expected_sha}, found {actual_sha}",
+            )));
+        }
+    } else {
+        return Err(ChainError::Config(format!(
+            "{kind} for {circuit} circuit is missing a SHA-256 digest in the hash manifest",
+        )));
+    }
+
+    if let Some(expected_blake3) = entry.blake3.as_deref() {
+        let actual_blake3 = hex::encode(blake3_hash(&decompressed));
+        if !digests_match(expected_blake3, &actual_blake3) {
+            return Err(ChainError::Config(format!(
+                "{kind} for {circuit} circuit BLAKE3 mismatch: expected {expected_blake3}, found {actual_blake3}",
+            )));
+        }
+    }
+
+    Ok(())
 }
 fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -406,14 +558,37 @@ fn load_circuit_artifacts() -> ChainResult<HashMap<String, CircuitArtifact>> {
                 file_path.display()
             )));
         }
-        let verifying_key_bytes = decode_artifact_bytes(
+        let verifying_artifact = decode_artifact_bytes(
             &path,
             &config.verifying_key,
             &config.circuit,
             "verifying key",
         )?;
-        let proving_key_bytes =
+        let proving_artifact =
             decode_artifact_bytes(&path, &config.proving_key, &config.circuit, "proving key")?;
+
+        let hash_manifest = config.hash_manifest.as_ref();
+        validate_hash_manifest_entry(
+            hash_manifest.and_then(|manifest| manifest.verifying_key.as_ref()),
+            &verifying_artifact,
+            &config.circuit,
+            "verifying key",
+        )?;
+        validate_hash_manifest_entry(
+            hash_manifest.and_then(|manifest| manifest.proving_key.as_ref()),
+            &proving_artifact,
+            &config.circuit,
+            "proving key",
+        )?;
+
+        let DecodedArtifact {
+            bytes: verifying_key_bytes,
+            ..
+        } = verifying_artifact;
+        let DecodedArtifact {
+            bytes: proving_key_bytes,
+            ..
+        } = proving_artifact;
         let mut verifying_key =
             backend::VerifyingKey::from_bytes(verifying_key_bytes, &config.circuit).map_err(
                 |err| {
