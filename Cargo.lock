@@ -5039,6 +5039,7 @@ dependencies = [
  "p3-mds",
  "p3-mersenne-31",
  "p3-poseidon",
+ "p3-symmetric",
  "p3-util",
  "serde",
  "serde_json",

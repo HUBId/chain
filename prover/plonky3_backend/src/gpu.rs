@@ -1,13 +1,10 @@
 #![allow(dead_code)]
 
+use crate::GPU_DISABLE_ENV;
 use gpu_alloc::{Request, UsageFlags};
 use gpu_descriptor::DescriptorAllocator;
 use once_cell::sync::OnceLock;
 use std::{env, fmt};
-
-/// Environment flag that operators can use to force CPU execution even when
-/// the backend was configured for GPU proving.
-pub const GPU_DISABLE_ENV: &str = "PLONKY3_GPU_DISABLE";
 
 /// Lightweight helpers for initializing GPU acceleration plumbing when the
 /// `plonky3-gpu` feature is enabled.
