@@ -6,6 +6,85 @@ on:
   workflow_dispatch:
 
 jobs:
+  plonky3-hash-audit:
+    name: Plonky3 release hash audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Determine latest release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --json tagName --jq '.tagName')
+          if [[ -z "$tag" ]]; then
+            echo "::error::Unable to determine latest release tag" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+      - name: Download release manifests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release
+          gh release download "${{ steps.release.outputs.tag }}" \
+            --pattern 'plonky3-setup-hashes.json*' \
+            --pattern 'SHA256SUMS.txt*' \
+            --dir dist/release
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.0'
+      - name: Verify checksum manifest signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --certificate dist/release/SHA256SUMS.txt.pem \
+            --signature dist/release/SHA256SUMS.txt.sig \
+            dist/release/SHA256SUMS.txt
+      - name: Verify Plonky3 hash manifest signature
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign verify-blob \
+            --certificate dist/release/plonky3-setup-hashes.json.pem \
+            --signature dist/release/plonky3-setup-hashes.json.sig \
+            dist/release/plonky3-setup-hashes.json
+      - name: Compute repository hash manifest
+        run: |
+          set -euo pipefail
+          python3 scripts/generate_plonky3_artifacts.py \
+            config/plonky3/setup \
+            --verify \
+            --hash-output dist/local-plonky3-setup-hashes.json
+      - name: Compare repository and release manifests
+        run: |
+          set -euo pipefail
+          if ! cmp -s dist/local-plonky3-setup-hashes.json dist/release/plonky3-setup-hashes.json; then
+            echo "::error::Repository and release Plonky3 hash manifests differ" >&2
+            diff -u dist/release/plonky3-setup-hashes.json dist/local-plonky3-setup-hashes.json || true
+            exit 1
+          fi
+      - name: Validate checksum entry for hash manifest
+        run: |
+          set -euo pipefail
+          release_sha=$(grep ' dist/plonky3-setup-hashes.json$' dist/release/SHA256SUMS.txt | awk '{print $1}')
+          if [[ -z "$release_sha" ]]; then
+            echo "::error::SHA256SUMS.txt does not contain dist/plonky3-setup-hashes.json" >&2
+            exit 1
+          fi
+          local_sha=$(sha256sum dist/local-plonky3-setup-hashes.json | awk '{print $1}')
+          if [[ "$release_sha" != "$local_sha" ]]; then
+            echo "::error::Checksum mismatch for dist/plonky3-setup-hashes.json" >&2
+            echo "release: $release_sha" >&2
+            echo "local:   $local_sha" >&2
+            exit 1
+          fi
   validation:
     name: Nightly validation (${{ matrix.name }})
     runs-on: ubuntu-latest
