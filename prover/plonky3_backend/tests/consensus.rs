@@ -1,5 +1,6 @@
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use blake3::hash;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -34,14 +35,14 @@ fn hash_commitment_to_bytes(hash: &CircuitHash<BabyBear, BabyBear, 8>) -> [u8; 3
     bytes
 }
 
-fn decode_fixture_key_bytes(key: &FixtureKey) -> Vec<u8> {
+fn decode_fixture_key_bytes(label: &str, key: &FixtureKey) -> Vec<u8> {
     let decoded = match key.encoding.as_str() {
         "base64" => BASE64_STANDARD
             .decode(key.value.as_bytes())
             .expect("decode base64 fixture"),
         other => panic!("unsupported fixture encoding: {other}"),
     };
-    match key.compression.as_deref() {
+    let decompressed = match key.compression.as_deref() {
         Some("gzip") => {
             let mut decoder = GzDecoder::new(decoded.as_slice());
             let mut decompressed = Vec::new();
@@ -52,7 +53,26 @@ fn decode_fixture_key_bytes(key: &FixtureKey) -> Vec<u8> {
         }
         Some("none") | None => decoded,
         Some(other) => panic!("unsupported fixture compression: {other}"),
+    };
+    assert!(
+        key.byte_length > 0,
+        "{label} key fixture must advertise a non-zero payload length",
+    );
+    assert_eq!(
+        decompressed.len(),
+        key.byte_length,
+        "{label} key fixture decompressed length must match byte_length",
+    );
+    if let Some(expected_hash) = &key.hash_blake3 {
+        let expected =
+            hex::decode(expected_hash).expect("fixture hash must be valid hexadecimal digest");
+        assert_eq!(
+            expected.as_slice(),
+            hash(&decompressed).as_bytes(),
+            "{label} key fixture digest must match decoded payload",
+        );
     }
+    decompressed
 }
 
 fn encode_fixture_key_bytes(bytes: &[u8], key: &FixtureKey) -> String {
@@ -162,9 +182,12 @@ fn sample_vote(label: &str, weight: u64) -> VotePower {
 #[derive(Deserialize)]
 struct FixtureKey {
     encoding: String,
+    byte_length: usize,
     value: String,
     #[serde(default)]
     compression: Option<String>,
+    #[serde(default)]
+    hash_blake3: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -299,6 +322,37 @@ fn consensus_prover_context_serializes_stark_proof() {
 }
 
 #[test]
+fn consensus_verifying_key_participates_in_uni_stark_verify() {
+    let (prover, verifier) = sample_contexts();
+    let witness = sample_witness();
+    let circuit = ConsensusCircuit::new(witness).expect("consensus circuit");
+    let public_inputs = circuit
+        .public_inputs_value()
+        .expect("encode consensus public inputs");
+    let (commitment, proof) = prover
+        .prove(&public_inputs)
+        .expect("consensus proving succeeds");
+    let stark_proof = assert_stark_proof_matches_metadata(&proof);
+    let (expected_commitment, _, canonical_inputs) =
+        compute_commitment_and_inputs(&public_inputs).expect("canonical encode public inputs");
+    assert_eq!(commitment, expected_commitment);
+    let canonical_value: Value =
+        serde_json::from_slice(&canonical_inputs).expect("decode canonical public inputs");
+    let (_, _, public_values) = decode_consensus_instance::<CircuitStarkConfig>(&canonical_value)
+        .expect("decode consensus instance");
+
+    let metadata = verifier.metadata();
+    let config =
+        build_circuit_stark_config(metadata.as_ref()).expect("build consensus Stark config");
+    let typed_key = verifier.verifying_key().typed();
+    let stark_key = typed_key.key();
+    let air = stark_key.air();
+
+    p3_uni_stark::verify(&config, air.as_ref(), &stark_proof, &public_values)
+        .expect("direct uni-stark verification succeeds");
+}
+
+#[test]
 fn consensus_proof_metadata_tracks_commitment_digest() {
     let (prover, _) = sample_contexts();
     let circuit = ConsensusCircuit::new(sample_witness()).expect("consensus circuit");
@@ -388,10 +442,10 @@ fn consensus_prover_context_rejects_retargeted_air() {
         fs::read_to_string("config/plonky3/setup/consensus.json").expect("read consensus fixture");
     let fixture: FixtureDoc = serde_json::from_str(&contents).expect("parse consensus fixture");
 
-    let verifying_raw = decode_fixture_key_bytes(&fixture.verifying_key);
+    let verifying_raw = decode_fixture_key_bytes("verifying", &fixture.verifying_key);
     let (metadata, verifying_key_raw): (AirMetadata, CircuitStarkVerifyingKey) =
         bincode::deserialize(&verifying_raw).expect("decode verifying key payload");
-    let proving_raw = decode_fixture_key_bytes(&fixture.proving_key);
+    let proving_raw = decode_fixture_key_bytes("proving", &fixture.proving_key);
     let (_, proving_key_raw): (AirMetadata, CircuitStarkProvingKey) =
         bincode::deserialize(&proving_raw).expect("decode proving key payload");
 
