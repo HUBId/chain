@@ -6,7 +6,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use hex::decode as hex_decode;
 use plonky3_backend::{
-    build_circuit_stark_config, resolve_toolchain_air, AirMetadata, BackendError, CircuitBaseField,
+    resolve_toolchain_air, AirMetadata, BackendError, CircuitBaseField, CircuitConfigBuilder,
     CircuitStarkProvingKey, CircuitStarkVerifyingKey, ProofMetadata, ProverContext, ProvingKey,
     ToolchainAir, VerifyingKey,
 };
@@ -537,7 +537,10 @@ fn stark_config_builder_parses_metadata() {
     }))
     .expect("metadata parses");
 
-    let config = build_circuit_stark_config(&metadata).expect("config builds");
+    let bundle = CircuitConfigBuilder::new(&metadata, 64, false)
+        .build("test")
+        .expect("config builds");
+    let config = bundle.stark_config();
     let pcs_debug = format!("{:?}", config.pcs());
     assert!(
         pcs_debug.contains("log_blowup: 6"),
@@ -558,6 +561,7 @@ fn stark_config_builder_parses_metadata() {
 
     let mut challenger = config.initialise_challenger();
     assert_eq!(challenger.sponge_state.len(), 24);
+    assert!(bundle.derived_security_bits() >= 64);
     assert!(challenger.input_buffer.is_empty());
 
     for _ in 0..15 {
@@ -568,4 +572,59 @@ fn stark_config_builder_parses_metadata() {
     challenger.observe(CircuitBaseField::ONE);
     assert!(challenger.input_buffer.is_empty());
     assert_eq!(challenger.output_buffer.len(), 16);
+}
+
+#[test]
+fn circuit_config_builder_rejects_excessive_security_bits() {
+    let metadata: AirMetadata = serde_json::from_value(json!({
+        "air": {
+            "fri": {
+                "log_blowup": 5,
+                "log_final_poly_len": 2,
+                "num_queries": 10,
+                "proof_of_work_bits": 8,
+            }
+        }
+    }))
+    .expect("metadata parses");
+
+    let baseline = CircuitConfigBuilder::new(&metadata, 1, false)
+        .build("test")
+        .expect("baseline config builds");
+    let derived = baseline.derived_security_bits();
+    let requested = derived + 1;
+    let err = CircuitConfigBuilder::new(&metadata, requested, false)
+        .build("test")
+        .expect_err("excessive security bits must fail");
+    match err {
+        BackendError::InsufficientSecurity {
+            requested: actual_requested,
+            available,
+            ..
+        } => {
+            assert_eq!(actual_requested, requested);
+            assert_eq!(available, derived);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[cfg(not(feature = "plonky3-gpu"))]
+#[test]
+fn circuit_config_builder_errors_without_gpu_support() {
+    let metadata: AirMetadata = serde_json::from_value(json!({"air": {"fri": {"log_blowup": 5}}}))
+        .expect("metadata parses");
+
+    let err = CircuitConfigBuilder::new(&metadata, 32, true)
+        .build("test")
+        .expect_err("GPU builds must fail without feature");
+    match err {
+        BackendError::GpuInitialization { message, .. } => {
+            assert!(
+                message.contains("GPU support"),
+                "unexpected GPU error message: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }

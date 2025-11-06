@@ -20,10 +20,14 @@ mod config;
 mod public_inputs;
 mod typed_keys;
 
-use crate::config::{extract_fri_config, FriConfigKnobs};
+use crate::config::{CircuitConfigBuilder, FriConfigKnobs};
 use p3_field::PrimeField32;
 use p3_symmetric::Hash;
-use p3_uni_stark::{config::Val, prove, StarkProvingKey, StarkVerifyingKey};
+use p3_uni_stark::verifier::VerificationError;
+use p3_uni_stark::{
+    config::{PcsError, Val},
+    prove, StarkProvingKey, StarkVerifyingKey,
+};
 
 #[cfg(feature = "plonky3-gpu")]
 mod gpu;
@@ -88,8 +92,20 @@ pub enum BackendError {
     },
     #[error("Plonky3 prover does not support {air:?} circuits (requested {circuit})")]
     UnsupportedProvingAir { circuit: String, air: ToolchainAir },
-    #[error("failed to construct {circuit} STARK proof: {message}")]
-    StarkProofConstruction { circuit: String, message: String },
+    #[error("Plonky3 proving failed for {circuit}: {message}")]
+    StarkProvingError { circuit: String, message: String },
+    #[error("Plonky3 verification failed for {circuit}: {message}")]
+    StarkVerificationError { circuit: String, message: String },
+    #[error("GPU initialisation failed for {circuit}: {message}")]
+    GpuInitialization { circuit: String, message: String },
+    #[error(
+        "requested security level {requested} for {circuit} exceeds derived level {available}"
+    )]
+    InsufficientSecurity {
+        circuit: String,
+        requested: u32,
+        available: u32,
+    },
     #[error("prover failure for {circuit} circuit ({context}): {source}")]
     ProverFailure {
         circuit: String,
@@ -135,8 +151,8 @@ where
 }
 
 pub use config::{
-    build_circuit_stark_config, CircuitBaseField, CircuitChallengeField, CircuitChallenger,
-    CircuitFriPcs, CircuitMerkleTreeMmcs, CircuitStarkConfig,
+    CircuitBaseField, CircuitChallengeField, CircuitChallenger, CircuitConfig,
+    CircuitConfigBuilder, CircuitFriPcs, CircuitMerkleTreeMmcs, CircuitStarkConfig,
 };
 
 /// Convenience alias for verifying key handles emitted by the Plonky3 toolchain
@@ -1030,7 +1046,7 @@ impl ProofMetadata {
             .collect();
 
         if fri_commitments.is_empty() {
-            return Err(BackendError::StarkProofConstruction {
+            return Err(BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: "FRI transcript missing commit-phase commitments".into(),
             });
@@ -1038,7 +1054,7 @@ impl ProofMetadata {
 
         let num_queries = proof.opening_proof.query_proofs.len();
         if num_queries != fri.num_queries {
-            return Err(BackendError::StarkProofConstruction {
+            return Err(BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: format!(
                     "FRI query count {num_queries} does not match AIR metadata ({})",
@@ -1050,7 +1066,7 @@ impl ProofMetadata {
         let final_poly_len = proof.opening_proof.final_poly.len();
         let expected_final_len = 1usize << fri.log_final_poly_len;
         if final_poly_len != expected_final_len {
-            return Err(BackendError::StarkProofConstruction {
+            return Err(BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: format!(
                     "FRI final polynomial length {final_poly_len} does not match AIR metadata ({expected_final_len})"
@@ -1062,7 +1078,7 @@ impl ProofMetadata {
         let expected_log_initial = fri.log_final_poly_len + rounds;
         let log_ext_degree = proof.degree_bits + config.is_zk();
         if expected_log_initial != log_ext_degree + fri.log_blowup {
-            return Err(BackendError::StarkProofConstruction {
+            return Err(BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: format!(
                     "FRI metadata inconsistent: rounds={rounds}, log_final_poly_len={}, log_blowup={}, degree_bits={}, is_zk={}",
@@ -1078,19 +1094,19 @@ impl ProofMetadata {
             replay_challenger_transcript(circuit, proof, config, &fri, public_values)?;
 
         let query_contrib = fri.log_blowup.checked_mul(num_queries).ok_or_else(|| {
-            BackendError::StarkProofConstruction {
+            BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: "derived security bits exceed usize range".into(),
             }
         })?;
         let total_security = query_contrib
             .checked_add(fri.proof_of_work_bits)
-            .ok_or_else(|| BackendError::StarkProofConstruction {
+            .ok_or_else(|| BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: "derived security bits overflow".into(),
             })?;
         let derived_security_bits =
-            u32::try_from(total_security).map_err(|_| BackendError::StarkProofConstruction {
+            u32::try_from(total_security).map_err(|_| BackendError::StarkProvingError {
                 circuit: circuit.to_string(),
                 message: "derived security bits exceed 32-bit range".into(),
             })?;
@@ -1401,7 +1417,7 @@ fn replay_challenger_transcript(
     }
 
     if proof.opening_proof.final_poly.len() != (1 << fri.log_final_poly_len) {
-        return Err(BackendError::StarkProofConstruction {
+        return Err(BackendError::StarkProvingError {
             circuit: circuit.to_string(),
             message: format!(
                 "unexpected FRI final polynomial length {}; expected {}",
@@ -1416,7 +1432,7 @@ fn replay_challenger_transcript(
     }
 
     if !challenger.check_witness(fri.proof_of_work_bits, proof.opening_proof.pow_witness) {
-        return Err(BackendError::StarkProofConstruction {
+        return Err(BackendError::StarkProvingError {
             circuit: circuit.to_string(),
             message: "proof-of-work witness failed transcript check".into(),
         });
@@ -1447,13 +1463,11 @@ fn ensure_proof_metadata_alignment(
         });
     }
 
-    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> = bincode::deserialize(serialized_proof)
-        .map_err(|err| {
-        BackendError::StarkProofConstruction {
+    let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
+        bincode::deserialize(serialized_proof).map_err(|err| BackendError::StarkProvingError {
             circuit: circuit.to_string(),
             message: format!("failed to decode STARK proof: {err}"),
-        }
-    })?;
+        })?;
 
     let trace_commitment = hash_to_bytes(&decoded.commitments.trace);
     if &trace_commitment != metadata.trace_commitment() {
@@ -1475,7 +1489,7 @@ fn ensure_proof_metadata_alignment(
     }
 
     if decoded.opening_proof.commit_phase_commits.is_empty() {
-        return Err(BackendError::StarkProofConstruction {
+        return Err(BackendError::StarkProvingError {
             circuit: circuit.to_string(),
             message: "missing FRI commit-phase commitment".into(),
         });
@@ -1603,29 +1617,37 @@ impl ProverContext {
         _encoded_inputs: &[u8],
         public_inputs: &Value,
     ) -> BackendResult<Proof> {
-        let config = build_circuit_stark_config(&self.proving_metadata)?;
-        let fri = extract_fri_config(&self.proving_metadata)?;
+        let config_bundle =
+            CircuitConfigBuilder::new(&self.proving_metadata, self.security_bits, self.use_gpu)
+                .build(&self.name)
+                .map_err(|err| prover_failure(&self.name, "build STARK configuration", err))?;
+        #[cfg(feature = "plonky3-gpu")]
+        let _gpu_guard = config_bundle.gpu_resources();
+        let config = config_bundle.stark_config();
+        let fri = config_bundle.fri_config();
+
         let typed_key = self.proving_key.typed();
         let proving_key = typed_key.key();
 
-        let proof = match typed_key.air() {
+        let (proof, public_values) = match typed_key.air() {
             ToolchainAir::Consensus => {
                 let (_circuit, trace, public_values) = decode_consensus_instance::<
                     CircuitStarkConfig,
                 >(public_inputs)
                 .map_err(|err| prover_failure(&self.name, "decode consensus public inputs", err))?;
-                prove(&config, proving_key.as_ref(), trace, &public_values)
+                let proof = prove(config, proving_key.as_ref(), trace, &public_values)
                     .into_stark_proof()
                     .map_err(|err| {
                         prover_failure(
                             &self.name,
                             "generate STARK proof",
-                            BackendError::StarkProofConstruction {
+                            BackendError::StarkProvingError {
                                 circuit: self.name.clone(),
                                 message: format!("failed to build STARK proof: {err}"),
                             },
                         )
-                    })?
+                    })?;
+                (proof, public_values)
             }
             other => {
                 return Err(BackendError::UnsupportedProvingAir {
@@ -1640,14 +1662,14 @@ impl ProverContext {
             &proof,
             &public_values,
             inputs_digest,
-            &config,
+            config,
             fri,
             self.security_bits,
             self.use_gpu,
         )?;
 
         let serialized_proof =
-            bincode::serialize(&proof).map_err(|err| BackendError::StarkProofConstruction {
+            bincode::serialize(&proof).map_err(|err| BackendError::StarkProvingError {
                 circuit: self.name.clone(),
                 message: format!("failed to serialize STARK proof: {err}"),
             })?;
@@ -1775,15 +1797,20 @@ impl VerifierContext {
         inputs_digest: &[u8; 32],
         proof: &Proof,
     ) -> BackendResult<()> {
-        let config = build_circuit_stark_config(&self.metadata)?;
-        let fri = extract_fri_config(&self.metadata)?;
+        let config_bundle =
+            CircuitConfigBuilder::new(&self.metadata, self.security_bits, self.use_gpu)
+                .build(&self.name)?;
+        #[cfg(feature = "plonky3-gpu")]
+        let _gpu_guard = config_bundle.gpu_resources();
+        let config = config_bundle.stark_config();
+        let fri = config_bundle.fri_config();
 
         let typed_key = self.verifying_key.typed();
         let verifying_key = typed_key.key();
 
         let stark_proof: p3_uni_stark::Proof<CircuitStarkConfig> =
             bincode::deserialize(proof.serialized_proof()).map_err(|err| {
-                BackendError::StarkProofConstruction {
+                BackendError::StarkVerificationError {
                     circuit: self.name.clone(),
                     message: format!("failed to decode STARK proof: {err}"),
                 }
@@ -1811,19 +1838,15 @@ impl VerifierContext {
         };
 
         let air = verifying_key.air();
-        p3_uni_stark::verify(&config, air.as_ref(), &stark_proof, &public_values).map_err(
-            |err| BackendError::StarkProofConstruction {
-                circuit: self.name.clone(),
-                message: format!("STARK verification failed: {err}"),
-            },
-        )?;
+        p3_uni_stark::verify(config, air.as_ref(), &stark_proof, &public_values)
+            .map_err(|err| map_verification_error(&self.name, err))?;
 
         let recomputed_metadata = ProofMetadata::from_stark_proof(
             &self.name,
             &stark_proof,
             &public_values,
             *inputs_digest,
-            &config,
+            config,
             fri,
             self.security_bits,
             self.use_gpu,
@@ -2086,6 +2109,27 @@ fn prover_failure(circuit: &str, context: impl Into<String>, err: BackendError) 
             context,
             source: Box::new(other),
         },
+    }
+}
+
+fn map_verification_error(
+    circuit: &str,
+    err: VerificationError<PcsError<CircuitStarkConfig>>,
+) -> BackendError {
+    use VerificationError::*;
+
+    let message = match err {
+        InvalidProofShape => "invalid proof shape".to_string(),
+        InvalidOpeningArgument(inner) => {
+            format!("invalid opening argument: {inner:?}")
+        }
+        OodEvaluationMismatch => "out-of-domain evaluation mismatch".to_string(),
+        RandomizationError => "randomization commitment mismatch".to_string(),
+    };
+
+    BackendError::StarkVerificationError {
+        circuit: circuit.to_string(),
+        message,
     }
 }
 

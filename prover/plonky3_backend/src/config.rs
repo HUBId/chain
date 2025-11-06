@@ -1,5 +1,8 @@
 use crate::{AirMetadata, BackendError, BackendResult};
 
+#[cfg(feature = "plonky3-gpu")]
+use crate::GpuResources;
+
 use p3_baby_bear::{
     default_babybear_poseidon2_16, default_babybear_poseidon2_24, BabyBear, Poseidon2BabyBear,
 };
@@ -171,7 +174,9 @@ pub(crate) fn extract_fri_config(metadata: &AirMetadata) -> BackendResult<FriCon
     })
 }
 
-pub fn build_circuit_stark_config(metadata: &AirMetadata) -> BackendResult<CircuitStarkConfig> {
+pub(crate) fn build_circuit_stark_config(
+    metadata: &AirMetadata,
+) -> BackendResult<CircuitStarkConfig> {
     let fri = extract_fri_config(metadata)?;
 
     let hash_perm = default_babybear_poseidon2_16();
@@ -193,4 +198,98 @@ pub fn build_circuit_stark_config(metadata: &AirMetadata) -> BackendResult<Circu
     let challenger = CircuitChallenger::new(default_babybear_poseidon2_24());
 
     Ok(CircuitStarkConfig::new(pcs, challenger))
+}
+
+fn derive_security_bits(fri: &FriConfigKnobs) -> BackendResult<u32> {
+    let query_contrib = fri.log_blowup.checked_mul(fri.num_queries).ok_or_else(|| {
+        BackendError::InvalidAirMetadata("derived security bits exceed usize range".into())
+    })?;
+    let total_security = query_contrib
+        .checked_add(fri.proof_of_work_bits)
+        .ok_or_else(|| BackendError::InvalidAirMetadata("derived security bits overflow".into()))?;
+    u32::try_from(total_security).map_err(|_| {
+        BackendError::InvalidAirMetadata("derived security bits exceed 32-bit range".into())
+    })
+}
+
+#[derive(Debug)]
+pub struct CircuitConfig {
+    stark: CircuitStarkConfig,
+    fri: FriConfigKnobs,
+    derived_security_bits: u32,
+    #[cfg(feature = "plonky3-gpu")]
+    gpu: Option<GpuResources>,
+}
+
+impl CircuitConfig {
+    pub fn stark_config(&self) -> &CircuitStarkConfig {
+        &self.stark
+    }
+
+    pub fn fri_config(&self) -> FriConfigKnobs {
+        self.fri
+    }
+
+    pub fn derived_security_bits(&self) -> u32 {
+        self.derived_security_bits
+    }
+
+    #[cfg(feature = "plonky3-gpu")]
+    pub fn gpu_resources(&self) -> Option<&GpuResources> {
+        self.gpu.as_ref()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CircuitConfigBuilder<'a> {
+    metadata: &'a AirMetadata,
+    security_bits: u32,
+    use_gpu: bool,
+}
+
+impl<'a> CircuitConfigBuilder<'a> {
+    pub fn new(metadata: &'a AirMetadata, security_bits: u32, use_gpu: bool) -> Self {
+        Self {
+            metadata,
+            security_bits,
+            use_gpu,
+        }
+    }
+
+    pub fn build(self, circuit: &str) -> BackendResult<CircuitConfig> {
+        let fri = extract_fri_config(self.metadata)?;
+        let derived_security_bits = derive_security_bits(&fri)?;
+        if self.security_bits > derived_security_bits {
+            return Err(BackendError::InsufficientSecurity {
+                circuit: circuit.to_string(),
+                requested: self.security_bits,
+                available: derived_security_bits,
+            });
+        }
+
+        #[cfg(not(feature = "plonky3-gpu"))]
+        if self.use_gpu {
+            return Err(BackendError::GpuInitialization {
+                circuit: circuit.to_string(),
+                message: "plonky3 backend compiled without GPU support".into(),
+            });
+        }
+
+        let stark = build_circuit_stark_config(self.metadata)?;
+
+        #[cfg(feature = "plonky3-gpu")]
+        let gpu = if self.use_gpu {
+            Some(GpuResources::new())
+        } else {
+            None
+        };
+
+        Ok(CircuitConfig {
+            stark,
+            fri,
+            derived_security_bits,
+            #[cfg(feature = "plonky3-gpu")]
+            gpu,
+        })
+    }
 }

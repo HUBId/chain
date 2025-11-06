@@ -13,11 +13,11 @@ use plonky3_backend::circuits::consensus::load_consensus_trace_layout;
 use plonky3_backend::{
     compute_commitment_and_inputs, decode_consensus_instance, encode_consensus_public_inputs,
     prove_consensus, require_circuit_air_metadata, validate_consensus_public_inputs,
-    verify_consensus, AirMetadata, BackendError, CircuitStarkConfig, CircuitStarkProvingKey,
-    CircuitStarkVerifyingKey, ConsensusCircuit, ConsensusProof, ConsensusVrfEntry,
-    ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProofMetadata, ProofParts, ProverContext,
-    ProvingKey, ToolchainAir, VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH,
-    VRF_PROOF_LENGTH,
+    verify_consensus, AirMetadata, BackendError, CircuitConfigBuilder, CircuitStarkConfig,
+    CircuitStarkProvingKey, CircuitStarkVerifyingKey, ConsensusCircuit, ConsensusProof,
+    ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProofMetadata,
+    ProofParts, ProverContext, ProvingKey, ToolchainAir, VerifierContext, VerifyingKey, VotePower,
+    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -342,8 +342,11 @@ fn consensus_verifying_key_participates_in_uni_stark_verify() {
         .expect("decode consensus instance");
 
     let metadata = verifier.metadata();
-    let config =
-        build_circuit_stark_config(metadata.as_ref()).expect("build consensus Stark config");
+    let (security_bits, use_gpu) = prover.parameters();
+    let config_bundle = CircuitConfigBuilder::new(metadata.as_ref(), security_bits, use_gpu)
+        .build("consensus")
+        .expect("build consensus Stark config");
+    let config = config_bundle.stark_config();
     let typed_key = verifier.verifying_key().typed();
     let stark_key = typed_key.key();
     let air = stark_key.air();
