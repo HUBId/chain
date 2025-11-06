@@ -13,8 +13,9 @@ Release-Asset).
       für VRF-/Quorum-Stress, Snapshot-Rebuild und Gossip-Backpressure.【F:tools/simnet/src/bin/regression.rs†L1-L240】【F:tools/simnet/scenarios/snapshot_rebuild.ron†L1-L13】【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L13】
 - [ ] **Tamper-Rejections bestätigt.** Logs aus `target/simnet/consensus-quorum` (oder dem Regression-Run)
       belegen abgelehnte VRF-/Quorum-Manipulationen (`invalid VRF proof`, `duplicate precommit detected`).
-      Katalog `docs/testing/consensus_regressions.md` prüfen und dokumentieren, dass STWO ✅ und Plonky3-❌
-      (bis zur Test-Landung) sichtbar abgeglichen wurden.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:docs/testing/consensus_regressions.md†L1-L40】
+      Katalog `docs/testing/consensus_regressions.md` prüfen und dokumentieren, dass sowohl STWO als auch
+      Plonky3 die Tamper-Szenarien ✅ mit `cargo test -p prover-stwo-backend` bzw.
+      `cargo test -p prover-plonky3-backend` abdecken.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:docs/testing/consensus_regressions.md†L1-L32】
 - [ ] **Dashboard-Screenshots abgelegt.** Grafana-Panels `consensus_vrf_verification_time_ms` und
       `consensus_quorum_verifications_total` dokumentieren p95-Werte und `result="failure"`-Slices
       während der Tests.【F:docs/dashboards/consensus_grafana.json†L1-L200】
