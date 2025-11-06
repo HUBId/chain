@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Detail the VRF/quorum proof constraints and failure modes in the consensus ADR and architecture foundations so reviewers can trace the new public inputs across circuits, runtime verifiers, and regression tests.【F:docs/adr/0001_consensus_proofs.md†L15-L44】【F:docs/architecture_foundations.md†L45-L86】
+
 - Capture the Plonky3 production graduation, including updated telemetry
   metrics, artefact paths, and supply-chain gates in the README, runbook, and
   ADR so operators can point auditors at the final proof flow and dashboard

@@ -20,16 +20,21 @@ Telemetriegestützte Fehlersuche.【F:rpp/runtime/node.rs†L5036-L5099】【F:d
   `invalid_vrf_submission` markiert, während `Block::verify_consensus_certificate`
   fehlgeschlagene Prüfungen als `invalid_vrf_proof` reportet und die Quorum-
   Metriken aktualisiert.【F:rpp/runtime/node.rs†L5036-L5099】【F:rpp/runtime/types/block.rs†L2008-L2050】
-* **Witness- und Constraint-Schicht.** Der STWO-Prover erzwingt Vollständigkeit
-  der Konsens-Witnesses (VRF-Ausgaben, Beweise, Reputation-Roots,
-  Witness-Commitments) und liefert bei Verletzungen strukturierte
-  `ChainError::Crypto`-Antworten. Diese Fehler tauchen sowohl im Node-Log als auch
-  in den Laufzeitmetriken auf, womit Dashboards sofort auf Witness-Divergenzen
-  reagieren.【F:rpp/proofs/stwo/prover/mod.rs†L419-L472】【F:rpp/runtime/types/block.rs†L2051-L2332】
+* **Witness- und Constraint-Schicht.** Die Konsens-Circuits der STWO- und
+  Plonky3-Backends prüfen nun sämtliche VRF-Transkripte, Quorum-Parameter und
+  Bindings direkt in den AIR-/Gate-Constraints. Beide Varianten erzwingen
+  vollständige VRF-Einträge (Randomness, Pre-Output, Proof, Public-Key sowie
+  Poseidon-Header/Tier-Seed), stimmen diese gegen Block-Hash und Epoche ab und
+  binden Witness-Commitments, Reputation-Roots sowie Quorum-Wurzeln an das
+  Block-Seed. Fehlende oder manipulierte Einträge resultieren in
+  `ConstraintViolation`- bzw. `invalid_witness`-Fehlern, die im Backend als
+  `ChainError::Crypto` auftauchen.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L125-L295】【F:prover/plonky3_backend/src/circuits/consensus.rs†L500-L705】【F:rpp/proofs/stwo/prover/mod.rs†L419-L472】
 * **Quorum-Evaluierung.** Konsenszertifikate prüfen Vote-Gewichte,
-  Teilnehmerkonsistenz und Witness-Zuordnung. Jede Abweichung aktualisiert das
-  Telemetrie-Label `consensus_quorum_verification_failure`, sodass Dashboards und
-  Runbooks einheitlich auf die Ursache verweisen können.【F:rpp/runtime/types/block.rs†L2140-L2332】【F:docs/dashboards/consensus_grafana.json†L1-L200】
+  Teilnehmerkonsistenz und Witness-Zuordnung. Zusätzlich erzwingen die neuen
+  Bindings, dass `quorum_bitmap_root` und `quorum_signature_root` mit den im
+  Circuit rekonstruierten Digests übereinstimmen. Jede Abweichung aktualisiert
+  das Telemetrie-Label `consensus_quorum_verification_failure`, sodass
+  Dashboards und Runbooks einheitlich auf die Ursache verweisen können.【F:prover/plonky3_backend/src/circuits/consensus.rs†L646-L705】【F:rpp/runtime/types/block.rs†L2053-L2173】【F:docs/dashboards/consensus_grafana.json†L1-L200】
 
 ## Nachvollziehbarkeit (Tests, Metriken, Runbooks)
 
@@ -37,6 +42,9 @@ Telemetriegestützte Fehlersuche.【F:rpp/runtime/node.rs†L5036-L5099】【F:d
   * `tests/vrf_selection.rs` rekonstruiert Konsensrunden über historische VRF-
     Daten und stellt sicher, dass ohne valide VRF-Ausgaben keine Quoren erreicht
     werden.【F:tests/vrf_selection.rs†L12-L120】
+  * Die Backend-Test-Suiten validieren die Circuit-Constraints: STWO weist
+    manipulierte VRF-Outputs, vertauschte Proofs und veränderte Quorum-Wurzeln
+    zurück, während Plonky3 dieselben Tamper-Fälle im Proof-Verifier ablehnt.【F:prover/prover_stwo_backend/src/backend.rs†L1185-L1333】【F:prover/plonky3_backend/tests/consensus.rs†L605-L690】
   * `tests/consensus/censorship_inactivity.rs` erzwingt Witness- und
     Quorum-Constraints (z. B. Doppeltstimmen, fehlende Witness-Teilnehmer) und
     verifiziert Slashing-Trigger sowie Penalty-Anwendung.【F:tests/consensus/censorship_inactivity.rs†L1-L220】

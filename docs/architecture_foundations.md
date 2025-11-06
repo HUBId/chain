@@ -51,23 +51,36 @@
   bevor der STWO-Zeugnisdatensatz erzeugt wird. Abweichungen führen zu
   `ChainError::Crypto` mit aussagekräftigen Fehlermeldungen, die das Monitoring
   unmittelbar korrelieren kann.【F:rpp/proofs/stwo/prover/mod.rs†L419-L472】
+- Die Konsens-Circuits der STWO- und Plonky3-Backends validieren anschließend
+  jedes VRF-Transcript, erzwingen eindeutige Vote-Sets und koppeln
+  Witness-Commitments, Reputation-Roots sowie Quorum-Wurzeln über Poseidon-
+  Bindings an den Block-Hash. Manipulierte oder fehlende Elemente führen zu
+  Constraint-Fehlern, die im Backend als `invalid_witness` bzw.
+  `ConstraintViolation` auftauchen.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L612-L777】【F:prover/plonky3_backend/src/circuits/consensus.rs†L538-L705】
+- Beide Backends exportieren identische öffentliche Eingaben: Block-Metadaten,
+  Quorum-Schwellen sowie Listen der VRF-Einträge, Witness-Commitments und
+  Reputation-Roots mitsamt Bindings werden in einem festen Layout serialisiert,
+  sodass Rekursion und Verifier auf dieselben Felder zugreifen.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L697-L795】【F:prover/plonky3_backend/src/circuits/consensus.rs†L643-L760】
 - `Block::verify_consensus_certificate_with_metrics` erzwingt zusätzliche
   Invarianten: Vote-Sets müssen den erwarteten Rundenzähler, Block-Hash und
-  Quorum-Schwellen erfüllen, Witness-Teilnehmer müssen mit den Commit-Votes
-  übereinstimmen, und doppelte Stimmen werden abgewiesen. Jeder Bruch setzt
-  spezifische `consensus_quorum_verification_failure`-Labels, um Runbooks direkt
-  auf die Metrikwerte zu verweisen.【F:rpp/runtime/types/block.rs†L2051-L2332】
+  Quorum-Schwellen erfüllen, VRF-Proofs werden gegen das Leader-Seed geprüft und
+  alle Abweichungen setzen spezifische
+  `consensus_quorum_verification_failure`-Labels.【F:rpp/runtime/types/block.rs†L2053-L2173】
 - Das Witness-Commitment wird parallel über die Konsens-Gossip-Pipeline
   repliziert (`witness_events` im Node-Status), wodurch Quorum-Entscheidungen in
   Wallet und Operator-Dashboards synchron bleiben.【F:rpp/runtime/node.rs†L5036-L5099】【F:rpp/runtime/node.rs†L5005-L5019】
+- Regressionstests auf Backend-Ebene stellen sicher, dass manipulierte VRF-
+  Outputs oder Quorum-Wurzeln abgelehnt werden, bevor Proofs veröffentlicht
+  werden.【F:prover/prover_stwo_backend/src/backend.rs†L1185-L1333】【F:prover/plonky3_backend/tests/consensus.rs†L605-L690】
 
 ### Quorum-Auswertung und Fehlerbehandlung
 - Die Quorum-Logik sammelt Vote-Gewichte, prüft Schwellenwerte (`quorum_threshold`,
-  `commit_power`) und verweist bei Abweichungen auf dedizierte
-  Fehlermeldungen. Gleichzeitig zeichnet der Runtime-Metrikexporter erfolgreiche
-  und fehlerhafte Quorum-Verifikationen auf, sodass Dashboards wie
-  `docs/dashboards/consensus_grafana.json` automatisiert regressionswarnungen
-  auslösen.【F:rpp/runtime/types/block.rs†L2140-L2328】【F:docs/dashboards/consensus_grafana.json†L1-L200】
+  `commit_power`) und versieht jede Abweichung – von `invalid_vrf_proof` über
+  `prevote_block_hash_mismatch` bis zu `duplicate_prevote` – mit dedizierten
+  Telemetrie-Labels, bevor `ChainError::Crypto` zurückgegeben wird. Das
+  Laufzeit-Monitoring erhält so präzise Fehlercodes, während Dashboards wie
+  `docs/dashboards/consensus_grafana.json` automatisiert Regressionswarnungen
+  auslösen.【F:rpp/runtime/types/block.rs†L2053-L2173】【F:docs/dashboards/consensus_grafana.json†L1-L200】
 - Runbooks (`docs/runbooks/observability.md`) führen Operatoren durch die
   Auswertung dieser Metriken: Simulationstests und `curl /status/consensus`
   dienen als erste Fehlerlokalisierung, während das Konsens-Grafana-Board die
