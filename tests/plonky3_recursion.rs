@@ -230,7 +230,7 @@ fn plonky3_recursive_flow_roundtrip() {
             "recursive proofs must record FRI commit-phase digests"
         );
         assert!(
-            parsed.payload.metadata.challenger_digests.len() >= 1,
+            !parsed.payload.metadata.transcript.checkpoints.is_empty(),
             "recursive proofs must expose challenger checkpoints"
         );
         assert!(

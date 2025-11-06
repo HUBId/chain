@@ -84,4 +84,5 @@ p3-util = "=0.3.0"
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { version = "=1.0.145", default-features = false, features = ["std"] }
 sha2 = { workspace = true }
+tracing = { workspace = true }
 thiserror = "=1.0.69"

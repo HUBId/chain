@@ -14,6 +14,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
+use tracing::{debug, info};
 
 mod circuits;
 mod config;
@@ -21,7 +22,7 @@ mod public_inputs;
 mod typed_keys;
 
 use crate::config::{CircuitConfigBuilder, FriConfigKnobs};
-use p3_field::PrimeField32;
+use p3_field::{BasedVectorSpace, PrimeField32};
 use p3_symmetric::Hash;
 use p3_uni_stark::verifier::VerificationError;
 use p3_uni_stark::{
@@ -74,8 +75,20 @@ pub enum BackendError {
     VerifyingKeyMismatch(String),
     #[error("public input digest mismatch for {0} circuit")]
     PublicInputDigestMismatch(String),
+    #[error("canonical public inputs mismatch for {0} circuit")]
+    CanonicalPublicInputMismatch(String),
     #[error("FRI transcript digest mismatch for {0} circuit")]
     FriDigestMismatch(String),
+    #[error("challenger transcript mismatch for {0} circuit")]
+    TranscriptMismatch(String),
+    #[error("STARK proof shape invalid for {circuit} circuit: {message}")]
+    InvalidProofShape { circuit: String, message: String },
+    #[error("opening argument mismatch for {circuit} circuit: {message}")]
+    OpeningArgumentMismatch { circuit: String, message: String },
+    #[error("constraint system mismatch for {circuit} circuit: {message}")]
+    ConstraintMismatch { circuit: String, message: String },
+    #[error("randomization inconsistency for {circuit} circuit: {message}")]
+    RandomizationInconsistency { circuit: String, message: String },
     #[error("proof metadata security bits mismatch for {0} circuit")]
     SecurityParameterMismatch(String),
     #[error("proof metadata GPU flag mismatch for {0} circuit")]
@@ -939,14 +952,164 @@ impl HashFormat {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptStage {
+    AfterPublicValues,
+    AfterCommitments,
+    AfterZetaSampling,
+    AfterQuerySampling,
+}
+
+impl TranscriptStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TranscriptStage::AfterPublicValues => "after_public_values",
+            TranscriptStage::AfterCommitments => "after_commitments",
+            TranscriptStage::AfterZetaSampling => "after_zeta_sampling",
+            TranscriptStage::AfterQuerySampling => "after_query_sampling",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "after_public_values" => Some(TranscriptStage::AfterPublicValues),
+            "after_commitments" => Some(TranscriptStage::AfterCommitments),
+            "after_zeta_sampling" => Some(TranscriptStage::AfterZetaSampling),
+            "after_query_sampling" => Some(TranscriptStage::AfterQuerySampling),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptCheckpoint {
+    stage: TranscriptStage,
+    state: Vec<u8>,
+}
+
+impl TranscriptCheckpoint {
+    pub fn new(stage: TranscriptStage, state: Vec<u8>) -> Self {
+        Self { stage, state }
+    }
+
+    pub fn stage(&self) -> TranscriptStage {
+        self.stage
+    }
+
+    pub fn state(&self) -> &[u8] {
+        &self.state
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChallengeValue {
+    limbs: [u32; EXPECTED_CHALLENGE_EXTENSION_DEGREE],
+}
+
+impl ChallengeValue {
+    fn from_field(value: &CircuitChallengeField) -> Self {
+        let mut limbs = [0u32; EXPECTED_CHALLENGE_EXTENSION_DEGREE];
+        for (index, coeff) in value.as_basis_coefficients_slice().iter().enumerate() {
+            limbs[index] = coeff.as_canonical_u32();
+        }
+        Self { limbs }
+    }
+
+    pub fn from_limbs(limbs: [u32; EXPECTED_CHALLENGE_EXTENSION_DEGREE]) -> Self {
+        Self { limbs }
+    }
+
+    pub fn limbs(&self) -> &[u32; EXPECTED_CHALLENGE_EXTENSION_DEGREE] {
+        &self.limbs
+    }
+
+    pub fn to_le_bytes(&self) -> [u8; EXPECTED_CHALLENGE_EXTENSION_DEGREE * 4] {
+        let mut bytes = [0u8; EXPECTED_CHALLENGE_EXTENSION_DEGREE * 4];
+        for (index, limb) in self.limbs.iter().enumerate() {
+            let offset = index * 4;
+            bytes[offset..offset + 4].copy_from_slice(&limb.to_le_bytes());
+        }
+        bytes
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptSnapshot {
+    degree_bits: u32,
+    trace_length_bits: u32,
+    alpha: ChallengeValue,
+    zeta: ChallengeValue,
+    pcs_alpha: ChallengeValue,
+    fri_challenges: Vec<ChallengeValue>,
+    query_indices: Vec<u32>,
+    checkpoints: Vec<TranscriptCheckpoint>,
+}
+
+impl TranscriptSnapshot {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        degree_bits: u32,
+        trace_length_bits: u32,
+        alpha: ChallengeValue,
+        zeta: ChallengeValue,
+        pcs_alpha: ChallengeValue,
+        fri_challenges: Vec<ChallengeValue>,
+        query_indices: Vec<u32>,
+        checkpoints: Vec<TranscriptCheckpoint>,
+    ) -> Self {
+        Self {
+            degree_bits,
+            trace_length_bits,
+            alpha,
+            zeta,
+            pcs_alpha,
+            fri_challenges,
+            query_indices,
+            checkpoints,
+        }
+    }
+
+    pub fn degree_bits(&self) -> u32 {
+        self.degree_bits
+    }
+
+    pub fn trace_length_bits(&self) -> u32 {
+        self.trace_length_bits
+    }
+
+    pub fn alpha(&self) -> &ChallengeValue {
+        &self.alpha
+    }
+
+    pub fn zeta(&self) -> &ChallengeValue {
+        &self.zeta
+    }
+
+    pub fn pcs_alpha(&self) -> &ChallengeValue {
+        &self.pcs_alpha
+    }
+
+    pub fn fri_challenges(&self) -> &[ChallengeValue] {
+        &self.fri_challenges
+    }
+
+    pub fn query_indices(&self) -> &[u32] {
+        &self.query_indices
+    }
+
+    pub fn checkpoints(&self) -> &[TranscriptCheckpoint] {
+        &self.checkpoints
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProofMetadata {
     trace_commitment: [u8; 32],
     quotient_commitment: [u8; 32],
     random_commitment: Option<[u8; 32]>,
     fri_commitments: Vec<[u8; 32]>,
-    public_inputs_hash: [u8; 32],
-    challenger_digests: Vec<[u8; 32]>,
+    canonical_public_inputs: Vec<u8>,
+    transcript: TranscriptSnapshot,
     hash_format: HashFormat,
     security_bits: u32,
     derived_security_bits: u32,
@@ -959,8 +1122,8 @@ impl ProofMetadata {
         quotient_commitment: [u8; 32],
         random_commitment: Option<[u8; 32]>,
         fri_commitments: Vec<[u8; 32]>,
-        public_inputs_hash: [u8; 32],
-        challenger_digests: Vec<[u8; 32]>,
+        canonical_public_inputs: Vec<u8>,
+        transcript: TranscriptSnapshot,
         hash_format: HashFormat,
         security_bits: u32,
         derived_security_bits: u32,
@@ -971,8 +1134,8 @@ impl ProofMetadata {
             quotient_commitment,
             random_commitment,
             fri_commitments,
-            public_inputs_hash,
-            challenger_digests,
+            canonical_public_inputs,
+            transcript,
             hash_format,
             security_bits,
             derived_security_bits,
@@ -996,12 +1159,12 @@ impl ProofMetadata {
         &self.fri_commitments
     }
 
-    pub fn public_inputs_hash(&self) -> &[u8; 32] {
-        &self.public_inputs_hash
+    pub fn canonical_public_inputs(&self) -> &[u8] {
+        &self.canonical_public_inputs
     }
 
-    pub fn challenger_digests(&self) -> &[[u8; 32]] {
-        &self.challenger_digests
+    pub fn transcript(&self) -> &TranscriptSnapshot {
+        &self.transcript
     }
 
     pub fn hash_format(&self) -> HashFormat {
@@ -1025,7 +1188,7 @@ impl ProofMetadata {
         circuit: &str,
         proof: &p3_uni_stark::Proof<CircuitStarkConfig>,
         public_values: &[Val<CircuitStarkConfig>],
-        inputs_digest: [u8; 32],
+        canonical_public_inputs: &[u8],
         config: &CircuitStarkConfig,
         fri: FriConfigKnobs,
         security_bits: u32,
@@ -1090,8 +1253,7 @@ impl ProofMetadata {
             });
         }
 
-        let challenge_checkpoints =
-            replay_challenger_transcript(circuit, proof, config, &fri, public_values)?;
+        let transcript = replay_challenger_transcript(circuit, proof, config, &fri, public_values)?;
 
         let query_contrib = fri.log_blowup.checked_mul(num_queries).ok_or_else(|| {
             BackendError::StarkProvingError {
@@ -1116,8 +1278,8 @@ impl ProofMetadata {
             quotient_commitment,
             random_commitment,
             fri_commitments,
-            inputs_digest,
-            challenge_checkpoints,
+            canonical_public_inputs.to_vec(),
+            transcript,
             HashFormat::default(),
             security_bits,
             derived_security_bits,
@@ -1139,7 +1301,7 @@ impl ProofMetadata {
         schema.insert(
             "description".to_string(),
             Value::String(
-                "Transcript commitments, challenger digests, and security parameters embedded in a Plonky3 proof payload.".into(),
+                "Transcript commitments, challenger checkpoints, and security parameters embedded in a Plonky3 proof payload.".into(),
             ),
         );
 
@@ -1175,28 +1337,115 @@ impl ProofMetadata {
         );
         properties.insert("fri_commitments".into(), Value::Object(fri_commitments));
         properties.insert(
-            "public_inputs_hash".into(),
-            hex32_schema("BLAKE3 digest of the encoded public inputs."),
+            "canonical_public_inputs".into(),
+            base64_schema("Canonical JSON encoding of the public inputs observed by the verifier."),
         );
-        let mut challenger_digests = Map::new();
-        challenger_digests.insert("type".into(), Value::String("array".into()));
-        challenger_digests.insert(
-            "items".into(),
-            hex32_schema(
-                "BLAKE3 digests of the Poseidon sponge state after major transcript milestones (Fiat-Shamir checkpoints).",
+        let mut transcript = Map::new();
+        transcript.insert("type".into(), Value::String("object".into()));
+
+        let mut transcript_props = Map::new();
+        transcript_props.insert(
+            "degree_bits".into(),
+            integer_schema(
+                "Binary logarithm of the low-degree extension used during proof generation.",
+                1,
             ),
         );
-        challenger_digests.insert("minItems".into(), Value::Number(Number::from(1)));
-        challenger_digests.insert(
+        transcript_props.insert(
+            "trace_length_bits".into(),
+            integer_schema(
+                "Binary logarithm of the execution trace length observed by the verifier.",
+                1,
+            ),
+        );
+        transcript_props.insert(
+            "alpha".into(),
+            challenge_value_schema("Main relation challenge alpha sampled from the transcript."),
+        );
+        transcript_props.insert(
+            "zeta".into(),
+            challenge_value_schema("Evaluation challenge zeta binding the quotient polynomial."),
+        );
+        transcript_props.insert(
+            "pcs_alpha".into(),
+            challenge_value_schema("Polynomial commitment challenge alpha issued before FRI."),
+        );
+        transcript_props.insert(
+            "fri_challenges".into(),
+            challenge_array_schema(
+                "Sequence of FRI folding challenges sampled for each commit-phase round.",
+            ),
+        );
+        transcript_props.insert(
+            "query_indices".into(),
+            u32_array_schema(
+                "Indices sampled during the Fiat-Shamir query phase (little-endian representation).",
+            ),
+        );
+
+        let mut checkpoints = Map::new();
+        checkpoints.insert("type".into(), Value::String("array".into()));
+        let mut checkpoint = Map::new();
+        checkpoint.insert("type".into(), Value::String("object".into()));
+        let mut checkpoint_properties = Map::new();
+        checkpoint_properties.insert(
+            "stage".into(),
+            enum_schema(
+                "Transcript stage identifier capturing the challenger state.",
+                &[
+                    TranscriptStage::AfterPublicValues.as_str(),
+                    TranscriptStage::AfterCommitments.as_str(),
+                    TranscriptStage::AfterZetaSampling.as_str(),
+                    TranscriptStage::AfterQuerySampling.as_str(),
+                ],
+            ),
+        );
+        checkpoint_properties.insert(
+            "state".into(),
+            base64_schema(
+                "Little-endian BabyBear encoding of the challenger sponge, input buffer, and output buffer at the recorded stage.",
+            ),
+        );
+        checkpoint.insert("properties".into(), Value::Object(checkpoint_properties));
+        checkpoint.insert(
+            "required".into(),
+            Value::Array(vec![
+                Value::String("stage".into()),
+                Value::String("state".into()),
+            ]),
+        );
+        checkpoint.insert("additionalProperties".into(), Value::Bool(false));
+        checkpoints.insert("items".into(), Value::Object(checkpoint));
+        checkpoints.insert("minItems".into(), Value::Number(Number::from(3)));
+        checkpoints.insert(
             "description".into(),
             Value::String(
-                "Deterministic checkpoints of the challenger transcript useful for external auditing.".into(),
+                "Deterministic checkpoints of the Fiat-Shamir challenger transcript used for external auditing.".into(),
             ),
         );
-        properties.insert(
-            "challenger_digests".into(),
-            Value::Object(challenger_digests),
+        transcript_props.insert("checkpoints".into(), Value::Object(checkpoints));
+
+        transcript.insert("properties".into(), Value::Object(transcript_props));
+        transcript.insert(
+            "required".into(),
+            Value::Array(
+                [
+                    "degree_bits",
+                    "trace_length_bits",
+                    "alpha",
+                    "zeta",
+                    "pcs_alpha",
+                    "fri_challenges",
+                    "query_indices",
+                    "checkpoints",
+                ]
+                .iter()
+                .map(|key| Value::String((*key).into()))
+                .collect(),
+            ),
         );
+        transcript.insert("additionalProperties".into(), Value::Bool(false));
+        properties.insert("transcript".into(), Value::Object(transcript));
         properties.insert(
             "security_bits".into(),
             integer_schema(
@@ -1230,8 +1479,8 @@ impl ProofMetadata {
                     "trace_commitment",
                     "quotient_commitment",
                     "fri_commitments",
-                    "public_inputs_hash",
-                    "challenger_digests",
+                    "canonical_public_inputs",
+                    "transcript",
                     "security_bits",
                     "derived_security_bits",
                     "use_gpu",
@@ -1335,7 +1584,7 @@ fn append_field_bytes(buffer: &mut Vec<u8>, value: CircuitBaseField) {
     buffer.extend_from_slice(&value.as_canonical_u32().to_le_bytes());
 }
 
-fn challenger_checkpoint(challenger: &CircuitChallenger) -> [u8; 32] {
+fn challenger_checkpoint(challenger: &CircuitChallenger) -> Vec<u8> {
     let mut data = Vec::with_capacity(
         (challenger.sponge_state.len()
             + challenger.input_buffer.len()
@@ -1358,8 +1607,7 @@ fn challenger_checkpoint(challenger: &CircuitChallenger) -> [u8; 32] {
         append_field_bytes(&mut data, element);
     }
 
-    let digest = blake3::hash(&data);
-    *digest.as_bytes()
+    data
 }
 
 fn replay_challenger_transcript(
@@ -1368,11 +1616,23 @@ fn replay_challenger_transcript(
     config: &CircuitStarkConfig,
     fri: &FriConfigKnobs,
     public_values: &[Val<CircuitStarkConfig>],
-) -> BackendResult<Vec<[u8; 32]>> {
+) -> BackendResult<TranscriptSnapshot> {
     use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 
     let mut challenger = config.initialise_challenger();
     let mut checkpoints = Vec::new();
+
+    let degree_bits =
+        u32::try_from(proof.degree_bits).map_err(|_| BackendError::StarkProvingError {
+            circuit: circuit.to_string(),
+            message: "degree bits exceed u32 range".into(),
+        })?;
+    let trace_length_bits = u32::try_from(proof.degree_bits - config.is_zk()).map_err(|_| {
+        BackendError::StarkProvingError {
+            circuit: circuit.to_string(),
+            message: "trace length bits exceed u32 range".into(),
+        }
+    })?;
 
     challenger.observe(Val::<CircuitStarkConfig>::from_usize(proof.degree_bits));
     challenger.observe(Val::<CircuitStarkConfig>::from_usize(
@@ -1380,17 +1640,26 @@ fn replay_challenger_transcript(
     ));
     challenger.observe(proof.commitments.trace.clone());
     challenger.observe_slice(public_values);
-    checkpoints.push(challenger_checkpoint(&challenger));
+    checkpoints.push(TranscriptCheckpoint::new(
+        TranscriptStage::AfterPublicValues,
+        challenger_checkpoint(&challenger),
+    ));
 
-    let _alpha: CircuitChallengeField = challenger.sample_algebra_element();
+    let alpha_field: CircuitChallengeField = challenger.sample_algebra_element();
     challenger.observe(proof.commitments.quotient_chunks.clone());
     if let Some(random) = proof.commitments.random.clone() {
         challenger.observe(random);
     }
-    checkpoints.push(challenger_checkpoint(&challenger));
+    checkpoints.push(TranscriptCheckpoint::new(
+        TranscriptStage::AfterCommitments,
+        challenger_checkpoint(&challenger),
+    ));
 
-    let _zeta: CircuitChallengeField = challenger.sample_algebra_element();
-    checkpoints.push(challenger_checkpoint(&challenger));
+    let zeta_field: CircuitChallengeField = challenger.sample_algebra_element();
+    checkpoints.push(TranscriptCheckpoint::new(
+        TranscriptStage::AfterZetaSampling,
+        challenger_checkpoint(&challenger),
+    ));
 
     for value in &proof.opened_values.trace_local {
         challenger.observe_algebra_element(*value);
@@ -1409,11 +1678,14 @@ fn replay_challenger_transcript(
         }
     }
 
-    let _pcs_alpha: CircuitChallengeField = challenger.sample_algebra_element();
+    let pcs_alpha_field: CircuitChallengeField = challenger.sample_algebra_element();
+
+    let mut fri_challenges = Vec::with_capacity(proof.opening_proof.commit_phase_commits.len());
 
     for commit in &proof.opening_proof.commit_phase_commits {
         challenger.observe(commit.clone());
-        let _: CircuitChallengeField = challenger.sample_algebra_element();
+        let challenge: CircuitChallengeField = challenger.sample_algebra_element();
+        fri_challenges.push(ChallengeValue::from_field(&challenge));
     }
 
     if proof.opening_proof.final_poly.len() != (1 << fri.log_final_poly_len) {
@@ -1441,13 +1713,33 @@ fn replay_challenger_transcript(
     let log_max_height =
         proof.opening_proof.commit_phase_commits.len() + fri.log_blowup + fri.log_final_poly_len;
 
+    let mut query_indices = Vec::with_capacity(proof.opening_proof.query_proofs.len());
     for _ in &proof.opening_proof.query_proofs {
-        let _ = challenger.sample_bits(log_max_height);
+        let sample = challenger.sample_bits(log_max_height);
+        let index = u32::try_from(sample).map_err(|_| BackendError::StarkProvingError {
+            circuit: circuit.to_string(),
+            message: "query index exceeds u32 range".into(),
+        })?;
+        query_indices.push(index);
     }
 
-    checkpoints.push(challenger_checkpoint(&challenger));
+    checkpoints.push(TranscriptCheckpoint::new(
+        TranscriptStage::AfterQuerySampling,
+        challenger_checkpoint(&challenger),
+    ));
 
-    Ok(checkpoints)
+    let transcript = TranscriptSnapshot::new(
+        degree_bits,
+        trace_length_bits,
+        ChallengeValue::from_field(&alpha_field),
+        ChallengeValue::from_field(&zeta_field),
+        ChallengeValue::from_field(&pcs_alpha_field),
+        fri_challenges,
+        query_indices,
+        checkpoints,
+    );
+
+    Ok(transcript)
 }
 
 fn ensure_proof_metadata_alignment(
@@ -1613,8 +1905,8 @@ impl ProverContext {
     fn prove_with_encoded(
         &self,
         _commitment: &str,
-        inputs_digest: [u8; 32],
-        _encoded_inputs: &[u8],
+        _inputs_digest: [u8; 32],
+        encoded_inputs: &[u8],
         public_inputs: &Value,
     ) -> BackendResult<Proof> {
         let config_bundle =
@@ -1661,7 +1953,7 @@ impl ProverContext {
             &self.name,
             &proof,
             &public_values,
-            inputs_digest,
+            encoded_inputs,
             config,
             fri,
             self.security_bits,
@@ -1845,7 +2137,7 @@ impl VerifierContext {
             &self.name,
             &stark_proof,
             &public_values,
-            *inputs_digest,
+            encoded_inputs,
             config,
             fri,
             self.security_bits,
@@ -1877,12 +2169,16 @@ impl VerifierContext {
             return Err(BackendError::FriDigestMismatch(self.name.clone()));
         }
 
-        if stored_metadata.challenger_digests() != recomputed_metadata.challenger_digests() {
-            return Err(BackendError::FriDigestMismatch(self.name.clone()));
+        if stored_metadata.canonical_public_inputs()
+            != recomputed_metadata.canonical_public_inputs()
+        {
+            return Err(BackendError::CanonicalPublicInputMismatch(
+                self.name.clone(),
+            ));
         }
 
-        if stored_metadata.public_inputs_hash() != recomputed_metadata.public_inputs_hash() {
-            return Err(BackendError::PublicInputDigestMismatch(self.name.clone()));
+        if stored_metadata.transcript() != recomputed_metadata.transcript() {
+            return Err(BackendError::TranscriptMismatch(self.name.clone()));
         }
 
         if stored_metadata.security_bits() != recomputed_metadata.security_bits()
@@ -1894,6 +2190,37 @@ impl VerifierContext {
 
         if stored_metadata.use_gpu() != recomputed_metadata.use_gpu() {
             return Err(BackendError::GpuModeMismatch(self.name.clone()));
+        }
+
+        let transcript = recomputed_metadata.transcript();
+        info!(
+            circuit = %self.name,
+            degree_bits = transcript.degree_bits(),
+            trace_length_bits = transcript.trace_length_bits(),
+            trace_commitment = %hex::encode(recomputed_metadata.trace_commitment()),
+            quotient_commitment = %hex::encode(recomputed_metadata.quotient_commitment()),
+            fri_rounds = transcript.fri_challenges().len(),
+            queries = transcript.query_indices().len(),
+            "plonky3 proof verification succeeded"
+        );
+
+        debug!(
+            circuit = %self.name,
+            alpha = %hex::encode(transcript.alpha().to_le_bytes()),
+            zeta = %hex::encode(transcript.zeta().to_le_bytes()),
+            pcs_alpha = %hex::encode(transcript.pcs_alpha().to_le_bytes()),
+            query_indices = ?transcript.query_indices(),
+            "plonky3 verifier transcript challenges"
+        );
+
+        for (index, checkpoint) in transcript.checkpoints().iter().enumerate() {
+            debug!(
+                circuit = %self.name,
+                stage = checkpoint.stage().as_str(),
+                checkpoint_index = index,
+                state = %BASE64_STANDARD.encode(checkpoint.state()),
+                "plonky3 verifier checkpoint"
+            );
         }
 
         Ok(())
@@ -2057,6 +2384,54 @@ fn optional_hex32_schema(description: &str) -> Value {
     Value::Object(object)
 }
 
+fn base64_schema(description: &str) -> Value {
+    let mut object = Map::new();
+    object.insert("type".into(), Value::String("string".into()));
+    object.insert("contentEncoding".into(), Value::String("base64".into()));
+    object.insert("description".into(), Value::String(description.into()));
+    Value::Object(object)
+}
+
+fn challenge_value_schema(description: &str) -> Value {
+    let mut array = Map::new();
+    array.insert("type".into(), Value::String("array".into()));
+    array.insert(
+        "items".into(),
+        integer_schema("Little-endian BabyBear limb", 0),
+    );
+    array.insert(
+        "minItems".into(),
+        Value::Number(Number::from(EXPECTED_CHALLENGE_EXTENSION_DEGREE)),
+    );
+    array.insert(
+        "maxItems".into(),
+        Value::Number(Number::from(EXPECTED_CHALLENGE_EXTENSION_DEGREE)),
+    );
+    array.insert("description".into(), Value::String(description.into()));
+    Value::Object(array)
+}
+
+fn challenge_array_schema(description: &str) -> Value {
+    let mut array = Map::new();
+    array.insert("type".into(), Value::String("array".into()));
+    array.insert(
+        "items".into(),
+        challenge_value_schema("FRI folding challenge"),
+    );
+    array.insert("minItems".into(), Value::Number(Number::from(1)));
+    array.insert("description".into(), Value::String(description.into()));
+    Value::Object(array)
+}
+
+fn u32_array_schema(description: &str) -> Value {
+    let mut array = Map::new();
+    array.insert("type".into(), Value::String("array".into()));
+    array.insert("items".into(), integer_schema("Unsigned 32-bit integer", 0));
+    array.insert("minItems".into(), Value::Number(Number::from(1)));
+    array.insert("description".into(), Value::String(description.into()));
+    Value::Object(array)
+}
+
 fn integer_schema(description: &str, minimum: u64) -> Value {
     let mut object = Map::new();
     object.insert("type".into(), Value::String("integer".into()));
@@ -2118,18 +2493,23 @@ fn map_verification_error(
 ) -> BackendError {
     use VerificationError::*;
 
-    let message = match err {
-        InvalidProofShape => "invalid proof shape".to_string(),
-        InvalidOpeningArgument(inner) => {
-            format!("invalid opening argument: {inner:?}")
-        }
-        OodEvaluationMismatch => "out-of-domain evaluation mismatch".to_string(),
-        RandomizationError => "randomization commitment mismatch".to_string(),
-    };
-
-    BackendError::StarkVerificationError {
-        circuit: circuit.to_string(),
-        message,
+    match err {
+        InvalidProofShape => BackendError::InvalidProofShape {
+            circuit: circuit.to_string(),
+            message: "proof layout does not match verifier configuration".into(),
+        },
+        InvalidOpeningArgument(inner) => BackendError::OpeningArgumentMismatch {
+            circuit: circuit.to_string(),
+            message: format!("{inner:?}"),
+        },
+        OodEvaluationMismatch => BackendError::ConstraintMismatch {
+            circuit: circuit.to_string(),
+            message: "out-of-domain evaluation mismatch".into(),
+        },
+        RandomizationError => BackendError::RandomizationInconsistency {
+            circuit: circuit.to_string(),
+            message: "randomization commitment mismatch".into(),
+        },
     }
 }
 

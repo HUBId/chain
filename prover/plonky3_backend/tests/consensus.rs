@@ -16,8 +16,8 @@ use plonky3_backend::{
     verify_consensus, AirMetadata, BackendError, CircuitConfigBuilder, CircuitStarkConfig,
     CircuitStarkProvingKey, CircuitStarkVerifyingKey, ConsensusCircuit, ConsensusProof,
     ConsensusVrfEntry, ConsensusVrfPoseidonInput, ConsensusWitness, Proof, ProofMetadata,
-    ProofParts, ProverContext, ProvingKey, ToolchainAir, VerifierContext, VerifyingKey, VotePower,
-    VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
+    ProofParts, ProverContext, ProvingKey, ToolchainAir, TranscriptCheckpoint, TranscriptSnapshot,
+    VerifierContext, VerifyingKey, VotePower, VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -149,7 +149,7 @@ fn assert_stark_proof_matches_metadata(proof: &Proof) -> p3_uni_stark::Proof<Cir
         "fri commit-phase commitments must match metadata"
     );
     assert!(
-        !metadata.challenger_digests().is_empty(),
+        !metadata.transcript().checkpoints().is_empty(),
         "challenger checkpoints must be captured"
     );
     assert!(
@@ -365,13 +365,12 @@ fn consensus_proof_metadata_tracks_commitment_digest() {
     let (commitment, proof) = prover
         .prove(&public_inputs)
         .expect("consensus proving succeeds");
-    let (expected_commitment, expected_digest, _) =
+    let (expected_commitment, _, canonical_bytes) =
         compute_commitment_and_inputs(&public_inputs).expect("canonical commitment computation");
     assert_eq!(commitment, expected_commitment);
-    assert_eq!(proof.metadata().public_inputs_hash(), &expected_digest);
     assert_eq!(
-        hex::encode(proof.metadata().public_inputs_hash()),
-        commitment
+        proof.metadata().canonical_public_inputs(),
+        canonical_bytes.as_slice()
     );
 }
 
@@ -996,13 +995,14 @@ fn consensus_verifier_rejects_security_metadata_mismatch() {
 
     let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
         let security_bits = metadata.security_bits() ^ 1;
+        let transcript = metadata.transcript().clone();
         ProofMetadata::assemble(
             *metadata.trace_commitment(),
             *metadata.quotient_commitment(),
             metadata.random_commitment().copied(),
             metadata.fri_commitments().to_vec(),
-            *metadata.public_inputs_hash(),
-            metadata.challenger_digests().to_vec(),
+            metadata.canonical_public_inputs().to_vec(),
+            transcript,
             metadata.hash_format(),
             security_bits,
             metadata.derived_security_bits(),
@@ -1019,7 +1019,7 @@ fn consensus_verifier_rejects_security_metadata_mismatch() {
 }
 
 #[test]
-fn consensus_verifier_rejects_public_input_hash_mismatch() {
+fn consensus_verifier_rejects_canonical_input_mismatch() {
     let (proof_bundle, verifier) = prove_sample_witness();
     let ConsensusProof {
         commitment,
@@ -1028,15 +1028,17 @@ fn consensus_verifier_rejects_public_input_hash_mismatch() {
     } = proof_bundle;
 
     let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
-        let mut hash = *metadata.public_inputs_hash();
-        hash[0] ^= 0x01;
+        let mut canonical = metadata.canonical_public_inputs().to_vec();
+        if let Some(byte) = canonical.first_mut() {
+            *byte ^= 0x01;
+        }
         ProofMetadata::assemble(
             *metadata.trace_commitment(),
             *metadata.quotient_commitment(),
             metadata.random_commitment().copied(),
             metadata.fri_commitments().to_vec(),
-            hash,
-            metadata.challenger_digests().to_vec(),
+            canonical,
+            metadata.transcript().clone(),
             metadata.hash_format(),
             metadata.security_bits(),
             metadata.derived_security_bits(),
@@ -1047,9 +1049,10 @@ fn consensus_verifier_rejects_public_input_hash_mismatch() {
     let err = verifier
         .verify(&commitment, &public_inputs, &tampered)
         .expect_err("verifier must reject modified public input hash");
-    assert!(
-        matches!(err, BackendError::PublicInputDigestMismatch(circuit) if circuit == verifier.circuit())
-    );
+    assert!(matches!(
+        err,
+        BackendError::CanonicalPublicInputMismatch(circuit) if circuit == verifier.circuit()
+    ));
 }
 
 #[test]
@@ -1067,8 +1070,8 @@ fn consensus_verifier_rejects_gpu_flag_mismatch() {
             *metadata.quotient_commitment(),
             metadata.random_commitment().copied(),
             metadata.fri_commitments().to_vec(),
-            *metadata.public_inputs_hash(),
-            metadata.challenger_digests().to_vec(),
+            metadata.canonical_public_inputs().to_vec(),
+            metadata.transcript().clone(),
             metadata.hash_format(),
             metadata.security_bits(),
             metadata.derived_security_bits(),
@@ -1092,17 +1095,33 @@ fn consensus_verifier_rejects_challenger_digest_mismatch() {
     } = proof_bundle;
 
     let tampered = rebuild_proof_with_metadata(&proof, verifier.circuit(), |metadata| {
-        let mut digests = metadata.challenger_digests().to_vec();
-        digests
-            .first_mut()
-            .expect("metadata exposes challenger digests")[0] ^= 0x01;
+        let transcript = metadata.transcript();
+        let mut checkpoints: Vec<TranscriptCheckpoint> =
+            transcript.checkpoints().iter().cloned().collect();
+        if let Some(first) = checkpoints.first_mut() {
+            let mut state = first.state().to_vec();
+            if let Some(byte) = state.first_mut() {
+                *byte ^= 0x01;
+            }
+            *first = TranscriptCheckpoint::new(first.stage(), state);
+        }
+        let tampered_transcript = TranscriptSnapshot::new(
+            transcript.degree_bits(),
+            transcript.trace_length_bits(),
+            transcript.alpha().clone(),
+            transcript.zeta().clone(),
+            transcript.pcs_alpha().clone(),
+            transcript.fri_challenges().to_vec(),
+            transcript.query_indices().to_vec(),
+            checkpoints,
+        );
         ProofMetadata::assemble(
             *metadata.trace_commitment(),
             *metadata.quotient_commitment(),
             metadata.random_commitment().copied(),
             metadata.fri_commitments().to_vec(),
-            *metadata.public_inputs_hash(),
-            digests,
+            metadata.canonical_public_inputs().to_vec(),
+            tampered_transcript,
             metadata.hash_format(),
             metadata.security_bits(),
             metadata.derived_security_bits(),
@@ -1112,8 +1131,9 @@ fn consensus_verifier_rejects_challenger_digest_mismatch() {
 
     let err = verifier
         .verify(&commitment, &public_inputs, &tampered)
-        .expect_err("verifier must reject modified challenger digests");
-    assert!(
-        matches!(err, BackendError::FriDigestMismatch(circuit) if circuit == verifier.circuit())
-    );
+        .expect_err("verifier must reject modified transcript checkpoints");
+    assert!(matches!(
+        err,
+        BackendError::TranscriptMismatch(circuit) if circuit == verifier.circuit()
+    ));
 }
