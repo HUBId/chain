@@ -1,7 +1,7 @@
 //! Regression tests for the experimental Plonky3 backend.
 //!
-//! The prover shims are deterministic when fed the same witnesses, so each
-//! helper below seeds `StdRng` with fixed byte arrays to keep CI runs
+//! Proof generation is deterministic when seeded with identical witnesses, so
+//! each helper below seeds `StdRng` with fixed byte arrays to keep CI runs
 //! reproducible without depending on JSON fixtures.
 
 use ed25519_dalek::{Keypair, Signer};

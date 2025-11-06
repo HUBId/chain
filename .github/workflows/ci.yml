@@ -194,7 +194,7 @@ PY
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
-            experimental: true
+            experimental: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -228,7 +228,7 @@ PY
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
-            experimental: true
+            experimental: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -262,7 +262,7 @@ PY
           - name: prod-stwo-plonky3
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
-            experimental: true
+            experimental: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

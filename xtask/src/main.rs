@@ -143,7 +143,7 @@ fn run_full_test_matrix() -> Result<()> {
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests",
     );
 }
 
@@ -170,6 +170,7 @@ fn main() -> Result<()> {
         "test-all" => run_full_test_matrix(),
         "proof-metadata" => generate_proof_metadata(&argv),
         "plonky3-setup" => regenerate_plonky3_setup(&argv),
+        "plonky3-verify" => verify_plonky3_setup(),
         "help" => {
             usage();
             Ok(())
@@ -341,6 +342,43 @@ fn regenerate_plonky3_setup(args: &[String]) -> Result<()> {
     run_command(command, "generate Plonky3 setup artifacts")?;
     drop(fixture_dir);
     Ok(())
+}
+
+fn verify_plonky3_setup() -> Result<()> {
+    let root = workspace_root();
+    let mut command = Command::new("python3");
+    command
+        .current_dir(&root)
+        .arg("scripts/generate_plonky3_artifacts.py")
+        .arg("config/plonky3/setup")
+        .arg("--verify");
+    if let Ok(circuits) = env::var("PLONKY3_VERIFY_CIRCUITS") {
+        let values: Vec<String> = circuits
+            .split(',')
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .collect();
+        if !values.is_empty() {
+            command.arg("--circuits");
+            for value in values {
+                command.arg(value);
+            }
+        }
+    }
+    if let Ok(pattern) = env::var("PLONKY3_VERIFY_PATTERN") {
+        let trimmed = pattern.trim();
+        if !trimmed.is_empty() {
+            command.arg("--verifying-pattern").arg(trimmed);
+        }
+    }
+    if let Ok(pattern) = env::var("PLONKY3_VERIFY_PROVING_PATTERN") {
+        let trimmed = pattern.trim();
+        if !trimmed.is_empty() {
+            command.arg("--proving-pattern").arg(trimmed);
+        }
+    }
+    run_command(command, "plonky3 setup verification")
 }
 
 fn env_var_list(name: &str) -> Vec<String> {

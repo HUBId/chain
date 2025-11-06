@@ -40,6 +40,7 @@ Backends:
   default    Use the workspace default backend configuration
   stwo       Force the `prover-stwo` feature only
   plonky3    Force the `backend-plonky3` feature only (experimental matrix)
+  prod-stwo-plonky3  Force `prod,prover-stwo,backend-plonky3` with `--no-default-features`
   rpp-stark  Force the `backend-rpp-stark` feature
 USAGE
 }
@@ -136,7 +137,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       case "$2" in
-        default|stwo|plonky3|rpp-stark)
+        default|stwo|plonky3|prod-stwo-plonky3|rpp-stark)
           BACKENDS+=("$2")
           ;;
         *)
@@ -246,7 +247,7 @@ fi
 
 if (( plonky3_features_requested )); then
   for backend in "${BACKENDS[@]}"; do
-    if [[ "$backend" != "plonky3" ]]; then
+    if [[ "$backend" != "plonky3" && "$backend" != "prod-stwo-plonky3" ]]; then
       echo "error: backend-plonky3 features are experimental and only supported via '--backend plonky3'." >&2
       if [[ "$FEATURE_SET_SELECTED" == "full" ]]; then
         echo "note: '--feature-set full' implicitly enables backend-plonky3. Re-run with '--backend plonky3 --feature-set full' or drop the full feature set." >&2
@@ -276,6 +277,9 @@ run_suite() {
       ;;
     plonky3)
       backend_args=("--features" "backend-plonky3")
+      ;;
+    prod-stwo-plonky3)
+      backend_args=("--no-default-features" "--features" "prod,prover-stwo,backend-plonky3")
       ;;
     rpp-stark)
       backend_args=("--features" "backend-rpp-stark")
@@ -330,6 +334,9 @@ run_integration_focus_tests() {
     plonky3)
       backend_args=("--features" "backend-plonky3")
       ;;
+    prod-stwo-plonky3)
+      backend_args=("--no-default-features" "--features" "prod,prover-stwo,backend-plonky3")
+      ;;
     rpp-stark)
       backend_args=("--features" "backend-rpp-stark")
       ;;
@@ -357,7 +364,22 @@ run_integration_focus_tests() {
   done
 }
 
+prepare_backend() {
+  local backend="$1"
+  case "$backend" in
+    plonky3|prod-stwo-plonky3)
+      echo "==> Verifying Plonky3 setup artifacts (${backend})"
+      cargo xtask plonky3-verify
+      ;;
+  esac
+}
+
+declare -A PREPARED_BACKENDS=()
 for backend in "${BACKENDS[@]}"; do
+  if [[ -z "${PREPARED_BACKENDS[$backend]:-}" ]]; then
+    prepare_backend "$backend"
+    PREPARED_BACKENDS[$backend]=1
+  fi
   for suite in "${SUITES_SELECTED[@]}"; do
     run_suite "$suite" "$backend"
     if [[ "$suite" == "integration" ]]; then
