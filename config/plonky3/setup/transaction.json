@@ -3,15 +3,13 @@
   "verifying_key": {
     "encoding": "base64",
     "byte_length": 96,
-    "value": "H4sIABJNDGkC/wFgAJ//2H2xwQIbToG/jZ5ME461vMuw7Y3I3zg9yCKG3bxy6HskXiZlqrc5mn9X86+ErFVorWBtt/2Uan/yrXgtklXzK2BD8m/GWcAeYxCF/VxcHX32fZIEVxffx4oNAJKkfGeTc65vXGAAAAA=",
-    "compression": "gzip",
-    "hash_blake3": "f4495a89cdd7974d71469526b111eba6c390d7567f9d64f26fe7771ffb9ae702"
+    "value": "H4sIAHJaDGkC/wFgAJ//2H2xwQIbToG/jZ5ME461vMuw7Y3I3zg9yCKG3bxy6HskXiZlqrc5mn9X86+ErFVorWBtt/2Uan/yrXgtklXzK2BD8m/GWcAeYxCF/VxcHX32fZIEVxffx4oNAJKkfGeTc65vXGAAAAA=",
+    "compression": "gzip"
   },
   "proving_key": {
     "encoding": "base64",
     "byte_length": 256,
-    "value": "H4sIABJNDGkC/wEAAf/+zjFVLJrjiv9zN65/Siaz3QiXd9y1gk6LeYgKJuzS7iNFS3AHyZIr7wwiHj1ayHDHXtudnf9bVc33qMvvWZEt6futnWHMEDbiqhX1wXD4qxZlmaByBjIKur2Z/kREi2hTjGvnXUmp3YR8FSDPvIu0BQi0+CVU+GQ00F3PAPLPfwgNizncAGb6MluANVFHXI7Vbz6BtC+hRmmgO9ieb5NWwWQHeCi4JRnaOgXBxqNVDHeSayGuMbTnBvoYG0KqCaqLL2SHvrXVNM5NnjpGx+9ejxrwCK4+wEyoi1qi0tjPKxvpTE4NPeB9BZIaiD9zZ4nQd2CQ4tRGOHJjYMBaxNDsnHvpkCUAAQAA",
-    "compression": "gzip",
-    "hash_blake3": "058b95c7fb8612da8baa52ad5c13b8ff79a2d38caa8bf50fe1b85eb8b47cc98b"
+    "value": "H4sIAHJaDGkC/wEAAf/+zjFVLJrjiv9zN65/Siaz3QiXd9y1gk6LeYgKJuzS7iNFS3AHyZIr7wwiHj1ayHDHXtudnf9bVc33qMvvWZEt6futnWHMEDbiqhX1wXD4qxZlmaByBjIKur2Z/kREi2hTjGvnXUmp3YR8FSDPvIu0BQi0+CVU+GQ00F3PAPLPfwgNizncAGb6MluANVFHXI7Vbz6BtC+hRmmgO9ieb5NWwWQHeCi4JRnaOgXBxqNVDHeSayGuMbTnBvoYG0KqCaqLL2SHvrXVNM5NnjpGx+9ejxrwCK4+wEyoi1qi0tjPKxvpTE4NPeB9BZIaiD9zZ4nQd2CQ4tRGOHJjYMBaxNDsnHvpkCUAAQAA",
+    "compression": "gzip"
   }
 }
