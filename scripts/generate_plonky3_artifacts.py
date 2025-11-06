@@ -34,12 +34,22 @@ DEFAULT_CIRCUITS: Tuple[str, ...] = (
     "consensus",
 )
 
+DEFAULT_FRI_PARAMETERS = OrderedDict(
+    (
+        ("log_blowup", 5),
+        ("log_final_poly_len", 0),
+        ("num_queries", 120),
+        ("proof_of_work_bits", 16),
+    )
+)
+
 
 @dataclass
 class Artifact:
     circuit: str
     verifying_key: bytes
     proving_key: bytes
+    fri_parameters: "OrderedDict[str, int]"
 
 
 @dataclass
@@ -304,6 +314,7 @@ def artifact_to_document(
             ("proving_key", build_hash_manifest_entry(artifact.proving_key)),
         )
     )
+    document["fri_parameters"] = artifact.fri_parameters
     return document
 
 
@@ -323,6 +334,29 @@ def emit_artifact(
     else:
         serialized = json.dumps(document, indent=None, sort_keys=False, separators=(",", ":"))
         serialized = f"{serialized}\n"
+    output_path.write_text(serialized, encoding="utf-8")
+    return output_path, serialized
+
+
+def default_fri_parameters() -> "OrderedDict[str, int]":
+    return OrderedDict(DEFAULT_FRI_PARAMETERS)
+
+
+def write_fri_manifest(
+    output_dir: Path,
+    entries: List[Tuple[str, "OrderedDict[str, int]"]],
+    pretty: bool,
+) -> Tuple[Path, str]:
+    manifest = OrderedDict()
+    manifest["circuits"] = [
+        OrderedDict((("circuit", circuit), ("parameters", params)))
+        for circuit, params in sorted(entries, key=lambda item: item[0])
+    ]
+    if pretty:
+        serialized = json.dumps(manifest, indent=2, sort_keys=False) + "\n"
+    else:
+        serialized = json.dumps(manifest, separators=(",", ":")) + "\n"
+    output_path = output_dir / "fri_parameters.json"
     output_path.write_text(serialized, encoding="utf-8")
     return output_path, serialized
 
@@ -546,6 +580,7 @@ def gather_artifacts(args: argparse.Namespace) -> List[Artifact]:
                 circuit=circuit,
                 verifying_key=verifying_key,
                 proving_key=proving_key,
+                fri_parameters=default_fri_parameters(),
             )
         )
     return artifacts
@@ -563,10 +598,14 @@ def main() -> None:
     metadata = build_metadata(args)
     artifacts = gather_artifacts(args)
     emitted: List[Tuple[Path, str]] = []
+    fri_entries: List[Tuple[str, "OrderedDict[str, int]"]] = []
     for artifact in artifacts:
         emitted.append(
             emit_artifact(args.output, artifact, args.compression, args.pretty, metadata)
         )
+        fri_entries.append((artifact.circuit, artifact.fri_parameters))
+    fri_path, fri_payload = write_fri_manifest(args.output, fri_entries, args.pretty)
+    emitted.append((fri_path, fri_payload))
     if args.signature_output:
         write_signature_manifest(args.signature_output, emitted, metadata)
 

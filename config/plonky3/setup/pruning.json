@@ -3,23 +3,33 @@
   "verifying_key": {
     "encoding": "base64",
     "byte_length": 96,
-    "value": "H4sIAHJaDGkC/wFgAJ//BIQ5awJEILAZRdiq4OQUgNM8utFTk5dM6QSK0a1GQHhkN/VzhfHsjogeEL8NWtRuCOlUg1Ng2X0btqR6xLIMLWLomLfu+0g0ighhVfFUZCeDIkKx1kYKJcw+LqXF0mGFpN9RH2AAAAA=",
-    "compression": "gzip"
+    "value": "H4sIAD72DGkC/wFgAJ//BIQ5awJEILAZRdiq4OQUgNM8utFTk5dM6QSK0a1GQHhkN/VzhfHsjogeEL8NWtRuCOlUg1Ng2X0btqR6xLIMLWLomLfu+0g0ighhVfFUZCeDIkKx1kYKJcw+LqXF0mGFpN9RH2AAAAA=",
+    "compression": "gzip",
+    "hash_blake3": "2d446f003445c6e18207faa43166f168654a1e94bdb07ac67e6dda5250840e2f"
   },
   "proving_key": {
     "encoding": "base64",
     "byte_length": 160,
-    "value": "H4sIAHJaDGkC/wGgAF//4IxytKnyh71lw4tyjn9RN9K8GfxtmAacws3tq64AUvJwC2GVedKouw58ggaBb24H7pIXbdge5c5FRh7UJVUc2XOu2yp42EcYR7Izbbxs300QaMnqB3TRr0hgUT9ce7J4ihpHcb5BjkrYg6aTxhnss6WEO8MXFVYCsgjY178Z+FVJILuDq7Kwk/3iTkYOkDmKDYA9AByGLVJ7gRCI8Pl65mz/zaqgAAAA",
-    "compression": "gzip"
+    "value": "H4sIAD72DGkC/wGgAF//4IxytKnyh71lw4tyjn9RN9K8GfxtmAacws3tq64AUvJwC2GVedKouw58ggaBb24H7pIXbdge5c5FRh7UJVUc2XOu2yp42EcYR7Izbbxs300QaMnqB3TRr0hgUT9ce7J4ihpHcb5BjkrYg6aTxhnss6WEO8MXFVYCsgjY178Z+FVJILuDq7Kwk/3iTkYOkDmKDYA9AByGLVJ7gRCI8Pl65mz/zaqgAAAA",
+    "compression": "gzip",
+    "hash_blake3": "021ae3e4b8418bd8485649f4c66069b063970b41dfdda60ce8d9aa64f192b89e"
   },
   "hash_manifest": {
     "verifying_key": {
       "byte_length": 96,
-      "sha256": "ed90d0489574881de98da131bb16c271686715bb70aeb1515da52a0d09803991"
+      "sha256": "ed90d0489574881de98da131bb16c271686715bb70aeb1515da52a0d09803991",
+      "blake3": "2d446f003445c6e18207faa43166f168654a1e94bdb07ac67e6dda5250840e2f"
     },
     "proving_key": {
       "byte_length": 160,
-      "sha256": "d3f13274df1643dc43a28a282dcdb7267e432038dd5bf3a518d6cedf91dbc1f8"
+      "sha256": "d3f13274df1643dc43a28a282dcdb7267e432038dd5bf3a518d6cedf91dbc1f8",
+      "blake3": "021ae3e4b8418bd8485649f4c66069b063970b41dfdda60ce8d9aa64f192b89e"
     }
+  },
+  "fri_parameters": {
+    "log_blowup": 5,
+    "log_final_poly_len": 0,
+    "num_queries": 120,
+    "proof_of_work_bits": 16
   }
 }

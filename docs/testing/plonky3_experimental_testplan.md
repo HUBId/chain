@@ -27,7 +27,9 @@ returning control to the caller.【F:rpp/proofs/plonky3/crypto.rs†L300-L420】
    expected compression/encoding metadata.
 2. Commit regenerated artefacts alongside the blake3 hashes emitted by
    `scripts/generate_plonky3_artifacts.py` or store the binary files referenced
-   via `@`/`file:` paths in the release bundle.【F:config/plonky3/setup/README.md†L11-L33】
+   via `@`/`file:` paths in the release bundle. The command now materialises
+   `fri_parameters.json` alongside the per-circuit descriptors so auditors can
+   diff the FRI configuration between releases.【F:config/plonky3/setup/README.md†L11-L44】
 3. When rotating keys, re-run the `xtask proof-metadata` report to capture new
    size and hash summaries for audit trails.【F:xtask/src/main.rs†L200-L266】
 

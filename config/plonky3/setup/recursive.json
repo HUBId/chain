@@ -3,23 +3,33 @@
   "verifying_key": {
     "encoding": "base64",
     "byte_length": 96,
-    "value": "H4sIAHJaDGkC/wFgAJ//VLcasHaEZWx16TXanf6PImQEH5CYQGYqm4qUXrjkIBqA+kC9H1VltWHNZmUwgkxUVNa3N3AyU04VNT+4wK3wGRvXTIVunSGvi9Occ/221D6tjQU1TE1bqeFkLQK8rvEq4lWjdWAAAAA=",
-    "compression": "gzip"
+    "value": "H4sIAD72DGkC/wFgAJ//VLcasHaEZWx16TXanf6PImQEH5CYQGYqm4qUXrjkIBqA+kC9H1VltWHNZmUwgkxUVNa3N3AyU04VNT+4wK3wGRvXTIVunSGvi9Occ/221D6tjQU1TE1bqeFkLQK8rvEq4lWjdWAAAAA=",
+    "compression": "gzip",
+    "hash_blake3": "4bff41c76f6ccd898e07db2dae4464640402bbe80fc6aa1457e96c13c9eead6b"
   },
   "proving_key": {
     "encoding": "base64",
     "byte_length": 288,
-    "value": "H4sIAHJaDGkC/wEgAd/+BVggC5QpgVWFTlIjrWokwbw/F+Z9koOx8V7N7SrUFW+JcYAGVC4u4Yrr+KScYMXyuf73Rk+pVRyYaFzH7izUnT2GAJsgOMi+IhNMKSb2XU+0ZXb7vsAzORPmvrsA5SNkCImL7o9DQcAs+uM2p1tg34LzC2BYA3AkY2sPW8gJvnaAGhYdPp8UuHtG5Wm+DvqJbUa3yhdrP2SbLqZnNLGaAt4mJ7GobGZB/ZxdEEN1nivI24bfMWw0aXc1hHxIv3M5O2N7+Kz3raZnU0GFOHTW9jJYY6LU3YhKCukZPDWTHh3++faF587rIRIEZBE4A9CT9toxdwkwY2kRJaeKecPYBJP7+I0dDdUUsfrCK6EPlOQRJwW0tNBhpaa2JrG+sudjMBkEPiABAAA=",
-    "compression": "gzip"
+    "value": "H4sIAD72DGkC/wEgAd/+BVggC5QpgVWFTlIjrWokwbw/F+Z9koOx8V7N7SrUFW+JcYAGVC4u4Yrr+KScYMXyuf73Rk+pVRyYaFzH7izUnT2GAJsgOMi+IhNMKSb2XU+0ZXb7vsAzORPmvrsA5SNkCImL7o9DQcAs+uM2p1tg34LzC2BYA3AkY2sPW8gJvnaAGhYdPp8UuHtG5Wm+DvqJbUa3yhdrP2SbLqZnNLGaAt4mJ7GobGZB/ZxdEEN1nivI24bfMWw0aXc1hHxIv3M5O2N7+Kz3raZnU0GFOHTW9jJYY6LU3YhKCukZPDWTHh3++faF587rIRIEZBE4A9CT9toxdwkwY2kRJaeKecPYBJP7+I0dDdUUsfrCK6EPlOQRJwW0tNBhpaa2JrG+sudjMBkEPiABAAA=",
+    "compression": "gzip",
+    "hash_blake3": "62195abd9a0e94ce67e7e0fda972367ea4b6e2dfc3c895f32a2d37b497b7dd20"
   },
   "hash_manifest": {
     "verifying_key": {
       "byte_length": 96,
-      "sha256": "9833aea82845a179651e077b09811f91eb4fe47bfb79af2f63484d832be73195"
+      "sha256": "9833aea82845a179651e077b09811f91eb4fe47bfb79af2f63484d832be73195",
+      "blake3": "4bff41c76f6ccd898e07db2dae4464640402bbe80fc6aa1457e96c13c9eead6b"
     },
     "proving_key": {
       "byte_length": 288,
-      "sha256": "1270d14ade1ba5c8dd51cdf3ce8c8bcd70e9e0ddec39b72ad46f003053ee5049"
+      "sha256": "1270d14ade1ba5c8dd51cdf3ce8c8bcd70e9e0ddec39b72ad46f003053ee5049",
+      "blake3": "62195abd9a0e94ce67e7e0fda972367ea4b6e2dfc3c895f32a2d37b497b7dd20"
     }
+  },
+  "fri_parameters": {
+    "log_blowup": 5,
+    "log_final_poly_len": 0,
+    "num_queries": 120,
+    "proof_of_work_bits": 16
   }
 }

@@ -3,23 +3,33 @@
   "verifying_key": {
     "encoding": "base64",
     "byte_length": 96,
-    "value": "H4sIAHJaDGkC/wFgAJ//2H2xwQIbToG/jZ5ME461vMuw7Y3I3zg9yCKG3bxy6HskXiZlqrc5mn9X86+ErFVorWBtt/2Uan/yrXgtklXzK2BD8m/GWcAeYxCF/VxcHX32fZIEVxffx4oNAJKkfGeTc65vXGAAAAA=",
-    "compression": "gzip"
+    "value": "H4sIAD72DGkC/wFgAJ//2H2xwQIbToG/jZ5ME461vMuw7Y3I3zg9yCKG3bxy6HskXiZlqrc5mn9X86+ErFVorWBtt/2Uan/yrXgtklXzK2BD8m/GWcAeYxCF/VxcHX32fZIEVxffx4oNAJKkfGeTc65vXGAAAAA=",
+    "compression": "gzip",
+    "hash_blake3": "f4495a89cdd7974d71469526b111eba6c390d7567f9d64f26fe7771ffb9ae702"
   },
   "proving_key": {
     "encoding": "base64",
     "byte_length": 256,
-    "value": "H4sIAHJaDGkC/wEAAf/+zjFVLJrjiv9zN65/Siaz3QiXd9y1gk6LeYgKJuzS7iNFS3AHyZIr7wwiHj1ayHDHXtudnf9bVc33qMvvWZEt6futnWHMEDbiqhX1wXD4qxZlmaByBjIKur2Z/kREi2hTjGvnXUmp3YR8FSDPvIu0BQi0+CVU+GQ00F3PAPLPfwgNizncAGb6MluANVFHXI7Vbz6BtC+hRmmgO9ieb5NWwWQHeCi4JRnaOgXBxqNVDHeSayGuMbTnBvoYG0KqCaqLL2SHvrXVNM5NnjpGx+9ejxrwCK4+wEyoi1qi0tjPKxvpTE4NPeB9BZIaiD9zZ4nQd2CQ4tRGOHJjYMBaxNDsnHvpkCUAAQAA",
-    "compression": "gzip"
+    "value": "H4sIAD72DGkC/wEAAf/+zjFVLJrjiv9zN65/Siaz3QiXd9y1gk6LeYgKJuzS7iNFS3AHyZIr7wwiHj1ayHDHXtudnf9bVc33qMvvWZEt6futnWHMEDbiqhX1wXD4qxZlmaByBjIKur2Z/kREi2hTjGvnXUmp3YR8FSDPvIu0BQi0+CVU+GQ00F3PAPLPfwgNizncAGb6MluANVFHXI7Vbz6BtC+hRmmgO9ieb5NWwWQHeCi4JRnaOgXBxqNVDHeSayGuMbTnBvoYG0KqCaqLL2SHvrXVNM5NnjpGx+9ejxrwCK4+wEyoi1qi0tjPKxvpTE4NPeB9BZIaiD9zZ4nQd2CQ4tRGOHJjYMBaxNDsnHvpkCUAAQAA",
+    "compression": "gzip",
+    "hash_blake3": "058b95c7fb8612da8baa52ad5c13b8ff79a2d38caa8bf50fe1b85eb8b47cc98b"
   },
   "hash_manifest": {
     "verifying_key": {
       "byte_length": 96,
-      "sha256": "71c9373a9276c888c5eee9f857ea068d5af083c9495f839939766af2a0186f40"
+      "sha256": "71c9373a9276c888c5eee9f857ea068d5af083c9495f839939766af2a0186f40",
+      "blake3": "f4495a89cdd7974d71469526b111eba6c390d7567f9d64f26fe7771ffb9ae702"
     },
     "proving_key": {
       "byte_length": 256,
-      "sha256": "f9693190b0cbaf01fcd7e94af821507a33d78c2af689b061f70c58e00bbda657"
+      "sha256": "f9693190b0cbaf01fcd7e94af821507a33d78c2af689b061f70c58e00bbda657",
+      "blake3": "058b95c7fb8612da8baa52ad5c13b8ff79a2d38caa8bf50fe1b85eb8b47cc98b"
     }
+  },
+  "fri_parameters": {
+    "log_blowup": 5,
+    "log_final_poly_len": 0,
+    "num_queries": 120,
+    "proof_of_work_bits": 16
   }
 }
