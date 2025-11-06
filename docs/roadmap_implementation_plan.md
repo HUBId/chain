@@ -25,6 +25,29 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 - **Runbooks & Operator-Guides:** `docs/rpp_node_operator_guide.md` und `docs/runbooks/observability.md` dokumentieren die
   erforderlichen CLI-/RPC-Schritte inklusive Simnet-Belege und Dashboard-Screenshots für Auditor:innen.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
 
+<a id="eng-742-constraint-layer-vrfquorum-enforcement"></a>
+### ENG-742 – Constraint-layer VRF/quorum enforcement
+
+- **Scope:** STWO- und Plonky3-Backends erweitern, damit sie VRF-Transkripte deterministisch nachrechnen, Merkle-Bindungen
+  validieren und den Quorum-Threshold im AIR/Gate-Set erzwingen.
+- **Deliverables:**
+  - STWO-Gadgets in `rpp/proofs/stwo/aggregation` für Transcript-Replays, Threshold-Berechnung und Bindings.
+  - Plonky3-Äquivalente in `rpp/proofs/plonky3/circuit/consensus.rs` inkl. Witness-Bindungen.
+  - Öffentliche Dokumentation der neuen Constraint-Zählungen via `cargo xtask proof-metadata`.
+- **Definition of Done:** Manipulierte VRF-/Quorum-Digests führen zu Constraint-Verletzungen ohne sich auf Host-Formatprüfungen
+  zu stützen; Regressionen werden über neue Negativtests und CI-Matrixläufe erzwungen.
+
+<a id="eng-743-tamper-regression-hardening"></a>
+### ENG-743 – Tamper regression hardening
+
+- **Scope:** Test-Suites erweitern (`tests/consensus/consensus_proof_tampering.rs`, Backend-spezifische Tests), um gefälschte
+  VRF-Outputs, Proofs, Bitmap-Roots und Signaturwurzeln abzulehnen, sobald ENG-742 die Constraint-Ebene liefert.
+- **Deliverables:**
+  - Integrationstests, die valide Zeugendaten verfälschen und `verify_consensus` für STWO und Plonky3 fehlschlagen lassen.
+  - Nightly-/CI-Jobs, die die neuen Szenarien automatisch ausführen.
+- **Definition of Done:** Dokumentierte Negativpfade, verlinkt in `docs/testing/consensus_regressions.md`, inklusive Simnet-Logs
+  und Dashboard-Screenshots aus der Phase‑2-Acceptance-Checkliste.
+
 ## 0. Vorbereitungsphase
 - **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module noch experimentelle Pfade enthalten (z. B. GPU-Optimierung für Plonky3, erweiterte VRF-Distribution).
 - **Tooling & CI**: Der Workflow [`CI`](.github/workflows/ci.yml) erzwingt neben dem Dashboard-Lint drei verpflichtende Gates: `fmt` (`cargo fmt --all -- --check`), `clippy` (`cargo clippy --workspace --all-targets --all-features -- -D warnings`) und `test` (`./scripts/test.sh --all`). Jede Blaupausenaufgabe muss diese Jobs grün halten; Reproduktionen laufen lokal mit denselben Kommandos, bevor Änderungen gemergt werden.
