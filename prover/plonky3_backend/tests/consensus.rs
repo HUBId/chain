@@ -505,6 +505,76 @@ fn consensus_proof_commitments_match_metadata() {
 }
 
 #[test]
+fn consensus_stark_proof_roundtrip_detects_tampering() {
+    let (prover, verifier) = sample_contexts();
+    let witness = sample_witness();
+    let circuit = ConsensusCircuit::new(witness).expect("consensus circuit");
+    let proof = prove_consensus(&prover, &circuit).expect("consensus proving succeeds");
+    verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
+
+    let (commitment, _, canonical_bytes) = compute_commitment_and_inputs(&proof.public_inputs)
+        .expect("encode canonical public inputs");
+    assert_eq!(commitment, proof.commitment);
+    let canonical_inputs: Value =
+        serde_json::from_slice(&canonical_bytes).expect("decode canonical inputs");
+    let (_, _, public_values) = decode_consensus_instance::<CircuitStarkConfig>(&canonical_inputs)
+        .expect("decode consensus instance");
+
+    let metadata = verifier.metadata();
+    let (security_bits, use_gpu) = prover.parameters();
+    let config_bundle = CircuitConfigBuilder::new(metadata.as_ref(), security_bits, use_gpu)
+        .build("consensus")
+        .expect("build consensus Stark config");
+    let config = config_bundle.stark_config();
+    let fri = config_bundle.fri_config();
+
+    let stark_proof = assert_stark_proof_matches_metadata(&proof.proof);
+
+    let mut tampered_stark = stark_proof.clone();
+    if let Some(first) = tampered_stark.opening_proof.final_poly.first_mut() {
+        *first += BabyBear::ONE;
+    } else {
+        panic!("final polynomial must not be empty");
+    }
+
+    let tampered_metadata = ProofMetadata::from_stark_proof(
+        "consensus",
+        &tampered_stark,
+        &public_values,
+        &canonical_bytes,
+        config,
+        fri,
+        security_bits,
+        use_gpu,
+    )
+    .expect("recompute metadata for tampered proof");
+
+    let tampered_serialized =
+        bincode::serialize(&tampered_stark).expect("serialize tampered Stark proof");
+    let tampered_parts = ProofParts::new(
+        tampered_serialized,
+        tampered_metadata,
+        proof.proof.auxiliary_payloads().to_vec(),
+    );
+    let tampered_proof =
+        Proof::from_parts("consensus", tampered_parts).expect("rebuild tampered proof");
+
+    let mut tampered = proof.clone();
+    tampered.proof = tampered_proof;
+
+    let err = verify_consensus(&verifier, &tampered).expect_err("tampered proof must fail");
+    match err {
+        BackendError::ConstraintMismatch { circuit, .. }
+        | BackendError::OpeningArgumentMismatch { circuit, .. }
+        | BackendError::RandomizationInconsistency { circuit, .. }
+        | BackendError::InvalidProofShape { circuit, .. } => {
+            assert_eq!(circuit, "consensus");
+        }
+        other => panic!("unexpected verification error: {other:?}"),
+    }
+}
+
+#[test]
 fn consensus_public_inputs_round_trip() {
     let witness = sample_witness();
     let circuit = ConsensusCircuit::new(witness.clone()).expect("valid witness");
