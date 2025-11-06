@@ -45,13 +45,32 @@ fn decode_base64(value: &str) -> Vec<u8> {
         .expect("decode base64 value")
 }
 
-fn decode_fixture_key_bytes(key: &FixtureKey) -> Vec<u8> {
+fn decode_fixture_key_bytes(label: &str, key: &FixtureKey) -> Vec<u8> {
+    assert!(
+        key.byte_length > 0,
+        "{label} key fixture must advertise a non-zero payload length",
+    );
     let decoded = decode_base64(&key.value);
-    match key.compression.as_deref() {
+    let decompressed = match key.compression.as_deref() {
         Some("gzip") => decompress_gzip(&decoded),
         Some("none") | None => decoded,
         Some(other) => panic!("unsupported fixture compression: {other}"),
+    };
+    assert_eq!(
+        decompressed.len(),
+        key.byte_length,
+        "{label} key fixture decompressed length must match byte_length",
+    );
+    if let Some(expected_hash) = &key.hash_blake3 {
+        let expected =
+            hex_decode(expected_hash).expect("fixture hash must be valid hexadecimal digest");
+        assert_eq!(
+            expected.as_slice(),
+            hash(&decompressed).as_bytes(),
+            "{label} key fixture digest must match decoded payload",
+        );
     }
+    decompressed
 }
 
 fn decompress_gzip(bytes: &[u8]) -> Vec<u8> {
@@ -69,87 +88,57 @@ fn compress_gzip(bytes: &[u8]) -> Vec<u8> {
     encoder.finish().expect("finalize gzip payload")
 }
 
+fn encode_fixture_key_bytes(bytes: &[u8], key: &FixtureKey) -> String {
+    let compressed = match key.compression.as_deref() {
+        Some("gzip") => compress_gzip(bytes),
+        Some("none") | None => bytes.to_vec(),
+        Some(other) => panic!("unsupported fixture compression: {other}"),
+    };
+    match key.encoding.as_str() {
+        "base64" => BASE64_STANDARD.encode(&compressed),
+        other => panic!("unsupported fixture encoding: {other}"),
+    }
+}
+
 #[test]
 fn consensus_fixture_descriptor_decodes_typed_keys() {
     let fixture = load_consensus_fixture();
 
-    assert_ne!(
-        fixture.verifying_key.byte_length, 0,
-        "consensus verifying fixture must advertise a non-zero payload length",
-    );
-    let verifying_fixture_raw = decode_fixture_key_bytes(&fixture.verifying_key);
-    assert_eq!(
-        verifying_fixture_raw.len(),
-        fixture.verifying_key.byte_length,
-        "decompressed verifying payload length must match advertised byte_length",
-    );
-    let expected_verifying_hash = fixture
-        .verifying_key
-        .hash_blake3
-        .as_ref()
-        .expect("consensus verifying fixture must include BLAKE3 digest");
-    let expected_verifying_hash =
-        hex_decode(expected_verifying_hash).expect("consensus verifying hash must be valid hex");
-    assert_eq!(
-        expected_verifying_hash.as_slice(),
-        hash(&verifying_fixture_raw).as_bytes(),
-        "verifying key payload digest must match fixture hash",
-    );
+    let verifying_fixture_raw = decode_fixture_key_bytes("verifying", &fixture.verifying_key);
     let (fixture_metadata, fixture_verifying_key): (AirMetadata, CircuitStarkVerifyingKey) =
         bincode::deserialize(&verifying_fixture_raw).expect("parse verifying key fixture");
+    let verifying_roundtrip_raw =
+        bincode::serialize(&(fixture_metadata.clone(), &fixture_verifying_key))
+            .expect("serialize verifying tuple");
+    assert_eq!(verifying_roundtrip_raw, verifying_fixture_raw);
 
-    assert_ne!(
-        fixture.proving_key.byte_length, 0,
-        "consensus proving fixture must advertise a non-zero payload length",
-    );
-    let proving_fixture_raw = decode_fixture_key_bytes(&fixture.proving_key);
-    assert_eq!(
-        proving_fixture_raw.len(),
-        fixture.proving_key.byte_length,
-        "decompressed proving payload length must match advertised byte_length",
-    );
-    if let Some(expected_hash) = &fixture.proving_key.hash_blake3 {
-        let expected_hash =
-            hex_decode(expected_hash).expect("consensus proving hash must be valid hex");
-        assert_eq!(
-            expected_hash.as_slice(),
-            hash(&proving_fixture_raw).as_bytes(),
-            "proving key payload digest must match fixture hash",
-        );
-    }
-    let (proving_metadata, fixture_proving_key): (AirMetadata, CircuitStarkProvingKey) =
-        bincode::deserialize(&proving_fixture_raw).expect("parse proving key fixture");
-    assert_eq!(fixture_metadata, proving_metadata);
-    let metadata = fixture_metadata;
-
-    let verifying_raw = bincode::serialize(&(metadata.clone(), &fixture_verifying_key))
-        .expect("serialize verifying tuple");
-    let verifying_compressed = match fixture.verifying_key.compression.as_deref() {
-        Some("gzip") => compress_gzip(&verifying_raw),
-        Some("none") | None => verifying_raw.clone(),
-        Some(other) => panic!("unsupported fixture compression: {other}"),
-    };
-    let verifying_base64 = BASE64_STANDARD.encode(verifying_compressed.as_slice());
+    let verifying_encoded_bytes = decode_base64(&fixture.verifying_key.value);
 
     let verifying_key = VerifyingKey::from_encoded_parts(
-        &verifying_base64,
-        "base64",
+        &fixture.verifying_key.value,
+        &fixture.verifying_key.encoding,
         fixture.verifying_key.compression.as_deref(),
         &fixture.circuit,
     )
     .expect("verifying key decodes");
-    assert_eq!(verifying_key.bytes(), verifying_raw.as_slice());
-    assert_eq!(verifying_key.bytes().len(), verifying_raw.len());
+    assert_eq!(verifying_key.bytes(), verifying_fixture_raw.as_slice());
+    assert_eq!(verifying_key.bytes().len(), verifying_fixture_raw.len());
     assert_eq!(
         verifying_key.hash(),
-        *hash(&verifying_compressed).as_bytes()
+        *hash(&verifying_encoded_bytes).as_bytes()
+    );
+    assert_eq!(
+        encode_fixture_key_bytes(verifying_key.bytes(), &fixture.verifying_key),
+        fixture.verifying_key.value
     );
 
     let verifying_stark = verifying_key.stark_key();
     assert_eq!(verifying_stark.air(), ToolchainAir::Consensus);
-    assert_eq!(verifying_stark.len(), verifying_raw.len());
+    assert_eq!(verifying_stark.len(), verifying_fixture_raw.len());
     let verifying_stark_again = verifying_key.stark_key();
     assert!(Arc::ptr_eq(verifying_stark, verifying_stark_again));
+    let verifying_inner = verifying_stark.key().key();
+    assert_eq!(verifying_inner.as_ref(), &fixture_verifying_key);
 
     let verifying_typed = verifying_key.typed();
     assert_eq!(verifying_typed.air(), ToolchainAir::Consensus);
@@ -165,38 +154,47 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
         verifying_metadata.digest().is_some(),
         !verifying_metadata.is_empty()
     );
-    assert_eq!(verifying_metadata.as_ref(), &metadata);
+    assert_eq!(verifying_metadata.as_ref(), &fixture_metadata);
     let verifying_metadata_again = verifying_key.air_metadata();
     assert!(Arc::ptr_eq(verifying_metadata, verifying_metadata_again));
 
-    let verifying_reserialized =
-        bincode::serialize(&(verifying_metadata.as_ref(), verifying_typed.key().as_ref()))
-            .expect("reserialize verifying tuple");
-    assert_eq!(verifying_reserialized, verifying_raw);
-
     let verifying_metadata_arc = Arc::clone(verifying_metadata);
 
-    let proving_raw = bincode::serialize(&(metadata.clone(), &fixture_proving_key))
-        .expect("serialize proving tuple");
-    let proving_base64 = BASE64_STANDARD.encode(proving_raw.as_slice());
+    let proving_fixture_raw = decode_fixture_key_bytes("proving", &fixture.proving_key);
+    let (proving_metadata, fixture_proving_key): (AirMetadata, CircuitStarkProvingKey) =
+        bincode::deserialize(&proving_fixture_raw).expect("parse proving key fixture");
+    assert_eq!(fixture_metadata, proving_metadata);
+
+    let proving_roundtrip_raw =
+        bincode::serialize(&(fixture_metadata.clone(), &fixture_proving_key))
+            .expect("serialize proving tuple");
+    assert_eq!(proving_roundtrip_raw, proving_fixture_raw);
+
+    let proving_encoded_bytes = decode_base64(&fixture.proving_key.value);
 
     let proving_key = ProvingKey::from_encoded_parts(
-        &proving_base64,
-        "base64",
-        Some("none"),
+        &fixture.proving_key.value,
+        &fixture.proving_key.encoding,
+        fixture.proving_key.compression.as_deref(),
         &fixture.circuit,
         Some(&verifying_metadata_arc),
     )
     .expect("proving key decodes");
-    assert_eq!(proving_key.bytes(), proving_raw.as_slice());
-    assert_eq!(proving_key.bytes().len(), proving_raw.len());
-    assert_eq!(proving_key.hash(), *hash(&proving_raw).as_bytes());
+    assert_eq!(proving_key.bytes(), proving_fixture_raw.as_slice());
+    assert_eq!(proving_key.bytes().len(), proving_fixture_raw.len());
+    assert_eq!(proving_key.hash(), *hash(&proving_encoded_bytes).as_bytes());
+    assert_eq!(
+        encode_fixture_key_bytes(proving_key.bytes(), &fixture.proving_key),
+        fixture.proving_key.value
+    );
 
     let proving_stark = proving_key.stark_key();
     assert_eq!(proving_stark.air(), ToolchainAir::Consensus);
-    assert_eq!(proving_stark.len(), proving_raw.len());
+    assert_eq!(proving_stark.len(), proving_fixture_raw.len());
     let proving_stark_again = proving_key.stark_key();
     assert!(Arc::ptr_eq(proving_stark, proving_stark_again));
+    let proving_inner = proving_stark.key().key();
+    assert_eq!(proving_inner.as_ref(), &fixture_proving_key);
 
     let proving_typed = proving_key.typed();
     assert_eq!(proving_typed.air(), ToolchainAir::Consensus);
@@ -213,7 +211,7 @@ fn consensus_fixture_descriptor_decodes_typed_keys() {
     let proving_reserialized =
         bincode::serialize(&(proving_metadata.as_ref(), proving_typed.key().as_ref()))
             .expect("reserialize proving tuple");
-    assert_eq!(proving_reserialized, proving_raw);
+    assert_eq!(proving_reserialized, proving_fixture_raw);
 }
 
 #[test]
