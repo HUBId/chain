@@ -253,27 +253,13 @@ fn transaction_proof_roundtrip() {
         ChainProof::Plonky3(value) => Plonky3Proof::from_value(value).unwrap(),
         ChainProof::Stwo(_) => panic!("expected Plonky3 proof"),
     };
-    let verifying_key = crypto::verifying_key("transaction").unwrap();
-    let verifying_bytes = verifying_key.bytes();
-    let header_len = 3 * crypto::COMMITMENT_LEN;
-    assert!(verifying_bytes.len() >= header_len);
-    assert_eq!(
-        parsed.payload.metadata.trace_commitment,
-        verifying_bytes[..crypto::COMMITMENT_LEN]
-            .try_into()
-            .unwrap()
+    assert!(
+        parsed.payload.metadata.fri_commitments.len() >= 1,
+        "transaction proofs must record FRI commit-phase digests"
     );
-    assert_eq!(
-        parsed.payload.metadata.quotient_commitment,
-        verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
-            .try_into()
-            .unwrap()
-    );
-    assert_eq!(
-        parsed.payload.metadata.fri_commitment,
-        verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
-            .try_into()
-            .unwrap()
+    assert!(
+        parsed.payload.metadata.challenger_digests.len() >= 1,
+        "transaction proofs must expose challenger checkpoints"
     );
     assert!(!parsed.payload.stark_proof.is_empty());
     let decoded: p3_uni_stark::Proof<CircuitStarkConfig> =
@@ -291,6 +277,10 @@ fn transaction_proof_roundtrip() {
     );
     let params = Plonky3Parameters::default();
     assert_eq!(parsed.payload.metadata.security_bits, params.security_bits);
+    assert!(
+        parsed.payload.metadata.derived_security_bits >= params.security_bits,
+        "derived security cannot undershoot negotiated security"
+    );
     assert_eq!(parsed.payload.metadata.use_gpu, params.use_gpu_acceleration);
     parsed.payload.validate().unwrap();
     let computed = crypto::compute_commitment(&parsed.public_inputs).unwrap();

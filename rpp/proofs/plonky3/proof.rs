@@ -120,14 +120,19 @@ pub struct ProofMetadata {
     pub trace_commitment: [u8; 32],
     #[serde(with = "serde_hex_32")]
     pub quotient_commitment: [u8; 32],
-    #[serde(with = "serde_hex_32")]
-    pub fri_commitment: [u8; 32],
+    #[serde(default, with = "serde_hex_32_option")]
+    pub random_commitment: Option<[u8; 32]>,
+    #[serde(with = "serde_hex_32_vec")]
+    pub fri_commitments: Vec<[u8; 32]>,
     #[serde(with = "serde_hex_32")]
     pub public_inputs_hash: [u8; 32],
     #[serde(default = "default_hash_format")]
     pub hash_format: HashFormat,
     pub security_bits: u32,
+    pub derived_security_bits: u32,
     pub use_gpu: bool,
+    #[serde(with = "serde_hex_32_vec")]
+    pub challenger_digests: Vec<[u8; 32]>,
 }
 
 impl From<backend::ProofMetadata> for ProofMetadata {
@@ -135,24 +140,30 @@ impl From<backend::ProofMetadata> for ProofMetadata {
         Self {
             trace_commitment: *value.trace_commitment(),
             quotient_commitment: *value.quotient_commitment(),
-            fri_commitment: *value.fri_commitment(),
+            random_commitment: value.random_commitment().copied(),
+            fri_commitments: value.fri_commitments().to_vec(),
             public_inputs_hash: *value.public_inputs_hash(),
             hash_format: value.hash_format(),
             security_bits: value.security_bits(),
+            derived_security_bits: value.derived_security_bits(),
             use_gpu: value.use_gpu(),
+            challenger_digests: value.challenger_digests().to_vec(),
         }
     }
 }
 
 impl From<ProofMetadata> for backend::ProofMetadata {
     fn from(value: ProofMetadata) -> Self {
-        backend::ProofMetadata::with_hash_format(
+        backend::ProofMetadata::assemble(
             value.trace_commitment,
             value.quotient_commitment,
-            value.fri_commitment,
+            value.random_commitment,
+            value.fri_commitments,
             value.public_inputs_hash,
+            value.challenger_digests,
             value.hash_format,
             value.security_bits,
+            value.derived_security_bits,
             value.use_gpu,
         )
     }
@@ -219,6 +230,72 @@ mod serde_hex_32 {
         let mut array = [0u8; 32];
         array.copy_from_slice(&bytes);
         Ok(array)
+    }
+}
+
+mod serde_hex_32_option {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(bytes) => serializer.serialize_some(&hex::encode(bytes)),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<[u8; 32]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = Option::<String>::deserialize(deserializer)?;
+        match encoded {
+            Some(value) => {
+                let normalized = value.trim();
+                let bytes = hex::decode(normalized).map_err(serde::de::Error::custom)?;
+                if bytes.len() != 32 {
+                    return Err(serde::de::Error::custom("expected 32-byte hex value"));
+                }
+                let mut array = [0u8; 32];
+                array.copy_from_slice(&bytes);
+                Ok(Some(array))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+mod serde_hex_32_vec {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(values: &Vec<[u8; 32]>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let encoded: Vec<String> = values.iter().map(|bytes| hex::encode(bytes)).collect();
+        encoded.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<[u8; 32]>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let encoded = Vec::<String>::deserialize(deserializer)?;
+        encoded
+            .into_iter()
+            .map(|value| {
+                let normalized = value.trim();
+                let bytes = hex::decode(normalized).map_err(serde::de::Error::custom)?;
+                if bytes.len() != 32 {
+                    return Err(serde::de::Error::custom("expected 32-byte hex value"));
+                }
+                let mut array = [0u8; 32];
+                array.copy_from_slice(&bytes);
+                Ok(array)
+            })
+            .collect()
     }
 }
 

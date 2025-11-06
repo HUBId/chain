@@ -144,7 +144,15 @@ fn fri_knob(air: Option<&Map<String, Value>>, key: &str, default: usize) -> Back
 }
 
 /// Builds the circuit configuration matching the vendor fixtures.
-pub fn build_circuit_stark_config(metadata: &AirMetadata) -> BackendResult<CircuitStarkConfig> {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FriConfigKnobs {
+    pub log_blowup: usize,
+    pub log_final_poly_len: usize,
+    pub num_queries: usize,
+    pub proof_of_work_bits: usize,
+}
+
+pub(crate) fn extract_fri_config(metadata: &AirMetadata) -> BackendResult<FriConfigKnobs> {
     let air = metadata.air();
 
     ensure_extension_degree(air)?;
@@ -155,6 +163,17 @@ pub fn build_circuit_stark_config(metadata: &AirMetadata) -> BackendResult<Circu
     let num_queries = fri_knob(air, "num_queries", DEFAULT_NUM_QUERIES)?;
     let proof_of_work_bits = fri_knob(air, "proof_of_work_bits", DEFAULT_PROOF_OF_WORK_BITS)?;
 
+    Ok(FriConfigKnobs {
+        log_blowup,
+        log_final_poly_len,
+        num_queries,
+        proof_of_work_bits,
+    })
+}
+
+pub fn build_circuit_stark_config(metadata: &AirMetadata) -> BackendResult<CircuitStarkConfig> {
+    let fri = extract_fri_config(metadata)?;
+
     let hash_perm = default_babybear_poseidon2_16();
     let hash = CircuitPoseidonHash::new(hash_perm);
     let compress_perm = default_babybear_poseidon2_24();
@@ -163,10 +182,10 @@ pub fn build_circuit_stark_config(metadata: &AirMetadata) -> BackendResult<Circu
     let challenge_mmcs = CircuitChallengeMmcs::new(val_mmcs.clone());
 
     let fri_params = FriParameters {
-        log_blowup,
-        log_final_poly_len,
-        num_queries,
-        proof_of_work_bits,
+        log_blowup: fri.log_blowup,
+        log_final_poly_len: fri.log_final_poly_len,
+        num_queries: fri.num_queries,
+        proof_of_work_bits: fri.proof_of_work_bits,
         mmcs: challenge_mmcs,
     };
 

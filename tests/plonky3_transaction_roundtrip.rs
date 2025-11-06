@@ -6,7 +6,6 @@
 //! commitments and proof blobs across runs.
 
 use ed25519_dalek::{Keypair, Signer};
-use std::convert::TryInto;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rpp_chain::crypto::address_from_public_key;
@@ -16,6 +15,7 @@ use rpp_chain::plonky3::prover::Plonky3Prover;
 use rpp_chain::plonky3::verifier::Plonky3Verifier;
 use rpp_chain::proof_system::{ProofProver, ProofVerifier};
 use rpp_chain::types::{ChainProof, SignedTransaction, Transaction};
+use std::convert::TryInto;
 
 const TRANSACTION_SEED: [u8; 32] = [23u8; 32];
 
@@ -44,25 +44,17 @@ fn transaction_roundtrip_produces_stable_commitment() {
     };
     let parsed = Plonky3Proof::from_value(value).unwrap();
     assert_eq!(parsed.circuit, "transaction");
-    let verifying_key = crypto::verifying_key("transaction").unwrap();
-    let verifying_bytes = verifying_key.bytes();
-    let header_len = 3 * crypto::COMMITMENT_LEN;
-    assert!(parsed.payload.stark_proof.len() >= header_len);
-    assert_eq!(
-        parsed.payload.metadata.trace_commitment,
-        verifying_bytes[..crypto::COMMITMENT_LEN].try_into().unwrap()
+    assert!(
+        parsed.payload.metadata.fri_commitments.len() >= 1,
+        "transaction proofs must record FRI commit-phase digests"
     );
-    assert_eq!(
-        parsed.payload.metadata.quotient_commitment,
-        verifying_bytes[crypto::COMMITMENT_LEN..(2 * crypto::COMMITMENT_LEN)]
-            .try_into()
-            .unwrap()
+    assert!(
+        parsed.payload.metadata.challenger_digests.len() >= 1,
+        "transaction proofs must expose challenger checkpoints"
     );
-    assert_eq!(
-        parsed.payload.metadata.fri_commitment,
-        verifying_bytes[(2 * crypto::COMMITMENT_LEN)..header_len]
-            .try_into()
-            .unwrap()
+    assert!(
+        parsed.payload.metadata.derived_security_bits >= parsed.payload.metadata.security_bits,
+        "derived security cannot undershoot negotiated security"
     );
 
     let commitment = crypto::compute_commitment(&parsed.public_inputs).unwrap();

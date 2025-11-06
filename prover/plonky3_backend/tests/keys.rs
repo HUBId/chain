@@ -349,7 +349,7 @@ fn json_schemas_are_deterministic() {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Plonky3 Proof Metadata",
         "type": "object",
-        "description": "Hex-encoded transcript commitments and security parameters embedded in a Plonky3 proof payload.",
+        "description": "Transcript commitments, challenger digests, and security parameters embedded in a Plonky3 proof payload.",
         "properties": {
             "trace_commitment": {
                 "type": "string",
@@ -361,15 +361,35 @@ fn json_schemas_are_deterministic() {
                 "pattern": "^[0-9a-fA-F]{64}$",
                 "description": "Poseidon Merkle cap commitment for the quotient domain."
             },
-            "fri_commitment": {
-                "type": "string",
+            "random_commitment": {
+                "type": ["string", "null"],
                 "pattern": "^[0-9a-fA-F]{64}$",
-                "description": "Poseidon Merkle cap commitment representing the FRI transcript."
+                "description": "Optional Poseidon Merkle cap commitment for the randomizer domain when zero-knowledge is enabled."
+            },
+            "fri_commitments": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Poseidon Merkle cap commitment generated for each FRI commit-phase round (oldest to newest)."
+                },
+                "minItems": 1,
+                "description": "Sequence of Merkle cap commitments binding every folding layer of the FRI transcript."
             },
             "public_inputs_hash": {
                 "type": "string",
                 "pattern": "^[0-9a-fA-F]{64}$",
                 "description": "BLAKE3 digest of the encoded public inputs."
+            },
+            "challenger_digests": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "BLAKE3 digests of the Poseidon sponge state after major transcript milestones (Fiat-Shamir checkpoints)."
+                },
+                "minItems": 1,
+                "description": "Deterministic checkpoints of the challenger transcript useful for external auditing."
             },
             "hash_format": {
                 "type": "string",
@@ -381,6 +401,11 @@ fn json_schemas_are_deterministic() {
                 "minimum": 1,
                 "description": "Security parameter negotiated between prover and verifier."
             },
+            "derived_security_bits": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Security level inferred from the circuit configuration, query schedule, and proof of work."
+            },
             "use_gpu": {
                 "type": "boolean",
                 "description": "Indicates whether the proof was constructed with GPU acceleration."
@@ -389,9 +414,11 @@ fn json_schemas_are_deterministic() {
         "required": [
             "trace_commitment",
             "quotient_commitment",
-            "fri_commitment",
+            "fri_commitments",
             "public_inputs_hash",
+            "challenger_digests",
             "security_bits",
+            "derived_security_bits",
             "use_gpu",
             "hash_format"
         ],
