@@ -250,6 +250,40 @@ PY
           fi
           cargo xtask test-integration
 
+  observability-metrics:
+    name: Observability metrics (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ""
+            no_default_features: ""
+            experimental: false
+          - name: prod-stwo
+            features: "prod,prover-stwo"
+            no_default_features: "1"
+            experimental: false
+          - name: prod-stwo-plonky3
+            features: "prod,prover-stwo,backend-plonky3"
+            no_default_features: "1"
+            experimental: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run observability metrics
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.no_default_features }}" ]; then
+            export XTASK_NO_DEFAULT_FEATURES="${{ matrix.no_default_features }}"
+          fi
+          if [ -n "${{ matrix.features }}" ]; then
+            export XTASK_FEATURES='${{ matrix.features }}'
+          fi
+          cargo xtask test-observability
+
   simnet-smoke:
     name: Simnet smoke (${{ matrix.name }})
     runs-on: ubuntu-latest

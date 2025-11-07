@@ -89,6 +89,20 @@ fn run_integration_workflows() -> Result<()> {
     run_command(command, "integration workflows")
 }
 
+fn run_observability_suite() -> Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(workspace_root())
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("observability_metrics");
+    apply_feature_flags(&mut command);
+    run_command(command, "observability metrics")
+}
+
 fn run_simnet_smoke() -> Result<()> {
     let scenarios = [
         "tools/simnet/scenarios/ci_block_pipeline.ron",
@@ -138,12 +152,13 @@ fn run_consensus_manipulation_tests() -> Result<()> {
 fn run_full_test_matrix() -> Result<()> {
     run_unit_suites()?;
     run_integration_workflows()?;
+    run_observability_suite()?;
     run_simnet_smoke()
 }
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests",
     );
 }
 
@@ -165,6 +180,7 @@ fn main() -> Result<()> {
         "pruning-validation" => run_pruning_validation(),
         "test-unit" => run_unit_suites(),
         "test-integration" => run_integration_workflows(),
+        "test-observability" => run_observability_suite(),
         "test-simnet" => run_simnet_smoke(),
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
         "test-all" => run_full_test_matrix(),

@@ -43,6 +43,13 @@ with default warning/critical thresholds of 30s/120s for stream lag, 10m/20m
 zero-throughput detection, and 3+/6+ chunk failure escalations routed to the
 snapshot on-call rotation.
 
+Continuous integration executes `cargo xtask test-observability`, which runs
+`tests/observability/snapshot_timetoke_metrics.rs` to drive a two-node snapshot
+and Timetoke sync via Prometheus scrapes. The test asserts that both
+`snapshot_stream_lag_seconds` and `timetoke_replay_duration_ms` appear and
+advance once data flows, giving us automated coverage that the exported metrics
+remain wired through the HTTP endpoints.
+
 ### Sample Grafana Panel
 
 ```json

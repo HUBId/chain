@@ -33,7 +33,7 @@ vendor-plonky3:
 plonky3-setup:
         cargo xtask plonky3-setup
 
-.PHONY: pruning-validation test\:unit test\:integration test\:simnet test\:all
+.PHONY: pruning-validation test\:unit test\:integration test\:observability test\:simnet test\:all
 
 ## Run pruning receipt conformance checks to guard snapshot publication.
 pruning-validation:
@@ -47,10 +47,14 @@ test\:unit:
 test\:integration:
         cargo xtask test-integration
 
+## Execute Prometheus-backed observability regression tests.
+test\:observability:
+        cargo xtask test-observability
+
 ## Run the CI simnet scenario that exercises orchestrator wiring.
 test\:simnet:
         cargo xtask test-simnet
 
-## Run the full multi-layer validation stack (unit + integration + simnet).
+## Run the full multi-layer validation stack (unit + integration + observability + simnet).
 test\:all:
         cargo xtask test-all

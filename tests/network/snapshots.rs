@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -12,6 +11,11 @@ use rpp_p2p::SnapshotSessionId;
 mod support;
 
 mod snapshots_common;
+
+#[path = "../observability/metrics_utils.rs"]
+mod metrics_utils;
+
+use metrics_utils::{fetch_metrics, metric_value};
 
 use snapshots_common::{
     default_chunk_size, start_snapshot_cluster, SnapshotStreamStatusResponse,
@@ -362,36 +366,4 @@ fn latest_light_client_head(handle: &NodeHandle) -> Result<Option<rpp_p2p::Light
         .context("query latest light client head")
 }
 
-async fn fetch_metrics(client: &Client, addr: SocketAddr) -> Result<String> {
-    let response = client
-        .get(format!("http://{addr}/metrics"))
-        .send()
-        .await
-        .with_context(|| format!("fetch metrics from {addr}"))?
-        .error_for_status()
-        .with_context(|| format!("metrics endpoint at {addr} returned error status"))?;
-    response
-        .text()
-        .await
-        .with_context(|| format!("decode metrics body from {addr}"))
-}
-
-fn metric_value(metrics: &str, name: &str, labels: &[(&str, &str)]) -> Option<f64> {
-    metrics.lines().find_map(|line| {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') || !line.starts_with(name) {
-            return None;
-        }
-
-        if !labels
-            .iter()
-            .all(|(key, value)| line.contains(&format!("{key}=\"{value}\"")))
-        {
-            return None;
-        }
-
-        line.split_whitespace()
-            .last()
-            .and_then(|value| value.parse::<f64>().ok())
-    })
-}
+use metrics_utils::{fetch_metrics, metric_value};
