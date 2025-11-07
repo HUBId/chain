@@ -82,10 +82,12 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 
 ## Security Review Update (Kalenderwoche 19/2026)
 
-**Zusammenfassung:** Die Security-Review für Snapshot-Replay, Resume-Validierung,
-Tier-Policy-Persistenz und Audit-Trail-Härtung ist abgeschlossen. Die Ergebnisse
-sind im aktualisierten [Threat Model Addendum](../security/threat_model.md) und
-dem [Security Risk Register](../security/register.md) dokumentiert.
+**Zusammenfassung:** Die Security-Review vom 27. Mai 2026 für Snapshot-Replay,
+Resume-Validierung, Admission-Policy-Kontrollen und Audit-Trail-Härtung ist
+abgeschlossen. Die Ergebnisse sind im aktualisierten
+[Threat Model Addendum](../security/threat_model.md) und dem
+überarbeiteten [Security Risk Register](../security/register.md)
+mit neuen Outstanding-Maßnahmen dokumentiert.
 
 ### Highlights
 - Threat-Model-Erweiterung beschreibt Replay-Abwehr, Resume-Schutz,
@@ -96,8 +98,8 @@ dem [Security Risk Register](../security/register.md) dokumentiert.
 ### Tracking
 <a id="snapshot-replay-hardening"></a>
 #### Snapshot Replay Hardening (ENG-921)
-- Instrumentierung für manifest-signature Telemetrie in Arbeit.
-- Simnet-Regression deckt Replay-Detection-Cases ab.
+- Instrumentierung für Manifest-Signature-Telemetrie wartet auf Replay-Simulationen.
+- Simnet-Regression deckt Replay-Detection-Cases ab; Ergebnisse werden für das CLI geteilt.
 
 <a id="resume-validation-guardrails"></a>
 #### Resume Validation Guardrails (ENG-922)
@@ -106,10 +108,25 @@ dem [Security Risk Register](../security/register.md) dokumentiert.
 
 <a id="tier-policy-persistence"></a>
 #### Tier Policy Persistence (ENG-923)
-- Append-only Policy-Log vorbereitet; Dual-Control-Automation in Entwicklung.
+- Append-only Policy-Log deployed.
 - Operator-Runbook wird um Policy-Rollback-Checks erweitert.
 
 <a id="audit-trail-reconciliation"></a>
 #### Audit Trail Reconciliation (ENG-924)
-- WORM-Export aktiv; Differenz-Checker wartet auf Deployment-Fenster.
+- Reconciliation-Job staged für Deployment nach Storage-API-Upgrade.
 - SIEM-Playbook ergänzt Eskalationspfad für fehlende Events.
+
+<a id="dual-control-automation-eng-1051"></a>
+#### Dual Control Automation (ENG-1051)
+- Witness-Approval-Service wird mit Admission-API verdrahtet.
+- Rollback-Alerts werden mit Network Operations abgestimmt.
+
+<a id="worm-export-hardening-eng-1052"></a>
+#### WORM Export Hardening (ENG-1052)
+- Object-Storage-Pipeline (Immutable Buckets) designiert; Compliance prüft Retention.
+- Integrationstests für unveränderliche Uploads sind in Planung.
+
+<a id="external-snapshot-verification-eng-1053"></a>
+#### External Snapshot Verification (ENG-1053)
+- CLI-Spezifikation freigegeben; Prototyp in `tools/firewood` entsteht.
+- Manifest-Signatur-Samples aus Replay-Simulationen werden gesammelt.
