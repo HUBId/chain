@@ -182,6 +182,139 @@ PY
             exit 1
           fi
 
+  runtime-smoke:
+    name: Runtime smoke health checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build runtime binary
+        run: |
+          set -euo pipefail
+          cargo build --bin rpp-node
+      - name: Exercise runtime modes
+        env:
+          RPP_NODE_BIN: "${{ github.workspace }}/target/debug/rpp-node"
+          RPP_SUPPRESS_EXPERIMENTAL_BACKEND_WARNING: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/runtime-smoke
+
+          wait_for_endpoint() {
+            local pid="$1"
+            local url="$2"
+            local timeout="$3"
+            local elapsed=0
+
+            while (( elapsed < timeout )); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                wait "$pid" || true
+                return 1
+              fi
+              if curl --fail --silent --show-error --max-time 5 "$url" >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 1
+              elapsed=$((elapsed + 1))
+            done
+
+            echo "error: $url did not become healthy within ${timeout}s" >&2
+            return 1
+          }
+
+          run_mode() {
+            local mode="$1"
+            local script="$2"
+            local metrics_url="$3"
+            shift 3
+            local -a health_endpoints=("$@")
+            local log_file="artifacts/runtime-smoke/${mode}.log"
+            local metrics_file="artifacts/runtime-smoke/${mode}.metrics"
+            local timeout=150
+
+            echo "::group::runtime smoke (${mode})"
+
+            local data_dir
+            data_dir="$(mktemp -d)"
+
+            (
+              export RPP_NODE_DATA_DIR="${data_dir}"
+              "${script}"
+            ) >"${log_file}" 2>&1 &
+            local runner_pid=$!
+
+            cleanup() {
+              if kill -0 "${runner_pid}" 2>/dev/null; then
+                kill -TERM "${runner_pid}" 2>/dev/null || true
+                wait "${runner_pid}" 2>/dev/null || true
+              fi
+              rm -rf "${data_dir}"
+            }
+
+            trap cleanup EXIT
+
+            local endpoint
+            for endpoint in "${health_endpoints[@]}"; do
+              echo "probing ${endpoint}"
+              if ! wait_for_endpoint "${runner_pid}" "${endpoint}" "${timeout}"; then
+                echo "::error title=${mode} health check failed::${endpoint} did not report healthy" >&2
+                trap - EXIT
+                cleanup
+                return 1
+              fi
+            done
+
+            if ! curl --fail --silent --show-error --max-time 10 "${metrics_url}" >"${metrics_file}"; then
+              echo "::error title=${mode} metrics scrape failed::Unable to fetch metrics from ${metrics_url}" >&2
+              trap - EXIT
+              cleanup
+              return 1
+            fi
+
+            kill -TERM "${runner_pid}" 2>/dev/null || true
+            if ! wait "${runner_pid}"; then
+              local status=$?
+              if [[ ${status} -ne 0 && ${status} -ne 143 ]]; then
+                echo "::error title=${mode} runtime exit code::Process exited with status ${status}" >&2
+                trap - EXIT
+                cleanup
+                return 1
+              fi
+            fi
+
+            trap - EXIT
+            cleanup
+            echo "::endgroup::"
+          }
+
+          run_mode \
+            node \
+            "${GITHUB_WORKSPACE}/scripts/run_node_mode.sh" \
+            "http://127.0.0.1:7070/metrics" \
+            "http://127.0.0.1:7070/health/live" \
+            "http://127.0.0.1:7070/health/ready"
+
+          run_mode \
+            wallet \
+            "${GITHUB_WORKSPACE}/scripts/run_wallet_mode.sh" \
+            "http://127.0.0.1:9090/metrics" \
+            "http://127.0.0.1:9090/health/live" \
+            "http://127.0.0.1:9090/health/ready"
+
+          run_mode \
+            hybrid \
+            "${GITHUB_WORKSPACE}/scripts/run_hybrid_mode.sh" \
+            "http://127.0.0.1:7070/metrics" \
+            "http://127.0.0.1:7070/health/live" \
+            "http://127.0.0.1:7070/health/ready"
+
+      - name: Upload runtime smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-smoke
+          path: artifacts/runtime-smoke
+
   unit-suites:
     name: Unit suites (${{ matrix.name }})
     runs-on: ubuntu-latest
