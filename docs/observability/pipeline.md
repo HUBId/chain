@@ -37,7 +37,11 @@ when Prometheus scraping is enabled:
 
 See `docs/observability/network_snapshots.md` for detailed queries, alert
 thresholds, and dashboard examples that tie these metrics back into the pipeline
-view.
+view. The corresponding Prometheus alert definitions live in
+[`docs/observability/alerts/snapshot_stream.yaml`](alerts/snapshot_stream.yaml)
+with default warning/critical thresholds of 30s/120s for stream lag, 10m/20m
+zero-throughput detection, and 3+/6+ chunk failure escalations routed to the
+snapshot on-call rotation.
 
 ### Sample Grafana Panel
 
@@ -121,13 +125,16 @@ bespoke variants or extending panel coverage.
   snapshot read failure along the state-sync path.
 - **Snapshot Stream Lag** – warn when
   `snapshot_stream_lag_seconds > 30` for five minutes and escalate at 120
-  seconds. Pair with a throughput check on
-  `rate(snapshot_bytes_sent_total{kind="chunk"}[5m])` to reduce noise when no
-  sessions are active.
+  seconds (see the warning/critical rules in
+  [`alerts/snapshot_stream.yaml`](alerts/snapshot_stream.yaml)). Pair with a
+  throughput check on `rate(snapshot_bytes_sent_total{kind="chunk"}[5m])` to
+  reduce noise when no sessions are active.
 - **Snapshot Failure Spike** – trigger when
   `increase(light_client_chunk_failures_total{kind="chunk",direction="outbound"}[10m])`
   exceeds three or inbound failures rise above one per 10 minutes, indicating
-  sustained delivery issues.
+  sustained delivery issues. Critical alerts fire once outbound failures exceed
+  six or inbound failures exceed three per the default escalation profile in
+  [`alerts/snapshot_stream.yaml`](alerts/snapshot_stream.yaml).
 
 ### Runbook Links
 Attach this document to observability and startup runbooks so operators can
