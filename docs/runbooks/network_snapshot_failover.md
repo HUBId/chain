@@ -17,6 +17,10 @@ Investigate a failover when any of the following signals trigger:
   remains active.
 - `rpp_node_pipeline_root_io_errors_total` increments, indicating Firewood
   storage or snapshot corruption during chunk replay.
+- `snapshot_chunk_checksum_failures_total{kind="checksum_mismatch"}` increases,
+  signalling the background validator found corrupted on-disk snapshot chunks;
+  inspect the accompanying `snapshot_validator` warnings and the manifest in the
+  node’s snapshot directory to confirm which files were affected.【F:rpp/node/src/services/snapshot_validator.rs†L1-L205】
 
 These metrics and alert thresholds are documented in the snapshot and pipeline
 observability references; keep those dashboards open while running this

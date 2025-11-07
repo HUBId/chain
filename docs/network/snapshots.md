@@ -128,3 +128,16 @@ runtime to inspect.【F:rpp/p2p/src/behaviour/snapshots.rs†L638-L859】 The ru
 `404` responses if they query an unknown session, and transport failures convert
 to HTTP error codes via `snapshot_runtime_error_to_http`.【F:rpp/rpc/src/routes/p2p.rs†L70-L102】【F:rpp/rpc/api.rs†L227-L270】
 
+
+## Background chunk validation
+
+Nodes continuously audit the snapshot chunks they keep on disk. The
+`SnapshotValidator` service reads `<snapshot_dir>/manifest/chunks.json`,
+recomputes the SHA-256 digests for every entry in `<snapshot_dir>/chunks`, and
+reports discrepancies as `snapshot_chunk_checksum_failures_total{kind="…"}`
+increments alongside structured warnings from the `snapshot_validator`
+target.【F:rpp/node/src/services/snapshot_validator.rs†L1-L205】【F:rpp/node/src/telemetry/snapshots.rs†L1-L33】 The cadence defaults to five
+minutes and can be tuned through `snapshot_validator.cadence_secs` in
+`node.toml`.【F:rpp/runtime/config.rs†L1256-L1761】 Keep manifest and
+chunk directories in sync whenever snapshots rotate so the validator catches
+corruption immediately after tampering or partial deployments.

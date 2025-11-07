@@ -1273,6 +1273,7 @@ pub const DEFAULT_PRUNING_RETENTION_DEPTH: u64 = 128;
 pub const DEFAULT_ADMISSION_RECONCILER_CADENCE_SECS: u64 = 60;
 pub const DEFAULT_ADMISSION_RECONCILER_ALERT_THRESHOLD: u64 = 1;
 pub const DEFAULT_ADMISSION_RECONCILER_AUDIT_LAG_SECS: u64 = 300;
+pub const DEFAULT_SNAPSHOT_VALIDATOR_CADENCE_SECS: u64 = 300;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeConfig {
@@ -1319,6 +1320,8 @@ pub struct NodeConfig {
     pub pruning: PruningConfig,
     #[serde(default)]
     pub admission_reconciler: AdmissionReconcilerConfig,
+    #[serde(default)]
+    pub snapshot_validator: SnapshotValidatorConfig,
     #[serde(default)]
     pub governance: GovernanceConfig,
 }
@@ -1619,6 +1622,7 @@ impl NodeConfig {
         self.secrets.validate_with_path(&self.vrf_key_path)?;
         self.pruning.validate()?;
         self.admission_reconciler.validate()?;
+        self.snapshot_validator.validate()?;
         self.governance.validate()?;
         Ok(())
     }
@@ -1655,6 +1659,7 @@ impl Default for NodeConfig {
             storage: FirewoodStorageConfig::default(),
             pruning: PruningConfig::default(),
             admission_reconciler: AdmissionReconcilerConfig::default(),
+            snapshot_validator: SnapshotValidatorConfig::default(),
             governance: GovernanceConfig::default(),
         }
     }
@@ -1733,6 +1738,31 @@ impl Default for AdmissionReconcilerConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SnapshotValidatorConfig {
+    pub cadence_secs: u64,
+}
+
+impl SnapshotValidatorConfig {
+    pub fn validate(&self) -> ChainResult<()> {
+        if self.cadence_secs == 0 {
+            return Err(ChainError::Config(
+                "snapshot_validator.cadence_secs must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for SnapshotValidatorConfig {
+    fn default() -> Self {
+        Self {
+            cadence_secs: DEFAULT_SNAPSHOT_VALIDATOR_CADENCE_SECS,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1766,6 +1796,19 @@ mod tests {
         );
         config
             .admission_reconciler
+            .validate()
+            .expect("defaults should validate");
+    }
+
+    #[test]
+    fn snapshot_validator_defaults_are_valid() {
+        let config = NodeConfig::default();
+        assert_eq!(
+            config.snapshot_validator.cadence_secs,
+            DEFAULT_SNAPSHOT_VALIDATOR_CADENCE_SECS
+        );
+        config
+            .snapshot_validator
             .validate()
             .expect("defaults should validate");
     }

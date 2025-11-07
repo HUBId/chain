@@ -68,6 +68,7 @@ use crate::config::{PruningCliOverrides, PruningOverrides};
 use crate::pipeline::PipelineHookGuard;
 use crate::services::admission_reconciler::{AdmissionReconciler, AdmissionReconcilerSettings};
 use crate::services::pruning::PruningService;
+use crate::services::snapshot_validator::SnapshotValidator;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
 pub use rpp_chain::runtime::RuntimeMode;
@@ -742,6 +743,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut pruning_service: Option<PruningService> = None;
     let mut admission_reconciler: Option<AdmissionReconciler> = None;
     let mut uptime_service: Option<UptimeScheduler> = None;
+    let mut snapshot_validator: Option<SnapshotValidator> = None;
     let mut pruning_api: Option<Arc<dyn PruningServiceApi>> = None;
     let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
     let mut rpc_auth: Option<String> = None;
@@ -790,6 +792,9 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
             reconciler_settings,
         );
         admission_reconciler = Some(reconciler);
+
+        let validator = SnapshotValidator::start(&config);
+        snapshot_validator = Some(validator);
 
         info!(
             target = "rpc",
@@ -1059,6 +1064,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 pruning_service.take(),
                 uptime_service.take(),
                 admission_reconciler.take(),
+                snapshot_validator.take(),
             )) as _),
             _ => Some(Box::pin(wait_for_signal_shutdown()) as _),
         };
@@ -1441,6 +1447,7 @@ async fn wait_for_node_shutdown(
     pruning: Option<PruningService>,
     mut uptime: Option<UptimeScheduler>,
     admission_reconciler: Option<AdmissionReconciler>,
+    snapshot_validator: Option<SnapshotValidator>,
 ) -> ShutdownOutcome {
     tokio::pin!(runtime);
 
@@ -1504,6 +1511,9 @@ async fn wait_for_node_shutdown(
         service.shutdown().await;
     }
     if let Some(service) = admission_reconciler.as_ref() {
+        service.shutdown().await;
+    }
+    if let Some(service) = snapshot_validator.as_ref() {
         service.shutdown().await;
     }
 
