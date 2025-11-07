@@ -46,11 +46,13 @@
   Quoren erreichen.【F:tests/vrf_selection.rs†L12-L120】
 
 ### Witness-Bündel und Constraints
-- `WalletProver::build_consensus_witness` stellt sicher, dass VRF-Ausgaben,
-  Witness-Commitments und Reputation-Roots vollständig und größenkonform sind,
-  bevor der STWO-Zeugnisdatensatz erzeugt wird. Abweichungen führen zu
-  `ChainError::Crypto` mit aussagekräftigen Fehlermeldungen, die das Monitoring
-  unmittelbar korrelieren kann.【F:rpp/proofs/stwo/prover/mod.rs†L419-L472】
+- `WalletProver::build_consensus_witness` spiegelt jetzt das vollständige
+  `ConsensusProofMetadata`: VRF-Transkripte (inklusive Poseidon-Inputs),
+  Witness-Commitments, Reputation-Roots sowie Epochen- und Slot-Zähler werden
+  zusammen mit den Poseidon-Bindings in das Witness-Bundle übernommen. Damit
+  können Ledger und RPC exakt dieselben Felder wie das Zertifikat exportieren;
+  `build_consensus_witness_includes_certificate_metadata` sichert diese
+  Invariante ab.【F:rpp/consensus/src/proofs.rs†L1-L44】【F:rpp/consensus/src/tests.rs†L606-L641】
 - Die Konsens-Circuits der STWO- und Plonky3-Backends validieren anschließend
   jedes VRF-Transcript, erzwingen eindeutige Vote-Sets und koppeln
   Witness-Commitments, Reputation-Roots sowie Quorum-Wurzeln über Poseidon-

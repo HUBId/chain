@@ -4,6 +4,8 @@ use crate::proof_backend::Blake2sHasher;
 use blake2::{Blake2s256, Digest};
 use serde::{Deserialize, Serialize};
 
+use crate::consensus::messages::ConsensusVrfEntry;
+use crate::consensus::ConsensusWitnessBindings;
 use crate::errors::{ChainError, ChainResult};
 use crate::proof_backend::{
     ProofSystemKind as BackendProofSystemKind, WitnessBytes, WitnessHeader,
@@ -676,11 +678,21 @@ pub struct ConsensusWitness {
     pub height: u64,
     pub round: u64,
     pub participants: Vec<Address>,
+    #[serde(default)]
+    pub vrf_entries: Vec<ConsensusVrfEntry>,
     pub vrf_outputs: Vec<String>,
     pub vrf_proofs: Vec<String>,
     pub witness_commitments: Vec<String>,
+    #[serde(default)]
+    pub reputation_roots: Vec<String>,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub slot: u64,
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
+    #[serde(default)]
+    pub bindings: ConsensusWitnessBindings,
 }
 
 impl ConsensusWitness {
@@ -689,21 +701,31 @@ impl ConsensusWitness {
         height: u64,
         round: u64,
         participants: Vec<Address>,
+        vrf_entries: Vec<ConsensusVrfEntry>,
         vrf_outputs: Vec<String>,
         vrf_proofs: Vec<String>,
         witness_commitments: Vec<String>,
+        reputation_roots: Vec<String>,
+        epoch: u64,
+        slot: u64,
         quorum_bitmap_root: String,
         quorum_signature_root: String,
+        bindings: ConsensusWitnessBindings,
     ) -> Self {
         Self {
             height,
             round,
             participants,
+            vrf_entries,
             vrf_outputs,
             vrf_proofs,
             witness_commitments,
+            reputation_roots,
+            epoch,
+            slot,
             quorum_bitmap_root,
             quorum_signature_root,
+            bindings,
         }
     }
 }
@@ -1776,15 +1798,29 @@ mod tests {
         };
         bundle.record_zsi(ZsiWitness::new("alice".into(), None, zsi_updated));
 
+        let vrf_entry = ConsensusVrfEntry::default();
+        let bindings = ConsensusWitnessBindings {
+            vrf_output: "11".repeat(32),
+            vrf_proof: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            quorum_bitmap: "55".repeat(32),
+            quorum_signature: "66".repeat(32),
+        };
         bundle.record_consensus(ConsensusWitness::new(
             42,
             3,
             vec!["alice".into(), "bob".into()],
+            vec![vrf_entry],
             vec!["aa".repeat(32)],
             vec!["bb".repeat(32)],
             vec!["cc".repeat(32)],
+            vec!["dd".repeat(32)],
+            7,
+            9,
             "dd".repeat(32),
             "ee".repeat(32),
+            bindings,
         ));
 
         bundle

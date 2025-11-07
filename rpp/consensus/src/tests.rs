@@ -588,6 +588,7 @@ fn build_consensus_witness_includes_certificate_metadata() {
     assert_eq!(bundle.height, certificate.height);
     assert_eq!(bundle.round, certificate.round);
     assert_eq!(bundle.participants, participants);
+    assert_eq!(bundle.vrf_entries, certificate.metadata.vrf.entries);
     let expected_outputs: Vec<String> = certificate
         .metadata
         .vrf
@@ -609,12 +610,46 @@ fn build_consensus_witness_includes_certificate_metadata() {
         certificate.metadata.witness_commitments
     );
     assert_eq!(
+        bundle.reputation_roots,
+        certificate.metadata.reputation_roots
+    );
+    assert_eq!(bundle.epoch, certificate.metadata.epoch);
+    assert_eq!(bundle.slot, certificate.metadata.slot);
+    assert_eq!(
         bundle.quorum_bitmap_root,
         certificate.metadata.quorum_bitmap_root
     );
     assert_eq!(
         bundle.quorum_signature_root,
         certificate.metadata.quorum_signature_root
+    );
+    let public_inputs = certificate
+        .consensus_public_inputs()
+        .expect("consensus public inputs");
+    let encode = |digest: [u8; 32]| hex::encode(digest);
+    assert_eq!(
+        bundle.bindings.vrf_output,
+        encode(public_inputs.vrf_output_binding)
+    );
+    assert_eq!(
+        bundle.bindings.vrf_proof,
+        encode(public_inputs.vrf_proof_binding)
+    );
+    assert_eq!(
+        bundle.bindings.witness_commitment,
+        encode(public_inputs.witness_commitment_binding)
+    );
+    assert_eq!(
+        bundle.bindings.reputation_root,
+        encode(public_inputs.reputation_root_binding)
+    );
+    assert_eq!(
+        bundle.bindings.quorum_bitmap,
+        encode(public_inputs.quorum_bitmap_binding)
+    );
+    assert_eq!(
+        bundle.bindings.quorum_signature,
+        encode(public_inputs.quorum_signature_binding)
     );
 }
 

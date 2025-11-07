@@ -422,16 +422,42 @@ pub struct ConsensusCertificate {
     pub metadata: ConsensusProofMetadata,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ConsensusWitnessBindings {
+    #[serde(default)]
+    pub vrf_output: String,
+    #[serde(default)]
+    pub vrf_proof: String,
+    #[serde(default)]
+    pub witness_commitment: String,
+    #[serde(default)]
+    pub reputation_root: String,
+    #[serde(default)]
+    pub quorum_bitmap: String,
+    #[serde(default)]
+    pub quorum_signature: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConsensusWitnessBundle {
     pub height: u64,
     pub round: u64,
     pub participants: Vec<ValidatorId>,
+    #[serde(default)]
+    pub vrf_entries: Vec<ConsensusVrfEntry>,
     pub vrf_outputs: Vec<String>,
     pub vrf_proofs: Vec<String>,
     pub witness_commitments: Vec<String>,
+    #[serde(default)]
+    pub reputation_roots: Vec<String>,
+    #[serde(default)]
+    pub epoch: u64,
+    #[serde(default)]
+    pub slot: u64,
     pub quorum_bitmap_root: String,
     pub quorum_signature_root: String,
+    #[serde(default)]
+    pub bindings: ConsensusWitnessBindings,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
