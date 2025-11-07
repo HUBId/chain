@@ -56,6 +56,8 @@ Szenarien aus：【F:xtask/src/main.rs†L60-L110】
 3. [`consensus_quorum_stress.ron`](../../tools/simnet/scenarios/consensus_quorum_stress.ron) –
    Phase‑2-Stresstest der VRF-/Quorum-Constraints, generiert CSV- und JSON-Reports
    über Tamper-Rejections und Prover/Verifier-Latenzen.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】
+4. [`snapshot_partition.ron`](../../tools/simnet/scenarios/snapshot_partition.ron) –
+   Streamt Pruningsnapshots unter Packet-Loss/Latenz und erfasst Resume-/Retry-Metriken.
 
 Beispiel für einen vollständigen Phase‑2-Lauf:
 
@@ -121,6 +123,7 @@ Nachvollziehbarkeit herstellen können.【F:scripts/analyze_simnet.py†L120-L20
 | [`consensus_quorum_stress.ron`](../../tools/simnet/scenarios/consensus_quorum_stress.ron) | VRF-/Quorum-Stresstest mit Tamper-Injektion und Latenzmetriken. | Consensus/Proofs (`#consensus-ztk`)|
 | [`snapshot_rebuild.ron`](../../tools/simnet/scenarios/snapshot_rebuild.ron) | Repliziert Partition-Restarts und Snapshot-Neuaufbau via Light-Client-Sync. | State Sync (`#state-sync`)|
 | [`gossip_backpressure.ron`](../../tools/simnet/scenarios/gossip_backpressure.ron) | Wallet-Tracker-Backpressure und Admission-Control im Gossip-Netzwerk. | Networking (`#p2p`)|
+| [`snapshot_partition.ron`](../../tools/simnet/scenarios/snapshot_partition.ron) | Snapshot-Streaming unter Latenz/Packet-Loss mit Resume- und Retry-Metriken. | State Sync (`#state-sync`)|
 
 Die Owner-Channels sind im internen Slack verankert; bei Ausreißern oder neuen
 Szenarioanforderungen bitte direkt dort eskalieren.
@@ -131,6 +134,9 @@ Szenarioanforderungen bitte direkt dort eskalieren.
   Schwellen bleibt. Die Ausgabe von `scripts/analyze_simnet.py` zeigt ebenfalls
   Deltas gegenüber Referenzläufen (falls konfiguriert) und sollte bei positiven
   Werten oberhalb von +50 ms untersucht werden.【F:scripts/analyze_simnet.py†L1-L120】
+  Das Snapshot-Partition-Szenario ergänzt `resume_events`, `max_resume_ms` sowie
+  `chunk_retries`; überschreitet die maximale Resume-Latenz (`--max-resume-latency`,
+  Standard 5 s) den Schwellwert, markiert Nightly den Lauf als fehlgeschlagen.【F:scripts/analyze_simnet.py†L1-L200】
 * **Consensus-Stress:** Die JSON- und CSV-Dateien enthalten p50/p95/max für
   Prover/Verifier, `tamper_vrf`/`tamper_quorum` zählen erwartete Ablehnungen.
   Unerwartete Akzeptanzen (`unexpected_accepts > 0`) gelten als Blocker und

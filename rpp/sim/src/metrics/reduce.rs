@@ -15,9 +15,13 @@ pub struct SimulationSummary {
     pub total_publishes: usize,
     pub total_receives: usize,
     pub duplicates: usize,
+    #[serde(default)]
+    pub chunk_retries: usize,
     pub propagation: Option<PropagationPercentiles>,
     pub mesh_changes: Vec<MeshChangeRecord>,
     pub faults: Vec<FaultRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryMetrics>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<ComparisonReport>,
 }
@@ -28,6 +32,16 @@ pub struct RunMetrics {
     pub total_receives: usize,
     pub duplicates: usize,
     pub propagation: Option<PropagationPercentiles>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct RecoveryMetrics {
+    #[serde(default)]
+    pub resume_latencies_ms: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_resume_latency_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mean_resume_latency_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -151,24 +165,28 @@ mod tests {
             total_publishes: 10,
             total_receives: 20,
             duplicates: 2,
+            chunk_retries: 0,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 100.0,
                 p95_ms: 200.0,
             }),
             mesh_changes: vec![],
             faults: vec![],
+            recovery: None,
             comparison: None,
         };
         let multi = SimulationSummary {
             total_publishes: 12,
             total_receives: 25,
             duplicates: 3,
+            chunk_retries: 1,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 110.0,
                 p95_ms: 205.0,
             }),
             mesh_changes: vec![],
             faults: vec![],
+            recovery: None,
             comparison: None,
         };
 

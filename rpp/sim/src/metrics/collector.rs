@@ -5,7 +5,7 @@ use std::time::Instant;
 use rpp_p2p::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 
-use crate::metrics::reduce::{calculate_percentiles, SimulationSummary};
+use crate::metrics::reduce::{calculate_percentiles, RecoveryMetrics, SimulationSummary};
 
 #[derive(Debug, Clone)]
 pub enum SimEvent {
@@ -66,8 +66,11 @@ pub struct Collector {
     total_publishes: usize,
     total_receives: usize,
     duplicates: usize,
+    chunk_retries: usize,
     mesh_changes: Vec<MeshChangeRecord>,
     faults: Vec<FaultRecord>,
+    pending_partition_end: Option<Instant>,
+    resume_latencies_ms: Vec<f64>,
 }
 
 impl Collector {
@@ -79,8 +82,11 @@ impl Collector {
             total_publishes: 0,
             total_receives: 0,
             duplicates: 0,
+            chunk_retries: 0,
             mesh_changes: Vec::new(),
             faults: Vec::new(),
+            pending_partition_end: None,
+            resume_latencies_ms: Vec::new(),
         }
     }
 
@@ -105,10 +111,16 @@ impl Collector {
                 self.total_receives += 1;
                 if duplicate {
                     self.duplicates += 1;
+                    self.chunk_retries += 1;
                 }
                 if let Some(published_at) = self.publications.get(&message_id) {
                     let delta = timestamp.duration_since(*published_at).as_secs_f64() * 1_000.0;
                     self.latencies_ms.push(delta);
+                }
+                if let Some(partition_end) = self.pending_partition_end.take() {
+                    let resume_latency =
+                        timestamp.duration_since(partition_end).as_secs_f64() * 1_000.0;
+                    self.resume_latencies_ms.push(resume_latency);
                 }
                 tracing::trace!(target = "rpp::sim::metrics", %peer_id, duplicate, "receive recorded");
             }
@@ -133,6 +145,12 @@ impl Collector {
                 detail,
                 timestamp,
             } => {
+                if matches!(kind, FaultEvent::PartitionStart) {
+                    self.pending_partition_end = None;
+                }
+                if matches!(kind, FaultEvent::PartitionEnd) {
+                    self.pending_partition_end = Some(timestamp);
+                }
                 let timestamp_ms = timestamp.duration_since(self.start).as_secs_f64() * 1_000.0;
                 self.faults.push(FaultRecord {
                     kind: fault_event_label(kind).to_string(),
@@ -147,13 +165,40 @@ impl Collector {
         self.latencies_ms
             .sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
         let propagation = calculate_percentiles(&self.latencies_ms);
+        let recovery = if !self.resume_latencies_ms.is_empty() || self.chunk_retries > 0 {
+            let max_resume_latency =
+                self.resume_latencies_ms
+                    .iter()
+                    .cloned()
+                    .fold(None, |acc: Option<f64>, value| match acc {
+                        Some(current) => Some(current.max(value)),
+                        None => Some(value),
+                    });
+            let mean_resume_latency = if self.resume_latencies_ms.is_empty() {
+                None
+            } else {
+                Some(
+                    self.resume_latencies_ms.iter().sum::<f64>()
+                        / self.resume_latencies_ms.len() as f64,
+                )
+            };
+            Some(RecoveryMetrics {
+                resume_latencies_ms: self.resume_latencies_ms.clone(),
+                max_resume_latency_ms: max_resume_latency,
+                mean_resume_latency_ms: mean_resume_latency,
+            })
+        } else {
+            None
+        };
         SimulationSummary {
             total_publishes: self.total_publishes,
             total_receives: self.total_receives,
             duplicates: self.duplicates,
+            chunk_retries: self.chunk_retries,
             propagation,
             mesh_changes: self.mesh_changes,
             faults: self.faults,
+            recovery,
             comparison: None,
         }
     }

@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::metrics::SimulationSummary;
+use crate::metrics::{RecoveryMetrics, SimulationSummary};
 
 pub fn render_compact(summary: &SimulationSummary) -> String {
     let mut out = String::new();
@@ -9,8 +9,8 @@ pub fn render_compact(summary: &SimulationSummary) -> String {
     writeln!(&mut out, "===================").unwrap();
     writeln!(
         &mut out,
-        "Publishes : {:>6}\nReceives  : {:>6}\nDuplicates: {:>6}",
-        summary.total_publishes, summary.total_receives, summary.duplicates,
+        "Publishes : {:>6}\nReceives  : {:>6}\nDuplicates: {:>6}\nRetries   : {:>6}",
+        summary.total_publishes, summary.total_receives, summary.duplicates, summary.chunk_retries,
     )
     .unwrap();
 
@@ -36,6 +36,21 @@ pub fn render_compact(summary: &SimulationSummary) -> String {
         writeln!(&mut out, "Fault events  : none").unwrap();
     } else {
         writeln!(&mut out, "Fault events  : {} entries", summary.faults.len()).unwrap();
+    }
+
+    if let Some(recovery) = &summary.recovery {
+        writeln!(
+            &mut out,
+            "Recovery      : {} resume events",
+            recovery.resume_latencies_ms.len()
+        )
+        .unwrap();
+        if let Some(max) = recovery.max_resume_latency_ms {
+            writeln!(&mut out, "  max resume  : {:>8.2} ms", max).unwrap();
+        }
+        if let Some(mean) = recovery.mean_resume_latency_ms {
+            writeln!(&mut out, "  mean resume : {:>8.2} ms", mean).unwrap();
+        }
     }
 
     if let Some(comparison) = &summary.comparison {
@@ -94,12 +109,18 @@ mod tests {
             total_publishes: 42,
             total_receives: 420,
             duplicates: 7,
+            chunk_retries: 3,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 120.5,
                 p95_ms: 240.75,
             }),
             mesh_changes: vec![],
             faults: vec![],
+            recovery: Some(RecoveryMetrics {
+                resume_latencies_ms: vec![1200.0, 1400.0],
+                max_resume_latency_ms: Some(1400.0),
+                mean_resume_latency_ms: Some(1300.0),
+            }),
             comparison: None,
         };
 
@@ -146,12 +167,14 @@ mod tests {
             total_publishes: 12,
             total_receives: 24,
             duplicates: 2,
+            chunk_retries: 1,
             propagation: Some(PropagationPercentiles {
                 p50_ms: 110.0,
                 p95_ms: 210.0,
             }),
             mesh_changes: vec![],
             faults: vec![],
+            recovery: None,
             comparison: Some(comparison),
         };
 

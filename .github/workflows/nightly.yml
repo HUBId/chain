@@ -202,7 +202,8 @@ jobs:
           python3 scripts/analyze_simnet.py \
             target/simnet/ci-block-pipeline/summaries/ci-block-pipeline.json \
             target/simnet/ci-state-sync-guard/summaries/ci-state-sync-guard.json \
-            target/simnet/consensus-quorum-stress/summaries/consensus_quorum_stress.json
+            target/simnet/consensus-quorum-stress/summaries/consensus_quorum_stress.json \
+            target/simnet/snapshot-partition/summaries/snapshot_partition.json
 
       - name: Package artifacts
         run: |

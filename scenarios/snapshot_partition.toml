@@ -1,0 +1,47 @@
+[sim]
+seed = 1337
+duration_ms = 25000
+
+[topology]
+type = "small_world"
+n = 24
+k = 6
+rewire_p = 0.08
+
+[regions]
+assignments = [
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+]
+
+[links]
+default = { delay_ms = 40, jitter_ms = 6, loss = 0.01 }
+A-B = { delay_ms = 160, jitter_ms = 40, loss = 0.05 }
+
+[traffic.tx]
+publisher_bias = { type = "uniform" }
+
+[[traffic.tx.phases]]
+name = "snapshot-stream"
+duration_ms = 25000
+model = "on_off_bursty"
+on_lambda_per_sec = 14.0
+on_duration_ms = 1200
+off_duration_ms = 400
+
+[metrics]
+json = "summaries/snapshot_partition_run.json"
+csv = "summaries/snapshot_partition_run.csv"
+
+[faults.partition]
+start_ms = 5000
+duration_ms = 7000
+group_a = "A"
+group_b = "B"
+
+[faults.churn]
+start_ms = 11000
+rate_per_min = 80.0
+restart_after_ms = 2500
