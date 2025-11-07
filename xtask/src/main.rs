@@ -175,9 +175,842 @@ fn run_full_test_matrix() -> Result<()> {
     run_simnet_smoke()
 }
 
+#[derive(Default, Deserialize)]
+struct ValidatorConfigSnippet {
+    #[serde(default)]
+    snapshot_dir: Option<String>,
+    #[serde(default)]
+    network: Option<ValidatorNetworkSnippet>,
+}
+
+#[derive(Default, Deserialize)]
+struct ValidatorNetworkSnippet {
+    #[serde(default)]
+    rpc: Option<ValidatorRpcSnippet>,
+}
+
+#[derive(Default, Deserialize)]
+struct ValidatorRpcSnippet {
+    #[serde(default)]
+    listen: Option<String>,
+    #[serde(default)]
+    auth_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RpcSnapshotStatus {
+    session: u64,
+    peer: String,
+    root: String,
+    #[serde(default)]
+    plan_id: Option<String>,
+    #[serde(default)]
+    last_chunk_index: Option<u64>,
+    #[serde(default)]
+    last_update_index: Option<u64>,
+    #[serde(default)]
+    last_update_height: Option<u64>,
+    #[serde(default)]
+    verified: Option<bool>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct ManifestEntry {
+    chunk_total: u64,
+    update_total: Option<u64>,
+    display_alias: Option<String>,
+    aliases: HashSet<String>,
+    source: Option<PathBuf>,
+}
+
+impl ManifestEntry {
+    fn new(chunk_total: u64) -> Self {
+        Self {
+            chunk_total,
+            update_total: None,
+            display_alias: None,
+            aliases: HashSet::new(),
+            source: None,
+        }
+    }
+
+    fn add_alias<S: AsRef<str>>(&mut self, alias: S) {
+        let trimmed = alias.as_ref().trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if self.display_alias.is_none() {
+            self.display_alias = Some(trimmed.to_string());
+        }
+        for variant in alias_variants(trimmed) {
+            if !variant.is_empty() {
+                self.aliases.insert(variant);
+            }
+        }
+    }
+
+    fn matches(&self, candidate: &str) -> bool {
+        if candidate.trim().is_empty() {
+            return false;
+        }
+        alias_variants(candidate)
+            .into_iter()
+            .any(|variant| self.aliases.contains(&variant))
+    }
+
+    fn label(&self) -> Option<String> {
+        if let Some(source) = &self.source {
+            return Some(source.display().to_string());
+        }
+        self.display_alias.clone()
+    }
+
+    fn describe_source(&self) -> Option<String> {
+        if let Some(source) = &self.source {
+            return Some(source.display().to_string());
+        }
+        self.display_alias.clone()
+    }
+}
+
+#[derive(Default)]
+struct ManifestCatalog {
+    entries: Vec<ManifestEntry>,
+}
+
+impl ManifestCatalog {
+    fn merge(&mut self, mut other: ManifestCatalog) {
+        self.entries.append(&mut other.entries);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn find_entry(&self, plan_id: Option<&str>, root: &str) -> Option<&ManifestEntry> {
+        if let Some(identifier) =
+            plan_id.and_then(|value| normalise_string(Some(value.to_string())))
+        {
+            for entry in &self.entries {
+                if entry.matches(&identifier) {
+                    return Some(entry);
+                }
+            }
+        }
+        if !root.trim().is_empty() {
+            for entry in &self.entries {
+                if entry.matches(root) {
+                    return Some(entry);
+                }
+            }
+        }
+        if self.entries.len() == 1 {
+            self.entries.first()
+        } else {
+            None
+        }
+    }
+
+    fn source_labels(&self) -> Vec<String> {
+        let mut labels: Vec<String> = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.describe_source())
+            .collect();
+        labels.sort();
+        labels.dedup();
+        labels
+    }
+}
+
+#[derive(Serialize)]
+struct SnapshotHealthReport {
+    generated_at: String,
+    rpc_base_url: String,
+    manifest_sources: Vec<String>,
+    sessions: Vec<SnapshotSessionReport>,
+}
+
+#[derive(Serialize)]
+struct SnapshotSessionReport {
+    session: u64,
+    peer: String,
+    plan_id: Option<String>,
+    root: String,
+    manifest: Option<String>,
+    chunk_progress: Option<u64>,
+    chunk_total: Option<u64>,
+    update_progress: Option<u64>,
+    update_total: Option<u64>,
+    last_update_height: Option<u64>,
+    verified: Option<bool>,
+    error: Option<String>,
+    cli_ok: bool,
+    anomalies: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SnapshotHealthLogEntry {
+    level: String,
+    message: String,
+    session: u64,
+    plan_id: Option<String>,
+    manifest: Option<String>,
+    chunk_progress: Option<u64>,
+    chunk_total: Option<u64>,
+    update_progress: Option<u64>,
+    update_total: Option<u64>,
+    verified: Option<bool>,
+    cli_status: String,
+    error: Option<String>,
+    anomalies: Vec<String>,
+}
+
+fn run_snapshot_health(args: &[String]) -> Result<()> {
+    let workspace = workspace_root();
+
+    let mut config_path: Option<PathBuf> = None;
+    let mut rpc_url: Option<String> = None;
+    let mut auth_token: Option<String> = None;
+    let mut manifest_path: Option<PathBuf> = None;
+    let mut output_path: Option<PathBuf> = None;
+    let mut rpp_node_bin: Option<PathBuf> = None;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--config requires a value"))?;
+                config_path = Some(PathBuf::from(value));
+            }
+            "--rpc-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--rpc-url requires a value"))?;
+                rpc_url = normalise_string(Some(value.clone()));
+            }
+            "--auth-token" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--auth-token requires a value"))?;
+                auth_token = normalise_string(Some(value.clone()));
+            }
+            "--manifest" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--manifest requires a value"))?;
+                manifest_path = Some(PathBuf::from(value));
+            }
+            "--output" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--output requires a value"))?;
+                output_path = Some(PathBuf::from(value));
+            }
+            "--rpp-node-bin" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--rpp-node-bin requires a value"))?;
+                rpp_node_bin = Some(PathBuf::from(value));
+            }
+            "--help" | "-h" => {
+                snapshot_health_usage();
+                return Ok(());
+            }
+            other => bail!("unknown argument '{other}' for snapshot-health"),
+        }
+    }
+
+    let resolved_config = config_path
+        .map(|path| resolve_path(&workspace, path))
+        .unwrap_or_else(|| workspace.join("config/validator.toml"));
+
+    let config_dir = resolved_config
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workspace.clone());
+
+    let config_snippet = load_validator_config_snippet(&resolved_config)?;
+
+    let mut manifest_catalog = ManifestCatalog::default();
+
+    if let Some(path) = manifest_path {
+        let resolved = resolve_path(&workspace, path);
+        let catalog = load_manifest_catalog_from_path(&resolved)?;
+        manifest_catalog.merge(catalog);
+    }
+
+    if let Some(json_payload) = env::var("SNAPSHOT_MANIFEST_JSON")
+        .ok()
+        .and_then(|value| normalise_string(Some(value)))
+    {
+        let value: JsonValue =
+            serde_json::from_str(&json_payload).context("parse SNAPSHOT_MANIFEST_JSON payload")?;
+        let catalog = load_manifest_catalog_from_value(&value, None, None)?;
+        manifest_catalog.merge(catalog);
+    }
+
+    if manifest_catalog.is_empty() {
+        if let Some(path) = env::var("SNAPSHOT_MANIFEST_PATH")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)))
+            .map(PathBuf::from)
+        {
+            let resolved = resolve_path(&workspace, path);
+            if resolved.exists() {
+                let catalog = load_manifest_catalog_from_path(&resolved)?;
+                manifest_catalog.merge(catalog);
+            }
+        }
+    }
+
+    if manifest_catalog.is_empty() {
+        if let Some(dir) = config_snippet
+            .snapshot_dir
+            .as_ref()
+            .and_then(|value| normalise_string(Some(value.clone())))
+            .map(|value| resolve_relative_path(&config_dir, &value))
+        {
+            let fallback = dir.join("manifest/chunks.json");
+            if fallback.exists() {
+                let catalog = load_manifest_catalog_from_path(&fallback)?;
+                manifest_catalog.merge(catalog);
+            }
+        }
+    }
+
+    if manifest_catalog.is_empty() {
+        bail!("no manifest entries discovered; provide --manifest or set SNAPSHOT_MANIFEST_PATH/SNAPSHOT_MANIFEST_JSON");
+    }
+
+    let rpp_node_bin = rpp_node_bin.map(|path| resolve_path(&workspace, path));
+
+    let explicit_rpc_url = rpc_url;
+    let base_url = resolve_rpc_base_url(explicit_rpc_url.clone(), &config_snippet);
+    let cli_rpc_url = explicit_rpc_url.unwrap_or_else(|| base_url.clone());
+
+    let mut resolved_auth = auth_token;
+    if resolved_auth.is_none() {
+        resolved_auth = env::var("SNAPSHOT_RPC_TOKEN")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)));
+    }
+    if resolved_auth.is_none() {
+        resolved_auth = config_snippet
+            .network
+            .as_ref()
+            .and_then(|net| net.rpc.as_ref())
+            .and_then(|rpc| rpc.auth_token.clone())
+            .and_then(|value| normalise_string(Some(value)));
+    }
+
+    let http_client = HttpClient::builder()
+        .timeout(StdDuration::from_secs(30))
+        .build()
+        .context("construct snapshot RPC client")?;
+
+    let sessions =
+        fetch_active_snapshot_sessions(&http_client, &base_url, resolved_auth.as_deref())?;
+
+    let mut reports = Vec::new();
+    let mut unhealthy = 0usize;
+
+    for status in sessions {
+        let manifest_entry = manifest_catalog.find_entry(status.plan_id.as_deref(), &status.root);
+        let manifest_label = manifest_entry.and_then(|entry| entry.label());
+        let chunk_total = manifest_entry.map(|entry| entry.chunk_total);
+        let update_total = manifest_entry.and_then(|entry| entry.update_total);
+
+        let mut anomalies = Vec::new();
+
+        if manifest_entry.is_none() {
+            anomalies.push("no manifest entry matched session plan".to_string());
+        }
+
+        if let Some(total) = chunk_total {
+            if total == 0 {
+                anomalies.push("manifest declares zero chunks".to_string());
+            }
+        }
+
+        let chunk_progress = status.last_chunk_index.map(|value| value + 1);
+        if let Some(total) = chunk_total {
+            if let Some(progress) = chunk_progress {
+                if progress > total {
+                    anomalies.push(format!(
+                        "chunk progress {progress} exceeds manifest total {total}"
+                    ));
+                }
+            } else {
+                anomalies.push("status missing last_chunk_index".to_string());
+            }
+        }
+
+        let update_progress = status.last_update_index.map(|value| value + 1);
+        if let Some(total) = update_total {
+            if let Some(progress) = update_progress {
+                if progress > total {
+                    anomalies.push(format!(
+                        "update progress {progress} exceeds manifest total {total}"
+                    ));
+                }
+            }
+        }
+
+        if let Some(error) = status
+            .error
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            anomalies.push(format!("snapshot reported error: {error}"));
+        }
+
+        if let (Some(total), Some(progress)) = (chunk_total, chunk_progress) {
+            if progress == total && status.verified != Some(true) {
+                anomalies.push("chunk replay complete but session not verified".to_string());
+            }
+        }
+
+        let cli_result = run_rpp_node_snapshot_status(
+            status.session,
+            &resolved_config,
+            &cli_rpc_url,
+            resolved_auth.as_deref(),
+            rpp_node_bin.as_deref(),
+        );
+
+        let cli_ok = match cli_result {
+            Ok(_) => true,
+            Err(err) => {
+                anomalies.push(format!("rpp-node snapshot status failed: {err}"));
+                false
+            }
+        };
+
+        let log_entry = SnapshotHealthLogEntry {
+            level: if anomalies.is_empty() {
+                "info".to_string()
+            } else {
+                "error".to_string()
+            },
+            message: if anomalies.is_empty() {
+                "snapshot healthy".to_string()
+            } else {
+                "snapshot health inconsistencies detected".to_string()
+            },
+            session: status.session,
+            plan_id: status.plan_id.clone(),
+            manifest: manifest_label.clone(),
+            chunk_progress,
+            chunk_total,
+            update_progress,
+            update_total,
+            verified: status.verified,
+            cli_status: if cli_ok {
+                "ok".to_string()
+            } else {
+                "failed".to_string()
+            },
+            error: status.error.clone(),
+            anomalies: anomalies.clone(),
+        };
+
+        println!("{}", serde_json::to_string(&log_entry)?);
+
+        if !anomalies.is_empty() {
+            unhealthy += 1;
+        }
+
+        reports.push(SnapshotSessionReport {
+            session: status.session,
+            peer: status.peer,
+            plan_id: status.plan_id,
+            root: status.root,
+            manifest: manifest_label,
+            chunk_progress,
+            chunk_total,
+            update_progress,
+            update_total,
+            last_update_height: status.last_update_height,
+            verified: status.verified,
+            error: status.error,
+            cli_ok,
+            anomalies,
+        });
+    }
+
+    let generated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .context("format snapshot health timestamp")?;
+
+    let report = SnapshotHealthReport {
+        generated_at,
+        rpc_base_url: base_url.clone(),
+        manifest_sources: manifest_catalog.source_labels(),
+        sessions: reports,
+    };
+
+    if let Some(path) = output_path {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("create output directory {}", parent.display()))?;
+            }
+        }
+        let data = serde_json::to_vec_pretty(&report)?;
+        fs::write(&path, data)
+            .with_context(|| format!("write snapshot health report to {}", path.display()))?;
+    }
+
+    if unhealthy > 0 {
+        bail!("snapshot health check detected {unhealthy} failing session(s)");
+    }
+
+    Ok(())
+}
+
+fn load_validator_config_snippet(path: &Path) -> Result<ValidatorConfigSnippet> {
+    if !path.exists() {
+        bail!("validator configuration not found at {}", path.display());
+    }
+    let data = fs::read_to_string(path)
+        .with_context(|| format!("read validator configuration from {}", path.display()))?;
+    toml::from_str(&data)
+        .with_context(|| format!("parse validator configuration from {}", path.display()))
+}
+
+fn resolve_path(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+fn resolve_relative_path(base: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+fn resolve_rpc_base_url(explicit: Option<String>, config: &ValidatorConfigSnippet) -> String {
+    if let Some(url) = explicit.and_then(|value| normalise_string(Some(value))) {
+        return normalise_base_url(&url);
+    }
+    if let Some(url) = env::var("SNAPSHOT_RPC_URL")
+        .ok()
+        .and_then(|value| normalise_string(Some(value)))
+    {
+        return normalise_base_url(&url);
+    }
+    if let Some(listen) = config
+        .network
+        .as_ref()
+        .and_then(|net| net.rpc.as_ref())
+        .and_then(|rpc| rpc.listen.clone())
+        .and_then(|value| normalise_string(Some(value)))
+    {
+        return normalise_base_url(&listen);
+    }
+    normalise_base_url("127.0.0.1:7070")
+}
+
+fn normalise_base_url(value: &str) -> String {
+    let trimmed = value.trim();
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else {
+        format!("http://{}", trimmed)
+    };
+    with_scheme.trim_end_matches('/').to_string()
+}
+
+fn fetch_active_snapshot_sessions(
+    client: &HttpClient,
+    base_url: &str,
+    auth_token: Option<&str>,
+) -> Result<Vec<RpcSnapshotStatus>> {
+    let endpoint = format!("{}/p2p/snapshots", base_url.trim_end_matches('/'));
+    let mut request = client.get(&endpoint);
+    if let Some(token) = auth_token {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .with_context(|| format!("query snapshot sessions from {endpoint}"))?
+        .error_for_status()
+        .with_context(|| format!("snapshot status endpoint returned error status at {endpoint}"))?
+        .json::<Vec<RpcSnapshotStatus>>()
+        .with_context(|| format!("decode snapshot status list from {endpoint}"))?;
+    Ok(response)
+}
+
+fn run_rpp_node_snapshot_status(
+    session: u64,
+    config_path: &Path,
+    rpc_url: &str,
+    auth_token: Option<&str>,
+    binary: Option<&Path>,
+) -> Result<()> {
+    if let Some(bin) = binary {
+        let mut command = Command::new(bin);
+        command
+            .current_dir(workspace_root())
+            .arg("validator")
+            .arg("snapshot")
+            .arg("status")
+            .arg("--config")
+            .arg(config_path)
+            .arg("--session")
+            .arg(session.to_string())
+            .arg("--rpc-url")
+            .arg(rpc_url);
+        if let Some(token) = auth_token {
+            command.arg("--auth-token").arg(token);
+        }
+        run_command(command, &format!("rpp-node snapshot status ({session})"))
+    } else {
+        let mut command = Command::new("cargo");
+        command
+            .current_dir(workspace_root())
+            .arg("run")
+            .arg("--quiet")
+            .arg("--package")
+            .arg("rpp-node")
+            .arg("--")
+            .arg("validator")
+            .arg("snapshot")
+            .arg("status")
+            .arg("--config")
+            .arg(config_path)
+            .arg("--session")
+            .arg(session.to_string())
+            .arg("--rpc-url")
+            .arg(rpc_url);
+        if let Some(token) = auth_token {
+            command.arg("--auth-token").arg(token);
+        }
+        run_command(command, &format!("rpp-node snapshot status ({session})"))
+    }
+}
+
+fn alias_variants(value: &str) -> Vec<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut variants = Vec::new();
+    let lower = trimmed.to_ascii_lowercase();
+    variants.push(lower.clone());
+    if let Some(stripped) = lower.strip_prefix("0x") {
+        variants.push(stripped.to_string());
+    }
+    if let Some(name) = Path::new(trimmed)
+        .file_name()
+        .and_then(|value| value.to_str())
+    {
+        let lower_name = name.to_ascii_lowercase();
+        variants.push(lower_name.clone());
+        if let Some(stripped) = lower_name.strip_prefix("0x") {
+            variants.push(stripped.to_string());
+        }
+        if let Some(stem) = Path::new(name).file_stem().and_then(|value| value.to_str()) {
+            let lower_stem = stem.to_ascii_lowercase();
+            variants.push(lower_stem.clone());
+            if let Some(stripped) = lower_stem.strip_prefix("0x") {
+                variants.push(stripped.to_string());
+            }
+        }
+    }
+    variants.sort();
+    variants.dedup();
+    variants
+}
+
+fn load_manifest_catalog_from_path(path: &Path) -> Result<ManifestCatalog> {
+    let data = fs::read_to_string(path)
+        .with_context(|| format!("read manifest file {}", path.display()))?;
+    let json: JsonValue = serde_json::from_str(&data)
+        .with_context(|| format!("parse manifest file {}", path.display()))?;
+    load_manifest_catalog_from_value(&json, path.parent(), Some(path))
+}
+
+fn load_manifest_catalog_from_value(
+    value: &JsonValue,
+    base_dir: Option<&Path>,
+    source_path: Option<&Path>,
+) -> Result<ManifestCatalog> {
+    if let Some(segments) = value.get("segments").and_then(|v| v.as_array()) {
+        let mut entry = ManifestEntry::new(segments.len() as u64);
+        if let Some(path) = source_path {
+            entry.source = Some(path.to_path_buf());
+            entry.add_alias(path.display().to_string());
+        }
+        if let Some(version) = value.get("version").and_then(|v| v.as_str()) {
+            entry.add_alias(version);
+        }
+        return Ok(ManifestCatalog {
+            entries: vec![entry],
+        });
+    }
+
+    if let Some(snapshots) = value.get("snapshots").and_then(|v| v.as_array()) {
+        let bundle_root = value
+            .get("bundle_root")
+            .and_then(|v| v.as_str())
+            .and_then(|v| {
+                let trimmed = v.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(trimmed))
+                }
+            });
+        let mut catalog = ManifestCatalog::default();
+        for snapshot in snapshots {
+            if let Some(entry) =
+                load_manifest_summary_entry(snapshot, base_dir, bundle_root.as_ref())?
+            {
+                catalog.entries.push(entry);
+            }
+        }
+        return Ok(catalog);
+    }
+
+    bail!("unsupported manifest format: expected chunk manifest or summary");
+}
+
+fn load_manifest_summary_entry(
+    value: &JsonValue,
+    base_dir: Option<&Path>,
+    bundle_root: Option<&PathBuf>,
+) -> Result<Option<ManifestEntry>> {
+    let obj = match value.as_object() {
+        Some(obj) => obj,
+        None => return Ok(None),
+    };
+
+    let plan_path = obj
+        .get("plan")
+        .and_then(|v| v.as_str())
+        .map(|v| resolve_summary_path(base_dir, bundle_root, v));
+
+    let plan_counts = if let Some(plan) = plan_path.as_ref() {
+        Some(
+            load_plan_counts(plan)
+                .with_context(|| format!("load state-sync plan from {}", plan.display()))?,
+        )
+    } else {
+        None
+    };
+
+    let chunk_total = if let Some(count) = obj.get("chunk_count").and_then(|v| v.as_u64()) {
+        count
+    } else if let Some(counts) = plan_counts.as_ref().and_then(|counts| counts.chunk_count) {
+        counts
+    } else {
+        bail!("manifest summary entry missing chunk_count and plan metadata");
+    };
+
+    let mut entry = ManifestEntry::new(chunk_total);
+
+    if let Some(plan) = plan_counts {
+        entry.update_total = plan.update_count;
+    }
+
+    if let Some(plan) = plan_path {
+        entry.add_alias(plan.display().to_string());
+        if let Some(stem) = plan.file_stem().and_then(|stem| stem.to_str()) {
+            entry.add_alias(stem);
+        }
+    }
+
+    if let Some(manifest) = obj
+        .get("manifest")
+        .and_then(|v| v.as_str())
+        .map(|v| resolve_summary_path(base_dir, bundle_root, v))
+    {
+        entry.source = Some(manifest.clone());
+        entry.add_alias(manifest.display().to_string());
+        if let Some(stem) = manifest.file_stem().and_then(|stem| stem.to_str()) {
+            entry.add_alias(stem);
+        }
+    }
+
+    if let Some(id) = obj.get("id").and_then(|v| v.as_str()) {
+        entry.add_alias(id);
+    }
+
+    if let Some(root) = obj.get("state_root").and_then(|v| v.as_str()) {
+        entry.add_alias(root);
+    }
+
+    if let Some(height) = obj.get("block_height").and_then(|v| v.as_u64()) {
+        entry.add_alias(format!("height-{height}"));
+    }
+
+    Ok(Some(entry))
+}
+
+struct PlanCounts {
+    chunk_count: Option<u64>,
+    update_count: Option<u64>,
+}
+
+fn load_plan_counts(path: &Path) -> Result<PlanCounts> {
+    let data = fs::read_to_string(path)
+        .with_context(|| format!("read state-sync plan from {}", path.display()))?;
+    let json: JsonValue = serde_json::from_str(&data)
+        .with_context(|| format!("parse state-sync plan from {}", path.display()))?;
+    let chunk_count = json
+        .get("chunks")
+        .and_then(|value| value.as_array())
+        .map(|chunks| chunks.len() as u64);
+    let update_count = json
+        .get("updates")
+        .and_then(|value| value.as_array())
+        .map(|updates| updates.len() as u64);
+    Ok(PlanCounts {
+        chunk_count,
+        update_count,
+    })
+}
+
+fn resolve_summary_path(
+    base_dir: Option<&Path>,
+    bundle_root: Option<&PathBuf>,
+    value: &str,
+) -> PathBuf {
+    let candidate = PathBuf::from(value);
+    if candidate.is_absolute() {
+        candidate
+    } else if let Some(root) = bundle_root {
+        let resolved_root = if root.is_absolute() {
+            root.clone()
+        } else if let Some(base) = base_dir {
+            base.join(root)
+        } else {
+            root.clone()
+        };
+        resolved_root.join(candidate)
+    } else if let Some(base) = base_dir {
+        base.join(candidate)
+    } else {
+        candidate
+    }
+}
+
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-health      Audit snapshot streaming progress against manifest totals",
     );
 }
 
@@ -190,6 +1023,12 @@ fn proof_metadata_usage() {
 fn report_timetoke_slo_usage() {
     eprintln!(
         "usage: cargo xtask report-timetoke-slo [--prometheus-url <url>] [--bearer-token <token>] [--metrics-log <path>] [--output <path>]\n\nSummarises the Timetoke replay success rate and latency SLOs across the last seven days. The command falls back to the environment variables TIMETOKE_PROMETHEUS_URL, TIMETOKE_PROMETHEUS_BEARER, and TIMETOKE_METRICS_LOG when CLI arguments are not provided.",
+    );
+}
+
+fn snapshot_health_usage() {
+    eprintln!(
+        "usage: cargo xtask snapshot-health [--config <path>] [--rpc-url <url>] [--auth-token <token>] [--manifest <path>] [--output <path>] [--rpp-node-bin <path>]\n\nPolls active snapshot sessions via the validator RPC, executes the `rpp-node validator snapshot status` CLI for each session, and verifies chunk progress against the persisted manifest totals.",
     );
 }
 
@@ -648,6 +1487,7 @@ fn main() -> Result<()> {
         "plonky3-setup" => regenerate_plonky3_setup(&argv),
         "plonky3-verify" => verify_plonky3_setup(),
         "report-timetoke-slo" => report_timetoke_slo(&argv),
+        "snapshot-health" => run_snapshot_health(&argv),
         "help" => {
             usage();
             Ok(())
@@ -703,9 +1543,15 @@ fn regenerate_plonky3_setup(args: &[String]) -> Result<()> {
                     .ok_or_else(|| anyhow!("--circuits requires a value"))?;
                 circuits.extend(
                     value
-                        .split(|ch| ch == ',' || ch.is_whitespace())
-                        .filter(|segment| !segment.trim().is_empty())
-                        .map(|segment| segment.trim().to_string()),
+                        .split(|ch: char| ch == ',' || ch.is_whitespace())
+                        .filter_map(|segment: &str| {
+                            let trimmed = segment.trim();
+                            if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(trimmed.to_string())
+                            }
+                        }),
                 );
             }
             "--toolchain-version" => {
@@ -919,7 +1765,8 @@ fn materialise_fixture_artifacts(circuits: &[String]) -> Result<(TempDir, PathBu
         }
     }
 
-    Ok((temp_dir, temp_dir.path().to_path_buf()))
+    let dir_path = temp_dir.path().to_path_buf();
+    Ok((temp_dir, dir_path))
 }
 
 fn generate_proof_metadata(args: &[String]) -> Result<()> {

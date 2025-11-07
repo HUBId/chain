@@ -42,6 +42,34 @@ playbook.【F:docs/observability/network_snapshots.md†L1-L74】【F:docs/obser
 All snapshot RPC calls require the `Authorization: Bearer` header whenever RPC
 authentication is enabled; missing headers return `401 Unauthorized`.【F:docs/network/snapshots.md†L74-L117】
 
+### Automated health audit
+
+The nightly workflow runs `cargo xtask snapshot-health` against the production
+validator RPC and persists the JSON report as the `snapshot-health-report`
+artifact. The task invokes `rpp-node validator snapshot status` for every active
+session, cross-checks the reported chunk/update indices against the local
+manifest totals, and emits structured JSON logs so any divergence fails the job
+and pages on-call engineers.【F:.github/workflows/nightly.yml†L29-L64】【F:xtask/src/main.rs†L214-L596】
+
+When investigating a snapshot incident, re-run the audit locally to capture the
+current state before making changes. Configure the RPC endpoint and optional
+manifest overrides via environment variables, then write the report to disk for
+the incident log:
+
+```sh
+export SNAPSHOT_RPC_URL="https://validator.example.net:7070"
+export SNAPSHOT_RPC_TOKEN="$(pass snapshots/prod-token)"
+export SNAPSHOT_MANIFEST_PATH="/var/lib/rpp-node/snapshots/manifest/chunks.json"
+cargo xtask snapshot-health \
+  --config /etc/rpp/validator.toml \
+  --output snapshot-health-report.json
+```
+
+The command prints per-session JSON entries highlighting any anomalies and exits
+non-zero if a session stalls, reports an error string, or exceeds the manifest
+totals. Attach the generated report to the incident timeline so it can be
+compared with the nightly artifact.【F:xtask/src/main.rs†L214-L596】
+
 ## Step 1 – Verify control-plane health
 
 1. List active sessions:
