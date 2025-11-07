@@ -34,6 +34,11 @@ recovery_playbook = "docs/deployment/staged_rollout.md#testnet-recovery"
 policy_path = "./data/p2p/admission_policies.json"
 audit_retention_days = 30
 
+[admission_reconciler]
+cadence_secs = 60
+drift_alert_threshold = 1
+max_audit_lag_secs = 300
+
 [network.admission.defaults.blocks]
 subscribe = "tl0"
 publish = "tl3"

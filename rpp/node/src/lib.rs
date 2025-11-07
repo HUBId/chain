@@ -66,6 +66,7 @@ use rpp_chain::wallet::Wallet;
 
 use crate::config::{PruningCliOverrides, PruningOverrides};
 use crate::pipeline::PipelineHookGuard;
+use crate::services::admission_reconciler::{AdmissionReconciler, AdmissionReconcilerSettings};
 use crate::services::pruning::PruningService;
 use crate::services::uptime::{cadence_from_config, UptimeScheduler};
 
@@ -739,6 +740,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
     let mut node_handle: Option<NodeHandle> = None;
     let mut node_runtime: Option<JoinHandle<()>> = None;
     let mut pruning_service: Option<PruningService> = None;
+    let mut admission_reconciler: Option<AdmissionReconciler> = None;
     let mut uptime_service: Option<UptimeScheduler> = None;
     let mut pruning_api: Option<Arc<dyn PruningServiceApi>> = None;
     let mut pruning_status_stream: Option<watch::Receiver<Option<PruningJobStatus>>> = None;
@@ -780,6 +782,14 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         pruning_status_stream = Some(status_rx);
         pruning_api = Some(Arc::new(api_handle) as Arc<dyn PruningServiceApi>);
         pruning_service = Some(service);
+
+        let reconciler_settings = AdmissionReconcilerSettings::from_config(&config);
+        let reconciler = AdmissionReconciler::start(
+            handle.clone(),
+            config.network.admission.policy_path.clone(),
+            reconciler_settings,
+        );
+        admission_reconciler = Some(reconciler);
 
         info!(
             target = "rpc",
@@ -1048,6 +1058,7 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
                 runtime,
                 pruning_service.take(),
                 uptime_service.take(),
+                admission_reconciler.take(),
             )) as _),
             _ => Some(Box::pin(wait_for_signal_shutdown()) as _),
         };
@@ -1429,6 +1440,7 @@ async fn wait_for_node_shutdown(
     mut runtime: JoinHandle<()>,
     pruning: Option<PruningService>,
     mut uptime: Option<UptimeScheduler>,
+    admission_reconciler: Option<AdmissionReconciler>,
 ) -> ShutdownOutcome {
     tokio::pin!(runtime);
 
@@ -1489,6 +1501,9 @@ async fn wait_for_node_shutdown(
         service.shutdown().await;
     }
     if let Some(service) = uptime.as_ref() {
+        service.shutdown().await;
+    }
+    if let Some(service) = admission_reconciler.as_ref() {
         service.shutdown().await;
     }
 
