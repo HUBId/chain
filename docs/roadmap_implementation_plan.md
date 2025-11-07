@@ -18,6 +18,9 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 
 ## Phase 2 Exit Criteria (Arbeitsstand)
 
+Die vollständige Artefakt- und Nachweisliste für die Freigabe ist in der
+[Phase‑2 Acceptance Checklist](runbooks/phase2_acceptance.md) gebündelt.
+
 ## Phase 2 – Test Suites abgeschlossen (Stand: 2026-04-07)
 
 Die dreistufige Test-Suite aus `cargo xtask`-Läufen ist vollständig grün und in die verpflichtenden Branch-Protections eingebunden. Damit sind die Unit-, Integrations- und Simulationsabdeckungen aus Phase 2 messbar abgeschlossen.

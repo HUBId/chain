@@ -16,7 +16,8 @@ workflows exposed by the running node.
 > [`build_release.sh`](../scripts/build_release.sh) ·
 > [`verify_release_features.sh`](../scripts/verify_release_features.sh) ·
 > [`ensure_prover_backend`](../rpp/node/src/lib.rs) ·
-> [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist)
+> [Release pipeline checklist](../RELEASE.md#release-pipeline-checklist) ·
+> [Phase‑2 Acceptance Checklist](./runbooks/phase2_acceptance.md)
 > · [Plonky3 runbook](./runbooks/plonky3.md)
 
 ## Build and install the CLI

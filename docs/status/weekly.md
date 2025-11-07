@@ -16,7 +16,8 @@
 ## Phase 2 Fortschritt (Kalenderwoche 38/2025)
 
 **Zusammenfassung:** VRF-/Quorum-Manipulationen lassen sich nun reproduzierbar testen und im Monitoring
-nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phase‑2-Audits.
+nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phase‑2-Audits. Alle
+Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_acceptance.md) zusammengeführt.
 
 ### Highlights
 - **Circuit Enforcement:** ENG‑742/ENG‑743 ausgeliefert – STWO rechnet VRF-Transkripte
