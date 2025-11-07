@@ -24,11 +24,23 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
         f"  publishes: {summary.get('total_publishes', 0)}",
         f"  receives: {summary.get('total_receives', 0)}",
         f"  duplicates: {summary.get('duplicates', 0)}",
+        f"  chunk_retries: {summary.get('chunk_retries', 0)}",
     ]
     if p50 is not None and p95 is not None:
         lines.append(f"  propagation_ms: p50={p50:.2f}, p95={p95:.2f}")
     else:
         lines.append("  propagation_ms: n/a")
+
+    recovery = summary.get("recovery") or {}
+    resume_events = len(recovery.get("resume_latencies_ms", []) or [])
+    if resume_events:
+        lines.append(f"  resume_events: {resume_events}")
+        max_resume = recovery.get("max_resume_latency_ms")
+        mean_resume = recovery.get("mean_resume_latency_ms")
+        if max_resume is not None:
+            lines.append(f"  max_resume_ms: {max_resume:.2f}")
+        if mean_resume is not None:
+            lines.append(f"  mean_resume_ms: {mean_resume:.2f}")
 
     comparison = summary.get("comparison")
     if comparison:
@@ -115,6 +127,12 @@ def main(argv: List[str]) -> int:
         default=0,
         help="Fail if more than this many tampered consensus proofs are accepted",
     )
+    parser.add_argument(
+        "--max-resume-latency",
+        type=float,
+        default=5000.0,
+        help="Fail if the recovery max resume latency exceeds this threshold (ms)",
+    )
     args = parser.parse_args(argv)
 
     failures: List[str] = []
@@ -147,6 +165,13 @@ def main(argv: List[str]) -> int:
         if p95 is not None and p95 > args.max_propagation_p95:
             failures.append(
                 f"{path} propagation p95 {p95:.2f}ms exceeds threshold {args.max_propagation_p95:.2f}ms"
+            )
+
+        recovery = summary.get("recovery") or {}
+        max_resume = recovery.get("max_resume_latency_ms")
+        if max_resume is not None and max_resume > args.max_resume_latency:
+            failures.append(
+                f"{path} recovery max resume {max_resume:.2f}ms exceeds threshold {args.max_resume_latency:.2f}ms"
             )
 
     if failures:

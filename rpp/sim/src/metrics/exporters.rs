@@ -40,6 +40,10 @@ pub fn export_csv<P: AsRef<Path>>(path: P, summary: &SimulationSummary) -> Resul
         summary.total_receives.to_string(),
     ])?;
     writer.write_record(&["duplicates".to_string(), summary.duplicates.to_string()])?;
+    writer.write_record(&[
+        "chunk_retries".to_string(),
+        summary.chunk_retries.to_string(),
+    ])?;
 
     if let Some(propagation) = &summary.propagation {
         writer.write_record(&[
@@ -57,6 +61,22 @@ pub fn export_csv<P: AsRef<Path>>(path: P, summary: &SimulationSummary) -> Resul
         summary.mesh_changes.len().to_string(),
     ])?;
     writer.write_record(&["fault_events".to_string(), summary.faults.len().to_string()])?;
+
+    if let Some(recovery) = &summary.recovery {
+        writer.write_record(&[
+            "recovery_resume_events".to_string(),
+            recovery.resume_latencies_ms.len().to_string(),
+        ])?;
+        if let Some(max) = recovery.max_resume_latency_ms {
+            writer.write_record(&["recovery_max_resume_ms".to_string(), format!("{:.3}", max)])?;
+        }
+        if let Some(mean) = recovery.mean_resume_latency_ms {
+            writer.write_record(&[
+                "recovery_mean_resume_ms".to_string(),
+                format!("{:.3}", mean),
+            ])?;
+        }
+    }
 
     writer.flush()?;
     Ok(())
@@ -82,12 +102,18 @@ mod tests {
             total_publishes: 10,
             total_receives: 20,
             duplicates: 3,
+            chunk_retries: 1,
             propagation: Some(super::super::reduce::PropagationPercentiles {
                 p50_ms: 120.0,
                 p95_ms: 340.5,
             }),
             mesh_changes: Vec::new(),
             faults: Vec::new(),
+            recovery: Some(super::super::reduce::RecoveryMetrics {
+                resume_latencies_ms: vec![1500.0],
+                max_resume_latency_ms: Some(1500.0),
+                mean_resume_latency_ms: Some(1500.0),
+            }),
             comparison: None,
         }
     }

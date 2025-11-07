@@ -1,0 +1,16 @@
+{
+  "name": "snapshot-partition",
+  "description": "Stream pruning snapshots under packet loss, latency, and temporary partitions",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/snapshot_partition.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/snapshot_partition.json"
+  },
+  "consensus": null
+}
