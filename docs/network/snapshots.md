@@ -31,6 +31,17 @@ correct offsets after reconnecting.【F:rpp/p2p/src/behaviour/snapshots.rs†L89
 provider translates it into a `SnapshotsResponse::Resume` that advertises the
 next chunk/update indices that should be requested.【F:rpp/p2p/src/behaviour/snapshots.rs†L780-L957】
 
+The runtime snapshot provider rejects resumes that fall behind the latest
+persisted acknowledgement or attempt to skip ahead of the advertised totals.
+`resume_session` bounds the requested chunk and update indices by the plan
+totals and the most recent confirmed offsets; regressed indices raise
+`PipelineError::SnapshotVerification` errors that propagate back through the
+runtime and RPC layers.【F:rpp/runtime/node.rs†L1670-L1724】【F:rpp/rpc/api.rs†L2958-L2966】 Operators invoking
+`POST /p2p/snapshots` with a `resume` marker receive the same error payload, so
+resuming with stale offsets produces a `500` response describing the offending
+chunk or update. Integration tests cover both the HTTP and runtime handle
+surfaces to guard the behaviour.【F:tests/network/snapshots_resume.rs†L1-L310】
+
 Acknowledge messages let consumers confirm ingestion of specific artefacts. The
 provider receives `Ack` requests, persists the acknowledgement, and echoes a
 matching response; outbound errors trigger `SnapshotProtocolError::Outbound`

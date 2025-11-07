@@ -1,68 +1,29 @@
-use std::net::{SocketAddr, TcpListener};
+use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
-use rpp_chain::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_chain::node::NodeHandle;
 use rpp_p2p::SnapshotSessionId;
 
 #[path = "../support/mod.rs"]
 mod support;
 
-use support::TestCluster;
+mod snapshots_common;
 
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(60);
-const SNAPSHOT_POLL_TIMEOUT: Duration = Duration::from_secs(60);
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const SNAPSHOT_BUILD_DELAY: Duration = Duration::from_secs(10);
-
-#[derive(Debug, Serialize)]
-struct StartSnapshotStreamRequest {
-    peer: String,
-    chunk_size: u32,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct SnapshotStreamStatusResponse {
-    session: u64,
-    peer: String,
-    root: String,
-    #[serde(default)]
-    last_chunk_index: Option<u64>,
-    #[serde(default)]
-    last_update_index: Option<u64>,
-    #[serde(default)]
-    last_update_height: Option<u64>,
-    #[serde(default)]
-    verified: Option<bool>,
-    #[serde(default)]
-    error: Option<String>,
-}
+use snapshots_common::{
+    default_chunk_size, start_snapshot_cluster, SnapshotStreamStatusResponse,
+    StartSnapshotStreamRequest, NETWORK_TIMEOUT, POLL_INTERVAL, SNAPSHOT_BUILD_DELAY,
+    SNAPSHOT_POLL_TIMEOUT,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_streams_verify_via_network_rpc() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let mut cluster = TestCluster::start_with(2, |cfg, idx| {
-        let metrics_listener = TcpListener::bind("127.0.0.1:0").context("bind metrics listener")?;
-        let metrics_addr = metrics_listener
-            .local_addr()
-            .context("resolve metrics listener address")?;
-        drop(metrics_listener);
-
-        cfg.rollout.feature_gates.reconstruction = true;
-        cfg.rollout.feature_gates.recursive_proofs = true;
-        cfg.rollout.telemetry.enabled = true;
-        cfg.rollout.telemetry.metrics.listen = Some(metrics_addr);
-        if idx == 0 {
-            cfg.network.p2p.bootstrap_peers.clear();
-        }
-        Ok(())
-    })
-    .await?;
+    let mut cluster = start_snapshot_cluster().await?;
 
     let result = async {
         cluster
@@ -87,7 +48,7 @@ async fn snapshot_streams_verify_via_network_rpc() -> Result<()> {
 
         let request = StartSnapshotStreamRequest {
             peer: provider_peer,
-            chunk_size: DEFAULT_STATE_SYNC_CHUNK as u32,
+            chunk_size: default_chunk_size(),
         };
 
         let consumer_addr = consumer.config.network.rpc.listen;
@@ -261,23 +222,7 @@ async fn snapshot_streams_verify_via_network_rpc() -> Result<()> {
 async fn snapshot_sessions_persist_across_provider_restart() -> Result<()> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let mut cluster = TestCluster::start_with(2, |cfg, idx| {
-        let metrics_listener = TcpListener::bind("127.0.0.1:0").context("bind metrics listener")?;
-        let metrics_addr = metrics_listener
-            .local_addr()
-            .context("resolve metrics listener address")?;
-        drop(metrics_listener);
-
-        cfg.rollout.feature_gates.reconstruction = true;
-        cfg.rollout.feature_gates.recursive_proofs = true;
-        cfg.rollout.telemetry.enabled = true;
-        cfg.rollout.telemetry.metrics.listen = Some(metrics_addr);
-        if idx == 0 {
-            cfg.network.p2p.bootstrap_peers.clear();
-        }
-        Ok(())
-    })
-    .await?;
+    let mut cluster = start_snapshot_cluster().await?;
 
     let result = async {
         cluster
