@@ -200,6 +200,7 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
     fn resume_session(
         &self,
         session_id: SnapshotSessionId,
+        _plan_id: &str,
         chunk_index: u64,
         update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error> {
@@ -487,7 +488,12 @@ async fn snapshot_stream_pause_and_resume() {
                                 let next_update = 0;
                                 client.force_clear_snapshot_pending(session);
                                 client
-                                    .resume_snapshot_stream(session, next_chunk, next_update)
+                                    .resume_snapshot_stream(
+                                        session,
+                                        root_hex.clone(),
+                                        next_chunk,
+                                        next_update,
+                                    )
                                     .expect("resume request");
                                 resumed = true;
                             }
@@ -628,7 +634,12 @@ async fn snapshot_resume_rejects_invalid_offsets() {
                                 resume_attempted = true;
                                 client.force_clear_snapshot_pending(event_session);
                                 client
-                                    .resume_snapshot_stream(event_session, 0, 0)
+                                    .resume_snapshot_stream(
+                                        event_session,
+                                        root_hex.clone(),
+                                        0,
+                                        0,
+                                    )
                                     .expect("resume request");
                             }
                         }

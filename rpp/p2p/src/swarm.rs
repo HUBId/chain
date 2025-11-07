@@ -660,6 +660,7 @@ struct PingReporter {
 struct SnapshotSessionState {
     peer: PeerId,
     root: String,
+    plan_id: String,
     total_chunks: Option<u64>,
     total_updates: Option<u64>,
     next_chunk: u64,
@@ -678,6 +679,7 @@ impl SnapshotSessionState {
         Self {
             peer,
             root,
+            plan_id: root.clone(),
             total_chunks: None,
             total_updates: None,
             next_chunk: 0,
@@ -1261,6 +1263,7 @@ impl Network {
     pub fn resume_snapshot_stream(
         &mut self,
         session: SnapshotSessionId,
+        plan_id: String,
         next_chunk: u64,
         next_update: u64,
     ) -> Result<(), NetworkError> {
@@ -1285,13 +1288,14 @@ impl Network {
         if let Some(state) = self.snapshot_sessions.get_mut(&session) {
             state.next_chunk = next_chunk;
             state.next_update = next_update;
+            state.plan_id = plan_id.clone();
         }
 
-        if let Some(request_id) = self
-            .swarm
-            .behaviour_mut()
-            .snapshots
-            .request_resume(peer.clone(), session)
+        if let Some(request_id) =
+            self.swarm
+                .behaviour_mut()
+                .snapshots
+                .request_resume(peer.clone(), session, plan_id)
         {
             if let Some(state) = self.snapshot_sessions.get_mut(&session) {
                 state.pending_request = Some(request_id);
@@ -1811,6 +1815,7 @@ impl Network {
                         state.pending_request = None;
                         if state.root.is_empty() {
                             state.root = root.clone();
+                            state.plan_id = root.clone();
                         } else if state.root != root {
                             mismatch = Some((state.peer.clone(), state.root.clone()));
                         }
@@ -1820,6 +1825,7 @@ impl Network {
                     }
                     None => {
                         let mut state = SnapshotSessionState::new(peer.clone(), root.clone());
+                        state.plan_id = root.clone();
                         state.set_totals(total_chunks, total_updates);
                         self.snapshot_sessions.insert(session_id, state);
                     }

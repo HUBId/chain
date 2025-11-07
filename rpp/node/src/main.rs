@@ -201,6 +201,10 @@ struct SnapshotResumeCommand {
     #[arg(long, value_name = "PEER")]
     peer: String,
 
+    /// Plan identifier advertised by the snapshot provider
+    #[arg(long, value_name = "PLAN")]
+    plan_id: String,
+
     /// Chunk size requested from the provider
     #[arg(long, value_name = "BYTES", default_value_t = 32_768)]
     chunk_size: u32,
@@ -486,6 +490,8 @@ struct SnapshotStreamStatusResponse {
     peer: String,
     root: String,
     #[serde(default)]
+    plan_id: Option<String>,
+    #[serde(default)]
     last_chunk_index: Option<u64>,
     #[serde(default)]
     last_update_index: Option<u64>,
@@ -502,12 +508,13 @@ struct StartSnapshotStreamRequest<'a> {
     peer: &'a str,
     chunk_size: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    resume: Option<ResumeMarker>,
+    resume: Option<ResumeMarker<'a>>,
 }
 
 #[derive(Serialize)]
-struct ResumeMarker {
+struct ResumeMarker<'a> {
     session: u64,
+    plan_id: &'a str,
 }
 
 impl SnapshotRpcClient {
@@ -622,6 +629,7 @@ async fn resume_snapshot_session(args: SnapshotResumeCommand) -> Result<()> {
         chunk_size: args.chunk_size,
         resume: Some(ResumeMarker {
             session: args.session,
+            plan_id: &args.plan_id,
         }),
     };
     let mut builder = client
@@ -678,6 +686,12 @@ fn print_snapshot_status(label: &str, status: &SnapshotStreamStatusResponse) {
     println!("  session: {}", status.session);
     println!("  peer: {}", status.peer);
     println!("  root: {}", status.root);
+    let plan_id = status
+        .plan_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&status.root);
+    println!("  plan_id: {plan_id}");
     println!(
         "  last_chunk_index: {}",
         status

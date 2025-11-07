@@ -30,6 +30,8 @@ pub struct StartSnapshotStreamRequest {
 #[derive(Debug, Deserialize)]
 pub struct ResumeMarker {
     pub session: u64,
+    #[serde(default)]
+    pub plan_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +39,8 @@ pub struct SnapshotStreamStatusResponse {
     pub session: u64,
     pub peer: String,
     pub root: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_chunk_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -90,10 +94,15 @@ pub struct UpdateAdmissionPoliciesRequest {
 
 impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
     fn from(status: SnapshotStreamStatus) -> Self {
+        let plan_id = status
+            .plan_id
+            .clone()
+            .or_else(|| (!status.root.is_empty()).then(|| status.root.clone()));
         Self {
             session: status.session.get(),
             peer: status.peer.to_string(),
             root: status.root,
+            plan_id,
             last_chunk_index: status.last_chunk_index,
             last_update_index: status.last_update_index,
             last_update_height: status.last_update_height,
@@ -150,9 +159,28 @@ pub(super) async fn start_snapshot_stream(
         .map(|marker| marker.session)
         .unwrap_or_else(next_session_id);
 
+    let plan_id = match request.resume.as_ref() {
+        Some(marker) => {
+            let value = marker
+                .plan_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    super::super::bad_request(
+                        "resume.plan_id must be provided when resuming a snapshot",
+                    )
+                })?;
+            Some(value.to_owned())
+        }
+        None => None,
+    };
+
+    let root_hint = plan_id.clone().unwrap_or_default();
+
     let runtime = state.require_snapshot_runtime()?;
     let status = runtime
-        .start_snapshot_stream(session, peer, String::new())
+        .start_snapshot_stream(session, peer, root_hint)
         .await
         .map_err(snapshot_runtime_error_to_http)?;
 

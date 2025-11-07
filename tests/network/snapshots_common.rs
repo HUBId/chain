@@ -25,6 +25,7 @@ pub struct StartSnapshotStreamRequest {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ResumeMarker {
     pub session: u64,
+    pub plan_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -32,6 +33,8 @@ pub struct SnapshotStreamStatusResponse {
     pub session: u64,
     pub peer: String,
     pub root: String,
+    #[serde(default)]
+    pub plan_id: Option<String>,
     #[serde(default)]
     pub last_chunk_index: Option<u64>,
     #[serde(default)]
@@ -97,4 +100,3 @@ where
 pub fn default_chunk_size() -> u32 {
     DEFAULT_STATE_SYNC_CHUNK as u32
 }
-

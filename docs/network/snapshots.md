@@ -36,11 +36,13 @@ persisted acknowledgement or attempt to skip ahead of the advertised totals.
 `resume_session` bounds the requested chunk and update indices by the plan
 totals and the most recent confirmed offsets; regressed indices raise
 `PipelineError::SnapshotVerification` errors that propagate back through the
-runtime and RPC layers.【F:rpp/runtime/node.rs†L1670-L1724】【F:rpp/rpc/api.rs†L2958-L2966】 Operators invoking
-`POST /p2p/snapshots` with a `resume` marker receive the same error payload, so
-resuming with stale offsets produces a `500` response describing the offending
-chunk or update. Integration tests cover both the HTTP and runtime handle
-surfaces to guard the behaviour.【F:tests/network/snapshots_resume.rs†L1-L310】
+runtime and RPC layers.【F:rpp/runtime/node.rs†L1680-L1744】【F:rpp/p2p/src/behaviour/snapshots.rs†L695-L733】 The session metadata
+also persists the snapshot `plan_id`, and consumers must echo it when resuming.
+Mismatches are rejected with a clear verification error—`"plan id … does not
+match persisted plan …"`—that bubbles up through the RPC surface so operators
+can see when a provider has rotated its snapshot.【F:rpp/runtime/node.rs†L1514-L1552】【F:rpp/rpc/src/routes/p2p.rs†L23-L118】
+Integration tests cover both the HTTP and runtime handle surfaces to guard the
+behaviour.【F:tests/network/snapshots_resume.rs†L1-L310】
 
 Acknowledge messages let consumers confirm ingestion of specific artefacts. The
 provider receives `Ack` requests, persists the acknowledgement, and echoes a
@@ -93,7 +95,8 @@ curl -sS -X POST \
 ```
 
 The POST request allocates or resumes a session (include
-`{"resume":{"session":<id>}}` to reuse an existing stream) and returns the
+`{"resume":{"session":<id>,"plan_id":"<plan-id>"}}` to reuse an existing
+stream) and returns the
 initial `SnapshotStreamStatus`. Poll status updates via:
 
 ```bash
@@ -111,7 +114,8 @@ issued by the RPC service during deployment or operator onboarding.
 The handler parses the peer ID, synthesises a new session ID when one is not
 provided, forwards the command to the runtime, and serialises the status back to
 the caller.【F:rpp/rpc/src/routes/p2p.rs†L16-L102】 Status responses mirror the runtime fields so operators can see the
-latest chunk/update indices, verification result, or error message.
+latest chunk/update indices, the persisted `plan_id`, verification result, or
+error message.【F:rpp/runtime/node_runtime/node.rs†L372-L413】【F:rpp/rpc/src/routes/p2p.rs†L36-L78】
 
 ## Failure handling
 
