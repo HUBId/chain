@@ -157,6 +157,23 @@ pub(super) async fn snapshot_stream_status(
     Ok(Json(SnapshotStreamStatusResponse::from(status)))
 }
 
+pub(super) async fn cancel_snapshot_stream(
+    State(state): State<ApiContext>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, (StatusCode, Json<ErrorResponse>)> {
+    let session = id
+        .parse::<u64>()
+        .map_err(|err| super::super::bad_request(format!("invalid snapshot session id: {err}")))?;
+
+    let runtime = state.require_snapshot_runtime()?;
+    runtime
+        .cancel_snapshot_stream(session)
+        .await
+        .map_err(snapshot_runtime_error_to_http)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub(super) async fn admission_policies(
     State(state): State<ApiContext>,
 ) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {

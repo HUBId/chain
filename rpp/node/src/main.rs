@@ -15,7 +15,7 @@ use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 use rpp_node::{BootstrapError, RuntimeMode};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task;
 
@@ -72,6 +72,8 @@ enum ValidatorCommand {
     Uptime(UptimeCommand),
     /// Run validator setup checks and rotate VRF material
     Setup(ValidatorSetupCommand),
+    /// Control snapshot streaming sessions through the RPC service
+    Snapshot(SnapshotCommand),
 }
 
 #[derive(Subcommand)]
@@ -134,6 +136,84 @@ enum UptimeCommand {
     Submit(UptimeSubmitCommand),
     /// Inspect pending uptime proof submissions queued in the node
     Status(UptimeStatusCommand),
+}
+
+#[derive(Subcommand)]
+enum SnapshotCommand {
+    /// Start a new snapshot streaming session
+    Start(SnapshotStartCommand),
+    /// Inspect the current status of a snapshot streaming session
+    Status(SnapshotStatusCommand),
+    /// Resume a previously started snapshot streaming session
+    Resume(SnapshotResumeCommand),
+    /// Cancel an in-flight snapshot streaming session
+    Cancel(SnapshotCancelCommand),
+}
+
+#[derive(Args, Clone)]
+struct SnapshotConnectionArgs {
+    #[command(flatten)]
+    config: ValidatorConfigArgs,
+
+    /// Override the RPC base URL derived from the validator configuration
+    #[arg(long, value_name = "URL")]
+    rpc_url: Option<String>,
+
+    /// Override the RPC bearer token; defaults to the configured token when omitted
+    #[arg(long, value_name = "TOKEN")]
+    auth_token: Option<String>,
+}
+
+#[derive(Args, Clone)]
+struct SnapshotStartCommand {
+    #[command(flatten)]
+    connection: SnapshotConnectionArgs,
+
+    /// Peer ID of the snapshot provider
+    #[arg(long, value_name = "PEER")]
+    peer: String,
+
+    /// Chunk size requested from the provider
+    #[arg(long, value_name = "BYTES", default_value_t = 32_768)]
+    chunk_size: u32,
+}
+
+#[derive(Args, Clone)]
+struct SnapshotStatusCommand {
+    #[command(flatten)]
+    connection: SnapshotConnectionArgs,
+
+    /// Snapshot session identifier
+    #[arg(long, value_name = "ID")]
+    session: u64,
+}
+
+#[derive(Args, Clone)]
+struct SnapshotResumeCommand {
+    #[command(flatten)]
+    connection: SnapshotConnectionArgs,
+
+    /// Snapshot session identifier to resume
+    #[arg(long, value_name = "ID")]
+    session: u64,
+
+    /// Peer ID of the snapshot provider
+    #[arg(long, value_name = "PEER")]
+    peer: String,
+
+    /// Chunk size requested from the provider
+    #[arg(long, value_name = "BYTES", default_value_t = 32_768)]
+    chunk_size: u32,
+}
+
+#[derive(Args, Clone)]
+struct SnapshotCancelCommand {
+    #[command(flatten)]
+    connection: SnapshotConnectionArgs,
+
+    /// Snapshot session identifier to cancel
+    #[arg(long, value_name = "ID")]
+    session: u64,
 }
 
 #[derive(Args, Clone)]
@@ -222,6 +302,7 @@ async fn main() -> Result<()> {
             Some(ValidatorCommand::Telemetry(command)) => fetch_telemetry(command).await,
             Some(ValidatorCommand::Uptime(command)) => handle_uptime_command(command).await,
             Some(ValidatorCommand::Setup(command)) => run_validator_setup(command).await,
+            Some(ValidatorCommand::Snapshot(command)) => handle_snapshot_command(command).await,
             None => handle_runtime(run_runtime(RuntimeMode::Validator, args.runtime).await),
         },
     }
@@ -381,6 +462,284 @@ async fn handle_uptime_command(command: UptimeCommand) -> Result<()> {
     match command {
         UptimeCommand::Submit(args) => submit_uptime_proof(args).await,
         UptimeCommand::Status(args) => fetch_uptime_status(args).await,
+    }
+}
+
+async fn handle_snapshot_command(command: SnapshotCommand) -> Result<()> {
+    match command {
+        SnapshotCommand::Start(args) => start_snapshot_session(args).await,
+        SnapshotCommand::Status(args) => fetch_snapshot_status(args).await,
+        SnapshotCommand::Resume(args) => resume_snapshot_session(args).await,
+        SnapshotCommand::Cancel(args) => cancel_snapshot_session(args).await,
+    }
+}
+
+struct SnapshotRpcClient {
+    client: Client,
+    base_url: String,
+    auth_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotStreamStatusResponse {
+    session: u64,
+    peer: String,
+    root: String,
+    #[serde(default)]
+    last_chunk_index: Option<u64>,
+    #[serde(default)]
+    last_update_index: Option<u64>,
+    #[serde(default)]
+    last_update_height: Option<u64>,
+    #[serde(default)]
+    verified: Option<bool>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StartSnapshotStreamRequest<'a> {
+    peer: &'a str,
+    chunk_size: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resume: Option<ResumeMarker>,
+}
+
+#[derive(Serialize)]
+struct ResumeMarker {
+    session: u64,
+}
+
+impl SnapshotRpcClient {
+    fn new(args: &SnapshotConnectionArgs) -> Result<Self> {
+        let config = load_validator_config(&args.config.config)?;
+        let base_url = args
+            .rpc_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| default_rpc_base_url(&config));
+
+        let cli_token = args
+            .auth_token
+            .as_deref()
+            .and_then(normalize_cli_bearer_token);
+        let config_token = config
+            .network
+            .rpc
+            .auth_token
+            .as_deref()
+            .and_then(normalize_cli_bearer_token);
+        let auth_token = cli_token.or(config_token);
+
+        let client = Client::builder()
+            .build()
+            .context("failed to build snapshot RPC client")?;
+
+        Ok(Self {
+            client,
+            base_url,
+            auth_token,
+        })
+    }
+
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    fn with_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(token) = self.auth_token.as_ref() {
+            request.bearer_auth(token)
+        } else {
+            request
+        }
+    }
+}
+
+async fn start_snapshot_session(args: SnapshotStartCommand) -> Result<()> {
+    let client = SnapshotRpcClient::new(&args.connection)?;
+    let request = StartSnapshotStreamRequest {
+        peer: &args.peer,
+        chunk_size: args.chunk_size,
+        resume: None,
+    };
+    let mut builder = client
+        .client
+        .post(client.endpoint("/p2p/snapshots"))
+        .json(&request);
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to start snapshot session")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode snapshot start response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    let payload: SnapshotStreamStatusResponse =
+        serde_json::from_str(&body).context("invalid snapshot status payload")?;
+    print_snapshot_status("snapshot session started", &payload);
+    Ok(())
+}
+
+async fn fetch_snapshot_status(args: SnapshotStatusCommand) -> Result<()> {
+    let client = SnapshotRpcClient::new(&args.connection)?;
+    let mut builder = client
+        .client
+        .get(client.endpoint(&format!("/p2p/snapshots/{}", args.session)));
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to query snapshot status")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode snapshot status response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    let payload: SnapshotStreamStatusResponse =
+        serde_json::from_str(&body).context("invalid snapshot status payload")?;
+    print_snapshot_status("snapshot status", &payload);
+    Ok(())
+}
+
+async fn resume_snapshot_session(args: SnapshotResumeCommand) -> Result<()> {
+    let client = SnapshotRpcClient::new(&args.connection)?;
+    let request = StartSnapshotStreamRequest {
+        peer: &args.peer,
+        chunk_size: args.chunk_size,
+        resume: Some(ResumeMarker {
+            session: args.session,
+        }),
+    };
+    let mut builder = client
+        .client
+        .post(client.endpoint("/p2p/snapshots"))
+        .json(&request);
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to resume snapshot session")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode snapshot resume response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    let payload: SnapshotStreamStatusResponse =
+        serde_json::from_str(&body).context("invalid snapshot status payload")?;
+    print_snapshot_status("snapshot session resumed", &payload);
+    Ok(())
+}
+
+async fn cancel_snapshot_session(args: SnapshotCancelCommand) -> Result<()> {
+    let client = SnapshotRpcClient::new(&args.connection)?;
+    let mut builder = client
+        .client
+        .delete(client.endpoint(&format!("/p2p/snapshots/{}", args.session)));
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to cancel snapshot session")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode snapshot cancel response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    println!("snapshot session {} cancelled", args.session);
+    Ok(())
+}
+
+fn print_snapshot_status(label: &str, status: &SnapshotStreamStatusResponse) {
+    println!("{label}:");
+    println!("  session: {}", status.session);
+    println!("  peer: {}", status.peer);
+    println!("  root: {}", status.root);
+    println!(
+        "  last_chunk_index: {}",
+        status
+            .last_chunk_index
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!(
+        "  last_update_index: {}",
+        status
+            .last_update_index
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    println!(
+        "  last_update_height: {}",
+        status
+            .last_update_height
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "none".to_string())
+    );
+    let verified = status
+        .verified
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("  verified: {verified}");
+    println!(
+        "  error: {}",
+        status
+            .error
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("none")
+    );
+}
+
+fn default_rpc_base_url(config: &NodeConfig) -> String {
+    let listen = config.network.rpc.listen;
+    let host = if listen.ip().is_unspecified() {
+        "127.0.0.1".to_string()
+    } else if listen.ip().is_ipv6() {
+        format!("[{}]", listen.ip())
+    } else {
+        listen.ip().to_string()
+    };
+    format!("http://{host}:{}", listen.port())
+}
+
+fn normalize_cli_bearer_token(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let token = if trimmed.to_ascii_lowercase().starts_with("bearer ") {
+        trimmed[7..].trim()
+    } else {
+        trimmed
+    };
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
     }
 }
 
