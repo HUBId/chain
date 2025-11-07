@@ -26,27 +26,29 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
   erforderlichen CLI-/RPC-Schritte inklusive Simnet-Belege und Dashboard-Screenshots für Auditor:innen.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
 
 <a id="eng-742-constraint-layer-vrfquorum-enforcement"></a>
-### ENG-742 – Constraint-layer VRF/quorum enforcement
+### ENG-742 – Constraint-layer VRF/quorum enforcement *(Status: ✅ Delivered)*
 
 - **Scope:** STWO- und Plonky3-Backends erweitern, damit sie VRF-Transkripte deterministisch nachrechnen, Merkle-Bindungen
   validieren und den Quorum-Threshold im AIR/Gate-Set erzwingen.
 - **Deliverables:**
-  - STWO-Gadgets in `rpp/proofs/stwo/aggregation` für Transcript-Replays, Threshold-Berechnung und Bindings.
-  - Plonky3-Äquivalente in `rpp/proofs/plonky3/circuit/consensus.rs` inkl. Witness-Bindungen.
+  - STWO Consensus-Circuit rechnet jede VRF-Eintragung mit Schnorrkel nach, vergleicht das abgeleitete Randomness-Feld,
+    prüft Epoch-/Header-Kohärenz und faltet die Poseidon-Bindings zurück in die Public Inputs.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L300-L586】【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L1068-L1135】
+  - Plonky3 spiegelt den Pfad über `ConsensusCircuit::validate`, das VRF- und Binding-Felder sanitized, den AIR-Trace mit
+    Poseidon-Schwämmen rekonstruiert und Quorum-Schwellenwerte erzwingt.【F:prover/plonky3_backend/src/circuits/consensus.rs†L520-L690】【F:prover/plonky3_backend/src/circuits/consensus.rs†L1230-L1340】
   - Öffentliche Dokumentation der neuen Constraint-Zählungen via `cargo xtask proof-metadata`.
-- **Definition of Done:** Manipulierte VRF-/Quorum-Digests führen zu Constraint-Verletzungen ohne sich auf Host-Formatprüfungen
-  zu stützen; Regressionen werden über neue Negativtests und CI-Matrixläufe erzwungen.
+- **Statusbeleg:** Tamper-Zertifikate schlagen in beiden Backends fehl (`cargo xtask test-consensus-manipulation`), womit die
+  Constraint-Layer-Verstärkungen unter Realbedingungen überprüft werden.【F:tests/consensus/consensus_proof_tampering.rs†L100-L320】【F:xtask/src/main.rs†L78-L125】
 
 <a id="eng-743-tamper-regression-hardening"></a>
-### ENG-743 – Tamper regression hardening
+### ENG-743 – Tamper regression hardening *(Status: ✅ Delivered)*
 
 - **Scope:** Test-Suites erweitern (`tests/consensus/consensus_proof_tampering.rs`, Backend-spezifische Tests), um gefälschte
   VRF-Outputs, Proofs, Bitmap-Roots und Signaturwurzeln abzulehnen, sobald ENG-742 die Constraint-Ebene liefert.
 - **Deliverables:**
-  - Integrationstests, die valide Zeugendaten verfälschen und `verify_consensus` für STWO und Plonky3 fehlschlagen lassen.
-  - Nightly-/CI-Jobs, die die neuen Szenarien automatisch ausführen.
-- **Definition of Done:** Dokumentierte Negativpfade, verlinkt in `docs/testing/consensus_regressions.md`, inklusive Simnet-Logs
-  und Dashboard-Screenshots aus der Phase‑2-Acceptance-Checkliste.
+  - Integrationstests, die valide Zeugendaten verfälschen und `verify_consensus` für STWO und Plonky3 fehlschlagen lassen.【F:tests/consensus/consensus_proof_tampering.rs†L100-L320】【F:prover/plonky3_backend/tests/consensus.rs†L520-L690】
+  - Nightly-/CI-Jobs, die die neuen Szenarien automatisch ausführen (`cargo xtask test-consensus-manipulation`).【F:xtask/src/main.rs†L78-L125】【F:.github/workflows/nightly.yml†L80-L120】
+- **Statusbeleg:** Die Regressionstabelle `docs/testing/consensus_regressions.md` führt die Tamper-Szenarien mit beiden Backends
+  als ✅ und dient als Referenz in Acceptance- und Operator-Dokumentation.【F:docs/testing/consensus_regressions.md†L1-L32】
 
 ## 0. Vorbereitungsphase
 - **Quellcode-Inventur**: Blueprint-Datenstruktur, Wallet-Workflows, Firewood-State-Lifecycle und P2P-Roadmap sichten. Identifizieren, welche Module noch experimentelle Pfade enthalten (z. B. GPU-Optimierung für Plonky3, erweiterte VRF-Distribution).

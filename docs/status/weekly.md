@@ -19,6 +19,11 @@
 nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phase‑2-Audits.
 
 ### Highlights
+- **Circuit Enforcement:** ENG‑742/ENG‑743 ausgeliefert – STWO rechnet VRF-Transkripte
+  in der Konsensschaltung neu, faltet Poseidon-Bindings und erzwingt Quoren,
+  während Plonky3 dasselbe Sanitizing/Replay im Backend widerspiegelt; die
+  Tamper-Suites laufen in CI via `cargo xtask test-consensus-manipulation`.
+  【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L300-L586】【F:prover/plonky3_backend/src/circuits/consensus.rs†L520-L690】【F:tests/consensus/consensus_proof_tampering.rs†L100-L320】【F:xtask/src/main.rs†L78-L125】
 - **Tamper-Tests:** `cargo xtask test-consensus-manipulation` läuft für STWO und Plonky3; die Cases in
   `tests/consensus/consensus_certificate_tampering.rs` sind als Abnahmebeleg dokumentiert.【F:xtask/src/main.rs†L1-L120】【F:tests/consensus/consensus_certificate_tampering.rs†L1-L160】
 - **Observability:** Neues Dashboard `docs/dashboards/consensus_grafana.json` plus Handbuch
