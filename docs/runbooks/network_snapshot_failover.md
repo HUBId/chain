@@ -22,6 +22,11 @@ Investigate a failover when any of the following signals trigger:
   inspect the accompanying `snapshot_validator` warnings and the manifest in the
   node’s snapshot directory to confirm which files were affected.【F:rpp/node/src/services/snapshot_validator.rs†L1-L205】
 
+The checksum worker runs every `snapshot_validator.cadence_secs` (five minutes by
+default) and survives process restarts: after the service comes back up it
+emits the `snapshot chunk validation failed` warning and bumps the checksum
+metric again within the configured cadence.【F:rpp/runtime/config.rs†L1294-L1299】【F:rpp/node/src/services/snapshot_validator.rs†L74-L113】【F:tests/network/snapshot_checksum_restart.rs†L21-L178】
+
 These metrics and alert thresholds are documented in the snapshot and pipeline
 observability references; keep those dashboards open while running this
 playbook.【F:docs/observability/network_snapshots.md†L1-L74】【F:docs/observability/pipeline.md†L22-L96】
@@ -86,6 +91,9 @@ If the provider validator crashed or shows storage errors:
 3. Re-run Step 1 to ensure the consumer can still reach the session record. The
    session persists across restarts, so the consumer can resume once the producer
    advertises fresh chunks.【F:docs/network/snapshots.md†L1-L73】
+4. Watch the checksum validator logs/metrics after the restart; they should fire
+   within the cadence window and confirm the node is still scanning its local
+   snapshots.【F:rpp/node/src/services/snapshot_validator.rs†L74-L153】【F:tests/network/snapshot_checksum_restart.rs†L92-L163】
 
 ## Step 3 – Replay missing chunks
 
