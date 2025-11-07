@@ -18,6 +18,17 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 
 ## Phase 2 Exit Criteria (Arbeitsstand)
 
+## Phase 2 – Test Suites abgeschlossen (Stand: 2026-04-07)
+
+Die dreistufige Test-Suite aus `cargo xtask`-Läufen ist vollständig grün und in die verpflichtenden Branch-Protections eingebunden. Damit sind die Unit-, Integrations- und Simulationsabdeckungen aus Phase 2 messbar abgeschlossen.
+
+- **`unit-suites` (CI):** Führt `cargo xtask test-unit` über drei Feature-Varianten (Default, `prod,prover-stwo`, `prod,prover-stwo,backend-plonky3`) aus. Der Lauf benötigt aktuell ~12 Minuten für die gesamte Matrix (Cold Start ~5 Minuten je Variante, Warm ~2 Minuten) und stellt die deterministischen Proof-/VRF-Suites bereit.【F:.github/workflows/ci.yml†L185-L217】
+- **`integration-workflows` (CI):** Reproduziert die End-to-End-Workflows per `cargo xtask test-integration` mit derselben Feature-Matrix. Die Matrix-Laufzeit liegt bei ~18 Minuten (Cold ~7 Minuten pro Variante) und deckt Blockproduktion, Snapshot-/Light-Client-Sync sowie Manipulationsschutz ab.【F:.github/workflows/ci.yml†L219-L251】
+- **`simnet-smoke` (CI):** Orchestriert alle drei Simnet-Szenarien (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) via `cargo xtask test-simnet`. Der Job läuft ~22 Minuten (Cold ~9 Minuten pro Variante) und liefert JSON-/CSV-Artefakte für VRF-/Quorum-Manipulationen.【F:.github/workflows/ci.yml†L253-L285】
+- **`validation` & `simnet` (Nightly):** Das Nightly-Pendant (`cargo xtask test-all` sowie das dedizierte Simnet-Harness) bestätigt die Phase‑2-Abdeckung täglich und lädt die Artefakte (`simnet-nightly`) zur Nachvollziehbarkeit hoch. Die Matrix benötigt ~35 Minuten, der Simnet-Harness ~15 Minuten für Analyse und Packaging.【F:.github/workflows/nightly.yml†L88-L124】【F:.github/workflows/nightly.yml†L148-L183】
+
+Die Jobs sind als verpflichtende Statuschecks verdrahtet und bilden die Grundlage für Audits und Regressionen der Phase‑2-Abnahme.
+
 - **Tests:** `cargo xtask test-consensus-manipulation` läuft in beiden Backends und dokumentiert VRF-/Quorum-Manipulationen.
   Ergebnisse werden in den Simnet-/Testreports verlinkt.【F:xtask/src/main.rs†L1-L120】【F:tests/consensus/consensus_certificate_tampering.rs†L1-L160】
 - **Observability:** Neue Panels in `docs/dashboards/consensus_grafana.json` zeigen VRF-Latenzen und Quorum-Fehlerquoten; das
