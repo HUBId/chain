@@ -111,8 +111,9 @@ use parking_lot::{Mutex, RwLock};
 use rpp::node::VerificationErrorKind;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    AdmissionAuditTrail, AllowlistedPeer, LightClientHead, NetworkMetaTelemetryReport,
-    NetworkPeerTelemetry, NetworkStateSyncChunk, NetworkStateSyncPlan, SnapshotChunk,
+    AdmissionApproval, AdmissionAuditTrail, AllowlistedPeer, LightClientHead,
+    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk, NetworkStateSyncPlan,
+    SnapshotChunk,
 };
 use rustls::crypto::aws_lc_rs;
 use rustls::pki_types::{
@@ -2315,7 +2316,11 @@ async fn update_access_lists(
         }
     }
 
-    let audit = AdmissionAuditTrail::new("rpc.legacy_access_lists", Some("POST /p2p/access-lists"));
+    let audit = AdmissionAuditTrail::new("rpc.legacy_access_lists", Some("POST /p2p/access-lists"))
+        .with_approvals(vec![
+            AdmissionApproval::new("operations", "rpc.legacy_access_lists"),
+            AdmissionApproval::new("security", "rpc.legacy_access_lists"),
+        ]);
     node.update_admission_policies(allowlist, blocklist, audit)
         .map_err(to_http_error)?;
     Ok(StatusCode::NO_CONTENT)

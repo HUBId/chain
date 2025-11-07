@@ -49,6 +49,8 @@ pub enum PeerstoreError {
         required: TierLevel,
         actual: TierLevel,
     },
+    #[error("high-impact admission policy change missing approvals: {missing:?}")]
+    MissingApprovals { missing: Vec<String> },
 }
 
 pub trait IdentityVerifier: Send + Sync {
@@ -364,10 +366,34 @@ impl AdmissionPolicies {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmissionApproval {
+    role: String,
+    approver: String,
+}
+
+impl AdmissionApproval {
+    pub fn new(role: impl Into<String>, approver: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            approver: approver.into(),
+        }
+    }
+
+    pub fn role(&self) -> &str {
+        self.role.as_str()
+    }
+
+    pub fn approver(&self) -> &str {
+        self.approver.as_str()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AdmissionAuditTrail {
     actor: String,
     reason: Option<String>,
+    approvals: Vec<AdmissionApproval>,
 }
 
 impl AdmissionAuditTrail {
@@ -375,13 +401,20 @@ impl AdmissionAuditTrail {
         Self {
             actor: actor.into(),
             reason: reason.map(|value| value.into()),
+            approvals: Vec::new(),
         }
+    }
+
+    pub fn with_approvals(mut self, approvals: Vec<AdmissionApproval>) -> Self {
+        self.approvals = approvals;
+        self
     }
 
     pub fn system(reason: impl Into<String>) -> Self {
         Self {
             actor: "system".into(),
             reason: Some(reason.into()),
+            approvals: Vec::new(),
         }
     }
 
@@ -391,6 +424,31 @@ impl AdmissionAuditTrail {
 
     pub fn reason(&self) -> Option<&str> {
         self.reason.as_deref()
+    }
+
+    pub fn approvals(&self) -> &[AdmissionApproval] {
+        &self.approvals
+    }
+
+    pub fn missing_roles<'a, I>(&self, roles: I) -> Vec<String>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        roles
+            .into_iter()
+            .filter(|role| !self.has_role(role))
+            .map(|role| role.to_string())
+            .collect()
+    }
+
+    pub fn has_role(&self, role: &str) -> bool {
+        self.approvals
+            .iter()
+            .any(|approval| approval.role.eq_ignore_ascii_case(role))
+    }
+
+    fn is_system(&self) -> bool {
+        self.actor == "system"
     }
 }
 
@@ -1125,18 +1183,31 @@ impl Peerstore {
         audit: AdmissionAuditTrail,
     ) -> Result<(), PeerstoreError> {
         let new_blocklisted: HashSet<PeerId> = blocklist.iter().cloned().collect();
-        let previous_blocklisted = {
+        let previous_blocklisted = self.blocklisted.read().clone();
+        let previous_allowlist = self.allowlist.read().clone();
+
+        let high_impact = Self::policies_differ(
+            &previous_allowlist,
+            &allowlist,
+            &previous_blocklisted,
+            &new_blocklisted,
+        );
+
+        if high_impact && !audit.is_system() {
+            let missing = audit.missing_roles(["operations", "security"]);
+            if !missing.is_empty() {
+                return Err(PeerstoreError::MissingApprovals { missing });
+            }
+        }
+
+        {
             let mut guard = self.blocklisted.write();
-            let previous = guard.clone();
             *guard = new_blocklisted.clone();
-            previous
-        };
-        let previous_allowlist = {
+        }
+        {
             let mut guard = self.allowlist.write();
-            let previous = guard.clone();
             *guard = allowlist.clone();
-            previous
-        };
+        }
 
         {
             let mut peers = self.peers.write();
@@ -1315,6 +1386,26 @@ impl Peerstore {
             );
         }
         Ok(())
+    }
+
+    fn policies_differ(
+        previous_allowlist: &[AllowlistedPeer],
+        next_allowlist: &[AllowlistedPeer],
+        previous_blocklisted: &HashSet<PeerId>,
+        next_blocklisted: &HashSet<PeerId>,
+    ) -> bool {
+        if previous_blocklisted != next_blocklisted {
+            return true;
+        }
+        Self::allowlist_map(previous_allowlist) != Self::allowlist_map(next_allowlist)
+    }
+
+    fn allowlist_map(entries: &[AllowlistedPeer]) -> BTreeMap<PeerId, TierLevel> {
+        let mut map = BTreeMap::new();
+        for entry in entries {
+            map.insert(entry.peer, entry.tier);
+        }
+        map
     }
 
     fn blocklist_ban_until() -> SystemTime {
@@ -1716,7 +1807,10 @@ mod tests {
             .update_admission_policies(
                 allowlist,
                 Vec::new(),
-                AdmissionAuditTrail::new("operator", Some("initial rollout")),
+                AdmissionAuditTrail::new("operator", Some("initial rollout")).with_approvals(vec![
+                    AdmissionApproval::new("operations", "operator"),
+                    AdmissionApproval::new("security", "operator"),
+                ]),
             )
             .expect("policy update");
 
@@ -1732,5 +1826,50 @@ mod tests {
             }
             change => panic!("unexpected audit change: {change:?}"),
         }
+    }
+
+    #[test]
+    fn audit_trail_reports_missing_roles() {
+        let audit = AdmissionAuditTrail::new("operator", Some("test"))
+            .with_approvals(vec![AdmissionApproval::new("operations", "ops.oncall")]);
+        let missing = audit.missing_roles(["operations", "security"]);
+        assert_eq!(missing, vec!["security".to_string()]);
+        assert!(audit.has_role("operations"));
+        assert!(!audit.has_role("security"));
+    }
+
+    #[test]
+    fn peerstore_requires_dual_approvals_for_high_impact_changes() {
+        let store = Peerstore::open(PeerstoreConfig::memory()).expect("open");
+        let peer = PeerId::random();
+        let allowlist = vec![AllowlistedPeer {
+            peer: peer.clone(),
+            tier: TierLevel::Tl3,
+        }];
+
+        let audit = AdmissionAuditTrail::new("operator", Some("ops rotation"))
+            .with_approvals(vec![AdmissionApproval::new("operations", "ops.oncall")]);
+        let err = store
+            .update_admission_policies(allowlist.clone(), Vec::new(), audit)
+            .expect_err("missing approvals should reject update");
+        match err {
+            PeerstoreError::MissingApprovals { missing } => {
+                assert_eq!(missing, vec!["security".to_string()]);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let audit =
+            AdmissionAuditTrail::new("operator", Some("ops rotation")).with_approvals(vec![
+                AdmissionApproval::new("operations", "ops.oncall"),
+                AdmissionApproval::new("security", "sec.oncall"),
+            ]);
+        store
+            .update_admission_policies(allowlist.clone(), Vec::new(), audit)
+            .expect("dual approvals should succeed");
+
+        let snapshot = store.admission_policies();
+        assert_eq!(snapshot.allowlist, allowlist);
+        assert!(snapshot.blocklist.is_empty());
     }
 }

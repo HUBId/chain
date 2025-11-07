@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
 
 use axum::{
@@ -16,7 +16,8 @@ use super::super::{
 use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry, AllowlistedPeer, TierLevel,
+    AdmissionApproval, AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry,
+    AllowlistedPeer, TierLevel,
 };
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +82,12 @@ pub struct AdmissionAuditLogResponse {
     pub entries: Vec<AdmissionPolicyLogEntry>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct AdmissionApprovalRequest {
+    pub role: String,
+    pub approver: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct UpdateAdmissionPoliciesRequest {
     #[serde(default)]
@@ -90,6 +97,8 @@ pub struct UpdateAdmissionPoliciesRequest {
     pub actor: String,
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default)]
+    pub approvals: Vec<AdmissionApprovalRequest>,
 }
 
 impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
@@ -233,7 +242,9 @@ pub(super) async fn update_admission_policies(
     Json(request): Json<UpdateAdmissionPoliciesRequest>,
 ) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
     let node = state.require_node()?;
-    let actor = request.actor.trim();
+    let current = node.admission_policies();
+
+    let actor = request.actor.trim().to_string();
     if actor.is_empty() {
         return Err(super::super::bad_request("actor must not be empty"));
     }
@@ -286,7 +297,57 @@ pub(super) async fn update_admission_policies(
         }
     }
 
-    let audit = AdmissionAuditTrail::new(actor, reason);
+    let mut approvals = Vec::with_capacity(request.approvals.len());
+    let mut approval_roles = HashSet::new();
+    for approval in request.approvals {
+        let role = approval.role.trim();
+        if role.is_empty() {
+            return Err(super::super::bad_request("approval role must not be empty"));
+        }
+        let approver = approval.approver.trim();
+        if approver.is_empty() {
+            return Err(super::super::bad_request(format!(
+                "approval `{role}` must include approver"
+            )));
+        }
+        let normalized = role.to_ascii_lowercase();
+        if !approval_roles.insert(normalized.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate approval role `{role}`"
+            )));
+        }
+        approvals.push(AdmissionApproval::new(
+            role.to_string(),
+            approver.to_string(),
+        ));
+    }
+
+    let high_impact = admission_policies_changed(
+        current.allowlist(),
+        &allowlist,
+        current.blocklist(),
+        &blocklist,
+    );
+
+    if high_impact {
+        let mut missing = Vec::new();
+        for role in ["operations", "security"] {
+            if !approvals
+                .iter()
+                .any(|approval| approval.role().eq_ignore_ascii_case(role))
+            {
+                missing.push(role);
+            }
+        }
+        if !missing.is_empty() {
+            return Err(super::super::bad_request(format!(
+                "missing required approvals: {}",
+                missing.join(", ")
+            )));
+        }
+    }
+
+    let audit = AdmissionAuditTrail::new(actor, reason).with_approvals(approvals);
     node.update_admission_policies(allowlist, blocklist, audit)
         .map_err(to_http_error)?;
 
@@ -318,4 +379,27 @@ pub(super) async fn admission_audit_log(
         total,
         entries,
     }))
+}
+
+fn admission_policies_changed(
+    current_allowlist: &[AllowlistedPeer],
+    next_allowlist: &[AllowlistedPeer],
+    current_blocklist: &[NetworkPeerId],
+    next_blocklist: &[NetworkPeerId],
+) -> bool {
+    if blocklist_snapshot(current_blocklist) != blocklist_snapshot(next_blocklist) {
+        return true;
+    }
+    allowlist_snapshot(current_allowlist) != allowlist_snapshot(next_allowlist)
+}
+
+fn blocklist_snapshot(entries: &[NetworkPeerId]) -> HashSet<NetworkPeerId> {
+    entries.iter().cloned().collect()
+}
+
+fn allowlist_snapshot(entries: &[AllowlistedPeer]) -> BTreeMap<NetworkPeerId, TierLevel> {
+    entries
+        .iter()
+        .map(|entry| (entry.peer.clone(), entry.tier))
+        .collect()
 }

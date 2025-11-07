@@ -59,9 +59,13 @@ before acknowledging the request.【F:rpp/rpc/src/routes/p2p.rs†L126-L157】�
 ### Audited updates
 
 Updates must provide an `actor` string and may include a free-form `reason`.
-The handler validates duplicate entries and cross-membership before committing
-the change. On success the updated policies are returned so operators can
-verify what was persisted without issuing a second call.【F:rpp/rpc/src/routes/p2p.rs†L158-L209】
+High-impact mutations—anything that alters the allowlist or blocklist—now
+require explicit approvals from both operations and security. The RPC handler
+rejects requests that omit either role or reuse the same approver twice and the
+peerstore double-checks the approvals before persisting the snapshot so manual
+changes cannot bypass the policy.【F:rpp/rpc/src/routes/p2p.rs†L158-L263】【F:rpp/p2p/src/peerstore.rs†L1084-L1389】
+On success the updated policies are returned so operators can verify what was
+persisted without issuing a second call.
 
 ```sh
 curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
@@ -71,13 +75,17 @@ curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
            "actor": "ops.oncall",
            "reason": "replace unhealthy peer",
            "allowlist": [{"peer_id": "12D3KooWRpcPeer", "tier": "Tl3"}],
-           "blocklist": ["12D3KooWBannedPeer"]
+           "blocklist": ["12D3KooWBannedPeer"],
+           "approvals": [
+             {"role": "operations", "approver": "ops.oncall"},
+             {"role": "security", "approver": "sec.oncall"}
+           ]
          }'
 ```
 
-If the payload is invalid—for example the same peer appears twice—the service
-returns a `400` with a descriptive error string so auditors can capture the
-failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L172-L195】
+If the payload is invalid—for example the same peer appears twice or a required
+approval is missing—the service returns a `400` with a descriptive error string
+so auditors can capture the failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L172-L263】
 
 ### Inspecting the audit log
 
