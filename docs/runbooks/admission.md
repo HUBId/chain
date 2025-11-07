@@ -37,6 +37,38 @@ Every successful or rejected attempt is written to the admission audit log with
 the actor, approvals, and reason. Review the log via `GET /p2p/admission/audit`
 when confirming a change during incident response or scheduled maintenance.
 
+## Backups and restores
+
+The peerstore writes a timestamped JSON snapshot to
+`network.admission.backup_dir` whenever the policies change. Retention is
+enforced according to `network.admission.backup_retention_days`, so older
+archives are pruned automatically. Use `GET /p2p/admission/backups` to list the
+available snapshots and append `?download=<name>` to download a specific
+archive.【F:rpp/p2p/src/peerstore.rs†L1090-L1157】【F:rpp/rpc/src/routes/p2p.rs†L90-L225】
+
+For day-to-day operations rely on the CLI wrapper, which applies the validator
+configuration automatically:
+
+```sh
+# List available snapshots
+rpp-node validator admission backups list
+
+# Download the newest snapshot to disk
+rpp-node validator admission backups download --backup "${BACKUP}" --output /tmp/admission.json
+
+# Restore a snapshot with the standard dual approvals
+rpp-node validator admission restore \
+  --backup "${BACKUP}" \
+  --actor ops.oncall \
+  --reason "rollback to previous allowlist" \
+  --approval operations:ops.oncall \
+  --approval security:sec.oncall
+```
+
+Restores are audited like regular policy updates. After the RPC call returns,
+confirm the change via `GET /p2p/admission/policies` and attach the retrieved
+backup to the incident record.
+
 ## Reconciliation checks
 
 The node runs a background admission reconciler that continuously compares the

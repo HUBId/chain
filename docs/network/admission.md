@@ -108,6 +108,42 @@ the selected slice. Operators should size retention according to
 keeps writing to the JSONL file while external rotation jobs enforce the
 window.【F:rpp/runtime/config.rs†L942-L1004】【F:docs/configuration.md†L48-L50】
 
+### Policy backups and restores
+
+Every successful policy mutation also emits a timestamped snapshot in the
+directory configured by `network.admission.backup_dir`. The peerstore keeps the
+most recent backups that fall within the
+`network.admission.backup_retention_days` window and automatically prunes older
+archives.【F:rpp/p2p/src/peerstore.rs†L1090-L1157】【F:rpp/runtime/config.rs†L972-L1004】
+
+Operators can list available snapshots via `GET /p2p/admission/backups`. Passing
+`?download=<name>` streams the requested archive so it can be copied off-box or
+fed into change reviews. Restoring a snapshot uses `POST /p2p/admission/backups`
+with the backup name, the acting operator, optional reason, and dual approvals;
+the restore is audited like any other mutation.【F:rpp/rpc/src/routes/p2p.rs†L90-L225】
+
+```sh
+# enumerate available backups
+curl -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     ${RPP_RPC_URL}/p2p/admission/backups | jq .
+
+# download a specific archive
+curl -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     "${RPP_RPC_URL}/p2p/admission/backups?download=${BACKUP}" \
+     -o "${BACKUP}"
+
+# restore with the same dual-approval workflow used for edits
+curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     ${RPP_RPC_URL}/p2p/admission/backups \
+     -d "{\n       \"backup\": \"${BACKUP}\",\n       \"actor\": \"ops.oncall\",\n       \"reason\": \"roll back to audited state\",\n       \"approvals\": [\n         {\"role\": \"operations\", \"approver\": \"ops.oncall\"},\n         {\"role\": \"security\", \"approver\": \"sec.oncall\"}\n       ]\n     }"
+```
+
+The `rpp-node` CLI mirrors these endpoints through
+`validator admission backups list|download|restore`, which automatically applies
+the configured RPC URL and bearer token from the validator profile so on-call
+operators can audit and recover policies without crafting manual payloads.【F:rpp/node/src/main.rs†L151-L408】
+
 ## Tests
 
 `tests/network/admission_control.rs` exercises the new failure modes: a peer

@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +76,8 @@ enum ValidatorCommand {
     Setup(ValidatorSetupCommand),
     /// Control snapshot streaming sessions through the RPC service
     Snapshot(SnapshotCommand),
+    /// Manage admission policy backups through the RPC service
+    Admission(AdmissionCommand),
 }
 
 #[derive(Subcommand)]
@@ -162,6 +166,82 @@ struct SnapshotConnectionArgs {
     /// Override the RPC bearer token; defaults to the configured token when omitted
     #[arg(long, value_name = "TOKEN")]
     auth_token: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum AdmissionCommand {
+    /// Inspect admission policy backups exposed by the validator RPC
+    Backups(AdmissionBackupsCommand),
+    /// Restore admission policies from a downloaded backup archive
+    Restore(AdmissionRestoreCommand),
+}
+
+#[derive(Subcommand)]
+enum AdmissionBackupsCommand {
+    /// List available admission policy backup archives
+    List(AdmissionBackupsListCommand),
+    /// Download an admission policy backup archive
+    Download(AdmissionBackupsDownloadCommand),
+}
+
+#[derive(Args, Clone)]
+struct AdmissionConnectionArgs {
+    #[command(flatten)]
+    config: ValidatorConfigArgs,
+
+    /// Override the RPC base URL derived from the validator configuration
+    #[arg(long, value_name = "URL")]
+    rpc_url: Option<String>,
+
+    /// Override the RPC bearer token; defaults to the configured token when omitted
+    #[arg(long, value_name = "TOKEN")]
+    auth_token: Option<String>,
+}
+
+#[derive(Args, Clone)]
+struct AdmissionBackupsListCommand {
+    #[command(flatten)]
+    connection: AdmissionConnectionArgs,
+
+    /// Emit the raw JSON payload instead of a formatted table
+    #[arg(long, default_value_t = false)]
+    json: bool,
+}
+
+#[derive(Args, Clone)]
+struct AdmissionBackupsDownloadCommand {
+    #[command(flatten)]
+    connection: AdmissionConnectionArgs,
+
+    /// Name of the backup archive to download
+    #[arg(long, value_name = "NAME")]
+    backup: String,
+
+    /// Optional path to write the downloaded backup (stdout when omitted)
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+struct AdmissionRestoreCommand {
+    #[command(flatten)]
+    connection: AdmissionConnectionArgs,
+
+    /// Name of the backup archive to restore
+    #[arg(long, value_name = "NAME")]
+    backup: String,
+
+    /// Actor attributed in the admission audit log
+    #[arg(long, value_name = "NAME")]
+    actor: String,
+
+    /// Optional reason recorded in the admission audit log
+    #[arg(long, value_name = "TEXT")]
+    reason: Option<String>,
+
+    /// Optional approval entries in ROLE:APPROVER format
+    #[arg(long = "approval", value_name = "ROLE:APPROVER")]
+    approvals: Vec<String>,
 }
 
 #[derive(Args, Clone)]
@@ -307,6 +387,7 @@ async fn main() -> Result<()> {
             Some(ValidatorCommand::Uptime(command)) => handle_uptime_command(command).await,
             Some(ValidatorCommand::Setup(command)) => run_validator_setup(command).await,
             Some(ValidatorCommand::Snapshot(command)) => handle_snapshot_command(command).await,
+            Some(ValidatorCommand::Admission(command)) => handle_admission_command(command).await,
             None => handle_runtime(run_runtime(RuntimeMode::Validator, args.runtime).await),
         },
     }
@@ -478,10 +559,105 @@ async fn handle_snapshot_command(command: SnapshotCommand) -> Result<()> {
     }
 }
 
+async fn handle_admission_command(command: AdmissionCommand) -> Result<()> {
+    match command {
+        AdmissionCommand::Backups(command) => handle_admission_backups(command).await,
+        AdmissionCommand::Restore(command) => restore_admission_backup_cli(command).await,
+    }
+}
+
+async fn handle_admission_backups(command: AdmissionBackupsCommand) -> Result<()> {
+    match command {
+        AdmissionBackupsCommand::List(args) => list_admission_backups(args).await,
+        AdmissionBackupsCommand::Download(args) => download_admission_backup(args).await,
+    }
+}
+
+struct AdmissionRpcClient {
+    client: Client,
+    base_url: String,
+    auth_token: Option<String>,
+}
+
 struct SnapshotRpcClient {
     client: Client,
     base_url: String,
     auth_token: Option<String>,
+}
+
+impl AdmissionRpcClient {
+    fn new(args: &AdmissionConnectionArgs) -> Result<Self> {
+        let config = load_validator_config(&args.config.config)?;
+        let base_url = args
+            .rpc_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| default_rpc_base_url(&config));
+
+        let cli_token = args
+            .auth_token
+            .as_deref()
+            .and_then(normalize_cli_bearer_token);
+        let config_token = config
+            .network
+            .rpc
+            .auth_token
+            .as_deref()
+            .and_then(normalize_cli_bearer_token);
+        let auth_token = cli_token.or(config_token);
+
+        let client = Client::builder()
+            .build()
+            .context("failed to build admission RPC client")?;
+
+        Ok(Self {
+            client,
+            base_url,
+            auth_token,
+        })
+    }
+
+    fn endpoint(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    fn with_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(token) = self.auth_token.as_ref() {
+            request.bearer_auth(token)
+        } else {
+            request
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct AdmissionBackupsRpcResponse {
+    backups: Vec<AdmissionBackupRpcEntry>,
+}
+
+#[derive(Deserialize)]
+struct AdmissionBackupRpcEntry {
+    name: String,
+    timestamp_ms: u64,
+    size: u64,
+}
+
+#[derive(Serialize)]
+struct AdmissionApprovalPayload {
+    role: String,
+    approver: String,
+}
+
+#[derive(Serialize)]
+struct RestoreAdmissionBackupRpcRequest {
+    backup: String,
+    actor: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    approvals: Vec<AdmissionApprovalPayload>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -678,6 +854,167 @@ async fn cancel_snapshot_session(args: SnapshotCancelCommand) -> Result<()> {
     }
 
     println!("snapshot session {} cancelled", args.session);
+    Ok(())
+}
+
+async fn list_admission_backups(args: AdmissionBackupsListCommand) -> Result<()> {
+    let client = AdmissionRpcClient::new(&args.connection)?;
+    let mut builder = client.client.get(client.endpoint("/p2p/admission/backups"));
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to fetch admission policy backups")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode admission backup list response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    if args.json {
+        println!("{}", body.trim());
+        return Ok(());
+    }
+
+    let payload: AdmissionBackupsRpcResponse =
+        serde_json::from_str(&body).context("invalid admission backups payload")?;
+    if payload.backups.is_empty() {
+        println!("no admission policy backups found");
+        return Ok(());
+    }
+
+    println!("{:<48} {:>16} {:>10}", "NAME", "TIMESTAMP_MS", "SIZE");
+    for backup in payload.backups {
+        println!(
+            "{:<48} {:>16} {:>10}",
+            backup.name, backup.timestamp_ms, backup.size
+        );
+    }
+    Ok(())
+}
+
+async fn download_admission_backup(args: AdmissionBackupsDownloadCommand) -> Result<()> {
+    let backup = args.backup.trim();
+    if backup.is_empty() {
+        anyhow::bail!("backup name must not be empty");
+    }
+    let client = AdmissionRpcClient::new(&args.connection)?;
+    let mut builder = client
+        .client
+        .get(client.endpoint("/p2p/admission/backups"))
+        .query(&[("download", backup)]);
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to download admission policy backup")?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .context("failed to decode admission backup payload")?;
+    if !status.is_success() {
+        let body = String::from_utf8_lossy(&bytes);
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    if let Some(path) = args.output.as_ref() {
+        fs::write(path, &bytes)
+            .with_context(|| format!("failed to write backup to {}", path.display()))?;
+        println!(
+            "admission policy backup `{}` written to {}",
+            backup,
+            path.display()
+        );
+    } else {
+        io::stdout().write_all(&bytes)?;
+    }
+    Ok(())
+}
+
+async fn restore_admission_backup_cli(args: AdmissionRestoreCommand) -> Result<()> {
+    let AdmissionRestoreCommand {
+        connection,
+        backup,
+        actor,
+        reason,
+        approvals,
+    } = args;
+
+    let backup = backup.trim();
+    if backup.is_empty() {
+        anyhow::bail!("backup name must not be empty");
+    }
+    let actor = actor.trim();
+    if actor.is_empty() {
+        anyhow::bail!("actor must not be empty");
+    }
+    let reason = reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let mut payload_approvals = Vec::with_capacity(approvals.len());
+    let mut approval_roles = HashSet::new();
+    for entry in approvals {
+        let mut parts = entry.splitn(2, ':');
+        let role = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid approval `{entry}` (expected ROLE:APPROVER)")
+            })?;
+        let approver = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid approval `{entry}` (expected ROLE:APPROVER)")
+            })?;
+        let normalized = role.to_ascii_lowercase();
+        if !approval_roles.insert(normalized) {
+            anyhow::bail!("duplicate approval role `{role}`");
+        }
+        payload_approvals.push(AdmissionApprovalPayload {
+            role: role.to_string(),
+            approver: approver.to_string(),
+        });
+    }
+
+    let client = AdmissionRpcClient::new(&connection)?;
+    let request = RestoreAdmissionBackupRpcRequest {
+        backup: backup.to_string(),
+        actor: actor.to_string(),
+        reason,
+        approvals: payload_approvals,
+    };
+    let mut builder = client
+        .client
+        .post(client.endpoint("/p2p/admission/backups"))
+        .json(&request);
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to restore admission policies from backup")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode admission restore response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    println!("admission policies restored from `{}`", request.backup);
     Ok(())
 }
 
