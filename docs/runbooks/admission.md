@@ -36,3 +36,33 @@ Re-submit the request after fixing the payload.
 Every successful or rejected attempt is written to the admission audit log with
 the actor, approvals, and reason. Review the log via `GET /p2p/admission/audit`
 when confirming a change during incident response or scheduled maintenance.
+
+## Reconciliation checks
+
+The node runs a background admission reconciler that continuously compares the
+in-memory allowlist and blocklist with both the persisted snapshot on disk and
+the audit log. The reconciler executes every minute by default and raises
+alerts as soon as drift is detected, so you do not need to wait for the next
+manual reload to surface inconsistency.
+
+1. Inspect the `rpp.node.admission.policy_drift_detected_total` counter for
+   increments. The metric is tagged with `kind="disk"`, `kind="audit"`, or
+   `kind="audit_lag"` to highlight whether the snapshot, audit log, or audit
+   timestamp is lagging. The reconciler also emits
+   `rpp.node.admission.reconcile_total{drift="true"}` when a cycle observes
+   mismatched state.
+2. When the metric reports `disk` drift, fetch the persisted snapshot from the
+   node (`/p2p/admission/policies`) and compare it to the on-disk JSON at the
+   path configured by `network.admission.policy_path`. A divergence indicates a
+   failed disk write.
+3. When `audit` drift is reported, reconcile the audit trail with the live
+   policies. Missing entries point to an append failure in the audit log; open
+   an incident and freeze admission changes until the log is repaired.
+4. A `audit_lag` drift means the disk snapshot is newer than the most recent
+   audit entry for longer than the configured threshold. Verify that the audit
+   service is healthy and that retention or rotation has not removed recent
+   entries.
+
+The reconciler shuts down automatically when the node stops, but it does not
+correct drift on its own. Operators should restore the policy snapshot and audit
+log before resuming admission changes.

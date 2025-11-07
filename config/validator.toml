@@ -45,6 +45,11 @@ enabled = true
 burst = 120
 replenish_per_minute = 60
 
+[admission_reconciler]
+cadence_secs = 60
+drift_alert_threshold = 1
+max_audit_lag_secs = 300
+
 [network.tls]
 enabled = false
 require_client_auth = false
