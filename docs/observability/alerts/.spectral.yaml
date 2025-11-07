@@ -1,0 +1,31 @@
+extends: []
+
+rules:
+  alerts-required-fields:
+    description: PrometheusRule manifests must include required metadata and spec keys.
+    message: "Alert manifest is missing required field '{{property}}'"
+    severity: error
+    given: $
+    then:
+      - field: apiVersion
+        function: truthy
+      - field: kind
+        function: truthy
+      - field: metadata
+        function: truthy
+      - field: metadata.name
+        function: truthy
+      - field: spec
+        function: truthy
+      - field: spec.groups
+        function: truthy
+  alerts-rule-required-keys:
+    description: Each alerting rule must specify an alert name and expression.
+    message: "Alert rule is missing required key '{{property}}'"
+    severity: error
+    given: $.spec.groups[*].rules[*]
+    then:
+      - field: alert
+        function: truthy
+      - field: expr
+        function: truthy

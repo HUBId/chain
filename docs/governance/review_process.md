@@ -12,6 +12,8 @@ required status check reports success:
   `storage_snapshot` regression (`cargo test --test storage_snapshot`).【F:tests/storage_snapshot.rs†L1-L73】
 - `observability-snapshot` exercises the Prometheus scrapes that back the
   snapshot/timetoke dashboards (`cargo xtask test-observability`).【F:tests/observability/snapshot_timetoke_metrics.rs†L1-L219】【F:xtask/src/main.rs†L96-L107】
+- `alerts-lint` validates the PrometheusRule alert manifests with Spectral so
+  YAML syntax errors and missing required fields fail before merge.【F:.github/workflows/ci.yml†L133-L164】
 - `simnet-admission` replays the `gossip-backpressure` scenario so admission
   policies and gossip throttling stay reproducible
   (`cargo run -p simnet -- --scenario tools/simnet/scenarios/gossip_backpressure.ron`).【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L16】【F:tools/simnet/src/main.rs†L1-L53】
@@ -40,6 +42,7 @@ gh api \
       "tests-rpp-stark",
       "snapshot-cli",
       "observability-snapshot",
+      "alerts-lint",
       "simnet-admission",
       "runtime-smoke"
     ]

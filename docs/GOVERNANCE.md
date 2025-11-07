@@ -19,7 +19,7 @@ runbooks and the security guidance in [`SECURITY.md`](../SECURITY.md).
   reality.
 - **Branch protection.** Maintainers must keep the `fmt`, `clippy`,
   `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`,
-  `observability-snapshot`, `simnet-admission`, and `runtime-smoke` GitHub
+  `observability-snapshot`, `alerts-lint`, `simnet-admission`, and `runtime-smoke` GitHub
   Actions jobs configured as required status checks on the protected branch
   (`<PRIMARY_BRANCH_OR_COMMIT>`). When onboarding a new fork or
   environment, update the branch protection rule through the repository
@@ -41,6 +41,7 @@ runbooks and the security guidance in [`SECURITY.md`](../SECURITY.md).
         "tests-rpp-stark",
         "snapshot-cli",
         "observability-snapshot",
+        "alerts-lint",
         "simnet-admission",
         "runtime-smoke"
       ]

@@ -114,9 +114,10 @@ from pathlib import Path
 
 import yaml
 
-          files = [
+files = [
     Path("docs/observability/alerts/root_integrity.yaml"),
     Path("docs/observability/alerts/consensus_vrf.yaml"),
+    Path("docs/observability/alerts/snapshot_stream.yaml"),
 ]
 
 error = False
@@ -181,6 +182,20 @@ PY
             echo "One or more dashboard exports are missing."
             exit 1
           fi
+
+  alerts-lint:
+    name: Alert manifest lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Spectral CLI
+        run: npm install -g @stoplight/spectral-cli@6
+      - name: Lint alert definitions
+        run: |
+          set -euo pipefail
+          spectral lint docs/observability/alerts/*.yaml \
+            -r docs/observability/alerts/.spectral.yaml
 
   runtime-smoke:
     name: Runtime smoke health checks
