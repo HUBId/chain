@@ -41,17 +41,24 @@ intervals.
    quickly spot whether pipeline stalls coincide with snapshot slowdowns.
 
 ## Alerting Suggestions
+The Prometheus rules in
+[`docs/observability/alerts/snapshot_stream.yaml`](alerts/snapshot_stream.yaml)
+codify the following defaults, routing warnings to the telemetry channel and
+critical pages to the snapshot on-call rotation:
+
 - **Snapshot Lag Warning** – Alert when
   `snapshot_stream_lag_seconds > 30` for longer than 5 minutes. Escalate to
-  critical at 120 seconds.
+  critical at 120 seconds (2 minute hold time).
 - **Chunk Failure Surge** – Fire when
   `increase(light_client_chunk_failures_total{direction="outbound",kind="chunk"}[10m])`
   exceeds 3. On consumers, alert when inbound failures exceed 1 in 10 minutes,
-  signalling persistent decode problems.
+  signalling persistent decode problems. Critical pages trigger once outbound
+  failures pass 6 or inbound failures pass 3 within the same 10 minute window.
 - **Zero Throughput** – Trigger a warning if both outbound and inbound rates of
   `snapshot_bytes_sent_total{kind="chunk"}` fall to zero while a session
   remains active (check `/p2p/snapshots` RPC). Combine with stream lag alerts to
-  reduce noise during idle periods.
+  reduce noise during idle periods. Page when the stall persists for 20 minutes
+  despite recent activity.
 
 ## Operational Checklist
 - Confirm metrics availability with the integration test

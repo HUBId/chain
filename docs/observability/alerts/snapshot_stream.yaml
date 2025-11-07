@@ -1,0 +1,97 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: snapshot-stream
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: snapshot-stream
+      rules:
+        - alert: SnapshotStreamLagWarning
+          expr: snapshot_stream_lag_seconds > 30
+          for: 5m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot stream lag exceeded 30 seconds
+            description: |
+              The snapshot stream lag has been above the 30 second warning threshold for five
+              minutes. Inspect producer bandwidth, consumer back-pressure, and gossip health to
+              keep snapshot replay within the target SLO.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotStreamLagCritical
+          expr: snapshot_stream_lag_seconds > 120
+          for: 2m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot stream lag exceeded 120 seconds
+            description: |
+              Snapshot lag has breached the 120 second critical threshold. Escalate to the on-call
+              snapshot engineer and execute the failover playbook to restore healthy consumers.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotStreamZeroThroughputWarning
+          expr: |
+            (sum(increase(snapshot_bytes_sent_total{kind="chunk"}[30m])) > 0)
+            and
+            (sum(rate(snapshot_bytes_sent_total{kind="chunk"}[5m])) < 1)
+          for: 10m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk throughput dropped to zero
+            description: |
+              Snapshot chunk throughput has been effectively zero for ten minutes despite recent
+              activity. Verify active sessions via the /p2p/snapshots RPC and confirm outbound
+              bandwidth limits.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotStreamZeroThroughputCritical
+          expr: |
+            (sum(increase(snapshot_bytes_sent_total{kind="chunk"}[30m])) > 0)
+            and
+            (sum(rate(snapshot_bytes_sent_total{kind="chunk"}[15m])) < 1)
+          for: 20m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk throughput stalled for 20 minutes
+            description: |
+              Snapshot chunk throughput has remained at zero for twenty minutes while sessions were
+              recently active. Page the snapshot on-call and follow the failover runbook to restart
+              producers or redirect consumers.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotChunkFailureSpikeWarning
+          expr: |
+            (sum(increase(light_client_chunk_failures_total{direction="outbound",kind="chunk"}[10m])) > 3)
+            or
+            (sum(increase(light_client_chunk_failures_total{direction="inbound",kind="chunk"}[10m])) > 1)
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk failures exceeded warning threshold
+            description: |
+              Snapshot chunk retries or decode failures crossed the warning threshold. Inspect peer
+              logs for repeated `chunk transfer failed` entries and rebalance consumers if needed.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
+        - alert: SnapshotChunkFailureSpikeCritical
+          expr: |
+            (sum(increase(light_client_chunk_failures_total{direction="outbound",kind="chunk"}[10m])) > 6)
+            or
+            (sum(increase(light_client_chunk_failures_total{direction="inbound",kind="chunk"}[10m])) > 3)
+          for: 5m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot chunk failures exceeded critical threshold
+            description: |
+              Snapshot chunk failure volume is spiking and breaching the critical ceiling. Escalate
+              to the on-call to investigate peer health, storage backing services, or snapshot
+              corruption before validators fall behind.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md
