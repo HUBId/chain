@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -15,7 +15,9 @@ use super::super::{
 };
 use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
-use rpp_p2p::{AdmissionAuditTrail, AdmissionPolicies, AllowlistedPeer, TierLevel};
+use rpp_p2p::{
+    AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry, AllowlistedPeer, TierLevel,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct StartSnapshotStreamRequest {
@@ -57,6 +59,22 @@ pub struct AdmissionPolicyEntry {
 pub struct AdmissionPoliciesResponse {
     pub allowlist: Vec<AdmissionPolicyEntry>,
     pub blocklist: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdmissionAuditLogQuery {
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdmissionAuditLogResponse {
+    pub offset: usize,
+    pub limit: usize,
+    pub total: usize,
+    pub entries: Vec<AdmissionPolicyLogEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,4 +264,30 @@ pub(super) async fn update_admission_policies(
 
     let policies = node.admission_policies();
     Ok(Json(AdmissionPoliciesResponse::from(policies)))
+}
+
+pub(super) async fn admission_audit_log(
+    State(state): State<ApiContext>,
+    Query(query): Query<AdmissionAuditLogQuery>,
+) -> Result<Json<AdmissionAuditLogResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let offset = query.offset.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).min(200);
+    if limit == 0 {
+        return Ok(Json(AdmissionAuditLogResponse {
+            offset,
+            limit,
+            total: 0,
+            entries: Vec::new(),
+        }));
+    }
+    let (entries, total) = node
+        .admission_audit_log(offset, limit)
+        .map_err(to_http_error)?;
+    Ok(Json(AdmissionAuditLogResponse {
+        offset,
+        limit,
+        total,
+        entries,
+    }))
 }

@@ -9,6 +9,7 @@ mod metrics;
 mod peerstore;
 mod persistence;
 mod pipeline;
+mod policy_log;
 mod roadmap;
 mod security;
 mod simulator;
@@ -51,6 +52,9 @@ pub use pipeline::{
     NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex, PersistentProofStorage,
     PipelineError, ProofMempool, ProofRecord, ProofStorage, RuntimeProofValidator, SnapshotChunk,
     SnapshotChunkStream, SnapshotStore, TelemetryEvent, TransactionProofVerifier, VoteOutcome,
+};
+pub use policy_log::{
+    AdmissionPolicyChange, AdmissionPolicyLogEntry, AdmissionPolicyLogError, PolicyAllowlistState,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
 pub use rpp_p2p_macros::NetworkBehaviour;

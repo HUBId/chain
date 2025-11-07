@@ -12,11 +12,15 @@ use base64::{engine::general_purpose, Engine as _};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::info;
+use tracing::{error, info};
 
 use crate::handshake::{
     emit_handshake_telemetry, HandshakeOutcome, HandshakePayload, TelemetryMetadata,
     VRF_HANDSHAKE_CONTEXT,
+};
+use crate::policy_log::{
+    AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry, AdmissionPolicyLogError,
+    PolicyAllowlistState,
 };
 use crate::tier::TierLevel;
 use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
@@ -27,6 +31,8 @@ pub enum PeerstoreError {
     Io(#[from] std::io::Error),
     #[error("encoding error: {0}")]
     Encoding(String),
+    #[error("admission audit log error: {0}")]
+    AuditLog(#[from] AdmissionPolicyLogError),
     #[error("missing signature in handshake")]
     MissingSignature,
     #[error("missing public key for peer {peer}")]
@@ -391,6 +397,7 @@ impl AdmissionAuditTrail {
 pub struct PeerstoreConfig {
     path: Option<PathBuf>,
     access_path: Option<PathBuf>,
+    audit_log_path: Option<PathBuf>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
     allowlist: Vec<AllowlistedPeer>,
     blocklist: Vec<PeerId>,
@@ -401,6 +408,7 @@ impl fmt::Debug for PeerstoreConfig {
         f.debug_struct("PeerstoreConfig")
             .field("path", &self.path)
             .field("access_path", &self.access_path)
+            .field("audit_log_path", &self.audit_log_path)
             .field("allowlist", &self.allowlist)
             .field("blocklist", &self.blocklist)
             .finish()
@@ -412,6 +420,7 @@ impl PeerstoreConfig {
         Self {
             path: None,
             access_path: None,
+            audit_log_path: None,
             identity_verifier: None,
             allowlist: Vec::new(),
             blocklist: Vec::new(),
@@ -421,8 +430,10 @@ impl PeerstoreConfig {
     pub fn persistent(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let access_path = path.with_extension("access.json");
+        let audit_log_path = path.with_extension("audit.jsonl");
         Self {
             access_path: Some(access_path),
+            audit_log_path: Some(audit_log_path),
             path: Some(path),
             identity_verifier: None,
             allowlist: Vec::new(),
@@ -450,6 +461,11 @@ impl PeerstoreConfig {
         self
     }
 
+    pub fn with_audit_log_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.audit_log_path = Some(path.into());
+        self
+    }
+
     pub fn allowlist(&self) -> &[AllowlistedPeer] {
         &self.allowlist
     }
@@ -462,6 +478,7 @@ impl PeerstoreConfig {
 pub struct Peerstore {
     path: Option<PathBuf>,
     access_path: Option<PathBuf>,
+    audit_log: Option<Arc<AdmissionPolicyLog>>,
     peers: RwLock<HashMap<PeerId, PeerRecord>>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
     allowlist: RwLock<Vec<AllowlistedPeer>>,
@@ -473,6 +490,7 @@ impl fmt::Debug for Peerstore {
         f.debug_struct("Peerstore")
             .field("path", &self.path)
             .field("access_path", &self.access_path)
+            .field("audit_log", &self.audit_log.is_some())
             .field("identity_verifier", &self.identity_verifier.is_some())
             .field("allowlist_len", &self.allowlist.read().len())
             .field("blocklisted_len", &self.blocklisted.read().len())
@@ -511,6 +529,23 @@ impl Peerstore {
                 .map(|path| path.with_extension("access.json"))
         });
 
+        let audit_log_path = config.audit_log_path.clone().or_else(|| {
+            access_path
+                .as_ref()
+                .map(|path| path.with_extension("audit.jsonl"))
+                .or_else(|| {
+                    config
+                        .path
+                        .as_ref()
+                        .map(|path| path.with_extension("audit.jsonl"))
+                })
+        });
+
+        let audit_log = match audit_log_path {
+            Some(path) => Some(Arc::new(AdmissionPolicyLog::open(path)?)),
+            None => None,
+        };
+
         let (allowlist, blocklisted) = if let Some(path) = &access_path {
             if path.exists() {
                 let raw = fs::read_to_string(path)?;
@@ -545,6 +580,7 @@ impl Peerstore {
         let store = Self {
             path: config.path,
             access_path,
+            audit_log,
             identity_verifier: config.identity_verifier,
             peers: RwLock::new(peers),
             allowlist: RwLock::new(allowlist),
@@ -559,6 +595,17 @@ impl Peerstore {
         let allowlist = self.allowlist.read().clone();
         let blocklist = self.blocklisted.read().iter().cloned().collect::<Vec<_>>();
         AdmissionPolicies::new(allowlist, blocklist)
+    }
+
+    pub fn admission_audit_entries(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<AdmissionPolicyLogEntry>, usize), PeerstoreError> {
+        match &self.audit_log {
+            Some(log) => log.read(offset, limit).map_err(PeerstoreError::from),
+            None => Ok((Vec::new(), 0)),
+        }
     }
 
     pub fn record_public_key(
@@ -1047,6 +1094,30 @@ impl Peerstore {
         self.commit_access_lists(allowlist, blocklist, audit)
     }
 
+    fn append_policy_change(
+        &self,
+        actor: &str,
+        reason: Option<&str>,
+        change: AdmissionPolicyChange,
+    ) -> Result<(), PeerstoreError> {
+        if let Some(log) = &self.audit_log {
+            let reason_owned = reason.map(|value| value.to_string());
+            let reason_ref = reason_owned.as_deref();
+            if let Err(err) = log.append(actor, reason_ref, change) {
+                let label = reason_ref.unwrap_or("n/a");
+                error!(
+                    target: "telemetry.admission",
+                    actor = %actor,
+                    reason = %label,
+                    error = %err,
+                    "failed to append admission audit log"
+                );
+                return Err(err.into());
+            }
+        }
+        Ok(())
+    }
+
     fn commit_access_lists(
         &self,
         allowlist: Vec<AllowlistedPeer>,
@@ -1098,7 +1169,7 @@ impl Peerstore {
             &allowlist,
             &previous_blocklisted,
             &new_blocklisted,
-        );
+        )?;
 
         Ok(())
     }
@@ -1110,7 +1181,7 @@ impl Peerstore {
         next_allowlist: &[AllowlistedPeer],
         previous_blocklisted: &HashSet<PeerId>,
         next_blocklisted: &HashSet<PeerId>,
-    ) {
+    ) -> Result<(), PeerstoreError> {
         let actor = audit.actor();
         let reason = audit.reason().unwrap_or("n/a");
         let previous_map: HashMap<PeerId, TierLevel> = previous_allowlist
@@ -1127,6 +1198,14 @@ impl Peerstore {
             match previous_map.get(peer) {
                 None => {
                     mutated = true;
+                    self.append_policy_change(
+                        actor,
+                        audit.reason(),
+                        AdmissionPolicyChange::Allowlist {
+                            previous: None,
+                            current: Some(PolicyAllowlistState::new(peer.clone(), *new_tier)),
+                        },
+                    )?;
                     info!(
                         target: "telemetry.admission",
                         actor = %actor,
@@ -1138,6 +1217,14 @@ impl Peerstore {
                 }
                 Some(old_tier) if old_tier != new_tier => {
                     mutated = true;
+                    self.append_policy_change(
+                        actor,
+                        audit.reason(),
+                        AdmissionPolicyChange::Allowlist {
+                            previous: Some(PolicyAllowlistState::new(peer.clone(), *old_tier)),
+                            current: Some(PolicyAllowlistState::new(peer.clone(), *new_tier)),
+                        },
+                    )?;
                     info!(
                         target: "telemetry.admission",
                         actor = %actor,
@@ -1155,6 +1242,14 @@ impl Peerstore {
         for (peer, old_tier) in &previous_map {
             if !next_map.contains_key(peer) {
                 mutated = true;
+                self.append_policy_change(
+                    actor,
+                    audit.reason(),
+                    AdmissionPolicyChange::Allowlist {
+                        previous: Some(PolicyAllowlistState::new(peer.clone(), *old_tier)),
+                        current: None,
+                    },
+                )?;
                 info!(
                     target: "telemetry.admission",
                     actor = %actor,
@@ -1169,6 +1264,15 @@ impl Peerstore {
         for peer in next_blocklisted {
             if !previous_blocklisted.contains(peer) {
                 mutated = true;
+                self.append_policy_change(
+                    actor,
+                    audit.reason(),
+                    AdmissionPolicyChange::Blocklist {
+                        peer_id: peer.to_base58(),
+                        previous: false,
+                        current: true,
+                    },
+                )?;
                 info!(
                     target: "telemetry.admission",
                     actor = %actor,
@@ -1182,6 +1286,15 @@ impl Peerstore {
         for peer in previous_blocklisted {
             if !next_blocklisted.contains(peer) {
                 mutated = true;
+                self.append_policy_change(
+                    actor,
+                    audit.reason(),
+                    AdmissionPolicyChange::Blocklist {
+                        peer_id: peer.to_base58(),
+                        previous: true,
+                        current: false,
+                    },
+                )?;
                 info!(
                     target: "telemetry.admission",
                     actor = %actor,
@@ -1193,6 +1306,7 @@ impl Peerstore {
         }
 
         if !mutated {
+            self.append_policy_change(actor, audit.reason(), AdmissionPolicyChange::Noop)?;
             info!(
                 target: "telemetry.admission",
                 actor = %actor,
@@ -1200,6 +1314,7 @@ impl Peerstore {
                 "admission_policies_unchanged"
             );
         }
+        Ok(())
     }
 
     fn blocklist_ban_until() -> SystemTime {
@@ -1221,6 +1336,7 @@ fn derive_public_key(peer_id: &PeerId) -> Option<identity::PublicKey> {
 mod tests {
     use super::*;
     use crate::handshake::VRF_HANDSHAKE_CONTEXT;
+    use crate::policy_log::AdmissionPolicyChange;
     use crate::vendor::identity;
     use rand::rngs::OsRng;
     use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
@@ -1583,5 +1699,38 @@ mod tests {
             .find(|record| record.peer_id == peer)
             .expect("record");
         assert!(entry.addresses.contains(&addr));
+    }
+
+    #[test]
+    fn audit_log_records_allowlist_changes() {
+        let dir = tempdir().expect("tmp");
+        let path = dir.path().join("peerstore.json");
+        let store = Peerstore::open(PeerstoreConfig::persistent(&path)).expect("open");
+        let peer = PeerId::random();
+        let allowlist = vec![AllowlistedPeer {
+            peer: peer.clone(),
+            tier: TierLevel::Tl3,
+        }];
+
+        store
+            .update_admission_policies(
+                allowlist,
+                Vec::new(),
+                AdmissionAuditTrail::new("operator", Some("initial rollout")),
+            )
+            .expect("policy update");
+
+        let (entries, total) = store.admission_audit_entries(0, 32).expect("audit log");
+        assert!(total >= 1);
+        let last = entries.last().expect("entry");
+        assert_eq!(last.actor, "operator");
+        match &last.change {
+            AdmissionPolicyChange::Allowlist { current, .. } => {
+                let current = current.as_ref().expect("current state");
+                assert_eq!(current.peer_id, peer.to_base58());
+                assert_eq!(current.tier, TierLevel::Tl3);
+            }
+            change => panic!("unexpected audit change: {change:?}"),
+        }
     }
 }

@@ -79,6 +79,27 @@ If the payload is invalid—for example the same peer appears twice—the servic
 returns a `400` with a descriptive error string so auditors can capture the
 failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L172-L195】
 
+### Inspecting the audit log
+
+Every policy mutation (including no-op attempts) is appended to an
+append-only JSONL log alongside the actor, optional reason, timestamp and the
+previous/current state of the affected entry. The peerstore writes the log next
+to the policy snapshot and surfaces it via `GET /p2p/admission/audit`, which
+accepts `offset` and `limit` query parameters for pagination. Each entry records
+the peer ID, tier transitions for allowlist edits, or blocklist toggles so
+operators can reconstruct the full history.【F:rpp/p2p/src/peerstore.rs†L1045-L1175】【F:rpp/p2p/src/policy_log.rs†L1-L112】【F:rpp/rpc/src/routes/p2p.rs†L110-L153】
+
+```sh
+curl -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     'https://rpc.example.org/p2p/admission/audit?offset=0&limit=50'
+```
+
+The RPC response reports the total number of entries, the requested window, and
+the selected slice. Operators should size retention according to
+`network.admission.audit_retention_days` in the config bundle; the peerstore
+keeps writing to the JSONL file while external rotation jobs enforce the
+window.【F:rpp/runtime/config.rs†L942-L1004】【F:docs/configuration.md†L48-L50】
+
 ## Tests
 
 `tests/network/admission_control.rs` exercises the new failure modes: a peer
