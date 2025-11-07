@@ -29,7 +29,6 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const core = require('@actions/core');
 
             const { owner, repo } = context.repo;
             const defaultBranch = context.payload.repository?.default_branch ?? process.env.GITHUB_BASE_REF ?? 'main';
