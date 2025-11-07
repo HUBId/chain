@@ -1372,11 +1372,14 @@ fn encode_recursive_proof(proof: &ChainProof) -> ChainResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus::messages::ConsensusVrfEntry;
     use crate::consensus::{
         evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
     };
     use crate::crypto::{address_from_public_key, generate_vrf_keypair, vrf_public_key_to_hex};
-    use crate::rpp::{ConsensusWitness, ModuleWitnessBundle, ProofArtifact};
+    use crate::rpp::{
+        ConsensusWitness, ConsensusWitnessBindings, ModuleWitnessBundle, ProofArtifact,
+    };
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::ExecutionTrace;
     use crate::stwo::circuit::{
@@ -1617,15 +1620,29 @@ mod tests {
         let state_stark = dummy_state_proof();
         let pruning_stark = dummy_pruning_proof();
         let mut module_witnesses = ModuleWitnessBundle::default();
+        let vrf_entry = ConsensusVrfEntry::default();
+        let bindings = ConsensusWitnessBindings {
+            vrf_output: "11".repeat(32),
+            vrf_proof: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            quorum_bitmap: "55".repeat(32),
+            quorum_signature: "66".repeat(32),
+        };
         module_witnesses.record_consensus(ConsensusWitness::new(
             height,
             height,
             vec![address.clone()],
+            vec![vrf_entry],
             vec!["aa".repeat(32)],
             vec!["bb".repeat(32)],
             vec!["cc".repeat(32)],
+            vec!["dd".repeat(32)],
+            height,
+            height + 1,
             "dd".repeat(32),
             "ee".repeat(32),
+            bindings,
         ));
         let proof_artifacts = module_witnesses
             .expected_artifacts()

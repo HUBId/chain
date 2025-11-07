@@ -785,6 +785,8 @@ pub mod test_helpers {
 
     use rpp::crypto::{address_from_public_key, sign_message};
     use rpp::errors::{ChainError, ChainResult};
+    use rpp::consensus::messages::ConsensusVrfEntry;
+    use rpp::consensus::ConsensusWitnessBindings;
     use rpp::proofs::rpp::{
         ConsensusWitness, ModuleWitnessBundle, ProofArtifact, TransactionWitness,
     };
@@ -1126,15 +1128,29 @@ pub mod test_helpers {
         let state_stark = dummy_state_proof();
         let pruning_stark = dummy_pruning_proof();
         let mut module_witnesses = ModuleWitnessBundle::default();
+        let vrf_entry = ConsensusVrfEntry::default();
+        let bindings = ConsensusWitnessBindings {
+            vrf_output: "11".repeat(32),
+            vrf_proof: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            quorum_bitmap: "55".repeat(32),
+            quorum_signature: "66".repeat(32),
+        };
         module_witnesses.record_consensus(ConsensusWitness::new(
             height,
             height,
             vec![address.clone()],
+            vec![vrf_entry],
             vec!["aa".repeat(32)],
             vec!["bb".repeat(32)],
             vec!["cc".repeat(32)],
+            vec!["dd".repeat(32)],
+            height,
+            height + 1,
             "dd".repeat(32),
             "ee".repeat(32),
+            bindings,
         ));
         let proof_artifacts = module_witnesses
             .expected_artifacts()

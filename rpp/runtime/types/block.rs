@@ -2476,6 +2476,7 @@ impl StoredBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consensus::messages::ConsensusVrfEntry;
     use crate::consensus::{
         evaluate_vrf, BftVote, BftVoteKind, ConsensusCertificate, SignedBftVote, VoteRecord,
     };
@@ -2484,7 +2485,7 @@ mod tests {
     use crate::ledger::{Ledger, DEFAULT_EPOCH_LENGTH};
     use crate::proof_backend::Blake2sHasher;
     use crate::reputation::{ReputationWeights, Tier};
-    use crate::rpp::{ConsensusWitness, ModuleWitnessBundle};
+    use crate::rpp::{ConsensusWitness, ConsensusWitnessBindings, ModuleWitnessBundle};
     use crate::state::merkle::compute_merkle_root;
     use crate::stwo::circuit::{
         consensus::{
@@ -3088,20 +3089,35 @@ mod tests {
             recursive_chain,
         );
         let mut witnesses = ModuleWitnessBundle::default();
+        let vrf_entries = vec![ConsensusVrfEntry::default()];
         let vrf_outputs = vec!["aa".repeat(32)];
         let vrf_proofs = vec!["bb".repeat(32)];
         let witness_commitments = vec!["cc".repeat(32)];
-        let quorum_bitmap_root = "dd".repeat(32);
-        let quorum_signature_root = "ee".repeat(32);
+        let reputation_roots = vec!["dd".repeat(32)];
+        let quorum_bitmap_root = "ee".repeat(32);
+        let quorum_signature_root = "ff".repeat(32);
+        let bindings = ConsensusWitnessBindings {
+            vrf_output: "11".repeat(32),
+            vrf_proof: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            quorum_bitmap: "55".repeat(32),
+            quorum_signature: "66".repeat(32),
+        };
         witnesses.record_consensus(ConsensusWitness::new(
             1,
             1,
             vec![address.clone()],
+            vrf_entries.clone(),
             vrf_outputs.clone(),
             vrf_proofs.clone(),
             witness_commitments.clone(),
+            reputation_roots.clone(),
+            3,
+            5,
             quorum_bitmap_root.clone(),
             quorum_signature_root.clone(),
+            bindings.clone(),
         ));
         let block = Block::new(
             header,
@@ -3144,11 +3160,16 @@ mod tests {
             1,
             1,
             vec!["cafebabe".repeat(4)],
+            vrf_entries,
             vrf_outputs.clone(),
             vrf_proofs.clone(),
             witness_commitments.clone(),
+            reputation_roots.clone(),
+            3,
+            5,
             quorum_bitmap_root.clone(),
             quorum_signature_root.clone(),
+            bindings,
         ));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
         assert!(mismatched_witness_block
@@ -3193,11 +3214,16 @@ mod tests {
             block.header.height,
             block.consensus.round,
             vec!["cafebabe".repeat(4)],
+            reference_witness.vrf_entries.clone(),
             reference_witness.vrf_outputs.clone(),
             reference_witness.vrf_proofs.clone(),
             reference_witness.witness_commitments.clone(),
+            reference_witness.reputation_roots.clone(),
+            reference_witness.epoch,
+            reference_witness.slot,
             reference_witness.quorum_bitmap_root.clone(),
             reference_witness.quorum_signature_root.clone(),
+            reference_witness.bindings.clone(),
         ));
         mismatched_witness_block.module_witnesses = mismatched_bundle;
         assert!(mismatched_witness_block.verify_consensus_light().is_err());

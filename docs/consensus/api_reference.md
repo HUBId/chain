@@ -95,6 +95,9 @@ only while older agents remain in the fleet.
    consensus circuit enforces. Also covered by
    `summarize_consensus_certificate_includes_bindings` and by the regression tests in
    [`tests/consensus/consensus_proof_integrity.rs`](../../tests/consensus/consensus_proof_integrity.rs).
+3. **Witness bundle parity** – `build_consensus_witness_includes_certificate_metadata`
+   ensures the ledger bundle mirrors the certificate metadata, including the
+   VRF transcripts, reputation roots, epoch/slot counters, and quorum bindings.
 
 When either criterion fails, the route returns `503 Service Unavailable` until the
 runtime records a valid certificate again.

@@ -1252,11 +1252,16 @@ impl Ledger {
             bundle.height,
             bundle.round,
             participants,
+            bundle.vrf_entries.clone(),
             bundle.vrf_outputs.clone(),
             bundle.vrf_proofs.clone(),
             bundle.witness_commitments.clone(),
+            bundle.reputation_roots.clone(),
+            bundle.epoch,
+            bundle.slot,
             bundle.quorum_bitmap_root.clone(),
             bundle.quorum_signature_root.clone(),
+            bundle.bindings.clone(),
         );
         let mut book = self.module_witnesses.write();
         book.record_consensus(witness);
@@ -2488,15 +2493,29 @@ mod tests {
         };
         bundle.record_zsi(ZsiWitness::new("alice".into(), None, zsi_updated));
 
+        let vrf_entry = crate::consensus::messages::ConsensusVrfEntry::default();
+        let bindings = crate::consensus::ConsensusWitnessBindings {
+            vrf_output: "11".repeat(32),
+            vrf_proof: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            reputation_root: "44".repeat(32),
+            quorum_bitmap: "55".repeat(32),
+            quorum_signature: "66".repeat(32),
+        };
         bundle.record_consensus(ConsensusWitness::new(
             42,
             3,
             vec!["alice".into(), "bob".into()],
+            vec![vrf_entry],
             vec!["aa".repeat(32)],
             vec!["bb".repeat(32)],
             vec!["cc".repeat(32)],
-            "dd".repeat(32),
+            vec!["dd".repeat(32)],
+            5,
+            7,
             "ee".repeat(32),
+            "ff".repeat(32),
+            bindings,
         ));
 
         bundle
