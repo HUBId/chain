@@ -80,9 +80,11 @@ fn run_unit_suites() -> Result<()> {
 }
 
 fn run_integration_workflows() -> Result<()> {
+    let root = workspace_root();
+
     let mut command = Command::new("cargo");
     command
-        .current_dir(workspace_root())
+        .current_dir(&root)
         .arg("test")
         .arg("-p")
         .arg("rpp-chain")
@@ -90,7 +92,19 @@ fn run_integration_workflows() -> Result<()> {
         .arg("--test")
         .arg("integration");
     apply_feature_flags(&mut command);
-    run_command(command, "integration workflows")
+    run_command(command, "integration workflows")?;
+
+    let mut restart = Command::new("cargo");
+    restart
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("snapshot_checksum_restart");
+    apply_feature_flags(&mut restart);
+    run_command(restart, "snapshot checksum restart")
 }
 
 fn run_observability_suite() -> Result<()> {
