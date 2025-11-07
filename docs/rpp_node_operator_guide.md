@@ -125,6 +125,57 @@ the active node configuration.【F:rpp/node/src/main.rs†L48-L183】 Detailed
 workflows—including sample invocations and expected output—live in the
 [validator tooling guide](./validator_tooling.md).【F:docs/validator_tooling.md†L14-L137】
 
+### Snapshot streaming CLI
+
+`rpp-node validator snapshot` wraps the `/p2p/snapshots` RPCs so operators can
+start, resume, inspect, and cancel consumer sessions without constructing HTTP
+requests by hand. The CLI resolves the active validator configuration, derives
+the RPC base URL from `network.rpc.listen`, and automatically attaches the
+configured bearer token unless an explicit `--auth-token` override is provided.
+
+```text
+$ rpp-node validator snapshot start --peer 12D3KooWexamplePeer
+snapshot session started:
+  session: 42
+  peer: 12D3KooWexamplePeer
+  root: deadbeefcafebabe
+  last_chunk_index: none
+  last_update_index: none
+  last_update_height: none
+  verified: unknown
+  error: none
+
+$ rpp-node validator snapshot status --session 42
+snapshot status:
+  session: 42
+  peer: 12D3KooWexamplePeer
+  root: deadbeefcafebabe
+  last_chunk_index: none
+  last_update_index: none
+  last_update_height: none
+  verified: unknown
+  error: none
+
+$ rpp-node validator snapshot resume --session 42 --peer 12D3KooWexamplePeer
+snapshot session resumed:
+  session: 42
+  peer: 12D3KooWexamplePeer
+  root: deadbeefcafebabe
+  last_chunk_index: 12
+  last_update_index: 3
+  last_update_height: 256
+  verified: false
+  error: none
+
+$ rpp-node validator snapshot cancel --session 42
+snapshot session 42 cancelled
+```
+
+Errors propagate directly from the RPC surface so operators receive the HTTP
+status code and body when a request fails (for example: `RPC returned 500:
+intentional failure`). The behaviour mirrors the manual `curl` workflows but
+adds token management and structured output for incident logs.【F:rpp/node/src/main.rs†L118-L310】
+
 ### Consensus proof metadata expectations
 
 Finality proofs now encode the epoch/slot context, VRF proofs, and quorum

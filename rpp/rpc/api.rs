@@ -124,7 +124,7 @@ use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_key
 
 #[path = "src/routes/mod.rs"]
 mod routes;
-pub use routes::p2p::{snapshot_stream_status, start_snapshot_stream};
+pub use routes::p2p::{cancel_snapshot_stream, snapshot_stream_status, start_snapshot_stream};
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
 pub use routes::state_sync::{
     chunk_by_id as state_sync_chunk_by_id, head_stream as state_sync_head_stream,
@@ -253,6 +253,8 @@ pub trait SnapshotStreamRuntime: Send + Sync {
     ) -> Result<SnapshotStreamStatus, SnapshotStreamRuntimeError>;
 
     fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus>;
+
+    async fn cancel_snapshot_stream(&self, session: u64) -> Result<(), SnapshotStreamRuntimeError>;
 }
 
 #[derive(Clone)]
@@ -286,6 +288,14 @@ impl SnapshotStreamRuntime for NodeSnapshotStreamRuntime {
     fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus> {
         let session_id = SnapshotSessionId::new(session);
         self.handle.snapshot_stream_status(session_id)
+    }
+
+    async fn cancel_snapshot_stream(&self, session: u64) -> Result<(), SnapshotStreamRuntimeError> {
+        let session_id = SnapshotSessionId::new(session);
+        self.handle
+            .cancel_snapshot_stream(session_id)
+            .await
+            .map_err(SnapshotStreamRuntimeError::Runtime)
     }
 }
 
@@ -1372,7 +1382,7 @@ where
         .route("/p2p/snapshots", post(routes::p2p::start_snapshot_stream))
         .route(
             "/p2p/snapshots/:id",
-            get(routes::p2p::snapshot_stream_status),
+            get(routes::p2p::snapshot_stream_status).delete(routes::p2p::cancel_snapshot_stream),
         )
         .route("/p2p/access-lists", post(update_access_lists))
         .route("/status/node", get(node_status))

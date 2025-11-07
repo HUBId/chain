@@ -3,21 +3,16 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::{
-    Router,
     body::Body,
     http::{Request, StatusCode},
-    routing::{get, post},
+    routing::{delete, get, post},
+    Router,
 };
 use hyper::body::to_bytes;
 use parking_lot::RwLock;
-use rpp_chain::api::{
-    self,
-    ApiContext,
-    SnapshotStreamRuntime,
-    SnapshotStreamRuntimeError,
-};
-use rpp_chain::runtime::RuntimeMode;
+use rpp_chain::api::{self, ApiContext, SnapshotStreamRuntime, SnapshotStreamRuntimeError};
 use rpp_chain::runtime::node_runtime::node::{NodeError as P2pNodeError, SnapshotStreamStatus};
+use rpp_chain::runtime::RuntimeMode;
 use rpp_p2p::{vendor::PeerId as NetworkPeerId, SnapshotSessionId};
 use serde_json::json;
 use tower::ServiceExt;
@@ -70,15 +65,21 @@ impl SnapshotStreamRuntime for FakeSnapshotRuntime {
         }
     }
 
-    fn snapshot_stream_status(
-        &self,
-        session: u64,
-    ) -> Option<SnapshotStreamStatus> {
+    fn snapshot_stream_status(&self, session: u64) -> Option<SnapshotStreamStatus> {
         self.statuses
             .lock()
             .expect("status lock")
             .get(&session)
             .cloned()
+    }
+
+    async fn cancel_snapshot_stream(&self, session: u64) -> Result<(), SnapshotStreamRuntimeError> {
+        let mut statuses = self.statuses.lock().expect("status lock");
+        if statuses.remove(&session).is_some() {
+            Ok(())
+        } else {
+            Err(SnapshotStreamRuntimeError::SessionNotFound(session))
+        }
     }
 }
 
@@ -128,15 +129,13 @@ async fn start_snapshot_stream_returns_status() {
         .method("POST")
         .uri("/p2p/snapshots")
         .header("content-type", "application/json")
-        .body(
-            Body::from(
-                json!({
-                    "peer": peer.to_string(),
-                    "chunk_size": 16,
-                })
-                .to_string(),
-            ),
-        )
+        .body(Body::from(
+            json!({
+                "peer": peer.to_string(),
+                "chunk_size": 16,
+            })
+            .to_string(),
+        ))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -176,15 +175,13 @@ async fn start_snapshot_stream_propagates_error() {
         .method("POST")
         .uri("/p2p/snapshots")
         .header("content-type", "application/json")
-        .body(
-            Body::from(
-                json!({
-                    "peer": peer.to_string(),
-                    "chunk_size": 32,
-                })
-                .to_string(),
-            ),
-        )
+        .body(Body::from(
+            json!({
+                "peer": peer.to_string(),
+                "chunk_size": 32,
+            })
+            .to_string(),
+        ))
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
@@ -196,15 +193,13 @@ async fn start_snapshot_stream_propagates_error() {
 
 #[tokio::test]
 async fn snapshot_stream_status_returns_not_found() {
-    let runtime = Arc::new(FakeSnapshotRuntime::new(Err(
-        SnapshotStreamRuntimeError::SessionNotFound(7),
-    ), HashMap::new()));
+    let runtime = Arc::new(FakeSnapshotRuntime::new(
+        Err(SnapshotStreamRuntimeError::SessionNotFound(7)),
+        HashMap::new(),
+    ));
     let context = test_context(runtime);
     let app = Router::new()
-        .route(
-            "/p2p/snapshots/:id",
-            get(api::snapshot_stream_status),
-        )
+        .route("/p2p/snapshots/:id", get(api::snapshot_stream_status))
         .with_state(context);
 
     let request = Request::builder()
@@ -217,4 +212,28 @@ async fn snapshot_stream_status_returns_not_found() {
     let body = to_bytes(response.into_body()).await.unwrap();
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(payload["error"], "snapshot session 7 not found");
+}
+
+#[tokio::test]
+async fn cancel_snapshot_stream_removes_session() {
+    let peer = NetworkPeerId::random();
+    let session = 11u64;
+    let status = sample_status(session, &peer);
+    let runtime = Arc::new(FakeSnapshotRuntime::new(
+        Ok(status.clone()),
+        HashMap::from([(session, status)]),
+    ));
+    let context = test_context(runtime);
+    let app = Router::new()
+        .route("/p2p/snapshots/:id", delete(api::cancel_snapshot_stream))
+        .with_state(context);
+
+    let request = Request::builder()
+        .method("DELETE")
+        .uri("/p2p/snapshots/11")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
 }
