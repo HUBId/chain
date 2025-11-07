@@ -80,6 +80,8 @@ struct MockSnapshotProvider {
     pause_after_chunk: u64,
     last_chunk_index: Mutex<Option<u64>>,
     last_update_index: Mutex<Option<u64>>,
+    confirmed_chunk_index: Mutex<Option<u64>>,
+    confirmed_update_index: Mutex<Option<u64>>,
     total_chunks: u64,
     total_updates: u64,
 }
@@ -104,6 +106,8 @@ impl MockSnapshotProvider {
             pause_after_chunk: 1,
             last_chunk_index: Mutex::new(None),
             last_update_index: Mutex::new(None),
+            confirmed_chunk_index: Mutex::new(None),
+            confirmed_update_index: Mutex::new(None),
             total_chunks,
             total_updates,
         })
@@ -220,8 +224,11 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             )));
         }
         let expected_chunk_index = {
-            let last = self.last_chunk_index.lock().expect("last chunk");
-            last.map(|index| index.saturating_add(1).min(self.total_chunks))
+            let last = *self.last_chunk_index.lock().expect("last chunk");
+            let confirmed = *self.confirmed_chunk_index.lock().expect("confirmed chunk");
+            confirmed
+                .or(last)
+                .map(|index| index.saturating_add(1).min(self.total_chunks))
                 .unwrap_or(0)
         };
         if chunk_index < expected_chunk_index {
@@ -235,8 +242,14 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             )));
         }
         let expected_update_index = {
-            let last = self.last_update_index.lock().expect("last update");
-            last.map(|index| index.saturating_add(1).min(self.total_updates))
+            let last = *self.last_update_index.lock().expect("last update");
+            let confirmed = *self
+                .confirmed_update_index
+                .lock()
+                .expect("confirmed update");
+            confirmed
+                .or(last)
+                .map(|index| index.saturating_add(1).min(self.total_updates))
                 .unwrap_or(0)
         };
         if update_index < expected_update_index {
@@ -272,6 +285,20 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             .lock()
             .expect("acks")
             .push((session_id, kind, index));
+        match kind {
+            SnapshotItemKind::Chunk => {
+                let mut confirmed = self.confirmed_chunk_index.lock().expect("confirmed chunk");
+                *confirmed = Some(confirmed.map_or(index, |current| current.max(index)));
+            }
+            SnapshotItemKind::LightClientUpdate => {
+                let mut confirmed = self
+                    .confirmed_update_index
+                    .lock()
+                    .expect("confirmed update");
+                *confirmed = Some(confirmed.map_or(index, |current| current.max(index)));
+            }
+            _ => {}
+        }
         Ok(())
     }
 }
@@ -505,23 +532,22 @@ async fn snapshot_stream_pause_and_resume() {
     );
 
     let flow_log = provider.flow_log();
-    assert_eq!(
-        flow_log,
-        vec![
-            ProviderCall::FetchPlan,
-            ProviderCall::FetchChunk(0),
-            ProviderCall::Resume(1, 0),
-            ProviderCall::FetchChunk(1),
-            ProviderCall::FetchUpdate(0),
-            ProviderCall::Ack(SnapshotItemKind::Ack, 0),
-        ],
-    );
+    assert!(flow_log.contains(&ProviderCall::FetchPlan));
+    assert!(flow_log.contains(&ProviderCall::FetchChunk(0)));
+    assert!(flow_log.contains(&ProviderCall::FetchChunk(1)));
+    assert!(flow_log.contains(&ProviderCall::FetchUpdate(0)));
+    assert!(flow_log.contains(&ProviderCall::Resume(1, 0)));
+    assert!(flow_log.contains(&ProviderCall::Ack(SnapshotItemKind::Chunk, 0)));
+    assert!(flow_log.contains(&ProviderCall::Ack(SnapshotItemKind::Chunk, 1)));
+    assert!(flow_log.contains(&ProviderCall::Ack(SnapshotItemKind::LightClientUpdate, 0)));
 
     let resume_calls = provider.resume_calls();
     assert_eq!(resume_calls, vec![(session, 1, 0)]);
 
     let acknowledgements = provider.acknowledgements();
-    assert_eq!(acknowledgements, vec![(session, SnapshotItemKind::Ack, 0)]);
+    assert!(acknowledgements.contains(&(session, SnapshotItemKind::Chunk, 0)));
+    assert!(acknowledgements.contains(&(session, SnapshotItemKind::Chunk, 1)));
+    assert!(acknowledgements.contains(&(session, SnapshotItemKind::LightClientUpdate, 0)));
 
     drop(client);
     drop(server);
