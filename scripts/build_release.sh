@@ -254,3 +254,19 @@ if [[ $GENERATE_SBOM -eq 1 ]]; then
     echo "Generated SBOM at $SBOM_PATH"
   fi
 fi
+
+SNAPSHOT_SUMMARY_SCRIPT="$(dirname "$0")/generate_snapshot_summary.py"
+if [[ -f "$SNAPSHOT_SUMMARY_SCRIPT" ]]; then
+  SUMMARY_PATH="$OUT_DIR/$TARGET/snapshot-manifest-summary-${TARGET}.json"
+  echo "Scanning $OUT_DIR/$TARGET for pruning snapshot manifests"
+  if python3 "$SNAPSHOT_SUMMARY_SCRIPT" "$OUT_DIR/$TARGET" --output "$SUMMARY_PATH" --target "$TARGET"; then
+    if [[ -f "$SUMMARY_PATH" ]]; then
+      echo "Snapshot manifest summary written to $SUMMARY_PATH"
+    else
+      echo "No pruning snapshots detected under $OUT_DIR/$TARGET; summary skipped"
+    fi
+  else
+    echo "error: failed to generate snapshot manifest summary" >&2
+    exit 1
+  fi
+fi
