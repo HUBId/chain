@@ -21,7 +21,7 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo +"$NIGHTLY_TOOLCHAIN" install cargo-fuzz --locked
 
-      - name: Run fuzzers
+      - name: Run P2P fuzzers
         working-directory: rpp/p2p
         run: |
           cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_meta -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_meta-
@@ -29,11 +29,26 @@ jobs:
           cargo +"$NIGHTLY_TOOLCHAIN" fuzz run handle_votes -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/handle_votes-
           cargo +"$NIGHTLY_TOOLCHAIN" fuzz run admission_evaluate_publish -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/admission_evaluate_publish-
 
-      - name: Package corpora
-        working-directory: rpp/p2p/fuzz
+      - name: Run wallet fuzzers
+        working-directory: rpp/wallet
         run: |
-          mkdir -p ../../ci-artifacts
-          tar -czf ../../ci-artifacts/nightly-fuzz-corpus.tar.gz corpus
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run wallet_rpc -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/wallet_rpc-
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run zsi_lifecycle -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/zsi_lifecycle-
+
+      - name: Run prover fuzzers
+        working-directory: prover/fuzz
+        run: |
+          cargo +"$NIGHTLY_TOOLCHAIN" fuzz run stwo_circuit_loader -- -seed=0x5A17F00D -max_total_time=120 -timeout=5 -artifact_prefix=artifacts/stwo_circuit_loader-
+
+      - name: Package corpora
+        run: |
+          mkdir -p ci-artifacts/fuzz-corpora
+          rm -rf ci-artifacts/fuzz-corpora/*
+          mkdir -p ci-artifacts/fuzz-corpora/p2p ci-artifacts/fuzz-corpora/wallet ci-artifacts/fuzz-corpora/prover
+          cp -a rpp/p2p/fuzz/corpus ci-artifacts/fuzz-corpora/p2p/
+          cp -a rpp/wallet/fuzz/corpus ci-artifacts/fuzz-corpora/wallet/
+          cp -a prover/fuzz/corpus ci-artifacts/fuzz-corpora/prover/
+          tar -czf ci-artifacts/nightly-fuzz-corpus.tar.gz -C ci-artifacts fuzz-corpora
 
       - name: Upload corpora
         uses: actions/upload-artifact@v4
