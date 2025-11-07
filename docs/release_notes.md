@@ -51,3 +51,13 @@ This document records release-specific proof metadata for the Malachite Phase 
 - **STWO** provides the base and aggregation circuits listed above.
 - **Plonky2** wraps the recursive accumulator for proof chaining.
 
+## Phase 2 Completed (2026-04-15)
+
+### Stakeholder summary
+- Proof-hardening milestones ENG‑742 und ENG‑743 sind ausgeliefert; STWO und Plonky3 berechnen VRF-/Quorum-Transkripte deterministisch nach und dokumentieren die Constraint-Layouts über `cargo xtask proof-metadata`.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L300-L586】【F:prover/plonky3_backend/src/circuits/consensus.rs†L520-L690】【F:docs/release_notes.md†L1-L120】
+- Branch-Protections `unit-suites`, `integration-workflows` und `simnet-smoke` sichern jede Änderung mit vollständiger Feature-Matrix ab; Nightly-Jobs halten die Matrix grün und veröffentlichen Simnet-Artefakte.【F:.github/workflows/ci.yml†L185-L303】【F:.github/workflows/nightly.yml†L88-L183】
+- Observability-Deliverables (Dashboards, Alerts, Runbooks) tracken VRF-Latenzen, Quorum-Verifikationen und Eskalationspfade für On-Call-Teams.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】【F:docs/runbooks/observability.md†L1-L160】
+
+### Next steps
+- Prepare Phase 3 networking scope (Snapshot-Verteilung, Witness-Gossip) as outlined in the roadmap implementation plan Sections 2, 4.2, 4.3 and 6.4/6.5.
+
