@@ -138,8 +138,8 @@ use rpp_chain::stwo::{params::StarkParameters, FieldElement};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipTopic, HandshakePayload, LightClientHead, NetworkLightClientUpdate,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError, SnapshotChunk,
-    SnapshotChunkStream, SnapshotItemKind, SnapshotProvider, SnapshotProviderHandle,
+    NetworkStateSyncChunk, NetworkStateSyncPlan, NodeIdentity, PipelineError, ResumeBoundKind,
+    SnapshotChunk, SnapshotChunkStream, SnapshotItemKind, SnapshotProvider, SnapshotProviderHandle,
     SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
 };
 use rpp_pruning::{TaggedDigest, SNAPSHOT_STATE_TAG};
@@ -1428,10 +1428,32 @@ impl RuntimeSnapshotProvider {
             ));
         }
 
-        let total_chunks = u64::try_from(network_plan.chunks.len())
+        let plan_total_chunks = u64::try_from(network_plan.chunks.len())
             .map_err(|_| PipelineError::SnapshotVerification("chunk count overflow".into()))?;
-        let total_updates = u64::try_from(updates.len())
+        let plan_total_updates = u64::try_from(updates.len())
             .map_err(|_| PipelineError::SnapshotVerification("update count overflow".into()))?;
+
+        let total_chunks = if record.total_chunks == 0 {
+            plan_total_chunks
+        } else if record.total_chunks > plan_total_chunks {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "persisted chunk total {} exceeds regenerated plan {plan_total_chunks}",
+                record.total_chunks
+            )));
+        } else {
+            record.total_chunks
+        };
+
+        let total_updates = if record.total_updates == 0 {
+            plan_total_updates
+        } else if record.total_updates > plan_total_updates {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "persisted update total {} exceeds regenerated plan {plan_total_updates}",
+                record.total_updates
+            )));
+        } else {
+            record.total_updates
+        };
 
         let last_chunk_index = if total_chunks == 0 {
             None
@@ -1698,16 +1720,18 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             )));
         }
         if chunk_index > session.total_chunks {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume chunk index {chunk_index} exceeds total {}",
-                session.total_chunks
-            )));
+            return Err(PipelineError::ResumeBoundsExceeded {
+                kind: ResumeBoundKind::Chunk,
+                requested: chunk_index,
+                total: session.total_chunks,
+            });
         }
         if update_index > session.total_updates {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume update index {update_index} exceeds total {}",
-                session.total_updates
-            )));
+            return Err(PipelineError::ResumeBoundsExceeded {
+                kind: ResumeBoundKind::Update,
+                requested: update_index,
+                total: session.total_updates,
+            });
         }
         let expected_chunk_index = session
             .confirmed_chunk_index

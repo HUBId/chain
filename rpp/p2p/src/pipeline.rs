@@ -19,6 +19,21 @@ use tokio::sync::watch;
 use crate::topics::GossipTopic;
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeBoundKind {
+    Chunk,
+    Update,
+}
+
+impl fmt::Display for ResumeBoundKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ResumeBoundKind::Chunk => write!(f, "chunk"),
+            ResumeBoundKind::Update => write!(f, "update"),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PipelineError {
     #[error("validator rejected payload: {0}")]
@@ -35,6 +50,12 @@ pub enum PipelineError {
     SnapshotVerification(String),
     #[error("persistence error: {0}")]
     Persistence(String),
+    #[error("resume {kind} index {requested} exceeds total {total}")]
+    ResumeBoundsExceeded {
+        kind: ResumeBoundKind,
+        requested: u64,
+        total: u64,
+    },
 }
 
 /// Handler invoked whenever a gossip proof is received on the `proofs` topic.
