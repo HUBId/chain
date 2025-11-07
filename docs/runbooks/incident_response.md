@@ -7,6 +7,11 @@ Genehmigungen verlangt. Jede Sektion beginnt mit einer "First Action"-Checkliste
 die die wichtigsten CLI-Aufrufe, Dashboards und Audit-Trails verlinkt, damit
 Auditor:innen die Dokumentation lückenlos nachverfolgen können.
 
+Für Replay-Störungen in der Timetoke-Pipeline verweist dieses Playbook auf das
+[Timetoke-Failover-Runbook](./timetoke_failover.md), das Detection-Signale,
+Recovery-Schritte und Troubleshooting-Tipps für die Wiederanbindung der
+Snapshot-Kette bündelt.
+
 ## Einsatzvorbereitung
 
 1. Aktualisiere das Incident-Ticket mit Uhrzeit, Alert-ID und Host, bevor du eine
