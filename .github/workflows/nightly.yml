@@ -6,6 +6,38 @@ on:
   workflow_dispatch:
 
 jobs:
+  timetoke-slo-report:
+    name: Timetoke replay SLO report
+    runs-on: ubuntu-latest
+    env:
+      TIMETOKE_PROMETHEUS_URL: ${{ secrets.TIMETOKE_PROMETHEUS_URL }}
+      TIMETOKE_PROMETHEUS_BEARER: ${{ secrets.TIMETOKE_PROMETHEUS_BEARER }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate Timetoke SLO report
+        run: |
+          set -euo pipefail
+          if [ -n "${TIMETOKE_PROMETHEUS_URL:-}" ]; then
+            cargo xtask report-timetoke-slo \
+              --prometheus-url "${TIMETOKE_PROMETHEUS_URL}" \
+              --output timetoke-slo-report.md
+          else
+            cargo xtask report-timetoke-slo \
+              --metrics-log docs/observability/examples/timetoke_metrics.jsonl \
+              --output timetoke-slo-report.md
+          fi
+
+      - name: Upload SLO report
+        uses: actions/upload-artifact@v4
+        with:
+          name: timetoke-slo-report
+          path: timetoke-slo-report.md
+
   plonky3-hash-audit:
     name: Plonky3 release hash audit
     runs-on: ubuntu-latest

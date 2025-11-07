@@ -1,0 +1,7 @@
+{"timestamp":"2024-06-01T09:00:00Z","successes":182,"failures":1,"replay_p50_ms":6200,"replay_p95_ms":24800,"replay_p99_ms":49200}
+{"timestamp":"2024-06-02T09:00:00Z","successes":176,"failures":0,"replay_p50_ms":6100,"replay_p95_ms":23800,"replay_p99_ms":48800}
+{"timestamp":"2024-06-03T09:00:00Z","successes":190,"failures":0,"replay_p50_ms":6000,"replay_p95_ms":23000,"replay_p99_ms":47000}
+{"timestamp":"2024-06-04T09:00:00Z","successes":188,"failures":1,"replay_p50_ms":6400,"replay_p95_ms":25200,"replay_p99_ms":50500}
+{"timestamp":"2024-06-05T09:00:00Z","successes":195,"failures":0,"replay_p50_ms":5800,"replay_p95_ms":22500,"replay_p99_ms":46000}
+{"timestamp":"2024-06-06T09:00:00Z","successes":200,"failures":0,"replay_p50_ms":5700,"replay_p95_ms":22000,"replay_p99_ms":45500}
+{"timestamp":"2024-06-07T09:00:00Z","successes":205,"failures":0,"replay_p50_ms":5600,"replay_p95_ms":21800,"replay_p99_ms":45000}
