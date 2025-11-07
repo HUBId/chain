@@ -156,6 +156,78 @@ mod plonky3_backend {
     }
 
     #[test]
+    fn plonky3_rejects_public_witness_commitment_tampering() {
+        let prover = Plonky3Prover::new();
+        let verifier = Plonky3Verifier::default();
+
+        let certificate = super::sample_certificate();
+        let block_hash = certificate.block_hash.0.clone();
+        let witness = prover
+            .build_consensus_witness(&block_hash, &certificate)
+            .expect("build consensus witness");
+        let proof = prover.prove_consensus(witness).expect("prove consensus");
+
+        verifier
+            .verify_consensus(&proof)
+            .expect("baseline verification succeeds");
+
+        let tampered = tamper_public_inputs(&proof, |public_inputs| {
+            if let Some(Value::Object(witness)) = public_inputs.get_mut("witness") {
+                if let Some(Value::Array(commitments)) = witness.get_mut("witness_commitments") {
+                    if let Some(Value::String(first)) = commitments.first_mut() {
+                        let mut chars: Vec<_> = first.chars().collect();
+                        if let Some(ch) = chars.first_mut() {
+                            *ch = match *ch {
+                                '0' => '1',
+                                _ => '0',
+                            };
+                        }
+                        *first = chars.into_iter().collect();
+                    }
+                }
+            }
+        });
+
+        assert!(verifier.verify_consensus(&tampered).is_err());
+    }
+
+    #[test]
+    fn plonky3_rejects_public_reputation_root_tampering() {
+        let prover = Plonky3Prover::new();
+        let verifier = Plonky3Verifier::default();
+
+        let certificate = super::sample_certificate();
+        let block_hash = certificate.block_hash.0.clone();
+        let witness = prover
+            .build_consensus_witness(&block_hash, &certificate)
+            .expect("build consensus witness");
+        let proof = prover.prove_consensus(witness).expect("prove consensus");
+
+        verifier
+            .verify_consensus(&proof)
+            .expect("baseline verification succeeds");
+
+        let tampered = tamper_public_inputs(&proof, |public_inputs| {
+            if let Some(Value::Object(witness)) = public_inputs.get_mut("witness") {
+                if let Some(Value::Array(roots)) = witness.get_mut("reputation_roots") {
+                    if let Some(Value::String(first)) = roots.first_mut() {
+                        let mut chars: Vec<_> = first.chars().collect();
+                        if let Some(ch) = chars.first_mut() {
+                            *ch = match *ch {
+                                '0' => '1',
+                                _ => '0',
+                            };
+                        }
+                        *first = chars.into_iter().collect();
+                    }
+                }
+            }
+        });
+
+        assert!(verifier.verify_consensus(&tampered).is_err());
+    }
+
+    #[test]
     fn plonky3_rejects_payload_vrf_metadata_tampering() {
         let prover = Plonky3Prover::new();
         let verifier = Plonky3Verifier::default();
@@ -294,6 +366,80 @@ mod stwo_backend {
                     let mut chars: Vec<_> = root.chars().collect();
                     chars.rotate_left(2.min(chars.len()));
                     *root = chars.into_iter().collect();
+                }
+            }
+        });
+
+        assert!(verifier.verify_consensus(&tampered).is_err());
+    }
+
+    #[test]
+    fn stwo_rejects_public_witness_commitment_tampering() {
+        let temp_dir = tempdir().expect("temporary storage directory");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let prover = WalletProver::new(&storage);
+        let verifier = NodeVerifier::new();
+
+        let certificate = super::sample_certificate();
+        let block_hash = certificate.block_hash.0.clone();
+        let witness = prover
+            .build_consensus_witness(&block_hash, &certificate)
+            .expect("build consensus witness");
+        let proof = prover.prove_consensus(witness).expect("prove consensus");
+
+        verifier
+            .verify_consensus(&proof)
+            .expect("baseline verification succeeds");
+
+        let tampered = tamper_public_inputs(&proof, |inputs| {
+            if inputs.len() > 10 {
+                let witness_index = inputs.len() - 10;
+                if let Some(first) = inputs.get_mut(witness_index) {
+                    if first.len() >= 2 {
+                        let mut chars: Vec<_> = first.chars().collect();
+                        chars[0] = match chars[0] {
+                            '0' => '1',
+                            _ => '0',
+                        };
+                        *first = chars.into_iter().collect();
+                    }
+                }
+            }
+        });
+
+        assert!(verifier.verify_consensus(&tampered).is_err());
+    }
+
+    #[test]
+    fn stwo_rejects_public_reputation_root_tampering() {
+        let temp_dir = tempdir().expect("temporary storage directory");
+        let storage = Storage::open(temp_dir.path()).expect("open storage");
+        let prover = WalletProver::new(&storage);
+        let verifier = NodeVerifier::new();
+
+        let certificate = super::sample_certificate();
+        let block_hash = certificate.block_hash.0.clone();
+        let witness = prover
+            .build_consensus_witness(&block_hash, &certificate)
+            .expect("build consensus witness");
+        let proof = prover.prove_consensus(witness).expect("prove consensus");
+
+        verifier
+            .verify_consensus(&proof)
+            .expect("baseline verification succeeds");
+
+        let tampered = tamper_public_inputs(&proof, |inputs| {
+            if inputs.len() > 9 {
+                let root_index = inputs.len() - 9;
+                if let Some(first) = inputs.get_mut(root_index) {
+                    if first.len() >= 2 {
+                        let mut chars: Vec<_> = first.chars().collect();
+                        chars[0] = match chars[0] {
+                            '0' => '1',
+                            _ => '0',
+                        };
+                        *first = chars.into_iter().collect();
+                    }
                 }
             }
         });

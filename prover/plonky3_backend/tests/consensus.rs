@@ -690,6 +690,62 @@ fn consensus_verification_rejects_tampered_quorum_digest() {
 }
 
 #[test]
+fn consensus_verification_rejects_tampered_witness_commitment() {
+    let (proof, verifier) = prove_sample_witness();
+    verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
+
+    let tampered = tamper_public_inputs_with_witness(&proof, |witness| {
+        if let Some(first) = witness.witness_commitments.first_mut() {
+            if first.len() < 2 {
+                panic!("witness commitment must encode at least one byte");
+            }
+            first.replace_range(0..2, "aa");
+        }
+    });
+
+    validate_consensus_public_inputs(&tampered.public_inputs)
+        .expect("tampered public inputs must remain well-formed");
+
+    let err =
+        verify_consensus(&verifier, &tampered).expect_err("tampered witness commitments must fail");
+    match err {
+        BackendError::ConstraintMismatch { circuit, .. }
+        | BackendError::OpeningArgumentMismatch { circuit, .. } => {
+            assert_eq!(circuit, "consensus");
+        }
+        other => panic!("unexpected verification error: {other:?}"),
+    }
+}
+
+#[test]
+fn consensus_verification_rejects_tampered_reputation_root() {
+    let (proof, verifier) = prove_sample_witness();
+    verify_consensus(&verifier, &proof).expect("baseline verification succeeds");
+
+    let tampered = tamper_public_inputs_with_witness(&proof, |witness| {
+        if let Some(first) = witness.reputation_roots.first_mut() {
+            if first.len() < 2 {
+                panic!("reputation root must encode at least one byte");
+            }
+            first.replace_range(0..2, "bb");
+        }
+    });
+
+    validate_consensus_public_inputs(&tampered.public_inputs)
+        .expect("tampered public inputs must remain well-formed");
+
+    let err =
+        verify_consensus(&verifier, &tampered).expect_err("tampered reputation roots must fail");
+    match err {
+        BackendError::ConstraintMismatch { circuit, .. }
+        | BackendError::OpeningArgumentMismatch { circuit, .. } => {
+            assert_eq!(circuit, "consensus");
+        }
+        other => panic!("unexpected verification error: {other:?}"),
+    }
+}
+
+#[test]
 fn consensus_rejects_invalid_vrf_proof_length() {
     let mut witness = sample_witness();
     witness.vrf_entries[0].proof.push_str("ff");
