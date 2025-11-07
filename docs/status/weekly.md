@@ -63,3 +63,17 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 - **Nightly-Artefakte:** Das Paket `simnet-nightly` enthält vollständige Nightly-Summaries (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) inklusive Analyseresultaten.【F:.github/workflows/nightly.yml†L148-L183】
 - **Matrix-Protokolle:** Die Step-Logs in `unit-suites`, `integration-workflows` und `simnet-smoke` dokumentieren Laufzeiten (~12/18/22 Minuten) und werden für Reviews im Actions-Tab archiviert.【F:.github/workflows/ci.yml†L185-L285】
 
+## Phase 2 abgeschlossen (Kalenderwoche 15/2026)
+
+**Zusammenfassung:** Phase 2 ist abgeschlossen. Die Proof-Erweiterungen aus ENG‑742/ENG‑743 laufen für STWO und Plonky3 in Produktion, die Pflicht-Test-Suites sichern jede Pipeline-Änderung ab und die Observability-Assets (Dashboards, Alerts, Runbooks) sind für On-Call verfügbar.
+
+### Highlights
+- **Proof-Erweiterungen:** VRF-/Quorum-Recomputation ist in beiden Backends ausgeliefert; Tamper-Tests und die `proof-metadata`-Generierung belegen stabile Constraint-Layouts.【F:prover/prover_stwo_backend/src/official/circuit/consensus.rs†L300-L586】【F:prover/plonky3_backend/src/circuits/consensus.rs†L520-L690】【F:docs/release_notes.md†L1-L80】
+- **Test-Suites:** `unit-suites`, `integration-workflows` und `simnet-smoke` sind als Branch-Protection aktiv; das Nightly-Harness (`cargo xtask test-all`) verifiziert die Matrix kontinuierlich.【F:.github/workflows/ci.yml†L185-L303】【F:.github/workflows/nightly.yml†L88-L183】
+- **Observability:** Dashboard, Alerts und Runbooks für VRF-/Quorum-Kennzahlen sind vollständig dokumentiert und verlinkt; Operator:innen besitzen das Phase‑2-Playbook.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】【F:docs/runbooks/observability.md†L1-L160】
+
+### Nächste Schritte – Phase 3 Preview
+- Netzwerk/Snapshot-Verteilung härten (siehe Abschnitt 4.3 „Snapshot-Sync & Telemetrie“ im Implementierungsplan und `SnapshotsBehaviour`).
+- Tier-Admission-Härtung und Witness-Kanäle vorziehen (Abschnitt 4.2 und 6.4/6.5 des Implementierungsplans).
+- Firewood↔Proof-Verzahnung und Snapshot-Rebuild-Service aus Abschnitt 2 vorbereiten, um Witness-Gossip und State-Sync zu koppeln.
+

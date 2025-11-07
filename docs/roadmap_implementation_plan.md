@@ -21,7 +21,9 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 Die vollständige Artefakt- und Nachweisliste für die Freigabe ist in der
 [Phase‑2 Acceptance Checklist](runbooks/phase2_acceptance.md) gebündelt.
 
-## Phase 2 – Test Suites abgeschlossen (Stand: 2026-04-07)
+## Phase 2 abgeschlossen (Stand: 2026-04-15)
+
+Phase 2 ist offiziell abgeschlossen. Die erweiterten Proof-Pfade (ENG‑742/ENG‑743) laufen stabil in STWO und Plonky3, die dreistufige Test-Suite (`unit-suites`, `integration-workflows`, `simnet-smoke`) ist als Pflichtgate aktiv, und neue Observability-Artefakte (Dashboards, Alerts, Runbooks) sichern VRF-/Quorum-Metriken für Audits und Betrieb.
 
 Die dreistufige Test-Suite aus `cargo xtask`-Läufen ist vollständig grün und in die verpflichtenden Branch-Protections eingebunden. Damit sind die Unit-, Integrations- und Simulationsabdeckungen aus Phase 2 messbar abgeschlossen.
 
@@ -38,6 +40,13 @@ Die Jobs sind als verpflichtende Statuschecks verdrahtet und bilden die Grundlag
   Konsens-Observability-Handbuch beschreibt Schwellenwerte und Alarmierung.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】
 - **Runbooks & Operator-Guides:** `docs/rpp_node_operator_guide.md` und `docs/runbooks/observability.md` dokumentieren die
   erforderlichen CLI-/RPC-Schritte inklusive Simnet-Belege und Dashboard-Screenshots für Auditor:innen.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
+
+### Phase 3 Preview
+
+- **Netzwerk & Snapshot-Verteilung:** Ausbau der verteilten Snapshot-Pipeline mit Fokus auf inkrementelle Resume-Pfade und Gossip-Backpressure (siehe Abschnitt 4.3 „Snapshot-Sync & Telemetrie“ und `SnapshotsBehaviour`).
+- **Tier-Admission-Härtung:** Weiterführung der Admission-Control-Arbeiten aus Abschnitt 4.2 inklusive Witness-Kanäle und Observer-Handshakes, gekoppelt mit Reputation-Decay und Ban-Propagation.
+- **State Sync & Firewood/Proof-Verzahnung:** Vorziehen der Tasks aus Abschnitt 2 (`prove_transition`, Snapshot-Rebuild-Service) zur Vorbereitung der Witness-Gossip-Feeds.
+- **Witness- und Tier-Networking:** Anschlussarbeiten an Abschnitt 6.4/6.5, um Witness-Gossip und Reward-Pools in die härtere Admission-Control zu integrieren.
 
 <a id="eng-742-constraint-layer-vrfquorum-enforcement"></a>
 ### ENG-742 – Constraint-layer VRF/quorum enforcement *(Status: ✅ Delivered)*
