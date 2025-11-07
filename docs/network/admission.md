@@ -36,6 +36,49 @@ tier, and rejection reasons. When the `metrics` feature is disabled the calls
 become no-ops, so the instrumentation does not affect non-observability
 builds.【F:rpp/p2p/src/metrics.rs†L1-L147】
 
+## Managing admission policies
+
+Operators can query and update the persisted allowlist/blocklist through the
+authenticated RPC endpoints `GET /p2p/admission/policies` and
+`POST /p2p/admission/policies`. Both endpoints require the standard bearer token
+when RPC auth is enabled and the peerstore emits structured audit telemetry for
+every mutation, including the actor and optional reason.【F:rpp/rpc/src/routes/p2p.rs†L126-L209】【F:rpp/p2p/src/peerstore.rs†L1007-L1189】
+
+### Fetching the active policies
+
+```sh
+curl -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     https://rpc.example.org/p2p/admission/policies
+```
+
+The response mirrors the peerstore: allowlist entries return the peer ID and
+enforced tier, while `blocklist` is sorted to make diffs readable. Persisted
+state survives restarts because the peerstore writes the snapshot atomically
+before acknowledging the request.【F:rpp/rpc/src/routes/p2p.rs†L126-L157】【F:rpp/p2p/src/peerstore.rs†L907-L937】
+
+### Audited updates
+
+Updates must provide an `actor` string and may include a free-form `reason`.
+The handler validates duplicate entries and cross-membership before committing
+the change. On success the updated policies are returned so operators can
+verify what was persisted without issuing a second call.【F:rpp/rpc/src/routes/p2p.rs†L158-L209】
+
+```sh
+curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     https://rpc.example.org/p2p/admission/policies \
+     -d '{
+           "actor": "ops.oncall",
+           "reason": "replace unhealthy peer",
+           "allowlist": [{"peer_id": "12D3KooWRpcPeer", "tier": "Tl3"}],
+           "blocklist": ["12D3KooWBannedPeer"]
+         }'
+```
+
+If the payload is invalid—for example the same peer appears twice—the service
+returns a `400` with a descriptive error string so auditors can capture the
+failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L172-L195】
+
 ## Tests
 
 `tests/network/admission_control.rs` exercises the new failure modes: a peer

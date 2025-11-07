@@ -142,6 +142,7 @@ impl NetworkConfig {
 pub struct NetworkResources {
     network: Network,
     identity: Arc<NodeIdentity>,
+    peerstore: Arc<Peerstore>,
 }
 
 impl NetworkResources {
@@ -218,12 +219,16 @@ impl NetworkResources {
                 warn!(target: "network", "failed to dial bootstrap peer {addr}: {err}");
             }
         }
-        Ok(Self { network, identity })
+        Ok(Self {
+            network,
+            identity,
+            peerstore,
+        })
     }
 
     /// Consumes the resources and returns ownership of the network and identity.
-    pub fn into_parts(self) -> (Network, Arc<NodeIdentity>) {
-        (self.network, self.identity)
+    pub fn into_parts(self) -> (Network, Arc<NodeIdentity>, Arc<Peerstore>) {
+        (self.network, self.identity, self.peerstore)
     }
 }
 

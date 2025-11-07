@@ -10,14 +10,15 @@ use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
-    AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
-    GossipVoteValidator, HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry,
-    NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
-    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity,
-    PeerstoreError, PersistentConsensusStorage, PersistentProofStorage, PipelineError,
-    ProofMempool, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
-    RuntimeProofValidator, SeenDigestRecord, SnapshotChunk, SnapshotProviderHandle,
-    SnapshotSessionId, TierLevel, VoteOutcome,
+    AdmissionAuditTrail, AdmissionPolicies, AllowlistedPeer, ConsensusPipeline,
+    GossipBlockValidator, GossipPayloadError, GossipTopic, GossipVoteValidator, HandshakePayload,
+    LightClientHead, LightClientSync, MetaTelemetry, NetworkError, NetworkEvent,
+    NetworkFeatureAnnouncement, NetworkLightClientUpdate, NetworkMetaTelemetryReport,
+    NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity, Peerstore, PeerstoreError,
+    PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
+    ReputationBroadcast, ReputationEvent, ReputationHeuristics, RuntimeProofValidator,
+    SeenDigestRecord, SnapshotChunk, SnapshotProviderHandle, SnapshotSessionId, TierLevel,
+    VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -1018,7 +1019,7 @@ impl NodeInner {
             config.feature_gates.clone(),
             config.snapshot_provider.clone(),
         )?;
-        let (network, identity) = resources.into_parts();
+        let (network, identity, peerstore) = resources.into_parts();
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, _) = broadcast::channel(256);
         let metrics = Arc::new(RwLock::new(NodeMetrics::default()));
@@ -1034,6 +1035,7 @@ impl NodeInner {
             local_peer_id: identity.peer_id(),
             light_client_heads,
             snapshot_streams: snapshot_streams.clone(),
+            peerstore: peerstore.clone(),
         };
         let local_features = config
             .identity
@@ -2149,6 +2151,7 @@ pub struct NodeHandle {
     local_peer_id: PeerId,
     light_client_heads: watch::Receiver<Option<LightClientHead>>,
     snapshot_streams: Arc<RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>>,
+    peerstore: Arc<Peerstore>,
 }
 
 impl NodeHandle {
@@ -2183,6 +2186,21 @@ impl NodeHandle {
     /// Updates the metrics that will be forwarded to telemetry.
     pub fn update_metrics(&self, metrics: NodeMetrics) {
         *self.metrics.write() = metrics;
+    }
+
+    pub fn admission_policies(&self) -> AdmissionPolicies {
+        self.peerstore.admission_policies()
+    }
+
+    pub fn update_admission_policies(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+        audit: AdmissionAuditTrail,
+    ) -> Result<(), NodeError> {
+        self.peerstore
+            .update_admission_policies(allowlist, blocklist, audit)
+            .map_err(NodeError::from)
     }
 
     /// Publishes a gossip message via the libp2p network.

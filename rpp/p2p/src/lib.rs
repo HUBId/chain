@@ -35,7 +35,8 @@ pub use behaviour::witness::{
 pub use handshake::{HandshakePayload, VRF_HANDSHAKE_CONTEXT};
 pub use identity::{IdentityError, IdentityMetadata, NodeIdentity, TopicPermission};
 pub use peerstore::{
-    AllowlistedPeer, IdentityVerifier, PeerRecord, Peerstore, PeerstoreConfig, PeerstoreError,
+    AdmissionAuditTrail, AdmissionPolicies, AllowlistedPeer, IdentityVerifier, PeerRecord,
+    Peerstore, PeerstoreConfig, PeerstoreError,
 };
 pub use persistence::{GossipStateError, GossipStateStore};
 pub use pipeline::{
