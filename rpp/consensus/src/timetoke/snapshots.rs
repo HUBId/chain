@@ -1,6 +1,7 @@
 use std::fmt;
 
 use blake3::Hash;
+use ed25519_dalek::{Signer, SigningKey};
 use rpp_p2p::{PipelineError, SnapshotChunk, SnapshotChunkStream, SnapshotStore};
 use serde::{Deserialize, Serialize};
 
@@ -50,21 +51,30 @@ pub struct TimetokeSnapshotHandle {
     pub record_count: usize,
     /// Hex encoded Timetoke commitment carried by the snapshot payload.
     pub timetoke_root: String,
+    /// Hex encoded Ed25519 signature over the manifest payload.
+    pub signature: String,
 }
 
 /// Produces snapshot streams for Timetoke records and exposes the payload to the
 /// libp2p snapshot protocol.
-#[derive(Debug)]
 pub struct TimetokeSnapshotProducer {
     store: SnapshotStore,
+    signing_key: SigningKey,
+}
+
+impl fmt::Debug for TimetokeSnapshotProducer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TimetokeSnapshotProducer").finish()
+    }
 }
 
 impl TimetokeSnapshotProducer {
     /// Creates a new producer backed by a snapshot store using the provided
     /// chunk size.
-    pub fn new(chunk_size: usize) -> Self {
+    pub fn new(chunk_size: usize, signing_key: SigningKey) -> Self {
         Self {
             store: SnapshotStore::new(chunk_size.max(1)),
+            signing_key,
         }
     }
 
@@ -80,7 +90,9 @@ impl TimetokeSnapshotProducer {
         };
         let payload = serde_json::to_vec(&snapshot)
             .map_err(|err| TimetokeSnapshotError::Encoding(err.to_string()))?;
-        let root = self.store.insert(payload);
+        let signature = self.signing_key.sign(&payload);
+        let signature_bytes = signature.to_bytes();
+        let root = self.store.insert(payload, signature_bytes.to_vec());
         let stream = self
             .store
             .stream(&root)
@@ -90,6 +102,7 @@ impl TimetokeSnapshotProducer {
             total_chunks: stream.total(),
             record_count: snapshot.records.len(),
             timetoke_root: snapshot.timetoke_root,
+            signature: hex::encode(signature_bytes),
         })
     }
 

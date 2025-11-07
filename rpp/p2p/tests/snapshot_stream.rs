@@ -413,7 +413,7 @@ fn sample_plan(root_hex: String) -> NetworkStateSyncPlan {
 async fn snapshot_stream_pause_and_resume() {
     let mut store = SnapshotStore::new(8);
     let payload = b"abcdefgh".to_vec();
-    let root = store.insert(payload);
+    let root = store.insert(payload, vec![0; 64]);
     let root_hex = hex::encode(root.as_bytes());
     let plan = sample_plan(root_hex.clone());
     let provider = MockSnapshotProvider::new(plan.clone(), store, root);
@@ -566,7 +566,7 @@ async fn snapshot_stream_pause_and_resume() {
 async fn snapshot_resume_rejects_invalid_offsets() {
     let mut store = SnapshotStore::new(8);
     let payload = b"abcdefgh".to_vec();
-    let root = store.insert(payload);
+    let root = store.insert(payload, vec![0; 64]);
     let root_hex = hex::encode(root.as_bytes());
     let plan = sample_plan(root_hex.clone());
     let provider = MockSnapshotProvider::new(plan.clone(), store, root);

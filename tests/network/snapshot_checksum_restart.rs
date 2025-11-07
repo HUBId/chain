@@ -104,6 +104,15 @@ async fn snapshot_validator_recovers_after_restart() -> Result<()> {
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
         .await
         .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
+    let sig_name = manifest_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| anyhow!("manifest filename is not valid UTF-8"))?;
+    let sig_path = manifest_path.with_file_name(format!("{sig_name}.sig"));
+    let signature = "00".repeat(64);
+    fs::write(&sig_path, signature.as_bytes())
+        .await
+        .with_context(|| format!("write manifest signature to {}", sig_path.display()))?;
 
     // Allow the validator to observe the clean manifest before introducing corruption.
     sleep(Duration::from_secs(1)).await;
