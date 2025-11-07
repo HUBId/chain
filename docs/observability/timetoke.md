@@ -15,7 +15,7 @@ The SLO windows align with the weekly acceptance cadence. Operators should verif
 
 ## Scheduled report
 
-Nightly CI executes `cargo xtask report-timetoke-slo` and publishes the summary as an artifact. The command prefers a Prometheus datasource, falling back to log archives for local dry-runs:
+The `nightly-simnet` workflow runs every Monday at 01:30 UTC and executes `cargo xtask report-timetoke-slo`, publishing the rendered markdown as the `timetoke-slo-report` artifact. The command prefers a Prometheus datasource, falling back to log archives for local dry-runs:
 
 ```bash
 cargo xtask report-timetoke-slo \
