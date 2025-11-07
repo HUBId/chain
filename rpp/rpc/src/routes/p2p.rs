@@ -2,8 +2,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
@@ -82,6 +84,24 @@ pub struct AdmissionAuditLogResponse {
     pub entries: Vec<AdmissionPolicyLogEntry>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AdmissionBackupMetadata {
+    pub name: String,
+    pub timestamp_ms: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdmissionBackupsResponse {
+    pub backups: Vec<AdmissionBackupMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdmissionBackupQuery {
+    #[serde(default)]
+    pub download: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct AdmissionApprovalRequest {
     pub role: String,
@@ -94,6 +114,16 @@ pub struct UpdateAdmissionPoliciesRequest {
     pub allowlist: Vec<AdmissionPolicyEntry>,
     #[serde(default)]
     pub blocklist: Vec<String>,
+    pub actor: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub approvals: Vec<AdmissionApprovalRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreAdmissionBackupRequest {
+    pub backup: String,
     pub actor: String,
     #[serde(default)]
     pub reason: Option<String>,
@@ -233,6 +263,99 @@ pub(super) async fn admission_policies(
     State(state): State<ApiContext>,
 ) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
     let node = state.require_node()?;
+    let policies = node.admission_policies();
+    Ok(Json(AdmissionPoliciesResponse::from(policies)))
+}
+
+pub(super) async fn admission_backups(
+    State(state): State<ApiContext>,
+    Query(query): Query<AdmissionBackupQuery>,
+) -> Result<Response, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    if let Some(name) = query.download {
+        let data = node.admission_policy_backup(&name).map_err(to_http_error)?;
+        let mut response = Response::new(Body::from(data));
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        let disposition = format!("attachment; filename=\"{}\"", name);
+        if let Ok(value) = HeaderValue::from_str(&disposition) {
+            response
+                .headers_mut()
+                .insert(header::CONTENT_DISPOSITION, value);
+        }
+        return Ok(response);
+    }
+
+    let backups = node.admission_policy_backups().map_err(to_http_error)?;
+    let payload = AdmissionBackupsResponse {
+        backups: backups
+            .into_iter()
+            .map(|backup| AdmissionBackupMetadata {
+                name: backup.name,
+                timestamp_ms: backup.timestamp_ms,
+                size: backup.size,
+            })
+            .collect(),
+    };
+    Ok(Json(payload).into_response())
+}
+
+pub(super) async fn restore_admission_backup(
+    State(state): State<ApiContext>,
+    Json(request): Json<RestoreAdmissionBackupRequest>,
+) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+
+    let backup = request.backup.trim();
+    if backup.is_empty() {
+        return Err(super::super::bad_request("backup must not be empty"));
+    }
+    let backup = backup.to_string();
+
+    let actor = request.actor.trim();
+    if actor.is_empty() {
+        return Err(super::super::bad_request("actor must not be empty"));
+    }
+    let actor = actor.to_string();
+
+    let reason = request
+        .reason
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let mut approvals = Vec::with_capacity(request.approvals.len());
+    let mut approval_roles = HashSet::new();
+    for approval in request.approvals {
+        let role = approval.role.trim();
+        if role.is_empty() {
+            return Err(super::super::bad_request("approval role must not be empty"));
+        }
+        let approver = approval.approver.trim();
+        if approver.is_empty() {
+            return Err(super::super::bad_request(format!(
+                "approval `{role}` must include approver"
+            )));
+        }
+        let normalized = role.to_ascii_lowercase();
+        if !approval_roles.insert(normalized.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate approval role `{role}`"
+            )));
+        }
+        approvals.push(AdmissionApproval::new(
+            role.to_string(),
+            approver.to_string(),
+        ));
+    }
+
+    let audit = AdmissionAuditTrail::new(actor, reason).with_approvals(approvals);
+    node.restore_admission_policies_from_backup(&backup, audit)
+        .map_err(to_http_error)?;
+
     let policies = node.admission_policies();
     Ok(Json(AdmissionPoliciesResponse::from(policies)))
 }

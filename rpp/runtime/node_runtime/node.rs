@@ -10,15 +10,15 @@ use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
-    AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry, AllowlistedPeer,
-    ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic, GossipVoteValidator,
-    HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry, NetworkError, NetworkEvent,
-    NetworkFeatureAnnouncement, NetworkLightClientUpdate, NetworkMetaTelemetryReport,
-    NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity, Peerstore, PeerstoreError,
-    PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
-    ReputationBroadcast, ReputationEvent, ReputationHeuristics, RuntimeProofValidator,
-    SeenDigestRecord, SnapshotChunk, SnapshotProviderHandle, SnapshotSessionId, TierLevel,
-    VoteOutcome,
+    AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyBackup, AdmissionPolicyLogEntry,
+    AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
+    GossipVoteValidator, HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry,
+    NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
+    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity,
+    Peerstore, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage, PipelineError,
+    ProofMempool, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
+    RuntimeProofValidator, SeenDigestRecord, SnapshotChunk, SnapshotProviderHandle,
+    SnapshotSessionId, TierLevel, VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -2240,6 +2240,28 @@ impl NodeHandle {
     ) -> Result<(), NodeError> {
         self.peerstore
             .update_admission_policies(allowlist, blocklist, audit)
+            .map_err(NodeError::from)
+    }
+
+    pub fn admission_policy_backups(&self) -> Result<Vec<AdmissionPolicyBackup>, NodeError> {
+        self.peerstore
+            .admission_policy_backups()
+            .map_err(NodeError::from)
+    }
+
+    pub fn admission_policy_backup(&self, name: &str) -> Result<Vec<u8>, NodeError> {
+        self.peerstore
+            .admission_policy_backup_contents(name)
+            .map_err(NodeError::from)
+    }
+
+    pub fn restore_admission_policies_from_backup(
+        &self,
+        name: &str,
+        audit: AdmissionAuditTrail,
+    ) -> Result<(), NodeError> {
+        self.peerstore
+            .restore_admission_policies_from_backup(name, audit)
             .map_err(NodeError::from)
     }
 

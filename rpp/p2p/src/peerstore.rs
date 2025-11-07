@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::fmt;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -51,10 +52,25 @@ pub enum PeerstoreError {
     },
     #[error("high-impact admission policy change missing approvals: {missing:?}")]
     MissingApprovals { missing: Vec<String> },
+    #[error("admission policy backups are disabled")]
+    PolicyBackupsDisabled,
+    #[error("admission policy backup {name} not found")]
+    PolicyBackupNotFound { name: String },
+    #[error("failed to parse admission policy backup {name}")]
+    PolicyBackupInvalid { name: String },
 }
 
 pub trait IdentityVerifier: Send + Sync {
     fn expected_vrf_public_key(&self, zsi_id: &str) -> Option<Vec<u8>>;
+}
+
+const DEFAULT_POLICY_BACKUP_PREFIX: &str = "admission_policies";
+
+#[derive(Debug, Clone)]
+pub struct AdmissionPolicyBackup {
+    pub name: String,
+    pub timestamp_ms: u64,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -459,6 +475,8 @@ pub struct PeerstoreConfig {
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
     allowlist: Vec<AllowlistedPeer>,
     blocklist: Vec<PeerId>,
+    policy_backup_dir: Option<PathBuf>,
+    policy_backup_retention: Option<Duration>,
 }
 
 impl fmt::Debug for PeerstoreConfig {
@@ -469,6 +487,8 @@ impl fmt::Debug for PeerstoreConfig {
             .field("audit_log_path", &self.audit_log_path)
             .field("allowlist", &self.allowlist)
             .field("blocklist", &self.blocklist)
+            .field("policy_backup_dir", &self.policy_backup_dir)
+            .field("policy_backup_retention", &self.policy_backup_retention)
             .finish()
     }
 }
@@ -482,6 +502,8 @@ impl PeerstoreConfig {
             identity_verifier: None,
             allowlist: Vec::new(),
             blocklist: Vec::new(),
+            policy_backup_dir: None,
+            policy_backup_retention: None,
         }
     }
 
@@ -496,6 +518,8 @@ impl PeerstoreConfig {
             identity_verifier: None,
             allowlist: Vec::new(),
             blocklist: Vec::new(),
+            policy_backup_dir: None,
+            policy_backup_retention: None,
         }
     }
 
@@ -516,6 +540,12 @@ impl PeerstoreConfig {
 
     pub fn with_access_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.access_path = Some(path.into());
+        self
+    }
+
+    pub fn with_policy_backups(mut self, dir: impl Into<PathBuf>, retention: Duration) -> Self {
+        self.policy_backup_dir = Some(dir.into());
+        self.policy_backup_retention = Some(retention);
         self
     }
 
@@ -541,6 +571,9 @@ pub struct Peerstore {
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
     allowlist: RwLock<Vec<AllowlistedPeer>>,
     blocklisted: RwLock<HashSet<PeerId>>,
+    policy_backup_dir: Option<PathBuf>,
+    policy_backup_retention: Option<Duration>,
+    policy_backup_prefix: Option<String>,
 }
 
 impl fmt::Debug for Peerstore {
@@ -552,15 +585,28 @@ impl fmt::Debug for Peerstore {
             .field("identity_verifier", &self.identity_verifier.is_some())
             .field("allowlist_len", &self.allowlist.read().len())
             .field("blocklisted_len", &self.blocklisted.read().len())
+            .field("policy_backup_dir", &self.policy_backup_dir)
+            .field("policy_backup_retention", &self.policy_backup_retention)
             .finish()
     }
 }
 
 impl Peerstore {
     pub fn open(config: PeerstoreConfig) -> Result<Self, PeerstoreError> {
-        let peers = if let Some(path) = &config.path {
-            if path.exists() {
-                let raw = fs::read_to_string(path)?;
+        let PeerstoreConfig {
+            path,
+            access_path,
+            audit_log_path,
+            identity_verifier,
+            allowlist: configured_allowlist,
+            blocklist: configured_blocklist,
+            policy_backup_dir,
+            policy_backup_retention,
+        } = config;
+
+        let peers = if let Some(path_ref) = &path {
+            if path_ref.exists() {
+                let raw = fs::read_to_string(path_ref)?;
                 let stored: Vec<StoredPeerRecord> = serde_json::from_str(&raw)
                     .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
                 stored
@@ -571,7 +617,7 @@ impl Peerstore {
                     })
                     .collect::<Result<HashMap<_, _>, PeerstoreError>>()?
             } else {
-                if let Some(parent) = path.parent() {
+                if let Some(parent) = path_ref.parent() {
                     fs::create_dir_all(parent)?;
                 }
                 HashMap::new()
@@ -580,23 +626,14 @@ impl Peerstore {
             HashMap::new()
         };
 
-        let access_path = config.access_path.clone().or_else(|| {
-            config
-                .path
-                .as_ref()
-                .map(|path| path.with_extension("access.json"))
-        });
+        let access_path =
+            access_path.or_else(|| path.as_ref().map(|path| path.with_extension("access.json")));
 
-        let audit_log_path = config.audit_log_path.clone().or_else(|| {
+        let audit_log_path = audit_log_path.or_else(|| {
             access_path
                 .as_ref()
                 .map(|path| path.with_extension("audit.jsonl"))
-                .or_else(|| {
-                    config
-                        .path
-                        .as_ref()
-                        .map(|path| path.with_extension("audit.jsonl"))
-                })
+                .or_else(|| path.as_ref().map(|path| path.with_extension("audit.jsonl")))
         });
 
         let audit_log = match audit_log_path {
@@ -604,9 +641,9 @@ impl Peerstore {
             None => None,
         };
 
-        let (allowlist, blocklisted) = if let Some(path) = &access_path {
-            if path.exists() {
-                let raw = fs::read_to_string(path)?;
+        let (allowlist, blocklisted) = if let Some(access_path) = &access_path {
+            if access_path.exists() {
+                let raw = fs::read_to_string(access_path)?;
                 let stored: StoredAccessLists = serde_json::from_str(&raw)
                     .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
                 let allowlist = stored
@@ -625,27 +662,37 @@ impl Peerstore {
                 (allowlist, blocklisted)
             } else {
                 (
-                    config.allowlist.clone(),
-                    config.blocklist.iter().cloned().collect(),
+                    configured_allowlist.clone(),
+                    configured_blocklist.iter().cloned().collect(),
                 )
             }
         } else {
             (
-                config.allowlist.clone(),
-                config.blocklist.iter().cloned().collect(),
+                configured_allowlist.clone(),
+                configured_blocklist.iter().cloned().collect(),
             )
         };
+
+        let policy_backup_prefix = access_path
+            .as_ref()
+            .and_then(|path| path.file_stem())
+            .and_then(|stem| stem.to_str())
+            .map(|value| value.to_string());
+
         let store = Self {
-            path: config.path,
+            path,
             access_path,
             audit_log,
-            identity_verifier: config.identity_verifier,
+            identity_verifier,
             peers: RwLock::new(peers),
             allowlist: RwLock::new(allowlist),
             blocklisted: RwLock::new(blocklisted),
+            policy_backup_dir,
+            policy_backup_retention,
+            policy_backup_prefix,
         };
         store.apply_access_control()?;
-        store.persist_access_lists()?;
+        store.persist_access_lists(false)?;
         Ok(store)
     }
 
@@ -666,6 +713,90 @@ impl Peerstore {
         }
     }
 
+    pub fn admission_policy_backups(&self) -> Result<Vec<AdmissionPolicyBackup>, PeerstoreError> {
+        let dir = self
+            .policy_backup_dir
+            .as_ref()
+            .ok_or(PeerstoreError::PolicyBackupsDisabled)?;
+        if !dir.exists() {
+            return Ok(Vec::new());
+        }
+        let prefix = self.policy_backup_prefix();
+        let mut backups = Vec::new();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let name = match entry.file_name().into_string() {
+                Ok(name) => name,
+                Err(_) => continue,
+            };
+            if !Self::is_valid_backup_name(&name, prefix) {
+                continue;
+            }
+            let Some(timestamp) = Self::parse_backup_timestamp(&name) else {
+                continue;
+            };
+            let size = entry.metadata()?.len();
+            let timestamp_ms = if timestamp > u128::from(u64::MAX) {
+                u64::MAX
+            } else {
+                timestamp as u64
+            };
+            backups.push(AdmissionPolicyBackup {
+                name,
+                timestamp_ms,
+                size,
+            });
+        }
+        backups.sort_by(|a, b| b.timestamp_ms.cmp(&a.timestamp_ms));
+        Ok(backups)
+    }
+
+    pub fn admission_policy_backup_contents(&self, name: &str) -> Result<Vec<u8>, PeerstoreError> {
+        let dir = self
+            .policy_backup_dir
+            .as_ref()
+            .ok_or(PeerstoreError::PolicyBackupsDisabled)?;
+        let prefix = self.policy_backup_prefix();
+        if !Self::is_valid_backup_name(name, prefix) {
+            return Err(PeerstoreError::PolicyBackupNotFound {
+                name: name.to_string(),
+            });
+        }
+        let path = dir.join(name);
+        if !path.exists() {
+            return Err(PeerstoreError::PolicyBackupNotFound {
+                name: name.to_string(),
+            });
+        }
+        Ok(fs::read(path)?)
+    }
+
+    pub fn restore_admission_policies_from_backup(
+        &self,
+        name: &str,
+        audit: AdmissionAuditTrail,
+    ) -> Result<(), PeerstoreError> {
+        let data = self.admission_policy_backup_contents(name)?;
+        let stored: StoredAccessLists = serde_json::from_slice(&data)
+            .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
+        let allowlist = stored
+            .allowlist
+            .into_iter()
+            .map(AllowlistedPeer::try_from)
+            .collect::<Result<Vec<_>, PeerstoreError>>()?;
+        let blocklist = stored
+            .blocklist
+            .into_iter()
+            .map(|peer| {
+                PeerId::from_str(&peer).map_err(|err| PeerstoreError::Encoding(err.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.commit_access_lists(allowlist, blocklist, audit)
+    }
+
     pub fn record_public_key(
         &self,
         peer_id: PeerId,
@@ -683,7 +814,7 @@ impl Peerstore {
                 .or_insert_with(|| PeerRecord::new(peer_id));
             entry.set_public_key(public_key);
         }
-        self.persist_access_lists()?;
+        self.persist_access_lists(false)?;
         self.persist()
     }
 
@@ -1072,7 +1203,7 @@ impl Peerstore {
         Ok(())
     }
 
-    fn persist_access_lists(&self) -> Result<(), PeerstoreError> {
+    fn persist_access_lists(&self, create_backup: bool) -> Result<(), PeerstoreError> {
         let Some(path) = &self.access_path else {
             return Ok(());
         };
@@ -1097,8 +1228,91 @@ impl Peerstore {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, encoded)?;
+        fs::write(path, &encoded)?;
+        if create_backup {
+            self.snapshot_admission_policies(&encoded)?;
+        }
         Ok(())
+    }
+
+    fn snapshot_admission_policies(&self, contents: &str) -> Result<(), PeerstoreError> {
+        let Some(dir) = &self.policy_backup_dir else {
+            return Ok(());
+        };
+        let prefix = self.policy_backup_prefix();
+        fs::create_dir_all(dir)?;
+        let mut timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        loop {
+            let filename = format!("{prefix}-{timestamp}.json");
+            if !Self::is_valid_backup_name(&filename, prefix) {
+                timestamp += 1;
+                continue;
+            }
+            let path = dir.join(&filename);
+            if path.exists() {
+                timestamp += 1;
+                continue;
+            }
+            fs::write(&path, contents)?;
+            break;
+        }
+        self.prune_policy_backups(dir, prefix)?;
+        Ok(())
+    }
+
+    fn prune_policy_backups(&self, dir: &Path, prefix: &str) -> Result<(), PeerstoreError> {
+        let Some(retention) = self.policy_backup_retention else {
+            return Ok(());
+        };
+        let cutoff_time = SystemTime::now()
+            .checked_sub(retention)
+            .unwrap_or(UNIX_EPOCH);
+        let cutoff_ms = cutoff_time
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let name = match entry.file_name().into_string() {
+                Ok(name) => name,
+                Err(_) => continue,
+            };
+            if !Self::is_valid_backup_name(&name, prefix) {
+                continue;
+            }
+            let Some(timestamp) = Self::parse_backup_timestamp(&name) else {
+                continue;
+            };
+            if timestamp < cutoff_ms {
+                fs::remove_file(entry.path())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn policy_backup_prefix(&self) -> &str {
+        self.policy_backup_prefix
+            .as_deref()
+            .unwrap_or(DEFAULT_POLICY_BACKUP_PREFIX)
+    }
+
+    fn is_valid_backup_name(name: &str, prefix: &str) -> bool {
+        !name.contains('/')
+            && !name.contains("\\")
+            && name.starts_with(prefix)
+            && Self::parse_backup_timestamp(name).is_some()
+    }
+
+    fn parse_backup_timestamp(name: &str) -> Option<u128> {
+        let (_, suffix) = name.rsplit_once('-')?;
+        let value = suffix.strip_suffix(".json")?;
+        value.parse().ok()
     }
 }
 
@@ -1231,7 +1445,7 @@ impl Peerstore {
             }
         }
 
-        self.persist_access_lists()?;
+        self.persist_access_lists(high_impact)?;
         self.persist()?;
 
         self.emit_admission_audit(
@@ -1871,5 +2085,103 @@ mod tests {
         let snapshot = store.admission_policies();
         assert_eq!(snapshot.allowlist, allowlist);
         assert!(snapshot.blocklist.is_empty());
+    }
+
+    #[test]
+    fn writes_policy_backups_when_configured() {
+        let dir = tempdir().expect("tmp");
+        let peerstore_path = dir.path().join("peerstore.json");
+        let policy_path = dir.path().join("admission.json");
+        let backup_dir = dir.path().join("backups");
+        let config = PeerstoreConfig::persistent(&peerstore_path)
+            .with_access_path(&policy_path)
+            .with_policy_backups(&backup_dir, Duration::from_secs(86_400));
+        let store = Peerstore::open(config).expect("open");
+
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer = PeerId::from(keypair.public());
+        let allowlist = vec![AllowlistedPeer {
+            peer,
+            tier: TierLevel::Tl3,
+        }];
+        store
+            .update_admission_policies(
+                allowlist,
+                Vec::new(),
+                AdmissionAuditTrail::system("test.backup"),
+            )
+            .expect("update policies");
+
+        let entries: Vec<_> = fs::read_dir(&backup_dir)
+            .expect("backups dir")
+            .map(|entry| entry.expect("entry").path())
+            .collect();
+        assert_eq!(entries.len(), 1, "expected a single backup");
+        let backup_path = &entries[0];
+        let policy_bytes = fs::read(&policy_path).expect("policy file");
+        let backup_bytes = fs::read(backup_path).expect("backup file");
+        assert_eq!(
+            policy_bytes, backup_bytes,
+            "backup should mirror policy file"
+        );
+
+        let backups = store.admission_policy_backups().expect("backups list");
+        assert_eq!(backups.len(), 1);
+        let name = backup_path
+            .file_name()
+            .expect("backup name")
+            .to_string_lossy();
+        assert_eq!(backups[0].name, name);
+    }
+
+    #[test]
+    fn prunes_policy_backups_after_retention() {
+        let dir = tempdir().expect("tmp");
+        let peerstore_path = dir.path().join("peerstore.json");
+        let policy_path = dir.path().join("admission.json");
+        let backup_dir = dir.path().join("backups");
+        let retention = Duration::from_secs(1);
+        let config = PeerstoreConfig::persistent(&peerstore_path)
+            .with_access_path(&policy_path)
+            .with_policy_backups(&backup_dir, retention);
+        let store = Peerstore::open(config).expect("open");
+
+        fs::create_dir_all(&backup_dir).expect("backup dir");
+        let prefix = policy_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or(DEFAULT_POLICY_BACKUP_PREFIX);
+        let old_backup = backup_dir.join(format!("{prefix}-1.json"));
+        fs::write(&old_backup, b"{}").expect("seed backup");
+
+        let keypair = identity::Keypair::generate_ed25519();
+        let peer = PeerId::from(keypair.public());
+        let allowlist = vec![AllowlistedPeer {
+            peer,
+            tier: TierLevel::Tl2,
+        }];
+        store
+            .update_admission_policies(
+                allowlist,
+                Vec::new(),
+                AdmissionAuditTrail::system("test.prune"),
+            )
+            .expect("update policies");
+
+        let backups: Vec<_> = fs::read_dir(&backup_dir)
+            .expect("backups dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "expected old backups to be pruned");
+        assert_ne!(
+            backups[0],
+            old_backup.file_name().unwrap().to_string_lossy()
+        );
     }
 }

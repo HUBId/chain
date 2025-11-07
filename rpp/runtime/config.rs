@@ -962,6 +962,8 @@ impl Default for AdmissionDefaultsConfig {
 pub struct NetworkAdmissionConfig {
     pub policy_path: PathBuf,
     pub audit_retention_days: u64,
+    pub backup_dir: PathBuf,
+    pub backup_retention_days: u64,
     pub defaults: AdmissionDefaultsConfig,
 }
 
@@ -977,6 +979,16 @@ impl NetworkAdmissionConfig {
                 "network.admission.audit_retention_days must be greater than 0".into(),
             ));
         }
+        if self.backup_dir.as_os_str().is_empty() {
+            return Err(ChainError::Config(
+                "network.admission.backup_dir must not be empty".into(),
+            ));
+        }
+        if self.backup_retention_days == 0 {
+            return Err(ChainError::Config(
+                "network.admission.backup_retention_days must be greater than 0".into(),
+            ));
+        }
         Ok(())
     }
 }
@@ -986,6 +998,8 @@ impl Default for NetworkAdmissionConfig {
         Self {
             policy_path: default_admission_policy_path(),
             audit_retention_days: 30,
+            backup_dir: default_admission_backup_dir(),
+            backup_retention_days: 30,
             defaults: AdmissionDefaultsConfig::default(),
         }
     }
@@ -993,6 +1007,10 @@ impl Default for NetworkAdmissionConfig {
 
 fn default_admission_policy_path() -> PathBuf {
     PathBuf::from("./data/p2p/admission_policies.json")
+}
+
+fn default_admission_backup_dir() -> PathBuf {
+    PathBuf::from("./data/p2p/admission/backups")
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

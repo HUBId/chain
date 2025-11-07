@@ -157,8 +157,11 @@ impl NetworkResources {
         snapshot_provider: Option<SnapshotProviderHandle>,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
+        let backup_retention =
+            Duration::from_secs(admission.backup_retention_days.saturating_mul(86_400));
         let peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
             .with_access_path(admission.policy_path.clone())
+            .with_policy_backups(admission.backup_dir.clone(), backup_retention)
             .with_allowlist(config.allowlist().to_vec())
             .with_blocklist(config.blocklist().to_vec());
         let peerstore = Arc::new(Peerstore::open(peerstore_config)?);

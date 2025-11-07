@@ -47,6 +47,8 @@ configuration reviews.
 | --- | --- |
 | `network.admission.policy_path` | Filesystem path where the peerstore persists the JSON snapshot of allowlisted and blocklisted peers. |
 | `network.admission.audit_retention_days` | Retention period for structured admission audit telemetry emitted when the policies mutate. |
+| `network.admission.backup_dir` | Directory where the peerstore stores timestamped admission policy snapshots. |
+| `network.admission.backup_retention_days` | Retention window (in days) for admission policy snapshots before they are pruned. |
 | `network.admission.defaults.<topic>.subscribe` | Tier assigned to new subscription policies for the given gossip topic when seeding admission metadata. |
 | `network.admission.defaults.<topic>.publish` | Tier assigned to new publish policies for the given gossip topic when seeding admission metadata. |
 
