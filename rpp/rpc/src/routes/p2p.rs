@@ -19,7 +19,7 @@ use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AdmissionApproval, AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry,
-    AllowlistedPeer, TierLevel,
+    AllowlistedPeer, PolicySignature, TierLevel,
 };
 
 #[derive(Debug, Deserialize)]
@@ -66,6 +66,8 @@ pub struct AdmissionPolicyEntry {
 pub struct AdmissionPoliciesResponse {
     pub allowlist: Vec<AdmissionPolicyEntry>,
     pub blocklist: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<PolicySignature>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,23 +155,25 @@ impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
 
 impl From<AdmissionPolicies> for AdmissionPoliciesResponse {
     fn from(policies: AdmissionPolicies) -> Self {
-        let allowlist = policies
-            .allowlist
+        let AdmissionPolicies {
+            allowlist,
+            blocklist,
+            signature,
+        } = policies;
+        let allowlist = allowlist
             .into_iter()
             .map(|entry| AdmissionPolicyEntry {
                 peer_id: entry.peer.to_base58(),
                 tier: entry.tier,
             })
             .collect();
-        let mut blocklist: Vec<String> = policies
-            .blocklist
-            .into_iter()
-            .map(|peer| peer.to_base58())
-            .collect();
+        let mut blocklist: Vec<String> =
+            blocklist.into_iter().map(|peer| peer.to_base58()).collect();
         blocklist.sort();
         Self {
             allowlist,
             blocklist,
+            signature,
         }
     }
 }
@@ -224,6 +228,48 @@ pub(super) async fn start_snapshot_stream(
         .map_err(snapshot_runtime_error_to_http)?;
 
     Ok(Json(SnapshotStreamStatusResponse::from(status)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rpp_p2p::vendor::identity;
+
+    #[test]
+    fn admission_policies_response_preserves_signature_and_sorts_blocklist() {
+        let allow_peer = {
+            let key = identity::Keypair::generate_ed25519();
+            NetworkPeerId::from(key.public())
+        };
+        let block_peer_a = {
+            let key = identity::Keypair::generate_ed25519();
+            NetworkPeerId::from(key.public())
+        };
+        let block_peer_b = {
+            let key = identity::Keypair::generate_ed25519();
+            NetworkPeerId::from(key.public())
+        };
+        let allowlist = vec![AllowlistedPeer {
+            peer: allow_peer.clone(),
+            tier: TierLevel::Tl2,
+        }];
+        let blocklist = vec![block_peer_b.clone(), block_peer_a.clone()];
+        let signature = Some(PolicySignature::new("key-1".into(), "00".repeat(64)));
+        let response = AdmissionPoliciesResponse::from(AdmissionPolicies::new(
+            allowlist,
+            blocklist,
+            signature.clone(),
+        ));
+
+        assert_eq!(response.allowlist.len(), 1);
+        assert_eq!(response.allowlist[0].peer_id, allow_peer.to_base58());
+        assert_eq!(response.allowlist[0].tier, TierLevel::Tl2);
+        assert_eq!(response.signature, signature);
+        assert_eq!(
+            response.blocklist,
+            vec![block_peer_a.to_base58(), block_peer_b.to_base58()]
+        );
+    }
 }
 
 pub(super) async fn snapshot_stream_status(

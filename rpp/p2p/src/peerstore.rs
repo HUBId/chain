@@ -13,7 +13,7 @@ use base64::{engine::general_purpose, Engine as _};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::handshake::{
     emit_handshake_telemetry, HandshakeOutcome, HandshakePayload, TelemetryMetadata,
@@ -23,6 +23,7 @@ use crate::policy_log::{
     AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
     AdmissionPolicyLogError, PolicyAllowlistState,
 };
+use crate::policy_signing::{PolicySignature, PolicySigner, PolicySigningError};
 use crate::tier::TierLevel;
 use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
 
@@ -58,6 +59,10 @@ pub enum PeerstoreError {
     PolicyBackupNotFound { name: String },
     #[error("failed to parse admission policy backup {name}")]
     PolicyBackupInvalid { name: String },
+    #[error("policy signing error: {0}")]
+    PolicySigning(#[from] PolicySigningError),
+    #[error("admission policy log entry {id} missing signature")]
+    MissingLogSignature { id: u64 },
 }
 
 pub trait IdentityVerifier: Send + Sync {
@@ -260,12 +265,38 @@ impl From<&PeerRecord> for StoredPeerRecord {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Debug, Clone, Serialize, Deserialize)]
 struct StoredAccessLists {
     #[serde(default)]
     allowlist: Vec<StoredAllowlistEntry>,
     #[serde(default)]
     blocklist: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signature: Option<PolicySignature>,
+}
+
+impl StoredAccessLists {
+    fn canonical_bytes(&self) -> Result<Vec<u8>, PeerstoreError> {
+        let mut clone = self.clone();
+        clone.signature = None;
+        serde_json::to_vec(&clone).map_err(|err| PeerstoreError::Encoding(err.to_string()))
+    }
+
+    fn into_lists(self) -> Result<(Vec<AllowlistedPeer>, Vec<PeerId>), PeerstoreError> {
+        let allowlist = self
+            .allowlist
+            .into_iter()
+            .map(AllowlistedPeer::try_from)
+            .collect::<Result<Vec<_>, PeerstoreError>>()?;
+        let blocklist = self
+            .blocklist
+            .into_iter()
+            .map(|peer| {
+                PeerId::from_str(&peer).map_err(|err| PeerstoreError::Encoding(err.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((allowlist, blocklist))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -363,13 +394,19 @@ pub struct AllowlistedPeer {
 pub struct AdmissionPolicies {
     pub allowlist: Vec<AllowlistedPeer>,
     pub blocklist: Vec<PeerId>,
+    pub signature: Option<PolicySignature>,
 }
 
 impl AdmissionPolicies {
-    pub fn new(allowlist: Vec<AllowlistedPeer>, blocklist: Vec<PeerId>) -> Self {
+    pub fn new(
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+        signature: Option<PolicySignature>,
+    ) -> Self {
         Self {
             allowlist,
             blocklist,
+            signature,
         }
     }
 
@@ -379,6 +416,10 @@ impl AdmissionPolicies {
 
     pub fn blocklist(&self) -> &[PeerId] {
         &self.blocklist
+    }
+
+    pub fn signature(&self) -> Option<&PolicySignature> {
+        self.signature.as_ref()
     }
 }
 
@@ -477,6 +518,7 @@ pub struct PeerstoreConfig {
     blocklist: Vec<PeerId>,
     policy_backup_dir: Option<PathBuf>,
     policy_backup_retention: Option<Duration>,
+    policy_signer: Option<PolicySigner>,
 }
 
 impl fmt::Debug for PeerstoreConfig {
@@ -489,6 +531,7 @@ impl fmt::Debug for PeerstoreConfig {
             .field("blocklist", &self.blocklist)
             .field("policy_backup_dir", &self.policy_backup_dir)
             .field("policy_backup_retention", &self.policy_backup_retention)
+            .field("policy_signer", &self.policy_signer.is_some())
             .finish()
     }
 }
@@ -504,6 +547,7 @@ impl PeerstoreConfig {
             blocklist: Vec::new(),
             policy_backup_dir: None,
             policy_backup_retention: None,
+            policy_signer: None,
         }
     }
 
@@ -520,6 +564,7 @@ impl PeerstoreConfig {
             blocklist: Vec::new(),
             policy_backup_dir: None,
             policy_backup_retention: None,
+            policy_signer: None,
         }
     }
 
@@ -554,6 +599,11 @@ impl PeerstoreConfig {
         self
     }
 
+    pub fn with_policy_signer(mut self, signer: PolicySigner) -> Self {
+        self.policy_signer = Some(signer);
+        self
+    }
+
     pub fn allowlist(&self) -> &[AllowlistedPeer] {
         &self.allowlist
     }
@@ -574,6 +624,8 @@ pub struct Peerstore {
     policy_backup_dir: Option<PathBuf>,
     policy_backup_retention: Option<Duration>,
     policy_backup_prefix: Option<String>,
+    policy_signer: Option<PolicySigner>,
+    policy_signature: RwLock<Option<PolicySignature>>,
 }
 
 impl fmt::Debug for Peerstore {
@@ -587,6 +639,7 @@ impl fmt::Debug for Peerstore {
             .field("blocklisted_len", &self.blocklisted.read().len())
             .field("policy_backup_dir", &self.policy_backup_dir)
             .field("policy_backup_retention", &self.policy_backup_retention)
+            .field("policy_signer", &self.policy_signer.is_some())
             .finish()
     }
 }
@@ -602,6 +655,7 @@ impl Peerstore {
             blocklist: configured_blocklist,
             policy_backup_dir,
             policy_backup_retention,
+            policy_signer,
         } = config;
 
         let peers = if let Some(path_ref) = &path {
@@ -641,24 +695,17 @@ impl Peerstore {
             None => None,
         };
 
+        let mut snapshot_signature: Option<PolicySignature> = None;
+        let signer_ref = policy_signer.as_ref();
         let (allowlist, blocklisted) = if let Some(access_path) = &access_path {
             if access_path.exists() {
                 let raw = fs::read_to_string(access_path)?;
                 let stored: StoredAccessLists = serde_json::from_str(&raw)
                     .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
-                let allowlist = stored
-                    .allowlist
-                    .into_iter()
-                    .map(AllowlistedPeer::try_from)
-                    .collect::<Result<Vec<_>, PeerstoreError>>()?;
-                let blocklisted = stored
-                    .blocklist
-                    .into_iter()
-                    .map(|peer| {
-                        PeerId::from_str(&peer)
-                            .map_err(|err| PeerstoreError::Encoding(err.to_string()))
-                    })
-                    .collect::<Result<HashSet<_>, _>>()?;
+                let (allowlist, blocklist_vec, signature) =
+                    Self::decode_access_lists(stored, signer_ref)?;
+                snapshot_signature = signature;
+                let blocklisted = blocklist_vec.into_iter().collect::<HashSet<_>>();
                 (allowlist, blocklisted)
             } else {
                 (
@@ -690,6 +737,8 @@ impl Peerstore {
             policy_backup_dir,
             policy_backup_retention,
             policy_backup_prefix,
+            policy_signer,
+            policy_signature: RwLock::new(snapshot_signature),
         };
         store.apply_access_control()?;
         store.persist_access_lists(false)?;
@@ -699,7 +748,8 @@ impl Peerstore {
     pub fn admission_policies(&self) -> AdmissionPolicies {
         let allowlist = self.allowlist.read().clone();
         let blocklist = self.blocklisted.read().iter().cloned().collect::<Vec<_>>();
-        AdmissionPolicies::new(allowlist, blocklist)
+        let signature = self.policy_signature.read().clone();
+        AdmissionPolicies::new(allowlist, blocklist, signature)
     }
 
     pub fn admission_audit_entries(
@@ -708,7 +758,11 @@ impl Peerstore {
         limit: usize,
     ) -> Result<(Vec<AdmissionPolicyLogEntry>, usize), PeerstoreError> {
         match &self.audit_log {
-            Some(log) => log.read(offset, limit).map_err(PeerstoreError::from),
+            Some(log) => {
+                let (entries, total) = log.read(offset, limit).map_err(PeerstoreError::from)?;
+                self.verify_log_entries(&entries)?;
+                Ok((entries, total))
+            }
             None => Ok((Vec::new(), 0)),
         }
     }
@@ -782,18 +836,8 @@ impl Peerstore {
         let data = self.admission_policy_backup_contents(name)?;
         let stored: StoredAccessLists = serde_json::from_slice(&data)
             .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
-        let allowlist = stored
-            .allowlist
-            .into_iter()
-            .map(AllowlistedPeer::try_from)
-            .collect::<Result<Vec<_>, PeerstoreError>>()?;
-        let blocklist = stored
-            .blocklist
-            .into_iter()
-            .map(|peer| {
-                PeerId::from_str(&peer).map_err(|err| PeerstoreError::Encoding(err.to_string()))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let (allowlist, blocklist, _) =
+            Self::decode_access_lists(stored, self.policy_signer.as_ref())?;
         self.commit_access_lists(allowlist, blocklist, audit)
     }
 
@@ -1213,16 +1257,24 @@ impl Peerstore {
             .iter()
             .map(StoredAllowlistEntry::from)
             .collect();
-        let blocklist: Vec<String> = self
+        let mut blocklist: Vec<String> = self
             .blocklisted
             .read()
             .iter()
             .map(|peer| peer.to_base58())
             .collect();
-        let stored = StoredAccessLists {
+        blocklist.sort();
+        let mut stored = StoredAccessLists {
             allowlist,
             blocklist,
+            signature: None,
         };
+        if let Some(signer) = self.policy_signer.as_ref() {
+            let message = stored.canonical_bytes()?;
+            let signature = signer.sign(&message)?;
+            stored.signature = Some(signature);
+        }
+        let current_signature = stored.signature.clone();
         let encoded = serde_json::to_string_pretty(&stored)
             .map_err(|err| PeerstoreError::Encoding(err.to_string()))?;
         if let Some(parent) = path.parent() {
@@ -1232,6 +1284,7 @@ impl Peerstore {
         if create_backup {
             self.snapshot_admission_policies(&encoded)?;
         }
+        *self.policy_signature.write() = current_signature;
         Ok(())
     }
 
@@ -1300,6 +1353,47 @@ impl Peerstore {
         self.policy_backup_prefix
             .as_deref()
             .unwrap_or(DEFAULT_POLICY_BACKUP_PREFIX)
+    }
+
+    fn decode_access_lists(
+        stored: StoredAccessLists,
+        signer: Option<&PolicySigner>,
+    ) -> Result<(Vec<AllowlistedPeer>, Vec<PeerId>, Option<PolicySignature>), PeerstoreError> {
+        let signature = stored.signature.clone();
+        let canonical = stored.canonical_bytes()?;
+        let (allowlist, blocklist) = stored.into_lists()?;
+        if let Some(signer) = signer {
+            if let Some(signature) = signature {
+                signer.verify(&signature, &canonical)?;
+                Ok((allowlist, blocklist, Some(signature)))
+            } else {
+                warn!(
+                    target: "telemetry.admission",
+                    "admission snapshot missing signature; scheduling re-sign"
+                );
+                Ok((allowlist, blocklist, None))
+            }
+        } else {
+            Ok((allowlist, blocklist, signature))
+        }
+    }
+
+    fn verify_log_entries(
+        &self,
+        entries: &[AdmissionPolicyLogEntry],
+    ) -> Result<(), PeerstoreError> {
+        let Some(signer) = self.policy_signer.as_ref() else {
+            return Ok(());
+        };
+        for entry in entries {
+            let signature = entry
+                .signature
+                .as_ref()
+                .ok_or(PeerstoreError::MissingLogSignature { id: entry.id })?;
+            let message = entry.canonical_bytes().map_err(PeerstoreError::from)?;
+            signer.verify(signature, &message)?;
+        }
+        Ok(())
     }
 
     fn is_valid_backup_name(name: &str, prefix: &str) -> bool {
@@ -1380,7 +1474,13 @@ impl Peerstore {
                 .iter()
                 .map(|approval| AdmissionApprovalRecord::new(approval.role(), approval.approver()))
                 .collect();
-            if let Err(err) = log.append(actor, reason_ref, &approval_records, change) {
+            if let Err(err) = log.append(
+                actor,
+                reason_ref,
+                &approval_records,
+                change,
+                self.policy_signer.as_ref(),
+            ) {
                 let label = reason_ref.unwrap_or("n/a");
                 error!(
                     target: "telemetry.admission",
@@ -1656,13 +1756,33 @@ fn derive_public_key(peer_id: &PeerId) -> Option<identity::PublicKey> {
 mod tests {
     use super::*;
     use crate::handshake::VRF_HANDSHAKE_CONTEXT;
-    use crate::policy_log::AdmissionPolicyChange;
+    use crate::policy_log::{AdmissionPolicyChange, AdmissionPolicyLogEntry, PolicyAllowlistState};
     use crate::vendor::identity;
+    use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
     use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
     use std::collections::HashMap;
+    use std::fs;
+    use std::path::Path;
     use std::sync::Arc;
     use tempfile::tempdir;
+
+    fn build_policy_signer(dir: &Path, key_id: &str) -> PolicySigner {
+        let key_path = dir.join(format!("{key_id}.toml"));
+        let mut rng = OsRng;
+        let signing_key = SigningKey::generate(&mut rng);
+        let verifying_key = signing_key.verifying_key();
+        let secret_hex = hex::encode(signing_key.to_bytes());
+        let public_hex = hex::encode(verifying_key.to_bytes());
+        let key_toml = format!("secret_key = \"{secret_hex}\"\npublic_key = \"{public_hex}\"\n");
+        fs::write(&key_path, key_toml).expect("write signing key");
+
+        let mut trust_map = HashMap::new();
+        trust_map.insert(key_id.to_string(), public_hex);
+        let trust_store = PolicyTrustStore::from_hex(trust_map).expect("trust store");
+        PolicySigner::with_filesystem_key(key_id.to_string(), key_path, trust_store)
+            .expect("policy signer")
+    }
 
     #[derive(Default)]
     struct StaticVerifier {
@@ -1711,6 +1831,139 @@ mod tests {
         };
         let template = HandshakePayload::new(zsi.to_string(), vrf_public_key, vrf_proof, tier);
         template.signed(keypair).expect("sign handshake")
+    }
+
+    #[test]
+    fn persists_signed_snapshot_when_signer_configured() {
+        let dir = tempdir().expect("tmp");
+        let peerstore_path = dir.path().join("peerstore.json");
+        let access_path = dir.path().join("access.json");
+        let signer = build_policy_signer(dir.path(), "test-key");
+        let verifier = signer.verifier().clone();
+
+        let store = Peerstore::open(
+            PeerstoreConfig::persistent(&peerstore_path)
+                .with_access_path(&access_path)
+                .with_policy_signer(signer),
+        )
+        .expect("open peerstore");
+
+        store
+            .update_admission_policies(Vec::new(), Vec::new(), AdmissionAuditTrail::system("test"))
+            .expect("update policies");
+
+        let raw = fs::read_to_string(&access_path).expect("read snapshot");
+        let stored: StoredAccessLists = serde_json::from_str(&raw).expect("decode snapshot");
+        let signature = stored.signature.clone().expect("missing signature");
+        let canonical = stored.canonical_bytes().expect("canonical snapshot");
+        verifier
+            .verify(&signature, &canonical)
+            .expect("verify signature");
+    }
+
+    #[test]
+    fn verifies_audit_log_signatures_when_signer_configured() {
+        let dir = tempdir().expect("tmp");
+        let peerstore_path = dir.path().join("peerstore.json");
+        let access_path = dir.path().join("access.json");
+        let audit_path = dir.path().join("audit.jsonl");
+        let signer = build_policy_signer(dir.path(), "audit-key");
+
+        let store = Peerstore::open(
+            PeerstoreConfig::persistent(&peerstore_path)
+                .with_access_path(&access_path)
+                .with_audit_log_path(&audit_path)
+                .with_policy_signer(signer),
+        )
+        .expect("open peerstore");
+
+        let log = store.audit_log.as_ref().expect("audit log");
+        let entry = log
+            .append(
+                "actor",
+                Some("reason"),
+                &[AdmissionApprovalRecord::new("role", "approver")],
+                AdmissionPolicyChange::Noop,
+                store.policy_signer.as_ref(),
+            )
+            .expect("append audit");
+
+        store
+            .verify_log_entries(&[entry])
+            .expect("verify audit signatures");
+    }
+
+    #[test]
+    fn rejects_audit_log_entries_without_signature() {
+        let dir = tempdir().expect("tmp");
+        let peerstore_path = dir.path().join("peerstore.json");
+        let access_path = dir.path().join("access.json");
+        let audit_path = dir.path().join("audit.jsonl");
+        let signer = build_policy_signer(dir.path(), "missing-sig-key");
+
+        let store = Peerstore::open(
+            PeerstoreConfig::persistent(&peerstore_path)
+                .with_access_path(&access_path)
+                .with_audit_log_path(&audit_path)
+                .with_policy_signer(signer),
+        )
+        .expect("open peerstore");
+
+        let entry = AdmissionPolicyLogEntry {
+            id: 42,
+            timestamp_ms: 1,
+            actor: "actor".into(),
+            reason: None,
+            change: AdmissionPolicyChange::Allowlist {
+                previous: None,
+                current: Some(PolicyAllowlistState::new(PeerId::random(), TierLevel::Tl2)),
+            },
+            approvals: vec![],
+            signature: None,
+        };
+
+        let result = store.verify_log_entries(&[entry]);
+        assert!(matches!(
+            result,
+            Err(PeerstoreError::MissingLogSignature { id }) if id == 42
+        ));
+    }
+
+    #[test]
+    fn rejects_audit_log_entries_with_tampered_signature() {
+        let dir = tempdir().expect("tmp");
+        let peerstore_path = dir.path().join("peerstore.json");
+        let access_path = dir.path().join("access.json");
+        let audit_path = dir.path().join("audit.jsonl");
+        let signer = build_policy_signer(dir.path(), "invalid-sig-key");
+
+        let store = Peerstore::open(
+            PeerstoreConfig::persistent(&peerstore_path)
+                .with_access_path(&access_path)
+                .with_audit_log_path(&audit_path)
+                .with_policy_signer(signer.clone()),
+        )
+        .expect("open peerstore");
+
+        let log = store.audit_log.as_ref().expect("audit log");
+        let mut entry = log
+            .append(
+                "actor",
+                None,
+                &[],
+                AdmissionPolicyChange::Blocklist {
+                    peer_id: "peer".into(),
+                    previous: false,
+                    current: true,
+                },
+                store.policy_signer.as_ref(),
+            )
+            .expect("append audit");
+        let signature = entry.signature.as_mut().expect("signature");
+        signature.value = "00".repeat(64);
+
+        let result = store.verify_log_entries(&[entry]);
+        assert!(matches!(result, Err(PeerstoreError::PolicySigning(_))));
     }
 
     #[test]

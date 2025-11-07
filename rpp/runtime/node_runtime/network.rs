@@ -7,8 +7,8 @@ use log::warn;
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     AllowlistedPeer, GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network,
-    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, ReputationHeuristics,
-    SnapshotProviderHandle, TierLevel,
+    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, PolicySigner,
+    PolicyTrustStore, ReputationHeuristics, SnapshotProviderHandle, TierLevel,
 };
 use std::str::FromStr;
 use thiserror::Error;
@@ -159,11 +159,35 @@ impl NetworkResources {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
         let backup_retention =
             Duration::from_secs(admission.backup_retention_days.saturating_mul(86_400));
-        let peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
+        let policy_signer = if admission.signing.enabled {
+            let trust_store = PolicyTrustStore::from_hex(admission.signing.trust_store.clone())
+                .map_err(|err| NetworkSetupError::Peerstore(PeerstoreError::PolicySigning(err)))?;
+            let key_path = admission
+                .signing
+                .key_path
+                .clone()
+                .expect("signing config validated key_path");
+            let active_key = admission
+                .signing
+                .active_key
+                .clone()
+                .expect("signing config validated active_key");
+            Some(
+                PolicySigner::with_filesystem_key(active_key, key_path, trust_store).map_err(
+                    |err| NetworkSetupError::Peerstore(PeerstoreError::PolicySigning(err)),
+                )?,
+            )
+        } else {
+            None
+        };
+        let mut peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
             .with_access_path(admission.policy_path.clone())
             .with_policy_backups(admission.backup_dir.clone(), backup_retention)
             .with_allowlist(config.allowlist().to_vec())
             .with_blocklist(config.blocklist().to_vec());
+        if let Some(signer) = policy_signer {
+            peerstore_config = peerstore_config.with_policy_signer(signer);
+        }
         let peerstore = Arc::new(Peerstore::open(peerstore_config)?);
         let gossip_state = if let Some(path) = p2p_config.gossip_path.as_ref() {
             Some(Arc::new(GossipStateStore::open(path)?))

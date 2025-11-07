@@ -8,6 +8,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::policy_signing::{PolicySignature, PolicySigner, PolicySigningError};
 use crate::tier::TierLevel;
 use crate::vendor::PeerId;
 
@@ -17,6 +18,8 @@ pub enum AdmissionPolicyLogError {
     Io(#[from] std::io::Error),
     #[error("encoding error: {0}")]
     Encoding(String),
+    #[error("signing error: {0}")]
+    Signing(#[from] PolicySigningError),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +77,16 @@ pub struct AdmissionPolicyLogEntry {
     pub change: AdmissionPolicyChange,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub approvals: Vec<AdmissionApprovalRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<PolicySignature>,
+}
+
+impl AdmissionPolicyLogEntry {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, AdmissionPolicyLogError> {
+        let mut clone = self.clone();
+        clone.signature = None;
+        serde_json::to_vec(&clone).map_err(|err| AdmissionPolicyLogError::Encoding(err.to_string()))
+    }
 }
 
 #[derive(Debug)]
@@ -121,20 +134,27 @@ impl AdmissionPolicyLog {
         reason: Option<&str>,
         approvals: &[AdmissionApprovalRecord],
         change: AdmissionPolicyChange,
+        signer: Option<&PolicySigner>,
     ) -> Result<AdmissionPolicyLogEntry, AdmissionPolicyLogError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_millis() as u64)
             .unwrap_or(0);
-        let entry = AdmissionPolicyLogEntry {
+        let mut entry = AdmissionPolicyLogEntry {
             id,
             timestamp_ms,
             actor: actor.to_string(),
             reason: reason.map(|value| value.to_string()),
             change,
             approvals: approvals.to_vec(),
+            signature: None,
         };
+        if let Some(signer) = signer {
+            let message = entry.canonical_bytes()?;
+            let signature = signer.sign(&message)?;
+            entry.signature = Some(signature);
+        }
         let encoded = serde_json::to_string(&entry)
             .map_err(|err| AdmissionPolicyLogError::Encoding(err.to_string()))?;
         let _guard = self.lock.lock();

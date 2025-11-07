@@ -10,6 +10,7 @@ mod peerstore;
 mod persistence;
 mod pipeline;
 mod policy_log;
+mod policy_signing;
 mod roadmap;
 mod security;
 mod simulator;
@@ -56,6 +57,9 @@ pub use pipeline::{
 };
 pub use policy_log::{
     AdmissionPolicyChange, AdmissionPolicyLogEntry, AdmissionPolicyLogError, PolicyAllowlistState,
+};
+pub use policy_signing::{
+    PolicySignature, PolicySignatureVerifier, PolicySigner, PolicySigningError, PolicyTrustStore,
 };
 pub use roadmap::{libp2p_backbone_plan, Deliverable, Milestone, Phase, Plan, WorkItem};
 pub use rpp_p2p_macros::NetworkBehaviour;

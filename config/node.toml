@@ -56,6 +56,14 @@ require_client_auth = false
 policy_path = "./data/p2p/admission_policies.json"
 audit_retention_days = 30
 
+[network.admission.signing]
+enabled = false
+key_path = "./secrets/admission_signing.toml"
+active_key = "admission_dev"
+
+[network.admission.signing.trust_store]
+admission_dev = "0000000000000000000000000000000000000000000000000000000000000000"
+
 [network.admission.defaults.blocks]
 subscribe = "tl0"
 publish = "tl3"
