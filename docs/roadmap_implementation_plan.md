@@ -44,6 +44,14 @@ Die Jobs sind als verpflichtende Statuschecks verdrahtet und bilden die Grundlag
 
 ### Phase 3 Preview
 
+**Abschluss (2026-06-19):** Die Admission-Control-Strecke persistiert Allow-/Blocklisten inklusive Audit-Trail im Peerstore, exponiert Dual-Control-gesicherte RPCs und exportiert Snapshot-SLIs (`snapshot_bytes_sent_total`, `snapshot_stream_lag_seconds`), die durch Observability-Tests validiert werden.【F:rpp/p2p/src/peerstore.rs†L1180-L1299】【F:rpp/p2p/src/peerstore.rs†L1795-L1828】【F:rpp/rpc/src/routes/p2p.rs†L232-L379】【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L518】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L180】 Phase‑3 schließt damit den Networking-/Snapshot-Schwerpunkt ab.
+
+- **Runbook:** Das [Network Snapshot Failover Runbook](runbooks/network_snapshot_failover.md) dokumentiert Diagnose-, Resume- und Recovery-Schritte inklusive RPC-/CLI-Beispielen und verweist auf die relevanten SLOs und Tests.【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
+- **Dashboard:** `docs/dashboards/pipeline_overview.json` liefert Panels für Snapshot-Durchsatz und Stream-Lag, die direkt auf den neuen SLIs aufsetzen.【F:docs/dashboards/pipeline_overview.json†L200-L260】
+- **Alerts:** `docs/observability/alerts/snapshot_stream.yaml` definiert Warning-/Critical-Regeln für Lag, Durchsatz und Chunk-Fehler und verlinkt das Runbook für Eskalationen.【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
+
+Die folgenden Arbeiten bleiben als Fokus für Phase‑3-Nacharbeiten und spätere Erweiterungen:
+
 - **Netzwerk & Snapshot-Verteilung:** Ausbau der verteilten Snapshot-Pipeline mit Fokus auf inkrementelle Resume-Pfade und Gossip-Backpressure (siehe Abschnitt 4.3 „Snapshot-Sync & Telemetrie“ und `SnapshotsBehaviour`).
 - **Tier-Admission-Härtung:** Weiterführung der Admission-Control-Arbeiten aus Abschnitt 4.2 inklusive Witness-Kanäle und Observer-Handshakes, gekoppelt mit Reputation-Decay und Ban-Propagation.
 - **State Sync & Firewood/Proof-Verzahnung:** Vorziehen der Tasks aus Abschnitt 2 (`prove_transition`, Snapshot-Rebuild-Service) zur Vorbereitung der Witness-Gossip-Feeds.
