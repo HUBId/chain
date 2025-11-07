@@ -32,7 +32,7 @@ nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phas
 - **Runbooks:** Operator Guide und Observability-Runbook beschreiben Simnet-Logs, RPC-Checks und
   Grafana-Screenshots für Phase‑2-Freigaben.【F:docs/rpp_node_operator_guide.md†L120-L174】【F:docs/runbooks/observability.md†L1-L120】
 - **Regression-Orchestrierung:** Der neue Binary `tools/simnet/src/bin/regression.rs` fährt VRF-/Snapshot-/Gossip-Szenarien
-  sequenziell, erzeugt JSON/HTML-Berichte und läuft in CI/Nightly als `simnet-regression`-Job.【F:tools/simnet/src/bin/regression.rs†L1-L240】【F:.github/workflows/ci.yml†L184-L226】【F:.github/workflows/nightly.yml†L80-L120】
+  sequenziell, erzeugt JSON/HTML-Berichte und läuft in CI/Nightly als `simnet-regression`-Job.【F:tools/simnet/src/bin/regression.rs†L1-L240】【F:.github/workflows/ci.yml†L287-L303】【F:.github/workflows/nightly.yml†L186-L208】
 - **Alert-Playbook:** Prometheus-Regeln unter `docs/observability/alerts/consensus_vrf.yaml` decken p95-VRF-Latenzen,
   Failure-Bursts und Quorum-Rejections ab; das Observability-Runbook dokumentiert Diagnose- und Eskalationsschritte.【F:docs/observability/alerts/consensus_vrf.yaml†L1-L47】【F:docs/runbooks/observability.md†L1-L160】
 - **Release-Metadaten:** Die Release-Notizen enthalten nun automatisch extrahierte Proof-Metadaten (Circuit-IDs,
@@ -46,4 +46,19 @@ nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phas
 - **Tests:** 🟢 – Manipulations-Suite läuft nightly.
 - **Monitoring:** 🟡 – Dashboards aktiv, Alerts in Rollout.
 - **Operator Docs:** 🟢 – Phase‑2-Abschnitt veröffentlicht.
+
+## Phase 2 Abnahme (Kalenderwoche 14/2026)
+
+**Zusammenfassung:** Die drei verpflichtenden Test-Suites (`unit-suites`, `integration-workflows`, `simnet-smoke`) sind in CI grün und als Branch-Protection-Checks aktiviert. Nightly-Läufe bestätigen die Stabilität und stellen vollständige Simnet-Artefakte bereit.
+
+### Highlights
+- **Unit-Suites:** Die Matrix aus Default-, Produktions- und Plonky3-Läufen (`cargo xtask test-unit`) deckt deterministische Witness-/VRF-Checks ab und bildet den Statuscheck `unit-suites` für alle Branches.【F:.github/workflows/ci.yml†L185-L217】
+- **Integrations-Workflows:** `cargo xtask test-integration` prüft Blockproduktion, Snapshot-/Light-Client-Sync und Manipulationsschutz als verpflichtenden Check `integration-workflows` auf denselben Feature-Kombinationen.【F:.github/workflows/ci.yml†L219-L251】
+- **Simnet-Smoke:** `cargo xtask test-simnet` läuft als Pflichtgate `simnet-smoke`, deckt alle Szenarien ab und liefert Summaries für VRF-/Quorum-Stressfälle.【F:.github/workflows/ci.yml†L253-L285】
+- **Nightly-Nachweis:** Der Workflow `nightly-simnet` fährt `cargo xtask test-all` sowie das dedizierte Simnet-Harness und lädt die Artefakte (`simnet-nightly`) für Auditor:innen hoch.【F:.github/workflows/nightly.yml†L88-L124】【F:.github/workflows/nightly.yml†L148-L183】
+
+### Artefakte & Logs
+- **CI-Artefakte:** Der `simnet-regression` Upload aus dem CI-Workflow bündelt JSON-/CSV-Summaries aller Simnet-Läufe zur Nachvollziehbarkeit.【F:.github/workflows/ci.yml†L287-L303】
+- **Nightly-Artefakte:** Das Paket `simnet-nightly` enthält vollständige Nightly-Summaries (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) inklusive Analyseresultaten.【F:.github/workflows/nightly.yml†L148-L183】
+- **Matrix-Protokolle:** Die Step-Logs in `unit-suites`, `integration-workflows` und `simnet-smoke` dokumentieren Laufzeiten (~12/18/22 Minuten) und werden für Reviews im Actions-Tab archiviert.【F:.github/workflows/ci.yml†L185-L285】
 

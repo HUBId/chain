@@ -36,6 +36,17 @@ Die GitHub-Actions-Matrix in `.github/workflows/ci.yml` und `nightly.yml` fährt
 
 Die Feature-Flags werden von `xtask` automatisch übernommen und damit sowohl in CI als auch lokal konsistent ausgewertet.【F:xtask/src/main.rs†L1-L91】
 
+## Phase 2 – Test Suites abgeschlossen
+
+Die Phase‑2-Abnahme bestätigt, dass alle drei `cargo xtask`-Läufe automatisiert und reproduzierbar grün sind. Die Jobs sind in [`CI`](../.github/workflows/ci.yml) und [`nightly-simnet`](../.github/workflows/nightly.yml) dokumentiert und liefern geprüfte Artefakte.
+
+- **`unit-suites`** startet `cargo xtask test-unit` über die Feature-Matrix `default`, `prod,prover-stwo` und `prod,prover-stwo,backend-plonky3`. Der kombinierte Lauf benötigt ~12 Minuten (Warm ~6 Minuten) und archiviert deterministische Witness- und VRF-Ergebnisse für Auditor:innen.【F:.github/workflows/ci.yml†L185-L217】
+- **`integration-workflows`** führt `cargo xtask test-integration` für dieselbe Matrix aus. Die Matrix dauert ~18 Minuten (Warm ~9 Minuten) und deckt Blockproduktion, Snapshot-/Light-Client-Sync sowie Manipulationsschutzfälle ab.【F:.github/workflows/ci.yml†L219-L251】
+- **`simnet-smoke`** betreibt `cargo xtask test-simnet` mit allen Simulationsszenarien. Der Lauf benötigt ~22 Minuten (Warm ~11 Minuten) und legt JSON-/CSV-Summaries als Artefakte (`simnet-regression`) im Actions-Tab ab.【F:.github/workflows/ci.yml†L253-L285】
+- **Nightly `validation` & `simnet`** replizieren die Matrix täglich (`cargo xtask test-all`) und laden das Paket `simnet-nightly` hoch, das die vollständigen Summaries für Prüfzwecke enthält (~35 Minuten + ~15 Minuten).【F:.github/workflows/nightly.yml†L88-L124】【F:.github/workflows/nightly.yml†L148-L183】
+
+Mit diesen Jobs gelten die Blueprint-Definition-of-Done-Kriterien für Unit-, Integrations- und Simulationsabdeckung als erfüllt.
+
 ## 2. Cross-Backend-Parität
 - **Feature-Matrix**: Die Standard-Matrix umfasst `default`, `stwo`, `rpp-stark` und `plonky3`; Release- und CI-Pipelines führen alle Backends verpflichtend aus.【F:.github/workflows/release.yml†L55-L120】【F:scripts/test.sh†L15-L210】
 - **Kompatibilitäts-Vektoren**: Gemeinsame Testvektoren (bincode-Dateien) stellen sicher, dass beide Backends identische öffentliche Inputs erzeugen.
