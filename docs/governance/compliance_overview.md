@@ -13,6 +13,10 @@
 - [Security Risk Register](../security/register.md) entries for retention deviations and audit trail coverage.
 - Phase 3 [Acceptance Checklist](../runbooks/phase3_acceptance.md) and [Weekly Status](../status/weekly.md#phase3-tracking-kalenderwoche-20-2026) reference this overview for auditor sign-off.
 
+### Phase 3 Evidence Bundle
+- `cargo xtask collect-phase3-evidence [--output-dir <path>]` erzeugt unter `target/compliance/phase3/<timestamp>/` eine Manifestdatei sowie das Archiv `phase3-evidence-<timestamp>.tar.gz`. Das Manifest dokumentiert pro Kategorie (Dashboards, Alerts, Audit-Logs, Policy-Backups, Checksum-Reports, CI-Logs) sowohl eingefügte Nachweise als auch fehlende Quellen.【F:xtask/src/main.rs†L1498-L1852】
+- Der Nightly-Workflow veröffentlicht das Paket automatisch als GitHub-Actions-Artefakt (`phase3-evidence-<timestamp>`), sodass Auditor:innen die aktuelle Evidenz direkt abrufen können.【F:.github/workflows/nightly.yml†L79-L128】
+
 ## Outstanding Items
 | Gap | Owner | Target Date | Notes |
 | --- | --- | --- | --- |

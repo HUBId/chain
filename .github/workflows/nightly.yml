@@ -76,6 +76,57 @@ jobs:
           name: snapshot-health-report
           path: snapshot-health-report.json
 
+  phase3-evidence:
+    name: Phase 3 evidence bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Collect compliance evidence
+        run: |
+          set -euo pipefail
+          cargo xtask collect-phase3-evidence
+
+      - name: Prepare evidence metadata
+        id: phase3
+        run: |
+          set -euo pipefail
+          base_dir="target/compliance/phase3"
+          if [ ! -d "$base_dir" ]; then
+            echo "::error::No evidence bundles generated" >&2
+            exit 1
+          fi
+          latest_dir=$(ls -1 "$base_dir" | grep -E '^[0-9]{8}T[0-9]{6}Z$' | sort | tail -n 1)
+          if [ -z "$latest_dir" ]; then
+            echo "::error::No timestamped evidence directories found" >&2
+            exit 1
+          fi
+          manifest_path="$base_dir/$latest_dir/manifest.json"
+          bundle_path="$base_dir/phase3-evidence-$latest_dir.tar.gz"
+          if [ ! -f "$manifest_path" ]; then
+            echo "::error::Evidence manifest $manifest_path is missing" >&2
+            exit 1
+          fi
+          if [ ! -f "$bundle_path" ]; then
+            echo "::error::Evidence bundle $bundle_path is missing" >&2
+            exit 1
+          fi
+          echo "timestamp=$latest_dir" >>"$GITHUB_OUTPUT"
+          echo "manifest=$manifest_path" >>"$GITHUB_OUTPUT"
+          echo "bundle=$bundle_path" >>"$GITHUB_OUTPUT"
+
+      - name: Upload Phase 3 evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase3-evidence-${{ steps.phase3.outputs.timestamp }}
+          path: |
+            ${{ steps.phase3.outputs.manifest }}
+            ${{ steps.phase3.outputs.bundle }}
+
   plonky3-hash-audit:
     name: Plonky3 release hash audit
     runs-on: ubuntu-latest
