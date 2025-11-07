@@ -41,6 +41,15 @@ The repository ships profile-specific templates under `config/` for quick bootst
 Copy one of these files, adjust local paths, and point the CLI to the new location for reproducible
 configuration reviews.
 
+### Admission policies
+
+| Key | Description |
+| --- | --- |
+| `network.admission.policy_path` | Filesystem path where the peerstore persists the JSON snapshot of allowlisted and blocklisted peers. |
+| `network.admission.audit_retention_days` | Retention period for structured admission audit telemetry emitted when the policies mutate. |
+| `network.admission.defaults.<topic>.subscribe` | Tier assigned to new subscription policies for the given gossip topic when seeding admission metadata. |
+| `network.admission.defaults.<topic>.publish` | Tier assigned to new publish policies for the given gossip topic when seeding admission metadata. |
+
 ## Schema and version validation
 
 * **Node configuration:** `NodeConfig::validate` enforces `config_version`, non-zero runtime limits,

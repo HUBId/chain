@@ -390,6 +390,7 @@ impl AdmissionAuditTrail {
 
 pub struct PeerstoreConfig {
     path: Option<PathBuf>,
+    access_path: Option<PathBuf>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
     allowlist: Vec<AllowlistedPeer>,
     blocklist: Vec<PeerId>,
@@ -399,6 +400,7 @@ impl fmt::Debug for PeerstoreConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeerstoreConfig")
             .field("path", &self.path)
+            .field("access_path", &self.access_path)
             .field("allowlist", &self.allowlist)
             .field("blocklist", &self.blocklist)
             .finish()
@@ -409,6 +411,7 @@ impl PeerstoreConfig {
     pub fn memory() -> Self {
         Self {
             path: None,
+            access_path: None,
             identity_verifier: None,
             allowlist: Vec::new(),
             blocklist: Vec::new(),
@@ -416,8 +419,11 @@ impl PeerstoreConfig {
     }
 
     pub fn persistent(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        let access_path = path.with_extension("access.json");
         Self {
-            path: Some(path.into()),
+            access_path: Some(access_path),
+            path: Some(path),
             identity_verifier: None,
             allowlist: Vec::new(),
             blocklist: Vec::new(),
@@ -436,6 +442,11 @@ impl PeerstoreConfig {
 
     pub fn with_blocklist(mut self, peers: Vec<PeerId>) -> Self {
         self.blocklist = peers;
+        self
+    }
+
+    pub fn with_access_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.access_path = Some(path.into());
         self
     }
 
@@ -493,10 +504,12 @@ impl Peerstore {
             HashMap::new()
         };
 
-        let access_path = config
-            .path
-            .as_ref()
-            .map(|path| path.with_extension("access.json"));
+        let access_path = config.access_path.clone().or_else(|| {
+            config
+                .path
+                .as_ref()
+                .map(|path| path.with_extension("access.json"))
+        });
 
         let (allowlist, blocklisted) = if let Some(path) = &access_path {
             if path.exists() {

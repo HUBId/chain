@@ -10,7 +10,10 @@ use http::Uri;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 
-use rpp_p2p::{ReputationHeuristics, TierLevel, WitnessChannelConfig, WitnessPipelineConfig};
+use rpp_p2p::{
+    GossipTopic, ReputationHeuristics, TierLevel, TopicPermission, WitnessChannelConfig,
+    WitnessPipelineConfig,
+};
 
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
@@ -855,6 +858,143 @@ impl P2pConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TopicTierConfig {
+    pub subscribe: TierLevel,
+    pub publish: TierLevel,
+}
+
+impl TopicTierConfig {
+    fn for_topic(topic: GossipTopic) -> Self {
+        let permission = TopicPermission::default_for(topic);
+        Self {
+            subscribe: permission.subscribe,
+            publish: permission.publish,
+        }
+    }
+
+    fn blocks() -> Self {
+        Self::for_topic(GossipTopic::Blocks)
+    }
+
+    fn votes() -> Self {
+        Self::for_topic(GossipTopic::Votes)
+    }
+
+    fn proofs() -> Self {
+        Self::for_topic(GossipTopic::Proofs)
+    }
+
+    fn vrf_proofs() -> Self {
+        Self::for_topic(GossipTopic::VrfProofs)
+    }
+
+    fn snapshots() -> Self {
+        Self::for_topic(GossipTopic::Snapshots)
+    }
+
+    fn meta() -> Self {
+        Self::for_topic(GossipTopic::Meta)
+    }
+
+    fn vrf_meta() -> Self {
+        Self::for_topic(GossipTopic::VrfMeta)
+    }
+
+    fn witness_proofs() -> Self {
+        Self::for_topic(GossipTopic::WitnessProofs)
+    }
+
+    fn witness_meta() -> Self {
+        Self::for_topic(GossipTopic::WitnessMeta)
+    }
+
+    pub fn to_permission(&self) -> TopicPermission {
+        TopicPermission {
+            subscribe: self.subscribe,
+            publish: self.publish,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AdmissionDefaultsConfig {
+    #[serde(default = "TopicTierConfig::blocks")]
+    pub blocks: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::votes")]
+    pub votes: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::proofs")]
+    pub proofs: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::vrf_proofs")]
+    pub vrf_proofs: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::snapshots")]
+    pub snapshots: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::meta")]
+    pub meta: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::vrf_meta")]
+    pub vrf_meta: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::witness_proofs")]
+    pub witness_proofs: TopicTierConfig,
+    #[serde(default = "TopicTierConfig::witness_meta")]
+    pub witness_meta: TopicTierConfig,
+}
+
+impl Default for AdmissionDefaultsConfig {
+    fn default() -> Self {
+        Self {
+            blocks: TopicTierConfig::blocks(),
+            votes: TopicTierConfig::votes(),
+            proofs: TopicTierConfig::proofs(),
+            vrf_proofs: TopicTierConfig::vrf_proofs(),
+            snapshots: TopicTierConfig::snapshots(),
+            meta: TopicTierConfig::meta(),
+            vrf_meta: TopicTierConfig::vrf_meta(),
+            witness_proofs: TopicTierConfig::witness_proofs(),
+            witness_meta: TopicTierConfig::witness_meta(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct NetworkAdmissionConfig {
+    pub policy_path: PathBuf,
+    pub audit_retention_days: u64,
+    pub defaults: AdmissionDefaultsConfig,
+}
+
+impl NetworkAdmissionConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if self.policy_path.as_os_str().is_empty() {
+            return Err(ChainError::Config(
+                "network.admission.policy_path must not be empty".into(),
+            ));
+        }
+        if self.audit_retention_days == 0 {
+            return Err(ChainError::Config(
+                "network.admission.audit_retention_days must be greater than 0".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for NetworkAdmissionConfig {
+    fn default() -> Self {
+        Self {
+            policy_path: default_admission_policy_path(),
+            audit_retention_days: 30,
+            defaults: AdmissionDefaultsConfig::default(),
+        }
+    }
+}
+
+fn default_admission_policy_path() -> PathBuf {
+    PathBuf::from("./data/p2p/admission_policies.json")
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NetworkConfig {
@@ -862,6 +1002,7 @@ pub struct NetworkConfig {
     pub rpc: NetworkRpcConfig,
     pub tls: NetworkTlsConfig,
     pub limits: NetworkLimitsConfig,
+    pub admission: NetworkAdmissionConfig,
 }
 
 impl NetworkConfig {
@@ -870,6 +1011,7 @@ impl NetworkConfig {
         self.rpc.validate()?;
         self.tls.validate()?;
         self.limits.validate()?;
+        self.admission.validate()?;
         Ok(())
     }
 }
@@ -881,6 +1023,7 @@ impl Default for NetworkConfig {
             rpc: NetworkRpcConfig::default(),
             tls: NetworkTlsConfig::default(),
             limits: NetworkLimitsConfig::default(),
+            admission: NetworkAdmissionConfig::default(),
         }
     }
 }
@@ -1364,6 +1507,11 @@ impl NodeConfig {
         if let Some(parent) = self.network.p2p.peerstore_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        if let Some(parent) = self.network.admission.policy_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
         if let Some(path) = self.network.p2p.gossip_path.as_ref() {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -1696,7 +1844,10 @@ impl Default for ReputationConfig {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    use crate::node_runtime::node::NodeRuntimeConfig;
 
     #[test]
     fn reputation_config_applies_weight_overrides() {
@@ -2279,6 +2430,38 @@ target_validator_count = 77
                 );
             }
             other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn admission_defaults_round_trip_from_templates() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root");
+        let templates = [
+            "config/node.toml",
+            "config/hybrid.toml",
+            "config/validator.toml",
+        ];
+
+        for template in templates {
+            let path = workspace_root.join(template);
+            let config = NodeConfig::load(&path).expect("load template");
+            let runtime = NodeRuntimeConfig::from(&config);
+            assert_eq!(
+                runtime.admission.policy_path,
+                config.network.admission.policy_path
+            );
+            assert_eq!(
+                runtime.admission.audit_retention_days,
+                config.network.admission.audit_retention_days
+            );
+            assert_eq!(
+                runtime.admission.defaults,
+                config.network.admission.defaults
+            );
         }
     }
 }

@@ -26,7 +26,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::time;
 use tracing::{debug, info, info_span, instrument, warn, Span};
 
-use crate::config::{FeatureGates, NodeConfig, P2pConfig, TelemetryConfig};
+use crate::config::{FeatureGates, NetworkAdmissionConfig, NodeConfig, P2pConfig, TelemetryConfig};
 use crate::consensus::{ConsensusCertificate, EvidenceRecord, SignedBftVote};
 use crate::node::NetworkIdentityProfile;
 use crate::proof_backend::Blake2sHasher;
@@ -305,6 +305,7 @@ pub struct Heartbeat {
 pub struct NodeRuntimeConfig {
     pub identity_path: PathBuf,
     pub p2p: P2pConfig,
+    pub admission: NetworkAdmissionConfig,
     pub telemetry: TelemetryConfig,
     pub metrics: Arc<RuntimeMetrics>,
     pub identity: Option<IdentityProfile>,
@@ -319,6 +320,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
         Self {
             identity_path: config.p2p_key_path.clone(),
             p2p: config.network.p2p.clone(),
+            admission: config.network.admission.clone(),
             telemetry: config.rollout.telemetry.clone(),
             metrics: RuntimeMetrics::noop(),
             identity: None,
@@ -335,6 +337,7 @@ impl fmt::Debug for NodeRuntimeConfig {
         f.debug_struct("NodeRuntimeConfig")
             .field("identity_path", &self.identity_path)
             .field("p2p", &self.p2p)
+            .field("admission", &self.admission)
             .field("telemetry", &self.telemetry)
             .field("identity", &self.identity)
             .field("proof_storage_path", &self.proof_storage_path)
@@ -1015,6 +1018,7 @@ impl NodeInner {
             &config.identity_path,
             &network_config,
             &config.p2p,
+            &config.admission,
             config.identity.clone(),
             config.feature_gates.clone(),
             config.snapshot_provider.clone(),
