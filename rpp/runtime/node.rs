@@ -1294,7 +1294,7 @@ struct RuntimeSnapshotProvider {
 }
 
 impl RuntimeSnapshotProvider {
-    fn new(inner: Arc<NodeInner>, chunk_size: usize) -> SnapshotProviderHandle {
+    fn build(inner: Arc<NodeInner>, chunk_size: usize) -> Arc<Self> {
         let store_path = inner.config.snapshot_dir.join("snapshot_sessions.json");
         let (store, persisted) = match SnapshotSessionStore::open(store_path.clone()) {
             Ok(store) => {
@@ -1348,7 +1348,16 @@ impl RuntimeSnapshotProvider {
             snapshots: RwLock::new(SnapshotStore::new(chunk_size)),
             session_store: store,
             session_peers: ParkingMutex::new(peers),
-        }) as SnapshotProviderHandle
+        })
+    }
+
+    fn new(inner: Arc<NodeInner>, chunk_size: usize) -> SnapshotProviderHandle {
+        Self::build(inner, chunk_size) as SnapshotProviderHandle
+    }
+
+    #[cfg(test)]
+    fn new_arc(inner: Arc<NodeInner>, chunk_size: usize) -> Arc<Self> {
+        Self::build(inner, chunk_size)
     }
 
     fn decode_root(plan: &NetworkStateSyncPlan) -> Result<Hash, PipelineError> {
@@ -1728,18 +1737,40 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             .ok_or(PipelineError::SnapshotNotFound)?;
         match kind {
             SnapshotItemKind::Chunk => {
+                if index >= session.total_chunks {
+                    return Err(PipelineError::SnapshotVerification(format!(
+                        "acknowledged chunk index {index} exceeds total {}",
+                        session.total_chunks
+                    )));
+                }
                 let updated = session
                     .last_chunk_index
                     .map(|current| current.max(index))
                     .or(Some(index));
                 session.last_chunk_index = updated;
+                let confirmed = session
+                    .confirmed_chunk_index
+                    .map(|current| current.max(index))
+                    .or(Some(index));
+                session.confirmed_chunk_index = confirmed;
             }
             SnapshotItemKind::LightClientUpdate => {
+                if index >= session.total_updates {
+                    return Err(PipelineError::SnapshotVerification(format!(
+                        "acknowledged update index {index} exceeds total {}",
+                        session.total_updates
+                    )));
+                }
                 let updated = session
                     .last_update_index
                     .map(|current| current.max(index))
                     .or(Some(index));
                 session.last_update_index = updated;
+                let confirmed = session
+                    .confirmed_update_index
+                    .map(|current| current.max(index))
+                    .or(Some(index));
+                session.confirmed_update_index = confirmed;
             }
             _ => {}
         }
@@ -7750,6 +7781,9 @@ mod tests {
         RppStarkProof, SignedTransaction, Stake, StarkProof, Tier, Transaction,
         TransactionProofBundle, TransactionWitness,
     };
+    use rpp_p2p::{
+        vendor::PeerId as NetworkPeerId, SnapshotItemKind, SnapshotProvider, SnapshotSessionId,
+    };
 
     fn sample_consensus_certificate() -> ConsensusCertificate {
         let digest = |byte: u8| hex::encode([byte; 32]);
@@ -8077,6 +8111,74 @@ mod tests {
 
         drop(handle);
         drop(node);
+    }
+
+    #[test]
+    fn snapshot_acknowledgements_persist_across_restart() {
+        let tempdir = tempdir().expect("tempdir");
+        let config = sample_node_config(tempdir.path());
+        let config_restart = config.clone();
+        let node = Node::new(config, RuntimeMetrics::noop()).expect("node init");
+        let provider =
+            RuntimeSnapshotProvider::new_arc(Arc::clone(&node.inner), DEFAULT_STATE_SYNC_CHUNK);
+
+        let session = SnapshotSessionId::new(7);
+        let peer = NetworkPeerId::random();
+
+        provider.open_session(session, &peer).expect("open session");
+        let plan = SnapshotProvider::fetch_plan(&*provider, session).expect("fetch plan");
+
+        let total_chunks = plan.chunks.len() as u64;
+        assert!(
+            total_chunks > 0,
+            "expected plan to contain at least one chunk"
+        );
+        let chunk_index = 0u64;
+        SnapshotProvider::fetch_chunk(&*provider, session, chunk_index).expect("chunk fetched");
+        SnapshotProvider::acknowledge(&*provider, session, SnapshotItemKind::Chunk, chunk_index)
+            .expect("chunk acknowledged");
+
+        let update_index = if plan.light_client_updates.is_empty() {
+            None
+        } else {
+            let update_index = 0u64;
+            SnapshotProvider::fetch_update(&*provider, session, update_index)
+                .expect("update fetched");
+            SnapshotProvider::acknowledge(
+                &*provider,
+                session,
+                SnapshotItemKind::LightClientUpdate,
+                update_index,
+            )
+            .expect("update acknowledged");
+            Some(update_index)
+        };
+
+        {
+            let sessions = provider.sessions.lock();
+            let record = sessions.get(&session).expect("session state");
+            assert_eq!(record.confirmed_chunk_index, Some(chunk_index));
+            match update_index {
+                Some(index) => assert_eq!(record.confirmed_update_index, Some(index)),
+                None => assert!(record.confirmed_update_index.is_none()),
+            }
+        }
+
+        drop(provider);
+        drop(node);
+
+        let node = Node::new(config_restart, RuntimeMetrics::noop()).expect("node restart");
+        let provider =
+            RuntimeSnapshotProvider::new_arc(Arc::clone(&node.inner), DEFAULT_STATE_SYNC_CHUNK);
+        {
+            let sessions = provider.sessions.lock();
+            let record = sessions.get(&session).expect("restored session state");
+            assert_eq!(record.confirmed_chunk_index, Some(chunk_index));
+            match update_index {
+                Some(index) => assert_eq!(record.confirmed_update_index, Some(index)),
+                None => assert!(record.confirmed_update_index.is_none()),
+            }
+        }
     }
 }
 
