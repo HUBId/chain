@@ -33,18 +33,39 @@ After submitting a PR, we'll run all the tests and verify your code meets our su
     scripts/run_wallet_mode.sh
     scripts/run_hybrid_mode.sh
 
-These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`, `observability-snapshot`, `simnet-admission`, `runtime-smoke`). The test harness applies `RUSTFLAGS=-D warnings`, selects the correct feature flags, and switches to the pinned nightly toolchain automatically when the STWO backend is involved, so local iterations match CI results.【F:.github/workflows/release.yml†L82-L103】【F:scripts/test.sh†L4-L210】【F:tests/storage_snapshot.rs†L1-L73】【F:tests/observability/snapshot_timetoke_metrics.rs†L1-L219】【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L16】
+These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`, `observability-snapshot`, `simnet-admission`, `runtime-smoke`, `Nightly Simulation Freshness`). The test harness applies `RUSTFLAGS=-D warnings`, selects the correct feature flags, and switches to the pinned nightly toolchain automatically when the STWO backend is involved, so local iterations match CI results.【F:.github/workflows/release.yml†L82-L103】【F:scripts/test.sh†L4-L210】【F:tests/storage_snapshot.rs†L1-L73】【F:tests/observability/snapshot_timetoke_metrics.rs†L1-L219】【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L16】
 
 Running `cargo doc --no-deps` is still encouraged before landing user-facing API changes to catch documentation regressions early.
 
 **Maintainer note.** Whenever a workflow file is renamed or a new CI job is
 introduced, confirm that branch protection still enforces the `fmt`, `clippy`,
 `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`,
-`observability-snapshot`, `simnet-admission`, and `runtime-smoke` checks on
-`<PRIMARY_BRANCH_OR_COMMIT>`. Navigate to `Settings → Branches → Branch
-protection rules` in the GitHub UI or run the `gh api
-repos/:owner/:repo/branches/<PRIMARY_BRANCH_OR_COMMIT>/protection` query to
+`observability-snapshot`, `simnet-admission`, `runtime-smoke`, and `Nightly
+Simulation Freshness` checks on `<PRIMARY_BRANCH_OR_COMMIT>`. Navigate to
+`Settings → Branches → Branch protection rules` in the GitHub UI or run the `gh
+api repos/:owner/:repo/branches/<PRIMARY_BRANCH_OR_COMMIT>/protection` query to
 verify the status-check list before merging follow-up changes.
+
+### Nightly simulation freshness gate
+
+The `Nightly Simulation Freshness` check fails when the most recent `nightly.yml`
+run on the default branch concluded with a non-success status or is older than
+24 hours. When the gate is red:
+
+1. Re-run the nightly workflow from the Actions tab (choose `nightly.yml` and
+   click **Run workflow**) or via CLI:
+
+   ```bash
+   gh workflow run nightly.yml
+   ```
+
+2. Inspect the logs for the failed nightly run to determine the failing job.
+   Use the `gh run view <run-id> --log` command or download the artifact bundle
+   for the simulation/SLO summary.
+3. Fix the underlying regression, or if the failure was environmental,
+   re-run the affected nightly job and ensure the follow-up run completes
+   successfully. Only merge once the check is green again so branch protection
+   can verify the dependency on healthy nightly results.
 
 Property-based tests in the workspace respect the `PROPTEST_CASES` environment
 variable so CI can run a smaller, deterministic sample. When a failure occurs,

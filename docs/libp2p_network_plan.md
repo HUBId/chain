@@ -87,6 +87,7 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
     - DoD: Simulation läuft automatisiert, produziert Report.
     - CI-Integration: `scripts/ci/sim_smoke.sh` ruft `cargo test -p rpp-sim --features ci-sim --test sim_smoke` auf und archiviert `target/sim-smoke-summary.json` sowie Detailverzeichnisse unter `ci-artifacts/sim-smoke/`.
     - Laufzeitüberwachung: Ziel < 10 Minuten pro Run; Thresholds via GitHub Action Timeout (15 Minuten) oder Pipeline-Konfiguration absichern.
+    - Gating: Der Status-Check **Nightly Simulation Freshness** muss vor der Phase‑3-Abnahme grün sein; er schlägt fehl, wenn das jüngste `nightly.yml`-Ergebnis älter als 24 h ist oder mit Fehlern endet, und verhindert damit Merges ohne frischen SLO-Nachweis.
 
 ## Cross-Cutting Deliverables
 - **Dokumentation:** Architekturgrafik, Config-Referenz, Operator-Guides.

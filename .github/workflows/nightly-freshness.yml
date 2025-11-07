@@ -1,0 +1,96 @@
+name: Nightly simulation freshness gate
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+  schedule:
+    - cron: '0 * * * *'
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+env:
+  FRESHNESS_HOURS: '24'
+
+jobs:
+  nightly-slo-gate:
+    name: Nightly Simulation Freshness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Evaluate latest nightly run
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const { owner, repo } = context.repo;
+            const defaultBranch = context.payload.repository?.default_branch ?? process.env.GITHUB_BASE_REF ?? 'main';
+
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner,
+              repo,
+              workflow_id: 'nightly.yml',
+              branch: defaultBranch,
+              per_page: 1,
+              status: 'completed'
+            });
+
+            const latestRun = data.workflow_runs?.[0];
+            const freshnessHours = Number(process.env.FRESHNESS_HOURS || '24');
+            const now = new Date();
+
+            let summaryLines = [];
+            let conclusion = 'failure';
+            let shortMessage = '';
+
+            if (!latestRun) {
+              shortMessage = 'No completed nightly runs were found for the default branch.';
+              summaryLines.push('| Field | Value |');
+              summaryLines.push('| --- | --- |');
+              summaryLines.push(`| Status | missing |`);
+            } else {
+              const completedAtRaw = latestRun.updated_at ?? latestRun.run_started_at;
+              const completedAt = new Date(completedAtRaw);
+              const ageHours = (now.getTime() - completedAt.getTime()) / (1000 * 60 * 60);
+              const ageDisplay = ageHours.toFixed(1);
+              const runUrl = latestRun.html_url;
+              const conclusionText = latestRun.conclusion ?? latestRun.status;
+
+              summaryLines.push('| Field | Value |');
+              summaryLines.push('| --- | --- |');
+              summaryLines.push(`| Workflow | [nightly.yml](${runUrl}) |`);
+              summaryLines.push(`| Conclusion | ${conclusionText} |`);
+              summaryLines.push(`| Completed at | ${completedAt.toISOString()} |`);
+              summaryLines.push(`| Age (hours) | ${ageDisplay} |`);
+
+              const isFresh = ageHours <= freshnessHours;
+              const succeeded = latestRun.conclusion === 'success';
+
+              if (succeeded && isFresh) {
+                conclusion = 'success';
+                shortMessage = `Nightly run is healthy (conclusion: ${conclusionText}, ${ageDisplay}h old).`;
+              } else if (!succeeded) {
+                shortMessage = `Latest nightly run concluded with "${conclusionText}".`;
+              } else {
+                shortMessage = `Latest nightly run is ${ageDisplay}h old which exceeds the ${freshnessHours}h freshness target.`;
+              }
+            }
+
+            if (process.env.GITHUB_STEP_SUMMARY) {
+              summaryLines.unshift(`# Nightly simulation freshness`);
+              summaryLines.push('');
+              await fs.promises.appendFile(process.env.GITHUB_STEP_SUMMARY, summaryLines.join('\n'));
+            }
+
+            if (conclusion !== 'success') {
+              core.setFailed(shortMessage);
+            } else {
+              core.info(shortMessage);
+            }
