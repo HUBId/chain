@@ -1148,11 +1148,130 @@ pub struct NodeHandle {
     inner: Arc<NodeInner>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Clone, Debug)]
 struct RuntimeSnapshotSession {
     plan: NetworkStateSyncPlan,
     updates: Vec<NetworkLightClientUpdate>,
     snapshot_root: Hash,
+    peer: NetworkPeerId,
+    total_chunks: u64,
+    total_updates: u64,
+    last_chunk_index: Option<u64>,
+    last_update_index: Option<u64>,
+}
+
+impl RuntimeSnapshotSession {
+    fn to_stored(&self, session_id: SnapshotSessionId) -> StoredSnapshotSession {
+        StoredSnapshotSession {
+            session: session_id.get(),
+            peer: self.peer.to_base58(),
+            root: self.snapshot_root.to_hex().to_string(),
+            total_chunks: self.total_chunks,
+            total_updates: self.total_updates,
+            last_chunk_index: self.last_chunk_index,
+            last_update_index: self.last_update_index,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct StoredSnapshotSession {
+    session: u64,
+    peer: String,
+    root: String,
+    total_chunks: u64,
+    total_updates: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_chunk_index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_update_index: Option<u64>,
+}
+
+#[derive(Debug)]
+struct SnapshotSessionStore {
+    path: PathBuf,
+    sessions: ParkingMutex<HashMap<SnapshotSessionId, StoredSnapshotSession>>,
+}
+
+impl SnapshotSessionStore {
+    fn open(path: PathBuf) -> Result<Self, PipelineError> {
+        if let Some(parent) = path.parent() {
+            if let Err(err) = fs::create_dir_all(parent) {
+                return Err(PipelineError::Persistence(err.to_string()));
+            }
+        }
+
+        let sessions = if path.exists() {
+            match fs::read(&path) {
+                Ok(bytes) => {
+                    if bytes.is_empty() {
+                        HashMap::new()
+                    } else {
+                        match serde_json::from_slice::<Vec<StoredSnapshotSession>>(&bytes) {
+                            Ok(records) => records
+                                .into_iter()
+                                .filter_map(|record| {
+                                    Some((SnapshotSessionId::new(record.session), record))
+                                })
+                                .collect(),
+                            Err(err) => return Err(PipelineError::Persistence(err.to_string())),
+                        }
+                    }
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => HashMap::new(),
+                Err(err) => return Err(PipelineError::Persistence(err.to_string())),
+            }
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Self {
+            path,
+            sessions: ParkingMutex::new(sessions),
+        })
+    }
+
+    fn records(&self) -> HashMap<SnapshotSessionId, StoredSnapshotSession> {
+        self.sessions.lock().clone()
+    }
+
+    fn upsert(
+        &self,
+        session_id: SnapshotSessionId,
+        record: StoredSnapshotSession,
+    ) -> Result<(), PipelineError> {
+        let mut sessions = self.sessions.lock();
+        sessions.insert(session_id, record);
+        self.persist_locked(&sessions)
+    }
+
+    fn remove(&self, session_id: SnapshotSessionId) -> Result<(), PipelineError> {
+        let mut sessions = self.sessions.lock();
+        sessions.remove(&session_id);
+        self.persist_locked(&sessions)
+    }
+
+    fn persist_locked(
+        &self,
+        sessions: &HashMap<SnapshotSessionId, StoredSnapshotSession>,
+    ) -> Result<(), PipelineError> {
+        let mut records: Vec<StoredSnapshotSession> = sessions
+            .iter()
+            .map(|(session_id, record)| StoredSnapshotSession {
+                session: session_id.get(),
+                peer: record.peer.clone(),
+                root: record.root.clone(),
+                total_chunks: record.total_chunks,
+                total_updates: record.total_updates,
+                last_chunk_index: record.last_chunk_index,
+                last_update_index: record.last_update_index,
+            })
+            .collect();
+        records.sort_by_key(|record| record.session);
+        let encoded = serde_json::to_vec_pretty(&records)
+            .map_err(|err| PipelineError::Persistence(err.to_string()))?;
+        fs::write(&self.path, encoded).map_err(|err| PipelineError::Persistence(err.to_string()))
+    }
 }
 
 struct RuntimeSnapshotProvider {
@@ -1160,15 +1279,65 @@ struct RuntimeSnapshotProvider {
     chunk_size: usize,
     sessions: ParkingMutex<HashMap<SnapshotSessionId, RuntimeSnapshotSession>>,
     snapshots: RwLock<SnapshotStore>,
+    session_store: Arc<SnapshotSessionStore>,
+    session_peers: ParkingMutex<HashMap<SnapshotSessionId, NetworkPeerId>>,
 }
 
 impl RuntimeSnapshotProvider {
     fn new(inner: Arc<NodeInner>, chunk_size: usize) -> SnapshotProviderHandle {
+        let store_path = inner.config.snapshot_dir.join("snapshot_sessions.json");
+        let (store, persisted) = match SnapshotSessionStore::open(store_path.clone()) {
+            Ok(store) => {
+                let records = store.records();
+                (Arc::new(store), records)
+            }
+            Err(err) => {
+                warn!(
+                    target: "node",
+                    path = %store_path.display(),
+                    %err,
+                    "failed to open snapshot session store"
+                );
+                (
+                    Arc::new(SnapshotSessionStore {
+                        path: store_path,
+                        sessions: ParkingMutex::new(HashMap::new()),
+                    }),
+                    HashMap::new(),
+                )
+            }
+        };
+
+        let mut restored_sessions = HashMap::new();
+        for (session_id, record) in persisted {
+            match Self::restore_session(&inner, chunk_size, &record) {
+                Ok(session) => {
+                    restored_sessions.insert(session_id, session);
+                }
+                Err(err) => {
+                    warn!(
+                        target: "node",
+                        session = session_id.get(),
+                        %err,
+                        "failed to restore snapshot session"
+                    );
+                    let _ = store.remove(session_id);
+                }
+            }
+        }
+
+        let peers = restored_sessions
+            .iter()
+            .map(|(id, session)| (*id, session.peer.clone()))
+            .collect();
+
         Arc::new(Self {
             inner,
             chunk_size,
-            sessions: ParkingMutex::new(HashMap::new()),
+            sessions: ParkingMutex::new(restored_sessions),
             snapshots: RwLock::new(SnapshotStore::new(chunk_size)),
+            session_store: store,
+            session_peers: ParkingMutex::new(peers),
         }) as SnapshotProviderHandle
     }
 
@@ -1187,10 +1356,104 @@ impl RuntimeSnapshotProvider {
         })?;
         Ok(Hash::from_bytes(array))
     }
+
+    fn decode_root_str(root: &str) -> Result<Hash, PipelineError> {
+        let bytes = hex::decode(root)
+            .map_err(|err| PipelineError::Persistence(format!("invalid snapshot root: {err}")))?;
+        let array: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
+            PipelineError::Persistence("snapshot root must decode to 32 bytes".into())
+        })?;
+        Ok(Hash::from_bytes(array))
+    }
+
+    fn persist_session(
+        &self,
+        session_id: SnapshotSessionId,
+        session: &RuntimeSnapshotSession,
+    ) -> Result<(), PipelineError> {
+        let record = session.to_stored(session_id);
+        self.session_store.upsert(session_id, record)
+    }
+
+    fn restore_session(
+        inner: &Arc<NodeInner>,
+        chunk_size: usize,
+        record: &StoredSnapshotSession,
+    ) -> Result<RuntimeSnapshotSession, PipelineError> {
+        let peer = NetworkPeerId::from_str(&record.peer)
+            .map_err(|err| PipelineError::Persistence(format!("invalid peer id: {err}")))?;
+        let snapshot_root = Self::decode_root_str(&record.root)?;
+
+        let state_plan = inner
+            .state_sync_plan(chunk_size)
+            .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
+        let network_plan = state_plan
+            .to_network_plan()
+            .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
+        let updates = state_plan
+            .light_client_messages()
+            .map_err(|err| PipelineError::SnapshotVerification(err.to_string()))?;
+        let computed_root = Self::decode_root(&network_plan)?;
+        if computed_root != snapshot_root {
+            return Err(PipelineError::SnapshotVerification(
+                "persisted snapshot root does not match regenerated plan".into(),
+            ));
+        }
+
+        let total_chunks = u64::try_from(network_plan.chunks.len())
+            .map_err(|_| PipelineError::SnapshotVerification("chunk count overflow".into()))?;
+        let total_updates = u64::try_from(updates.len())
+            .map_err(|_| PipelineError::SnapshotVerification("update count overflow".into()))?;
+
+        let last_chunk_index = if total_chunks == 0 {
+            None
+        } else {
+            record
+                .last_chunk_index
+                .filter(|index| *index < total_chunks)
+        };
+        let last_update_index = if total_updates == 0 {
+            None
+        } else {
+            record
+                .last_update_index
+                .filter(|index| *index < total_updates)
+        };
+
+        Ok(RuntimeSnapshotSession {
+            plan: network_plan,
+            updates,
+            snapshot_root,
+            peer,
+            total_chunks,
+            total_updates,
+            last_chunk_index,
+            last_update_index,
+        })
+    }
 }
 
 impl SnapshotProvider for RuntimeSnapshotProvider {
     type Error = PipelineError;
+
+    fn open_session(
+        &self,
+        session_id: SnapshotSessionId,
+        peer: &NetworkPeerId,
+    ) -> Result<(), Self::Error> {
+        {
+            let mut peers = self.session_peers.lock();
+            peers.insert(session_id, peer.clone());
+        }
+        let mut sessions = self.sessions.lock();
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if session.peer != *peer {
+                session.peer = peer.clone();
+                self.persist_session(session_id, session)?;
+            }
+        }
+        Ok(())
+    }
 
     fn fetch_plan(
         &self,
@@ -1208,14 +1471,59 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             ))
         })?;
         let snapshot_root = Self::decode_root(&network_plan)?;
-        self.sessions.lock().insert(
-            session_id,
-            RuntimeSnapshotSession {
+        let total_chunks = u64::try_from(network_plan.chunks.len())
+            .map_err(|_| PipelineError::SnapshotVerification("chunk count overflow".into()))?;
+        let total_updates = u64::try_from(updates.len())
+            .map_err(|_| PipelineError::SnapshotVerification("update count overflow".into()))?;
+        let peer = {
+            let peers = self.session_peers.lock();
+            peers.get(&session_id).cloned().ok_or_else(|| {
+                PipelineError::SnapshotVerification("unknown snapshot session peer".into())
+            })?
+        };
+
+        let mut sessions = self.sessions.lock();
+        let session = sessions
+            .entry(session_id)
+            .or_insert_with(|| RuntimeSnapshotSession {
                 plan: network_plan.clone(),
-                updates,
+                updates: updates.clone(),
                 snapshot_root,
-            },
-        );
+                peer: peer.clone(),
+                total_chunks,
+                total_updates,
+                last_chunk_index: None,
+                last_update_index: None,
+            });
+        session.plan = network_plan.clone();
+        session.updates = updates.clone();
+        session.snapshot_root = snapshot_root;
+        session.peer = peer;
+        session.total_chunks = total_chunks;
+        session.total_updates = total_updates;
+        session.last_chunk_index = if total_chunks == 0 {
+            None
+        } else {
+            session.last_chunk_index.and_then(|index| {
+                if index < total_chunks {
+                    Some(index)
+                } else {
+                    total_chunks.checked_sub(1)
+                }
+            })
+        };
+        session.last_update_index = if total_updates == 0 {
+            None
+        } else {
+            session.last_update_index.and_then(|index| {
+                if index < total_updates {
+                    Some(index)
+                } else {
+                    total_updates.checked_sub(1)
+                }
+            })
+        };
+        self.persist_session(session_id, session)?;
         Ok(network_plan)
     }
 
@@ -1246,13 +1554,29 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
                 "state sync chunk {chunk_index} out of range (total {total})"
             )));
         }
-        self.inner
+        let chunk = self
+            .inner
             .state_sync_chunk_by_index(&*store, &snapshot_root, chunk_index)
             .map_err(|err| {
                 PipelineError::SnapshotVerification(format!(
                     "failed to fetch state sync chunk {chunk_index}: {err}"
                 ))
-            })
+            })?;
+
+        {
+            let mut sessions = self.sessions.lock();
+            let session = sessions
+                .get_mut(&session_id)
+                .ok_or(PipelineError::SnapshotNotFound)?;
+            let updated = session
+                .last_chunk_index
+                .map(|current| current.max(chunk_index))
+                .or(Some(chunk_index));
+            session.last_chunk_index = updated;
+            self.persist_session(session_id, session)?;
+        }
+
+        Ok(chunk)
     }
 
     fn fetch_update(
@@ -1269,12 +1593,19 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         let session = sessions
             .get(&session_id)
             .ok_or(PipelineError::SnapshotNotFound)?;
-        session.updates.get(index).cloned().ok_or_else(|| {
+        let update = session.updates.get(index).cloned().ok_or_else(|| {
             PipelineError::SnapshotVerification(format!(
                 "light client update index {update_index} out of range (total {})",
                 session.updates.len()
             ))
-        })
+        })?;
+        let updated = session
+            .last_update_index
+            .map(|current| current.max(update_index))
+            .or(Some(update_index));
+        session.last_update_index = updated;
+        self.persist_session(session_id, session)?;
+        Ok(update)
     }
 
     fn resume_session(
@@ -1284,8 +1615,20 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error> {
         let sessions = self.sessions.lock();
-        if !sessions.contains_key(&session_id) {
-            return Err(PipelineError::SnapshotNotFound);
+        let session = sessions
+            .get(&session_id)
+            .ok_or(PipelineError::SnapshotNotFound)?;
+        if chunk_index > session.total_chunks {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume chunk index {chunk_index} exceeds total {}",
+                session.total_chunks
+            )));
+        }
+        if update_index > session.total_updates {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume update index {update_index} exceeds total {}",
+                session.total_updates
+            )));
         }
         Ok(SnapshotResumeState {
             next_chunk_index: chunk_index,
@@ -1296,15 +1639,31 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
     fn acknowledge(
         &self,
         session_id: SnapshotSessionId,
-        _kind: SnapshotItemKind,
-        _index: u64,
+        kind: SnapshotItemKind,
+        index: u64,
     ) -> Result<(), Self::Error> {
-        let sessions = self.sessions.lock();
-        if sessions.contains_key(&session_id) {
-            Ok(())
-        } else {
-            Err(PipelineError::SnapshotNotFound)
+        let mut sessions = self.sessions.lock();
+        let session = sessions
+            .get_mut(&session_id)
+            .ok_or(PipelineError::SnapshotNotFound)?;
+        match kind {
+            SnapshotItemKind::Chunk => {
+                let updated = session
+                    .last_chunk_index
+                    .map(|current| current.max(index))
+                    .or(Some(index));
+                session.last_chunk_index = updated;
+            }
+            SnapshotItemKind::LightClientUpdate => {
+                let updated = session
+                    .last_update_index
+                    .map(|current| current.max(index))
+                    .or(Some(index));
+                session.last_update_index = updated;
+            }
+            _ => {}
         }
+        self.persist_session(session_id, session)
     }
 }
 

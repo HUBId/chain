@@ -44,7 +44,14 @@ chunk/update indices, the height of the most recent verified light-client
 update, and whether the session has completed verification or encountered an
 error.【F:rpp/runtime/node_runtime/node.rs†L375-L399】【F:rpp/runtime/node_runtime/node.rs†L1119-L1163】 Starting or resuming a
 stream resets these fields and clears previous errors before issuing the
-underlying network command.【F:rpp/runtime/node_runtime/node.rs†L1223-L1276】
+underlying network command.【F:rpp/runtime/node_runtime/node.rs†L1223-L1276】 Session metadata (plan
+root, peer ID, totals, and the last confirmed chunk/update) is durably persisted
+under the node’s snapshot directory and reloaded during bootstrap so restart
+requests resume from the correct offsets.【F:rpp/runtime/node.rs†L1160-L1305】 Updates to plans,
+chunks, light-client updates, and acknowledgements immediately refresh the
+on-disk record, and resume requests that advertise chunk or update indices
+outside the persisted totals are rejected with a snapshot verification
+error.【F:rpp/runtime/node.rs†L1323-L1509】【F:rpp/runtime/node.rs†L1479-L1504】
 
 Failures propagate through `snapshot_stream_failure`, which marks the session as
 failed and emits `NodeEvent::SnapshotStreamFailed`; consumers can listen for
@@ -59,8 +66,8 @@ chunk ordering, verifies recursive proofs, and only emits a new head once the
 chain of updates is complete.【F:rpp/p2p/src/pipeline.rs†L1311-L1408】【F:rpp/p2p/src/pipeline.rs†L1409-L1497】 The runtime subscribes to
 these heads so snapshot consumers can confirm when the state sync has produced a
 verified checkpoint.【F:rpp/runtime/node_runtime/node.rs†L1005-L1015】 The end-to-end behaviour—including RPC wiring, network
-flow control, and the light client verifier—is exercised by
-`tests/network/snapshots.rs` to prevent regressions.【F:tests/network/snapshots.rs†L1-L120】
+flow control, persistence, and the light client verifier—is exercised by
+`tests/network/snapshots.rs` to prevent regressions.【F:tests/network/snapshots.rs†L1-L361】
 
 ## HTTP control plane
 

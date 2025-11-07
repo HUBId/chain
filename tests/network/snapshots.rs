@@ -1,12 +1,13 @@
 use std::net::{SocketAddr, TcpListener};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::time::{sleep, Instant};
+use tokio::time::sleep;
 
 use rpp_chain::node::{NodeHandle, DEFAULT_STATE_SYNC_CHUNK};
+use rpp_p2p::SnapshotSessionId;
 
 #[path = "../support/mod.rs"]
 mod support;
@@ -245,6 +246,160 @@ async fn snapshot_streams_verify_via_network_rpc() -> Result<()> {
             bail!(
                 "expected zero inbound light client update failures, got {inbound_update_failures}"
             );
+        }
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    cluster.shutdown().await.context("cluster shutdown")?;
+
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_sessions_persist_across_provider_restart() -> Result<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let mut cluster = TestCluster::start_with(2, |cfg, idx| {
+        let metrics_listener = TcpListener::bind("127.0.0.1:0").context("bind metrics listener")?;
+        let metrics_addr = metrics_listener
+            .local_addr()
+            .context("resolve metrics listener address")?;
+        drop(metrics_listener);
+
+        cfg.rollout.feature_gates.reconstruction = true;
+        cfg.rollout.feature_gates.recursive_proofs = true;
+        cfg.rollout.telemetry.enabled = true;
+        cfg.rollout.telemetry.metrics.listen = Some(metrics_addr);
+        if idx == 0 {
+            cfg.network.p2p.bootstrap_peers.clear();
+        }
+        Ok(())
+    })
+    .await?;
+
+    let result = async {
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh")?;
+
+        sleep(SNAPSHOT_BUILD_DELAY).await;
+
+        let session = SnapshotSessionId::new(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos() as u64,
+        );
+
+        {
+            let nodes = cluster.nodes();
+            let provider = &nodes[0];
+            let consumer = &nodes[1];
+            let provider_peer = provider.p2p_handle.local_peer_id();
+            consumer
+                .node_handle
+                .start_snapshot_stream(session, provider_peer, String::new())
+                .await
+                .context("start snapshot stream")?;
+        }
+
+        let mut initial_chunk = None;
+        let mut initial_update = None;
+        let poll_deadline = Instant::now() + SNAPSHOT_POLL_TIMEOUT;
+        loop {
+            if Instant::now() >= poll_deadline {
+                bail!("timed out waiting for snapshot progress before restart");
+            }
+            let status = cluster.nodes()[1]
+                .node_handle
+                .snapshot_stream_status(session);
+            if let Some(status) = status {
+                if let Some(ref error) = status.error {
+                    bail!("snapshot stream reported error before restart: {error}");
+                }
+                if status.verified == Some(true) {
+                    bail!("snapshot stream completed before restart");
+                }
+                if status.last_chunk_index.is_some() || status.last_update_index.is_some() {
+                    initial_chunk = status.last_chunk_index;
+                    initial_update = status.last_update_index;
+                    break;
+                }
+            }
+            sleep(POLL_INTERVAL).await;
+        }
+
+        {
+            let nodes = cluster.nodes_mut();
+            nodes[0].restart().await.context("restart provider node")?;
+        }
+
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh after restart")?;
+
+        {
+            let nodes = cluster.nodes();
+            nodes[1]
+                .node_handle
+                .resume_snapshot_stream(session)
+                .await
+                .context("resume snapshot stream")?;
+        }
+
+        let mut final_status = None;
+        let poll_deadline = Instant::now() + SNAPSHOT_POLL_TIMEOUT;
+        loop {
+            if Instant::now() >= poll_deadline {
+                bail!("timed out waiting for snapshot verification after resume");
+            }
+            let status = cluster.nodes()[1]
+                .node_handle
+                .snapshot_stream_status(session);
+            if let Some(status) = status {
+                if let Some(ref error) = status.error {
+                    bail!("snapshot stream reported error after resume: {error}");
+                }
+                if status.verified == Some(true) {
+                    final_status = Some(status);
+                    break;
+                }
+            }
+            sleep(POLL_INTERVAL).await;
+        }
+
+        let status = final_status.context("missing final snapshot status")?;
+        if let Some(chunk) = initial_chunk {
+            let resumed_chunk = status
+                .last_chunk_index
+                .context("missing final chunk index")?;
+            if resumed_chunk < chunk {
+                bail!("resumed chunk index {resumed_chunk} smaller than initial {chunk}");
+            }
+        }
+        if let Some(update) = initial_update {
+            let resumed_update = status
+                .last_update_index
+                .context("missing final update index")?;
+            if resumed_update < update {
+                bail!("resumed update index {resumed_update} smaller than initial {update}");
+            }
+        }
+        if let Some(height) = status.last_update_height {
+            let consumer = &cluster.nodes()[1];
+            let head = latest_light_client_head(&consumer.node_handle)
+                .context("fetch consumer head after resume")?
+                .context("consumer head missing after resume")?;
+            if head.height != height {
+                bail!(
+                    "resumed head height {} does not match status {height}",
+                    head.height
+                );
+            }
         }
 
         Ok::<(), anyhow::Error>(())
