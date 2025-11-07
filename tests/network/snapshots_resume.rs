@@ -260,6 +260,186 @@ async fn snapshot_resume_rejects_plan_id_mismatches() -> Result<()> {
     result
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_resume_enforces_plan_bounds() -> Result<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let mut cluster = start_snapshot_cluster().await?;
+
+    let result = async {
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh")?;
+
+        tokio::time::sleep(SNAPSHOT_BUILD_DELAY).await;
+
+        let client = http_client()?;
+        let (session, provider_peer, base_url, plan_id) =
+            start_stream_via_http(&mut cluster, &client).await?;
+
+        let consumer_handle = cluster.nodes()[1].node_handle.clone();
+        let progress =
+            wait_for_snapshot_status(&consumer_handle, session, SNAPSHOT_POLL_TIMEOUT, |status| {
+                status
+                    .last_chunk_index
+                    .map(|index| index >= MIN_RESUME_CHUNK)
+                    .unwrap_or(false)
+                    && status.last_update_index.is_some()
+            })
+            .await
+            .context("wait for snapshot progress with updates")?;
+
+        let progressed_chunk = progress
+            .last_chunk_index
+            .context("missing progressed chunk index")?;
+        let progressed_update = progress
+            .last_update_index
+            .context("missing progressed update index")?;
+
+        let record = read_session_record(&cluster.nodes()[0], session)
+            .await
+            .context("read persisted provider session")?;
+        let original_chunk_total = record
+            .get("total_chunks")
+            .and_then(Value::as_u64)
+            .context("missing total chunk count")?;
+        let original_update_total = record
+            .get("total_updates")
+            .and_then(Value::as_u64)
+            .context("missing total update count")?;
+
+        cluster.nodes_mut()[0]
+            .restart()
+            .await
+            .context("restart provider before bounds checks")?;
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh after provider restart")?;
+
+        let resume_request = StartSnapshotStreamRequest {
+            peer: provider_peer,
+            chunk_size: default_chunk_size(),
+            resume: Some(ResumeMarker {
+                session: session.get(),
+                plan_id: plan_id.clone(),
+            }),
+        };
+
+        client
+            .post(format!("{}/p2p/snapshots", base_url))
+            .json(&resume_request)
+            .send()
+            .await
+            .context("resume snapshot stream (baseline)")?
+            .error_for_status()
+            .context("baseline resume status")?;
+
+        mutate_session_record(&cluster.nodes()[0], session, |entry| {
+            entry["total_chunks"] = json!(progressed_chunk);
+            entry["total_updates"] = json!(original_update_total);
+            Ok(())
+        })
+        .await
+        .context("lower chunk total in store")?;
+
+        cluster.nodes_mut()[0]
+            .restart()
+            .await
+            .context("restart provider after chunk total tamper")?;
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh after chunk total restart")?;
+
+        let response = client
+            .post(format!("{}/p2p/snapshots", base_url))
+            .json(&resume_request)
+            .send()
+            .await
+            .context("resume snapshot stream after chunk tamper")?;
+
+        if response.status() == StatusCode::OK {
+            anyhow::bail!("resume with reduced chunk total unexpectedly succeeded");
+        }
+        let body: Value = response
+            .json()
+            .await
+            .context("decode chunk bounds resume response")?;
+        let error = body
+            .get("error")
+            .and_then(Value::as_str)
+            .context("chunk bounds resume error missing message")?;
+        if !error.contains("resume chunk index") || !error.contains("exceeds total") {
+            anyhow::bail!("unexpected chunk bounds resume error: {error}");
+        }
+
+        mutate_session_record(&cluster.nodes()[0], session, |entry| {
+            entry["total_chunks"] = json!(original_chunk_total);
+            entry["total_updates"] = json!(original_update_total);
+            Ok(())
+        })
+        .await
+        .context("restore original totals")?;
+
+        cluster.nodes_mut()[0]
+            .restart()
+            .await
+            .context("restart provider after restoring totals")?;
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh after restore restart")?;
+
+        mutate_session_record(&cluster.nodes()[0], session, |entry| {
+            entry["total_chunks"] = json!(original_chunk_total);
+            entry["total_updates"] = json!(progressed_update);
+            Ok(())
+        })
+        .await
+        .context("lower update total in store")?;
+
+        cluster.nodes_mut()[0]
+            .restart()
+            .await
+            .context("restart provider after update total tamper")?;
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh after update total restart")?;
+
+        let response = client
+            .post(format!("{}/p2p/snapshots", base_url))
+            .json(&resume_request)
+            .send()
+            .await
+            .context("resume snapshot stream after update tamper")?;
+        if response.status() == StatusCode::OK {
+            anyhow::bail!("resume with reduced update total unexpectedly succeeded");
+        }
+        let update_body: Value = response
+            .json()
+            .await
+            .context("decode update bounds resume response")?;
+        let update_error = update_body
+            .get("error")
+            .and_then(Value::as_str)
+            .context("update bounds resume error missing message")?;
+        if !update_error.contains("resume update index") || !update_error.contains("exceeds total")
+        {
+            anyhow::bail!("unexpected update bounds resume error: {update_error}");
+        }
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    cluster.shutdown().await.context("cluster shutdown")?;
+
+    result
+}
+
 fn http_client() -> Result<Client> {
     Client::builder()
         .timeout(Duration::from_secs(10))
@@ -380,4 +560,28 @@ where
     tokio::fs::write(&path, encoded)
         .await
         .with_context(|| format!("write snapshot session store at {}", path.display()))
+}
+
+async fn read_session_record(
+    provider: &support::TestClusterNode,
+    session: SnapshotSessionId,
+) -> Result<Value> {
+    let path = provider.config.snapshot_dir.join("snapshot_sessions.json");
+    let data = tokio::fs::read(&path)
+        .await
+        .with_context(|| format!("read snapshot session store at {}", path.display()))?;
+
+    let records: Vec<Value> =
+        serde_json::from_slice(&data).context("decode snapshot session store")?;
+
+    records
+        .into_iter()
+        .find(|value| {
+            value
+                .get("session")
+                .and_then(Value::as_u64)
+                .map(|id| id == session.get())
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| anyhow!("session {} not found in provider store", session.get()))
 }

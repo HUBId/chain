@@ -50,8 +50,9 @@ pub use pipeline::{
     NetworkPruningCommitment, NetworkPruningEnvelope, NetworkPruningSegment,
     NetworkPruningSnapshot, NetworkReconstructionRequest, NetworkSnapshotSummary,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex, PersistentProofStorage,
-    PipelineError, ProofMempool, ProofRecord, ProofStorage, RuntimeProofValidator, SnapshotChunk,
-    SnapshotChunkStream, SnapshotStore, TelemetryEvent, TransactionProofVerifier, VoteOutcome,
+    PipelineError, ProofMempool, ProofRecord, ProofStorage, ResumeBoundKind, RuntimeProofValidator,
+    SnapshotChunk, SnapshotChunkStream, SnapshotStore, TelemetryEvent, TransactionProofVerifier,
+    VoteOutcome,
 };
 pub use policy_log::{
     AdmissionPolicyChange, AdmissionPolicyLogEntry, AdmissionPolicyLogError, PolicyAllowlistState,

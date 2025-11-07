@@ -34,9 +34,11 @@ next chunk/update indices that should be requested.【F:rpp/p2p/src/behaviour/sn
 The runtime snapshot provider rejects resumes that fall behind the latest
 persisted acknowledgement or attempt to skip ahead of the advertised totals.
 `resume_session` bounds the requested chunk and update indices by the plan
-totals and the most recent confirmed offsets; regressed indices raise
-`PipelineError::SnapshotVerification` errors that propagate back through the
-runtime and RPC layers.【F:rpp/runtime/node.rs†L1680-L1744】【F:rpp/p2p/src/behaviour/snapshots.rs†L695-L733】 The session metadata
+totals sourced from the persisted session metadata and the most recent
+confirmed offsets; regressed indices raise
+`PipelineError::SnapshotVerification` errors and requests that exceed the
+advertised totals now surface `PipelineError::ResumeBoundsExceeded`, both of
+which propagate back through the runtime and RPC layers.【F:rpp/runtime/node.rs†L1680-L1752】【F:rpp/p2p/src/behaviour/snapshots.rs†L695-L733】 The session metadata
 also persists the snapshot `plan_id`, and consumers must echo it when resuming.
 Mismatches are rejected with a clear verification error—`"plan id … does not
 match persisted plan …"`—that bubbles up through the RPC surface so operators

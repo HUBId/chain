@@ -9,8 +9,9 @@ use rpp_p2p::{
     NetworkPruningCommitment, NetworkPruningEnvelope, NetworkPruningSegment,
     NetworkPruningSnapshot, NetworkReconstructionRequest, NetworkSnapshotSummary,
     NetworkStateSyncChunk, NetworkStateSyncPlan, NetworkTaggedDigestHex, NodeIdentity, Peerstore,
-    PeerstoreConfig, PipelineError, ReputationHeuristics, SnapshotChunk, SnapshotItemKind,
-    SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel, VRF_HANDSHAKE_CONTEXT,
+    PeerstoreConfig, PipelineError, ReputationHeuristics, ResumeBoundKind, SnapshotChunk,
+    SnapshotItemKind, SnapshotResumeState, SnapshotSessionId, SnapshotStore, TierLevel,
+    VRF_HANDSHAKE_CONTEXT,
 };
 use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
 use tempfile::{tempdir, TempDir};
@@ -213,16 +214,18 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             .expect("resume log")
             .push((session_id, chunk_index, update_index));
         if chunk_index > self.total_chunks {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume chunk index {chunk_index} exceeds total {}",
-                self.total_chunks
-            )));
+            return Err(PipelineError::ResumeBoundsExceeded {
+                kind: ResumeBoundKind::Chunk,
+                requested: chunk_index,
+                total: self.total_chunks,
+            });
         }
         if update_index > self.total_updates {
-            return Err(PipelineError::SnapshotVerification(format!(
-                "resume update index {update_index} exceeds total {}",
-                self.total_updates
-            )));
+            return Err(PipelineError::ResumeBoundsExceeded {
+                kind: ResumeBoundKind::Update,
+                requested: update_index,
+                total: self.total_updates,
+            });
         }
         let expected_chunk_index = {
             let last = *self.last_chunk_index.lock().expect("last chunk");
