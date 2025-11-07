@@ -48,6 +48,9 @@ engineering backlog.
   platform does not yet replicate them into immutable storage.
 
 ## Follow-ups
-- [ENG-921 — Snapshot replay hardening](../status/weekly.md#snapshot-replay-hardening-eng-921)
-- [ENG-923 — Tier policy persistence](../status/weekly.md#tier-policy-persistence-eng-923)
-- [ENG-924 — Audit trail reconciliation](../status/weekly.md#audit-trail-reconciliation-eng-924)
+- [ENG-921 — Snapshot replay hardening](../status/weekly.md#snapshot-replay-hardening)
+- [ENG-923 — Tier policy persistence](../status/weekly.md#tier-policy-persistence)
+- [ENG-924 — Audit trail reconciliation](../status/weekly.md#audit-trail-reconciliation)
+- [ENG-1051 — Dual control automation](../status/weekly.md#dual-control-automation-eng-1051)
+- [ENG-1052 — WORM export hardening](../status/weekly.md#worm-export-hardening-eng-1052)
+- [ENG-1053 — External snapshot verification](../status/weekly.md#external-snapshot-verification-eng-1053)
