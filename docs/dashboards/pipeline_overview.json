@@ -19,7 +19,12 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "ms"
@@ -51,7 +56,12 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "ops"
@@ -81,7 +91,12 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "ms"
@@ -111,7 +126,12 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "ops"
@@ -146,7 +166,12 @@
         "type": "prometheus",
         "uid": "prometheus"
       },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 17 },
+      "gridPos": {
+        "h": 6,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "none"
@@ -164,6 +189,121 @@
         "legend": {
           "displayMode": "list",
           "placement": "right"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Snapshot Chunk Throughput",
+      "description": "Producer vs consumer chunk throughput sampled over 5 minutes.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(snapshot_bytes_sent_total{kind=\"chunk\",direction=\"outbound\"}[5m]))",
+          "legendFormat": "Producers"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(snapshot_bytes_sent_total{kind=\"chunk\",direction=\"inbound\"}[5m]))",
+          "legendFormat": "Consumers"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Snapshot Stream Lag",
+      "description": "Maximum observed lag across active snapshot sessions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(snapshot_stream_lag_seconds)",
+          "legendFormat": "Lag"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Light Client Chunk Failures",
+      "description": "Snapshot chunk failures per direction over a 15 minute window.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(light_client_chunk_failures_total{kind=\"chunk\",direction=\"outbound\"}[15m]))",
+          "legendFormat": "Producer failures"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(increase(light_client_chunk_failures_total{kind=\"chunk\",direction=\"inbound\"}[15m]))",
+          "legendFormat": "Consumer failures"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
         }
       }
     }
