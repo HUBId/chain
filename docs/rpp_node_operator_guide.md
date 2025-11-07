@@ -156,7 +156,7 @@ snapshot status:
   verified: unknown
   error: none
 
-$ rpp-node validator snapshot resume --session 42 --peer 12D3KooWexamplePeer
+$ rpp-node validator snapshot resume --session 42 --peer 12D3KooWexamplePeer --plan-id plan-2024-05-18
 snapshot session resumed:
   session: 42
   peer: 12D3KooWexamplePeer
@@ -173,8 +173,15 @@ snapshot session 42 cancelled
 
 Errors propagate directly from the RPC surface so operators receive the HTTP
 status code and body when a request fails (for example: `RPC returned 500:
-intentional failure`). The behaviour mirrors the manual `curl` workflows but
-adds token management and structured output for incident logs.【F:rpp/node/src/main.rs†L118-L310】
+intentional failure`). The behaviour replaces the manual `curl` workflows, adds
+token management, and prints structured output for incident logs and the
+Phase‑3 artefaktablage.【F:rpp/node/src/main.rs†L118-L310】【F:docs/runbooks/phase3_acceptance.md†L8-L62】 Dokumentiere jede
+Snapshot-Intervention im [On-Call-Handbuch](./runbooks/oncall.md#snapshot-recovery)
+und halte die Metriken parallel über das [Observability-Runbook](./runbooks/observability.md#snapshot-cli-diagnose) fest, damit
+Audit- und Dashboard-Belege synchron bleiben.【F:docs/runbooks/oncall.md†L21-L56】【F:docs/runbooks/observability.md†L6-L170】 Die Panels aus
+`pipeline_overview.json`, `pipeline_proof_validation.json` und `vrf_overview.json`
+visualisieren dieselben Fortschritts- und Fehlerindikatoren, die die CLI als
+Text ausgibt, und sind verpflichtende Artefakte für die Phase‑3-Abnahme.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/dashboards/pipeline_proof_validation.json†L1-L60】【F:docs/dashboards/vrf_overview.json†L1-L60】
 
 ### Consensus proof metadata expectations
 
@@ -276,9 +283,13 @@ rpp-node validator uptime submit --wallet-config config/wallet.toml --auth-token
 rpp-node validator uptime status --rpc-url http://127.0.0.1:7070 --auth-token $RPP_RPC_TOKEN --json
 ```
 
-State-sync and head monitoring rely on the public `/state-sync` RPC endpoints;
-use `curl`/`wget` or similar tooling to consume the SSE stream and fetch
-snapshot chunks as outlined in the validator tooling guide.【F:docs/validator_tooling.md†L53-L118】
+Verwende für `/state-sync`-Operationen die Snapshot-Subcommands statt ad-hoc
+`curl`-Aufrufen. `rpp-node validator snapshot status --session <id>` spiegelt die
+Light-Client-SSE-Header, sodass Du den Ablauf direkt in der CLI nachvollziehen
+kannst. Das Runbook [`network_snapshot_failover`](./runbooks/network_snapshot_failover.md)
+führt Peer-Rotation und Failover-Schritte aus, während die
+[Phase‑3-Checkliste](./runbooks/phase3_acceptance.md#snapshot-slis--replay-evidenz)
+die notwendigen Artefakte sammelt.【F:rpp/node/src/main.rs†L118-L310】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
 
 ## RPC authentication & rate limiting
 
