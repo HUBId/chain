@@ -6,9 +6,9 @@ use std::{
     convert::{TryFrom, TryInto},
 };
 
-use rpp_crypto_vrf::{PoseidonVrfInput, VrfOutput, VrfPublicKey, POSEIDON_VRF_DOMAIN};
 use schnorrkel::{
     context::signing_context,
+    keys::PublicKey as SrPublicKey,
     vrf::{VRFPreOut, VRFProof},
 };
 
@@ -20,7 +20,78 @@ use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
 
 use super::{string_to_field, CircuitError, ExecutionTrace, StarkCircuit, TraceSegment};
 
+const POSEIDON_VRF_DOMAIN: &[u8] = b"chain.vrf.poseidon";
 const VRF_RANDOMNESS_CONTEXT: &[u8] = b"chain.vrf.randomness";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VrfOutput {
+    randomness: [u8; 32],
+    preoutput: [u8; VRF_PREOUTPUT_LENGTH],
+    proof: [u8; VRF_PROOF_LENGTH],
+}
+
+impl VrfOutput {
+    fn proof_bytes(&self) -> &[u8; VRF_PROOF_LENGTH] {
+        &self.proof
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VrfPublicKey {
+    inner: SrPublicKey,
+}
+
+impl VrfPublicKey {
+    fn as_public_key(&self) -> &SrPublicKey {
+        &self.inner
+    }
+}
+
+impl TryFrom<[u8; 32]> for VrfPublicKey {
+    type Error = schnorrkel::SignatureError;
+
+    fn try_from(bytes: [u8; 32]) -> Result<Self, Self::Error> {
+        SrPublicKey::from_bytes(&bytes).map(|inner| Self { inner })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PoseidonVrfInput {
+    last_block_header: [u8; 32],
+    epoch: u64,
+    tier_seed: [u8; 32],
+}
+
+impl PoseidonVrfInput {
+    fn new(last_block_header: [u8; 32], epoch: u64, tier_seed: [u8; 32]) -> Self {
+        Self {
+            last_block_header,
+            epoch,
+            tier_seed,
+        }
+    }
+
+    fn poseidon_digest_bytes(&self) -> [u8; 32] {
+        let params = StarkParameters::blueprint_default();
+        let digest = self.poseidon_digest(&params);
+        let digest_bytes = digest.to_bytes();
+        let mut buffer = [0u8; 32];
+        let offset = 32 - digest_bytes.len();
+        buffer[offset..].copy_from_slice(&digest_bytes);
+        buffer
+    }
+
+    fn poseidon_digest(&self, params: &StarkParameters) -> FieldElement {
+        let hasher = params.poseidon_hasher();
+        let elements = vec![
+            params.element_from_bytes(POSEIDON_VRF_DOMAIN),
+            params.element_from_bytes(&self.last_block_header),
+            params.element_from_u64(self.epoch),
+            params.element_from_bytes(&self.tier_seed),
+        ];
+        hasher.hash(&elements)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct ConsensusVerifiedVrfOutput {
@@ -1181,12 +1252,14 @@ impl ConsensusCircuit {
 mod tests {
     use super::{
         parse_vrf_entries, string_to_field, summary_columns, ConsensusCircuit,
-        ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, VotePower,
+        ConsensusVrfPoseidonInput, ConsensusVrfWitnessEntry, ConsensusWitness, PoseidonVrfInput,
+        VotePower, VrfOutput, POSEIDON_VRF_DOMAIN, VRF_RANDOMNESS_CONTEXT,
     };
     use crate::official::circuit::CircuitError;
     use crate::official::params::StarkParameters;
     use crate::vrf::{VRF_PREOUTPUT_LENGTH, VRF_PROOF_LENGTH};
-    use rpp_crypto_vrf::{generate_vrf, PoseidonVrfInput, VrfSecretKey, POSEIDON_VRF_DOMAIN};
+    use schnorrkel::keys::{ExpansionMode, MiniSecretKey};
+    use schnorrkel::signing_context;
     use serde_json::{from_value, to_value};
     use std::convert::{TryFrom, TryInto};
 
@@ -1196,14 +1269,30 @@ mod tests {
         0x1F, 0x20,
     ];
 
-    fn test_secret_key() -> VrfSecretKey {
-        VrfSecretKey::try_from(TEST_SECRET_KEY_BYTES).expect("valid VRF secret key")
+    fn test_secret_key() -> MiniSecretKey {
+        MiniSecretKey::from_bytes(&TEST_SECRET_KEY_BYTES).expect("valid VRF secret key")
     }
 
     fn decode_hex<const N: usize>(value: &str) -> [u8; N] {
         let bytes = hex::decode(value).expect("decode hex");
         let array: [u8; N] = bytes.as_slice().try_into().expect("hex length");
         array
+    }
+
+    fn generate_vrf(input: &PoseidonVrfInput, secret: &MiniSecretKey) -> VrfOutput {
+        let digest = input.poseidon_digest_bytes();
+        let keypair = secret.expand_to_keypair(ExpansionMode::Uniform);
+        let context = signing_context(POSEIDON_VRF_DOMAIN);
+        let (inout, proof, _) = keypair.vrf_sign(context.bytes(&digest));
+        let randomness: [u8; 32] = inout.make_bytes(VRF_RANDOMNESS_CONTEXT);
+        let preoutput = inout.to_preout().0;
+        let proof_bytes = proof.to_bytes();
+
+        VrfOutput {
+            randomness,
+            preoutput,
+            proof: proof_bytes,
+        }
     }
 
     fn sample_vote() -> VotePower {
@@ -1223,8 +1312,9 @@ mod tests {
             decode_hex::<32>(&tier_seed),
         );
         let secret = test_secret_key();
-        let public_key = secret.derive_public();
-        let output = generate_vrf(&input, &secret).expect("generate vrf output");
+        let keypair = secret.expand_to_keypair(ExpansionMode::Uniform);
+        let public_key = keypair.public;
+        let output = generate_vrf(&input, &secret);
 
         ConsensusVrfWitnessEntry {
             randomness: hex::encode(output.randomness),

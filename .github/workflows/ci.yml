@@ -364,6 +364,17 @@ PY
           fi
           cargo xtask test-unit
 
+  rpc-admission-audit:
+    name: RPC admission audit guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run dual-approval audit guard
+        run: |
+          set -euo pipefail
+          cargo test -p rpp-chain --locked --test admission
+
   integration-workflows:
     name: Integration workflows (${{ matrix.name }})
     runs-on: ubuntu-latest

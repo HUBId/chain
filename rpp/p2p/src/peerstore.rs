@@ -20,8 +20,8 @@ use crate::handshake::{
     VRF_HANDSHAKE_CONTEXT,
 };
 use crate::policy_log::{
-    AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry, AdmissionPolicyLogError,
-    PolicyAllowlistState,
+    AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
+    AdmissionPolicyLogError, PolicyAllowlistState,
 };
 use crate::tier::TierLevel;
 use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
@@ -382,7 +382,7 @@ impl AdmissionPolicies {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdmissionApproval {
     role: String,
     approver: String,
@@ -1370,12 +1370,17 @@ impl Peerstore {
         &self,
         actor: &str,
         reason: Option<&str>,
+        approvals: &[AdmissionApproval],
         change: AdmissionPolicyChange,
     ) -> Result<(), PeerstoreError> {
         if let Some(log) = &self.audit_log {
             let reason_owned = reason.map(|value| value.to_string());
             let reason_ref = reason_owned.as_deref();
-            if let Err(err) = log.append(actor, reason_ref, change) {
+            let approval_records: Vec<AdmissionApprovalRecord> = approvals
+                .iter()
+                .map(|approval| AdmissionApprovalRecord::new(approval.role(), approval.approver()))
+                .collect();
+            if let Err(err) = log.append(actor, reason_ref, &approval_records, change) {
                 let label = reason_ref.unwrap_or("n/a");
                 error!(
                     target: "telemetry.admission",
@@ -1486,6 +1491,7 @@ impl Peerstore {
                     self.append_policy_change(
                         actor,
                         audit.reason(),
+                        audit.approvals(),
                         AdmissionPolicyChange::Allowlist {
                             previous: None,
                             current: Some(PolicyAllowlistState::new(peer.clone(), *new_tier)),
@@ -1505,6 +1511,7 @@ impl Peerstore {
                     self.append_policy_change(
                         actor,
                         audit.reason(),
+                        audit.approvals(),
                         AdmissionPolicyChange::Allowlist {
                             previous: Some(PolicyAllowlistState::new(peer.clone(), *old_tier)),
                             current: Some(PolicyAllowlistState::new(peer.clone(), *new_tier)),
@@ -1530,6 +1537,7 @@ impl Peerstore {
                 self.append_policy_change(
                     actor,
                     audit.reason(),
+                    audit.approvals(),
                     AdmissionPolicyChange::Allowlist {
                         previous: Some(PolicyAllowlistState::new(peer.clone(), *old_tier)),
                         current: None,
@@ -1552,6 +1560,7 @@ impl Peerstore {
                 self.append_policy_change(
                     actor,
                     audit.reason(),
+                    audit.approvals(),
                     AdmissionPolicyChange::Blocklist {
                         peer_id: peer.to_base58(),
                         previous: false,
@@ -1574,6 +1583,7 @@ impl Peerstore {
                 self.append_policy_change(
                     actor,
                     audit.reason(),
+                    audit.approvals(),
                     AdmissionPolicyChange::Blocklist {
                         peer_id: peer.to_base58(),
                         previous: true,
@@ -1591,7 +1601,12 @@ impl Peerstore {
         }
 
         if !mutated {
-            self.append_policy_change(actor, audit.reason(), AdmissionPolicyChange::Noop)?;
+            self.append_policy_change(
+                actor,
+                audit.reason(),
+                audit.approvals(),
+                AdmissionPolicyChange::Noop,
+            )?;
             info!(
                 target: "telemetry.admission",
                 actor = %actor,
@@ -2032,6 +2047,13 @@ mod tests {
         assert!(total >= 1);
         let last = entries.last().expect("entry");
         assert_eq!(last.actor, "operator");
+        assert_eq!(
+            last.approvals,
+            vec![
+                AdmissionApprovalRecord::new("operations", "operator"),
+                AdmissionApprovalRecord::new("security", "operator"),
+            ]
+        );
         match &last.change {
             AdmissionPolicyChange::Allowlist { current, .. } => {
                 let current = current.as_ref().expect("current state");
