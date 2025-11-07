@@ -24,6 +24,21 @@ is only populated when Firewood commits the block. Metrics share the
 `rpp-node.pipeline` meter scope so they can be grouped in Grafana by resource or
 scope.
 
+### Snapshot & Light Client Sync Metrics
+Snapshot distribution now exposes dedicated counters and gauges to extend the
+pipeline view beyond Firewood. These metrics live alongside the pipeline scope
+when Prometheus scraping is enabled:
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `snapshot_bytes_sent_total` | Counter (u64) | `direction` (`outbound`, `inbound`), `kind` (`plan`, `chunk`, `light_client_update`, `resume`, `ack`, `error`) | Captures throughput for producers (outbound) and consumers (inbound). Chunk throughput should rise steadily during light-client syncs. |
+| `snapshot_stream_lag_seconds` | Gauge (f64) | _none_ | Maximum observed delay since the last successful chunk/update/ack across active sessions. Healthy streams remain below 30 seconds. |
+| `light_client_chunk_failures_total` | Counter (u64) | `direction`, `kind` (`chunk`, `light_client_update`) | Counts failed fetches or decode errors. Any sustained increase indicates unhealthy peers or corrupt artefacts. |
+
+See `docs/observability/network_snapshots.md` for detailed queries, alert
+thresholds, and dashboard examples that tie these metrics back into the pipeline
+view.
+
 ### Sample Grafana Panel
 
 ```json
@@ -65,6 +80,12 @@ scope.
    `stage_latency_ms{phase="storage"}` with
    `stage_total{phase="storage"}` and overlaying the latest value from
    `commit_height` to confirm Firewood persistence is keeping up.
+5. **Snapshot Stream Health** – overlay
+   `rate(snapshot_bytes_sent_total{kind="chunk",direction="outbound"}[5m])`
+   against `snapshot_stream_lag_seconds` to confirm producers are pushing data
+   and consumers keep up. Add a table for
+   `increase(light_client_chunk_failures_total[15m])` to highlight peers that
+   repeatedly fail chunk delivery.
 
 Export rendered dashboards to the checked-in Grafana definitions under
 `docs/dashboards/`. The repository already contains:
@@ -96,7 +117,19 @@ bespoke variants or extending panel coverage.
 - **Firewood Root IO Errors** – alert when `sum(increase(rpp_node_pipeline_root_io_errors_total[5m]))`
   is greater than zero for more than one scrape interval, signalling a recurring
   snapshot read failure along the state-sync path.
+- **Snapshot Stream Lag** – warn when
+  `snapshot_stream_lag_seconds > 30` for five minutes and escalate at 120
+  seconds. Pair with a throughput check on
+  `rate(snapshot_bytes_sent_total{kind="chunk"}[5m])` to reduce noise when no
+  sessions are active.
+- **Snapshot Failure Spike** – trigger when
+  `increase(light_client_chunk_failures_total{kind="chunk",direction="outbound"}[10m])`
+  exceeds three or inbound failures rise above one per 10 minutes, indicating
+  sustained delivery issues.
 
 ### Runbook Links
 Attach this document to observability and startup runbooks so operators can
 navigate directly to the recommended dashboards when diagnosing pipeline gaps.
+Link snapshot operators to `docs/observability/network_snapshots.md` and
+`docs/runbooks/network_snapshot_failover.md` for stream-specific remediation
+steps.

@@ -249,7 +249,7 @@ impl RppBehaviour {
     fn new(
         identity: &Keypair,
         snapshots_provider: SnapshotProviderHandle,
-        #[cfg(feature = "metrics")] metrics_registry: Option<&mut Registry>,
+        #[cfg(feature = "metrics")] mut metrics_registry: Option<&mut Registry>,
     ) -> Result<Self, NetworkError> {
         let protocols = std::iter::once((HANDSHAKE_PROTOCOL.to_string(), ProtocolSupport::Full));
         let cfg = request_response::Config::default();
@@ -261,6 +261,10 @@ impl RppBehaviour {
 
         let ping = ping::Behaviour::new(ping::Config::new());
         let mut gossipsub = Self::build_gossipsub(identity)?;
+        #[cfg(feature = "metrics")]
+        let snapshots =
+            SnapshotsBehaviour::new(snapshots_provider, metrics_registry.as_deref_mut());
+        #[cfg(not(feature = "metrics"))]
         let snapshots = SnapshotsBehaviour::new(snapshots_provider);
 
         #[cfg(feature = "metrics")]
