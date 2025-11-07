@@ -199,13 +199,13 @@ impl Blueprint {
                     Task {
                         key: "p2p.admission_control",
                         title: "Admission-Control",
-                        detail: "Reputationsbasierte Tier-Steuerung inklusive Sperrlisten und Updates entwickeln.",
+                        detail: "Reputationsbasierte Tier-Steuerung inklusive persistenter Allow-/Blocklisten, Audit-Log und Dual-Control-Updates entwickeln.",
                         status: TaskStatus::Done,
                     },
                     Task {
                         key: "p2p.snapshot_sync",
                         title: "Snapshot-Synchronisation",
-                        detail: "Firewood-Snapshots und Telemetrie über dedizierte Gossip-Kanäle synchronisieren.",
+                        detail: "Firewood-Snapshots, Light-Client-Updates und Stream-SLIs (`snapshot_bytes_sent_total`, `snapshot_stream_lag_seconds`) über dedizierte Gossip-Kanäle synchronisieren.",
                         status: TaskStatus::Done,
                     },
                 ],

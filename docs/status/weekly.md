@@ -79,6 +79,20 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 - Tier-Admission-Härtung und Witness-Kanäle vorziehen (Abschnitt 4.2 und 6.4/6.5 des Implementierungsplans).
 - Firewood↔Proof-Verzahnung und Snapshot-Rebuild-Service aus Abschnitt 2 vorbereiten, um Witness-Gossip und State-Sync zu koppeln.
 
+## Phase 3 Abschluss (Kalenderwoche 25/2026)
+
+**Zusammenfassung:** Phase 3 schließt den Networking-Schwerpunkt ab: Admission-Control speichert Allow-/Blocklisten persistent, protokolliert Audit-Trails, erlaubt Dual-Control-Updates via RPC und exportiert Snapshot-SLIs, die Runbook, Dashboard und Alerts konsolidieren.【F:rpp/p2p/src/peerstore.rs†L1180-L1299】【F:rpp/p2p/src/peerstore.rs†L1795-L1828】【F:rpp/rpc/src/routes/p2p.rs†L232-L379】【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L518】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L180】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
+
+### Highlights
+- **Persistente Policies & Audit:** `Peerstore::update_admission_policies` schreibt Allow-/Blocklisten auf Disk, hängt Audit-Events an das JSONL-Log an und Tests prüfen den Dual-Control-Pfad inklusive Reload.【F:rpp/p2p/src/peerstore.rs†L1180-L1299】【F:rpp/p2p/src/peerstore.rs†L1795-L1828】
+- **RPC-Audit & Governance:** Die neuen `/p2p/admission/*`-Endpunkte erzwingen Rollen-Approvals, erlauben Policy-Reviews und liefern das Audit-Log für Operator:innen.【F:rpp/rpc/src/routes/p2p.rs†L232-L379】
+- **Stream-Metriken & Observability:** `SnapshotsBehaviour` exportiert `snapshot_bytes_sent_total` und `snapshot_stream_lag_seconds`, die durch die Observability-Test-Suite validiert und in Runbook, Dashboard und Alert-Regeln verankert sind.【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L518】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L180】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
+
+### Ampelstatus
+- **Tests:** 🟢 – Snapshot-Lag- und Byte-Counter-Validierung läuft in `cargo xtask test-observability` stabil.【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L180】
+- **Monitoring:** 🟢 – Dashboard und Alerts für Snapshot-Lag/-Durchsatz sind live und verlinken das Failover-Runbook.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
+- **Operator Docs:** 🟢 – Failover-Runbook aktualisiert, inklusive RPC-/CLI-Schritten und Eskalationspfad.【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
+
 
 ## Security Review Update (Kalenderwoche 19/2026)
 
