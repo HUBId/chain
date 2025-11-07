@@ -170,6 +170,42 @@ mod plonky3_backend {
             .verify_consensus(&tampered_quorum_signature)
             .is_err());
 
+        let tampered_witness_commitments = tamper_proof(&proof, |witness| {
+            if let Some(Value::Array(commitments)) = witness.get_mut("witness_commitments") {
+                if let Some(Value::String(first)) = commitments.first_mut() {
+                    let mut chars: Vec<_> = first.chars().collect();
+                    if let Some(ch) = chars.first_mut() {
+                        *ch = match *ch {
+                            '0' => '1',
+                            _ => '0',
+                        };
+                    }
+                    *first = chars.into_iter().collect();
+                }
+            }
+        });
+        assert!(verifier
+            .verify_consensus(&tampered_witness_commitments)
+            .is_err());
+
+        let tampered_reputation_roots = tamper_proof(&proof, |witness| {
+            if let Some(Value::Array(roots)) = witness.get_mut("reputation_roots") {
+                if let Some(Value::String(first)) = roots.first_mut() {
+                    let mut chars: Vec<_> = first.chars().collect();
+                    if let Some(ch) = chars.first_mut() {
+                        *ch = match *ch {
+                            '0' => '1',
+                            _ => '0',
+                        };
+                    }
+                    *first = chars.into_iter().collect();
+                }
+            }
+        });
+        assert!(verifier
+            .verify_consensus(&tampered_reputation_roots)
+            .is_err());
+
         let swapped_vrf_proofs = tamper_proof(&proof, |witness| {
             if let Some(Value::Array(entries)) = witness.get_mut("vrf_entries") {
                 if let [Value::Object(first), Value::Object(second), ..] = entries.as_mut_slice() {
@@ -293,6 +329,38 @@ mod stwo_backend {
         });
         assert!(verifier
             .verify_consensus(&tampered_quorum_signature)
+            .is_err());
+
+        let tampered_witness_commitments = tamper_proof(&proof, |witness| {
+            if let Some(first) = witness.witness_commitments.first_mut() {
+                let mut chars: Vec<_> = first.chars().collect();
+                if let Some(ch) = chars.first_mut() {
+                    *ch = match *ch {
+                        '0' => '1',
+                        _ => '0',
+                    };
+                }
+                *first = chars.into_iter().collect();
+            }
+        });
+        assert!(verifier
+            .verify_consensus(&tampered_witness_commitments)
+            .is_err());
+
+        let tampered_reputation_roots = tamper_proof(&proof, |witness| {
+            if let Some(first) = witness.reputation_roots.first_mut() {
+                let mut chars: Vec<_> = first.chars().collect();
+                if let Some(ch) = chars.first_mut() {
+                    *ch = match *ch {
+                        '0' => '1',
+                        _ => '0',
+                    };
+                }
+                *first = chars.into_iter().collect();
+            }
+        });
+        assert!(verifier
+            .verify_consensus(&tampered_reputation_roots)
             .is_err());
 
         let swapped_vrf_proofs = tamper_proof(&proof, |witness| {
