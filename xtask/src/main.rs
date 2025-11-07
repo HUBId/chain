@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fmt::Write as FmtWrite;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -12,13 +12,18 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use blake3::hash as blake3_hash;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use reqwest::blocking::Client as HttpClient;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use tar::Builder as TarBuilder;
 use tempfile::TempDir;
 use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
 use time::{Duration as TimeDuration, OffsetDateTime};
+use walkdir::WalkDir;
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1010,7 +1015,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-health      Audit snapshot streaming progress against manifest totals",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs",
     );
 }
 
@@ -1029,6 +1034,12 @@ fn report_timetoke_slo_usage() {
 fn snapshot_health_usage() {
     eprintln!(
         "usage: cargo xtask snapshot-health [--config <path>] [--rpc-url <url>] [--auth-token <token>] [--manifest <path>] [--output <path>] [--rpp-node-bin <path>]\n\nPolls active snapshot sessions via the validator RPC, executes the `rpp-node validator snapshot status` CLI for each session, and verifies chunk progress against the persisted manifest totals.",
+    );
+}
+
+fn collect_phase3_evidence_usage() {
+    eprintln!(
+        "usage: cargo xtask collect-phase3-evidence [--output-dir <path>]\n\nBundles snapshot/timetoke dashboards, alert YAMLs, admission audit logs, policy backups, checksum reports, and CI job logs into a timestamped archive with a manifest.",
     );
 }
 
@@ -1467,6 +1478,401 @@ fn format_optional_datetime(value: Option<OffsetDateTime>) -> Option<String> {
     value.and_then(|dt| dt.format(&Rfc3339).ok())
 }
 
+#[derive(Serialize)]
+struct EvidenceCategoryManifest {
+    name: String,
+    description: String,
+    files: Vec<String>,
+    missing: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct EvidenceManifest {
+    generated_at: String,
+    bundle: String,
+    categories: Vec<EvidenceCategoryManifest>,
+    warnings: Vec<String>,
+}
+
+fn collect_phase3_evidence(args: &[String]) -> Result<()> {
+    let workspace = workspace_root();
+    let mut output_root = workspace.join("target/compliance/phase3");
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--output-dir" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--output-dir requires a value"))?;
+                let candidate = PathBuf::from(value);
+                output_root = if candidate.is_absolute() {
+                    candidate
+                } else {
+                    workspace.join(candidate)
+                };
+            }
+            "--help" | "-h" => {
+                collect_phase3_evidence_usage();
+                return Ok(());
+            }
+            other => bail!("unknown argument '{other}' for collect-phase3-evidence"),
+        }
+    }
+
+    fs::create_dir_all(&output_root)?;
+    let now = OffsetDateTime::now_utc();
+    let timestamp = now.format(&format_description!(
+        "[year][month][day]T[hour][minute][second]Z"
+    ))?;
+    let staging_dir = output_root.join(&timestamp);
+    fs::create_dir_all(&staging_dir)?;
+
+    let mut categories = Vec::new();
+    categories.push(bundle_snapshot_dashboards(&workspace, &staging_dir)?);
+    categories.push(bundle_alert_rules(&workspace, &staging_dir)?);
+    categories.push(bundle_audit_logs(&workspace, &staging_dir)?);
+    categories.push(bundle_policy_backups(&workspace, &staging_dir)?);
+    categories.push(bundle_checksum_reports(&workspace, &staging_dir)?);
+    categories.push(bundle_ci_job_logs(&workspace, &staging_dir)?);
+
+    let bundle_name = format!("phase3-evidence-{timestamp}.tar.gz");
+    let bundle_path = output_root.join(&bundle_name);
+
+    let manifest = EvidenceManifest {
+        generated_at: now.format(&Rfc3339)?,
+        bundle: bundle_name,
+        categories,
+        warnings: Vec::new(),
+    };
+    let manifest_path = staging_dir.join("manifest.json");
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+
+    create_tarball(&staging_dir, &bundle_path)?;
+
+    println!("phase3 evidence bundle created: {}", bundle_path.display());
+    println!("manifest: {}", manifest_path.display());
+
+    Ok(())
+}
+
+fn create_tarball(source_dir: &Path, output: &Path) -> Result<()> {
+    let file = File::create(output)?;
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut builder = TarBuilder::new(encoder);
+    builder.append_dir_all("phase3-evidence", source_dir)?;
+    let encoder = builder.into_inner()?;
+    encoder.finish()?;
+    Ok(())
+}
+
+fn bundle_snapshot_dashboards(
+    workspace: &Path,
+    staging: &Path,
+) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Snapshot & Timetoke dashboards".to_string(),
+        description:
+            "Grafana JSON exports highlighting snapshot throughput, lag, and timetoke replay panels.".
+                to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let dashboards_dir = workspace.join("docs/dashboards");
+    if dashboards_dir.exists() {
+        for entry in WalkDir::new(&dashboards_dir)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            if !matches!(path.extension().and_then(|ext| ext.to_str()), Some(ext) if ext.eq_ignore_ascii_case("json"))
+            {
+                continue;
+            }
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let mut matches = file_name.contains("snapshot") || file_name.contains("timetoke");
+            if !matches {
+                match fs::read_to_string(path) {
+                    Ok(contents) => {
+                        let lower = contents.to_ascii_lowercase();
+                        matches = lower.contains("snapshot") || lower.contains("timetoke");
+                    }
+                    Err(err) => category
+                        .warnings
+                        .push(format!("failed to read {}: {err}", path.display())),
+                }
+            }
+            if matches {
+                let recorded = copy_into_category(workspace, staging, "dashboards", path)?;
+                category.files.push(recorded);
+            }
+        }
+    } else {
+        category
+            .missing
+            .push("docs/dashboards directory not found".to_string());
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("docs/dashboards exports containing snapshot or timetoke metrics".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn bundle_alert_rules(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Alertmanager rules".to_string(),
+        description: "Prometheus/Alertmanager YAML definitions for snapshot and timetoke monitors."
+            .to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let alerts_dir = workspace.join("docs/observability/alerts");
+    if alerts_dir.exists() {
+        for entry in WalkDir::new(&alerts_dir)
+            .max_depth(2)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            if !matches!(path.extension().and_then(|ext| ext.to_str()), Some(ext) if matches!(ext, "yaml" | "yml"))
+            {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "alerts", path)?;
+            category.files.push(recorded);
+        }
+    } else {
+        category
+            .missing
+            .push("docs/observability/alerts directory not found".to_string());
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("docs/observability/alerts/*.yaml".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn bundle_audit_logs(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Admission audit logs".to_string(),
+        description: "Append-only admission or policy audit trails exported for compliance review."
+            .to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let mut candidates: Vec<(PathBuf, Option<usize>)> = Vec::new();
+    let logs_dir = workspace.join("logs");
+    if logs_dir.exists() {
+        candidates.push((logs_dir, Some(4)));
+    }
+    let examples_dir = workspace.join("docs/observability/examples");
+    if examples_dir.exists() {
+        candidates.push((examples_dir, Some(2)));
+    }
+    for (root, depth) in candidates {
+        let walker = if let Some(limit) = depth {
+            WalkDir::new(&root).max_depth(limit)
+        } else {
+            WalkDir::new(&root)
+        };
+        for entry in walker
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !lower.contains("audit") {
+                continue;
+            }
+            if !matches!(path.extension().and_then(|ext| ext.to_str()), Some(ext) if matches!(ext, "log" | "jsonl" | "json" | "txt"))
+            {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "audit-logs", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("logs/*audit*.log or *.jsonl".to_string());
+        category
+            .missing
+            .push("docs/observability/examples/*audit*.jsonl".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn bundle_policy_backups(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Admission policy backups".to_string(),
+        description: "Filesystem snapshots of tier admission policies with retention metadata."
+            .to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = [
+        workspace.join("logs"),
+        workspace.join("storage"),
+        workspace.join("config"),
+        workspace.join("docs"),
+        workspace.join("target"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        let walker = WalkDir::new(root).max_depth(6);
+        for entry in walker
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !(lower.contains("backup")
+                && (lower.contains("policy") || lower.contains("admission")))
+            {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "policy-backups", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("admission policy backup archives (*.json, *.tar.gz)".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn bundle_checksum_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Checksum reports".to_string(),
+        description: "Reports validating snapshot checksum monitors or restart drills.".to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = [
+        workspace.join("logs"),
+        workspace.join("docs"),
+        workspace.join("target"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        let walker = WalkDir::new(root).max_depth(6);
+        for entry in walker
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !lower.contains("checksum") {
+                continue;
+            }
+            if !matches!(path.extension().and_then(|ext| ext.to_str()), Some(ext) if matches!(ext, "log" | "json" | "jsonl" | "txt" | "md" | "csv"))
+            {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "checksum-reports", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("Checksum validation outputs (*.log, *.json, *.md)".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn bundle_ci_job_logs(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "CI job logs".to_string(),
+        description: "Selected CI logs demonstrating nightly or weekly compliance checks."
+            .to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let logs_dir = workspace.join("logs");
+    if logs_dir.exists() {
+        for entry in WalkDir::new(&logs_dir)
+            .max_depth(4)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !(lower.contains("ci") || lower.contains("nightly") || lower.contains("simnet")) {
+                continue;
+            }
+            if !matches!(path.extension().and_then(|ext| ext.to_str()), Some(ext) if matches!(ext, "log" | "txt" | "json" | "jsonl"))
+            {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "ci-logs", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("logs capturing CI or nightly runs (*.log, *.json)".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn copy_into_category(
+    workspace: &Path,
+    staging: &Path,
+    category: &str,
+    source: &Path,
+) -> Result<String> {
+    let relative = source
+        .strip_prefix(workspace)
+        .unwrap_or(source)
+        .to_path_buf();
+    let dest = staging.join(category).join(&relative);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::copy(source, &dest)?;
+    Ok(format!("{category}/{}", relative_display_path(&relative)))
+}
+
+fn relative_display_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn main() -> Result<()> {
     let mut argv: Vec<String> = env::args().collect();
     let _ = argv.remove(0);
@@ -1488,6 +1894,7 @@ fn main() -> Result<()> {
         "plonky3-verify" => verify_plonky3_setup(),
         "report-timetoke-slo" => report_timetoke_slo(&argv),
         "snapshot-health" => run_snapshot_health(&argv),
+        "collect-phase3-evidence" => collect_phase3_evidence(&argv),
         "help" => {
             usage();
             Ok(())
