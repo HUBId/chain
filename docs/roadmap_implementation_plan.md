@@ -47,6 +47,7 @@ Die Jobs sind als verpflichtende Statuschecks verdrahtet und bilden die Grundlag
 - **Tier-Admission-Härtung:** Weiterführung der Admission-Control-Arbeiten aus Abschnitt 4.2 inklusive Witness-Kanäle und Observer-Handshakes, gekoppelt mit Reputation-Decay und Ban-Propagation.
 - **State Sync & Firewood/Proof-Verzahnung:** Vorziehen der Tasks aus Abschnitt 2 (`prove_transition`, Snapshot-Rebuild-Service) zur Vorbereitung der Witness-Gossip-Feeds.
 - **Witness- und Tier-Networking:** Anschlussarbeiten an Abschnitt 6.4/6.5, um Witness-Gossip und Reward-Pools in die härtere Admission-Control zu integrieren.
+- **Abnahme-Nachweise bündeln:** Die Phase‑3-Artefakte (Snapshot-SLIs, Admission-Persistenz, Timetoke-Replay, Observability-Drills) werden zentral in der [Phase‑3 Acceptance Checklist](runbooks/phase3_acceptance.md) nachgehalten.
 
 <a id="eng-742-constraint-layer-vrfquorum-enforcement"></a>
 ### ENG-742 – Constraint-layer VRF/quorum enforcement *(Status: ✅ Delivered)*

@@ -72,6 +72,8 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 - **Test-Suites:** `unit-suites`, `integration-workflows` und `simnet-smoke` sind als Branch-Protection aktiv; das Nightly-Harness (`cargo xtask test-all`) verifiziert die Matrix kontinuierlich.【F:.github/workflows/ci.yml†L185-L303】【F:.github/workflows/nightly.yml†L88-L183】
 - **Observability:** Dashboard, Alerts und Runbooks für VRF-/Quorum-Kennzahlen sind vollständig dokumentiert und verlinkt; Operator:innen besitzen das Phase‑2-Playbook.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:docs/observability/consensus.md†L1-L70】【F:docs/runbooks/observability.md†L1-L160】
 
+- **Phase 3 Acceptance Tracking:** Fortschritt und Nachweise (Snapshot-SLIs, Admission-Persistenz, Timetoke-Replay, Observability-Drills) werden in der [Phase‑3 Acceptance Checklist](../runbooks/phase3_acceptance.md) dokumentiert.
+
 ### Nächste Schritte – Phase 3 Preview
 - Netzwerk/Snapshot-Verteilung härten (siehe Abschnitt 4.3 „Snapshot-Sync & Telemetrie“ im Implementierungsplan und `SnapshotsBehaviour`).
 - Tier-Admission-Härtung und Witness-Kanäle vorziehen (Abschnitt 4.2 und 6.4/6.5 des Implementierungsplans).
