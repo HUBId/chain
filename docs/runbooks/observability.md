@@ -4,6 +4,26 @@ Use this runbook to diagnose gaps in telemetry, metrics, and health reporting. P
 [startup](startup.md) and [configuration](../configuration.md) guides when remediation requires
 configuration changes.
 
+## Snapshot-CLI-Diagnose
+
+Die Snapshot-Steuerung läuft vollständig über `rpp-node validator snapshot`. Verwende die Subcommands,
+um Session-Status strukturiert zu erfassen und die Belege für Phase 3 zu sichern:
+
+1. **Start oder Resume dokumentieren.** `rpp-node validator snapshot start --peer <peer>` bzw.
+   `rpp-node validator snapshot resume --session <id> --peer <peer> --plan-id <plan>` legt einen
+   neuen oder wiederaufgenommenen Stream an und druckt Session-ID, Root und Plan-ID für das Incident-Log.【F:rpp/node/src/main.rs†L118-L310】
+2. **Status prüfen.** `rpp-node validator snapshot status --session <id>` zeigt Fortschritt,
+   Chunk-Index, letzte Höhe und Fehlerzustände. Kopiere den Output in das
+   [On-Call-Handbuch](./oncall.md#snapshot-recovery), damit Rotationsteams die gleiche Sicht teilen und die
+   Snapshots im Incident-Log nachvollziehen können.【F:docs/runbooks/oncall.md†L21-L34】
+3. **Artefakte sichern.** Exportiere parallel die Panels aus `pipeline_overview.json`,
+   `pipeline_proof_validation.json` und `vrf_overview.json`, um die CLI-Ausgabe mit Dashboard-Screenshots
+   zu belegen; beide Quellen werden in der [Phase‑3-Akzeptanzliste](phase3_acceptance.md#snapshot-slis--replay-evidenz)
+   abgelegt.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/dashboards/pipeline_proof_validation.json†L1-L60】【F:docs/dashboards/vrf_overview.json†L1-L60】【F:docs/runbooks/phase3_acceptance.md†L8-L62】
+4. **Cancel als Abschluss.** Schliesse fehlgeschlagene Sessions mit
+   `rpp-node validator snapshot cancel --session <id>` und notiere den Zeitpunkt im Incident-Log; das On-Call-Handbuch
+   beschreibt die Eskalation für mehrfach fehlschlagende Streams.【F:docs/runbooks/oncall.md†L21-L34】
+
 ## Phase-1 Guard Verification
 
 Re-run these guard checks whenever telemetry gaps or snapshot alerts occur to ensure the compile-time
@@ -40,17 +60,18 @@ and runtime protections remain enforced alongside the CI gates.
       `target/simnet/consensus-quorum/node.log`. Diese stammen aus
       `Block::verify_consensus_certificate` und beweisen, dass manipulierte Daten abgelehnt werden.【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:rpp/runtime/types/block.rs†L2002-L2245】
 - [ ] **RPC- und Dashboard-Nachweise sammeln.** Während eines erfolgreichen Laufs muss
-      `curl -s http://127.0.0.1:7070/status/consensus | jq '{round, quorum_reached}'`
+      `rpp-node validator telemetry --rpc-url http://127.0.0.1:7070 --auth-token "$RPP_RPC_TOKEN" --pretty | jq '.consensus | {round, quorum_reached}'`
       `quorum_reached=true` liefern. Nach einer manipulierten Probe bleibt der Wert `false` und der
       Log-Eintrag dokumentiert den Abbruch. Erfasse zusätzlich einen Screenshot der Panels
       `consensus_vrf_verification_time_ms` und `consensus_quorum_verifications_total` aus
-`docs/dashboards/consensus_grafana.json`, inklusive des `result="failure"`-Slices.【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:rpp/runtime/node.rs†L358-L390】
+`docs/dashboards/consensus_grafana.json`, inklusive des `result="failure"`-Slices.【F:rpp/node/src/main.rs†L60-L208】【F:docs/dashboards/consensus_grafana.json†L1-L200】【F:rpp/runtime/node.rs†L358-L390】
 
 ## Consensus VRF-/Quorum-Alert-Playbook
 
 Die Prometheus-Regeln unter `docs/observability/alerts/consensus_vrf.yaml` schlagen bei erhöhten VRF-Latenzen,
-Failure-Bursts oder Quorum-Rejections an.【F:docs/observability/alerts/consensus_vrf.yaml†L1-L47】 Verwende folgende Schritte,
-um On-Call-Reaktionen zu standardisieren:
+Failure-Bursts oder Quorum-Rejections an.【F:docs/observability/alerts/consensus_vrf.yaml†L1-L47】 Die folgenden Schritte sind
+mit dem [On-Call-Handbuch](./oncall.md#alert-reaction-quick-reference) synchronisiert und sichern die Artefakte für die
+[Phase‑3 Acceptance Checklist](phase3_acceptance.md#observability-dashboards--alerts).【F:docs/runbooks/oncall.md†L47-L56】
 
 1. **Alert `ConsensusVRFSlow` (warning).** Prüfe das Histogramm
    `consensus_vrf_verification_time_ms` nach `result="success"` und verifiziere, dass der p95-Wert
@@ -83,6 +104,18 @@ um On-Call-Reaktionen zu standardisieren:
 | Grafana shows `firewood.nodestore.root.read_errors` or `firewood.snapshot.ingest.failures` climbing | Confirm the spike is real by querying the labelled counters in Prometheus (`sum by (state)(increase(firewood_nodestore_root_read_errors_total[5m]))`, `sum by (reason)(increase(firewood_snapshot_ingest_failures_total[5m]))`). Inspect the Firewood lifecycle logs for `root read failed` or `snapshot manifest` errors and check the WAL recovery drill output.【F:storage/src/nodestore/mod.rs†L661-L701】【F:storage-firewood/src/lifecycle.rs†L18-L37】【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】 | Treat the incident as data loss: pause snapshot ingestion, run the `firewood_recovery` utility to rebuild state, and only resume once the counters flatten. Escalate if the recovery gauge `firewood.recovery.active` stays non-zero after the workflow finishes.【F:storage-firewood/src/bin/firewood_recovery.rs†L36-L105】 |
 | `pipeline_submissions_total` metrics report many `reason="tier_requirement"` rejections | Review the labelled counter from the metrics backend; the orchestrator records tier and gossip errors when rejecting workflows.【F:rpp/runtime/orchestration.rs†L623-L704】 | Investigate the submitting account’s reputation tier via `/wallet/reputation/:address` (include the Authorization header when RPC auth is enabled[^rpc-auth]) or adjust the workflow policy; see [modes](../modes.md) for role-specific submission expectations.【F:rpp/rpc/api.rs†L984-L1059】 |
 | Slashing dashboards show `kind=censorship` oder `kind=inactivity` Ausschläge | Prüfe `rpp.node.slashing.events_total` und `queue_segments` nach Validator-IDs mit gehäuften Meldungen; korreliere mit `consensus`-Logs für `registered censorship trigger` bzw. `registered inactivity trigger`.【F:rpp/node/src/telemetry/slashing.rs†L59-L93】【F:rpp/consensus/src/state.rs†L1000-L1199】 | Abgleich mit den in `consensus.config` gesetzten Grenzwerten (`censorship_vote_threshold`, `censorship_proof_threshold`, `inactivity_threshold`) und Validator-Runbooks; wiederholte Treffer deuten auf blockierte Votes/Proofs oder dauerhaftes Fernbleiben hin. Fordere betroffene Operatoren zur Netzwerkanalyse auf und evaluiere Slashing-/Ersatzmaßnahmen anhand der Testfälle.【F:tests/consensus/censorship_inactivity.rs†L1-L260】 |
+
+## Admission-Audit-Abfragen
+
+Nutze die Audit-Endpunkte, um Policy-Änderungen nachvollziehbar zu dokumentieren:
+
+1. **Policysnapshot ziehen.** `curl -sS -H "Authorization: Bearer ${RPP_RPC_TOKEN}" ${RPP_RPC_URL}/p2p/admission/policies | jq .`
+   legt den aktuellen Allow-/Blocklist-Stand offen und wird gemeinsam mit der CLI-Ausgabe im Incident-Log abgelegt.【F:rpp/rpc/src/routes/p2p.rs†L126-L209】
+2. **Audit-Log paginieren.** `curl -sS -H "Authorization: Bearer ${RPP_RPC_TOKEN}" "${RPP_RPC_URL}/p2p/admission/audit?offset=0&limit=50" | jq .`
+   liefert die jüngsten Änderungen inklusive `actor`, `reason` und `approvals`. Exportiere die JSONL-Datei oder Screenshot in das
+   [On-Call-Handbuch](./oncall.md#admission-audit) und verlinke den Export in der [Phase‑3 Acceptance Checklist](phase3_acceptance.md#tier-admission-persistenz--audit).【F:rpp/rpc/src/routes/p2p.rs†L110-L209】【F:docs/runbooks/phase3_acceptance.md†L13-L42】【F:docs/runbooks/oncall.md†L35-L45】
+3. **Retention bestätigen.** Prüfe, dass `network.admission.audit_retention_days` im Konfig-Dump zur Größe der JSONL-Dateien passt;
+   Abweichungen deuten auf fehlende Rotation oder zu kurze Retention hin.【F:rpp/runtime/config.rs†L942-L1004】 Dokumentiere Korrekturen im Incident-Log, damit das Audit-Trail konsistent bleibt.
 
 [^rpc-auth]: RPC endpoints require an `Authorization` header when authentication is enabled; review the [API security hardening guide](../API_SECURITY.md) for token lifecycle management.
 
