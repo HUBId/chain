@@ -1158,6 +1158,8 @@ struct RuntimeSnapshotSession {
     total_updates: u64,
     last_chunk_index: Option<u64>,
     last_update_index: Option<u64>,
+    confirmed_chunk_index: Option<u64>,
+    confirmed_update_index: Option<u64>,
 }
 
 impl RuntimeSnapshotSession {
@@ -1170,6 +1172,8 @@ impl RuntimeSnapshotSession {
             total_updates: self.total_updates,
             last_chunk_index: self.last_chunk_index,
             last_update_index: self.last_update_index,
+            confirmed_chunk_index: self.confirmed_chunk_index,
+            confirmed_update_index: self.confirmed_update_index,
         }
     }
 }
@@ -1185,6 +1189,10 @@ struct StoredSnapshotSession {
     last_chunk_index: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_update_index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    confirmed_chunk_index: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    confirmed_update_index: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -1265,6 +1273,8 @@ impl SnapshotSessionStore {
                 total_updates: record.total_updates,
                 last_chunk_index: record.last_chunk_index,
                 last_update_index: record.last_update_index,
+                confirmed_chunk_index: record.confirmed_chunk_index,
+                confirmed_update_index: record.confirmed_update_index,
             })
             .collect();
         records.sort_by_key(|record| record.session);
@@ -1419,6 +1429,20 @@ impl RuntimeSnapshotProvider {
                 .last_update_index
                 .filter(|index| *index < total_updates)
         };
+        let confirmed_chunk_index = if total_chunks == 0 {
+            None
+        } else {
+            record
+                .confirmed_chunk_index
+                .filter(|index| *index < total_chunks)
+        };
+        let confirmed_update_index = if total_updates == 0 {
+            None
+        } else {
+            record
+                .confirmed_update_index
+                .filter(|index| *index < total_updates)
+        };
 
         Ok(RuntimeSnapshotSession {
             plan: network_plan,
@@ -1429,6 +1453,8 @@ impl RuntimeSnapshotProvider {
             total_updates,
             last_chunk_index,
             last_update_index,
+            confirmed_chunk_index,
+            confirmed_update_index,
         })
     }
 }
@@ -1494,6 +1520,8 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
                 total_updates,
                 last_chunk_index: None,
                 last_update_index: None,
+                confirmed_chunk_index: None,
+                confirmed_update_index: None,
             });
         session.plan = network_plan.clone();
         session.updates = updates.clone();
@@ -1516,6 +1544,28 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             None
         } else {
             session.last_update_index.and_then(|index| {
+                if index < total_updates {
+                    Some(index)
+                } else {
+                    total_updates.checked_sub(1)
+                }
+            })
+        };
+        session.confirmed_chunk_index = if total_chunks == 0 {
+            None
+        } else {
+            session.confirmed_chunk_index.and_then(|index| {
+                if index < total_chunks {
+                    Some(index)
+                } else {
+                    total_chunks.checked_sub(1)
+                }
+            })
+        };
+        session.confirmed_update_index = if total_updates == 0 {
+            None
+        } else {
+            session.confirmed_update_index.and_then(|index| {
                 if index < total_updates {
                     Some(index)
                 } else {
@@ -1628,6 +1678,36 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             return Err(PipelineError::SnapshotVerification(format!(
                 "resume update index {update_index} exceeds total {}",
                 session.total_updates
+            )));
+        }
+        let expected_chunk_index = session
+            .confirmed_chunk_index
+            .or(session.last_chunk_index)
+            .map(|index| index.saturating_add(1).min(session.total_chunks))
+            .unwrap_or(0);
+        if chunk_index < expected_chunk_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume chunk index {chunk_index} precedes next expected chunk {expected_chunk_index}"
+            )));
+        }
+        if chunk_index > expected_chunk_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume chunk index {chunk_index} skips ahead of next expected chunk {expected_chunk_index}"
+            )));
+        }
+        let expected_update_index = session
+            .confirmed_update_index
+            .or(session.last_update_index)
+            .map(|index| index.saturating_add(1).min(session.total_updates))
+            .unwrap_or(0);
+        if update_index < expected_update_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume update index {update_index} precedes next expected update {expected_update_index}"
+            )));
+        }
+        if update_index > expected_update_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume update index {update_index} skips ahead of next expected update {expected_update_index}"
             )));
         }
         Ok(SnapshotResumeState {
