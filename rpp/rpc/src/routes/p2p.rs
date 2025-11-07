@@ -62,7 +62,7 @@ pub struct AdmissionPolicyEntry {
     pub tier: TierLevel,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AdmissionPoliciesResponse {
     pub allowlist: Vec<AdmissionPolicyEntry>,
     pub blocklist: Vec<String>,
@@ -76,7 +76,7 @@ pub struct AdmissionAuditLogQuery {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AdmissionAuditLogResponse {
     pub offset: usize,
     pub limit: usize,
@@ -470,6 +470,17 @@ pub(super) async fn update_admission_policies(
         }
     }
 
+    #[cfg(test)]
+    if let Some(peerstore) = state.test_peerstore() {
+        let audit = AdmissionAuditTrail::new(actor.clone(), reason.clone())
+            .with_approvals(approvals.clone());
+        peerstore
+            .update_admission_policies(allowlist.clone(), blocklist.clone(), audit)
+            .map_err(to_http_error)?;
+        let policies = peerstore.admission_policies();
+        return Ok(Json(AdmissionPoliciesResponse::from(policies)));
+    }
+
     let audit = AdmissionAuditTrail::new(actor, reason).with_approvals(approvals);
     node.update_admission_policies(allowlist, blocklist, audit)
         .map_err(to_http_error)?;
@@ -491,6 +502,18 @@ pub(super) async fn admission_audit_log(
             limit,
             total: 0,
             entries: Vec::new(),
+        }));
+    }
+    #[cfg(test)]
+    if let Some(peerstore) = state.test_peerstore() {
+        let (entries, total) = peerstore
+            .admission_audit_entries(offset, limit)
+            .map_err(to_http_error)?;
+        return Ok(Json(AdmissionAuditLogResponse {
+            offset,
+            limit,
+            total,
+            entries,
         }));
     }
     let (entries, total) = node

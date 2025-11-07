@@ -77,6 +77,7 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
 | `snapshot-cli` | Verifiziert die Snapshot-Backup-/Restore-Skripte und die CLI-Artefakte. | `cargo test --test storage_snapshot` |
 | `observability-snapshot` | Prüft die Snapshot-/Timetoke-Metriken via Prometheus-Scrape und Dashboard-Snapshots. | `cargo xtask test-observability` |
 | `simnet-admission` | Simuliert Gossip-Backpressure und Admission-Policies mit dem Simnet-Szenario `gossip-backpressure`. | `cargo run -p simnet -- --scenario tools/simnet/scenarios/gossip_backpressure.ron` |
+| `rpc-admission-audit` | Prüft den Dual-Control-Guard der Admission-RPC und stellt sicher, dass beide Genehmigungen im Audit-Log landen. | `cargo test -p rpp-chain --locked --test admission` |
 | `unit-suites` | Erzwingt die deterministischen STWO/Firewood/VRF-Unit-Suites. | `cargo xtask test-unit` |
 | `integration-workflows` | Überprüft Blockproduktion, Snapshot-/Light-Client-Pläne und Operator-RPC-Lifecycle. | `cargo xtask test-integration` |
 | `simnet-smoke` | Führt alle drei Simnet-Szenarien (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) aus und protokolliert Artefakte inkl. Tamper-Checks. | `cargo xtask test-simnet` |

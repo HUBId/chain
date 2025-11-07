@@ -49,6 +49,21 @@ pub enum AdmissionPolicyChange {
     Noop,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AdmissionApprovalRecord {
+    pub role: String,
+    pub approver: String,
+}
+
+impl AdmissionApprovalRecord {
+    pub fn new(role: impl Into<String>, approver: impl Into<String>) -> Self {
+        Self {
+            role: role.into(),
+            approver: approver.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdmissionPolicyLogEntry {
     pub id: u64,
@@ -57,6 +72,8 @@ pub struct AdmissionPolicyLogEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     pub change: AdmissionPolicyChange,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approvals: Vec<AdmissionApprovalRecord>,
 }
 
 #[derive(Debug)]
@@ -102,6 +119,7 @@ impl AdmissionPolicyLog {
         &self,
         actor: &str,
         reason: Option<&str>,
+        approvals: &[AdmissionApprovalRecord],
         change: AdmissionPolicyChange,
     ) -> Result<AdmissionPolicyLogEntry, AdmissionPolicyLogError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
@@ -115,6 +133,7 @@ impl AdmissionPolicyLog {
             actor: actor.to_string(),
             reason: reason.map(|value| value.to_string()),
             change,
+            approvals: approvals.to_vec(),
         };
         let encoded = serde_json::to_string(&entry)
             .map_err(|err| AdmissionPolicyLogError::Encoding(err.to_string()))?;

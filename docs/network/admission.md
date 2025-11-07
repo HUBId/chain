@@ -108,6 +108,16 @@ the selected slice. Operators should size retention according to
 keeps writing to the JSONL file while external rotation jobs enforce the
 window.【F:rpp/runtime/config.rs†L942-L1004】【F:docs/configuration.md†L48-L50】
 
+To guard against regressions, the test
+`dual_approval_update_records_audit_approvals` performs a full RPC update with
+operations and security approvals and verifies that the audit log encodes both
+approver records. Run it locally with:
+
+```sh
+cargo test -p rpp-chain --locked --test admission -- \
+  dual_approval_update_records_audit_approvals
+```
+
 ### Policy backups and restores
 
 Every successful policy mutation also emits a timestamped snapshot in the

@@ -110,6 +110,8 @@ use blake3::Hash as Blake3Hash;
 use parking_lot::{Mutex, RwLock};
 use rpp::node::VerificationErrorKind;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
+#[cfg(test)]
+use rpp_p2p::Peerstore;
 use rpp_p2p::{
     AdmissionApproval, AdmissionAuditTrail, AllowlistedPeer, LightClientHead,
     NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk, NetworkStateSyncPlan,
@@ -125,7 +127,10 @@ use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_key
 
 #[path = "src/routes/mod.rs"]
 mod routes;
-pub use routes::p2p::{cancel_snapshot_stream, snapshot_stream_status, start_snapshot_stream};
+pub use routes::p2p::{
+    admission_audit_log, cancel_snapshot_stream, snapshot_stream_status, start_snapshot_stream,
+    update_admission_policies,
+};
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
 pub use routes::state_sync::{
     chunk_by_id as state_sync_chunk_by_id, head_stream as state_sync_head_stream,
@@ -357,6 +362,8 @@ pub struct ApiContext {
     wallet_runtime_active: bool,
     pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
     snapshot_runtime: Option<Arc<dyn SnapshotStreamRuntime>>,
+    #[cfg(test)]
+    test_peerstore: Option<Arc<Peerstore>>,
 }
 
 impl ApiContext {
@@ -401,6 +408,8 @@ impl ApiContext {
             wallet_runtime_active,
             pruning_status,
             snapshot_runtime: None,
+            #[cfg(test)]
+            test_peerstore: None,
         }
     }
 
@@ -534,6 +543,17 @@ impl ApiContext {
     pub fn with_snapshot_runtime(mut self, runtime: Arc<dyn SnapshotStreamRuntime>) -> Self {
         self.snapshot_runtime = Some(runtime);
         self
+    }
+
+    #[cfg(test)]
+    pub fn with_test_peerstore(mut self, peerstore: Arc<Peerstore>) -> Self {
+        self.test_peerstore = Some(peerstore);
+        self
+    }
+
+    #[cfg(test)]
+    fn test_peerstore(&self) -> Option<Arc<Peerstore>> {
+        self.test_peerstore.as_ref().map(Arc::clone)
     }
 
     #[cfg(feature = "vendor_electrs")]
