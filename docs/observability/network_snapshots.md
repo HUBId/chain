@@ -57,9 +57,9 @@ intervals.
 - Confirm metrics availability with the integration test
   `tests/network/snapshots.rs`, which establishes a producer/consumer pair,
   scrapes `/metrics`, and asserts non-zero throughput.
-- Tie alerts back to the runbook steps in
-  `docs/runbooks/network_snapshot_failover.md` so on-call engineers can restart
-  stalled streams and replay missing chunks.
+- Tie alerts back to the runbook steps in the
+  [network snapshot failover runbook](../runbooks/network_snapshot_failover.md)
+  so on-call engineers can restart stalled streams and replay missing chunks.
 - Surface the gauges on the pipeline overview dashboard (see
   `docs/observability/pipeline.md`) to provide an end-to-end picture from wallet
   intake through snapshot distribution.

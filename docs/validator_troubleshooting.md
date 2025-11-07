@@ -72,6 +72,9 @@ configured bearer token when RPC auth is enabled.
   shows utilisation consistently above 80%.
 - Keep `rollout.feature_gates.reconstruction` enabled so the runtime continues
   to publish reconstruction data.
+- When consumers report stalled resumes, follow the
+  [network snapshot failover runbook](runbooks/network_snapshot_failover.md) to
+  restart providers, replay missing chunks, and confirm telemetry has recovered.
 
 ## Telemetry Not Emitting
 
