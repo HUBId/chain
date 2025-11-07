@@ -75,8 +75,9 @@ Dieser Plan gliedert die Umsetzung des Blueprint 2.3 in klar umrissene Lieferg
     - Fuzzing/Property-Tests für Decoder und Admission-Control.
     - Konfigurierbare Zugriffslisten: `p2p.allowlist` (Default: `[]`) fixiert Tier-Level erlaubter Peers,
       `p2p.blocklist` (Default: `[]`) sperrt Peers dauerhaft bereits beim Handshake.
-    - Hot-Reload der Allow-/Blocklists erfolgt per RPC `POST /p2p/access-lists`; der Peerstore persistiert die aktiven Listen,
-      damit Neustarts ohne Konfigurationsdatei-Anpassungen konsistent bleiben.
+    - Hot-Reload der Allow-/Blocklists erfolgt per RPC `POST /p2p/admission/policies`; `GET /p2p/admission/policies`
+      liefert die persistierten Tiers und Blocklist, während der Peerstore jede Mutation mit Audit-Telemetrie versieht,
+      damit Neustarts ohne Konfigurationsdatei-Anpassungen konsistent bleiben.【F:rpp/rpc/src/routes/p2p.rs†L126-L209】【F:rpp/p2p/src/peerstore.rs†L1007-L1189】
     - DoD-Nachweis: `rpp/p2p/tests/access_control.rs` prüft Hot-Reload, Persistenz und das Entfernen von Blocklist-Einträgen.
     - DoD: Sicherheits-Tests laufen in CI, bekannte Angriffsvektoren mitigiert.
 

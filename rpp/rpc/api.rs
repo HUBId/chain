@@ -111,8 +111,8 @@ use parking_lot::{Mutex, RwLock};
 use rpp::node::VerificationErrorKind;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
-    AllowlistedPeer, LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
-    NetworkStateSyncChunk, NetworkStateSyncPlan, SnapshotChunk,
+    AdmissionAuditTrail, AllowlistedPeer, LightClientHead, NetworkMetaTelemetryReport,
+    NetworkPeerTelemetry, NetworkStateSyncChunk, NetworkStateSyncPlan, SnapshotChunk,
 };
 use rustls::crypto::aws_lc_rs;
 use rustls::pki_types::{
@@ -1365,6 +1365,10 @@ where
         .route("/validator/uptime", post(validator_submit_uptime))
         .route("/p2p/peers", get(p2p_meta_telemetry))
         .route("/p2p/censorship", get(p2p_censorship_report))
+        .route(
+            "/p2p/admission/policies",
+            get(routes::p2p::admission_policies).post(routes::p2p::update_admission_policies),
+        )
         .route("/p2p/snapshots", post(routes::p2p::start_snapshot_stream))
         .route(
             "/p2p/snapshots/:id",
@@ -2297,8 +2301,8 @@ async fn update_access_lists(
         }
     }
 
-    node.reload_access_lists(allowlist, blocklist)
-        .await
+    let audit = AdmissionAuditTrail::new("rpc.legacy_access_lists", Some("POST /p2p/access-lists"));
+    node.update_admission_policies(allowlist, blocklist, audit)
         .map_err(to_http_error)?;
     Ok(StatusCode::NO_CONTENT)
 }

@@ -12,6 +12,7 @@ use base64::{engine::general_purpose, Engine as _};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::info;
 
 use crate::handshake::{
     emit_handshake_telemetry, HandshakeOutcome, HandshakePayload, TelemetryMetadata,
@@ -334,6 +335,59 @@ pub struct AllowlistedPeer {
     pub tier: TierLevel,
 }
 
+#[derive(Debug, Clone)]
+pub struct AdmissionPolicies {
+    pub allowlist: Vec<AllowlistedPeer>,
+    pub blocklist: Vec<PeerId>,
+}
+
+impl AdmissionPolicies {
+    pub fn new(allowlist: Vec<AllowlistedPeer>, blocklist: Vec<PeerId>) -> Self {
+        Self {
+            allowlist,
+            blocklist,
+        }
+    }
+
+    pub fn allowlist(&self) -> &[AllowlistedPeer] {
+        &self.allowlist
+    }
+
+    pub fn blocklist(&self) -> &[PeerId] {
+        &self.blocklist
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AdmissionAuditTrail {
+    actor: String,
+    reason: Option<String>,
+}
+
+impl AdmissionAuditTrail {
+    pub fn new(actor: impl Into<String>, reason: Option<impl Into<String>>) -> Self {
+        Self {
+            actor: actor.into(),
+            reason: reason.map(|value| value.into()),
+        }
+    }
+
+    pub fn system(reason: impl Into<String>) -> Self {
+        Self {
+            actor: "system".into(),
+            reason: Some(reason.into()),
+        }
+    }
+
+    pub fn actor(&self) -> &str {
+        self.actor.as_str()
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+}
+
 pub struct PeerstoreConfig {
     path: Option<PathBuf>,
     identity_verifier: Option<Arc<dyn IdentityVerifier>>,
@@ -486,6 +540,12 @@ impl Peerstore {
         store.apply_access_control()?;
         store.persist_access_lists()?;
         Ok(store)
+    }
+
+    pub fn admission_policies(&self) -> AdmissionPolicies {
+        let allowlist = self.allowlist.read().clone();
+        let blocklist = self.blocklisted.read().iter().cloned().collect::<Vec<_>>();
+        AdmissionPolicies::new(allowlist, blocklist)
     }
 
     pub fn record_public_key(
@@ -958,6 +1018,28 @@ impl Peerstore {
         allowlist: Vec<AllowlistedPeer>,
         blocklist: Vec<PeerId>,
     ) -> Result<(), PeerstoreError> {
+        self.commit_access_lists(
+            allowlist,
+            blocklist,
+            AdmissionAuditTrail::system("peerstore.reload_access_lists"),
+        )
+    }
+
+    pub fn update_admission_policies(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+        audit: AdmissionAuditTrail,
+    ) -> Result<(), PeerstoreError> {
+        self.commit_access_lists(allowlist, blocklist, audit)
+    }
+
+    fn commit_access_lists(
+        &self,
+        allowlist: Vec<AllowlistedPeer>,
+        blocklist: Vec<PeerId>,
+        audit: AdmissionAuditTrail,
+    ) -> Result<(), PeerstoreError> {
         let new_blocklisted: HashSet<PeerId> = blocklist.iter().cloned().collect();
         let previous_blocklisted = {
             let mut guard = self.blocklisted.write();
@@ -965,11 +1047,12 @@ impl Peerstore {
             *guard = new_blocklisted.clone();
             previous
         };
-
-        {
+        let previous_allowlist = {
             let mut guard = self.allowlist.write();
+            let previous = guard.clone();
             *guard = allowlist.clone();
-        }
+            previous
+        };
 
         {
             let mut peers = self.peers.write();
@@ -994,7 +1077,116 @@ impl Peerstore {
         }
 
         self.persist_access_lists()?;
-        self.persist()
+        self.persist()?;
+
+        self.emit_admission_audit(
+            &audit,
+            &previous_allowlist,
+            &allowlist,
+            &previous_blocklisted,
+            &new_blocklisted,
+        );
+
+        Ok(())
+    }
+
+    fn emit_admission_audit(
+        &self,
+        audit: &AdmissionAuditTrail,
+        previous_allowlist: &[AllowlistedPeer],
+        next_allowlist: &[AllowlistedPeer],
+        previous_blocklisted: &HashSet<PeerId>,
+        next_blocklisted: &HashSet<PeerId>,
+    ) {
+        let actor = audit.actor();
+        let reason = audit.reason().unwrap_or("n/a");
+        let previous_map: HashMap<PeerId, TierLevel> = previous_allowlist
+            .iter()
+            .map(|entry| (entry.peer, entry.tier))
+            .collect();
+        let next_map: HashMap<PeerId, TierLevel> = next_allowlist
+            .iter()
+            .map(|entry| (entry.peer, entry.tier))
+            .collect();
+        let mut mutated = false;
+
+        for (peer, new_tier) in &next_map {
+            match previous_map.get(peer) {
+                None => {
+                    mutated = true;
+                    info!(
+                        target: "telemetry.admission",
+                        actor = %actor,
+                        reason,
+                        peer = %peer.to_base58(),
+                        tier = ?new_tier,
+                        "admission_allowlist_added"
+                    );
+                }
+                Some(old_tier) if old_tier != new_tier => {
+                    mutated = true;
+                    info!(
+                        target: "telemetry.admission",
+                        actor = %actor,
+                        reason,
+                        peer = %peer.to_base58(),
+                        previous_tier = ?old_tier,
+                        tier = ?new_tier,
+                        "admission_allowlist_updated"
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        for (peer, old_tier) in &previous_map {
+            if !next_map.contains_key(peer) {
+                mutated = true;
+                info!(
+                    target: "telemetry.admission",
+                    actor = %actor,
+                    reason,
+                    peer = %peer.to_base58(),
+                    previous_tier = ?old_tier,
+                    "admission_allowlist_removed"
+                );
+            }
+        }
+
+        for peer in next_blocklisted {
+            if !previous_blocklisted.contains(peer) {
+                mutated = true;
+                info!(
+                    target: "telemetry.admission",
+                    actor = %actor,
+                    reason,
+                    peer = %peer.to_base58(),
+                    "admission_blocklist_added"
+                );
+            }
+        }
+
+        for peer in previous_blocklisted {
+            if !next_blocklisted.contains(peer) {
+                mutated = true;
+                info!(
+                    target: "telemetry.admission",
+                    actor = %actor,
+                    reason,
+                    peer = %peer.to_base58(),
+                    "admission_blocklist_removed"
+                );
+            }
+        }
+
+        if !mutated {
+            info!(
+                target: "telemetry.admission",
+                actor = %actor,
+                reason,
+                "admission_policies_unchanged"
+            );
+        }
     }
 
     fn blocklist_ban_until() -> SystemTime {

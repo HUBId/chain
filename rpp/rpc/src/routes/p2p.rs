@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 
 use axum::{
@@ -9,10 +10,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::super::{
-    snapshot_runtime_error_to_http, ApiContext, ErrorResponse, SnapshotStreamRuntimeError,
+    snapshot_runtime_error_to_http, to_http_error, ApiContext, ErrorResponse,
+    SnapshotStreamRuntimeError,
 };
 use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
+use rpp_p2p::{AdmissionAuditTrail, AdmissionPolicies, AllowlistedPeer, TierLevel};
 
 #[derive(Debug, Deserialize)]
 pub struct StartSnapshotStreamRequest {
@@ -44,6 +47,29 @@ pub struct SnapshotStreamStatusResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdmissionPolicyEntry {
+    pub peer_id: String,
+    pub tier: TierLevel,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdmissionPoliciesResponse {
+    pub allowlist: Vec<AdmissionPolicyEntry>,
+    pub blocklist: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateAdmissionPoliciesRequest {
+    #[serde(default)]
+    pub allowlist: Vec<AdmissionPolicyEntry>,
+    #[serde(default)]
+    pub blocklist: Vec<String>,
+    pub actor: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
 impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
     fn from(status: SnapshotStreamStatus) -> Self {
         Self {
@@ -55,6 +81,29 @@ impl From<SnapshotStreamStatus> for SnapshotStreamStatusResponse {
             last_update_height: status.last_update_height,
             verified: status.verified,
             error: status.error,
+        }
+    }
+}
+
+impl From<AdmissionPolicies> for AdmissionPoliciesResponse {
+    fn from(policies: AdmissionPolicies) -> Self {
+        let allowlist = policies
+            .allowlist
+            .into_iter()
+            .map(|entry| AdmissionPolicyEntry {
+                peer_id: entry.peer.to_base58(),
+                tier: entry.tier,
+            })
+            .collect();
+        let mut blocklist: Vec<String> = policies
+            .blocklist
+            .into_iter()
+            .map(|peer| peer.to_base58())
+            .collect();
+        blocklist.sort();
+        Self {
+            allowlist,
+            blocklist,
         }
     }
 }
@@ -106,4 +155,78 @@ pub(super) async fn snapshot_stream_status(
     })?;
 
     Ok(Json(SnapshotStreamStatusResponse::from(status)))
+}
+
+pub(super) async fn admission_policies(
+    State(state): State<ApiContext>,
+) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let policies = node.admission_policies();
+    Ok(Json(AdmissionPoliciesResponse::from(policies)))
+}
+
+pub(super) async fn update_admission_policies(
+    State(state): State<ApiContext>,
+    Json(request): Json<UpdateAdmissionPoliciesRequest>,
+) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let node = state.require_node()?;
+    let actor = request.actor.trim();
+    if actor.is_empty() {
+        return Err(super::super::bad_request("actor must not be empty"));
+    }
+
+    let reason = request
+        .reason
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let mut allowlist = Vec::with_capacity(request.allowlist.len());
+    let mut allow_seen = HashSet::new();
+    for entry in request.allowlist {
+        let peer = NetworkPeerId::from_str(&entry.peer_id).map_err(|err| {
+            super::super::bad_request(format!("invalid allowlist peer `{}`: {err}", entry.peer_id))
+        })?;
+        if !allow_seen.insert(peer.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate allowlist entry for peer `{}`",
+                entry.peer_id
+            )));
+        }
+        allowlist.push(AllowlistedPeer {
+            peer,
+            tier: entry.tier,
+        });
+    }
+
+    let mut blocklist = Vec::with_capacity(request.blocklist.len());
+    let mut block_seen = HashSet::new();
+    for value in request.blocklist {
+        let peer = NetworkPeerId::from_str(&value).map_err(|err| {
+            super::super::bad_request(format!("invalid blocklist peer `{value}`: {err}"))
+        })?;
+        if !block_seen.insert(peer.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate blocklist entry for peer `{value}`"
+            )));
+        }
+        blocklist.push(peer);
+    }
+
+    for entry in &allowlist {
+        if block_seen.contains(&entry.peer) {
+            return Err(super::super::bad_request(format!(
+                "peer `{}` cannot be in allowlist and blocklist",
+                entry.peer.to_base58()
+            )));
+        }
+    }
+
+    let audit = AdmissionAuditTrail::new(actor, reason);
+    node.update_admission_policies(allowlist, blocklist, audit)
+        .map_err(to_http_error)?;
+
+    let policies = node.admission_policies();
+    Ok(Json(AdmissionPoliciesResponse::from(policies)))
 }
