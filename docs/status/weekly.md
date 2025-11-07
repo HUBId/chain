@@ -83,6 +83,8 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 
 Dieser Abschnitt dient als fortlaufende Vorlage für Phase‑3-Updates. Neue Einträge werden jeweils unter den bestehenden Tabellen ergänzt; erledigte Artefakte bleiben zur Nachverfolgung bestehen, offene Punkte verweisen auf Owner, Backlog-Items oder Checklisten.
 
+Die [Compliance Overview](../governance/compliance_overview.md) listet Phase‑3-Kontrollen, Evidenzlinks und Restarbeiten, damit Audits denselben Informationsstand wie das Programmteam besitzen.
+
 ### Artefaktstatus
 
 | Kategorie | Deliverable | Status | Nachweise / Links |
