@@ -17,9 +17,11 @@ runbooks and the security guidance in [`SECURITY.md`](../SECURITY.md).
   update the relevant security documents (`THREAT_MODEL`, `KEY_MANAGEMENT`,
   `API_SECURITY`) alongside code to keep operators aligned with implementation
   reality.
-- **Branch protection.** Maintainers must keep the `fmt`, `clippy`, and
-  `tests-stwo` GitHub Actions jobs configured as required status checks on the
-  protected branch (`<PRIMARY_BRANCH_OR_COMMIT>`). When onboarding a new fork or
+- **Branch protection.** Maintainers must keep the `fmt`, `clippy`,
+  `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`,
+  `observability-snapshot`, `simnet-admission`, and `runtime-smoke` GitHub
+  Actions jobs configured as required status checks on the protected branch
+  (`<PRIMARY_BRANCH_OR_COMMIT>`). When onboarding a new fork or
   environment, update the branch protection rule through the repository
   settings or the GitHub CLI:
 
@@ -31,7 +33,17 @@ runbooks and the security guidance in [`SECURITY.md`](../SECURITY.md).
   {
     "required_status_checks": {
       "strict": true,
-      "contexts": ["fmt", "clippy", "tests-stwo"]
+      "contexts": [
+        "fmt",
+        "clippy",
+        "tests-default",
+        "tests-stwo",
+        "tests-rpp-stark",
+        "snapshot-cli",
+        "observability-snapshot",
+        "simnet-admission",
+        "runtime-smoke"
+      ]
     }
   }
   JSON
