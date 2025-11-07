@@ -14,7 +14,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 use super::node::IdentityProfile;
-use crate::config::{FeatureGates, P2pAllowlistEntry, P2pConfig};
+use crate::config::{FeatureGates, NetworkAdmissionConfig, P2pAllowlistEntry, P2pConfig};
 
 /// Resolved libp2p networking configuration used by the runtime.
 #[derive(Clone, Debug)]
@@ -151,12 +151,14 @@ impl NetworkResources {
         identity_path: &Path,
         config: &NetworkConfig,
         p2p_config: &P2pConfig,
+        admission: &NetworkAdmissionConfig,
         identity_profile: Option<IdentityProfile>,
         feature_gates: FeatureGates,
         snapshot_provider: Option<SnapshotProviderHandle>,
     ) -> Result<Self, NetworkSetupError> {
         let identity = Arc::new(NodeIdentity::load_or_generate(identity_path)?);
         let peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
+            .with_access_path(admission.policy_path.clone())
             .with_allowlist(config.allowlist().to_vec())
             .with_blocklist(config.blocklist().to_vec());
         let peerstore = Arc::new(Peerstore::open(peerstore_config)?);

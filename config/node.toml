@@ -47,6 +47,46 @@ replenish_per_minute = 60
 enabled = false
 require_client_auth = false
 
+[network.admission]
+policy_path = "./data/p2p/admission_policies.json"
+audit_retention_days = 30
+
+[network.admission.defaults.blocks]
+subscribe = "tl0"
+publish = "tl3"
+
+[network.admission.defaults.votes]
+subscribe = "tl0"
+publish = "tl3"
+
+[network.admission.defaults.proofs]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.vrf_proofs]
+subscribe = "tl0"
+publish = "tl2"
+
+[network.admission.defaults.snapshots]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.meta]
+subscribe = "tl0"
+publish = "tl0"
+
+[network.admission.defaults.vrf_meta]
+subscribe = "tl0"
+publish = "tl1"
+
+[network.admission.defaults.witness_proofs]
+subscribe = "tl0"
+publish = "tl2"
+
+[network.admission.defaults.witness_meta]
+subscribe = "tl0"
+publish = "tl1"
+
 [network.p2p]
 listen_addr = "/ip4/0.0.0.0/tcp/7600"
 bootstrap_peers = []
