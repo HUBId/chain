@@ -17,6 +17,10 @@ All notable changes to this project will be documented in this file.
 
 ### 📚 Documentation
 
+- Flag the expanded branch-protection gates in the contributor guide, testing
+  strategy, and governance review checklist so everyone sees the new
+  `snapshot-cli`, `observability-snapshot`, `simnet-admission`, and
+  `runtime-smoke` requirements before merging.【F:CONTRIBUTING.md†L29-L52】【F:docs/test_validation_strategy.md†L104-L145】【F:docs/governance/review_process.md†L1-L53】【F:docs/GOVERNANCE.md†L19-L44】
 - Detail the VRF/quorum proof constraints and failure modes in the consensus ADR and architecture foundations so reviewers can trace the new public inputs across circuits, runtime verifiers, and regression tests.【F:docs/adr/0001_consensus_proofs.md†L15-L44】【F:docs/architecture_foundations.md†L45-L86】
 
 - Capture the Plonky3 production graduation, including updated telemetry
