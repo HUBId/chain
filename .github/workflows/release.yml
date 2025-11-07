@@ -272,6 +272,27 @@ jobs:
             ./scripts/provenance_attest.sh --artifact "$file" --target "$target" --subject "$subject"
           done
           cosign sign-blob --yes --output-signature dist/SHA256SUMS.txt.sig --output-certificate dist/SHA256SUMS.txt.pem dist/SHA256SUMS.txt
+      - name: Reference snapshot summaries in release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t summaries < <(find dist/artifacts -name 'snapshot-manifest-summary-*.json' -print | sort)
+          if [[ ${#summaries[@]} -eq 0 ]]; then
+            echo "No snapshot summaries detected; skipping release note update"
+            exit 0
+          fi
+          {
+            printf '\n## Snapshot bundle metadata\n\n'
+            printf 'The release ships pruning snapshot metadata summaries alongside the bundle:\n\n'
+            for summary in "${summaries[@]}"; do
+              rel=${summary#dist/artifacts/}
+              printf -- '- `%s`\n' "$rel"
+            done
+            cat <<'EOF'
+
+Each JSON summary enumerates the manifest identifier, Firewood state root, and chunk count extracted from the persisted state-sync plan. Operators can validate the entries by recomputing `jq '.chunks | length'` against the corresponding `snapshot-<height>.json` plan and replaying the Light Client verification flow documented in the pruning operations runbook.
+EOF
+          } >> dist/release-notes.md
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
