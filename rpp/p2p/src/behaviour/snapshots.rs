@@ -154,6 +154,14 @@ pub enum SnapshotsResponse {
 pub trait SnapshotProvider: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
 
+    fn open_session(
+        &self,
+        _session_id: SnapshotSessionId,
+        _peer: &PeerId,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
     fn fetch_plan(
         &self,
         session_id: SnapshotSessionId,
@@ -188,6 +196,14 @@ pub trait SnapshotProvider: Send + Sync + 'static {
 
 impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
     type Error = T::Error;
+
+    fn open_session(
+        &self,
+        session_id: SnapshotSessionId,
+        peer: &PeerId,
+    ) -> Result<(), Self::Error> {
+        (**self).open_session(session_id, peer)
+    }
 
     fn fetch_plan(
         &self,
@@ -804,6 +820,32 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         request: SnapshotsRequest,
         channel: RequestResponseChannel<SnapshotsResponse>,
     ) {
+        let session_id = match &request {
+            SnapshotsRequest::Plan { session_id }
+            | SnapshotsRequest::Chunk { session_id, .. }
+            | SnapshotsRequest::LightClientUpdate { session_id, .. }
+            | SnapshotsRequest::Resume { session_id, .. }
+            | SnapshotsRequest::Ack { session_id, .. }
+            | SnapshotsRequest::Error { session_id, .. } => *session_id,
+        };
+
+        if let Err(err) = self.provider.open_session(session_id, &peer) {
+            let message = err.to_string();
+            let _ = self.inner.send_response(
+                channel,
+                SnapshotsResponse::Error {
+                    session_id,
+                    message: message.clone(),
+                },
+            );
+            self.pending_events.push_back(SnapshotsEvent::Error {
+                peer,
+                session_id,
+                error: SnapshotProtocolError::Provider(message),
+            });
+            return;
+        }
+
         match request {
             SnapshotsRequest::Plan { session_id } => match self.provider.fetch_plan(session_id) {
                 Ok(plan) => match serde_json::to_vec(&plan) {

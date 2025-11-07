@@ -2,6 +2,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use rand::rngs::OsRng;
+use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     handshake::HandshakePayload, Network, NetworkBlockMetadata, NetworkEvent,
     NetworkGlobalStateCommitments, NetworkLightClientUpdate, NetworkPayloadExpectations,
@@ -113,6 +114,14 @@ impl MockSnapshotProvider {
 
 impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
     type Error = PipelineError;
+
+    fn open_session(
+        &self,
+        _session_id: SnapshotSessionId,
+        _peer: &PeerId,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
 
     fn fetch_plan(
         &self,
