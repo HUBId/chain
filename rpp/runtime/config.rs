@@ -959,12 +959,66 @@ impl Default for AdmissionDefaultsConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
+pub struct AdmissionSigningConfig {
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_key: Option<String>,
+    #[serde(default)]
+    pub trust_store: BTreeMap<String, String>,
+}
+
+impl AdmissionSigningConfig {
+    fn validate(&self) -> ChainResult<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let path = self.key_path.as_ref().ok_or_else(|| {
+            ChainError::Config("network.admission.signing.key_path must be configured".into())
+        })?;
+        if path.as_os_str().is_empty() {
+            return Err(ChainError::Config(
+                "network.admission.signing.key_path must not be empty".into(),
+            ));
+        }
+        let key_id = self.active_key.as_ref().ok_or_else(|| {
+            ChainError::Config("network.admission.signing.active_key must be configured".into())
+        })?;
+        if key_id.trim().is_empty() {
+            return Err(ChainError::Config(
+                "network.admission.signing.active_key must not be empty".into(),
+            ));
+        }
+        if !self.trust_store.contains_key(key_id) {
+            return Err(ChainError::Config(format!(
+                "network.admission.signing.trust_store missing entry for `{key_id}`"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl Default for AdmissionSigningConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            key_path: None,
+            active_key: None,
+            trust_store: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct NetworkAdmissionConfig {
     pub policy_path: PathBuf,
     pub audit_retention_days: u64,
     pub backup_dir: PathBuf,
     pub backup_retention_days: u64,
     pub defaults: AdmissionDefaultsConfig,
+    pub signing: AdmissionSigningConfig,
 }
 
 impl NetworkAdmissionConfig {
@@ -989,6 +1043,7 @@ impl NetworkAdmissionConfig {
                 "network.admission.backup_retention_days must be greater than 0".into(),
             ));
         }
+        self.signing.validate()?;
         Ok(())
     }
 }
@@ -1001,6 +1056,7 @@ impl Default for NetworkAdmissionConfig {
             backup_dir: default_admission_backup_dir(),
             backup_retention_days: 30,
             defaults: AdmissionDefaultsConfig::default(),
+            signing: AdmissionSigningConfig::default(),
         }
     }
 }

@@ -69,6 +69,51 @@ Restores are audited like regular policy updates. After the RPC call returns,
 confirm the change via `GET /p2p/admission/policies` and attach the retrieved
 backup to the incident record.
 
+## Signed attestations and verification
+
+Admission policy snapshots and every audit log entry are signed with the active
+admission signing key declared under `network.admission.signing` in the node
+configuration. The peerstore rehydrates unsigned snapshots at startup and
+persists the canonical JSON together with a signature so operators can prove
+the provenance of every allowlist and audit artifact.【F:rpp/p2p/src/peerstore.rs†L1206-L1260】
+
+Use the validator CLI to verify both the live snapshot and a configurable
+window of audit entries against the trusted public keys shipped with the node
+configuration:
+
+```sh
+rpp-node validator admission verify --audit-limit 100
+```
+
+The command fetches the current policies and audit history via RPC, rebuilds
+the canonical payload, and validates each signature before reporting success or
+failing fast with a descriptive error.【F:rpp/node/src/main.rs†L1023-L1144】 Make
+the verification step part of reconciliations and change reviews so incident
+notes include proof that the data under inspection was produced by the signing
+key currently in rotation.
+
+## Signing key rotation
+
+Store the admission signing key in the medium mandated by the deployment
+profile (filesystem, HSM, or Vault). The node expects an Ed25519 secret in the
+same TOML format as other key material and derives the public key for the trust
+store during startup.【F:rpp/p2p/src/policy_signing.rs†L76-L161】 Rotate the key on
+the cadence agreed with security (monthly for production) and follow the steps
+below:
+
+1. Generate a fresh Ed25519 signing key and update the trust store map in
+   `network.admission.signing.trust_store` with the new public key while keeping
+   the previous entries so historical signatures remain verifiable.【F:rpp/runtime/config.rs†L940-L1005】
+2. Point `network.admission.signing.key_path` (or the equivalent HSM identifier)
+   to the new secret and update `active_key` to the matching identifier.【F:rpp/runtime/config.rs†L952-L1005】
+3. Restart the validator. On boot the peerstore will re-sign the snapshot with
+   the active key and continue signing audit entries automatically.【F:rpp/p2p/src/peerstore.rs†L699-L758】
+4. Run `rpp-node validator admission verify` and attach the CLI output to the
+   change ticket as evidence that the new key is active and trusted.
+
+Retire obsolete keys from the trust store only after the signed artifacts have
+aged out of retention so operators can still verify historical admissions.
+
 ## Reconciliation checks
 
 The node runs a background admission reconciler that continuously compares the

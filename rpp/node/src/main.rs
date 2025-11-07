@@ -17,6 +17,9 @@ use rpp_chain::runtime::RuntimeMetrics;
 use rpp_chain::storage::Storage;
 use rpp_chain::wallet::Wallet;
 use rpp_node::{BootstrapError, RuntimeMode};
+use rpp_p2p::{
+    AdmissionPolicyLogEntry, PolicySignature, PolicySignatureVerifier, PolicyTrustStore, TierLevel,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task;
@@ -174,6 +177,8 @@ enum AdmissionCommand {
     Backups(AdmissionBackupsCommand),
     /// Restore admission policies from a downloaded backup archive
     Restore(AdmissionRestoreCommand),
+    /// Verify admission policy snapshot and audit log signatures via the RPC service
+    Verify(AdmissionVerifyCommand),
 }
 
 #[derive(Subcommand)]
@@ -242,6 +247,16 @@ struct AdmissionRestoreCommand {
     /// Optional approval entries in ROLE:APPROVER format
     #[arg(long = "approval", value_name = "ROLE:APPROVER")]
     approvals: Vec<String>,
+}
+
+#[derive(Args, Clone)]
+struct AdmissionVerifyCommand {
+    #[command(flatten)]
+    connection: AdmissionConnectionArgs,
+
+    /// Number of audit log entries to verify (0 fetches the full log)
+    #[arg(long, value_name = "COUNT", default_value_t = 50)]
+    audit_limit: usize,
 }
 
 #[derive(Args, Clone)]
@@ -563,6 +578,7 @@ async fn handle_admission_command(command: AdmissionCommand) -> Result<()> {
     match command {
         AdmissionCommand::Backups(command) => handle_admission_backups(command).await,
         AdmissionCommand::Restore(command) => restore_admission_backup_cli(command).await,
+        AdmissionCommand::Verify(command) => verify_admission_signatures(command).await,
     }
 }
 
@@ -642,6 +658,34 @@ struct AdmissionBackupRpcEntry {
     name: String,
     timestamp_ms: u64,
     size: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct AdmissionPolicyEntry {
+    peer_id: String,
+    tier: TierLevel,
+}
+
+#[derive(Deserialize)]
+struct AdmissionPoliciesRpcResponse {
+    allowlist: Vec<AdmissionPolicyEntry>,
+    blocklist: Vec<String>,
+    #[serde(default)]
+    signature: Option<PolicySignature>,
+}
+
+#[derive(Serialize)]
+struct AdmissionSnapshotCanonical {
+    allowlist: Vec<AdmissionPolicyEntry>,
+    blocklist: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AdmissionAuditRpcResponse {
+    offset: usize,
+    limit: usize,
+    total: usize,
+    entries: Vec<AdmissionPolicyLogEntry>,
 }
 
 #[derive(Serialize)]
@@ -1018,6 +1062,149 @@ async fn restore_admission_backup_cli(args: AdmissionRestoreCommand) -> Result<(
     Ok(())
 }
 
+async fn verify_admission_signatures(args: AdmissionVerifyCommand) -> Result<()> {
+    let AdmissionVerifyCommand {
+        connection,
+        audit_limit,
+    } = args;
+    const ADMISSION_AUDIT_PAGE_SIZE: usize = 512;
+    let client = AdmissionRpcClient::new(&connection)?;
+    let config = load_validator_config(&connection.config.config)?;
+    if config.network.admission.signing.trust_store.is_empty() {
+        anyhow::bail!(
+            "network.admission.signing.trust_store is empty; configure trusted signing keys"
+        );
+    }
+    let trust_store =
+        PolicyTrustStore::from_hex(config.network.admission.signing.trust_store.clone())
+            .map_err(|err| anyhow!(err.to_string()))?;
+    let verifier = PolicySignatureVerifier::new(trust_store);
+
+    let mut policies_request = client
+        .client
+        .get(client.endpoint("/p2p/admission/policies"));
+    policies_request = client.with_auth(policies_request);
+    let response = policies_request
+        .send()
+        .await
+        .context("failed to fetch admission policies")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode admission policies payload")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+    let policies: AdmissionPoliciesRpcResponse =
+        serde_json::from_str(&body).context("invalid admission policies payload")?;
+    let signature = policies
+        .signature
+        .clone()
+        .ok_or_else(|| anyhow!("admission policy snapshot is missing a signature"))?;
+    let snapshot_bytes = canonical_snapshot_bytes(&policies)?;
+    verifier
+        .verify(&signature, &snapshot_bytes)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    println!(
+        "admission policy snapshot signature verified with key `{}`",
+        signature.key_id
+    );
+
+    let mut limit = audit_limit;
+    if limit == 0 {
+        let mut meta_request = client
+            .client
+            .get(client.endpoint("/p2p/admission/audit"))
+            .query(&[("offset", 0usize), ("limit", 0usize)]);
+        meta_request = client.with_auth(meta_request);
+        let response = meta_request
+            .send()
+            .await
+            .context("failed to fetch admission audit metadata")?;
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .context("failed to decode admission audit metadata")?;
+        if !status.is_success() {
+            anyhow::bail!("RPC returned {}: {}", status, body.trim());
+        }
+        let payload: AdmissionAuditRpcResponse =
+            serde_json::from_str(&body).context("invalid admission audit metadata")?;
+        limit = payload.total;
+    }
+
+    let mut verified_entries = 0usize;
+    if limit > 0 {
+        let mut offset = 0usize;
+        while verified_entries < limit {
+            let remaining = limit - verified_entries;
+            let page_size = remaining.min(ADMISSION_AUDIT_PAGE_SIZE).max(1);
+            let mut audit_request = client
+                .client
+                .get(client.endpoint("/p2p/admission/audit"))
+                .query(&[("offset", offset), ("limit", page_size)]);
+            audit_request = client.with_auth(audit_request);
+            let response = audit_request
+                .send()
+                .await
+                .context("failed to fetch admission audit log")?;
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .context("failed to decode admission audit payload")?;
+            if !status.is_success() {
+                anyhow::bail!("RPC returned {}: {}", status, body.trim());
+            }
+            let payload: AdmissionAuditRpcResponse =
+                serde_json::from_str(&body).context("invalid admission audit payload")?;
+            if payload.entries.is_empty() {
+                break;
+            }
+            for entry in &payload.entries {
+                let signature = entry.signature.as_ref().ok_or_else(|| {
+                    anyhow!(format!(
+                        "admission audit entry {} missing signature",
+                        entry.id
+                    ))
+                })?;
+                let message = entry.canonical_bytes().map_err(|err| {
+                    anyhow!(format!("failed to encode audit entry {}: {err}", entry.id))
+                })?;
+                verifier.verify(signature, &message).map_err(|err| {
+                    anyhow!(format!(
+                        "audit entry {} verification failed: {err}",
+                        entry.id
+                    ))
+                })?;
+            }
+            verified_entries += payload.entries.len();
+            offset += payload.entries.len();
+            if offset >= payload.total {
+                break;
+            }
+        }
+    }
+
+    println!(
+        "verified {} admission audit log entries with configured trust store",
+        verified_entries
+    );
+    Ok(())
+}
+
+fn canonical_snapshot_bytes(snapshot: &AdmissionPoliciesRpcResponse) -> Result<Vec<u8>> {
+    let mut blocklist = snapshot.blocklist.clone();
+    blocklist.sort();
+    let canonical = AdmissionSnapshotCanonical {
+        allowlist: snapshot.allowlist.clone(),
+        blocklist,
+    };
+    serde_json::to_vec(&canonical).context("failed to encode policies for verification")
+}
+
 fn print_snapshot_status(label: &str, status: &SnapshotStreamStatusResponse) {
     println!("{label}:");
     println!("  session: {}", status.session);
@@ -1091,6 +1278,50 @@ fn normalize_cli_bearer_token(raw: &str) -> Option<String> {
         None
     } else {
         Some(token.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    #[test]
+    fn canonical_snapshot_bytes_sorts_blocklist_and_preserves_allowlist() {
+        let snapshot = AdmissionPoliciesRpcResponse {
+            allowlist: vec![AdmissionPolicyEntry {
+                peer_id: "peer-a".into(),
+                tier: TierLevel::Tl1,
+            }],
+            blocklist: vec!["peer-z".into(), "peer-b".into()],
+            signature: None,
+        };
+        let bytes = canonical_snapshot_bytes(&snapshot).expect("canonical bytes");
+        let value: Value = serde_json::from_slice(&bytes).expect("json");
+        assert_eq!(
+            value["allowlist"].as_array().expect("allowlist len")[0]["peer_id"],
+            Value::String("peer-a".into())
+        );
+        let block: Vec<String> = value["blocklist"]
+            .as_array()
+            .expect("blocklist")
+            .iter()
+            .map(|entry| entry.as_str().expect("string").to_string())
+            .collect();
+        assert_eq!(block, vec!["peer-b", "peer-z"]);
+    }
+
+    #[test]
+    fn normalize_cli_bearer_token_handles_prefix_and_whitespace() {
+        assert_eq!(
+            normalize_cli_bearer_token("   bearer example-token  "),
+            Some("example-token".into())
+        );
+        assert_eq!(
+            normalize_cli_bearer_token("ExplicitToken"),
+            Some("ExplicitToken".into())
+        );
+        assert_eq!(normalize_cli_bearer_token("   "), None);
     }
 }
 

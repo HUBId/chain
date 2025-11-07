@@ -6534,6 +6534,7 @@ dependencies = [
  "base64 0.21.7",
  "blake2",
  "blake3",
+ "ed25519-dalek",
  "futures",
  "hex",
  "jsonschema",
