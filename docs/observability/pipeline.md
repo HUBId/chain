@@ -80,12 +80,14 @@ view.
    `stage_latency_ms{phase="storage"}` with
    `stage_total{phase="storage"}` and overlaying the latest value from
    `commit_height` to confirm Firewood persistence is keeping up.
-5. **Snapshot Stream Health** – overlay
+5. **Snapshot Stream Health** – Panel **#6 _Snapshot Chunk Throughput_** plots
    `rate(snapshot_bytes_sent_total{kind="chunk",direction="outbound"}[5m])`
-   against `snapshot_stream_lag_seconds` to confirm producers are pushing data
-   and consumers keep up. Add a table for
-   `increase(light_client_chunk_failures_total[15m])` to highlight peers that
-   repeatedly fail chunk delivery.
+   alongside the matching inbound rate to compare producer versus consumer
+   throughput. Panel **#7 _Snapshot Stream Lag_** surfaces
+   `snapshot_stream_lag_seconds` so operators can immediately see when replay
+   stalls. Panel **#8 _Light Client Chunk Failures_** highlights
+   `increase(light_client_chunk_failures_total{kind="chunk"}[15m])` for both
+   directions to call out peers that repeatedly fail chunk delivery.
 
 Export rendered dashboards to the checked-in Grafana definitions under
 `docs/dashboards/`. The repository already contains:
