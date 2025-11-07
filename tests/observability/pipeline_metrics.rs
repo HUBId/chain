@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use opentelemetry::global;
 use opentelemetry::metrics::noop::NoopMeterProvider;
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::metrics::{
+    InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
+};
 use rpp_node::telemetry::pipeline::PipelineMetrics;
 use rpp_runtime::orchestration::PipelineStage;
 

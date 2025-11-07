@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use opentelemetry::global;
 use opentelemetry::metrics::noop::NoopMeterProvider;
-use opentelemetry_sdk::metrics::{InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::metrics::{
+    InMemoryMetricExporter, MetricError, PeriodicReader, SdkMeterProvider,
+};
 use rpp_crypto_vrf::telemetry::VrfTelemetry;
 use rpp_crypto_vrf::VrfSelectionMetrics;
 
@@ -28,9 +30,7 @@ fn vrf_metrics_exporter_records_selection_rounds() -> std::result::Result<(), Me
     metrics.latest_round = Some(7);
     metrics.active_epoch_threshold = Some("1337".into());
     metrics.active_threshold_ratio = Some(0.75);
-    metrics
-        .rejections_by_reason
-        .insert("threshold".into(), 1);
+    metrics.rejections_by_reason.insert("threshold".into(), 1);
 
     telemetry.record_selection(&metrics);
 
