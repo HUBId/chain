@@ -79,6 +79,27 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 - Tier-Admission-Härtung und Witness-Kanäle vorziehen (Abschnitt 4.2 und 6.4/6.5 des Implementierungsplans).
 - Firewood↔Proof-Verzahnung und Snapshot-Rebuild-Service aus Abschnitt 2 vorbereiten, um Witness-Gossip und State-Sync zu koppeln.
 
+## Phase 3 Tracking (Kalenderwoche 20/2026)
+
+Dieser Abschnitt dient als fortlaufende Vorlage für Phase‑3-Updates. Neue Einträge werden jeweils unter den bestehenden Tabellen ergänzt; erledigte Artefakte bleiben zur Nachverfolgung bestehen, offene Punkte verweisen auf Owner, Backlog-Items oder Checklisten.
+
+### Artefaktstatus
+
+| Kategorie | Deliverable | Status | Nachweise / Links |
+| --- | --- | --- | --- |
+| Runbooks | Failover-Runbook verlinkt Snapshot- und Admission-Drills in On-Call-Dokumentation. | ✅ produktiv | [`docs/runbooks/network_snapshot_failover.md`](../runbooks/network_snapshot_failover.md), [`docs/runbooks/observability.md`](../runbooks/observability.md)【F:docs/runbooks/network_snapshot_failover.md†L1-L176】【F:docs/runbooks/observability.md†L1-L120】 |
+| Metriken & Tests | Snapshot-/Timetoke-Metriken exportiert und via `cargo xtask test-observability` sowie `snapshot_timetoke_metrics.rs` abgesichert. | ✅ produktiv | [`rpp/p2p/src/behaviour/snapshots.rs`](../../rpp/p2p/src/behaviour/snapshots.rs), [`tests/observability/snapshot_timetoke_metrics.rs`](../../tests/observability/snapshot_timetoke_metrics.rs)【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L518】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L206】 |
+| CI-Jobs | `simnet-regression` und `nightly-simnet` veröffentlichen Snapshot-/Timetoke-Artefakte mit Timetoke-SLO-Bericht. | ✅ aktiv | [`ci.yml` simnet-regression Job](../../.github/workflows/ci.yml#L287-L303), [`nightly.yml` timetoke-report Steps](../../.github/workflows/nightly.yml#L1-L124)【F:.github/workflows/ci.yml†L287-L303】【F:.github/workflows/nightly.yml†L1-L124】 |
+
+### Offene Restarbeiten
+
+| Fokus | Deliverable | Offene Schritte | Referenz |
+| --- | --- | --- | --- |
+| Snapshot-SLIs | Baselines & Replay-Belege finalisieren (Panels archivieren, Replay-Schutz protokollieren). | Dashboard-Exports einsammeln, RPC-/P2P-Logs dem Audit-Archiv hinzufügen. | [Phase‑3 Acceptance Checklist – Snapshot-SLIs & Replay](../runbooks/phase3_acceptance.md#snapshot-slis--replay-evidenz)【F:docs/runbooks/phase3_acceptance.md†L8-L33】 |
+| Timetoke | Timetoke-SLO-Bericht und Replay-Validator-Artefakte vollständig anhängen. | Nightly-Artefakte annotieren, Replay-Failure-Cases sammeln. | [Phase‑3 Acceptance Checklist – Timetoke](../runbooks/phase3_acceptance.md#timetoke-snapshot-roundtrip)【F:docs/runbooks/phase3_acceptance.md†L34-L61】 |
+| Tier Admission | Allow-/Blocklist-Dumps versionieren, RPC-Roundtrip-Logs sichern. | Peerstore-Reload-Protokolle und RPC-Audit-Logs exportieren. | [Phase‑3 Acceptance Checklist – Tier-Admission Persistenz & Audit](../runbooks/phase3_acceptance.md#tier-admission-persistenz--audit)【F:docs/runbooks/phase3_acceptance.md†L36-L49】 |
+| Observability | Alert-Drills & Grafana-Exporte versionieren, Screenshots zu On-Call-Handbook hinzufügen. | Prometheus-Testläufe dokumentieren, Grafana-Screenshots verlinken. | [Phase‑3 Acceptance Checklist – Observability Dashboards & Alerts](../runbooks/phase3_acceptance.md#observability-dashboards--alerts)【F:docs/runbooks/phase3_acceptance.md†L62-L79】 |
+
 ## Phase 3 Abschluss (Kalenderwoche 25/2026)
 
 **Zusammenfassung:** Phase 3 schließt den Networking-Schwerpunkt ab: Admission-Control speichert Allow-/Blocklisten persistent, protokolliert Audit-Trails, erlaubt Dual-Control-Updates via RPC und exportiert Snapshot-SLIs, die Runbook, Dashboard und Alerts konsolidieren.【F:rpp/p2p/src/peerstore.rs†L1180-L1299】【F:rpp/p2p/src/peerstore.rs†L1795-L1828】【F:rpp/rpc/src/routes/p2p.rs†L232-L379】【F:rpp/p2p/src/behaviour/snapshots.rs†L462-L518】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L180】【F:docs/runbooks/network_snapshot_failover.md†L1-L176】【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
