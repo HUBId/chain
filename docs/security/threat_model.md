@@ -1,48 +1,53 @@
 # Threat Model Addendum: Snapshot Lifecycle Controls
 
-This addendum expands the platform threat model with controls that defend the
-snapshot lifecycle, resumable state transfers, and auditability of privileged
-operations.
+This addendum documents the controls that currently protect the snapshot lifecycle,
+resumable state transfers, and admission policy changes. It also calls out the
+security work that remains open so auditors can trace coverage gaps back to the
+engineering backlog.
 
-## Snapshot Replay Mitigations
-- **Replay-resistant manifests:** Snapshots are signed with rotation-aware
-  manifests; validators verify the epoch seal, height monotonicity, and the
-  hash chain across differential chunks before applying state.
-- **Wormhole detection:** State-sync peers maintain rolling digests of accepted
-  snapshots. Any replayed height hash mismatch is quarantined and reported via
-  the consensus tamper channel, blocking propagation.
-- **Out-of-band verification:** Operators can verify snapshot bundles against
-  the published manifest ledger using `tools/firewood verify-manifest`, closing
-  the replay window created by offline bootstraps.
+## Snapshot persistence controls
+- **Disk-backed session metadata:** The runtime persists every active snapshot
+  session to `<snapshot_dir>/snapshot_sessions.json`. The `SnapshotSessionStore`
+  constructor creates the directory on demand, deserialises prior sessions, and
+  re-emits them to disk after each update so crash recovery resumes from the last
+  confirmed offsets.【F:rpp/runtime/node.rs†L1202-L1289】
+- **Automatic restore on restart:** When the node boots, the snapshot provider
+  rebuilds in-memory sessions from the stored records. Invalid records are
+  discarded and removed from disk, limiting replay to verifiable manifests and
+  peers that pass the stored integrity checks.【F:rpp/runtime/node.rs†L1292-L1356】
+- **Inline manifest validation:** Before serving a restored session, the runtime
+  re-decodes the advertised global state root from the plan and verifies it is a
+  32-byte value. Malformed manifests fail the recovery path and never become
+  eligible for streaming.【F:rpp/runtime/node.rs†L1368-L1379】
 
-## Resume Validation Controls
-- **Checkpoint attestation:** A resumable download must present the signed
-  attestation from its originating validator set. Missing or stale attestations
-  trigger a restart with a fresh manifest pull.
-- **Partial chunk hashing:** The resume handler re-hashes byte ranges before
-  resuming transfer and compares them against the manifest Merkle proofs to
-  ensure no tampering occurred while the transfer was paused.
-- **Rate-limited retries:** Automated retries back off exponentially and log
-  structured events to prevent brute-force probing of the resume interface.
+## Resume validation controls
+- **Plan binding:** Resume requests must present the plan identifier that was
+  originally persisted with the session. Mismatches are rejected before any data
+  leaves disk.【F:rpp/runtime/node.rs†L1683-L1699】
+- **Monotonic offsets:** The runtime clamps resume positions to the last confirmed
+  chunk and light-client update. Requests that replay old data or skip ahead are
+  rejected so the peer must re-synchronise from the trusted boundary.【F:rpp/runtime/node.rs†L1700-L1744】
 
-## Tier Policy Persistence
-- **Config checkpointing:** Tier admission policies (witness ACLs, gossip caps,
-  and rate controls) are persisted to an append-only Firewood log. Nodes replay
-  the log on boot before accepting inbound tier changes.
-- **Version-gated updates:** Policy updates are wrapped in consensus-approved
-  payloads that include schema versions. Mismatched versions are rejected,
-  forcing operators to reconcile drift explicitly.
-- **Dual control:** High-sensitivity policy changes require dual signatures
-  (operations + security). Automation enforces that both approvals are present
-  before the change log entry is committed.
+## Admission audit logging controls
+- **JSONL audit log:** The peerstore initialiser resolves or creates an
+  `audit.jsonl` log beside the persisted access lists and opens it through the
+  `AdmissionPolicyLog` helper. When present, every policy change is appended with
+  the actor metadata, and failures bubble up so operators can detect gaps.【F:rpp/p2p/src/peerstore.rs†L525-L607】【F:rpp/p2p/src/peerstore.rs†L1088-L1119】
+- **Immediate persistence of access changes:** Allowlist and blocklist updates are
+  written back to disk after each change so subsequent restarts retain the same
+  policy view that produced the audit entry.【F:rpp/p2p/src/peerstore.rs†L1121-L1138】
 
-## Audit Trail Hardening
-- **Structured event logging:** Snapshot ingestion, resume attempts, and policy
-  mutations emit structured events into the SIEM pipeline with correlation IDs
-  that cover the entire lifecycle of the operation.
-- **Immutable storage:** Audit events are exported into the retention-tier
-  object store with WORM (write once, read many) controls enabled, providing a
-  tamper-evident record for forensic review.
-- **Periodic reconciliation:** A scheduled job compares local audit buffers
-  with the retention store and raises alerts if entries are missing or have
-  diverged, ensuring continuity of evidence.
+## Known gaps and future work
+- **External snapshot verification:** Operators today rely on the runtime’s
+  built-in validation path described above; there is no standalone
+  `tools/firewood verify-manifest` utility yet. External, offline verification is
+  tracked as follow-up work.
+- **Dual approvals for policy changes:** The admission audit log records a single
+  actor. Automated enforcement of dual signatures remains outstanding.
+- **WORM export of audit logs:** Audit files are append-only locally, but the
+  platform does not yet replicate them into immutable storage.
+
+## Follow-ups
+- [ENG-921 — Snapshot replay hardening](../status/weekly.md#snapshot-replay-hardening-eng-921)
+- [ENG-923 — Tier policy persistence](../status/weekly.md#tier-policy-persistence-eng-923)
+- [ENG-924 — Audit trail reconciliation](../status/weekly.md#audit-trail-reconciliation-eng-924)
