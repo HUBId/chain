@@ -7,6 +7,7 @@ configuration specifics, checklists, and runbooks as needed:
 - [Operator checklist](checklists/operator.md)
 - [Runbook: startup](runbooks/startup.md)
 - [Runbook: observability](runbooks/observability.md)
+- [Runbook: network snapshot failover](runbooks/network_snapshot_failover.md)
 - [Runbook: upgrade](runbooks/upgrade.md)
 - [Runbook: pruning](runbooks/pruning.md)
 - [Runbook: pruning operations](runbooks/pruning_operations.md)

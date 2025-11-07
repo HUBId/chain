@@ -130,6 +130,7 @@ bespoke variants or extending panel coverage.
 ### Runbook Links
 Attach this document to observability and startup runbooks so operators can
 navigate directly to the recommended dashboards when diagnosing pipeline gaps.
-Link snapshot operators to `docs/observability/network_snapshots.md` and
-`docs/runbooks/network_snapshot_failover.md` for stream-specific remediation
-steps.
+Link snapshot operators to
+[`docs/observability/network_snapshots.md`](network_snapshots.md) and the
+[network snapshot failover runbook](../runbooks/network_snapshot_failover.md)
+for stream-specific remediation steps.
