@@ -1,0 +1,22 @@
+[package]
+name = "prover-fuzz"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.79"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+serde_json = "1.0"
+plonky3-backend = { path = "../plonky3_backend" }
+prover_stwo_backend = { path = "../prover_stwo_backend", features = ["official"] }
+
+[[bin]]
+name = "stwo_circuit_loader"
+path = "fuzz_targets/stwo_circuit_loader.rs"
+test = false
+doc = false

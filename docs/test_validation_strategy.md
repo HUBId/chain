@@ -21,7 +21,10 @@ Diese Strategie beschreibt, wie die STWO- und Plonky3-Integrationen vollständig
 ### 1.3 System- und Szenariotests
 - **End-to-End**: Start eines lokalen Netzwerks (mindestens zwei Wallets + ein Node) mit VRF-basierter Leader-Selektion, Erzeugung von Blöcken und vollständiger Rekursionskette.
 - **Migrationspfad**: Sicherstellen, dass `migration` alte Datensätze korrekt in das `ChainProof`-Format überführt und anschließend verifiziert wird.
-- **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken.
+- **Fuzzing/Property-Tests**: Einsatz von `proptest` für Witness-Parser und State-Höhen, um Grenzwerte aufzudecken. Ergänzend
+  laufen `cargo fuzz`-Targets für P2P-Decoder, Wallet-RPC (`wallet_rpc`), das ZSI-Lifecycle-Handling (`zsi_lifecycle`) sowie den
+  STWO/Plonky3-Beweisparser (`stwo_circuit_loader`). Lokal lassen sich die Läufe über `cargo fuzz run wallet_rpc` bzw.
+  `cargo fuzz run zsi_lifecycle` im Wallet-Crate und `cargo fuzz run stwo_circuit_loader` unter `prover/fuzz` reproduzieren.
 - **Simnet-Szenarien**: Das Simulations-Framework (`tools/simnet/`) bündelt `ci_block_pipeline.ron`, `ci_state_sync_guard.ron` und den Phase‑2-Stresslauf `consensus_quorum_stress.ron`. Die ersten beiden orchestrieren Integrationstests (Blockproduktion, Snapshot-/Light-Client-Sync, Manipulationsschutz); der dritte injiziert VRF-/Quorum-Manipulationen und misst Prover/Verifier-Latenzen inklusive CSV-/JSON-Summaries.【F:tools/simnet/scenarios/ci_block_pipeline.ron†L1-L16】【F:tools/simnet/scenarios/ci_state_sync_guard.ron†L1-L36】【F:tools/simnet/scenarios/consensus_quorum_stress.ron†L1-L22】【F:tools/simnet/src/main.rs†L1-L86】
 
 ### 1.4 Feature-Matrix & Laufzeiten
@@ -85,9 +88,10 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
     Feature-Set (`prod,prover-stwo,backend-plonky3`), wertet alle JSON-Summaries über `scripts/analyze_simnet.py` aus und
     lädt ein Tarball mit Logs, JSON- und CSV-Reports hoch. Abweichungen bei P2P-Latenzen oder akzeptierten VRF-/Quorum-
     Manipulationen führen zu einem roten Workflow-Status.
-  - [`Nightly fuzzing`](../.github/workflows/nightly-fuzz.yml): Startet `cargo fuzz` für die P2P-Handler (`handle_meta`,
-    `handle_blocks`, `handle_votes`, `admission_evaluate_publish`) auf einem Nightly-Toolchain-Setup und archiviert die
-    Corpora. **TODO:** Auf Wallet- und Prover-Komponenten ausweiten.
+  - [`Nightly fuzzing`](../.github/workflows/nightly-fuzz.yml): Startet `cargo fuzz` für die P2P-Handler
+    (`handle_meta`, `handle_blocks`, `handle_votes`, `admission_evaluate_publish`), die Wallet-RPC-Decoder (`wallet_rpc`,
+    `zsi_lifecycle`) sowie den STWO/Plonky3-Beweisparser (`stwo_circuit_loader`) auf einem Nightly-Toolchain-Setup und
+    archiviert die Corpora.
 - **Manuelle Prüfpfade**:
   - `scripts/run_hybrid_mode.sh`, `scripts/run_node_mode.sh`, `scripts/run_wallet_mode.sh`: Lokale Smoke-Tests für Node- und
     Wallet-Modi, weiterhin manuell auszuführen bis eine automatisierte Umgebung bereitsteht. **TODO:** Automatisierte Ausführung
