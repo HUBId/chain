@@ -79,7 +79,10 @@ post-change validation and ongoing monitoring.【F:rpp/node/src/telemetry/prunin
    missing heights, and other diagnostics used by the worker loop.【F:rpp/rpc/api.rs†L1250-L1253】【F:rpp/runtime/node.rs†L3200-L3219】
 3. **Validate distribution.** When consumers report stale state-sync data, trigger `POST /p2p/snapshots`
    against an affected node to start a snapshot stream from a healthy peer and monitor the returned
-   session via `GET /p2p/snapshots/<session>` until `verified=true` or an error is reported.【F:rpp/rpc/src/routes/p2p.rs†L16-L102】【F:docs/network/snapshots.md†L1-L120】
+   session via `GET /p2p/snapshots/<session>` until `verified=true` or an error is reported.【F:rpp/rpc/src/routes/p2p.rs†L16-L102】【F:docs/network/snapshots.md†L24-L120】 Resume attempts that fall behind the
+   latest acknowledgement or skip ahead of the advertised totals return `500` responses containing the
+   `SnapshotVerification` reason; treat them as configuration drift between peers and restart from the
+   most recent offsets before escalating.【F:docs/network/snapshots.md†L24-L44】
 4. **Cross-check telemetry.** When a job runs, the worker updates internal watchers and emits the
    status to the snapshots gossip topic. Confirm that downstream consumers (dashboards, recovery
    tooling) ingest the plan before closing the incident.【F:rpp/node/src/services/pruning.rs†L305-L320】【F:rpp/runtime/node.rs†L3200-L3219】
