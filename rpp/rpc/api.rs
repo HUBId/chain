@@ -1379,6 +1379,10 @@ where
             "/p2p/admission/policies",
             get(routes::p2p::admission_policies).post(routes::p2p::update_admission_policies),
         )
+        .route(
+            "/p2p/admission/audit",
+            get(routes::p2p::admission_audit_log),
+        )
         .route("/p2p/snapshots", post(routes::p2p::start_snapshot_stream))
         .route(
             "/p2p/snapshots/:id",

@@ -10,9 +10,9 @@ use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
-    AdmissionAuditTrail, AdmissionPolicies, AllowlistedPeer, ConsensusPipeline,
-    GossipBlockValidator, GossipPayloadError, GossipTopic, GossipVoteValidator, HandshakePayload,
-    LightClientHead, LightClientSync, MetaTelemetry, NetworkError, NetworkEvent,
+    AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry, AllowlistedPeer,
+    ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic, GossipVoteValidator,
+    HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry, NetworkError, NetworkEvent,
     NetworkFeatureAnnouncement, NetworkLightClientUpdate, NetworkMetaTelemetryReport,
     NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity, Peerstore, PeerstoreError,
     PersistentConsensusStorage, PersistentProofStorage, PipelineError, ProofMempool,
@@ -2194,6 +2194,16 @@ impl NodeHandle {
 
     pub fn admission_policies(&self) -> AdmissionPolicies {
         self.peerstore.admission_policies()
+    }
+
+    pub fn admission_audit_log(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(Vec<AdmissionPolicyLogEntry>, usize), NodeError> {
+        self.peerstore
+            .admission_audit_entries(offset, limit)
+            .map_err(NodeError::from)
     }
 
     pub fn update_admission_policies(
