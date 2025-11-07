@@ -75,15 +75,18 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
 | `unit-suites` | Erzwingt die deterministischen STWO/Firewood/VRF-Unit-Suites. | `cargo xtask test-unit` |
 | `integration-workflows` | Überprüft Blockproduktion, Snapshot-/Light-Client-Pläne und Operator-RPC-Lifecycle. | `cargo xtask test-integration` |
 | `simnet-smoke` | Führt alle drei Simnet-Szenarien (`ci_block_pipeline`, `ci_state_sync_guard`, `consensus_quorum_stress`) aus und protokolliert Artefakte inkl. Tamper-Checks. | `cargo xtask test-simnet` |
+| `runtime-smoke` | Startet Node-, Wallet- und Hybrid-Modus seriell via `scripts/run_*_mode.sh`, prüft `/health/*` sowie `/metrics` und lädt Logs/Metriken als Artefakte hoch. | `cargo build --bin rpp-node && ./scripts/run_node_mode.sh` / `run_wallet_mode.sh` / `run_hybrid_mode.sh` |
 
 > **Hinweis:** `scripts/test.sh` setzt `RUSTFLAGS=-D warnings`, aktiviert automatisch das passende Feature-Set und wählt für STWO den gepinnten Nightly-Toolchain, damit lokale Läufe die CI-Ergebnisse widerspiegeln.【F:scripts/test.sh†L4-L8】【F:scripts/test.sh†L81-L210】
 
 - **GitHub Actions Workflows**:
   - [`Release`](../.github/workflows/release.yml): Führt `./scripts/test.sh --all --backend default --backend stwo --backend rpp-stark --backend plonky3` aus und deckt damit die vollständige Produktionsmatrix inklusive Plonky3 ab.【F:.github/workflows/release.yml†L55-L120】
   - [`CI`](../.github/workflows/ci.yml): Ergänzt `fmt`, `clippy` und `test` um die verpflichtenden Gates `unit-suites`,
-    `integration-workflows` und `simnet-smoke`. Die Jobs delegieren an `cargo xtask test-unit`, `cargo xtask test-integration`
-    und `cargo xtask test-simnet`, womit alle drei Testebenen (Unit, Workflow, Simulation) automatisiert abgedeckt werden und
-    Contributors dieselben Läufe lokal reproduzieren können.【F:.github/workflows/ci.yml†L63-L96】【F:xtask/src/main.rs†L1-L86】
+    `integration-workflows`, `simnet-smoke` sowie `runtime-smoke`. Letzteres baut `rpp-node`, startet die drei
+    Betriebsmodi seriell, prüft die Health-/Metrics-Endpunkte und archiviert Logs/Metriken je Modus. Die Jobs delegieren an
+    `cargo xtask test-unit`, `cargo xtask test-integration`, `cargo xtask test-simnet` und die `scripts/run_*_mode.sh`-Wrapper,
+    womit alle Testebenen (Unit, Workflow, Simulation, Runtime-Smoke) automatisiert abgedeckt werden und Contributors dieselben
+    Läufe lokal reproduzieren können.【F:.github/workflows/ci.yml†L185-L452】【F:xtask/src/main.rs†L1-L86】
   - [`nightly-simnet`](../.github/workflows/nightly.yml): Startet täglich `cargo xtask test-simnet` mit dem Production-
     Feature-Set (`prod,prover-stwo,backend-plonky3`), wertet alle JSON-Summaries über `scripts/analyze_simnet.py` aus und
     lädt ein Tarball mit Logs, JSON- und CSV-Reports hoch. Abweichungen bei P2P-Latenzen oder akzeptierten VRF-/Quorum-
@@ -94,8 +97,41 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
     archiviert die Corpora.
 - **Manuelle Prüfpfade**:
   - `scripts/run_hybrid_mode.sh`, `scripts/run_node_mode.sh`, `scripts/run_wallet_mode.sh`: Lokale Smoke-Tests für Node- und
-    Wallet-Modi, weiterhin manuell auszuführen bis eine automatisierte Umgebung bereitsteht. **TODO:** Automatisierte Ausführung
-    in einer dedizierten Workflow-Umgebung.
+    Wallet-Modi. Die GitHub-Actions-Stufe `runtime-smoke` automatisiert diese Läufe, prüft die Health-Endpunkte (`/health/live`,
+    `/health/ready`), sammelt Metriken (`/metrics`) und lädt Log-/Metrik-Artefakte (`artifacts/runtime-smoke/<mode>.*`) hoch. Zur
+    Reproduktion lokal zuerst `cargo build --bin rpp-node` ausführen und anschließend die Modi seriell starten, z. B.:
+
+    ```bash
+    mkdir -p artifacts/runtime-smoke
+    for mode in node wallet hybrid; do
+      log="artifacts/runtime-smoke/${mode}.log"
+      metrics="artifacts/runtime-smoke/${mode}.metrics"
+      port=7070
+      if [[ "${mode}" == "wallet" ]]; then
+        port=9090
+      fi
+      timeout --signal=TERM 150 scripts/run_${mode}_mode.sh >"${log}" 2>&1 &
+      pid=$!
+      for suffix in live ready; do
+        success=0
+        for attempt in $(seq 1 150); do
+          if curl --fail --silent "http://127.0.0.1:${port}/health/${suffix}" >/dev/null; then
+            success=1
+            break
+          fi
+          sleep 1
+        done
+        if [[ ${success} -ne 1 ]]; then
+          echo "health check ${suffix} timed out for ${mode}" >&2
+          exit 1
+        fi
+      done
+      curl --fail --silent --show-error "http://127.0.0.1:${port}/metrics" >"${metrics}"
+      kill -TERM "${pid}" && wait "${pid}"
+    done
+    ```
+    Die CI-Stufe übernimmt diese Schritte vollautomatisch und bricht bei fehlerhaften Health- oder Metrik-Antworten mit einer
+    aussagekräftigen Fehlermeldung ab.【F:.github/workflows/ci.yml†L185-L316】
   - `tools/simnet/scenarios/*.ron`: Zusätzliche Netzwerkszenarien können lokal per `cargo run -p simnet -- --scenario …`
     getestet werden und sind in der Roadmap als Kandidaten für eine Workflow-Erweiterung vermerkt.
   - `scripts/test.sh --backend plonky3 --unit --integration`: Reproduziert die produktive Plonky3-Testmatrix lokal (Proof-Generierung, Manipulations-Checks, Telemetrie).【F:scripts/test.sh†L15-L210】【F:docs/testing/plonky3_experimental_testplan.md†L1-L120】
