@@ -1,6 +1,6 @@
 # Phase‑3 Acceptance Checklist
 
-Diese Checkliste bündelt alle Nachweise, die für die Phase‑3-Abnahme erforderlich sind. Jeder Punkt erfordert verlinkte Artefakte (Reposnapshot, CI-Artefakt, Dashboard-Screenshot oder Ticket-Referenz), damit Auditor:innen und Stakeholder den Fortschritt nachvollziehen können.
+Diese Checkliste bündelt alle Nachweise, die für die Phase‑3-Abnahme erforderlich sind. Jeder Punkt erfordert verlinkte Artefakte (Reposnapshot, CI-Artefakt, Dashboard-Screenshot oder Ticket-Referenz), damit Auditor:innen und Stakeholder den Fortschritt nachvollziehen können. Für den aktuellen Kontrollstatus und offene Maßnahmen verweise auf die [Compliance Overview](../governance/compliance_overview.md), die Phase‑3-Kontrollen und Restarbeiten zentral nachhält.
 
 ## Artefaktliste
 
