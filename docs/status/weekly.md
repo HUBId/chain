@@ -79,3 +79,37 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
 - Tier-Admission-Härtung und Witness-Kanäle vorziehen (Abschnitt 4.2 und 6.4/6.5 des Implementierungsplans).
 - Firewood↔Proof-Verzahnung und Snapshot-Rebuild-Service aus Abschnitt 2 vorbereiten, um Witness-Gossip und State-Sync zu koppeln.
 
+
+## Security Review Update (Kalenderwoche 19/2026)
+
+**Zusammenfassung:** Die Security-Review für Snapshot-Replay, Resume-Validierung,
+Tier-Policy-Persistenz und Audit-Trail-Härtung ist abgeschlossen. Die Ergebnisse
+sind im aktualisierten [Threat Model Addendum](../security/threat_model.md) und
+dem [Security Risk Register](../security/register.md) dokumentiert.
+
+### Highlights
+- Threat-Model-Erweiterung beschreibt Replay-Abwehr, Resume-Schutz,
+  Policy-Persistenz und Audit-Trail-Mitigations mit konkreten Kontrollen.
+- Risk Register weist offene Maßnahmen inkl. Ownern und Tracking-Links aus
+  und dient als Referenz für Phase‑3-Planung.
+
+### Tracking
+<a id="snapshot-replay-hardening"></a>
+#### Snapshot Replay Hardening (ENG-921)
+- Instrumentierung für manifest-signature Telemetrie in Arbeit.
+- Simnet-Regression deckt Replay-Detection-Cases ab.
+
+<a id="resume-validation-guardrails"></a>
+#### Resume Validation Guardrails (ENG-922)
+- Attestationsprüfung merged; Hash-Retry-Schutz in QA.
+- Firewood-CLI erhält Integrationstests für Resume-Flows.
+
+<a id="tier-policy-persistence"></a>
+#### Tier Policy Persistence (ENG-923)
+- Append-only Policy-Log vorbereitet; Dual-Control-Automation in Entwicklung.
+- Operator-Runbook wird um Policy-Rollback-Checks erweitert.
+
+<a id="audit-trail-reconciliation"></a>
+#### Audit Trail Reconciliation (ENG-924)
+- WORM-Export aktiv; Differenz-Checker wartet auf Deployment-Fenster.
+- SIEM-Playbook ergänzt Eskalationspfad für fehlende Events.
