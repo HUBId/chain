@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -24,6 +25,17 @@ use crate::vendor::swarm::behaviour::ToSwarm;
 use crate::vendor::swarm::{
     ConnectionDenied, ConnectionHandler, ConnectionId, FromSwarm, NetworkBehaviour,
 };
+
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+use prometheus_client::metrics::counter::Counter;
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+use prometheus_client::metrics::family::Family;
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+use prometheus_client::metrics::gauge::Gauge;
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+use prometheus_client::registry::{Registry, Unit};
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+use std::sync::atomic::AtomicU64;
 
 #[cfg(feature = "request-response")]
 use async_trait::async_trait;
@@ -407,6 +419,7 @@ struct SessionState {
     next_chunk_index: u64,
     next_update_index: u64,
     in_flight: Option<RequestResponseId>,
+    last_progress: Instant,
 }
 
 #[cfg(feature = "request-response")]
@@ -417,6 +430,91 @@ impl SessionState {
             next_chunk_index: 0,
             next_update_index: 0,
             in_flight: None,
+            last_progress: Instant::now(),
+        }
+    }
+
+    fn mark_progress(&mut self) {
+        self.last_progress = Instant::now();
+    }
+}
+
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+#[derive(Clone)]
+struct SnapshotStreamMetrics {
+    bytes_transferred: Family<Vec<(String, String)>, Counter>,
+    lag_seconds: Gauge<f64, AtomicU64>,
+    failures: Family<Vec<(String, String)>, Counter>,
+}
+
+#[cfg(all(feature = "metrics", feature = "request-response"))]
+impl SnapshotStreamMetrics {
+    fn register(registry: &mut Registry) -> Self {
+        let bytes_transferred = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register_with_unit(
+            "snapshot_bytes_sent_total",
+            "Total snapshot payload bytes transferred grouped by direction and item kind",
+            Unit::Bytes,
+            bytes_transferred.clone(),
+        );
+
+        let lag_seconds = Gauge::<f64, AtomicU64>::default();
+        registry.register_with_unit(
+            "snapshot_stream_lag_seconds",
+            "Maximum observed delay in seconds since the last snapshot item was processed",
+            Unit::Seconds,
+            lag_seconds.clone(),
+        );
+
+        let failures = Family::<Vec<(String, String)>, Counter>::default();
+        registry.register(
+            "light_client_chunk_failures_total",
+            "Count of snapshot chunk and light client update failures grouped by direction",
+            failures.clone(),
+        );
+
+        Self {
+            bytes_transferred,
+            lag_seconds,
+            failures,
+        }
+    }
+
+    fn record_bytes(&self, direction: &str, kind: SnapshotItemKind, bytes: usize) {
+        let kind_label = match kind {
+            SnapshotItemKind::Plan => "plan",
+            SnapshotItemKind::Chunk => "chunk",
+            SnapshotItemKind::LightClientUpdate => "light_client_update",
+            SnapshotItemKind::Resume => "resume",
+            SnapshotItemKind::Ack => "ack",
+            SnapshotItemKind::Error => "error",
+        };
+        let labels = vec![
+            ("direction".to_string(), direction.to_string()),
+            ("kind".to_string(), kind_label.to_string()),
+        ];
+        self.bytes_transferred
+            .get_or_create(&labels)
+            .inc_by(bytes as u64);
+    }
+
+    fn observe_lag(&self, lag: Duration) {
+        self.lag_seconds.set(lag.as_secs_f64());
+    }
+
+    fn record_failure(&self, direction: &str, kind: SnapshotItemKind) {
+        let failure_kind = match kind {
+            SnapshotItemKind::Chunk => Some("chunk"),
+            SnapshotItemKind::LightClientUpdate => Some("light_client_update"),
+            _ => None,
+        };
+
+        if let Some(kind_label) = failure_kind {
+            let labels = vec![
+                ("direction".to_string(), direction.to_string()),
+                ("kind".to_string(), kind_label.to_string()),
+            ];
+            self.failures.get_or_create(&labels).inc();
         }
     }
 }
@@ -429,11 +527,28 @@ pub struct SnapshotsBehaviour<P: SnapshotProvider> {
     pending_events: VecDeque<SnapshotsEvent>,
     requests: HashMap<RequestResponseId, (SnapshotSessionId, SnapshotItemKind)>,
     sessions: HashMap<SnapshotSessionId, SessionState>,
+    #[cfg(feature = "metrics")]
+    metrics: Option<SnapshotStreamMetrics>,
 }
 
 #[cfg(feature = "request-response")]
 impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     /// Creates a new `SnapshotsBehaviour` for the given provider.
+    #[cfg(feature = "metrics")]
+    pub fn new(provider: P, registry: Option<&mut Registry>) -> Self {
+        let protocols = vec![(SNAPSHOTS_PROTOCOL_ID.to_string(), ProtocolSupport::Full)];
+        let config = RequestResponseConfig::default();
+        Self {
+            inner: RequestResponseBehaviour::new(protocols, config),
+            provider,
+            pending_events: VecDeque::new(),
+            requests: HashMap::new(),
+            sessions: HashMap::new(),
+            metrics: registry.map(SnapshotStreamMetrics::register),
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
     pub fn new(provider: P) -> Self {
         let protocols = vec![(SNAPSHOTS_PROTOCOL_ID.to_string(), ProtocolSupport::Full)];
         let config = RequestResponseConfig::default();
@@ -450,6 +565,42 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
     pub fn provider(&self) -> &P {
         &self.provider
     }
+
+    #[cfg(feature = "metrics")]
+    fn record_bytes(&self, direction: &str, kind: SnapshotItemKind, bytes: usize) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_bytes(direction, kind, bytes);
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_bytes(&self, _direction: &str, _kind: SnapshotItemKind, _bytes: usize) {}
+
+    #[cfg(feature = "metrics")]
+    fn record_failure(&self, direction: &str, kind: SnapshotItemKind) {
+        if let Some(metrics) = &self.metrics {
+            metrics.record_failure(direction, kind);
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn record_failure(&self, _direction: &str, _kind: SnapshotItemKind) {}
+
+    #[cfg(feature = "metrics")]
+    fn update_stream_lag_metric(&mut self) {
+        if let Some(metrics) = &self.metrics {
+            let lag = self
+                .sessions
+                .values()
+                .map(|state| state.last_progress.elapsed())
+                .max()
+                .unwrap_or_else(|| Duration::from_secs(0));
+            metrics.observe_lag(lag);
+        }
+    }
+
+    #[cfg(not(feature = "metrics"))]
+    fn update_stream_lag_metric(&mut self) {}
 
     /// Sends a plan request to the remote peer.
     pub fn request_plan(
@@ -472,6 +623,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         entry.in_flight = Some(request_id);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Plan));
+        #[cfg(feature = "metrics")]
+        self.update_stream_lag_metric();
         Some(request_id)
     }
 
@@ -494,6 +647,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         entry.in_flight = Some(request_id);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Chunk));
+        #[cfg(feature = "metrics")]
+        self.update_stream_lag_metric();
         Some(request_id)
     }
 
@@ -518,6 +673,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             request_id,
             (session_id, SnapshotItemKind::LightClientUpdate),
         );
+        #[cfg(feature = "metrics")]
+        self.update_stream_lag_metric();
         Some(request_id)
     }
 
@@ -540,6 +697,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         entry.in_flight = Some(request_id);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Resume));
+        #[cfg(feature = "metrics")]
+        self.update_stream_lag_metric();
         Some(request_id)
     }
 
@@ -567,6 +726,8 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         let request_id = self.inner.send_request(&peer, request);
         self.requests
             .insert(request_id, (session_id, SnapshotItemKind::Error));
+        #[cfg(feature = "metrics")]
+        self.update_stream_lag_metric();
         Some(request_id)
     }
 
@@ -623,6 +784,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             state.in_flight = None;
                         }
                     }
+                    self.record_failure("outbound", kind);
                     self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
                         session_id,
@@ -646,6 +808,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             SnapshotsRequest::Plan { session_id } => match self.provider.fetch_plan(session_id) {
                 Ok(plan) => match serde_json::to_vec(&plan) {
                     Ok(plan) => {
+                        self.record_bytes("outbound", SnapshotItemKind::Plan, plan.len());
                         let _ = self
                             .inner
                             .send_response(channel, SnapshotsResponse::Plan { session_id, plan });
@@ -664,6 +827,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.record_failure("outbound", SnapshotItemKind::Plan);
                     }
                 },
                 Err(err) => {
@@ -680,6 +844,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Provider(message),
                     });
+                    self.record_failure("outbound", SnapshotItemKind::Plan);
                 }
             },
             SnapshotsRequest::Chunk {
@@ -688,6 +853,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             } => match self.provider.fetch_chunk(session_id, chunk_index) {
                 Ok(chunk) => match serde_json::to_vec(&chunk) {
                     Ok(chunk) => {
+                        self.record_bytes("outbound", SnapshotItemKind::Chunk, chunk.len());
                         let _ = self.inner.send_response(
                             channel,
                             SnapshotsResponse::Chunk {
@@ -711,6 +877,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.record_failure("outbound", SnapshotItemKind::Chunk);
                     }
                 },
                 Err(err) => {
@@ -727,6 +894,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Provider(message),
                     });
+                    self.record_failure("outbound", SnapshotItemKind::Chunk);
                 }
             },
             SnapshotsRequest::LightClientUpdate {
@@ -735,6 +903,11 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             } => match self.provider.fetch_update(session_id, update_index) {
                 Ok(update) => match serde_json::to_vec(&update) {
                     Ok(update) => {
+                        self.record_bytes(
+                            "outbound",
+                            SnapshotItemKind::LightClientUpdate,
+                            update.len(),
+                        );
                         let _ = self.inner.send_response(
                             channel,
                             SnapshotsResponse::LightClientUpdate {
@@ -758,6 +931,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                             session_id,
                             error: SnapshotProtocolError::Provider(message),
                         });
+                        self.record_failure("outbound", SnapshotItemKind::LightClientUpdate);
                     }
                 },
                 Err(err) => {
@@ -774,6 +948,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         session_id,
                         error: SnapshotProtocolError::Provider(message),
                     });
+                    self.record_failure("outbound", SnapshotItemKind::LightClientUpdate);
                 }
             },
             SnapshotsRequest::Resume {
@@ -872,12 +1047,15 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         match response {
             SnapshotsResponse::Plan { plan, .. } => match serde_json::from_slice(&plan) {
                 Ok(plan) => {
+                    self.record_bytes("inbound", SnapshotItemKind::Plan, plan.len());
                     let state = self
                         .sessions
                         .entry(session_id)
                         .or_insert_with(|| SessionState::new(peer.clone()));
                     state.next_chunk_index = 0;
                     state.next_update_index = 0;
+                    state.mark_progress();
+                    self.update_stream_lag_metric();
                     self.pending_events.push_back(SnapshotsEvent::Plan {
                         peer,
                         session_id,
@@ -885,6 +1063,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     });
                 }
                 Err(err) => {
+                    self.record_failure("inbound", SnapshotItemKind::Plan);
                     self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
                         session_id,
@@ -898,7 +1077,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 Ok(chunk) => {
                     if let Some(state) = self.sessions.get_mut(&session_id) {
                         state.next_chunk_index = chunk_index.saturating_add(1);
+                        state.mark_progress();
                     }
+                    self.record_bytes("inbound", SnapshotItemKind::Chunk, chunk.len());
+                    self.update_stream_lag_metric();
                     self.pending_events.push_back(SnapshotsEvent::Chunk {
                         peer,
                         session_id,
@@ -907,6 +1089,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                     });
                 }
                 Err(err) => {
+                    self.record_failure("inbound", SnapshotItemKind::Chunk);
                     self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
                         session_id,
@@ -922,7 +1105,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 Ok(update) => {
                     if let Some(state) = self.sessions.get_mut(&session_id) {
                         state.next_update_index = update_index.saturating_add(1);
+                        state.mark_progress();
                     }
+                    self.record_bytes("inbound", SnapshotItemKind::LightClientUpdate, update.len());
+                    self.update_stream_lag_metric();
                     self.pending_events
                         .push_back(SnapshotsEvent::LightClientUpdate {
                             peer,
@@ -932,6 +1118,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                         });
                 }
                 Err(err) => {
+                    self.record_failure("inbound", SnapshotItemKind::LightClientUpdate);
                     self.pending_events.push_back(SnapshotsEvent::Error {
                         peer,
                         session_id,
@@ -947,7 +1134,9 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 if let Some(state) = self.sessions.get_mut(&session_id) {
                     state.next_chunk_index = chunk_index;
                     state.next_update_index = update_index;
+                    state.mark_progress();
                 }
+                self.update_stream_lag_metric();
                 self.pending_events.push_back(SnapshotsEvent::Resume {
                     peer,
                     session_id,
@@ -956,6 +1145,10 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
                 });
             }
             SnapshotsResponse::Ack { kind, index, .. } => {
+                if let Some(state) = self.sessions.get_mut(&session_id) {
+                    state.mark_progress();
+                }
+                self.update_stream_lag_metric();
                 self.pending_events.push_back(SnapshotsEvent::Ack {
                     peer,
                     session_id,
@@ -973,6 +1166,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         if matches!(kind, SnapshotItemKind::Ack | SnapshotItemKind::Error) {
             self.sessions.remove(&session_id);
+            self.update_stream_lag_metric();
         }
     }
 }
@@ -1060,6 +1254,7 @@ impl<P: SnapshotProvider> NetworkBehaviour for SnapshotsBehaviour<P> {
     ) -> std::task::Poll<
         ToSwarm<Self::ToSwarm, <Self::ConnectionHandler as ConnectionHandler>::InEvent>,
     > {
+        self.update_stream_lag_metric();
         if let Some(event) = self.pending_events.pop_front() {
             return std::task::Poll::Ready(ToSwarm::GenerateEvent(event));
         }
