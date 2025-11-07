@@ -45,16 +45,17 @@ authentication is enabled; missing headers return `401 Unauthorized`.【F:docs/n
    entries. `404 Not Found` indicates the session expired or never existed. The
    CLI alternative auto-loads the RPC URL/token from `validator.toml`:
    ```text
-   rpp-node validator snapshot status --session <session>
-   snapshot status:
-     session: <session>
-     peer: 12D3KooW...
-     root: deadbeef...
-     last_chunk_index: 12
-     last_update_index: 3
-     last_update_height: 256
-     verified: false
-     error: none
+  rpp-node validator snapshot status --session <session>
+  snapshot status:
+    session: <session>
+    peer: 12D3KooW...
+    root: deadbeef...
+    plan_id: deadbeef...
+    last_chunk_index: 12
+    last_update_index: 3
+    last_update_height: 256
+    verified: false
+    error: none
    ```
 2. Inspect the stalled session directly to capture its last confirmed chunk and
    error string:
@@ -91,20 +92,21 @@ If the provider validator crashed or shows storage errors:
    curl -sS -X POST \
      -H 'Content-Type: application/json' \
      -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
-     -d '{
-           "peer":"<provider-peer-id>",
-           "chunk_size":32768,
-           "resume":{"session":<session>}
-         }' \
-     http://<consumer-host>:<port>/p2p/snapshots
+   -d '{
+          "peer":"<provider-peer-id>",
+          "chunk_size":32768,
+          "resume":{"session":<session>,"plan_id":"<plan-id>"}
+        }' \
+   http://<consumer-host>:<port>/p2p/snapshots
    ```
    The equivalent CLI shortcut handles authentication automatically:
    ```text
-   rpp-node validator snapshot resume --session <session> --peer <provider-peer-id>
+   rpp-node validator snapshot resume --session <session> --peer <provider-peer-id> --plan-id <plan-id>
    snapshot session resumed:
      session: <session>
      peer: <provider-peer-id>
      root: deadbeef...
+     plan_id: deadbeef...
      last_chunk_index: 327
      last_update_index: 12
      last_update_height: 4096
@@ -117,6 +119,9 @@ If the provider validator crashed or shows storage errors:
      `"precedes next expected chunk"` or
      `"skips ahead of next expected chunk"` means the request regressed or
      skipped offsets. Use the last confirmed chunk from Step 1 and try again.
+   - `500 Internal Server Error` with `"plan id"` indicates the provider has
+     rotated to a different snapshot plan; fetch the latest status to obtain the
+     new `plan_id` before retrying.
 3. Poll the session until `verified=true` and `error=null`:
    ```sh
    curl -sS \
@@ -161,6 +166,7 @@ log before closing the alert.
 | `POST /p2p/snapshots` / `rpp-node validator snapshot start` | Start/resume with valid offsets | `200 OK` | Returns `SnapshotStreamStatus` with updated indices. |
 | `POST /p2p/snapshots` / `rpp-node validator snapshot resume` | Resume with regressed offsets | `500 Internal Server Error` | Error message contains `"precedes next expected chunk"`. |
 | `POST /p2p/snapshots` / `rpp-node validator snapshot resume` | Resume skipping ahead | `500 Internal Server Error` | Error message contains `"skips ahead of next expected chunk"`. |
+| `POST /p2p/snapshots` / `rpp-node validator snapshot resume` | Resume with mismatched plan | `500 Internal Server Error` | Error message contains `"plan id"`; fetch the latest status to obtain the new `plan_id`. |
 | `DELETE /p2p/snapshots/<session>` / `rpp-node validator snapshot cancel` | Cancel active session | `204 No Content` | Removes the persisted session; follow with `status` to confirm deletion. |
 | `GET /p2p/snapshots/<session>` / `rpp-node validator snapshot status` | Unknown session ID | `404 Not Found` | Indicates record expired or was cleared. |
 | Any snapshot endpoint | Missing/invalid bearer token | `401 Unauthorized` | Add `Authorization: Bearer ${RPP_RPC_TOKEN}` header or rely on the CLI’s auto-injected token. |

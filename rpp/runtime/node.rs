@@ -1153,6 +1153,7 @@ struct RuntimeSnapshotSession {
     plan: NetworkStateSyncPlan,
     updates: Vec<NetworkLightClientUpdate>,
     snapshot_root: Hash,
+    plan_id: String,
     peer: NetworkPeerId,
     total_chunks: u64,
     total_updates: u64,
@@ -1168,6 +1169,7 @@ impl RuntimeSnapshotSession {
             session: session_id.get(),
             peer: self.peer.to_base58(),
             root: self.snapshot_root.to_hex().to_string(),
+            plan_id: Some(self.plan_id.clone()),
             total_chunks: self.total_chunks,
             total_updates: self.total_updates,
             last_chunk_index: self.last_chunk_index,
@@ -1183,6 +1185,8 @@ struct StoredSnapshotSession {
     session: u64,
     peer: String,
     root: String,
+    #[serde(default)]
+    plan_id: Option<String>,
     total_chunks: u64,
     total_updates: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1269,6 +1273,7 @@ impl SnapshotSessionStore {
                 session: session_id.get(),
                 peer: record.peer.clone(),
                 root: record.root.clone(),
+                plan_id: record.plan_id.clone(),
                 total_chunks: record.total_chunks,
                 total_updates: record.total_updates,
                 last_chunk_index: record.last_chunk_index,
@@ -1402,6 +1407,10 @@ impl RuntimeSnapshotProvider {
         let peer = NetworkPeerId::from_str(&record.peer)
             .map_err(|err| PipelineError::Persistence(format!("invalid peer id: {err}")))?;
         let snapshot_root = Self::decode_root_str(&record.root)?;
+        let plan_id = record
+            .plan_id
+            .clone()
+            .unwrap_or_else(|| record.root.clone());
 
         let state_plan = inner
             .state_sync_plan(chunk_size)
@@ -1457,6 +1466,7 @@ impl RuntimeSnapshotProvider {
             plan: network_plan,
             updates,
             snapshot_root,
+            plan_id,
             peer,
             total_chunks,
             total_updates,
@@ -1506,6 +1516,7 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
             ))
         })?;
         let snapshot_root = Self::decode_root(&network_plan)?;
+        let plan_id = network_plan.snapshot.commitments.global_state_root.clone();
         let total_chunks = u64::try_from(network_plan.chunks.len())
             .map_err(|_| PipelineError::SnapshotVerification("chunk count overflow".into()))?;
         let total_updates = u64::try_from(updates.len())
@@ -1524,6 +1535,7 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
                 plan: network_plan.clone(),
                 updates: updates.clone(),
                 snapshot_root,
+                plan_id: plan_id.clone(),
                 peer: peer.clone(),
                 total_chunks,
                 total_updates,
@@ -1535,6 +1547,7 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         session.plan = network_plan.clone();
         session.updates = updates.clone();
         session.snapshot_root = snapshot_root;
+        session.plan_id = plan_id;
         session.peer = peer;
         session.total_chunks = total_chunks;
         session.total_updates = total_updates;
@@ -1670,6 +1683,7 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
     fn resume_session(
         &self,
         session_id: SnapshotSessionId,
+        plan_id: &str,
         chunk_index: u64,
         update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error> {
@@ -1677,6 +1691,12 @@ impl SnapshotProvider for RuntimeSnapshotProvider {
         let session = sessions
             .get(&session_id)
             .ok_or(PipelineError::SnapshotNotFound)?;
+        if session.plan_id != plan_id {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume plan id {plan_id} does not match persisted plan {}",
+                session.plan_id
+            )));
+        }
         if chunk_index > session.total_chunks {
             return Err(PipelineError::SnapshotVerification(format!(
                 "resume chunk index {chunk_index} exceeds total {}",

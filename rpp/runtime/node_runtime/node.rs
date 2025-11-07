@@ -78,6 +78,7 @@ enum NodeCommand {
     },
     ResumeSnapshotStream {
         session: SnapshotSessionId,
+        plan_id: String,
         response: oneshot::Sender<Result<(), NodeError>>,
     },
     CancelSnapshotStream {
@@ -381,6 +382,7 @@ pub struct SnapshotStreamStatus {
     pub session: SnapshotSessionId,
     pub peer: PeerId,
     pub root: String,
+    pub plan_id: Option<String>,
     pub last_chunk_index: Option<u64>,
     pub last_update_index: Option<u64>,
     pub last_update_height: Option<u64>,
@@ -394,6 +396,11 @@ impl SnapshotStreamStatus {
             session,
             peer,
             root,
+            plan_id: if root.is_empty() {
+                None
+            } else {
+                Some(root.clone())
+            },
             last_chunk_index: None,
             last_update_index: None,
             last_update_height: None,
@@ -1142,6 +1149,7 @@ impl NodeInner {
         if let Some(root) = root_hint {
             if !root.is_empty() {
                 entry.root = root;
+                entry.plan_id = Some(entry.root.clone());
             }
         }
         update(entry);
@@ -1248,7 +1256,11 @@ impl NodeInner {
                 let _ = response.send(result);
                 Ok(false)
             }
-            NodeCommand::ResumeSnapshotStream { session, response } => {
+            NodeCommand::ResumeSnapshotStream {
+                session,
+                plan_id,
+                response,
+            } => {
                 let resume_params = {
                     let streams = self.snapshot_streams.read();
                     streams.get(&session).map(|status| {
@@ -1260,22 +1272,36 @@ impl NodeInner {
                             .last_update_index
                             .map(|index| index.saturating_add(1))
                             .unwrap_or(0);
-                        (status.peer.clone(), next_chunk, next_update)
+                        (
+                            status.peer.clone(),
+                            status.plan_id.clone(),
+                            next_chunk,
+                            next_update,
+                        )
                     })
                 };
-                let (peer, next_chunk, next_update) = match resume_params {
+                let (peer, expected_plan_id, next_chunk, next_update) = match resume_params {
                     Some(params) => params,
                     None => {
                         let _ = response.send(Err(NodeError::SnapshotStreamNotFound));
                         return Ok(false);
                     }
                 };
+                if let Some(expected) = expected_plan_id {
+                    if expected != plan_id {
+                        let error = PipelineError::SnapshotVerification(format!(
+                            "resume plan id {plan_id} does not match persisted plan {expected}"
+                        ));
+                        let _ = response.send(Err(NodeError::from(error)));
+                        return Ok(false);
+                    }
+                }
                 let result = self
                     .network
-                    .resume_snapshot_stream(session, next_chunk, next_update)
+                    .resume_snapshot_stream(session, plan_id.clone(), next_chunk, next_update)
                     .map_err(NodeError::from);
                 if result.is_ok() {
-                    self.update_snapshot_status(session, &peer, None, |status| {
+                    self.update_snapshot_status(session, &peer, Some(plan_id.clone()), |status| {
                         status.error = None;
                         status.verified = None;
                     });
@@ -2282,11 +2308,13 @@ impl NodeHandle {
     pub async fn resume_snapshot_stream(
         &self,
         session: SnapshotSessionId,
+        plan_id: String,
     ) -> Result<(), NodeError> {
         let (tx, rx) = oneshot::channel();
         self.commands
             .send(NodeCommand::ResumeSnapshotStream {
                 session,
+                plan_id,
                 response: tx,
             })
             .await

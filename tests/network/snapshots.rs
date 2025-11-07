@@ -293,9 +293,22 @@ async fn snapshot_sessions_persist_across_provider_restart() -> Result<()> {
 
         {
             let nodes = cluster.nodes();
+            let plan_id = nodes[1]
+                .node_handle
+                .snapshot_stream_status(session)
+                .and_then(|status| {
+                    status.plan_id.clone().or_else(|| {
+                        if status.root.is_empty() {
+                            None
+                        } else {
+                            Some(status.root)
+                        }
+                    })
+                })
+                .context("missing snapshot plan identifier before resume")?;
             nodes[1]
                 .node_handle
-                .resume_snapshot_stream(session)
+                .resume_snapshot_stream(session, plan_id)
                 .await
                 .context("resume snapshot stream")?;
         }

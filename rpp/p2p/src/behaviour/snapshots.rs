@@ -102,6 +102,7 @@ pub enum SnapshotsRequest {
     },
     Resume {
         session_id: SnapshotSessionId,
+        plan_id: String,
         chunk_index: u64,
         update_index: u64,
     },
@@ -182,6 +183,7 @@ pub trait SnapshotProvider: Send + Sync + 'static {
     fn resume_session(
         &self,
         session_id: SnapshotSessionId,
+        plan_id: &str,
         chunk_index: u64,
         update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error>;
@@ -231,10 +233,11 @@ impl<T: SnapshotProvider> SnapshotProvider for Arc<T> {
     fn resume_session(
         &self,
         session_id: SnapshotSessionId,
+        plan_id: &str,
         chunk_index: u64,
         update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error> {
-        (**self).resume_session(session_id, chunk_index, update_index)
+        (**self).resume_session(session_id, plan_id, chunk_index, update_index)
     }
 
     fn acknowledge(
@@ -280,6 +283,7 @@ impl SnapshotProvider for NullSnapshotProvider {
     fn resume_session(
         &self,
         _session_id: SnapshotSessionId,
+        _plan_id: &str,
         _chunk_index: u64,
         _update_index: u64,
     ) -> Result<SnapshotResumeState, Self::Error> {
@@ -699,6 +703,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         &mut self,
         peer: PeerId,
         session_id: SnapshotSessionId,
+        plan_id: String,
     ) -> Option<RequestResponseId> {
         let entry = self.sessions.get_mut(&session_id)?;
         if entry.in_flight.is_some() || entry.peer != peer {
@@ -706,6 +711,7 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
         }
         let request = SnapshotsRequest::Resume {
             session_id,
+            plan_id,
             chunk_index: entry.next_chunk_index,
             update_index: entry.next_update_index,
         };
@@ -995,11 +1001,12 @@ impl<P: SnapshotProvider> SnapshotsBehaviour<P> {
             },
             SnapshotsRequest::Resume {
                 session_id,
+                plan_id,
                 chunk_index,
                 update_index,
             } => match self
                 .provider
-                .resume_session(session_id, chunk_index, update_index)
+                .resume_session(session_id, &plan_id, chunk_index, update_index)
             {
                 Ok(resume) => {
                     let _ = self.inner.send_response(

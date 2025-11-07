@@ -35,6 +35,8 @@ struct SnapshotStatusPayload {
     peer: String,
     root: String,
     #[serde(default)]
+    plan_id: Option<String>,
+    #[serde(default)]
     last_chunk_index: Option<u64>,
     #[serde(default)]
     last_update_index: Option<u64>,
@@ -57,6 +59,7 @@ struct StartRequest {
 #[derive(Debug, Deserialize)]
 struct ResumeMarker {
     session: u64,
+    plan_id: String,
 }
 
 struct SnapshotTestServer {
@@ -102,6 +105,7 @@ async fn snapshot_cli_happy_path() -> Result<()> {
         .stdout(contains(format!("session: {SESSION_ID}")))
         .stdout(contains(format!("peer: {peer}")))
         .stdout(contains(format!("root: {SNAPSHOT_ROOT}")))
+        .stdout(contains(format!("plan_id: {SNAPSHOT_ROOT}")))
         .stdout(contains("last_chunk_index: none"))
         .stdout(contains("last_update_index: none"))
         .stdout(contains("verified: unknown"))
@@ -118,6 +122,7 @@ async fn snapshot_cli_happy_path() -> Result<()> {
         .assert()
         .success()
         .stdout(contains("snapshot status:"))
+        .stdout(contains(format!("plan_id: {SNAPSHOT_ROOT}")))
         .stdout(contains("last_chunk_index: none"));
 
     AssertCommand::cargo_bin("rpp-node")?
@@ -130,11 +135,14 @@ async fn snapshot_cli_happy_path() -> Result<()> {
         .arg(SESSION_ID.to_string())
         .arg("--peer")
         .arg(peer)
+        .arg("--plan-id")
+        .arg(SNAPSHOT_ROOT)
         .arg("--chunk-size")
         .arg("4096")
         .assert()
         .success()
         .stdout(contains("snapshot session resumed:"))
+        .stdout(contains(format!("plan_id: {SNAPSHOT_ROOT}")))
         .stdout(contains("last_chunk_index: 12"))
         .stdout(contains("last_update_index: 3"))
         .stdout(contains("verified: false"));
@@ -280,6 +288,10 @@ async fn start_snapshot(
         let entry = statuses
             .get_mut(&resume.session)
             .ok_or(StatusCode::NOT_FOUND)?;
+        if resume.plan_id != SNAPSHOT_ROOT {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        entry.plan_id = Some(resume.plan_id);
         entry.last_chunk_index = Some(12);
         entry.last_update_index = Some(3);
         entry.last_update_height = Some(256);
@@ -290,6 +302,7 @@ async fn start_snapshot(
             session,
             peer: request.peer,
             root: SNAPSHOT_ROOT.to_string(),
+            plan_id: Some(SNAPSHOT_ROOT.to_string()),
             last_chunk_index: None,
             last_update_index: None,
             last_update_height: None,

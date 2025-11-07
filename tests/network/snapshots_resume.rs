@@ -33,22 +33,20 @@ async fn snapshot_resume_rejects_regressed_offsets_over_http() -> Result<()> {
         tokio::time::sleep(SNAPSHOT_BUILD_DELAY).await;
 
         let client = http_client()?;
-        let (session, provider_peer, base_url) =
+        let (session, provider_peer, base_url, plan_id) =
             start_stream_via_http(&mut cluster, &client).await?;
 
         let consumer_handle = cluster.nodes()[1].node_handle.clone();
 
-        let progress = wait_for_snapshot_status(
-            &consumer_handle,
-            session,
-            SNAPSHOT_POLL_TIMEOUT,
-            |status| status
-                .last_chunk_index
-                .map(|index| index >= MIN_RESUME_CHUNK)
-                .unwrap_or(false),
-        )
-        .await
-        .context("wait for snapshot progress")?;
+        let progress =
+            wait_for_snapshot_status(&consumer_handle, session, SNAPSHOT_POLL_TIMEOUT, |status| {
+                status
+                    .last_chunk_index
+                    .map(|index| index >= MIN_RESUME_CHUNK)
+                    .unwrap_or(false)
+            })
+            .await
+            .context("wait for snapshot progress")?;
 
         let progressed_chunk = progress
             .last_chunk_index
@@ -56,8 +54,7 @@ async fn snapshot_resume_rejects_regressed_offsets_over_http() -> Result<()> {
 
         inflate_confirmed_chunk(&cluster.nodes()[0], session, progressed_chunk).await?;
 
-        cluster
-            .nodes_mut()[0]
+        cluster.nodes_mut()[0]
             .restart()
             .await
             .context("restart provider after tampering")?;
@@ -72,6 +69,7 @@ async fn snapshot_resume_rejects_regressed_offsets_over_http() -> Result<()> {
             chunk_size: default_chunk_size(),
             resume: Some(ResumeMarker {
                 session: session.get(),
+                plan_id: plan_id.clone(),
             }),
         };
 
@@ -107,10 +105,7 @@ async fn snapshot_resume_rejects_regressed_offsets_over_http() -> Result<()> {
     }
     .await;
 
-    cluster
-        .shutdown()
-        .await
-        .context("cluster shutdown")?;
+    cluster.shutdown().await.context("cluster shutdown")?;
 
     result
 }
@@ -130,22 +125,20 @@ async fn snapshot_resume_rejects_skipped_offsets_via_runtime() -> Result<()> {
         tokio::time::sleep(SNAPSHOT_BUILD_DELAY).await;
 
         let client = http_client()?;
-        let (session, _peer, _base_url) =
+        let (session, _peer, _base_url, plan_id) =
             start_stream_via_http(&mut cluster, &client).await?;
 
         let consumer_handle = cluster.nodes()[1].node_handle.clone();
 
-        let progress = wait_for_snapshot_status(
-            &consumer_handle,
-            session,
-            SNAPSHOT_POLL_TIMEOUT,
-            |status| status
-                .last_chunk_index
-                .map(|index| index >= MIN_RESUME_CHUNK)
-                .unwrap_or(false),
-        )
-        .await
-        .context("wait for snapshot progress")?;
+        let progress =
+            wait_for_snapshot_status(&consumer_handle, session, SNAPSHOT_POLL_TIMEOUT, |status| {
+                status
+                    .last_chunk_index
+                    .map(|index| index >= MIN_RESUME_CHUNK)
+                    .unwrap_or(false)
+            })
+            .await
+            .context("wait for snapshot progress")?;
 
         let progressed_chunk = progress
             .last_chunk_index
@@ -153,8 +146,7 @@ async fn snapshot_resume_rejects_skipped_offsets_via_runtime() -> Result<()> {
 
         deflate_confirmed_chunk(&cluster.nodes()[0], session, progressed_chunk).await?;
 
-        cluster
-            .nodes_mut()[0]
+        cluster.nodes_mut()[0]
             .restart()
             .await
             .context("restart provider after deflating chunk")?;
@@ -166,7 +158,7 @@ async fn snapshot_resume_rejects_skipped_offsets_via_runtime() -> Result<()> {
 
         let err = cluster.nodes()[1]
             .p2p_handle
-            .resume_snapshot_stream(session)
+            .resume_snapshot_stream(session, plan_id.clone())
             .await
             .expect_err("resume with skipped offsets should fail");
 
@@ -179,10 +171,91 @@ async fn snapshot_resume_rejects_skipped_offsets_via_runtime() -> Result<()> {
     }
     .await;
 
-    cluster
-        .shutdown()
-        .await
-        .context("cluster shutdown")?;
+    cluster.shutdown().await.context("cluster shutdown")?;
+
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_resume_rejects_plan_id_mismatches() -> Result<()> {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let mut cluster = start_snapshot_cluster().await?;
+
+    let result = async {
+        cluster
+            .wait_for_full_mesh(NETWORK_TIMEOUT)
+            .await
+            .context("cluster mesh")?;
+
+        tokio::time::sleep(SNAPSHOT_BUILD_DELAY).await;
+
+        let client = http_client()?;
+        let (session, provider_peer, base_url, plan_id) =
+            start_stream_via_http(&mut cluster, &client).await?;
+
+        let consumer_handle = cluster.nodes()[1].node_handle.clone();
+        let progress =
+            wait_for_snapshot_status(&consumer_handle, session, SNAPSHOT_POLL_TIMEOUT, |status| {
+                status
+                    .last_chunk_index
+                    .map(|index| index >= MIN_RESUME_CHUNK)
+                    .unwrap_or(false)
+            })
+            .await
+            .context("wait for snapshot progress")?;
+
+        let wrong_plan_id = format!("{plan_id}-mismatch");
+
+        let resume_request = StartSnapshotStreamRequest {
+            peer: provider_peer,
+            chunk_size: default_chunk_size(),
+            resume: Some(ResumeMarker {
+                session: session.get(),
+                plan_id: wrong_plan_id.clone(),
+            }),
+        };
+
+        let response = client
+            .post(format!("{base_url}/p2p/snapshots"))
+            .json(&resume_request)
+            .send()
+            .await
+            .context("resume snapshot stream request")?;
+
+        if response.status() != StatusCode::INTERNAL_SERVER_ERROR {
+            anyhow::bail!("unexpected resume status {}", response.status());
+        }
+
+        let body: Value = response
+            .json()
+            .await
+            .context("decode resume mismatch response")?;
+        let error = body
+            .get("error")
+            .and_then(Value::as_str)
+            .context("resume mismatch error missing message")?;
+        if !error.contains("plan id") {
+            anyhow::bail!("unexpected resume error: {error}");
+        }
+
+        let err = cluster.nodes()[1]
+            .p2p_handle
+            .resume_snapshot_stream(session, wrong_plan_id)
+            .await
+            .expect_err("resume with mismatched plan id should fail");
+        let message = format!("{err}");
+        if !message.contains("plan id") {
+            anyhow::bail!("unexpected runtime resume error: {message}");
+        }
+
+        drop(progress);
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    cluster.shutdown().await.context("cluster shutdown")?;
 
     result
 }
@@ -197,7 +270,7 @@ fn http_client() -> Result<Client> {
 async fn start_stream_via_http(
     cluster: &mut TestCluster,
     client: &Client,
-) -> Result<(SnapshotSessionId, String, String)> {
+) -> Result<(SnapshotSessionId, String, String, String)> {
     let nodes = cluster.nodes();
     let provider = &nodes[0];
     let consumer = &nodes[1];
@@ -226,7 +299,12 @@ async fn start_stream_via_http(
 
     let session = SnapshotSessionId::new(status.session);
 
-    Ok((session, provider_peer, base_url))
+    let plan_id = status
+        .plan_id
+        .clone()
+        .unwrap_or_else(|| status.root.clone());
+
+    Ok((session, provider_peer, base_url, plan_id))
 }
 
 async fn inflate_confirmed_chunk(
@@ -281,8 +359,8 @@ where
         .await
         .with_context(|| format!("read snapshot session store at {}", path.display()))?;
 
-    let mut records: Vec<Value> = serde_json::from_slice(&data)
-        .context("decode snapshot session store")?;
+    let mut records: Vec<Value> =
+        serde_json::from_slice(&data).context("decode snapshot session store")?;
 
     let record = records
         .iter_mut()
