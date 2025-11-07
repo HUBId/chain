@@ -78,11 +78,17 @@ struct MockSnapshotProvider {
     gate: Mutex<GateState>,
     condvar: Condvar,
     pause_after_chunk: u64,
+    last_chunk_index: Mutex<Option<u64>>,
+    last_update_index: Mutex<Option<u64>>,
+    total_chunks: u64,
+    total_updates: u64,
 }
 
 impl MockSnapshotProvider {
     fn new(plan: NetworkStateSyncPlan, store: SnapshotStore, root: blake3::Hash) -> Arc<Self> {
         let updates = plan.light_client_updates.clone();
+        let total_chunks = plan.chunks.len() as u64;
+        let total_updates = updates.len() as u64;
         Arc::new(Self {
             plan,
             store,
@@ -96,6 +102,10 @@ impl MockSnapshotProvider {
             }),
             condvar: Condvar::new(),
             pause_after_chunk: 1,
+            last_chunk_index: Mutex::new(None),
+            last_update_index: Mutex::new(None),
+            total_chunks,
+            total_updates,
         })
     }
 
@@ -150,6 +160,10 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             .lock()
             .expect("flow log")
             .push(ProviderCall::FetchChunk(chunk_index));
+        {
+            let mut last = self.last_chunk_index.lock().expect("last chunk");
+            *last = Some(chunk_index);
+        }
         Ok(chunk)
     }
 
@@ -172,6 +186,10 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             .lock()
             .expect("flow log")
             .push(ProviderCall::FetchUpdate(update_index));
+        {
+            let mut last = self.last_update_index.lock().expect("last update");
+            *last = Some(update_index);
+        }
         Ok(update)
     }
 
@@ -189,6 +207,48 @@ impl rpp_p2p::SnapshotProvider for MockSnapshotProvider {
             .lock()
             .expect("resume log")
             .push((session_id, chunk_index, update_index));
+        if chunk_index > self.total_chunks {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume chunk index {chunk_index} exceeds total {}",
+                self.total_chunks
+            )));
+        }
+        if update_index > self.total_updates {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume update index {update_index} exceeds total {}",
+                self.total_updates
+            )));
+        }
+        let expected_chunk_index = {
+            let last = self.last_chunk_index.lock().expect("last chunk");
+            last.map(|index| index.saturating_add(1).min(self.total_chunks))
+                .unwrap_or(0)
+        };
+        if chunk_index < expected_chunk_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume chunk index {chunk_index} precedes next expected chunk {expected_chunk_index}"
+            )));
+        }
+        if chunk_index > expected_chunk_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume chunk index {chunk_index} skips ahead of next expected chunk {expected_chunk_index}"
+            )));
+        }
+        let expected_update_index = {
+            let last = self.last_update_index.lock().expect("last update");
+            last.map(|index| index.saturating_add(1).min(self.total_updates))
+                .unwrap_or(0)
+        };
+        if update_index < expected_update_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume update index {update_index} precedes next expected update {expected_update_index}"
+            )));
+        }
+        if update_index > expected_update_index {
+            return Err(PipelineError::SnapshotVerification(format!(
+                "resume update index {update_index} skips ahead of next expected update {expected_update_index}"
+            )));
+        }
         let mut state = self.gate.lock().expect("gate");
         state.resume_allowed = true;
         self.condvar.notify_all();
@@ -462,6 +522,115 @@ async fn snapshot_stream_pause_and_resume() {
 
     let acknowledgements = provider.acknowledgements();
     assert_eq!(acknowledgements, vec![(session, SnapshotItemKind::Ack, 0)]);
+
+    drop(client);
+    drop(server);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_resume_rejects_invalid_offsets() {
+    let mut store = SnapshotStore::new(8);
+    let payload = b"abcdefgh".to_vec();
+    let root = store.insert(payload);
+    let root_hex = hex::encode(root.as_bytes());
+    let plan = sample_plan(root_hex.clone());
+    let provider = MockSnapshotProvider::new(plan.clone(), store, root);
+
+    let server_dir = tempdir().expect("server");
+    let client_dir = tempdir().expect("client");
+
+    let mut server = init_network(
+        &server_dir,
+        "server",
+        TierLevel::Tl3,
+        Some(provider.clone()),
+    );
+    let mut client = init_network(&client_dir, "client", TierLevel::Tl3, None);
+
+    server
+        .listen_on("/ip4/127.0.0.1/tcp/0".parse().expect("addr"))
+        .expect("listen");
+
+    let listen_addr = loop {
+        match timeout(Duration::from_secs(5), server.next_event()).await {
+            Ok(Ok(NetworkEvent::NewListenAddr(addr))) => break addr,
+            Ok(_) => continue,
+            Err(err) => panic!("listen timeout: {err:?}"),
+        }
+    };
+
+    client.dial(listen_addr).expect("dial");
+
+    let mut got_client_handshake = false;
+    let mut got_server_handshake = false;
+
+    timeout(Duration::from_secs(10), async {
+        while !(got_client_handshake && got_server_handshake) {
+            tokio::select! {
+                event = client.next_event() => {
+                    if let Ok(NetworkEvent::HandshakeCompleted { .. }) = event {
+                        got_client_handshake = true;
+                    }
+                }
+                event = server.next_event() => {
+                    if let Ok(NetworkEvent::HandshakeCompleted { .. }) = event {
+                        got_server_handshake = true;
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("handshake");
+
+    let session = SnapshotSessionId::new(11);
+    client
+        .start_snapshot_stream(session, server.local_peer_id(), root_hex)
+        .expect("start stream");
+
+    let mut resume_attempted = false;
+    let mut error_reason: Option<String> = None;
+
+    timeout(Duration::from_secs(20), async {
+        while error_reason.is_none() {
+            tokio::select! {
+                event = client.next_event() => {
+                    match event.expect("client event") {
+                        NetworkEvent::SnapshotPlan { .. } => {}
+                        NetworkEvent::SnapshotChunk { session: event_session, index, .. } => {
+                            if index == 0 && !resume_attempted {
+                                resume_attempted = true;
+                                client.force_clear_snapshot_pending(event_session);
+                                client
+                                    .resume_snapshot_stream(event_session, 0, 0)
+                                    .expect("resume request");
+                            }
+                        }
+                        NetworkEvent::SnapshotStreamError { reason, .. } => {
+                            error_reason = Some(reason);
+                        }
+                        _ => {}
+                    }
+                }
+                event = server.next_event() => {
+                    if let Ok(NetworkEvent::SnapshotStreamError { reason, .. }) = event {
+                        panic!("server stream error: {reason}");
+                    }
+                }
+            }
+        }
+    })
+    .await
+    .expect("resume error observed");
+
+    let reason = error_reason.expect("resume error");
+    assert!(
+        reason.contains("resume chunk index 0 precedes next expected chunk 1"),
+        "unexpected error message: {reason}"
+    );
+
+    let flow_log = provider.flow_log();
+    assert!(flow_log.contains(&ProviderCall::Resume(0, 0)));
 
     drop(client);
     drop(server);
