@@ -35,3 +35,8 @@ Die neue Testsuite deckt sowohl den Snapshot-Roundtrip als auch die
 Replay-Abwehr ab: der erste Test streamt eine Beispielaufnahme über Producer
 und Consumer, der zweite provoziert unterschiedliche Fehlerpfade (stale root,
 Digest-Mismatch, falscher Domain-Tag).【F:tests/consensus/timetoke_snapshots.rs†L48-L168】
+
+Operative Failover-Schritte und Replay-Wiederherstellungen dokumentiert das
+[Timetoke-Failover-Runbook](../runbooks/timetoke_failover.md), das die
+hier beschriebenen Mechanismen mit konkreten Alerts, CLI-Aufrufen und
+Troubleshooting-Tipps verbindet.
