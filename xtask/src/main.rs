@@ -2,19 +2,23 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration as StdDuration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use blake3::hash as blake3_hash;
 use flate2::read::GzDecoder;
+use reqwest::blocking::Client as HttpClient;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use tempfile::TempDir;
+use time::format_description::well_known::Rfc3339;
+use time::{Duration as TimeDuration, OffsetDateTime};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -158,7 +162,7 @@ fn run_full_test_matrix() -> Result<()> {
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives",
     );
 }
 
@@ -166,6 +170,447 @@ fn proof_metadata_usage() {
     eprintln!(
         "usage: cargo xtask proof-metadata [--format json|markdown] [--output <path>]\n\nOutputs proof metadata aggregated from Plonky3 setup files, STWO verifying keys, and the blueprint.",
     );
+}
+
+fn report_timetoke_slo_usage() {
+    eprintln!(
+        "usage: cargo xtask report-timetoke-slo [--prometheus-url <url>] [--bearer-token <token>] [--metrics-log <path>] [--output <path>]\n\nSummarises the Timetoke replay success rate and latency SLOs across the last seven days. The command falls back to the environment variables TIMETOKE_PROMETHEUS_URL, TIMETOKE_PROMETHEUS_BEARER, and TIMETOKE_METRICS_LOG when CLI arguments are not provided.",
+    );
+}
+
+const TIMETOKE_LOOKBACK_DAYS: i64 = 7;
+const TIMETOKE_SUCCESS_RATE_TARGET: f64 = 0.99;
+const TIMETOKE_LATENCY_P50_TARGET_MS: f64 = 5_000.0;
+const TIMETOKE_LATENCY_P95_TARGET_MS: f64 = 60_000.0;
+const TIMETOKE_LATENCY_P99_TARGET_MS: f64 = 120_000.0;
+
+#[derive(Default)]
+struct TimetokeSloSummary {
+    source: String,
+    window_start: Option<OffsetDateTime>,
+    window_end: Option<OffsetDateTime>,
+    successes: f64,
+    failures: f64,
+    p50_ms: Option<f64>,
+    p95_ms: Option<f64>,
+    p99_ms: Option<f64>,
+}
+
+impl TimetokeSloSummary {
+    fn success_rate(&self) -> Option<f64> {
+        let total = self.successes + self.failures;
+        if total > 0.0 {
+            Some(self.successes / total)
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct TimetokeLogEntry {
+    timestamp: String,
+    successes: Option<f64>,
+    failures: Option<f64>,
+    #[serde(rename = "p50_ms")]
+    replay_ms_p50: Option<f64>,
+    #[serde(rename = "p95_ms")]
+    replay_ms_p95: Option<f64>,
+    #[serde(rename = "p99_ms")]
+    replay_ms_p99: Option<f64>,
+    #[serde(rename = "replay_p50_ms")]
+    replay_alt_p50: Option<f64>,
+    #[serde(rename = "replay_p95_ms")]
+    replay_alt_p95: Option<f64>,
+    #[serde(rename = "replay_p99_ms")]
+    replay_alt_p99: Option<f64>,
+}
+
+fn report_timetoke_slo(args: &[String]) -> Result<()> {
+    let mut prometheus_url: Option<String> = None;
+    let mut bearer_token: Option<String> = None;
+    let mut metrics_log: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--prometheus-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--prometheus-url requires a value"))?;
+                prometheus_url = normalise_string(Some(value.clone()));
+            }
+            "--bearer-token" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--bearer-token requires a value"))?;
+                bearer_token = normalise_string(Some(value.clone()));
+            }
+            "--metrics-log" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--metrics-log requires a value"))?;
+                if let Some(path) = normalise_string(Some(value.clone())) {
+                    metrics_log = Some(PathBuf::from(path));
+                }
+            }
+            "--output" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--output requires a value"))?;
+                output = Some(PathBuf::from(value));
+            }
+            "--help" | "-h" => {
+                report_timetoke_slo_usage();
+                return Ok(());
+            }
+            other => bail!("unknown argument '{other}' for report-timetoke-slo"),
+        }
+    }
+
+    if prometheus_url.is_none() {
+        prometheus_url = env::var("TIMETOKE_PROMETHEUS_URL")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)))
+            .or_else(|| {
+                env::var("PROMETHEUS_URL")
+                    .ok()
+                    .and_then(|v| normalise_string(Some(v)))
+            });
+    }
+    if bearer_token.is_none() {
+        bearer_token = env::var("TIMETOKE_PROMETHEUS_BEARER")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)))
+            .or_else(|| {
+                env::var("PROMETHEUS_BEARER_TOKEN")
+                    .ok()
+                    .and_then(|v| normalise_string(Some(v)))
+            });
+    }
+    if metrics_log.is_none() {
+        metrics_log = env::var("TIMETOKE_METRICS_LOG")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)))
+            .map(PathBuf::from);
+    }
+
+    let summary = if let Some(url) = prometheus_url {
+        fetch_prometheus_summary(&url, bearer_token.as_deref())?
+    } else {
+        let path = metrics_log.ok_or_else(|| {
+            anyhow!("report-timetoke-slo requires either --prometheus-url or --metrics-log")
+        })?;
+        parse_log_summary(&path)?
+    };
+
+    let report = render_timetoke_report(&summary);
+    println!("{report}");
+
+    if let Some(path) = output {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("create output directory {}", parent.display()))?;
+            }
+        }
+        fs::write(&path, report.as_bytes())
+            .with_context(|| format!("write Timetoke SLO report to {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn normalise_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .and_then(|v| if v.is_empty() { None } else { Some(v) })
+}
+
+fn fetch_prometheus_summary(url: &str, bearer: Option<&str>) -> Result<TimetokeSloSummary> {
+    let client = HttpClient::builder()
+        .timeout(StdDuration::from_secs(30))
+        .build()
+        .context("construct HTTP client")?;
+    let now = OffsetDateTime::now_utc();
+    let start = now - TimeDuration::days(TIMETOKE_LOOKBACK_DAYS);
+
+    let successes = query_prometheus_value(
+        &client,
+        url,
+        bearer,
+        "sum(increase(timetoke_replay_success_total[7d]))",
+    )?
+    .unwrap_or(0.0);
+    let failures = query_prometheus_value(
+        &client,
+        url,
+        bearer,
+        "sum(increase(timetoke_replay_failure_total[7d]))",
+    )?
+    .unwrap_or(0.0);
+    let p50_ms = query_prometheus_value(
+        &client,
+        url,
+        bearer,
+        "histogram_quantile(0.50, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))",
+    )?;
+    let p95_ms = query_prometheus_value(
+        &client,
+        url,
+        bearer,
+        "histogram_quantile(0.95, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))",
+    )?;
+    let p99_ms = query_prometheus_value(
+        &client,
+        url,
+        bearer,
+        "histogram_quantile(0.99, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))",
+    )?;
+
+    Ok(TimetokeSloSummary {
+        source: format!("Prometheus {}", url),
+        window_start: Some(start),
+        window_end: Some(now),
+        successes,
+        failures,
+        p50_ms,
+        p95_ms,
+        p99_ms,
+    })
+}
+
+fn query_prometheus_value(
+    client: &HttpClient,
+    base_url: &str,
+    bearer: Option<&str>,
+    query: &str,
+) -> Result<Option<f64>> {
+    let endpoint = format!("{}/api/v1/query", base_url.trim_end_matches('/'));
+    let mut request = client.get(&endpoint).query(&[("query", query)]);
+    if let Some(token) = bearer {
+        request = request.bearer_auth(token);
+    }
+
+    let response = request
+        .send()
+        .with_context(|| format!("query Prometheus for '{query}'"))?
+        .error_for_status()
+        .with_context(|| format!("Prometheus returned error status for '{query}'"))?
+        .json::<JsonValue>()
+        .with_context(|| format!("decode Prometheus response for '{query}'"))?;
+
+    match response.get("status").and_then(|value| value.as_str()) {
+        Some("success") => {}
+        Some(other) => {
+            bail!("Prometheus reported status '{other}' for query '{query}'");
+        }
+        None => {
+            bail!("Prometheus response missing status for query '{query}'");
+        }
+    }
+
+    let result = response
+        .get("data")
+        .and_then(|data| data.get("result"))
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| anyhow!("Prometheus response missing data.result for '{query}'"))?;
+
+    let Some(first) = result.first() else {
+        return Ok(None);
+    };
+    let value = first
+        .get("value")
+        .and_then(|value| value.as_array())
+        .and_then(|values| values.get(1))
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| anyhow!("Prometheus response missing value for '{query}'"))?;
+    let parsed = value
+        .parse::<f64>()
+        .with_context(|| format!("parse Prometheus value '{value}' for '{query}'"))?;
+    Ok(Some(parsed))
+}
+
+fn parse_log_summary(path: &Path) -> Result<TimetokeSloSummary> {
+    let file = fs::File::open(path)
+        .with_context(|| format!("open Timetoke metrics log {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let cutoff = OffsetDateTime::now_utc() - TimeDuration::days(TIMETOKE_LOOKBACK_DAYS);
+
+    let mut summary = TimetokeSloSummary::default();
+    summary.source = format!("log file {}", path.display());
+
+    let mut min_ts: Option<OffsetDateTime> = None;
+    let mut max_ts: Option<OffsetDateTime> = None;
+    let mut samples = 0usize;
+
+    for (index, line) in reader.lines().enumerate() {
+        let line =
+            line.with_context(|| format!("read entry {} from {}", index + 1, path.display()))?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let entry: TimetokeLogEntry = serde_json::from_str(trimmed).with_context(|| {
+            format!(
+                "parse Timetoke metrics entry {} from {}",
+                index + 1,
+                path.display()
+            )
+        })?;
+        let timestamp = OffsetDateTime::parse(&entry.timestamp, &Rfc3339).with_context(|| {
+            format!(
+                "parse timestamp '{}' in {}",
+                entry.timestamp,
+                path.display()
+            )
+        })?;
+        if timestamp < cutoff {
+            continue;
+        }
+        samples += 1;
+        summary.successes += entry.successes.unwrap_or(0.0);
+        summary.failures += entry.failures.unwrap_or(0.0);
+
+        if let Some(value) = entry.replay_ms_p50.or(entry.replay_alt_p50) {
+            summary.p50_ms = Some(match summary.p50_ms {
+                Some(existing) => existing.max(value),
+                None => value,
+            });
+        }
+        if let Some(value) = entry.replay_ms_p95.or(entry.replay_alt_p95) {
+            summary.p95_ms = Some(match summary.p95_ms {
+                Some(existing) => existing.max(value),
+                None => value,
+            });
+        }
+        if let Some(value) = entry.replay_ms_p99.or(entry.replay_alt_p99) {
+            summary.p99_ms = Some(match summary.p99_ms {
+                Some(existing) => existing.max(value),
+                None => value,
+            });
+        }
+
+        min_ts = Some(match min_ts {
+            Some(existing) if existing <= timestamp => existing,
+            _ => timestamp,
+        });
+        max_ts = Some(match max_ts {
+            Some(existing) if existing >= timestamp => existing,
+            _ => timestamp,
+        });
+    }
+
+    if samples == 0 {
+        bail!(
+            "no Timetoke metrics found in {} within the last {} days",
+            path.display(),
+            TIMETOKE_LOOKBACK_DAYS
+        );
+    }
+
+    summary.window_start = min_ts;
+    summary.window_end = max_ts;
+
+    Ok(summary)
+}
+
+fn render_timetoke_report(summary: &TimetokeSloSummary) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Timetoke Replay SLO Report (last {} days)",
+        TIMETOKE_LOOKBACK_DAYS
+    );
+    let _ = writeln!(output);
+    let _ = writeln!(output, "- Source: {}", summary.source);
+    if let (Some(start), Some(end)) = (
+        format_optional_datetime(summary.window_start),
+        format_optional_datetime(summary.window_end),
+    ) {
+        let _ = writeln!(output, "- Window: {} – {}", start, end);
+    } else if let Some(end) = format_optional_datetime(summary.window_end) {
+        let _ = writeln!(output, "- Window end: {}", end);
+    }
+
+    let total = summary.successes + summary.failures;
+    let _ = writeln!(output);
+    let _ = writeln!(output, "## Replay success");
+    let _ = writeln!(output, "- Observations: {:.0}", total);
+    let _ = writeln!(output, "- Successes: {:.0}", summary.successes);
+    let _ = writeln!(output, "- Failures: {:.0}", summary.failures);
+    match summary.success_rate() {
+        Some(rate) => {
+            let percent = rate * 100.0;
+            let status = if rate >= TIMETOKE_SUCCESS_RATE_TARGET {
+                "✅"
+            } else {
+                "❌"
+            };
+            let _ = writeln!(
+                output,
+                "- Success rate: {} {:.2}% (target ≥ {:.2}%)",
+                status,
+                percent,
+                TIMETOKE_SUCCESS_RATE_TARGET * 100.0
+            );
+        }
+        None => {
+            let _ = writeln!(
+                output,
+                "- Success rate: ⚠️ unavailable (target ≥ {:.2}%)",
+                TIMETOKE_SUCCESS_RATE_TARGET * 100.0
+            );
+        }
+    }
+
+    let _ = writeln!(output);
+    let _ = writeln!(output, "## Replay latency (timetoke_replay_duration_ms)");
+    render_latency_line(
+        &mut output,
+        "p50",
+        summary.p50_ms,
+        TIMETOKE_LATENCY_P50_TARGET_MS,
+    );
+    render_latency_line(
+        &mut output,
+        "p95",
+        summary.p95_ms,
+        TIMETOKE_LATENCY_P95_TARGET_MS,
+    );
+    render_latency_line(
+        &mut output,
+        "p99",
+        summary.p99_ms,
+        TIMETOKE_LATENCY_P99_TARGET_MS,
+    );
+
+    output
+}
+
+fn render_latency_line(buffer: &mut String, label: &str, value: Option<f64>, target: f64) {
+    match value {
+        Some(latency) => {
+            let status = if latency <= target { "✅" } else { "❌" };
+            let _ = writeln!(
+                buffer,
+                "- {}: {} {:.2} ms (target ≤ {:.0} ms)",
+                label, status, latency, target
+            );
+        }
+        None => {
+            let _ = writeln!(
+                buffer,
+                "- {}: ⚠️ no data (target ≤ {:.0} ms)",
+                label, target
+            );
+        }
+    }
+}
+
+fn format_optional_datetime(value: Option<OffsetDateTime>) -> Option<String> {
+    value.and_then(|dt| dt.format(&Rfc3339).ok())
 }
 
 fn main() -> Result<()> {
@@ -187,6 +632,7 @@ fn main() -> Result<()> {
         "proof-metadata" => generate_proof_metadata(&argv),
         "plonky3-setup" => regenerate_plonky3_setup(&argv),
         "plonky3-verify" => verify_plonky3_setup(),
+        "report-timetoke-slo" => report_timetoke_slo(&argv),
         "help" => {
             usage();
             Ok(())
