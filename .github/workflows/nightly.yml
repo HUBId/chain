@@ -39,6 +39,43 @@ jobs:
           name: timetoke-slo-report
           path: timetoke-slo-report.md
 
+  snapshot-health:
+    name: Snapshot stream health audit
+    if: ${{ secrets.SNAPSHOT_RPC_URL != '' }}
+    runs-on: ubuntu-latest
+    env:
+      SNAPSHOT_RPC_URL: ${{ secrets.SNAPSHOT_RPC_URL }}
+      SNAPSHOT_RPC_TOKEN: ${{ secrets.SNAPSHOT_RPC_TOKEN }}
+      SNAPSHOT_MANIFEST_PATH: ${{ secrets.SNAPSHOT_MANIFEST_PATH }}
+      SNAPSHOT_MANIFEST_JSON: ${{ secrets.SNAPSHOT_MANIFEST_JSON }}
+      SNAPSHOT_VALIDATOR_CONFIG: ${{ secrets.SNAPSHOT_VALIDATOR_CONFIG }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build rpp-node CLI
+        run: |
+          set -euo pipefail
+          cargo build -p rpp-node --release
+
+      - name: Audit snapshot sessions
+        run: |
+          set -euo pipefail
+          CONFIG_PATH="${SNAPSHOT_VALIDATOR_CONFIG:-config/validator.toml}"
+          cargo xtask snapshot-health \
+            --config "${CONFIG_PATH}" \
+            --output snapshot-health-report.json \
+            --rpp-node-bin target/release/rpp-node
+
+      - name: Upload snapshot health report
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-health-report
+          path: snapshot-health-report.json
+
   plonky3-hash-audit:
     name: Plonky3 release hash audit
     runs-on: ubuntu-latest
