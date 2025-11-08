@@ -105,26 +105,67 @@ jobs:
             fi
           }
 
+          ensure_apt_package() {
+            local binary="$1"
+            shift
+            local package="$1"
+            if ! command -v "${binary}" >/dev/null 2>&1; then
+              if [ "${APT_UPDATED:-false}" != true ]; then
+                sudo apt-get update
+                APT_UPDATED=true
+              fi
+              sudo apt-get install -y "${package}"
+            fi
+          }
+
           extract_archive() {
             local source="$1"
             local archive="$2"
             local destination="$3"
 
             case "${source}" in
-              *.tar|*.tar.gz|*.tgz|*.tar.xz)
+              *.tar)
                 tar -xf "${archive}" -C "${destination}"
                 ;;
+              *.tar.gz|*.tgz)
+                tar -xzf "${archive}" -C "${destination}"
+                ;;
+              *.tar.bz2|*.tbz|*.tbz2)
+                tar -xjf "${archive}" -C "${destination}"
+                ;;
+              *.tar.xz|*.txz)
+                tar -xJf "${archive}" -C "${destination}"
+                ;;
               *.tar.zst|*.tzst)
+                if ! command -v unzstd >/dev/null 2>&1 && ! command -v zstdcat >/dev/null 2>&1; then
+                  echo "zstd utilities missing; installing" >&2
+                  ensure_apt_package "unzstd" "zstd"
+                fi
                 if command -v unzstd >/dev/null 2>&1; then
                   tar --use-compress-program=unzstd -xf "${archive}" -C "${destination}"
-                elif command -v zstdcat >/dev/null 2>&1; then
-                  zstdcat "${archive}" | tar -x -C "${destination}"
                 else
-                  echo "::error::zstd utilities are required to extract ${source}" >&2
-                  exit 1
+                  zstdcat "${archive}" | tar -x -C "${destination}"
                 fi
                 ;;
+              *.tar.lz4|*.tlz4)
+                if ! command -v lz4 >/dev/null 2>&1 && ! command -v lz4cat >/dev/null 2>&1; then
+                  echo "lz4 utilities missing; installing" >&2
+                  ensure_apt_package "lz4" "lz4"
+                fi
+                if command -v lz4cat >/dev/null 2>&1; then
+                  lz4cat "${archive}" | tar -x -C "${destination}"
+                else
+                  lz4 -dc "${archive}" | tar -x -C "${destination}"
+                fi
+                ;;
+              *.tar.lzma|*.tlz)
+                tar --lzma -xf "${archive}" -C "${destination}"
+                ;;
               *.zip)
+                if ! command -v unzip >/dev/null 2>&1; then
+                  echo "unzip utility missing; installing" >&2
+                  ensure_apt_package "unzip" "unzip"
+                fi
                 unzip -q "${archive}" -d "${destination}"
                 ;;
               *)
@@ -138,7 +179,7 @@ jobs:
 
           is_archive=false
           case "${source_for_type}" in
-            *.tar|*.tar.gz|*.tgz|*.tar.xz|*.tar.zst|*.tzst|*.zip)
+            *.tar|*.tar.gz|*.tgz|*.tar.bz2|*.tbz|*.tbz2|*.tar.xz|*.txz|*.tar.zst|*.tzst|*.tar.lz4|*.tlz4|*.tar.lzma|*.tlz|*.zip)
               is_archive=true
               ;;
           esac
