@@ -2,8 +2,8 @@ name: nightly-simnet
 
 on:
   schedule:
-    # Mondays at 01:30 UTC
-    - cron: '30 1 * * 1'
+    # Daily at 01:30 UTC
+    - cron: '30 1 * * *'
   workflow_dispatch:
 
 jobs:
