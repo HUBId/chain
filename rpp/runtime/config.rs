@@ -6,6 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::{engine::general_purpose, Engine as _};
+use ed25519_dalek::VerifyingKey;
+use hex;
+use std::convert::TryInto;
+
 use http::Uri;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -1362,6 +1367,8 @@ pub struct NodeConfig {
     pub secrets: SecretsConfig,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot_manifest_public_key_path: Option<PathBuf>,
     #[serde(default = "default_proof_cache_dir")]
     pub proof_cache_dir: PathBuf,
     #[serde(default = "default_consensus_pipeline_path")]
@@ -1698,6 +1705,46 @@ impl NodeConfig {
         self.admission_reconciler.validate()?;
         self.snapshot_validator.validate()?;
         self.governance.validate()?;
+        if let Some(path) = self.snapshot_manifest_public_key_path.as_ref() {
+            if path.as_os_str().is_empty() {
+                return Err(ChainError::Config(
+                    "snapshot_manifest_public_key_path must not be empty".into(),
+                ));
+            }
+            let raw = fs::read_to_string(path).map_err(|err| {
+                ChainError::Config(format!(
+                    "snapshot_manifest_public_key_path ({}) could not be read: {err}",
+                    path.display()
+                ))
+            })?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err(ChainError::Config(
+                    "snapshot_manifest_public_key_path must not contain an empty key".into(),
+                ));
+            }
+            let decoded = match hex::decode(trimmed) {
+                Ok(bytes) => bytes,
+                Err(_) => general_purpose::STANDARD
+                    .decode(trimmed.as_bytes())
+                    .map_err(|err| {
+                        ChainError::Config(format!(
+                            "snapshot_manifest_public_key_path has invalid key encoding: {err}"
+                        ))
+                    })?,
+            };
+            if decoded.len() != 32 {
+                return Err(ChainError::Config(
+                    "snapshot_manifest_public_key_path must encode 32 bytes".into(),
+                ));
+            }
+            let bytes: [u8; 32] = decoded.as_slice().try_into().expect("length verified");
+            VerifyingKey::from_bytes(&bytes).map_err(|err| {
+                ChainError::Config(format!(
+                    "snapshot_manifest_public_key_path does not contain a valid ed25519 public key: {err}"
+                ))
+            })?;
+        }
         Ok(())
     }
 }
@@ -1715,6 +1762,7 @@ impl Default for NodeConfig {
             vrf_key_path: PathBuf::from("./keys/vrf.toml"),
             secrets: SecretsConfig::default(),
             snapshot_dir: default_snapshot_dir(),
+            snapshot_manifest_public_key_path: None,
             proof_cache_dir: default_proof_cache_dir(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
             block_time_ms: 5_000,

@@ -3,6 +3,8 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::{engine::general_purpose, Engine as _};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use rpp_chain::config::NodeConfig;
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
@@ -24,7 +26,8 @@ const GOSSIP_TIMEOUT: Duration = Duration::from_secs(5);
 #[tokio::test]
 async fn light_client_stream_verifies_state_sync() {
     let fixture = StateSyncFixture::new();
-    let mut light_client = LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()));
+    let mut light_client =
+        LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()), None);
     let mut receiver = fixture
         .node
         .subscribe_witness_gossip(GossipTopic::Snapshots);
@@ -103,7 +106,8 @@ async fn state_sync_chunk_index_errors_surface_chain_error() {
 #[tokio::test]
 async fn light_client_rejects_mismatched_commitment() {
     let fixture = StateSyncFixture::new();
-    let mut light_client = LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()));
+    let mut light_client =
+        LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()), None);
     let mut receiver = fixture
         .node
         .subscribe_witness_gossip(GossipTopic::Snapshots);
@@ -144,7 +148,8 @@ async fn light_client_rejects_mismatched_commitment() {
 #[tokio::test]
 async fn light_client_fails_when_chunk_missing() {
     let fixture = StateSyncFixture::new();
-    let mut light_client = LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()));
+    let mut light_client =
+        LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()), None);
     let mut receiver = fixture
         .node
         .subscribe_witness_gossip(GossipTopic::Snapshots);
@@ -170,6 +175,67 @@ async fn light_client_fails_when_chunk_missing() {
         }
         other => panic!("unexpected error variant: {other:?}"),
     }
+}
+
+#[test]
+fn light_client_accepts_plan_with_valid_manifest_signature() {
+    let fixture = StateSyncFixture::new();
+    let signing = SigningKey::from_bytes(&[7u8; 32]);
+    let verifying = Arc::new(VerifyingKey::from(&signing));
+    let mut plan = fixture.plan.clone();
+    plan.snapshot.manifest_signature = sign_snapshot_summary(&plan, &signing);
+    let mut light_client = LightClientSync::new(
+        Arc::new(RuntimeRecursiveProofVerifier::default()),
+        Some(verifying),
+    );
+    let payload = serde_json::to_vec(&plan).expect("encode snapshot plan");
+    light_client
+        .ingest_plan(&payload)
+        .expect("manifest signature should be accepted");
+}
+
+#[test]
+fn light_client_rejects_plan_with_invalid_manifest_signature() {
+    let fixture = StateSyncFixture::new();
+    let signing = SigningKey::from_bytes(&[9u8; 32]);
+    let verifying = Arc::new(VerifyingKey::from(&signing));
+    let mut plan = fixture.plan.clone();
+    plan.snapshot.manifest_signature = sign_snapshot_summary(&plan, &signing);
+    plan.snapshot.manifest_signature = corrupt_signature(&plan.snapshot.manifest_signature);
+    let mut light_client = LightClientSync::new(
+        Arc::new(RuntimeRecursiveProofVerifier::default()),
+        Some(verifying),
+    );
+    let payload = serde_json::to_vec(&plan).expect("encode snapshot plan");
+    let error = light_client
+        .ingest_plan(&payload)
+        .expect_err("invalid signature should be rejected");
+    match error {
+        PipelineError::SnapshotVerification(message) => {
+            assert!(
+                message.contains("manifest signature"),
+                "unexpected message: {message}"
+            );
+        }
+        other => panic!("unexpected error variant: {other:?}"),
+    }
+}
+
+fn sign_snapshot_summary(plan: &NetworkStateSyncPlan, signing: &SigningKey) -> String {
+    let payload = plan
+        .snapshot
+        .signing_bytes()
+        .expect("snapshot summary payload");
+    let signature = signing.sign(&payload);
+    general_purpose::STANDARD.encode(signature.to_bytes())
+}
+
+fn corrupt_signature(signature: &str) -> String {
+    let mut chars: Vec<char> = signature.chars().collect();
+    if let Some(first) = chars.first_mut() {
+        *first = if *first == 'A' { 'B' } else { 'A' };
+    }
+    chars.into_iter().collect()
 }
 
 async fn publish_snapshot<T>(

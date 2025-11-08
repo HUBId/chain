@@ -45,7 +45,7 @@ impl StateSyncFixture {
     }
 
     fn new_light_client(&self) -> LightClientSync {
-        LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()))
+        LightClientSync::new(Arc::new(RuntimeRecursiveProofVerifier::default()), None)
     }
 
     fn encode<T>(&self, value: &T) -> Result<Vec<u8>>

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::convert::TryInto;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -9,6 +10,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::vendor::PeerId;
 use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures::stream::Stream;
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
@@ -1171,6 +1173,20 @@ pub struct NetworkSnapshotSummary {
     pub block_hash: String,
     pub commitments: NetworkGlobalStateCommitments,
     pub chain_commitment: String,
+    #[serde(default)]
+    pub manifest_signature: String,
+}
+
+impl NetworkSnapshotSummary {
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, PipelineError> {
+        let mut sanitized = self.clone();
+        sanitized.manifest_signature.clear();
+        serde_json::to_vec(&sanitized).map_err(|err| {
+            PipelineError::SnapshotVerification(format!(
+                "failed to encode snapshot summary for signature verification: {err}"
+            ))
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1356,6 +1372,7 @@ impl RecursiveProofVerifier for BasicRecursiveProofVerifier {
 pub struct LightClientSync {
     verifier: Arc<dyn RecursiveProofVerifier>,
     plan: Option<ActivePlan>,
+    manifest_verifying_key: Option<Arc<VerifyingKey>>,
     received_chunks: HashMap<usize, [u8; 32]>,
     accepted_updates: HashSet<u64>,
     emitted_update_index: Option<usize>,
@@ -1365,16 +1382,20 @@ pub struct LightClientSync {
 
 impl Default for LightClientSync {
     fn default() -> Self {
-        Self::new(Arc::new(BasicRecursiveProofVerifier::default()))
+        Self::new(Arc::new(BasicRecursiveProofVerifier::default()), None)
     }
 }
 
 impl LightClientSync {
-    pub fn new(verifier: Arc<dyn RecursiveProofVerifier>) -> Self {
+    pub fn new(
+        verifier: Arc<dyn RecursiveProofVerifier>,
+        manifest_verifying_key: Option<Arc<VerifyingKey>>,
+    ) -> Self {
         let (head_tx, _head_rx) = watch::channel(None);
         Self {
             verifier,
             plan: None,
+            manifest_verifying_key,
             received_chunks: HashMap::new(),
             accepted_updates: HashSet::new(),
             emitted_update_index: None,
@@ -1386,6 +1407,38 @@ impl LightClientSync {
     pub fn ingest_plan(&mut self, payload: &[u8]) -> Result<(), PipelineError> {
         let plan: NetworkStateSyncPlan = serde_json::from_slice(payload)
             .map_err(|err| PipelineError::Validation(format!("invalid plan payload: {err}")))?;
+        if let Some(verifying_key) = self.manifest_verifying_key.as_ref() {
+            if plan.snapshot.manifest_signature.is_empty() {
+                return Err(PipelineError::SnapshotVerification(
+                    "snapshot manifest signature missing".into(),
+                ));
+            }
+            let payload = plan.snapshot.signing_bytes()?;
+            let signature_bytes = general_purpose::STANDARD
+                .decode(plan.snapshot.manifest_signature.as_bytes())
+                .map_err(|err| {
+                    PipelineError::SnapshotVerification(format!(
+                        "invalid manifest signature encoding: {err}"
+                    ))
+                })?;
+            let signature_array: [u8; 64] = signature_bytes.try_into().map_err(|_| {
+                PipelineError::SnapshotVerification(
+                    "manifest signature must encode exactly 64 bytes".into(),
+                )
+            })?;
+            let signature = Signature::from_bytes(&signature_array).map_err(|err| {
+                PipelineError::SnapshotVerification(format!(
+                    "invalid manifest signature bytes: {err}"
+                ))
+            })?;
+            verifying_key
+                .verify_strict(&payload, &signature)
+                .map_err(|err| {
+                    PipelineError::SnapshotVerification(format!(
+                        "manifest signature verification failed: {err}"
+                    ))
+                })?;
+        }
         let active = ActivePlan::try_from(plan)?;
         self.plan = Some(active);
         self.received_chunks.clear();
@@ -2131,6 +2184,7 @@ mod tests {
                     proof_root: hex::encode([0u8; 32]),
                 },
                 chain_commitment: hex::encode(snapshot_root),
+                manifest_signature: String::new(),
             },
             tip: NetworkBlockMetadata {
                 height: 1,

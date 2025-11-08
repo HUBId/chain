@@ -346,6 +346,7 @@ fn sample_plan(root_hex: String) -> NetworkStateSyncPlan {
                 proof_root: "55".repeat(32),
             },
             chain_commitment: "66".repeat(32),
+            manifest_signature: String::new(),
         },
         tip: NetworkBlockMetadata {
             height: 50,
