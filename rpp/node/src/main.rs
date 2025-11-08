@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use hex;
 use reqwest::Client;
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, vrf_secret_key_to_hex,
@@ -22,6 +23,15 @@ use rpp_p2p::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use snapshot_verify::{
+    run_verification as run_snapshot_verification,
+    write_report as write_snapshot_report,
+    DataSource as SnapshotVerifySource,
+    Execution as SnapshotVerifyExecution,
+    ExitCode as SnapshotVerifyExitCode,
+    VerificationReport as SnapshotVerificationReport,
+    VerifyArgs as SnapshotVerifyArgs,
+};
 use tokio::task;
 
 const DEFAULT_VALIDATOR_CONFIG: &str = "config/validator.toml";
@@ -155,6 +165,8 @@ enum SnapshotCommand {
     Resume(SnapshotResumeCommand),
     /// Cancel an in-flight snapshot streaming session
     Cancel(SnapshotCancelCommand),
+    /// Verify snapshot manifests and chunks using the configured signing key
+    Verify(SnapshotVerifyCommand),
 }
 
 #[derive(Args, Clone)]
@@ -313,6 +325,32 @@ struct SnapshotCancelCommand {
     /// Snapshot session identifier to cancel
     #[arg(long, value_name = "ID")]
     session: u64,
+}
+
+#[derive(Args, Clone)]
+struct SnapshotVerifyCommand {
+    #[command(flatten)]
+    config: ValidatorConfigArgs,
+
+    /// Override the manifest path derived from the validator configuration
+    #[arg(long, value_name = "PATH")]
+    manifest: Option<PathBuf>,
+
+    /// Override the signature path; defaults to <manifest>.sig when omitted
+    #[arg(long, value_name = "PATH")]
+    signature: Option<PathBuf>,
+
+    /// Override the chunk directory derived from the validator configuration
+    #[arg(long = "chunk-root", value_name = "PATH")]
+    chunk_root: Option<PathBuf>,
+
+    /// Optional path to write the verification report to instead of stdout
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
+
+    /// Use a specific public key file instead of the configured signing key
+    #[arg(long = "public-key", value_name = "PATH")]
+    public_key: Option<PathBuf>,
 }
 
 #[derive(Args, Clone)]
@@ -571,6 +609,7 @@ async fn handle_snapshot_command(command: SnapshotCommand) -> Result<()> {
         SnapshotCommand::Status(args) => fetch_snapshot_status(args).await,
         SnapshotCommand::Resume(args) => resume_snapshot_session(args).await,
         SnapshotCommand::Cancel(args) => cancel_snapshot_session(args).await,
+        SnapshotCommand::Verify(args) => verify_snapshot_manifest(args).await,
     }
 }
 
@@ -899,6 +938,77 @@ async fn cancel_snapshot_session(args: SnapshotCancelCommand) -> Result<()> {
 
     println!("snapshot session {} cancelled", args.session);
     Ok(())
+}
+
+async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
+    let config = load_validator_config(&args.config.config)?;
+    let manifest_path = args
+        .manifest
+        .unwrap_or_else(|| config.snapshot_dir.join("manifest/chunks.json"));
+    let signature_path = match args.signature {
+        Some(path) => path,
+        None => default_snapshot_signature_path(&manifest_path)?,
+    };
+    let chunk_root = args
+        .chunk_root
+        .unwrap_or_else(|| config.snapshot_dir.join("chunks"));
+
+    let public_key_source = if let Some(path) = args.public_key {
+        SnapshotVerifySource::Path(path)
+    } else {
+        let signing_key = config
+            .load_timetoke_snapshot_signing_key()
+            .map_err(|err| anyhow!(err))?;
+        let verifying_key = signing_key.verifying_key();
+        SnapshotVerifySource::Inline {
+            label: config.timetoke_snapshot_key_path.display().to_string(),
+            data: hex::encode(verifying_key.to_bytes()),
+        }
+    };
+
+    let verify_args = SnapshotVerifyArgs {
+        manifest: manifest_path.clone(),
+        signature: signature_path.clone(),
+        public_key: public_key_source,
+        chunk_root: Some(chunk_root.clone()),
+    };
+
+    let mut report = SnapshotVerificationReport::new(&verify_args);
+    let execution = run_snapshot_verification(&verify_args, &mut report);
+    let exit_code = match execution {
+        SnapshotVerifyExecution::Completed { exit_code } => exit_code,
+        SnapshotVerifyExecution::Fatal { exit_code, error } => {
+            report.errors.push(error);
+            exit_code
+        }
+    };
+
+    write_snapshot_report(&report, args.output.as_deref())
+        .context("write snapshot verification report")?;
+
+    if let Some(path) = args.output.as_ref() {
+        println!("snapshot verification report written to {}", path.display());
+    }
+
+    if exit_code == SnapshotVerifyExitCode::Success {
+        Ok(())
+    } else {
+        std::process::exit(exit_code.code());
+    }
+}
+
+fn default_snapshot_signature_path(manifest_path: &Path) -> Result<PathBuf> {
+    let file_name = manifest_path
+        .file_name()
+        .ok_or_else(|| {
+            anyhow!(
+                "manifest {} is missing a file name",
+                manifest_path.display()
+            )
+        })?;
+    let mut signature_name = file_name.to_os_string();
+    signature_name.push(".sig");
+    Ok(manifest_path.with_file_name(signature_name))
 }
 
 async fn list_admission_backups(args: AdmissionBackupsListCommand) -> Result<()> {
