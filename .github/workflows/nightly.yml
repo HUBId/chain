@@ -49,6 +49,7 @@ jobs:
       SNAPSHOT_MANIFEST_PATH: ${{ secrets.SNAPSHOT_MANIFEST_PATH }}
       SNAPSHOT_MANIFEST_JSON: ${{ secrets.SNAPSHOT_MANIFEST_JSON }}
       SNAPSHOT_VALIDATOR_CONFIG: ${{ secrets.SNAPSHOT_VALIDATOR_CONFIG }}
+      SNAPSHOT_CHUNK_ARCHIVE_URL: ${{ secrets.SNAPSHOT_CHUNK_ARCHIVE_URL }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -60,6 +61,89 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p rpp-node --release
+
+      - name: Download pruning snapshot chunks
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SNAPSHOT_CHUNK_ARCHIVE_URL:-}" ]; then
+            echo "::error::SNAPSHOT_CHUNK_ARCHIVE_URL is required to download pruning snapshot chunks" >&2
+            exit 1
+          fi
+
+          workspace="${GITHUB_WORKSPACE:-$(pwd)}"
+          staging_root="${workspace}/target/pruning-snapshot-chunks"
+          rm -rf "${staging_root}"
+          mkdir -p "${staging_root}"
+
+          tmp_dir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "${tmp_dir}"
+          }
+          trap cleanup EXIT
+
+          archive_path="${tmp_dir}/snapshot-chunks"
+          extract_dir="${tmp_dir}/extracted"
+          mkdir -p "${extract_dir}"
+
+          echo "Fetching pruning snapshot chunks from ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
+          if [[ "${SNAPSHOT_CHUNK_ARCHIVE_URL}" == s3://* ]]; then
+            if ! command -v aws >/dev/null 2>&1; then
+              echo "::error::aws CLI is required to sync ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
+              exit 1
+            fi
+            aws s3 sync --only-show-errors "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${extract_dir}"
+          else
+            curl -fL "${SNAPSHOT_CHUNK_ARCHIVE_URL}" -o "${archive_path}"
+            case "${SNAPSHOT_CHUNK_ARCHIVE_URL}" in
+              *.tar|*.tar.gz|*.tgz|*.tar.xz)
+                tar -xf "${archive_path}" -C "${extract_dir}"
+                ;;
+              *.tar.zst|*.tzst)
+                if command -v unzstd >/dev/null 2>&1; then
+                  tar --use-compress-program=unzstd -xf "${archive_path}" -C "${extract_dir}"
+                elif command -v zstdcat >/dev/null 2>&1; then
+                  zstdcat "${archive_path}" | tar -x -C "${extract_dir}"
+                else
+                  echo "::error::zstd utilities are required to extract ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
+                  exit 1
+                fi
+                ;;
+              *.zip)
+                unzip -q "${archive_path}" -d "${extract_dir}"
+                ;;
+              *)
+                echo "::error::Unsupported archive type for ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [ -z "$(find "${extract_dir}" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+            echo "::error::No pruning snapshot files extracted from ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
+            exit 1
+          fi
+
+          find "${staging_root}" -mindepth 1 -delete
+          cp -a "${extract_dir}/." "${staging_root}/"
+
+          chunk_root="${staging_root}"
+          detected_chunk_dir="$(find "${staging_root}" -type d -name 'cf_pruning_snapshots' | head -n 1)"
+          if [ -n "${detected_chunk_dir}" ]; then
+            chunk_root="${detected_chunk_dir}"
+          fi
+
+          if [ ! -d "${chunk_root}" ]; then
+            echo "::error::Unable to locate pruning snapshot directory under ${staging_root}" >&2
+            exit 1
+          fi
+
+          if [ -z "$(find "${chunk_root}" -maxdepth 1 -type f \( -name '*.json' -o -name '*.chunk' \) -print -quit)" ]; then
+            echo "::warning::Pruning snapshot directory ${chunk_root} does not contain manifest or chunk files" >&2
+          fi
+
+          echo "SNAPSHOT_CHUNK_ROOT=${chunk_root}" >> "${GITHUB_ENV}"
+          echo "Pruning snapshot chunks extracted to ${chunk_root}" >&2
 
       - name: Audit snapshot sessions
         run: |
