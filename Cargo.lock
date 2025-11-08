@@ -6751,7 +6751,9 @@ dependencies = [
 name = "rpp-consensus"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.7",
  "blake3",
+ "ed25519-dalek",
  "hex",
  "libp2p",
  "proptest",

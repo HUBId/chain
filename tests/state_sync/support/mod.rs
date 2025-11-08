@@ -165,6 +165,7 @@ fn prepare_config() -> (NodeConfig, TempDir) {
     config.key_path = keys_dir.join("node.toml");
     config.p2p_key_path = keys_dir.join("p2p.toml");
     config.vrf_key_path = keys_dir.join("vrf.toml");
+    config.timetoke_snapshot_key_path = keys_dir.join("timetoke_snapshot.toml");
     config.network.rpc.listen = "127.0.0.1:0".parse().expect("rpc listen");
     (config, temp_dir)
 }

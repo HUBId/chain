@@ -1,8 +1,11 @@
 use std::fmt;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use blake3::Hash;
+use ed25519_dalek::{Signer, SigningKey};
 use rpp_p2p::{PipelineError, SnapshotChunk, SnapshotChunkStream, SnapshotStore};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 /// Snapshot representation for Timetoke ledger state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +53,8 @@ pub struct TimetokeSnapshotHandle {
     pub record_count: usize,
     /// Hex encoded Timetoke commitment carried by the snapshot payload.
     pub timetoke_root: String,
+    /// Base64 encoded Ed25519 signature over the manifest payload.
+    pub signature: Option<String>,
 }
 
 /// Produces snapshot streams for Timetoke records and exposes the payload to the
@@ -57,14 +62,16 @@ pub struct TimetokeSnapshotHandle {
 #[derive(Debug)]
 pub struct TimetokeSnapshotProducer {
     store: SnapshotStore,
+    signing_key: SigningKey,
 }
 
 impl TimetokeSnapshotProducer {
     /// Creates a new producer backed by a snapshot store using the provided
     /// chunk size.
-    pub fn new(chunk_size: usize) -> Self {
+    pub fn new(chunk_size: usize, signing_key: SigningKey) -> Self {
         Self {
             store: SnapshotStore::new(chunk_size.max(1)),
+            signing_key,
         }
     }
 
@@ -80,7 +87,16 @@ impl TimetokeSnapshotProducer {
         };
         let payload = serde_json::to_vec(&snapshot)
             .map_err(|err| TimetokeSnapshotError::Encoding(err.to_string()))?;
-        let root = self.store.insert(payload);
+        let signature = self.signing_key.sign(&payload);
+        let signature_bytes = signature.to_bytes();
+        let signature_base64 = BASE64.encode(signature_bytes);
+        let root = self.store.insert(payload, Some(signature_base64.clone()));
+        info!(
+            target: "consensus.timetoke",
+            root = %root.to_hex(),
+            records = snapshot.records.len(),
+            "signed Timetoke snapshot manifest"
+        );
         let stream = self
             .store
             .stream(&root)
@@ -90,6 +106,7 @@ impl TimetokeSnapshotProducer {
             total_chunks: stream.total(),
             record_count: snapshot.records.len(),
             timetoke_root: snapshot.timetoke_root,
+            signature: Some(signature_base64),
         })
     }
 

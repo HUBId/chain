@@ -10,7 +10,7 @@ pub mod telemetry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
-use malachite::base::num::arithmetic::traits::DivRem;
+use malachite::num::arithmetic::traits::DivRem;
 use malachite::Natural;
 use prover_backend_interface::Blake2sHasher;
 #[cfg(feature = "nightly-prover")]

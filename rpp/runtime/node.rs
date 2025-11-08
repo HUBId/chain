@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ed25519_dalek::Keypair;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use ed25519_dalek::{Keypair, SigningKey};
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::mpsc::error::TrySendError;
@@ -1066,6 +1067,7 @@ pub(crate) struct NodeInner {
     queue_weights: RwLock<QueueWeightsConfig>,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
+    timetoke_snapshot_signing_key: SigningKey,
     p2p_identity: Arc<NodeIdentity>,
     address: Address,
     storage: Storage,
@@ -1098,6 +1100,7 @@ pub(crate) struct NodeInner {
     audit_exporter: AuditExporter,
     runtime_metrics: Arc<RuntimeMetrics>,
     state_sync_session: ParkingMutex<StateSyncSessionCache>,
+    legacy_snapshot_warnings: ParkingMutex<HashSet<Hash>>,
 }
 
 #[cfg_attr(not(feature = "prover-stwo"), allow(dead_code))]
@@ -2009,6 +2012,8 @@ impl Node {
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
         let vrf_keypair = config.load_or_generate_vrf_keypair()?;
+        let timetoke_snapshot_signing_key =
+            config.load_or_generate_timetoke_snapshot_signing_key()?;
         let p2p_identity = Arc::new(
             NodeIdentity::load_or_generate(&config.p2p_key_path)
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
@@ -2186,6 +2191,7 @@ impl Node {
             queue_weights: RwLock::new(queue_weights),
             keypair,
             vrf_keypair,
+            timetoke_snapshot_signing_key,
             p2p_identity,
             address,
             storage,
@@ -2221,6 +2227,7 @@ impl Node {
             audit_exporter,
             runtime_metrics: runtime_metrics.clone(),
             state_sync_session: ParkingMutex::new(StateSyncSessionCache::default()),
+            legacy_snapshot_warnings: ParkingMutex::new(HashSet::new()),
         });
         {
             let weak_inner = Arc::downgrade(&inner);
@@ -4519,7 +4526,10 @@ impl NodeInner {
         message[start..end].trim().parse().ok()
     }
 
-    fn load_snapshot_payload(&self, root: &Hash) -> Result<Option<Vec<u8>>, std::io::Error> {
+    fn load_snapshot_payload(
+        &self,
+        root: &Hash,
+    ) -> Result<Option<(Vec<u8>, Option<String>)>, std::io::Error> {
         let base = self.config.snapshot_dir.clone();
         if base.as_os_str().is_empty() {
             return Ok(None);
@@ -4541,9 +4551,47 @@ impl NodeInner {
                 if !file_type.is_file() {
                     continue;
                 }
-                let payload = fs::read(entry.path())?;
+                let payload_path = entry.path();
+                let payload = fs::read(&payload_path)?;
                 if &blake3::hash(&payload) == root {
-                    return Ok(Some(payload));
+                    let mut signature_path = payload_path.clone();
+                    let mut sig_name = entry.file_name();
+                    sig_name.push(".sig");
+                    signature_path.set_file_name(sig_name);
+                    if !signature_path.exists() {
+                        let mut warned = self.legacy_snapshot_warnings.lock();
+                        let root_hex = hex::encode(root.as_bytes());
+                        if warned.insert(*root) {
+                            warn!(
+                                target: "node",
+                                root = %root_hex,
+                                path = %payload_path.display(),
+                                "snapshot signature missing; serving legacy manifest"
+                            );
+                        } else {
+                            debug!(
+                                target: "node",
+                                root = %root_hex,
+                                path = %payload_path.display(),
+                                "snapshot signature still missing; serving legacy manifest"
+                            );
+                        }
+                        // TODO(ENG-4972): remove legacy snapshot signature fallback once manifests ship signatures.
+                        return Ok(Some((payload, None)));
+                    }
+                    let encoded = fs::read_to_string(&signature_path)?;
+                    let trimmed = encoded.trim();
+                    let signature_bytes = BASE64.decode(trimmed).map_err(|err| {
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            format!(
+                                "invalid snapshot signature encoding at {}: {err}",
+                                signature_path.display()
+                            ),
+                        )
+                    })?;
+                    let canonical = BASE64.encode(signature_bytes);
+                    return Ok(Some((payload, Some(canonical))));
                 }
             }
         }
@@ -4585,7 +4633,7 @@ impl NodeInner {
         let store = if let Some(store) = cached_store {
             store
         } else {
-            let payload = match self.load_snapshot_payload(&root) {
+            let (payload, signature) = match self.load_snapshot_payload(&root) {
                 Ok(Some(data)) => data,
                 Ok(None) => {
                     let reason = format!(
@@ -4597,7 +4645,7 @@ impl NodeInner {
                 Err(err) => return Err(StateSyncChunkError::Io(err)),
             };
             let mut store = SnapshotStore::new(chunk_size);
-            let actual_root = store.insert(payload);
+            let actual_root = store.insert(payload, signature);
             if actual_root != root {
                 return Err(StateSyncChunkError::SnapshotRootMismatch {
                     expected: root,

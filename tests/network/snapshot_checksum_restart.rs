@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -104,6 +105,19 @@ async fn snapshot_validator_recovers_after_restart() -> Result<()> {
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
         .await
         .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
+
+    let mut signature_path = manifest_path.clone();
+    let mut sig_name = manifest_path
+        .file_name()
+        .expect("manifest file name")
+        .to_os_string();
+    sig_name.push(".sig");
+    signature_path.set_file_name(sig_name);
+    let signature_bytes = [0x24u8; 64];
+    let signature_base64 = BASE64.encode(signature_bytes);
+    fs::write(&signature_path, format!("{signature_base64}\n"))
+        .await
+        .with_context(|| format!("write manifest signature to {}", signature_path.display()))?;
 
     // Allow the validator to observe the clean manifest before introducing corruption.
     sleep(Duration::from_secs(1)).await;

@@ -71,6 +71,7 @@ blake3 = "=1.8.2"
 async-trait = "=0.1.89"
 clap = { workspace = true, features = ["derive"] }
 ed25519-dalek = "=2.1.1"
+rand = { version = "=0.8.5", features = ["std", "std_rng"] }
 flate2 = { version = "=1.0.34", default-features = false, features = ["rust_backend"], optional = true }
 hex.workspace = true
 libp2p = { path = "../../vendor/libp2p/libp2p", default-features = false }
@@ -124,7 +125,6 @@ p3-util = { workspace = true, optional = true }
 plonky3-backend = { path = "../../prover/plonky3_backend", optional = true }
 
 [dev-dependencies]
-rand = { version = "=0.8.5", features = ["std", "std_rng"] }
 tempfile.workspace = true
 tracing-test = "=0.2.5"
 jsonschema = "=0.17.1"

@@ -77,7 +77,7 @@ async fn light_client_stream_verifies_state_sync() {
 async fn state_sync_chunk_index_errors_surface_chain_error() {
     let fixture = StateSyncFixture::new();
     let mut store = SnapshotStore::new(8);
-    let root = store.insert(vec![0u8; 32]);
+    let root = store.insert(vec![0u8; 32], None);
 
     let stream = fixture
         .handle
