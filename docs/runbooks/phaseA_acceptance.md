@@ -46,6 +46,11 @@ milestone.
       `cargo xtask collect-phase3-evidence` die WORM-Logs (`target/worm-export-smoke`)
       samt Signaturen ins Bundle kopiert und die Manifestdatei die Quellen
       aufführt. Dokumentiere Speicherort und Prüfsumme im Freigabeprotokoll.【F:xtask/src/main.rs†L1516-L1584】【F:xtask/src/main.rs†L1606-L1644】
+- ✅ **Bootstrap-Guard aktiv.** Produktions-Release-Channels (`canary`/`mainnet`)
+  verweigern den Start, wenn `network.admission.worm_export` keinen S3-Endpoint,
+  Zugangsdaten und ein Retention-Fenster setzt. Der Guard schreibt einen
+  Bootstrap-Fehler und erhöht die Metrik `worm_export_misconfigured_total`; prüfe
+  Logs und Prometheus-Export beim Abbruch.【F:rpp/node/src/lib.rs†L520-L590】
 
 ## Exit-Kriterien
 
