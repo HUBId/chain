@@ -21,10 +21,11 @@ use crate::handshake::{
 };
 use crate::policy_log::{
     AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
-    AdmissionPolicyLogError, PolicyAllowlistState,
+    AdmissionPolicyLogError, AdmissionPolicyLogOptions, PolicyAllowlistState,
 };
 use crate::policy_signing::{PolicySignature, PolicySigner, PolicySigningError};
 use crate::tier::TierLevel;
+use crate::worm_export::WormExportSettings;
 use schnorrkel::{keys::PublicKey as Sr25519PublicKey, Signature};
 
 #[derive(Debug, Error)]
@@ -34,7 +35,7 @@ pub enum PeerstoreError {
     #[error("encoding error: {0}")]
     Encoding(String),
     #[error("admission audit log error: {0}")]
-    AuditLog(#[from] AdmissionPolicyLogError),
+    AuditLog(AdmissionPolicyLogError),
     #[error("missing signature in handshake")]
     MissingSignature,
     #[error("missing public key for peer {peer}")]
@@ -63,6 +64,17 @@ pub enum PeerstoreError {
     PolicySigning(#[from] PolicySigningError),
     #[error("admission policy log entry {id} missing signature")]
     MissingLogSignature { id: u64 },
+}
+
+impl From<AdmissionPolicyLogError> for PeerstoreError {
+    fn from(err: AdmissionPolicyLogError) -> Self {
+        match err {
+            AdmissionPolicyLogError::MissingExportSignature { id } => {
+                PeerstoreError::MissingLogSignature { id }
+            }
+            other => PeerstoreError::AuditLog(other),
+        }
+    }
 }
 
 pub trait IdentityVerifier: Send + Sync {
@@ -519,6 +531,7 @@ pub struct PeerstoreConfig {
     policy_backup_dir: Option<PathBuf>,
     policy_backup_retention: Option<Duration>,
     policy_signer: Option<PolicySigner>,
+    worm_export: Option<WormExportSettings>,
 }
 
 impl fmt::Debug for PeerstoreConfig {
@@ -532,6 +545,7 @@ impl fmt::Debug for PeerstoreConfig {
             .field("policy_backup_dir", &self.policy_backup_dir)
             .field("policy_backup_retention", &self.policy_backup_retention)
             .field("policy_signer", &self.policy_signer.is_some())
+            .field("worm_export", &self.worm_export.is_some())
             .finish()
     }
 }
@@ -548,6 +562,7 @@ impl PeerstoreConfig {
             policy_backup_dir: None,
             policy_backup_retention: None,
             policy_signer: None,
+            worm_export: None,
         }
     }
 
@@ -565,6 +580,7 @@ impl PeerstoreConfig {
             policy_backup_dir: None,
             policy_backup_retention: None,
             policy_signer: None,
+            worm_export: None,
         }
     }
 
@@ -601,6 +617,11 @@ impl PeerstoreConfig {
 
     pub fn with_policy_signer(mut self, signer: PolicySigner) -> Self {
         self.policy_signer = Some(signer);
+        self
+    }
+
+    pub fn with_worm_export(mut self, settings: WormExportSettings) -> Self {
+        self.worm_export = Some(settings);
         self
     }
 
@@ -656,6 +677,7 @@ impl Peerstore {
             policy_backup_dir,
             policy_backup_retention,
             policy_signer,
+            worm_export,
         } = config;
 
         let peers = if let Some(path_ref) = &path {
@@ -691,7 +713,13 @@ impl Peerstore {
         });
 
         let audit_log = match audit_log_path {
-            Some(path) => Some(Arc::new(AdmissionPolicyLog::open(path)?)),
+            Some(path) => {
+                let mut options = AdmissionPolicyLogOptions::default();
+                options.worm_export = worm_export.clone();
+                Some(Arc::new(AdmissionPolicyLog::open_with_options(
+                    path, options,
+                )?))
+            }
             None => None,
         };
 

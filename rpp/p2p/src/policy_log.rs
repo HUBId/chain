@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::policy_signing::{PolicySignature, PolicySigner, PolicySigningError};
 use crate::tier::TierLevel;
 use crate::vendor::PeerId;
+use crate::worm_export::{WormEntryMetadata, WormExportError, WormExportSettings};
 
 #[derive(Debug, Error)]
 pub enum AdmissionPolicyLogError {
@@ -20,6 +21,10 @@ pub enum AdmissionPolicyLogError {
     Encoding(String),
     #[error("signing error: {0}")]
     Signing(#[from] PolicySigningError),
+    #[error("worm export error: {0}")]
+    Export(String),
+    #[error("worm export requires signature for entry {id}")]
+    MissingExportSignature { id: u64 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,10 +99,18 @@ pub struct AdmissionPolicyLog {
     path: PathBuf,
     next_id: AtomicU64,
     lock: Mutex<()>,
+    worm_export: Option<WormExportSettings>,
 }
 
 impl AdmissionPolicyLog {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, AdmissionPolicyLogError> {
+        Self::open_with_options(path, AdmissionPolicyLogOptions::default())
+    }
+
+    pub fn open_with_options(
+        path: impl Into<PathBuf>,
+        options: AdmissionPolicyLogOptions,
+    ) -> Result<Self, AdmissionPolicyLogError> {
         let path = path.into();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -125,6 +138,7 @@ impl AdmissionPolicyLog {
             path,
             next_id: AtomicU64::new(next_id),
             lock: Mutex::new(()),
+            worm_export: options.worm_export,
         })
     }
 
@@ -157,13 +171,25 @@ impl AdmissionPolicyLog {
         }
         let encoded = serde_json::to_string(&entry)
             .map_err(|err| AdmissionPolicyLogError::Encoding(err.to_string()))?;
-        let _guard = self.lock.lock();
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        file.write_all(encoded.as_bytes())?;
-        file.write_all(b"\n")?;
+        {
+            let _guard = self.lock.lock();
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)?;
+            file.write_all(encoded.as_bytes())?;
+            file.write_all(b"\n")?;
+        }
+        if let Some(settings) = &self.worm_export {
+            if settings.require_signature() && entry.signature.is_none() {
+                return Err(AdmissionPolicyLogError::MissingExportSignature { id });
+            }
+            let metadata = WormEntryMetadata { id, timestamp_ms };
+            settings
+                .exporter()
+                .append(encoded.as_bytes(), &metadata, settings.retention())
+                .map_err(map_worm_error)?;
+        }
         Ok(entry)
     }
 
@@ -199,4 +225,19 @@ impl AdmissionPolicyLog {
         let slice = entries[offset..end].to_vec();
         Ok((slice, total))
     }
+}
+
+fn map_worm_error(err: WormExportError) -> AdmissionPolicyLogError {
+    match err {
+        WormExportError::Io(source) => AdmissionPolicyLogError::Io(source),
+        WormExportError::Encoding(message)
+        | WormExportError::InvalidRetention(message)
+        | WormExportError::Command(message)
+        | WormExportError::S3(message) => AdmissionPolicyLogError::Export(message),
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct AdmissionPolicyLogOptions {
+    pub worm_export: Option<WormExportSettings>,
 }

@@ -64,6 +64,16 @@ active_key = "admission_dev"
 [network.admission.signing.trust_store]
 admission_dev = "0000000000000000000000000000000000000000000000000000000000000000"
 
+[network.admission.worm_export]
+enabled = false
+required = false
+retention_days = 90
+require_signatures = true
+
+[network.admission.worm_export.target]
+kind = "command"
+program = "tools/worm-export/worm-export"
+
 [admission_reconciler]
 cadence_secs = 60
 drift_alert_threshold = 1

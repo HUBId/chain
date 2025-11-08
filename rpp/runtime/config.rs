@@ -1011,6 +1011,160 @@ impl Default for AdmissionSigningConfig {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WormRetentionModeConfig {
+    Compliance,
+    Governance,
+}
+
+impl Default for WormRetentionModeConfig {
+    fn default() -> Self {
+        Self::Compliance
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WormExportTargetConfig {
+    Command {
+        program: PathBuf,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+    },
+    S3 {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        endpoint: Option<String>,
+        region: String,
+        bucket: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prefix: Option<String>,
+        access_key: String,
+        secret_key: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_token: Option<String>,
+        #[serde(default)]
+        path_style: bool,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct NetworkAdmissionWormConfig {
+    pub enabled: bool,
+    pub required: bool,
+    pub retention_days: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retention_max_days: Option<u64>,
+    pub retention_mode: WormRetentionModeConfig,
+    pub require_signatures: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<WormExportTargetConfig>,
+}
+
+impl Default for NetworkAdmissionWormConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            required: false,
+            retention_days: 90,
+            retention_max_days: None,
+            retention_mode: WormRetentionModeConfig::Compliance,
+            require_signatures: true,
+            target: None,
+        }
+    }
+}
+
+impl NetworkAdmissionWormConfig {
+    fn validate(&self, signing_enabled: bool) -> ChainResult<()> {
+        if self.required && !self.enabled {
+            return Err(ChainError::Config(
+                "network.admission.worm_export.required cannot be true when disabled".into(),
+            ));
+        }
+        if self.retention_days == 0 {
+            return Err(ChainError::Config(
+                "network.admission.worm_export.retention_days must be greater than 0".into(),
+            ));
+        }
+        if let Some(max) = self.retention_max_days {
+            if max < self.retention_days {
+                return Err(ChainError::Config(
+                    "network.admission.worm_export.retention_max_days must be >= retention_days"
+                        .into(),
+                ));
+            }
+        }
+        if (self.enabled || self.required) && self.target.is_none() {
+            return Err(ChainError::Config(
+                "network.admission.worm_export.target must be configured when enabled".into(),
+            ));
+        }
+        if self.require_signatures && !signing_enabled {
+            return Err(ChainError::Config(
+                "network.admission.worm_export.require_signatures requires admission signing"
+                    .into(),
+            ));
+        }
+        if let Some(target) = &self.target {
+            match target {
+                WormExportTargetConfig::Command { program, .. } => {
+                    if program.as_os_str().is_empty() {
+                        return Err(ChainError::Config(
+                            "network.admission.worm_export.target.program must not be empty".into(),
+                        ));
+                    }
+                }
+                WormExportTargetConfig::S3 {
+                    endpoint,
+                    region,
+                    bucket,
+                    access_key,
+                    secret_key,
+                    ..
+                } => {
+                    if region.trim().is_empty() {
+                        return Err(ChainError::Config(
+                            "network.admission.worm_export.target.region must not be empty".into(),
+                        ));
+                    }
+                    if bucket.trim().is_empty() {
+                        return Err(ChainError::Config(
+                            "network.admission.worm_export.target.bucket must not be empty".into(),
+                        ));
+                    }
+                    if access_key.trim().is_empty() {
+                        return Err(ChainError::Config(
+                            "network.admission.worm_export.target.access_key must not be empty"
+                                .into(),
+                        ));
+                    }
+                    if secret_key.trim().is_empty() {
+                        return Err(ChainError::Config(
+                            "network.admission.worm_export.target.secret_key must not be empty"
+                                .into(),
+                        ));
+                    }
+                    if endpoint
+                        .as_ref()
+                        .map(|value| value.trim().is_empty())
+                        .unwrap_or(false)
+                    {
+                        return Err(ChainError::Config(
+                            "network.admission.worm_export.target.endpoint must not be empty"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct NetworkAdmissionConfig {
     pub policy_path: PathBuf,
@@ -1019,6 +1173,7 @@ pub struct NetworkAdmissionConfig {
     pub backup_retention_days: u64,
     pub defaults: AdmissionDefaultsConfig,
     pub signing: AdmissionSigningConfig,
+    pub worm_export: NetworkAdmissionWormConfig,
 }
 
 impl NetworkAdmissionConfig {
@@ -1044,6 +1199,7 @@ impl NetworkAdmissionConfig {
             ));
         }
         self.signing.validate()?;
+        self.worm_export.validate(self.signing.enabled)?;
         Ok(())
     }
 }
@@ -1057,6 +1213,7 @@ impl Default for NetworkAdmissionConfig {
             backup_retention_days: 30,
             defaults: AdmissionDefaultsConfig::default(),
             signing: AdmissionSigningConfig::default(),
+            worm_export: NetworkAdmissionWormConfig::default(),
         }
     }
 }
