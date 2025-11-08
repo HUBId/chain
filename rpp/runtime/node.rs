@@ -3455,7 +3455,10 @@ impl NodeInner {
         if !self.config.rollout.feature_gates.reconstruction {
             return;
         }
-        let engine = ReconstructionEngine::new(self.storage.clone());
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
         let plan = match engine.state_sync_plan(DEFAULT_STATE_SYNC_CHUNK) {
             Ok(plan) => plan,
             Err(err) => {
@@ -4279,7 +4282,10 @@ impl NodeInner {
                 "reconstruction feature gate disabled".into(),
             ));
         }
-        let engine = ReconstructionEngine::new(self.storage.clone());
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
         let plan = engine.state_sync_plan(chunk_size)?;
         let expected_root = Hash::from(plan.snapshot.commitments.global_state_root);
         let total_chunks = plan.chunks.len();
@@ -4720,7 +4726,10 @@ impl NodeInner {
                 "recursive proof verification disabled by rollout".into(),
             ));
         }
-        let engine = ReconstructionEngine::new(self.storage.clone());
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
         match engine.verify_proof_chain() {
             Ok(result) => Ok(result),
             Err(err) => {
@@ -4740,7 +4749,10 @@ impl NodeInner {
                 "reconstruction feature gate disabled".into(),
             ));
         }
-        let engine = ReconstructionEngine::new(self.storage.clone());
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
         engine.reconstruct_block(height, provider)
     }
 
@@ -4755,7 +4767,10 @@ impl NodeInner {
                 "reconstruction feature gate disabled".into(),
             ));
         }
-        let engine = ReconstructionEngine::new(self.storage.clone());
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
         engine.reconstruct_range(start_height, end_height, provider)
     }
 
@@ -4769,7 +4784,10 @@ impl NodeInner {
                 "reconstruction feature gate disabled".into(),
             ));
         }
-        let engine = ReconstructionEngine::new(self.storage.clone());
+        let engine = ReconstructionEngine::with_snapshot_dir(
+            self.storage.clone(),
+            self.config.snapshot_dir.clone(),
+        );
         engine.execute_plan(plan, provider)
     }
 

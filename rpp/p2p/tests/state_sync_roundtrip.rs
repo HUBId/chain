@@ -71,6 +71,7 @@ fn state_sync_plan_roundtrip() {
                 proof_root: "55".repeat(32),
             },
             chain_commitment: "aa".repeat(32),
+            manifest_signature: String::new(),
         },
         tip: NetworkBlockMetadata {
             height: 1,

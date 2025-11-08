@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -35,6 +36,8 @@ use rpp_p2p::{
 use rpp_pruning::{
     TaggedDigest, COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH, ENVELOPE_TAG, PROOF_SEGMENT_TAG,
 };
+
+const SNAPSHOT_MANIFEST_SIGNATURE_FILE: &str = "manifest/signature.ed25519";
 
 pub mod invariants {
     use std::sync::Arc;
@@ -574,6 +577,8 @@ pub struct SnapshotSummary {
     pub block_hash: String,
     pub commitments: GlobalStateCommitments,
     pub chain_commitment: String,
+    #[serde(default)]
+    pub manifest_signature: String,
 }
 
 /// Expectations for the payload data associated with a pruned block.
@@ -736,6 +741,7 @@ impl StateSyncPlan {
             block_hash: self.snapshot.block_hash.clone(),
             commitments: encode_global_commitments(&self.snapshot.commitments),
             chain_commitment: self.snapshot.chain_commitment.clone(),
+            manifest_signature: self.snapshot.manifest_signature.clone(),
         };
         let chunks = self
             .chunks
@@ -825,6 +831,35 @@ impl ReconstructionEngine {
         }
     }
 
+    fn manifest_signature(&self) -> ChainResult<Option<String>> {
+        let Some(dir) = self.snapshot_dir.as_ref() else {
+            return Ok(None);
+        };
+        let path = dir.join(SNAPSHOT_MANIFEST_SIGNATURE_FILE);
+        match fs::read_to_string(&path) {
+            Ok(signature) => {
+                let trimmed = signature.trim();
+                if trimmed.is_empty() {
+                    return Err(ChainError::Config(
+                        "snapshot manifest signature file is empty".into(),
+                    ));
+                }
+                Ok(Some(trimmed.to_owned()))
+            }
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    fn attach_manifest_signature(&self, snapshot: &mut SnapshotSummary) -> ChainResult<()> {
+        if snapshot.manifest_signature.is_empty() {
+            if let Some(signature) = self.manifest_signature()? {
+                snapshot.manifest_signature = signature;
+            }
+        }
+        Ok(())
+    }
+
     pub fn plan_from_height(&self, start_height: u64) -> ChainResult<ReconstructionPlan> {
         let tip = self
             .storage
@@ -884,12 +919,14 @@ impl ReconstructionEngine {
         let snapshot_block = snapshot_block.expect("snapshot block initialised");
         let snapshot = SnapshotSummary::from_metadata(&snapshot_metadata, &snapshot_block)?;
 
-        Ok(ReconstructionPlan {
+        let mut plan = ReconstructionPlan {
             start_height: snapshot.height,
             tip,
             snapshot,
             requests,
-        })
+        };
+        self.attach_manifest_signature(&mut plan.snapshot)?;
+        Ok(plan)
     }
 
     pub fn full_plan(&self) -> ChainResult<ReconstructionPlan> {
@@ -1172,6 +1209,10 @@ impl ReconstructionEngine {
             ChainError::Config(format!("failed to encode reconstruction plan: {err}"))
         })?;
         fs::write(&path, encoded)?;
+        if !plan.snapshot.manifest_signature.is_empty() {
+            let signature_path = path.with_extension("sig");
+            fs::write(&signature_path, plan.snapshot.manifest_signature.as_bytes())?;
+        }
         Ok(path)
     }
 }
@@ -1191,6 +1232,7 @@ impl SnapshotSummary {
                 proof_root: decode_digest(&header.proof_root)?,
             },
             chain_commitment: metadata.recursive_commitment.clone(),
+            manifest_signature: String::new(),
         })
     }
 }

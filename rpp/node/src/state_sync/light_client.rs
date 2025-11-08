@@ -75,7 +75,7 @@ impl LightClientVerifier {
         validate_snapshot_metadata(&plan, &persisted_state, &mut builder)?;
 
         let verifier = Arc::new(RuntimeRecursiveProofVerifier::default());
-        let mut light_client = LightClientSync::new(verifier);
+        let mut light_client = LightClientSync::new(verifier, None);
 
         let network_plan = plan
             .to_network_plan()

@@ -4,8 +4,12 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{convert::TryInto, fs};
 
+use base64::{engine::general_purpose, Engine as _};
 use blake3::Hash;
+use ed25519_dalek::VerifyingKey;
+use hex;
 use parking_lot::{Mutex, RwLock};
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
@@ -314,6 +318,7 @@ pub struct NodeRuntimeConfig {
     pub consensus_storage_path: PathBuf,
     pub feature_gates: FeatureGates,
     pub snapshot_provider: Option<SnapshotProviderHandle>,
+    pub snapshot_manifest_verifying_key: Option<Arc<VerifyingKey>>,
 }
 
 impl From<&NodeConfig> for NodeRuntimeConfig {
@@ -329,6 +334,7 @@ impl From<&NodeConfig> for NodeRuntimeConfig {
             consensus_storage_path: config.consensus_pipeline_path.clone(),
             feature_gates: config.rollout.feature_gates.clone(),
             snapshot_provider: None,
+            snapshot_manifest_verifying_key: load_manifest_verifying_key(config),
         }
     }
 }
@@ -352,8 +358,41 @@ impl fmt::Debug for NodeRuntimeConfig {
                     &"None"
                 },
             )
+            .field(
+                "snapshot_manifest_verifying_key",
+                if self.snapshot_manifest_verifying_key.is_some() {
+                    &"Some(..)"
+                } else {
+                    &"None"
+                },
+            )
             .finish()
     }
+}
+
+fn load_manifest_verifying_key(config: &NodeConfig) -> Option<Arc<VerifyingKey>> {
+    let path = config.snapshot_manifest_public_key_path.as_ref()?;
+    let raw = fs::read_to_string(path).expect("snapshot manifest public key file");
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        panic!(
+            "snapshot manifest public key file {} is empty",
+            path.display()
+        );
+    }
+    let decoded = match hex::decode(trimmed) {
+        Ok(bytes) => bytes,
+        Err(_) => general_purpose::STANDARD
+            .decode(trimmed.as_bytes())
+            .expect("snapshot manifest public key must be valid hex or base64"),
+    };
+    let bytes: [u8; 32] = decoded
+        .as_slice()
+        .try_into()
+        .expect("snapshot manifest public key must encode 32 bytes");
+    let key = VerifyingKey::from_bytes(&bytes)
+        .expect("snapshot manifest public key must be a valid ed25519 key");
+    Some(Arc::new(key))
 }
 
 #[derive(Clone, Debug)]
@@ -596,7 +635,8 @@ impl GossipPipelines {
         let validator = Arc::new(RuntimeProofValidator::new(proof_backend));
         let proofs = ProofMempool::new(validator, storage)?;
         let verifier = Arc::new(RuntimeRecursiveProofVerifier::new(registry));
-        let light_client = LightClientSync::new(verifier);
+        let light_client =
+            LightClientSync::new(verifier, config.snapshot_manifest_verifying_key.clone());
         let consensus_storage = Arc::new(PersistentConsensusStorage::open(
             &config.consensus_storage_path,
         )?);
