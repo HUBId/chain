@@ -157,6 +157,40 @@ jobs:
       - name: Verify release feature set
         shell: bash
         run: ./scripts/verify_release_features.sh --target "${{ matrix.target }}" --profile release
+      - name: Verify snapshot manifests
+        shell: bash
+        env:
+          SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
+        run: |
+          set -euo pipefail
+          manifests_dir="dist/artifacts/${{ matrix.target }}"
+          if [[ -z "${SNAPSHOT_MANIFEST_PUBKEY_HEX:-}" ]]; then
+            echo "::error::SNAPSHOT_MANIFEST_PUBKEY_HEX secret is not configured" >&2
+            exit 1
+          fi
+          key_path="$(mktemp)"
+          printf '%s' "$SNAPSHOT_MANIFEST_PUBKEY_HEX" >"$key_path"
+          found=0
+          while IFS= read -r manifest; do
+            found=1
+            signature="${manifest}.sig"
+            if [[ ! -f "$signature" ]]; then
+              echo "::error::Snapshot manifest signature not found for $manifest" >&2
+              exit 1
+            fi
+            chunk_root="$(dirname "$(dirname "$manifest")")/chunks"
+            report="${manifest%.json}-verify.json"
+            cargo run --locked --package snapshot-verify -- \
+              --manifest "$manifest" \
+              --signature "$signature" \
+              --public-key "$key_path" \
+              --chunk-root "$chunk_root" \
+              --output "$report"
+          done < <(find "$manifests_dir" -path '*/manifest/chunks.json' -type f -print | sort)
+          rm -f "$key_path"
+          if [[ $found -eq 0 ]]; then
+            echo "No snapshot manifests discovered under $manifests_dir; verification skipped"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
@@ -193,6 +227,40 @@ jobs:
       - name: Verify release feature set
         shell: bash
         run: ./scripts/verify_release_features.sh --target "${{ matrix.target }}" --profile release
+      - name: Verify snapshot manifests
+        shell: bash
+        env:
+          SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
+        run: |
+          set -euo pipefail
+          manifests_dir="dist/artifacts/${{ matrix.target }}"
+          if [[ -z "${SNAPSHOT_MANIFEST_PUBKEY_HEX:-}" ]]; then
+            echo "::error::SNAPSHOT_MANIFEST_PUBKEY_HEX secret is not configured" >&2
+            exit 1
+          fi
+          key_path="$(mktemp)"
+          printf '%s' "$SNAPSHOT_MANIFEST_PUBKEY_HEX" >"$key_path"
+          found=0
+          while IFS= read -r manifest; do
+            found=1
+            signature="${manifest}.sig"
+            if [[ ! -f "$signature" ]]; then
+              echo "::error::Snapshot manifest signature not found for $manifest" >&2
+              exit 1
+            fi
+            chunk_root="$(dirname "$(dirname "$manifest")")/chunks"
+            report="${manifest%.json}-verify.json"
+            cargo run --locked --package snapshot-verify -- \
+              --manifest "$manifest" \
+              --signature "$signature" \
+              --public-key "$key_path" \
+              --chunk-root "$chunk_root" \
+              --output "$report"
+          done < <(find "$manifests_dir" -path '*/manifest/chunks.json' -type f -print | sort)
+          rm -f "$key_path"
+          if [[ $found -eq 0 ]]; then
+            echo "No snapshot manifests discovered under $manifests_dir; verification skipped"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
