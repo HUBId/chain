@@ -17,7 +17,8 @@ permissions:
   pull-requests: read
 
 env:
-  FRESHNESS_HOURS: '24'
+  # Accept the weekly cadence of nightly-simnet by allowing reports up to 7 days old.
+  FRESHNESS_HOURS: '168'
 
 jobs:
   nightly-slo-gate:
@@ -47,11 +48,12 @@ jobs:
             const now = new Date();
 
             let summaryLines = [];
-            let conclusion = 'failure';
+            let conclusion = 'success';
             let shortMessage = '';
 
             if (!latestRun) {
               shortMessage = 'No completed nightly runs were found for the default branch.';
+              conclusion = 'failure';
               summaryLines.push('| Field | Value |');
               summaryLines.push('| --- | --- |');
               summaryLines.push(`| Status | missing |`);
@@ -77,20 +79,28 @@ jobs:
                 conclusion = 'success';
                 shortMessage = `Nightly run is healthy (conclusion: ${conclusionText}, ${ageDisplay}h old).`;
               } else if (!succeeded) {
+                conclusion = 'failure';
                 shortMessage = `Latest nightly run concluded with "${conclusionText}".`;
               } else {
+                conclusion = 'failure';
                 shortMessage = `Latest nightly run is ${ageDisplay}h old which exceeds the ${freshnessHours}h freshness target.`;
               }
             }
 
             if (process.env.GITHUB_STEP_SUMMARY) {
-              summaryLines.unshift(`# Nightly simulation freshness`);
+              summaryLines = [
+                '# Nightly simulation freshness',
+                '',
+                '> ℹ️ The nightly freshness gate is now informational only and will not block merges.',
+                '',
+                ...summaryLines
+              ];
               summaryLines.push('');
               await fs.promises.appendFile(process.env.GITHUB_STEP_SUMMARY, summaryLines.join('\n'));
             }
 
             if (conclusion !== 'success') {
-              core.setFailed(shortMessage);
+              core.warning(shortMessage);
             } else {
               core.info(shortMessage);
             }

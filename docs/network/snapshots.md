@@ -141,3 +141,38 @@ minutes and can be tuned through `snapshot_validator.cadence_secs` in
 `node.toml`.【F:rpp/runtime/config.rs†L1256-L1761】 Keep manifest and
 chunk directories in sync whenever snapshots rotate so the validator catches
 corruption immediately after tampering or partial deployments.
+
+## Offline manifest verification
+
+Release bundles and nightly audits ship the pruning snapshot manifest
+(`manifest/chunks.json`) together with a detached Ed25519 signature. The
+`snapshot-verify` CLI validates both the signature and every chunk checksum
+before the artifacts are published. Provide the manifest, signature, chunk
+directory, and the hex/base64 encoded verifying key:
+
+```bash
+cargo run --locked --package snapshot-verify -- \
+  --manifest dist/artifacts/x86_64-unknown-linux-gnu/snapshots/manifest/chunks.json \
+  --signature dist/artifacts/x86_64-unknown-linux-gnu/snapshots/manifest/chunks.json.sig \
+  --public-key ~/keys/snapshot-manifest.hex \
+  --chunk-root dist/artifacts/x86_64-unknown-linux-gnu/snapshots/chunks \
+  --output dist/artifacts/x86_64-unknown-linux-gnu/snapshots/manifest/chunks-verify.json
+```
+
+The tool emits a machine-readable JSON report summarising the signature check,
+per-segment results, and aggregate counters. Exit codes indicate the failure
+mode:
+
+- `0` – signature and all chunk hashes match the manifest
+- `2` – signature verification failed
+- `3` – at least one segment is missing, has a size mismatch, or fails the
+  checksum comparison
+- `1` – I/O or decode error prevented verification from running
+
+The release and nightly workflows persist the JSON report alongside the other
+artifacts so auditors can cross-reference CI output with manual runs.【F:.github/workflows/release.yml†L122-L155】【F:.github/workflows/nightly.yml†L20-L118】 Nightly
+verification runners must stage the chunk directory before invoking the CLI;
+set `SNAPSHOT_CHUNK_ARCHIVE_URL` to a tarball/zip that mirrors the manifest’s
+`chunks/` layout (optionally combine it with `SNAPSHOT_CHUNK_ROOT_SUBDIR` when
+the archive nests the directory) and the workflow unpacks the archive into a
+temporary workspace before the verification step runs.【F:.github/workflows/nightly.yml†L60-L118】

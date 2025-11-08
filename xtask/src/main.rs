@@ -161,6 +161,20 @@ fn run_simnet_smoke() -> Result<()> {
     Ok(())
 }
 
+fn run_worm_export_smoke() -> Result<()> {
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(workspace_root())
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-p2p")
+        .arg("--locked")
+        .arg("--test")
+        .arg("worm_export");
+    apply_feature_flags(&mut command);
+    run_command(command, "worm export smoke test")
+}
+
 fn run_consensus_manipulation_tests() -> Result<()> {
     let mut command = Command::new("cargo");
     command
@@ -1015,7 +1029,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs",
     );
 }
 
@@ -1888,6 +1902,7 @@ fn main() -> Result<()> {
         "test-observability" => run_observability_suite(),
         "test-simnet" => run_simnet_smoke(),
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
+        "test-worm-export" => run_worm_export_smoke(),
         "test-all" => run_full_test_matrix(),
         "proof-metadata" => generate_proof_metadata(&argv),
         "plonky3-setup" => regenerate_plonky3_setup(&argv),

@@ -17,6 +17,7 @@ mod simulator;
 mod swarm;
 mod tier;
 mod topics;
+mod worm_export;
 
 pub mod vendor;
 
@@ -56,7 +57,8 @@ pub use pipeline::{
     VoteOutcome,
 };
 pub use policy_log::{
-    AdmissionPolicyChange, AdmissionPolicyLogEntry, AdmissionPolicyLogError, PolicyAllowlistState,
+    AdmissionPolicyChange, AdmissionPolicyLogEntry, AdmissionPolicyLogError,
+    AdmissionPolicyLogOptions, PolicyAllowlistState,
 };
 pub use policy_signing::{
     PolicySignature, PolicySignatureVerifier, PolicySigner, PolicySigningError, PolicyTrustStore,
@@ -70,3 +72,7 @@ pub use swarm::{
 };
 pub use tier::TierLevel;
 pub use topics::GossipTopic;
+pub use worm_export::{
+    CommandWormExporter, S3WormExporter, WormExportError, WormExportSettings, WormExporter,
+    WormRetention, WormRetentionMode,
+};

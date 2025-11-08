@@ -6,15 +6,19 @@ use libp2p::{identity::ParseError as PeerIdParseError, Multiaddr};
 use log::warn;
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
-    AllowlistedPeer, GossipStateError, GossipStateStore, HandshakePayload, IdentityError, Network,
-    NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError, PolicySigner,
-    PolicyTrustStore, ReputationHeuristics, SnapshotProviderHandle, TierLevel,
+    AllowlistedPeer, CommandWormExporter, GossipStateError, GossipStateStore, HandshakePayload,
+    IdentityError, Network, NetworkError, NodeIdentity, Peerstore, PeerstoreConfig, PeerstoreError,
+    PolicySigner, PolicyTrustStore, ReputationHeuristics, S3WormExporter, SnapshotProviderHandle,
+    TierLevel, WormExportSettings, WormExporter, WormRetention, WormRetentionMode,
 };
 use std::str::FromStr;
 use thiserror::Error;
 
 use super::node::IdentityProfile;
-use crate::config::{FeatureGates, NetworkAdmissionConfig, P2pAllowlistEntry, P2pConfig};
+use crate::config::{
+    FeatureGates, NetworkAdmissionConfig, P2pAllowlistEntry, P2pConfig, WormExportTargetConfig,
+    WormRetentionModeConfig,
+};
 
 /// Resolved libp2p networking configuration used by the runtime.
 #[derive(Clone, Debug)]
@@ -180,6 +184,11 @@ impl NetworkResources {
         } else {
             None
         };
+        let worm_export = if admission.worm_export.enabled {
+            Some(build_worm_export_settings(&admission.worm_export)?)
+        } else {
+            None
+        };
         let mut peerstore_config = PeerstoreConfig::persistent(&p2p_config.peerstore_path)
             .with_access_path(admission.policy_path.clone())
             .with_policy_backups(admission.backup_dir.clone(), backup_retention)
@@ -187,6 +196,9 @@ impl NetworkResources {
             .with_blocklist(config.blocklist().to_vec());
         if let Some(signer) = policy_signer {
             peerstore_config = peerstore_config.with_policy_signer(signer);
+        }
+        if let Some(settings) = worm_export {
+            peerstore_config = peerstore_config.with_worm_export(settings);
         }
         let peerstore = Arc::new(Peerstore::open(peerstore_config)?);
         let gossip_state = if let Some(path) = p2p_config.gossip_path.as_ref() {
@@ -284,6 +296,56 @@ pub enum NetworkSetupError {
     GossipState(#[from] GossipStateError),
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
+    #[error("worm export error: {0}")]
+    WormExport(String),
+}
+
+fn build_worm_export_settings(
+    config: &crate::config::NetworkAdmissionWormConfig,
+) -> Result<WormExportSettings, NetworkSetupError> {
+    let retention_mode = match config.retention_mode {
+        WormRetentionModeConfig::Compliance => WormRetentionMode::Compliance,
+        WormRetentionModeConfig::Governance => WormRetentionMode::Governance,
+    };
+    let retention = WormRetention {
+        min_days: config.retention_days,
+        max_days: config.retention_max_days,
+        mode: retention_mode,
+    };
+    let exporter: Arc<dyn WormExporter> = match config.target.as_ref() {
+        Some(WormExportTargetConfig::Command { program, args, env }) => Arc::new(
+            CommandWormExporter::new(program.clone(), args.clone(), env.clone()),
+        ),
+        Some(WormExportTargetConfig::S3 {
+            endpoint,
+            region,
+            bucket,
+            prefix,
+            access_key,
+            secret_key,
+            session_token,
+            path_style,
+        }) => Arc::new(
+            S3WormExporter::new(
+                bucket.clone(),
+                region.clone(),
+                endpoint.clone(),
+                prefix.clone(),
+                access_key.clone(),
+                secret_key.clone(),
+                session_token.clone(),
+                *path_style,
+            )
+            .map_err(|err| NetworkSetupError::WormExport(err.to_string()))?,
+        ),
+        None => {
+            return Err(NetworkSetupError::WormExport(
+                "worm export target missing".to_string(),
+            ))
+        }
+    };
+    WormExportSettings::new(exporter, retention, config.require_signatures)
+        .map_err(|err| NetworkSetupError::WormExport(err.to_string()))
 }
 
 #[cfg(test)]

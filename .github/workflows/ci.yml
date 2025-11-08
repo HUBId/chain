@@ -375,6 +375,17 @@ PY
           set -euo pipefail
           cargo test -p rpp-chain --locked --test admission
 
+  worm-export-smoke:
+    name: WORM export pipeline smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Exercise WORM export stub pipeline
+        run: |
+          set -euo pipefail
+          cargo xtask test-worm-export
+
   integration-workflows:
     name: Integration workflows (${{ matrix.name }})
     runs-on: ubuntu-latest

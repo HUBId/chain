@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir=${WORM_EXPORT_ROOT:-./logs/worm}
+mkdir -p "$root_dir"
+
+object_name=${WORM_EXPORT_OBJECT:-$(date +%s%3N)}
+if [[ ${object_name} != *.json ]]; then
+  object_name="${object_name}.json"
+fi
+output_path="${root_dir}/${object_name}"
+if [[ -e "$output_path" ]]; then
+  echo "worm-export: refusing to overwrite $output_path" >&2
+  exit 1
+fi
+
+metadata_path="${root_dir}/retention.meta"
+{
+  echo "min_days=${WORM_RETENTION_MIN_DAYS:-}";
+  echo "max_days=${WORM_RETENTION_MAX_DAYS:-}";
+  echo "mode=${WORM_RETENTION_MODE:-}";
+  echo "retain_until=${WORM_RETAIN_UNTIL:-}";
+} >"$metadata_path"
+
+cat >"$output_path"
