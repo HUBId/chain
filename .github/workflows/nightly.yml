@@ -94,6 +94,42 @@ jobs:
           extract_dir="${tmp_dir}/extracted"
           mkdir -p "${extract_dir}"
 
+          extract_archive() {
+            local source="$1"
+            local archive="$2"
+            local destination="$3"
+
+            case "${source}" in
+              *.tar|*.tar.gz|*.tgz|*.tar.xz)
+                tar -xf "${archive}" -C "${destination}"
+                ;;
+              *.tar.zst|*.tzst)
+                if command -v unzstd >/dev/null 2>&1; then
+                  tar --use-compress-program=unzstd -xf "${archive}" -C "${destination}"
+                elif command -v zstdcat >/dev/null 2>&1; then
+                  zstdcat "${archive}" | tar -x -C "${destination}"
+                else
+                  echo "::error::zstd utilities are required to extract ${source}" >&2
+                  exit 1
+                fi
+                ;;
+              *.zip)
+                unzip -q "${archive}" -d "${destination}"
+                ;;
+              *)
+                echo "::error::Unsupported archive type for ${source}" >&2
+                exit 1
+                ;;
+            esac
+          }
+
+          is_archive=false
+          case "${SNAPSHOT_CHUNK_ARCHIVE_URL}" in
+            *.tar|*.tar.gz|*.tgz|*.tar.xz|*.tar.zst|*.tzst|*.zip)
+              is_archive=true
+              ;;
+          esac
+
           echo "Fetching pruning snapshot chunks from ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
           if [[ "${SNAPSHOT_CHUNK_ARCHIVE_URL}" == s3://* ]]; then
             if ! command -v aws >/dev/null 2>&1; then
@@ -102,31 +138,21 @@ jobs:
               export PATH="${HOME}/.local/bin:${PATH}"
               hash -r
             fi
-            aws s3 sync --only-show-errors "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${extract_dir}"
+
+            if [[ "${is_archive}" == true ]]; then
+              aws s3 cp --no-progress "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${archive_path}"
+              extract_archive "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${archive_path}" "${extract_dir}"
+            else
+              aws s3 sync --only-show-errors "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${extract_dir}"
+            fi
           else
-            curl -fL "${SNAPSHOT_CHUNK_ARCHIVE_URL}" -o "${archive_path}"
-            case "${SNAPSHOT_CHUNK_ARCHIVE_URL}" in
-              *.tar|*.tar.gz|*.tgz|*.tar.xz)
-                tar -xf "${archive_path}" -C "${extract_dir}"
-                ;;
-              *.tar.zst|*.tzst)
-                if command -v unzstd >/dev/null 2>&1; then
-                  tar --use-compress-program=unzstd -xf "${archive_path}" -C "${extract_dir}"
-                elif command -v zstdcat >/dev/null 2>&1; then
-                  zstdcat "${archive_path}" | tar -x -C "${extract_dir}"
-                else
-                  echo "::error::zstd utilities are required to extract ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
-                  exit 1
-                fi
-                ;;
-              *.zip)
-                unzip -q "${archive_path}" -d "${extract_dir}"
-                ;;
-              *)
-                echo "::error::Unsupported archive type for ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
-                exit 1
-                ;;
-            esac
+            if [[ "${is_archive}" == true ]]; then
+              curl -fL "${SNAPSHOT_CHUNK_ARCHIVE_URL}" -o "${archive_path}"
+              extract_archive "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${archive_path}" "${extract_dir}"
+            else
+              echo "::error::Unsupported archive type for ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
+              exit 1
+            fi
           fi
 
           if [ -z "$(find "${extract_dir}" -mindepth 1 -maxdepth 1 -print -quit)" ]; then

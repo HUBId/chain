@@ -53,10 +53,11 @@ and pages on-call engineers.【F:.github/workflows/nightly.yml†L29-L64】【F:
 
 Nightly verification also requires access to the pruning chunk set referenced
 by the manifest. Configure the `SNAPSHOT_CHUNK_ARCHIVE_URL` secret with an HTTP
-or S3 location of the archived `cf_pruning_snapshots` directory. The workflow
-downloads the archive, extracts it into `SNAPSHOT_CHUNK_ROOT`, and passes that
-path to the snapshot verification tooling; missing or unreachable archives fail
-the job so maintainers are alerted to expired artifacts.【F:.github/workflows/nightly.yml†L46-L134】
+URL or S3 object/prefix that resolves to the archived `cf_pruning_snapshots`
+directory. The workflow downloads the archive (including `.tar.*`, `.tzst`, or
+`.zip` bundles), extracts it into `SNAPSHOT_CHUNK_ROOT`, and passes that path to
+the snapshot verification tooling; missing or unreachable archives fail the job
+so maintainers are alerted to expired artifacts.【F:.github/workflows/nightly.yml†L46-L156】
 
 If the archive secret is not configured the nightly job emits a warning and
 skips the download step so the remainder of the health audit can still run;
