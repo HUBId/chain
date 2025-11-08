@@ -118,6 +118,7 @@ files = [
     Path("docs/observability/alerts/root_integrity.yaml"),
     Path("docs/observability/alerts/consensus_vrf.yaml"),
     Path("docs/observability/alerts/snapshot_stream.yaml"),
+    Path("docs/observability/alerts/timetoke_replay_stall.yaml"),
 ]
 
 error = False

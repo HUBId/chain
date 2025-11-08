@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: timetoke-replay-stall
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: timetoke-replay
+      rules:
+        - alert: TimetokeReplayLatencySLOBreach
+          expr: histogram_quantile(0.99, sum(rate(timetoke_replay_duration_ms_bucket[5m])) by (le)) > 120000
+          for: 15m
+          labels:
+            severity: page
+            service: timetoke
+          annotations:
+            summary: Timetoke replay latency SLO breached
+            description: |
+              The p99 timetoke replay latency exceeded the 120 second SLO for the last 15 minutes.
+              Inspect gossip backlog, pipeline load, and recent deployment changes before
+              resuming acceptance of new deltas.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/incident_response.md#timetoke-replay-stall
+        - alert: TimetokeReplayStalled
+          expr: sum(increase(timetoke_replay_success_total[15m])) == 0
+          for: 15m
+          labels:
+            severity: page
+            service: timetoke
+          annotations:
+            summary: Timetoke replay successes stalled
+            description: |
+              No successful timetoke replays have been recorded in the last 15 minutes.
+              Validate exporter health, ensure the replay pipeline is running, and follow the
+              failover steps before reintroducing downstream consumers.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/incident_response.md#timetoke-replay-stall
