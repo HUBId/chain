@@ -51,6 +51,20 @@ session, cross-checks the reported chunk/update indices against the local
 manifest totals, and emits structured JSON logs so any divergence fails the job
 and pages on-call engineers.【F:.github/workflows/nightly.yml†L29-L64】【F:xtask/src/main.rs†L214-L596】
 
+Nightly verification also requires access to the pruning chunk set referenced
+by the manifest. Configure the `SNAPSHOT_CHUNK_ARCHIVE_URL` secret with an HTTP
+URL or S3 object/prefix that resolves to the archived `cf_pruning_snapshots`
+directory. The workflow downloads the archive (including `.tar.*`, `.tbz2`,
+`.txz`, `.tzst`, `.tlz4`, or `.zip` bundles—even when referenced via signed URLs
+with query strings), extracts it into `SNAPSHOT_CHUNK_ROOT`, and passes that path to
+the snapshot verification tooling; missing or unreachable archives fail the job
+so maintainers are alerted to expired artifacts.【F:.github/workflows/nightly.yml†L46-L156】
+
+If the archive secret is not configured the nightly job emits a warning and
+skips the download step so the remainder of the health audit can still run;
+configure the secret as soon as the archive location is known to restore full
+coverage.【F:.github/workflows/nightly.yml†L96-L122】
+
 When investigating a snapshot incident, re-run the audit locally to capture the
 current state before making changes. Configure the RPC endpoint and optional
 manifest overrides via environment variables, then write the report to disk for
