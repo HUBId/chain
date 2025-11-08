@@ -33,6 +33,14 @@ jobs:
             const { owner, repo } = context.repo;
             const defaultBranch = context.payload.repository?.default_branch ?? process.env.GITHUB_BASE_REF ?? 'main';
 
+            const { data: branchData } = await github.rest.repos.getBranch({
+              owner,
+              repo,
+              branch: defaultBranch
+            });
+
+            const branchHeadSha = branchData?.commit?.sha;
+
             const { data } = await github.rest.actions.listWorkflowRuns({
               owner,
               repo,
@@ -72,10 +80,21 @@ jobs:
 
               const isFresh = ageHours <= freshnessHours;
               const succeeded = latestRun.conclusion === 'success';
+              const isUpToDate = Boolean(branchHeadSha && latestRun.head_sha === branchHeadSha);
 
-              if (succeeded && isFresh) {
+              summaryLines.push(`| Latest run head SHA | ${latestRun.head_sha} |`);
+              summaryLines.push(`| Default branch head SHA | ${branchHeadSha ?? 'unknown'} |`);
+              summaryLines.push(`| Branch head matches run | ${isUpToDate ? 'yes' : 'no'} |`);
+
+              if (succeeded && (isFresh || isUpToDate)) {
                 conclusion = 'success';
-                shortMessage = `Nightly run is healthy (conclusion: ${conclusionText}, ${ageDisplay}h old).`;
+                if (!isFresh && isUpToDate) {
+                  shortMessage = `Nightly run is ${ageDisplay}h old (>${freshnessHours}h) but no new commits have landed since it completed.`;
+                  summaryLines.push('');
+                  summaryLines.push('Nightly run exceeded freshness target, but default branch head matches the latest run.');
+                } else {
+                  shortMessage = `Nightly run is healthy (conclusion: ${conclusionText}, ${ageDisplay}h old).`;
+                }
               } else if (!succeeded) {
                 shortMessage = `Latest nightly run concluded with "${conclusionText}".`;
               } else {
