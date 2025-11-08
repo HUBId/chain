@@ -170,4 +170,9 @@ mode:
 - `1` – I/O or decode error prevented verification from running
 
 The release and nightly workflows persist the JSON report alongside the other
-artifacts so auditors can cross-reference CI output with manual runs.【F:.github/workflows/release.yml†L122-L155】【F:.github/workflows/nightly.yml†L20-L65】
+artifacts so auditors can cross-reference CI output with manual runs.【F:.github/workflows/release.yml†L122-L155】【F:.github/workflows/nightly.yml†L20-L118】 Nightly
+verification runners must stage the chunk directory before invoking the CLI;
+set `SNAPSHOT_CHUNK_ARCHIVE_URL` to a tarball/zip that mirrors the manifest’s
+`chunks/` layout (optionally combine it with `SNAPSHOT_CHUNK_ROOT_SUBDIR` when
+the archive nests the directory) and the workflow unpacks the archive into a
+temporary workspace before the verification step runs.【F:.github/workflows/nightly.yml†L60-L118】

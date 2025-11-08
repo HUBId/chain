@@ -24,6 +24,12 @@ milestone.
 - [ ] **CI report linked.** The release and nightly pipelines publish
       `snapshot-manifest-verify.json` when the CLI runs in CI. Link the relevant
       workflow run (and the uploaded report) to the acceptance record for traceability.
+- [ ] **Nightly chunk staging configured.** Nightly verification runners either
+      mount the pruning snapshot chunks under `SNAPSHOT_CHUNK_ROOT` or provide a
+      `SNAPSHOT_CHUNK_ARCHIVE_URL` secret that points at a tarball/zip containing
+      the manifest’s `chunks/` hierarchy. Set `SNAPSHOT_CHUNK_ROOT_SUBDIR` when
+      the archive needs an additional path segment so the CI job can extract the
+      payload and hand the correct directory to `snapshot-verify`.
 
 ## Exit-Kriterien
 

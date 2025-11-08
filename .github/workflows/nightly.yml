@@ -51,6 +51,8 @@ jobs:
       SNAPSHOT_VALIDATOR_CONFIG: ${{ secrets.SNAPSHOT_VALIDATOR_CONFIG }}
       SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
       SNAPSHOT_CHUNK_ROOT: ${{ secrets.SNAPSHOT_CHUNK_ROOT }}
+      SNAPSHOT_CHUNK_ARCHIVE_URL: ${{ secrets.SNAPSHOT_CHUNK_ARCHIVE_URL }}
+      SNAPSHOT_CHUNK_ROOT_SUBDIR: ${{ secrets.SNAPSHOT_CHUNK_ROOT_SUBDIR }}
       SNAPSHOT_MANIFEST_SIGNATURE_PATH: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE_PATH }}
       SNAPSHOT_MANIFEST_SIGNATURE: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE }}
     steps:
@@ -73,8 +75,56 @@ jobs:
             --config "${CONFIG_PATH}" \
             --output snapshot-health-report.json \
             --rpp-node-bin target/release/rpp-node
+      - name: Stage snapshot chunks
+        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') && (env.SNAPSHOT_CHUNK_ROOT != '' || env.SNAPSHOT_CHUNK_ARCHIVE_URL != '') }}
+        id: stage_chunks
+        run: |
+          set -euo pipefail
+          if [[ -n "${SNAPSHOT_CHUNK_ROOT:-}" && -d "${SNAPSHOT_CHUNK_ROOT}" ]]; then
+            chunk_root="$SNAPSHOT_CHUNK_ROOT"
+          elif [[ -n "${SNAPSHOT_CHUNK_ARCHIVE_URL:-}" ]]; then
+            workdir="$(mktemp -d)"
+            archive="$workdir/archive"
+            echo "Downloading snapshot chunks from $SNAPSHOT_CHUNK_ARCHIVE_URL"
+            curl -fsSL "$SNAPSHOT_CHUNK_ARCHIVE_URL" -o "$archive"
+            extract_dir="$workdir/extracted"
+            mkdir "$extract_dir"
+            case "$SNAPSHOT_CHUNK_ARCHIVE_URL" in
+              *.tar.gz|*.tgz)
+                tar -xzf "$archive" -C "$extract_dir"
+                ;;
+              *.tar)
+                tar -xf "$archive" -C "$extract_dir"
+                ;;
+              *.zip)
+                unzip -q "$archive" -d "$extract_dir"
+                ;;
+              *)
+                echo "::error::Unsupported archive format: $SNAPSHOT_CHUNK_ARCHIVE_URL" >&2
+                exit 1
+                ;;
+            esac
+            mapfile -t entries < <(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | sort)
+            if [[ -n "${SNAPSHOT_CHUNK_ROOT_SUBDIR:-}" ]]; then
+              chunk_root="$extract_dir/$SNAPSHOT_CHUNK_ROOT_SUBDIR"
+            elif [[ ${#entries[@]} -eq 1 ]]; then
+              chunk_root="${entries[0]}"
+            else
+              chunk_root="$extract_dir"
+            fi
+            echo "Snapshot chunks extracted to $chunk_root"
+          else
+            echo "::error::SNAPSHOT_CHUNK_ROOT is not present and SNAPSHOT_CHUNK_ARCHIVE_URL is unset" >&2
+            exit 1
+          fi
+          if [[ ! -d "$chunk_root" ]]; then
+            echo "::error::Chunk root $chunk_root does not exist or is not a directory" >&2
+            exit 1
+          fi
+          echo "SNAPSHOT_CHUNK_ROOT=$chunk_root" >>"$GITHUB_ENV"
+          echo "chunk_root=$chunk_root" >>"$GITHUB_OUTPUT"
       - name: Verify snapshot manifest signature
-        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && env.SNAPSHOT_CHUNK_ROOT != '' && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
+        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && (env.SNAPSHOT_CHUNK_ROOT != '' || env.SNAPSHOT_CHUNK_ARCHIVE_URL != '') && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
         run: |
           set -euo pipefail
           key_path="$(mktemp)"
@@ -122,7 +172,7 @@ jobs:
           path: snapshot-health-report.json
 
       - name: Upload snapshot manifest verification report
-        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && env.SNAPSHOT_CHUNK_ROOT != '' && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
+        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && (env.SNAPSHOT_CHUNK_ROOT != '' || env.SNAPSHOT_CHUNK_ARCHIVE_URL != '') && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-manifest-verify
