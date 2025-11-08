@@ -396,6 +396,9 @@ PY
     exit "$rc"
   fi
 
+  echo "Validating snapshot verifier aggregate report schema"
+  cargo xtask verify-report --report "$aggregate_report"
+
   sha256sum "$aggregate_report" >"${aggregate_report}.sha256"
   echo "Snapshot verifier report written to $aggregate_report"
 }
