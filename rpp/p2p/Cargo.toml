@@ -71,7 +71,7 @@ serde_json = "=1.0.145"
 prometheus-client = "0.23"
 thiserror = "=2.0.12"
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time"] }
-toml = "0.8"
+toml = "=0.9.6"
 tracing = "=0.1.41"
 blake3 = "=1.8.2"
 blake2 = "=0.10.6"
