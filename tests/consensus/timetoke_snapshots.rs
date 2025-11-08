@@ -1,3 +1,6 @@
+use std::convert::TryInto;
+
+use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use rpp_consensus::{
     TimetokeRecord, TimetokeReplayError, TimetokeReplayValidator, TimetokeSnapshotConsumer,
     TimetokeSnapshotError, TimetokeSnapshotProducer,
@@ -47,6 +50,8 @@ fn sample_pruning_envelope(global_root: [u8; DIGEST_LENGTH]) -> NetworkPruningEn
 
 #[test]
 fn timetoke_snapshot_roundtrip() {
+    let signing_key = SigningKey::from_bytes(&[0x11; 32]);
+    let verifying_key: VerifyingKey = signing_key.verifying_key();
     let records = vec![
         TimetokeRecord {
             identity: "validator-1".into(),
@@ -68,7 +73,7 @@ fn timetoke_snapshot_roundtrip() {
         },
     ];
     let timetoke_root = [0xAB; 32];
-    let mut producer = TimetokeSnapshotProducer::new(16);
+    let mut producer = TimetokeSnapshotProducer::new(16, signing_key);
     let handle = producer
         .publish(records.clone(), timetoke_root)
         .expect("publish");
@@ -92,6 +97,14 @@ fn timetoke_snapshot_roundtrip() {
     assert_eq!(snapshot.timetoke_root, hex::encode(timetoke_root));
     assert!(consumer.is_finished());
 
+    let encoded_snapshot = serde_json::to_vec(&snapshot).expect("encode snapshot");
+    let signature_bytes = hex::decode(&handle.signature).expect("decode signature");
+    let signature_array: [u8; 64] = signature_bytes.try_into().expect("signature length");
+    let signature = Signature::from_bytes(&signature_array).expect("signature bytes");
+    verifying_key
+        .verify(&encoded_snapshot, &signature)
+        .expect("signature verifies");
+
     let err = consumer
         .ingest_chunk(last_chunk.expect("have last chunk"))
         .expect_err("reject duplicate chunk");
@@ -100,10 +113,11 @@ fn timetoke_snapshot_roundtrip() {
 
 #[test]
 fn timetoke_replay_validation_guards_roots_and_tags() {
+    let signing_key = SigningKey::from_bytes(&[0x22; 32]);
     let ledger_timetoke_root = [0x44; 32];
     let ledger_global_root = [0x55; 32];
 
-    let mut producer = TimetokeSnapshotProducer::new(8);
+    let mut producer = TimetokeSnapshotProducer::new(8, signing_key);
     let handle = producer
         .publish(Vec::new(), ledger_timetoke_root)
         .expect("publish snapshot");

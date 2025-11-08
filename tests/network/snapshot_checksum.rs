@@ -90,6 +90,16 @@ async fn snapshot_validator_reports_checksum_mismatch() -> Result<()> {
         fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
             .await
             .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
+        let signature_path = manifest_path.with_file_name(format!(
+            "{}.sig",
+            manifest_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("manifest file name")
+        ));
+        fs::write(&signature_path, b"dummy-signature")
+            .await
+            .with_context(|| format!("write signature to {}", signature_path.display()))?;
 
         // Wait for the validator to observe the clean manifest at least once.
         sleep(Duration::from_secs(2)).await;

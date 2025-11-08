@@ -55,6 +55,9 @@ for manifest_path in sorted(manifests_src.glob("*.json")):
     if checksum != data.get("proof_checksum"):
         raise SystemExit(f"checksum mismatch for {proof_file}")
     shutil.copy2(manifest_path, snapshots_dst / manifest_path.name)
+    sig_path = manifest_path.parent / f"{manifest_path.name}.sig"
+    if sig_path.exists():
+        shutil.copy2(sig_path, snapshots_dst / sig_path.name)
     shutil.copy2(proof_path, proofs_dst / proof_path.name)
 
 for meta_file in ("layout_version.json", "pruner_state.json"):

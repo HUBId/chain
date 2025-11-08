@@ -1012,8 +1012,14 @@ pub struct SnapshotChunk {
 type ChunkOverride =
     Box<dyn Fn(&Hash, u64) -> Result<SnapshotChunk, PipelineError> + Send + Sync + 'static>;
 
+#[derive(Clone, Debug)]
+struct StoredSnapshot {
+    payload: Arc<[u8]>,
+    signature: Arc<[u8]>,
+}
+
 pub struct SnapshotStore {
-    snapshots: HashMap<Hash, Arc<[u8]>>,
+    snapshots: HashMap<Hash, StoredSnapshot>,
     chunk_size: usize,
     #[cfg(any(test, feature = "integration"))]
     chunk_override: Option<ChunkOverride>,
@@ -1041,9 +1047,13 @@ impl SnapshotStore {
         }
     }
 
-    pub fn insert(&mut self, payload: Vec<u8>) -> Hash {
+    pub fn insert(&mut self, payload: Vec<u8>, signature: Vec<u8>) -> Hash {
         let root = blake3::hash(&payload);
-        self.snapshots.insert(root, Arc::from(payload));
+        let snapshot = StoredSnapshot {
+            payload: Arc::from(payload),
+            signature: Arc::from(signature),
+        };
+        self.snapshots.insert(root, snapshot);
         root
     }
 
@@ -1056,6 +1066,7 @@ impl SnapshotStore {
             .snapshots
             .get(root)
             .ok_or(PipelineError::SnapshotNotFound)?
+            .payload
             .clone();
         Ok(SnapshotChunkStream::new(*root, data, self.chunk_size))
     }
@@ -1069,7 +1080,14 @@ impl SnapshotStore {
             .snapshots
             .get(root)
             .ok_or(PipelineError::SnapshotNotFound)?;
-        SnapshotChunkStream::chunk_for(*root, data, self.chunk_size, index)
+        SnapshotChunkStream::chunk_for(*root, &data.payload, self.chunk_size, index)
+    }
+
+    pub fn signature(&self, root: &Hash) -> Result<Arc<[u8]>, PipelineError> {
+        self.snapshots
+            .get(root)
+            .map(|snapshot| Arc::clone(&snapshot.signature))
+            .ok_or(PipelineError::SnapshotNotFound)
     }
 }
 
