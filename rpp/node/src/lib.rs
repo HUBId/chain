@@ -50,7 +50,8 @@ use tracing_subscriber::Layer;
 
 use rpp_chain::api::{ApiContext, PruningServiceApi};
 use rpp_chain::config::{
-    NodeConfig, SecretsBackendConfig, TelemetryConfig, VrfTelemetryThresholds, WalletConfig,
+    NodeConfig, ReleaseChannel, SecretsBackendConfig, TelemetryConfig, VrfTelemetryThresholds,
+    WalletConfig, WormExportTargetConfig,
 };
 use rpp_chain::crypto::{
     generate_vrf_keypair, load_or_generate_keypair, vrf_public_key_to_hex, VrfKeyIdentifier,
@@ -78,6 +79,8 @@ pub use state_sync::light_client::{
 };
 
 pub type BootstrapResult<T> = std::result::Result<T, BootstrapError>;
+
+const WORM_EXPORT_MISCONFIGURED_METRIC: &str = "worm_export_misconfigured_total";
 
 #[derive(Debug, Clone)]
 pub struct ValidatorSetupOptions {
@@ -532,6 +535,88 @@ pub fn ensure_prover_backend(mode: RuntimeMode) -> BootstrapResult<()> {
     Ok(())
 }
 
+fn ensure_worm_export_configured(
+    mode: RuntimeMode,
+    config: &NodeConfig,
+) -> BootstrapResult<()> {
+    if !mode.includes_node() {
+        return Ok(());
+    }
+
+    let release_channel = config.rollout.release_channel;
+    let production_channel =
+        matches!(release_channel, ReleaseChannel::Canary | ReleaseChannel::Mainnet);
+
+    if !production_channel {
+        return Ok(());
+    }
+
+    let worm = &config.network.admission.worm_export;
+    let mut missing = Vec::new();
+
+    if !worm.enabled {
+        missing.push("network.admission.worm_export.enabled".to_string());
+    }
+
+    if worm.retention_days == 0 {
+        missing.push("network.admission.worm_export.retention_days".to_string());
+    }
+
+    match worm.target.as_ref() {
+        Some(WormExportTargetConfig::S3 {
+            endpoint,
+            access_key,
+            secret_key,
+            ..
+        }) => {
+            if endpoint
+                .as_ref()
+                .map(|value| value.trim().is_empty())
+                .unwrap_or(true)
+            {
+                missing.push("network.admission.worm_export.target.endpoint".to_string());
+            }
+            if access_key.trim().is_empty() {
+                missing.push("network.admission.worm_export.target.access_key".to_string());
+            }
+            if secret_key.trim().is_empty() {
+                missing.push("network.admission.worm_export.target.secret_key".to_string());
+            }
+        }
+        Some(WormExportTargetConfig::Command { .. }) => {
+            missing.push("network.admission.worm_export.target (s3 required for production)".to_string());
+        }
+        None => {
+            missing.push("network.admission.worm_export.target".to_string());
+        }
+    }
+
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let missing_display = missing.join(", ");
+
+    metrics::counter!(
+        WORM_EXPORT_MISCONFIGURED_METRIC,
+        "release_channel" => format!("{release_channel:?}")
+    )
+    .increment(1);
+
+    error!(
+        target = "bootstrap",
+        mode = mode.as_str(),
+        release_channel = ?release_channel,
+        missing = %missing_display,
+        "production release requires configured WORM export endpoint, credentials, and retention"
+    );
+
+    Err(BootstrapError::configuration(anyhow!(
+        "production release channel {:?} requires configuring network.admission.worm_export (missing: {missing_display})",
+        release_channel
+    )))
+}
+
 pub async fn run(mode: RuntimeMode, mut options: RuntimeOptions) -> BootstrapResult<()> {
     ensure_prover_backend(mode)?;
 
@@ -584,6 +669,9 @@ pub async fn bootstrap(mode: RuntimeMode, options: BootstrapOptions) -> Bootstra
         load_node_configuration(mode, &options).map_err(BootstrapError::configuration)?;
     if let Some(bundle) = node_bundle.as_mut() {
         apply_overrides(&mut bundle.value, &options);
+    }
+    if let Some(bundle) = node_bundle.as_ref() {
+        ensure_worm_export_configured(mode, &bundle.value)?;
     }
     let mut wallet_bundle =
         load_wallet_configuration(mode, &options).map_err(BootstrapError::configuration)?;
