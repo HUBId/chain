@@ -50,3 +50,16 @@ The report wrapper issues the following PromQL queries:
 - `histogram_quantile(0.99, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))`
 
 Reuse these snippets in Grafana dashboard panels or when cross-checking the CLI output with live Prometheus. When latency SLOs regress, correlate the histogram buckets with the `timetoke_replay_duration_ms_count` increase to ensure the exporter is healthy.
+
+## Alerts and incident handling
+
+Prometheus alert definitions live alongside this document in
+[`docs/observability/alerts/timetoke_replay_stall.yaml`](./alerts/timetoke_replay_stall.yaml).
+Two rules enforce the latency SLO and a replay health heartbeat:
+
+- **`TimetokeReplayLatencySLOBreach`** fires when the p99 latency crosses the 120 s ceiling for 15 minutes.
+- **`TimetokeReplayStalled`** fires when no replay success has been recorded during a 15-minute window.
+
+On-call responders should acknowledge either alert, capture the associated Prometheus graphs, and follow the
+[incident response playbook](../runbooks/incident_response.md#timetoke-replay-stall) to triage exporter health,
+pipeline load, and potential failover actions before reintroducing downstream consumers.

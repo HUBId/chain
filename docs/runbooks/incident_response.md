@@ -12,6 +12,21 @@ Für Replay-Störungen in der Timetoke-Pipeline verweist dieses Playbook auf das
 Recovery-Schritte und Troubleshooting-Tipps für die Wiederanbindung der
 Snapshot-Kette bündelt.
 
+## Timetoke Replay Stall
+
+### First Action Checklist
+
+- [ ] **Alert bestätigen:** Quittiere `TimetokeReplayLatencySLOBreach` oder `TimetokeReplayStalled` und vermerke die Alert-ID im Incident-Log.
+- [ ] **Dashboards sichern:** Exportiere die Prometheus- oder Grafana-Panels für `timetoke_replay_duration_ms` und `timetoke_replay_success_total`.
+- [ ] **CLI-Verifikation:** Führe `cargo xtask report-timetoke-slo --metrics-log <pfad>` oder den passenden Prometheus-Aufruf aus und hänge den Output an das Ticket.
+- [ ] **Exporter-Health:** Prüfe `systemctl status timetoke-exporter` (oder den zuständigen Supervisor) und sichere Journal-Einträge.
+
+### Nächste Schritte
+
+1. Vergleiche die Alert-Timestamps mit aktuellen Deployments oder Konfigurationsänderungen in der Replay-Pipeline.
+2. Folge den Failover-Schritten im [Timetoke-Failover-Runbook](./timetoke_failover.md), falls Replays weiterhin ausstehen oder sich die Latenz nicht normalisiert.
+3. Dokumentiere Workarounds, Recovery-Schritte und verlinkte Dashboards im Incident-Log, bevor du den Dienst wieder in die Acceptance-Pipeline einbindest.
+
 ## Einsatzvorbereitung
 
 1. Aktualisiere das Incident-Ticket mit Uhrzeit, Alert-ID und Host, bevor du eine
