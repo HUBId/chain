@@ -7,6 +7,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  worm-export:
+    name: WORM export stub verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run WORM export smoke test
+        run: |
+          set -euo pipefail
+          cargo xtask test-worm-export
+
   timetoke-slo-report:
     name: Timetoke replay SLO report
     runs-on: ubuntu-latest
