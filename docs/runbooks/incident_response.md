@@ -51,6 +51,9 @@ Peer-Wechsel einleitest.
    Versuche oder Peer-Wechsel. Wiederhole die Checkliste nach jedem Eingriff.
 3. Dokumentiere Recovery, neue Checksummen sowie Dashboard-Screenshots im
    Incident-Log und verknüpfe sie mit dem entsprechenden Phase‑3-Checklisteneintrag.
+4. Falls eine Snapshot-Signatur- oder Vertrauensankündigung erforderlich ist,
+   folge der [Signing-Key-Rotation](./signing_key_rotation.md#snapshot-manifest-signing-release-pipeline),
+   damit Auditor:innen die Manifest-Authentizität bestätigen können.
 
 ## Tier-Policy-Drift erkennen
 
@@ -81,6 +84,9 @@ Belege, bevor du Änderungen akzeptierst oder zurückrollst.
    Security-Team mit Hinweis auf die betroffenen Audit-Einträge.
 3. Verknüpfe Dumps, Audit-Exports und Dashboard-Screenshots mit der
    [Phase‑3-Checkliste](./phase3_acceptance.md#tier-admission-persistenz--audit).
+4. Dokumentiere etwaige Schlüsselwechsel nach der
+   [Signing-Key-Rotation](./signing_key_rotation.md#admission-tier-policy-signing-validator-runtime)
+   im Incident-Log, sobald Audit-Signaturen neu validiert wurden.
 
 ## Dual-Approval-Eskalationen
 

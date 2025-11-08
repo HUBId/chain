@@ -12,6 +12,8 @@
 - Updated [Threat Model](../THREAT_MODEL.md) highlighting snapshot and audit log attack surfaces.
 - [Security Risk Register](../security/register.md) entries for retention deviations and audit trail coverage.
 - Phase 3 [Acceptance Checklist](../runbooks/phase3_acceptance.md) and [Weekly Status](../status/weekly.md#phase3-tracking-kalenderwoche-20-2026) reference this overview for auditor sign-off.
+- [Signing key rotation runbook](../runbooks/signing_key_rotation.md) captures the manifest and tier-policy key lifecycle; update
+  this overview with the rotation date, next planned expiry, and verification evidence after every change.
 
 ### Phase 3 Evidence Bundle
 - `cargo xtask collect-phase3-evidence [--output-dir <path>]` erzeugt unter `target/compliance/phase3/<timestamp>/` eine Manifestdatei sowie das Archiv `phase3-evidence-<timestamp>.tar.gz`. Das Manifest dokumentiert pro Kategorie (Dashboards, Alerts, Audit-Logs, Policy-Backups, Checksum-Reports, CI-Logs) sowohl eingefügte Nachweise als auch fehlende Quellen.【F:xtask/src/main.rs†L1498-L1852】

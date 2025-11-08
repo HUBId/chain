@@ -85,6 +85,8 @@ Dieser Abschnitt dient als fortlaufende Vorlage für Phase‑3-Updates. Neue Ein
 
 Die [Compliance Overview](../governance/compliance_overview.md) listet Phase‑3-Kontrollen, Evidenzlinks und Restarbeiten, damit Audits denselben Informationsstand wie das Programmteam besitzen.
 
+Ergänze jede Statusaktualisierung um abgeschlossene Signing-Key-Rotationen und das nächste Ablaufdatum laut [Signing-Key-Runbook](../runbooks/signing_key_rotation.md), damit Snapshot- und Tier-Policy-Schlüssel lückenlos nachverfolgt werden.
+
 ### Artefaktstatus
 
 | Kategorie | Deliverable | Status | Nachweise / Links |
