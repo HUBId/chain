@@ -149,6 +149,8 @@ fn run_simnet_smoke() -> Result<()> {
             .arg("--quiet")
             .arg("--package")
             .arg("simnet")
+            .arg("--bin")
+            .arg("simnet")
             .arg("--")
             .arg("--scenario")
             .arg(scenario_path)
