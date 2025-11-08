@@ -4519,7 +4519,10 @@ impl NodeInner {
         message[start..end].trim().parse().ok()
     }
 
-    fn load_snapshot_payload(&self, root: &Hash) -> Result<Option<Vec<u8>>, std::io::Error> {
+    fn load_snapshot_payload(
+        &self,
+        root: &Hash,
+    ) -> Result<Option<(Vec<u8>, Vec<u8>)>, std::io::Error> {
         let base = self.config.snapshot_dir.clone();
         if base.as_os_str().is_empty() {
             return Ok(None);
@@ -4541,9 +4544,17 @@ impl NodeInner {
                 if !file_type.is_file() {
                     continue;
                 }
-                let payload = fs::read(entry.path())?;
+                let path = entry.path();
+                let payload = fs::read(&path)?;
                 if &blake3::hash(&payload) == root {
-                    return Ok(Some(payload));
+                    let signature_path =
+                        path.with_file_name(format!("{}.sig", entry.file_name().to_string_lossy()));
+                    let signature = match fs::read(&signature_path) {
+                        Ok(bytes) => bytes,
+                        Err(err) if err.kind() == ErrorKind::NotFound => Vec::new(),
+                        Err(err) => return Err(err),
+                    };
+                    return Ok(Some((payload, signature)));
                 }
             }
         }
@@ -4585,8 +4596,8 @@ impl NodeInner {
         let store = if let Some(store) = cached_store {
             store
         } else {
-            let payload = match self.load_snapshot_payload(&root) {
-                Ok(Some(data)) => data,
+            let (payload, signature) = match self.load_snapshot_payload(&root) {
+                Ok(Some((data, signature))) => (data, signature),
                 Ok(None) => {
                     let reason = format!(
                         "snapshot payload for root {} not found",
@@ -4597,7 +4608,7 @@ impl NodeInner {
                 Err(err) => return Err(StateSyncChunkError::Io(err)),
             };
             let mut store = SnapshotStore::new(chunk_size);
-            let actual_root = store.insert(payload);
+            let actual_root = store.insert(payload, signature);
             if actual_root != root {
                 return Err(StateSyncChunkError::SnapshotRootMismatch {
                     expected: root,

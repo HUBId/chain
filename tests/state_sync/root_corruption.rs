@@ -28,7 +28,7 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
     let expected_root = blake3::hash(valid_payload);
 
     let mut store = SnapshotStore::new(chunk_size);
-    store.insert(valid_payload.to_vec());
+    store.insert(valid_payload.to_vec(), Vec::new());
     let cache = StateSyncSessionCache::verified_for_tests(
         expected_root,
         chunk_size,
