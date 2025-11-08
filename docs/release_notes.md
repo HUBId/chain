@@ -9,6 +9,7 @@ This document records release-specific proof metadata for the Malachite Phase 
 - VRF/quorum observability playbook defines actionable alert thresholds, escalation paths, and references the new dashboards for on-call teams.
 - Release automation now injects proof metadata into generated notes, capturing Plonky3 verifying/proving keys, STWO verifying key commitments, and blueprint circuit stages.
 - Release packaging emits `snapshot-manifest-summary-<target>.json` whenever pruning snapshots are attached to a build. The summary lists the snapshot manifest identifier, recorded Firewood state root, and chunk count derived from the persisted state-sync plan so operators can validate bundle integrity before rollout.【F:scripts/generate_snapshot_summary.py†L1-L190】【F:scripts/build_release.sh†L258-L272】【F:.github/workflows/release.yml†L275-L295】
+- Snapshot & Timetoke automation is documented in the test strategy, adds the `observability-metrics` gate to Branch-Protection, and ships new Prometheus rules (`SnapshotManifestSignatureInvalid`, `SnapshotReplayStallCritical`, `SnapshotChecksumDrift`) together with nightly artefacts (`snapshot-health-report.json`, `timetoke-slo-report.md`).【F:docs/test_validation_strategy.md†L128-L174】【F:.github/workflows/ci.yml†L412-L446】【F:docs/observability/alerts/snapshot_manifest.yaml†L1-L52】【F:.github/workflows/nightly.yml†L29-L124】
 
 ### Proof metadata
 

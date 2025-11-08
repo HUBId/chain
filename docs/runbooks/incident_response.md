@@ -7,6 +7,14 @@ Genehmigungen verlangt. Jede Sektion beginnt mit einer "First Action"-Checkliste
 die die wichtigsten CLI-Aufrufe, Dashboards und Audit-Trails verlinkt, damit
 Auditor:innen die Dokumentation lückenlos nachverfolgen können.
 
+Die Alert-Matrizen in den Runbooks
+[network_snapshot_failover](./network_snapshot_failover.md#alert-first-response-matrix)
+und [timetoke_failover](./timetoke_failover.md#alert-first-response-matrix)
+listen die neuen Snapshot-/Timetoke-Alerts (`SnapshotManifestSignatureInvalid`,
+`SnapshotReplayStallCritical`, `SnapshotChecksumDrift`) samt sofortigen CLI- und
+Eskalationsschritten. Übernimm deren Checklisten als ersten Schritt jedes
+Incidents, bevor du tiefer in dieses Playbook einsteigst.
+
 Für Replay-Störungen in der Timetoke-Pipeline verweist dieses Playbook auf das
 [Timetoke-Failover-Runbook](./timetoke_failover.md), das Detection-Signale,
 Recovery-Schritte und Troubleshooting-Tipps für die Wiederanbindung der

@@ -1534,7 +1534,9 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     categories.push(bundle_alert_rules(&workspace, &staging_dir)?);
     categories.push(bundle_audit_logs(&workspace, &staging_dir)?);
     categories.push(bundle_policy_backups(&workspace, &staging_dir)?);
+    categories.push(bundle_manifest_signatures(&workspace, &staging_dir)?);
     categories.push(bundle_checksum_reports(&workspace, &staging_dir)?);
+    categories.push(bundle_timetoke_reports(&workspace, &staging_dir)?);
     categories.push(bundle_ci_job_logs(&workspace, &staging_dir)?);
 
     let bundle_name = format!("phase3-evidence-{timestamp}.tar.gz");
@@ -1768,6 +1770,62 @@ fn bundle_policy_backups(workspace: &Path, staging: &Path) -> Result<EvidenceCat
     Ok(category)
 }
 
+fn bundle_manifest_signatures(
+    workspace: &Path,
+    staging: &Path,
+) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Snapshot manifest signatures".to_string(),
+        description: "Signed snapshot manifest summaries or detached signature artefacts."
+            .to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = [
+        workspace.join("target"),
+        workspace.join("docs"),
+        workspace.join("logs"),
+        workspace.join("releases"),
+        workspace.join("storage"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        let walker = WalkDir::new(root).max_depth(6);
+        for entry in walker
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !(lower.contains("snapshot-manifest")
+                || lower.contains("manifest-summary")
+                || lower.contains("manifest-signature")
+                || (lower.contains("manifest") && lower.contains("signature")))
+            {
+                continue;
+            }
+            if !matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some(ext) if matches!(ext, "json" | "jsonl" | "sig" | "asc")
+            ) {
+                continue;
+            }
+            let recorded =
+                copy_into_category(workspace, staging, "snapshot-manifest-signatures", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("snapshot-manifest-summary*.json or *.sig not found".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
 fn bundle_checksum_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
     let mut category = EvidenceCategoryManifest {
         name: "Checksum reports".to_string(),
@@ -1805,6 +1863,51 @@ fn bundle_checksum_reports(workspace: &Path, staging: &Path) -> Result<EvidenceC
         category
             .missing
             .push("Checksum validation outputs (*.log, *.json, *.md)".to_string());
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
+fn bundle_timetoke_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Timetoke SLO reports".to_string(),
+        description: "Rendered outputs from `cargo xtask report-timetoke-slo` runs.".to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = [
+        workspace.join("target"),
+        workspace.join("logs"),
+        workspace.join("docs"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        let walker = WalkDir::new(root).max_depth(5);
+        for entry in walker
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !(lower.contains("timetoke") && lower.contains("slo")) {
+                continue;
+            }
+            if !matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some(ext) if matches!(ext, "md" | "markdown" | "json" | "txt")
+            ) {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "timetoke-slo", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category
+            .missing
+            .push("timetoke SLO reports (*.md, *.json)".to_string());
     }
     category.files.sort();
     category.files.dedup();

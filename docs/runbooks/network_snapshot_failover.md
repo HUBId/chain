@@ -70,6 +70,18 @@ non-zero if a session stalls, reports an error string, or exceeds the manifest
 totals. Attach the generated report to the incident timeline so it can be
 compared with the nightly artifact.【F:xtask/src/main.rs†L214-L596】
 
+### Alert first-response matrix
+
+Die folgenden Alerts schlagen im Observability-Stack an und referenzieren dieses
+Runbook direkt. Nutze die Tabelle als „First Action“-Spickzettel, bevor du in die
+Schritte unten einsteigst.
+
+| Alert | Kennzahl / Signal | Erste Schritte | Eskalation & Erfolgsnachweis |
+| --- | --- | --- | --- |
+| `SnapshotManifestSignatureInvalid` | Zunahme von `snapshot_chunk_checksum_failures_total{kind="missing"}` (Manifest referenziert nicht vorhandene oder unerwartete Dateien).【F:docs/observability/alerts/snapshot_manifest.yaml†L1-L52】【F:rpp/node/src/telemetry/snapshots.rs†L1-L33】 | 1. Sofort `cargo xtask snapshot-health --output manifest-check.json` ausführen und das Ergebnis im Incident-Log ablegen.<br>2. Mit `rpp-node validator snapshot status --session <id>` prüfen, ob Plan-ID und Root mit dem Manifest übereinstimmen.【F:xtask/src/main.rs†L337-L596】【F:rpp/node/src/main.rs†L787-L841】 | - Wenn das Nightly-`snapshot-health`-Artefakt zwei Läufe hintereinander schlägt, sofort an Storage/State-Sync eskalieren.【F:.github/workflows/nightly.yml†L29-L79】<br>- Erfolg: `snapshot-health` liefert Exit-Code 0, und das Manifest wurde erneut aus dem Provider exportiert (Status `verified: true`). |
+| `SnapshotReplayStallCritical` | `snapshot_stream_lag_seconds > 180` bzw. stagnierende `snapshot_bytes_sent_total`-Raten.【F:docs/observability/alerts/snapshot_replay.yaml†L1-L54】 | 1. Tabelle „Step 1“ unten durchführen, um den Session-Status zu sichern.<br>2. Provider-/Consumer-Logs nach `snapshot stream lag` durchsuchen und Bandbreitenlimit prüfen. | - Eskalation nach 15 Minuten ohne sinkenden Lag an Networking/On-Call.<br>- Erfolg: Lag fällt unter Warnschwelle, `cargo xtask snapshot-health` meldet keine Anomalien, Nightly-Report bleibt grün. |
+| `SnapshotChecksumDrift` | `snapshot_chunk_checksum_failures_total{kind="checksum_mismatch"}` steigt gegenüber der Baseline.【F:docs/observability/alerts/snapshot_checksum.yaml†L1-L48】【F:rpp/node/src/telemetry/snapshots.rs†L1-L33】 | 1. `journalctl -u rpp-node -t snapshot_validator --since "-10 min"` sichern.<br>2. Betroffene Segmente aus dem Manifest (`manifest/chunks.json`) identifizieren und erneut vom Provider beziehen. | - Wenn sich die Zähler trotz Neuabgleich > 2 Zyklen erhöhen, Storage-Team hinzuziehen.<br>- Erfolg: Validator-Logs melden keine neuen `snapshot chunk validation failed`, und der nächste Audit-Lauf (`snapshot-health` Nightly) bestätigt `verified: true`. |
+
 ## Step 1 – Verify control-plane health
 
 1. List active sessions:

@@ -1,0 +1,35 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: snapshot-replay-health
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: snapshot-replay-health
+      rules:
+        - alert: SnapshotReplayStallWarning
+          expr: max(snapshot_stream_lag_seconds) > 120
+          for: 10m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot replay lag exceeded 120 seconds
+            description: |
+              Snapshot replay lag has stayed above 120 seconds for ten minutes. Inspect the
+              consumer session, confirm bandwidth limits, and prepare to restart the stream.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md#alert-first-response-matrix
+        - alert: SnapshotReplayStallCritical
+          expr: max(snapshot_stream_lag_seconds) > 180
+          for: 10m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot replay lag exceeded 180 seconds
+            description: |
+              Snapshot replay lag has breached the 180 second threshold for ten minutes. Resume
+              or restart the session immediately and follow the failover/timetoke runbooks to
+              restore healthy replay throughput.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/timetoke_failover.md#alert-first-response-matrix
