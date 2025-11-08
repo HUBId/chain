@@ -43,6 +43,9 @@ authenticated RPC endpoints `GET /p2p/admission/policies` and
 `POST /p2p/admission/policies`. Both endpoints require the standard bearer token
 when RPC auth is enabled and the peerstore emits structured audit telemetry for
 every mutation, including the actor and optional reason.【F:rpp/rpc/src/routes/p2p.rs†L126-L209】【F:rpp/p2p/src/peerstore.rs†L1007-L1189】
+Rotation, storage, and revocation procedures for the signing keys that back these
+snapshots are detailed in the
+[signing key runbook](../runbooks/signing_key_rotation.md#admission-tier-policy-signing-validator-runtime).
 
 ### Fetching the active policies
 

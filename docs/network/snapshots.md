@@ -2,7 +2,8 @@
 
 This guide documents the libp2p snapshot request/response protocol, how flow
 control and resume markers work, and how the runtime and RPC layers expose the
-feature to operators.
+feature to operators. For procedures that rotate the snapshot manifest signing
+credential, refer to the [signing key runbook](../runbooks/signing_key_rotation.md#snapshot-manifest-signing-release-pipeline).
 
 ## Wire protocol
 
