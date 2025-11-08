@@ -139,13 +139,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag=$(gh release view --json tagName --jq '.tagName')
-          if [[ -z "$tag" ]]; then
-            echo "::error::Unable to determine latest release tag" >&2
+          err_file="$(mktemp)"
+          if ! tag=$(gh release view --json tagName --jq '.tagName' 2>"$err_file"); then
+            if grep -qi 'release not found' "$err_file"; then
+              echo "::notice::No GitHub release found; skipping Plonky3 hash audit." >&2
+              echo "skip=true" >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat "$err_file" >&2
             exit 1
           fi
+          echo "skip=false" >>"$GITHUB_OUTPUT"
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
       - name: Download release manifests
+        if: steps.release.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -156,9 +163,11 @@ jobs:
             --pattern 'SHA256SUMS.txt*' \
             --dir dist/release
       - uses: sigstore/cosign-installer@v3
+        if: steps.release.outputs.skip != 'true'
         with:
           cosign-release: 'v2.4.0'
       - name: Verify checksum manifest signature
+        if: steps.release.outputs.skip != 'true'
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
@@ -168,6 +177,7 @@ jobs:
             --signature dist/release/SHA256SUMS.txt.sig \
             dist/release/SHA256SUMS.txt
       - name: Verify Plonky3 hash manifest signature
+        if: steps.release.outputs.skip != 'true'
         env:
           COSIGN_EXPERIMENTAL: "1"
         run: |
@@ -177,6 +187,7 @@ jobs:
             --signature dist/release/plonky3-setup-hashes.json.sig \
             dist/release/plonky3-setup-hashes.json
       - name: Compute repository hash manifest
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -euo pipefail
           python3 scripts/generate_plonky3_artifacts.py \
@@ -184,6 +195,7 @@ jobs:
             --verify \
             --hash-output dist/local-plonky3-setup-hashes.json
       - name: Compare repository and release manifests
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -euo pipefail
           if ! cmp -s dist/local-plonky3-setup-hashes.json dist/release/plonky3-setup-hashes.json; then
@@ -192,6 +204,7 @@ jobs:
             exit 1
           fi
       - name: Validate checksum entry for hash manifest
+        if: steps.release.outputs.skip != 'true'
         run: |
           set -euo pipefail
           release_sha=$(grep ' dist/plonky3-setup-hashes.json$' dist/release/SHA256SUMS.txt | awk '{print $1}')
@@ -206,6 +219,10 @@ jobs:
             echo "local:   $local_sha" >&2
             exit 1
           fi
+      - name: Plonky3 hash audit skipped
+        if: steps.release.outputs.skip == 'true'
+        run: |
+          echo "Plonky3 hash audit skipped because no GitHub release is available."
   validation:
     name: Nightly validation (${{ matrix.name }})
     runs-on: ubuntu-latest
