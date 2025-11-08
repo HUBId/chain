@@ -94,6 +94,17 @@ jobs:
           extract_dir="${tmp_dir}/extracted"
           mkdir -p "${extract_dir}"
 
+          strip_url_suffix() {
+            local value="$1"
+            local without_fragment="${value%%#*}"
+            local without_query="${without_fragment%%\?*}"
+            if [ -n "${without_query}" ]; then
+              echo "${without_query}"
+            else
+              echo "${value}"
+            fi
+          }
+
           extract_archive() {
             local source="$1"
             local archive="$2"
@@ -123,8 +134,10 @@ jobs:
             esac
           }
 
+          source_for_type="$(strip_url_suffix "${SNAPSHOT_CHUNK_ARCHIVE_URL}")"
+
           is_archive=false
-          case "${SNAPSHOT_CHUNK_ARCHIVE_URL}" in
+          case "${source_for_type}" in
             *.tar|*.tar.gz|*.tgz|*.tar.xz|*.tar.zst|*.tzst|*.zip)
               is_archive=true
               ;;
@@ -141,14 +154,14 @@ jobs:
 
             if [[ "${is_archive}" == true ]]; then
               aws s3 cp --no-progress "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${archive_path}"
-              extract_archive "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${archive_path}" "${extract_dir}"
+              extract_archive "${source_for_type}" "${archive_path}" "${extract_dir}"
             else
               aws s3 sync --only-show-errors "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${extract_dir}"
             fi
           else
             if [[ "${is_archive}" == true ]]; then
               curl -fL "${SNAPSHOT_CHUNK_ARCHIVE_URL}" -o "${archive_path}"
-              extract_archive "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${archive_path}" "${extract_dir}"
+              extract_archive "${source_for_type}" "${archive_path}" "${extract_dir}"
             else
               echo "::error::Unsupported archive type for ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
               exit 1

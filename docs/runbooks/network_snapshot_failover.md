@@ -55,7 +55,8 @@ Nightly verification also requires access to the pruning chunk set referenced
 by the manifest. Configure the `SNAPSHOT_CHUNK_ARCHIVE_URL` secret with an HTTP
 URL or S3 object/prefix that resolves to the archived `cf_pruning_snapshots`
 directory. The workflow downloads the archive (including `.tar.*`, `.tzst`, or
-`.zip` bundles), extracts it into `SNAPSHOT_CHUNK_ROOT`, and passes that path to
+`.zip` bundles—even when referenced via signed URLs with query strings),
+extracts it into `SNAPSHOT_CHUNK_ROOT`, and passes that path to
 the snapshot verification tooling; missing or unreachable archives fail the job
 so maintainers are alerted to expired artifacts.【F:.github/workflows/nightly.yml†L46-L156】
 
