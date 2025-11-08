@@ -62,14 +62,22 @@ jobs:
           set -euo pipefail
           cargo build -p rpp-node --release
 
-      - name: Download pruning snapshot chunks
+      - name: Verify pruning snapshot archive secret
+        id: pruning-chunks
         run: |
           set -euo pipefail
 
           if [ -z "${SNAPSHOT_CHUNK_ARCHIVE_URL:-}" ]; then
-            echo "::error::SNAPSHOT_CHUNK_ARCHIVE_URL is required to download pruning snapshot chunks" >&2
-            exit 1
+            echo "::warning::SNAPSHOT_CHUNK_ARCHIVE_URL is not configured; skipping pruning snapshot chunk download" >&2
+            echo "enabled=false" >>"${GITHUB_OUTPUT}"
+          else
+            echo "enabled=true" >>"${GITHUB_OUTPUT}"
           fi
+
+      - name: Download pruning snapshot chunks
+        if: steps.pruning-chunks.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
 
           workspace="${GITHUB_WORKSPACE:-$(pwd)}"
           staging_root="${workspace}/target/pruning-snapshot-chunks"
@@ -89,8 +97,10 @@ jobs:
           echo "Fetching pruning snapshot chunks from ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
           if [[ "${SNAPSHOT_CHUNK_ARCHIVE_URL}" == s3://* ]]; then
             if ! command -v aws >/dev/null 2>&1; then
-              echo "::error::aws CLI is required to sync ${SNAPSHOT_CHUNK_ARCHIVE_URL}" >&2
-              exit 1
+              echo "aws CLI not found; installing with pip" >&2
+              python3 -m pip install --user --upgrade awscli
+              export PATH="${HOME}/.local/bin:${PATH}"
+              hash -r
             fi
             aws s3 sync --only-show-errors "${SNAPSHOT_CHUNK_ARCHIVE_URL}" "${extract_dir}"
           else

@@ -56,7 +56,12 @@ by the manifest. Configure the `SNAPSHOT_CHUNK_ARCHIVE_URL` secret with an HTTP
 or S3 location of the archived `cf_pruning_snapshots` directory. The workflow
 downloads the archive, extracts it into `SNAPSHOT_CHUNK_ROOT`, and passes that
 path to the snapshot verification tooling; missing or unreachable archives fail
-the job so maintainers are alerted to expired artifacts.【F:.github/workflows/nightly.yml†L46-L119】
+the job so maintainers are alerted to expired artifacts.【F:.github/workflows/nightly.yml†L46-L134】
+
+If the archive secret is not configured the nightly job emits a warning and
+skips the download step so the remainder of the health audit can still run;
+configure the secret as soon as the archive location is known to restore full
+coverage.【F:.github/workflows/nightly.yml†L96-L122】
 
 When investigating a snapshot incident, re-run the audit locally to capture the
 current state before making changes. Configure the RPC endpoint and optional
