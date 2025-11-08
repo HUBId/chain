@@ -6515,6 +6515,7 @@ dependencies = [
 name = "rpp-consensus"
 version = "0.1.0"
 dependencies = [
+ "base64 0.21.7",
  "blake3",
  "ed25519-dalek",
  "hex",
@@ -6628,6 +6629,7 @@ dependencies = [
  "rand 0.8.5",
  "rpp-chain",
  "rpp-p2p-macros",
+ "rpp-pruning",
  "schnorrkel",
  "serde",
  "serde_json",
