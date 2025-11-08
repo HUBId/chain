@@ -5,19 +5,29 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use blake3::hash as blake3_hash;
+use ed25519_dalek::SigningKey;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use hex::encode as hex_encode;
+use rand::rngs::OsRng;
 use reqwest::blocking::Client as HttpClient;
+use rpp_p2p::{
+    AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
+    AdmissionPolicyLogOptions, CommandWormExporter, PolicySigner, PolicyTrustStore,
+    WormExportSettings, WormRetention, WormRetentionMode,
+};
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
+use sha2::{Digest, Sha256};
 use tar::Builder as TarBuilder;
 use tempfile::TempDir;
 use time::format_description::well_known::Rfc3339;
@@ -161,10 +171,411 @@ fn run_simnet_smoke() -> Result<()> {
     Ok(())
 }
 
-fn run_worm_export_smoke() -> Result<()> {
+fn run_snapshot_verifier_smoke() -> Result<()> {
+    let workspace = workspace_root();
+    let smoke_root = workspace.join("target/snapshot-verifier-smoke");
+    if smoke_root.exists() {
+        fs::remove_dir_all(&smoke_root).with_context(|| {
+            format!(
+                "remove previous snapshot verifier smoke artefacts under {}",
+                smoke_root.display()
+            )
+        })?;
+    }
+    let manifest_dir = smoke_root.join("snapshots/manifest");
+    let chunks_dir = smoke_root.join("snapshots/chunks");
+    fs::create_dir_all(&manifest_dir)
+        .with_context(|| format!("create manifest directory {}", manifest_dir.display()))?;
+    fs::create_dir_all(&chunks_dir)
+        .with_context(|| format!("create chunk directory {}", chunks_dir.display()))?;
+
+    let chunk_path = chunks_dir.join("chunk-000");
+    let chunk_contents = b"phase-a-snapshot-smoke";
+    fs::write(&chunk_path, chunk_contents)
+        .with_context(|| format!("write chunk data {}", chunk_path.display()))?;
+    let mut chunk_hasher = Sha256::new();
+    chunk_hasher.update(chunk_contents);
+    let chunk_hash = hex_encode(chunk_hasher.finalize());
+
+    let manifest = serde_json::json!({
+        "segments": [
+            {
+                "segment_name": "chunk-000",
+                "size_bytes": chunk_contents.len() as u64,
+                "sha256": chunk_hash,
+            }
+        ]
+    });
+    let manifest_path = manifest_dir.join("chunks.json");
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
+        .with_context(|| format!("write manifest {}", manifest_path.display()))?;
+    let manifest_bytes = serde_json::to_vec(&manifest)?;
+
+    let mut rng = OsRng;
+    let signing_key = SigningKey::generate(&mut rng);
+    let verifying_key = signing_key.verifying_key();
+    let signature = signing_key.sign(&manifest_bytes);
+    let public_hex = hex_encode(verifying_key.to_bytes());
+    let signature_hex = hex_encode(signature.to_bytes());
+
+    let public_key_path = smoke_root.join("snapshot-key.hex");
+    fs::write(&public_key_path, &public_hex)
+        .with_context(|| format!("write verifying key {}", public_key_path.display()))?;
+    let signature_path = manifest_dir.join("chunks.json.sig");
+    fs::write(&signature_path, &signature_hex)
+        .with_context(|| format!("write signature {}", signature_path.display()))?;
+
+    let report_path = manifest_dir.join("chunks-verify.json");
     let mut command = Command::new("cargo");
     command
-        .current_dir(workspace_root())
+        .current_dir(&workspace)
+        .arg("run")
+        .arg("--locked")
+        .arg("--package")
+        .arg("snapshot-verify")
+        .arg("--")
+        .arg("--manifest")
+        .arg(&manifest_path)
+        .arg("--signature")
+        .arg(&signature_path)
+        .arg("--public-key")
+        .arg(&public_key_path)
+        .arg("--chunk-root")
+        .arg(&chunks_dir)
+        .arg("--output")
+        .arg(&report_path);
+    run_command(command, "snapshot verifier smoke report")?;
+
+    let report_bytes = fs::read(&report_path)
+        .with_context(|| format!("read verifier report {}", report_path.display()))?;
+    let report_json: serde_json::Value =
+        serde_json::from_slice(&report_bytes).context("decode snapshot verifier report")?;
+    let signature_valid = report_json
+        .get("signature")
+        .and_then(|value| value.get("signature_valid"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let errors_empty = report_json
+        .get("errors")
+        .and_then(|value| value.as_array())
+        .map(|array| array.is_empty())
+        .unwrap_or(true);
+    let summary = report_json
+        .get("summary")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| anyhow!("snapshot verifier report missing summary"))?;
+    let verified = summary
+        .get("verified")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let segments_total = summary
+        .get("segments_total")
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let failure_counters = [
+        "metadata_incomplete",
+        "missing_files",
+        "size_mismatches",
+        "checksum_mismatches",
+        "io_errors",
+    ];
+    let mut summary_ok = verified == segments_total;
+    for key in &failure_counters {
+        let value = summary
+            .get(*key)
+            .and_then(|value| value.as_u64())
+            .unwrap_or(0);
+        if value != 0 {
+            summary_ok = false;
+            break;
+        }
+    }
+    if !(signature_valid && errors_empty && summary_ok) {
+        bail!("snapshot verifier smoke report indicates a failure");
+    }
+
+    let manifest_rel = manifest_path
+        .strip_prefix(&workspace)
+        .unwrap_or(manifest_path.as_path());
+    let report_rel = report_path
+        .strip_prefix(&workspace)
+        .unwrap_or(report_path.as_path());
+    let aggregate_path = smoke_root.join("snapshot-verify-report.json");
+    let aggregate = serde_json::json!({
+        "generated_at": OffsetDateTime::now_utc().format(&Rfc3339)?,
+        "reports": [
+            {
+                "manifest": relative_display_path(manifest_rel),
+                "report": relative_display_path(report_rel),
+                "signature_valid": true,
+                "summary": report_json.get("summary").cloned().unwrap_or_else(|| serde_json::json!({})),
+                "errors": report_json.get("errors").cloned().unwrap_or_else(|| serde_json::json!([])),
+                "status": true,
+            }
+        ],
+        "all_passed": true,
+    });
+    fs::write(&aggregate_path, serde_json::to_vec_pretty(&aggregate)?).with_context(|| {
+        format!(
+            "write aggregate verifier report {}",
+            aggregate_path.display()
+        )
+    })?;
+
+    let aggregate_bytes = fs::read(&aggregate_path).with_context(|| {
+        format!(
+            "read aggregate verifier report {}",
+            aggregate_path.display()
+        )
+    })?;
+    let digest = Sha256::digest(&aggregate_bytes);
+    let hash_hex = hex_encode(digest);
+    let sha_path = aggregate_path.with_extension("json.sha256");
+    let sha_line = format!(
+        "{hash_hex}  {}\n",
+        aggregate_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("snapshot-verify-report.json")
+    );
+    fs::write(&sha_path, sha_line)
+        .with_context(|| format!("write aggregate verifier hash {}", sha_path.display()))?;
+
+    println!(
+        "snapshot verifier smoke bundle written to {}",
+        aggregate_path.display()
+    );
+
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct WormExportSummaryEntry {
+    entry_id: u64,
+    export_object: String,
+    actor: String,
+    reason: Option<String>,
+    approvals: Vec<AdmissionApprovalRecord>,
+    signature_key: String,
+    signature_valid: bool,
+}
+
+#[derive(Serialize)]
+struct WormExportSummary {
+    generated_at: String,
+    audit_log: String,
+    export_root: String,
+    retention: WormRetention,
+    retention_metadata: Option<String>,
+    signer_key_id: String,
+    signer_public_key_hex: String,
+    entries: Vec<WormExportSummaryEntry>,
+}
+
+fn initialise_policy_signer(dir: &Path) -> Result<(PolicySigner, String)> {
+    fs::create_dir_all(dir)?;
+    let key_path = dir.join("worm-export.toml");
+    let mut rng = OsRng;
+    let signing_key = SigningKey::generate(&mut rng);
+    let public_hex = hex_encode(signing_key.verifying_key().to_bytes());
+    let secret_hex = hex_encode(signing_key.to_bytes());
+    let key_toml = format!("secret_key = \"{secret_hex}\"\npublic_key = \"{public_hex}\"\n");
+    fs::write(&key_path, key_toml).context("write generated WORM signing key")?;
+
+    let mut trust_store = BTreeMap::new();
+    trust_store.insert("worm-export".to_string(), public_hex.clone());
+    let trust = PolicyTrustStore::from_hex(trust_store)
+        .context("construct policy trust store for WORM signer")?;
+    let signer = PolicySigner::with_filesystem_key("worm-export".to_string(), key_path, trust)
+        .context("initialise policy signer for WORM smoke test")?;
+
+    Ok((signer, public_hex))
+}
+
+fn load_latest_audit_entry(path: &Path) -> Result<AdmissionPolicyLogEntry> {
+    let file = File::open(path).with_context(|| format!("open audit log {path:?}"))?;
+    let reader = BufReader::new(file);
+    let mut last_line = None;
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        last_line = Some(line);
+    }
+    let line =
+        last_line.ok_or_else(|| anyhow!("audit log {path:?} did not contain any entries"))?;
+    serde_json::from_str(&line).with_context(|| "decode audit log entry".to_string())
+}
+
+fn verify_exported_entries(
+    workspace: &Path,
+    export_root: &Path,
+    signer: &PolicySigner,
+) -> Result<Vec<WormExportSummaryEntry>> {
+    let mut entries = Vec::new();
+    let mut exported = Vec::new();
+    if export_root.exists() {
+        for item in fs::read_dir(export_root)? {
+            let item = item?;
+            let path = item.path();
+            if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("json"))
+                .unwrap_or(false)
+            {
+                exported.push(path);
+            }
+        }
+    }
+    if exported.is_empty() {
+        bail!(
+            "WORM export smoke test did not produce any exported JSON objects under {}",
+            export_root.display()
+        );
+    }
+    exported.sort();
+
+    for path in exported {
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("read exported WORM object {}", path.display()))?;
+        let entry: AdmissionPolicyLogEntry = serde_json::from_str(&contents)
+            .with_context(|| format!("decode exported WORM object {}", path.display()))?;
+        let signature = entry
+            .signature
+            .as_ref()
+            .ok_or_else(|| anyhow!("exported entry {} is missing a signature", entry.id))?;
+        let canonical = entry.canonical_bytes()?;
+        signer
+            .verify(signature, &canonical)
+            .with_context(|| format!("verify signature for exported entry {}", entry.id))?;
+
+        let relative = path.strip_prefix(workspace).unwrap_or(path.as_path());
+        entries.push(WormExportSummaryEntry {
+            entry_id: entry.id,
+            export_object: relative_display_path(relative),
+            actor: entry.actor,
+            reason: entry.reason,
+            approvals: entry.approvals,
+            signature_key: signature.key_id.clone(),
+            signature_valid: true,
+        });
+    }
+
+    Ok(entries)
+}
+
+fn run_worm_export_smoke() -> Result<()> {
+    let workspace = workspace_root();
+    let smoke_root = workspace.join("target/worm-export-smoke");
+    if smoke_root.exists() {
+        fs::remove_dir_all(&smoke_root).with_context(|| {
+            format!(
+                "remove previous WORM smoke artefacts under {}",
+                smoke_root.display()
+            )
+        })?;
+    }
+    fs::create_dir_all(&smoke_root)
+        .with_context(|| format!("create WORM smoke directory {}", smoke_root.display()))?;
+
+    let export_root = smoke_root.join("worm");
+    fs::create_dir_all(&export_root)
+        .with_context(|| format!("create WORM export root {}", export_root.display()))?;
+    let audit_path = smoke_root.join("audit.jsonl");
+    let worm_wrapper = workspace.join("tools/worm-export/worm-export");
+    if !worm_wrapper.exists() {
+        bail!(
+            "worm-export wrapper not found at {}; run from the workspace root",
+            worm_wrapper.display()
+        );
+    }
+
+    let mut env = BTreeMap::new();
+    env.insert(
+        "WORM_EXPORT_ROOT".to_string(),
+        export_root.to_string_lossy().to_string(),
+    );
+
+    let exporter = CommandWormExporter::new(worm_wrapper, Vec::new(), env);
+    let retention = WormRetention {
+        min_days: 30,
+        max_days: Some(90),
+        mode: WormRetentionMode::Compliance,
+    };
+    let settings = WormExportSettings::new(Arc::new(exporter), retention, true)
+        .context("initialise WORM export settings")?;
+    let mut options = AdmissionPolicyLogOptions::default();
+    options.worm_export = Some(settings.clone());
+
+    let log = AdmissionPolicyLog::open_with_options(&audit_path, options)
+        .context("open admission policy log for WORM smoke test")?;
+
+    let keys_dir = smoke_root.join("keys");
+    let (signer, public_hex) = initialise_policy_signer(&keys_dir)?;
+    let approvals = vec![AdmissionApprovalRecord::new("operations", "alice")];
+    let entry = log
+        .append(
+            "operator",
+            Some("nightly worm export smoke"),
+            &approvals,
+            AdmissionPolicyChange::Noop,
+            Some(&signer),
+        )
+        .context("append signed admission entry to audit log")?;
+
+    let audit_entry = load_latest_audit_entry(&audit_path)?;
+    if audit_entry.id != entry.id {
+        bail!(
+            "latest audit entry id {} does not match appended entry id {}",
+            audit_entry.id,
+            entry.id
+        );
+    }
+    if audit_entry.signature.is_none() {
+        bail!("latest audit entry is missing a signature");
+    }
+
+    let entries = verify_exported_entries(&workspace, &export_root, &signer)?;
+    let retention_meta = export_root.join("retention.meta");
+    let retention_metadata = if retention_meta.exists() {
+        Some(relative_display_path(
+            retention_meta
+                .strip_prefix(&workspace)
+                .unwrap_or(retention_meta.as_path()),
+        ))
+    } else {
+        None
+    };
+
+    let audit_rel = audit_path
+        .strip_prefix(&workspace)
+        .unwrap_or(audit_path.as_path());
+    let export_rel = export_root
+        .strip_prefix(&workspace)
+        .unwrap_or(export_root.as_path());
+    let summary = WormExportSummary {
+        generated_at: OffsetDateTime::now_utc().format(&Rfc3339)?,
+        audit_log: relative_display_path(audit_rel),
+        export_root: relative_display_path(export_rel),
+        retention,
+        retention_metadata,
+        signer_key_id: signer.active_key().to_string(),
+        signer_public_key_hex: public_hex,
+        entries,
+    };
+    let summary_path = smoke_root.join("worm-export-summary.json");
+    fs::write(&summary_path, serde_json::to_vec_pretty(&summary)?)
+        .with_context(|| format!("write WORM export summary {}", summary_path.display()))?;
+    println!(
+        "worm export smoke summary written to {}",
+        summary_path.display()
+    );
+
+    let mut command = Command::new("cargo");
+    command
+        .current_dir(&workspace)
         .arg("test")
         .arg("-p")
         .arg("rpp-p2p")
@@ -1029,7 +1440,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs",
     );
 }
 
@@ -1548,6 +1959,7 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     categories.push(bundle_alert_rules(&workspace, &staging_dir)?);
     categories.push(bundle_audit_logs(&workspace, &staging_dir)?);
     categories.push(bundle_policy_backups(&workspace, &staging_dir)?);
+    categories.push(bundle_worm_exports(&workspace, &staging_dir)?);
     categories.push(bundle_checksum_reports(&workspace, &staging_dir)?);
     categories.push(bundle_ci_job_logs(&workspace, &staging_dir)?);
 
@@ -1782,6 +2194,52 @@ fn bundle_policy_backups(workspace: &Path, staging: &Path) -> Result<EvidenceCat
     Ok(category)
 }
 
+fn bundle_worm_exports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "WORM export evidence".to_string(),
+        description:
+            "Admission audit WORM export logs, retention metadata, and aggregated verification summaries.".to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = [
+        workspace.join("target/worm-export-smoke"),
+        workspace.join("logs"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !lower.contains("worm") {
+                continue;
+            }
+            if !matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some(ext) if matches!(ext, "json" | "jsonl" | "meta" | "sha256")
+            ) {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "worm-export", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category.missing.push(
+            "WORM export audit logs and verification summaries (target/worm-export-smoke)"
+                .to_string(),
+        );
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
 fn bundle_checksum_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
     let mut category = EvidenceCategoryManifest {
         name: "Checksum reports".to_string(),
@@ -1908,6 +2366,7 @@ fn main() -> Result<()> {
         "plonky3-setup" => regenerate_plonky3_setup(&argv),
         "plonky3-verify" => verify_plonky3_setup(),
         "report-timetoke-slo" => report_timetoke_slo(&argv),
+        "snapshot-verifier" => run_snapshot_verifier_smoke(),
         "snapshot-health" => run_snapshot_health(&argv),
         "collect-phase3-evidence" => collect_phase3_evidence(&argv),
         "help" => {

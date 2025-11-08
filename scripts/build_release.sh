@@ -270,3 +270,134 @@ if [[ -f "$SNAPSHOT_SUMMARY_SCRIPT" ]]; then
     exit 1
   fi
 fi
+
+generate_snapshot_verifier_report() {
+  local artifacts_dir="$OUT_DIR/$TARGET"
+  mapfile -t manifests < <(find "$artifacts_dir" -path '*/manifest/chunks.json' -type f -print | sort)
+  if [[ ${#manifests[@]} -eq 0 ]]; then
+    echo "error: no pruning snapshot manifests found under $artifacts_dir; snapshot verifier report is required" >&2
+    exit 1
+  fi
+  if [[ -z "${SNAPSHOT_MANIFEST_PUBKEY_HEX:-}" ]]; then
+    echo "error: SNAPSHOT_MANIFEST_PUBKEY_HEX must be set to generate the snapshot verifier report" >&2
+    exit 1
+  fi
+
+  local key_path
+  key_path="$(mktemp)"
+  printf '%s' "$SNAPSHOT_MANIFEST_PUBKEY_HEX" >"$key_path"
+
+  local specs=()
+  local status=0
+  local manifest
+  for manifest in "${manifests[@]}"; do
+    local signature="${manifest}.sig"
+    if [[ ! -f "$signature" ]]; then
+      echo "error: snapshot manifest signature missing for $manifest" >&2
+      status=1
+      break
+    fi
+    local chunk_root
+    chunk_root="$(dirname "$(dirname "$manifest")")/chunks"
+    if [[ ! -d "$chunk_root" ]]; then
+      echo "error: chunk root $chunk_root not found for manifest $manifest" >&2
+      status=1
+      break
+    fi
+    local report_path="${manifest%.json}-verify.json"
+    if ! cargo run --locked --package snapshot-verify -- \
+      --manifest "$manifest" \
+      --signature "$signature" \
+      --public-key "$key_path" \
+      --chunk-root "$chunk_root" \
+      --output "$report_path"; then
+      status=$?
+      break
+    fi
+    local manifest_rel="${manifest#$artifacts_dir/}"
+    local report_rel="${report_path#$artifacts_dir/}"
+    specs+=("${manifest_rel}:::${report_rel}")
+  done
+
+  rm -f "$key_path"
+  if [[ $status -ne 0 ]]; then
+    echo "error: snapshot verification failed" >&2
+    exit "$status"
+  fi
+
+  local aggregate_report="$artifacts_dir/snapshot-verify-report.json"
+  python3 - "$artifacts_dir" "$aggregate_report" "${specs[@]}" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+base = Path(sys.argv[1])
+output = Path(sys.argv[2])
+
+if len(sys.argv) <= 3:
+    print("error: no snapshot verifier reports to aggregate", file=sys.stderr)
+    sys.exit(1)
+
+entries = []
+all_passed = True
+
+for spec in sys.argv[3:]:
+    manifest_rel, report_rel = spec.split(":::", 1)
+    report_path = base / report_rel
+    try:
+        data = json.loads(report_path.read_text())
+    except Exception as exc:  # noqa: BLE001
+        print(f"error: failed to load snapshot verifier report {report_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    summary = data.get("summary") or {}
+    signature = data.get("signature") or {}
+    errors = data.get("errors") or []
+    failure_counters = [
+        summary.get("missing_files", 0),
+        summary.get("size_mismatches", 0),
+        summary.get("checksum_mismatches", 0),
+        summary.get("io_errors", 0),
+        summary.get("metadata_incomplete", 0),
+    ]
+    status = (
+        signature.get("signature_valid") is True
+        and not errors
+        and all(counter == 0 for counter in failure_counters)
+    )
+    if not status:
+        all_passed = False
+    entries.append(
+        {
+            "manifest": manifest_rel,
+            "report": report_rel,
+            "signature_valid": signature.get("signature_valid"),
+            "summary": summary,
+            "errors": errors,
+            "status": status,
+        }
+    )
+
+document = {
+    "generated_at": datetime.now(timezone.utc).isoformat(),
+    "reports": entries,
+    "all_passed": all_passed,
+}
+
+output.write_text(json.dumps(document, indent=2))
+
+if not all_passed:
+    print("snapshot verification reported failures; inspect per-manifest reports", file=sys.stderr)
+    sys.exit(1)
+PY
+  local rc=$?
+  if [[ $rc -ne 0 ]]; then
+    exit "$rc"
+  fi
+
+  sha256sum "$aggregate_report" >"${aggregate_report}.sha256"
+  echo "Snapshot verifier report written to $aggregate_report"
+}
+
+generate_snapshot_verifier_report

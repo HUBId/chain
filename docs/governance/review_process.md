@@ -20,6 +20,11 @@ required status check reports success:
 - `runtime-smoke` builds `rpp-node` and runs the node, wallet, and hybrid modes
   through the `scripts/run_*_mode.sh` helpers, asserting health and metrics are
   wired before shipping.【F:.github/workflows/ci.yml†L185-L316】【F:scripts/run_node_mode.sh†L1-L160】
+- `snapshot-verifier` erzeugt ein synthetisches Snapshot-Bündel via
+  `cargo xtask snapshot-verifier`, führt den Verifier aus und überprüft das
+  aggregierte `snapshot-verify-report.json` inklusive SHA256-Seitendatei.【F:.github/workflows/ci.yml†L369-L397】【F:xtask/src/main.rs†L220-L318】
+- `worm-export-smoke` führt `cargo xtask test-worm-export` aus, prüft Signatur-
+  Anforderungen und speichert die Summary/Artefakte im Actions-Tab.【F:.github/workflows/ci.yml†L360-L387】【F:xtask/src/main.rs†L120-L318】
 
 ## Branch protection verification
 
@@ -44,7 +49,9 @@ gh api \
       "observability-snapshot",
       "alerts-lint",
       "simnet-admission",
-      "runtime-smoke"
+      "runtime-smoke",
+      "snapshot-verifier",
+      "worm-export-smoke"
     ]
   }
 }
