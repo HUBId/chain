@@ -38,11 +38,13 @@ jobs:
               repo,
               workflow_id: 'nightly.yml',
               branch: defaultBranch,
-              per_page: 1,
+              per_page: 20,
               status: 'completed'
             });
 
-            const latestRun = data.workflow_runs?.[0];
+            const runs = data.workflow_runs ?? [];
+            const latestRun = runs[0];
+            const latestSuccess = runs.find((run) => run.conclusion === 'success');
             const freshnessHours = Number(process.env.FRESHNESS_HOURS || '24');
             const now = new Date();
 
@@ -50,36 +52,41 @@ jobs:
             let conclusion = 'failure';
             let shortMessage = '';
 
+            summaryLines.push('| Field | Value |');
+            summaryLines.push('| --- | --- |');
+
             if (!latestRun) {
               shortMessage = 'No completed nightly runs were found for the default branch.';
-              summaryLines.push('| Field | Value |');
-              summaryLines.push('| --- | --- |');
-              summaryLines.push(`| Status | missing |`);
+              summaryLines.push(`| Latest run | missing |`);
             } else {
-              const completedAtRaw = latestRun.updated_at ?? latestRun.run_started_at;
-              const completedAt = new Date(completedAtRaw);
-              const ageHours = (now.getTime() - completedAt.getTime()) / (1000 * 60 * 60);
-              const ageDisplay = ageHours.toFixed(1);
-              const runUrl = latestRun.html_url;
-              const conclusionText = latestRun.conclusion ?? latestRun.status;
+              const latestCompletedAtRaw = latestRun.updated_at ?? latestRun.run_started_at;
+              const latestCompletedAt = new Date(latestCompletedAtRaw);
+              const latestAgeHours = (now.getTime() - latestCompletedAt.getTime()) / (1000 * 60 * 60);
+              const latestAgeDisplay = latestAgeHours.toFixed(1);
+              const latestConclusion = latestRun.conclusion ?? latestRun.status;
+              summaryLines.push(`| Latest run | [${latestConclusion}](${latestRun.html_url}) (${latestAgeDisplay}h old) |`);
+            }
 
-              summaryLines.push('| Field | Value |');
-              summaryLines.push('| --- | --- |');
-              summaryLines.push(`| Workflow | [nightly.yml](${runUrl}) |`);
-              summaryLines.push(`| Conclusion | ${conclusionText} |`);
-              summaryLines.push(`| Completed at | ${completedAt.toISOString()} |`);
-              summaryLines.push(`| Age (hours) | ${ageDisplay} |`);
+            if (!latestSuccess) {
+              summaryLines.push(`| Most recent success | not found |`);
+              shortMessage = 'No successful nightly runs were found on the default branch.';
+            } else {
+              const successCompletedAtRaw = latestSuccess.updated_at ?? latestSuccess.run_started_at;
+              const successCompletedAt = new Date(successCompletedAtRaw);
+              const successAgeHours = (now.getTime() - successCompletedAt.getTime()) / (1000 * 60 * 60);
+              const successAgeDisplay = successAgeHours.toFixed(1);
+              summaryLines.push(
+                `| Most recent success | [run #${latestSuccess.run_number}](${latestSuccess.html_url}) (${successAgeDisplay}h old) |`
+              );
 
-              const isFresh = ageHours <= freshnessHours;
-              const succeeded = latestRun.conclusion === 'success';
-
-              if (succeeded && isFresh) {
+              if (successAgeHours <= freshnessHours) {
                 conclusion = 'success';
-                shortMessage = `Nightly run is healthy (conclusion: ${conclusionText}, ${ageDisplay}h old).`;
-              } else if (!succeeded) {
-                shortMessage = `Latest nightly run concluded with "${conclusionText}".`;
+                const latestConclusion = latestRun
+                  ? latestRun.conclusion ?? latestRun.status
+                  : 'unknown';
+                shortMessage = `Nightly run is healthy (most recent success ${successAgeDisplay}h old; latest run conclusion: ${latestConclusion}).`;
               } else {
-                shortMessage = `Latest nightly run is ${ageDisplay}h old which exceeds the ${freshnessHours}h freshness target.`;
+                shortMessage = `Most recent successful nightly run is ${successAgeDisplay}h old which exceeds the ${freshnessHours}h freshness target.`;
               }
             }
 
