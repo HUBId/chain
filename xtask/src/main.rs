@@ -33,18 +33,42 @@ fn workspace_root() -> PathBuf {
 }
 
 fn apply_feature_flags(command: &mut Command) {
-    let no_defaults = env::var("XTASK_NO_DEFAULT_FEATURES")
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if no_defaults {
-        command.arg("--no-default-features");
-    }
-    if let Ok(features) = env::var("XTASK_FEATURES") {
-        let trimmed = features.trim();
-        if !trimmed.is_empty() {
-            command.arg("--features").arg(trimmed);
+    apply_feature_flags_inner(command, true, None);
+}
+
+fn apply_simnet_feature_flags(command: &mut Command) {
+    apply_feature_flags_inner(command, false, Some(&is_simnet_feature));
+}
+
+fn apply_feature_flags_inner(
+    command: &mut Command,
+    respect_no_defaults: bool,
+    filter: Option<&dyn Fn(&str) -> bool>,
+) {
+    if respect_no_defaults {
+        let no_defaults = env::var("XTASK_NO_DEFAULT_FEATURES")
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        if no_defaults {
+            command.arg("--no-default-features");
         }
     }
+    if let Ok(features) = env::var("XTASK_FEATURES") {
+        let filtered: Vec<String> = features
+            .split(',')
+            .map(|feature| feature.trim())
+            .filter(|feature| !feature.is_empty())
+            .filter(|feature| filter.map_or(true, |predicate| predicate(feature)))
+            .map(str::to_owned)
+            .collect();
+        if !filtered.is_empty() {
+            command.arg("--features").arg(filtered.join(","));
+        }
+    }
+}
+
+fn is_simnet_feature(feature: &str) -> bool {
+    matches!(feature, "backend-plonky3" | "backend-plonky3-gpu" | "prod")
 }
 
 fn run_command(mut command: Command, context: &str) -> Result<()> {
@@ -156,7 +180,7 @@ fn run_simnet_smoke() -> Result<()> {
             .arg(scenario_path)
             .arg("--artifacts-dir")
             .arg(artifacts);
-        apply_feature_flags(&mut command);
+        apply_simnet_feature_flags(&mut command);
         let context = format!("simnet scenario {stem}");
         run_command(command, &context)?;
     }
