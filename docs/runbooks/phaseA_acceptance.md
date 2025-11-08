@@ -13,6 +13,11 @@ milestone.
       `snapshot-verify-report.json` und `snapshot-verify-report.json.sha256`
       unter `dist/artifacts/<target>/`. Hinterlege die JSON- und SHA256-Datei als
       Pflichtartefakte und archiviere die Einzelberichte für spätere Audits.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L122-L209】
+      Validiere den JSON-Inhalt zusätzlich lokal via
+      `cargo xtask verify-report --report dist/artifacts/<target>/snapshot-verify-report.json`
+      – das Kommando prüft sowohl die Aggregation als auch Einzelreports gegen
+      `docs/interfaces/snapshot_verify_report.schema.json`. Führe das Ergebnis im
+      Übergabeprotokoll auf.【F:xtask/src/main.rs†L1594-L1677】【F:docs/interfaces/snapshot_verify_report.schema.json†L1-L173】
 - [ ] **SHA256 im Freigabeprotokoll festgehalten.** Die Release Notes enthalten
       den Abschnitt „Snapshot verifier attestation“ mit den Hashes aus den
       `.sha256`-Dateien. Vergleiche mindestens einen Wert lokal via

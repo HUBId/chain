@@ -185,6 +185,12 @@ jobs:
             rm -f "$manifest_path" "${manifest_path}.sig"
           fi
 
+      - name: Validate snapshot verifier report schema
+        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && (env.SNAPSHOT_CHUNK_ROOT != '' || env.SNAPSHOT_CHUNK_ARCHIVE_URL != '') && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
+        run: |
+          set -euo pipefail
+          cargo xtask verify-report --report snapshot-manifest-verify.json
+
       - name: Upload snapshot health report
         uses: actions/upload-artifact@v4
         with:

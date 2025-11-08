@@ -17,6 +17,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use hex::encode as hex_encode;
+use jsonschema::{Draft, JSONSchema};
 use rand::rngs::OsRng;
 use reqwest::blocking::Client as HttpClient;
 use rpp_p2p::{
@@ -347,6 +348,145 @@ fn run_snapshot_verifier_smoke() -> Result<()> {
     );
 
     Ok(())
+}
+
+fn verify_snapshot_verifier_report(args: &[String]) -> Result<()> {
+    let root = workspace_root();
+    let mut report: Option<PathBuf> = None;
+    let mut schema: Option<PathBuf> = None;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--report" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--report requires a value"))?;
+                report = Some(PathBuf::from(value));
+            }
+            "--schema" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--schema requires a value"))?;
+                schema = Some(PathBuf::from(value));
+            }
+            "--help" => {
+                verify_report_usage();
+                return Ok(());
+            }
+            other => {
+                bail!("unknown argument '{other}' for verify-report");
+            }
+        }
+    }
+
+    let schema_path = schema
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
+        })
+        .unwrap_or_else(|| root.join("docs/interfaces/snapshot_verify_report.schema.json"));
+    if !schema_path.exists() {
+        bail!(
+            "JSON schema {} not found; pass --schema to override the lookup",
+            schema_path.display()
+        );
+    }
+
+    let report_path = match report {
+        Some(path) => {
+            if path.is_absolute() {
+                path
+            } else {
+                root.join(path)
+            }
+        }
+        None => discover_snapshot_report(&root)?,
+    };
+
+    if !report_path.exists() {
+        bail!(
+            "snapshot verifier report {} not found",
+            report_path.display()
+        );
+    }
+
+    let schema_file = File::open(&schema_path)
+        .with_context(|| format!("open snapshot verifier schema {}", schema_path.display()))?;
+    let schema_json: JsonValue = serde_json::from_reader(schema_file)
+        .with_context(|| format!("parse snapshot verifier schema {}", schema_path.display()))?;
+
+    let report_file = File::open(&report_path)
+        .with_context(|| format!("open snapshot verifier report {}", report_path.display()))?;
+    let report_json: JsonValue = serde_json::from_reader(report_file)
+        .with_context(|| format!("parse snapshot verifier report {}", report_path.display()))?;
+
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&schema_json)
+        .context("compile snapshot verifier schema")?;
+
+    match compiled.validate(&report_json) {
+        Ok(_) => {
+            println!(
+                "snapshot verifier report {} matches schema {}",
+                report_path.display(),
+                schema_path.display()
+            );
+            Ok(())
+        }
+        Err(errors) => {
+            eprintln!(
+                "::error::Snapshot verifier report {} failed schema validation against {}",
+                report_path.display(),
+                schema_path.display()
+            );
+            for error in errors {
+                eprintln!(" - {} at {}", error, error.instance_path);
+            }
+            bail!("snapshot verifier report schema validation failed");
+        }
+    }
+}
+
+fn discover_snapshot_report(root: &Path) -> Result<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for base in ["dist", "target"] {
+        let dir = root.join(base);
+        if !dir.exists() {
+            continue;
+        }
+        for entry in WalkDir::new(&dir) {
+            let entry = entry?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name == "snapshot-verify-report.json")
+            {
+                candidates.push(entry.path().to_path_buf());
+            }
+        }
+    }
+
+    match candidates.len() {
+        0 => bail!(
+            "snapshot-verify-report.json not found; pass --report <path> to cargo xtask verify-report"
+        ),
+        1 => Ok(candidates.remove(0)),
+        _ => {
+            eprintln!("multiple snapshot verifier reports detected:");
+            for path in &candidates {
+                eprintln!(" - {}", path.display());
+            }
+            bail!("multiple snapshot verifier reports discovered; pass --report <path> to disambiguate");
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1440,7 +1580,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
     );
 }
 
@@ -1465,6 +1605,12 @@ fn snapshot_health_usage() {
 fn collect_phase3_evidence_usage() {
     eprintln!(
         "usage: cargo xtask collect-phase3-evidence [--output-dir <path>]\n\nBundles snapshot/timetoke dashboards, alert YAMLs, admission audit logs, policy backups, checksum reports, and CI job logs into a timestamped archive with a manifest.",
+    );
+}
+
+fn verify_report_usage() {
+    eprintln!(
+        "usage: cargo xtask verify-report [--report <path>] [--schema <path>]\n\nValidates aggregated snapshot verifier reports (snapshot-verify-report.json) or per-manifest reports against the repository JSON schema. When --report is omitted the command searches dist/ and target/ for snapshot-verify-report.json and fails if multiple candidates exist.",
     );
 }
 
@@ -2369,6 +2515,7 @@ fn main() -> Result<()> {
         "snapshot-verifier" => run_snapshot_verifier_smoke(),
         "snapshot-health" => run_snapshot_health(&argv),
         "collect-phase3-evidence" => collect_phase3_evidence(&argv),
+        "verify-report" => verify_snapshot_verifier_report(&argv),
         "help" => {
             usage();
             Ok(())

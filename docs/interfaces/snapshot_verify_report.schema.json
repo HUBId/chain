@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://risc0.org/schemas/snapshot_verify_report.schema.json",
+  "title": "Snapshot verifier reports",
+  "description": "Schema for aggregated snapshot verifier bundles and individual manifest verification outputs",
+  "oneOf": [
+    { "$ref": "#/$defs/AggregatedReport" },
+    { "$ref": "#/$defs/ManifestReport" }
+  ],
+  "$defs": {
+    "AggregatedReport": {
+      "type": "object",
+      "required": ["generated_at", "reports", "all_passed"],
+      "additionalProperties": false,
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reports": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/AggregatedEntry" }
+        },
+        "all_passed": { "type": "boolean" }
+      }
+    },
+    "AggregatedEntry": {
+      "type": "object",
+      "required": ["manifest", "report", "signature_valid", "summary", "errors", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "manifest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "report": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature_valid": {
+          "type": ["boolean", "null"]
+        },
+        "summary": { "$ref": "#/$defs/SegmentSummary" },
+        "errors": { "$ref": "#/$defs/ErrorList" },
+        "status": { "type": "boolean" }
+      }
+    },
+    "ManifestReport": {
+      "type": "object",
+      "required": [
+        "manifest_path",
+        "signature_path",
+        "public_key_path",
+        "segments",
+        "errors"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "manifest_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "public_key_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunk_root": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "manifest_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "signature": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/SignatureReport" }
+          ]
+        },
+        "segments": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/SegmentReport" }
+        },
+        "summary": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/SegmentSummary" }
+          ]
+        },
+        "errors": { "$ref": "#/$defs/ErrorList" }
+      }
+    },
+    "SignatureReport": {
+      "type": "object",
+      "required": ["algorithm", "manifest_digest", "signature_valid"],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": ["ed25519"]
+        },
+        "manifest_digest": {
+          "type": "string",
+          "minLength": 1
+        },
+        "public_key_fingerprint": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "signature_valid": { "type": "boolean" },
+        "error": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    },
+    "SegmentReport": {
+      "type": "object",
+      "required": ["segment", "path", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "segment": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "missing_metadata",
+            "missing_file",
+            "size_mismatch",
+            "checksum_mismatch",
+            "io_error"
+          ]
+        },
+        "expected_size": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "actual_size": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "expected_checksum": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "actual_checksum": {
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "error": {
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    },
+    "SegmentSummary": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "segments_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "metadata_incomplete": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "size_mismatches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checksum_mismatches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "io_errors": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ErrorList": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

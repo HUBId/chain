@@ -155,6 +155,12 @@ jobs:
           SKIP_SNAPSHOT_INTEGRITY_TEST: 1
           SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
         run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool "${{ matrix.tool }}"
+      - name: Validate snapshot verifier report schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo xtask verify-report \
+            --report "dist/artifacts/${{ matrix.target }}/snapshot-verify-report.json"
       - name: Verify release feature set
         shell: bash
         run: ./scripts/verify_release_features.sh --target "${{ matrix.target }}" --profile release
@@ -199,6 +205,12 @@ jobs:
           SKIP_SNAPSHOT_INTEGRITY_TEST: 1
           SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
         run: ./scripts/build_release.sh --target "${{ matrix.target }}" --profile release --out-dir dist/artifacts --tool cargo
+      - name: Validate snapshot verifier report schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo xtask verify-report \
+            --report "dist/artifacts/${{ matrix.target }}/snapshot-verify-report.json"
       - name: Verify release feature set
         shell: bash
         run: ./scripts/verify_release_features.sh --target "${{ matrix.target }}" --profile release
