@@ -18,6 +18,12 @@ milestone.
       – das Kommando prüft sowohl die Aggregation als auch Einzelreports gegen
       `docs/interfaces/snapshot_verify_report.schema.json`. Führe das Ergebnis im
       Übergabeprotokoll auf.【F:xtask/src/main.rs†L1594-L1677】【F:docs/interfaces/snapshot_verify_report.schema.json†L1-L173】
+- [ ] **CLI-Verifikation nachvollzogen.** Dokumentiere mindestens einen Lauf von
+      `rpp-node validator snapshot verify --config <pfad>` gegen das produktive
+      Bundle. Der Report muss `signature_valid=true` und keine Chunk-Abweichungen
+      melden; bei Fehlern liefert das CLI Exit-Code `2` (Signatur) oder `3`
+      (Segmentabweichungen). Hänge den JSON-Output an die Übergabeunterlagen, damit
+      Reviewer:innen die lokale Prüfung nachverfolgen können.【F:rpp/node/src/main.rs†L140-L227】【F:rpp/node/tests/snapshot_verify.rs†L1-L123】
 - [ ] **SHA256 im Freigabeprotokoll festgehalten.** Die Release Notes enthalten
       den Abschnitt „Snapshot verifier attestation“ mit den Hashes aus den
       `.sha256`-Dateien. Vergleiche mindestens einen Wert lokal via

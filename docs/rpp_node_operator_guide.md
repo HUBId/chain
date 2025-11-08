@@ -183,6 +183,46 @@ Audit- und Dashboard-Belege synchron bleiben.【F:docs/runbooks/oncall.md†L21-
 visualisieren dieselben Fortschritts- und Fehlerindikatoren, die die CLI als
 Text ausgibt, und sind verpflichtende Artefakte für die Phase‑3-Abnahme.【F:docs/dashboards/pipeline_overview.json†L200-L260】【F:docs/dashboards/pipeline_proof_validation.json†L1-L60】【F:docs/dashboards/vrf_overview.json†L1-L60】
 
+### Snapshot verification CLI
+
+`rpp-node validator snapshot verify` kapselt den Offline-Verifier aus
+`tools/snapshot-verify` und nutzt die Validator-Konfiguration, um Manifest,
+Signatur, Chunk-Verzeichnis und Verifierschlüssel automatisch aufzulösen. Ohne
+Overrides liest der Befehl `<snapshot_dir>/manifest/chunks.json`, erwartet die
+Signatur nebenan als `chunks.json.sig`, prüft `<snapshot_dir>/chunks` und leitet
+den Ed25519-Schlüssel aus `timetoke_snapshot_key_path` ab. Optional kannst du
+`--manifest`, `--signature`, `--chunk-root`, `--output` und `--public-key`
+verwenden, um einzelne Pfade bzw. einen alternativen Public Key zu setzen.【F:rpp/node/src/main.rs†L140-L227】
+
+```text
+$ rpp-node validator snapshot verify --config config/validator.toml
+{
+  "manifest_path": "./data/snapshots/manifest/chunks.json",
+  "signature_path": "./data/snapshots/manifest/chunks.json.sig",
+  "public_key_path": "./keys/timetoke_snapshot.toml",
+  "chunk_root": "./data/snapshots/chunks",
+  "signature": {
+    "algorithm": "ed25519",
+    "manifest_digest": "…",
+    "public_key_fingerprint": "…",
+    "signature_valid": true,
+    "error": null
+  },
+  "summary": {
+    "segments_total": 1,
+    "verified": 1,
+    "checksum_mismatches": 0,
+    …
+  },
+  "errors": []
+}
+```
+
+Bei einer Abweichung liefert der Befehl weiterhin den JSON-Report, beendet sich
+aber mit Exit-Code `3`, sodass CI-Jobs und Runbooks zwischen Signaturfehlern
+(Exit-Code `2`) und tatsächlichen Chunk-Abweichungen unterscheiden können.【F:rpp/node/src/main.rs†L210-L227】【F:rpp/node/tests/snapshot_verify.rs†L1-L123】 Dokumentiere die Reports als Teil der
+Snapshot-Abnahme und bewahre sie gemeinsam mit den Release-Artefakten auf.
+
 ### Consensus proof metadata expectations
 
 Finality proofs now encode the epoch/slot context, VRF proofs, and quorum
