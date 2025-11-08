@@ -27,6 +27,14 @@ Keep the pipeline dashboards and the Timetoke SLO report open while running the
 rest of this playbook to confirm that each intervention moves the counters back
 into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/src/main.rs†L1197-L1423】
 
+### Alert first-response matrix
+
+| Alert | Kennzahl / Signal | Erste Schritte | Eskalation & Erfolgsnachweis |
+| --- | --- | --- | --- |
+| `SnapshotManifestSignatureInvalid` | Hintergrundvalidator meldet fehlende/abweichende Segmente via `snapshot_chunk_checksum_failures_total{kind="missing"}`; Timetoke-Resync blockiert anschließend.| 1. `cargo xtask snapshot-health --manifest … --output manifest-check.json` laufen lassen und im Incident-Log sichern.<br>2. Mit `rpp-node validator snapshot status --session <id>` prüfen, ob der Consumer noch den korrekten Plan nutzt.【F:docs/observability/alerts/snapshot_manifest.yaml†L1-L52】【F:xtask/src/main.rs†L337-L596】【F:rpp/node/src/main.rs†L787-L841】 | - Wenn der Nightly-Report zweimal hintereinander scheitert, Storage-Team hinzuziehen.【F:.github/workflows/nightly.yml†L29-L79】<br>- Erfolg: Manifest erneut importiert, `snapshot-health` meldet „verified: true“. |
+| `SnapshotReplayStallCritical` | `snapshot_stream_lag_seconds` überschreitet 180 s oder `snapshot_bytes_sent_total` stagniert; Timetoke-SLO-Bericht schlägt auf rot um.【F:docs/observability/alerts/snapshot_replay.yaml†L1-L54】【F:xtask/src/main.rs†L1197-L1423】 | 1. Tabelle „Step 1“ durchführen und `timetoke-slo-before.md` erfassen.<br>2. Snapshot-Session neu starten (`rpp-node validator snapshot start …`). | - Eskalation nach 15 Minuten ohne sinkende Latenz an Networking.<br>- Erfolg: `cargo xtask report-timetoke-slo` zeigt wieder `status: pass`, Lag fällt unter Warnschwelle. |
+| `SnapshotChecksumDrift` | `snapshot_chunk_checksum_failures_total{kind="checksum_mismatch"}` erhöht sich, Timetoke-Replay stoppt an fehlerhaften Chunks.【F:docs/observability/alerts/snapshot_checksum.yaml†L1-L48】【F:rpp/node/src/telemetry/snapshots.rs†L1-L33】 | 1. Journal der `snapshot_validator`-Einträge sichern.<br>2. Betroffene Chunks neu vom Provider laden und Replay erneut starten (`rpp-node validator snapshot resume …`). | - Wenn nach zwei Resumes weiterhin Drift gemeldet wird, Storage-SRE eskalieren.<br>- Erfolg: Nächster Validator-Lauf ohne neue `snapshot chunk validation failed`, `timetoke-slo-report.md` bleibt grün. |
+
 ## Prerequisites
 
 1. Export the validator RPC token (`export RPP_RPC_TOKEN=...`).

@@ -152,6 +152,52 @@ Halte die Branch-Protection-Regel für `main` synchron mit den unten aufgeführt
   verfolgt, damit neue Suites konsistent dokumentiert und priorisiert werden.
 - **Geplanter CI-Task**: Erweiterung der Nightly-Matrix um GPU-Profile und Hardwarevarianten für Plonky3, sobald dedizierte Runner verfügbar sind (siehe Testplan-Follow-ups).
 
+## Snapshot & Timetoke Automation
+
+Die neuen Snapshot-/Timetoke-Automationen kombinieren CLI-Kommandos (`rpp-node snapshot …`), `cargo xtask`-Audits und Nightly-Jobs,
+um Manifest-, Chunk- und Replay-SLOs kontinuierlich zu verifizieren. Phase 3 verlangt, dass jede Abweichung reproduzierbar und
+mit Artefakten belegbar ist.
+
+- **Snapshot-Health-Audit** (`cargo xtask snapshot-health`): Pollt alle aktiven Sessions über das Validator-RPC, ruft für jede
+  Session `rpp-node validator snapshot status` auf und vergleicht Fortschritt sowie Fehlermeldungen mit den Manifest-Totals.
+  Der Befehl akzeptiert optionale Parameter (`--config`, `--rpc-url`, `--auth-token`, `--manifest`, `--output`) und beendet sich
+  mit Exit-Code ≠ 0, sobald eine Session den erwarteten Plan verfehlt, einen Fehlerstring meldet oder Fortschritt über die
+  Manifestgrenzen hinaus meldet.【F:xtask/src/main.rs†L337-L596】 Das Nightly-Workflowziel `snapshot-health` lädt den erzeugten
+  JSON-Bericht (`snapshot-health-report.json`) als Artefakt hoch, wodurch Auditor:innen den Zustand jeder Session nachvollziehen
+  können.【F:.github/workflows/nightly.yml†L29-L79】 Lokal lässt sich derselbe Bericht beispielsweise so erzeugen:
+  ```bash
+  export SNAPSHOT_RPC_URL="https://validator.example.net:7070"
+  export SNAPSHOT_RPC_TOKEN="$(pass snapshots/prod-token)"
+  cargo xtask snapshot-health \
+    --config /etc/rpp/validator.toml \
+    --manifest /var/lib/rpp-node/snapshots/manifest/chunks.json \
+    --output snapshot-health-report.json
+  ```
+  Die CLI-Hilfsprogramme `rpp-node validator snapshot start/status/resume` verwenden dieselbe RPC-Schnittstelle. Sie propagieren
+  HTTP-Fehlercodes als aussagekräftige Fehlermeldungen und liefern strukturierte Statusausgaben, die direkt ins Incident-Log
+  übernommen werden.【F:rpp/node/src/main.rs†L150-L212】【F:rpp/node/src/main.rs†L787-L876】
+- **Replay-Stress in CI:** Der verpflichtende Statuscheck `observability-metrics` führt `cargo xtask test-observability` über die
+  Feature-Matrix aus und validiert dabei u. a. `snapshot_stream_lag_seconds`, `snapshot_bytes_sent_total` sowie die
+  Timetoke-Metriken gegen Prometheus-Scrapes.【F:.github/workflows/ci.yml†L412-L446】【F:tests/observability/snapshot_timetoke_metrics.rs†L70-L210】 Fehlende Daten oder
+  regressierte Grenzwerte führen zu einem roten Jobstatus.
+- **Timetoke-SLO-Reporting** (`cargo xtask report-timetoke-slo`): Aggregiert die Erfolgsrate und Latenzpercentile der letzten
+  sieben Tage aus Prometheus oder einem Metrics-Log. Fehlt sowohl `--prometheus-url` als auch `--metrics-log`, bricht der Befehl
+  mit Exit-Code 1 ab, sodass fehlkonfigurierte Pipelines nicht unbemerkt bleiben.【F:xtask/src/main.rs†L1018-L1423】 Der Nightly-Workflow
+  erzeugt daraus das Artefakt `timetoke-slo-report.md`, das die SLO-Ampel (pass/fail) enthält und im Incident-Log verlinkt wird.
+  Lokal genügt:
+  ```bash
+  cargo xtask report-timetoke-slo \
+    --prometheus-url "https://prom.example.net" \
+    --bearer-token "${PROM_TOKEN}" \
+    --output timetoke-slo-report.md
+  ```
+- **Branch-Protection & Nightly-Checks:** Die Branch-Protection verlangt zusätzlich zu den klassischen Test-Gates den
+  Observability-Check `observability-metrics`. Nightly-Jobs `snapshot-health` und `timetoke-slo` ergänzen die CI-Abdeckung um
+  kontinuierliche Artefakte, die sowohl in der Phase‑3-Checkliste als auch im Evidence-Bundle referenziert werden.【F:.github/workflows/nightly.yml†L29-L124】
+
+Alle Schritte sind Teil der Phase‑3-Abnahmekriterien: Pull-Requests müssen mit grünem `observability-metrics`-Status enden, und
+Nightly-Artefakte (`snapshot-health-report.json`, `timetoke-slo-report.md`) dienen als Nachweis für wiederholbare Audits.
+
 ## 5. Dokumentation & Review-Prozess
 - **Testprotokolle**: Jeder Release-Kandidat benötigt ein Protokoll mit ausgeführten Testläufen und Ergebnissen.
 - **Code-Review-Checkliste**: Enthält Prüfpunkte für Circuit-Constraints, Witness-Glaubwürdigkeit, Fehlerbehandlung und Cross-Backend-Abdeckung.

@@ -1,0 +1,38 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: snapshot-manifest-signature
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: snapshot-manifest-signature
+      rules:
+        - alert: SnapshotManifestSignatureInvalid
+          expr: |
+            sum(increase(snapshot_chunk_checksum_failures_total{kind=~"missing|size_mismatch"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot manifest signature failed verification
+            description: |
+              The background validator observed missing or size-mismatched snapshot chunks
+              compared to the published manifest during the last five minutes. Re-run
+              `cargo xtask snapshot-health` and reconcile the manifest before replay resumes.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md#alert-first-response-matrix
+        - alert: SnapshotManifestSignatureInvalidCritical
+          expr: |
+            sum(increase(snapshot_chunk_checksum_failures_total{kind=~"missing|size_mismatch"}[15m])) > 2
+          for: 5m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot manifest signature failures persisting for 15 minutes
+            description: |
+              Manifest verification continues to report missing or size-mismatched chunks for
+              more than fifteen minutes. Escalate to the on-call storage engineer and follow
+              the failover runbook to refresh the manifest and snapshot set.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md#alert-first-response-matrix

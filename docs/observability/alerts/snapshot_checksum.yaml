@@ -1,0 +1,35 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: snapshot-checksum-drift
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: snapshot-checksum-drift
+      rules:
+        - alert: SnapshotChecksumDrift
+          expr: sum(increase(snapshot_chunk_checksum_failures_total{kind="checksum_mismatch"}[10m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+            service: snapshots
+          annotations:
+            summary: Snapshot checksum drift detected
+            description: |
+              Snapshot chunk checksum mismatches have been recorded in the last ten minutes. Fetch
+              fresh chunks from the provider and validate the manifest before replay continues.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/network_snapshot_failover.md#alert-first-response-matrix
+        - alert: SnapshotChecksumDriftCritical
+          expr: sum(increase(snapshot_chunk_checksum_failures_total{kind="checksum_mismatch"}[30m])) > 3
+          for: 5m
+          labels:
+            severity: critical
+            service: snapshots
+          annotations:
+            summary: Snapshot checksum drift persists for thirty minutes
+            description: |
+              Persistent checksum drift indicates corrupted snapshot data or an unhealthy provider.
+              Escalate to the storage on-call and execute the failover runbook to replace the
+              affected snapshot set.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/timetoke_failover.md#alert-first-response-matrix

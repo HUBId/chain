@@ -49,6 +49,7 @@ Die Jobs sind als verpflichtende Statuschecks verdrahtet und bilden die Grundlag
 - **Runbook:** Das [Network Snapshot Failover Runbook](runbooks/network_snapshot_failover.md) dokumentiert Diagnose-, Resume- und Recovery-Schritte inklusive RPC-/CLI-Beispielen und verweist auf die relevanten SLOs und Tests.【F:docs/runbooks/network_snapshot_failover.md†L1-L176】
 - **Dashboard:** `docs/dashboards/pipeline_overview.json` liefert Panels für Snapshot-Durchsatz und Stream-Lag, die direkt auf den neuen SLIs aufsetzen.【F:docs/dashboards/pipeline_overview.json†L200-L260】
 - **Alerts:** `docs/observability/alerts/snapshot_stream.yaml` definiert Warning-/Critical-Regeln für Lag, Durchsatz und Chunk-Fehler und verlinkt das Runbook für Eskalationen.【F:docs/observability/alerts/snapshot_stream.yaml†L1-L66】
+- **Release-Kommunikation:** Die Release Notes weisen auf die Snapshot-/Timetoke-Automationen und das verpflichtende `observability-metrics`-Gate hin, damit Maintainer:innen Branch-Protection und Nightly-Artefakte (Snapshot-Health, Timetoke-SLO) vor jedem Cut überprüfen.【F:docs/release_notes.md†L9-L20】【F:docs/test_validation_strategy.md†L128-L174】【F:.github/workflows/nightly.yml†L29-L124】
 
 Die folgenden Arbeiten bleiben als Fokus für Phase‑3-Nacharbeiten und spätere Erweiterungen:
 
