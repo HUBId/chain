@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use reqwest::Client;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -109,7 +110,7 @@ async fn snapshot_validator_recovers_after_restart() -> Result<()> {
         .and_then(|value| value.to_str())
         .ok_or_else(|| anyhow!("manifest filename is not valid UTF-8"))?;
     let sig_path = manifest_path.with_file_name(format!("{sig_name}.sig"));
-    let signature = "00".repeat(64);
+    let signature = BASE64.encode([0u8; 64]);
     fs::write(&sig_path, signature.as_bytes())
         .await
         .with_context(|| format!("write manifest signature to {}", sig_path.display()))?;

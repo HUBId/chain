@@ -3,6 +3,7 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rpp_chain::config::NodeConfig;
 use rpp_chain::errors::ChainError;
 use rpp_chain::node::Node;
@@ -77,7 +78,7 @@ async fn light_client_stream_verifies_state_sync() {
 async fn state_sync_chunk_index_errors_surface_chain_error() {
     let fixture = StateSyncFixture::new();
     let mut store = SnapshotStore::new(8);
-    let root = store.insert(vec![0u8; 32], vec![0; 64]);
+    let root = store.insert(vec![0u8; 32], Some(BASE64.encode([0u8; 64])));
 
     let stream = fixture
         .handle

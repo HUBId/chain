@@ -1,5 +1,6 @@
 use std::convert::TryInto;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, SigningKey};
 use rpp_consensus::{
     TimetokeRecord, TimetokeReplayError, TimetokeReplayValidator, TimetokeSnapshotConsumer,
@@ -97,7 +98,10 @@ fn timetoke_snapshot_roundtrip() {
     assert_eq!(snapshot.timetoke_root, hex::encode(timetoke_root));
     assert!(consumer.is_finished());
 
-    let signature_bytes = hex::decode(handle.signature).expect("hex signature");
+    let signature_b64 = handle.signature.as_ref().expect("signature present");
+    let signature_bytes = BASE64
+        .decode(signature_b64)
+        .expect("decode manifest signature");
     let signature_array: [u8; 64] = signature_bytes
         .try_into()
         .expect("ed25519 signature length");
@@ -106,6 +110,26 @@ fn timetoke_snapshot_roundtrip() {
     verifying_key
         .verify_strict(&manifest_bytes, &signature)
         .expect("manifest signature");
+
+    let mut tampered_bytes = manifest_bytes.clone();
+    tampered_bytes[0] ^= 0x01;
+    assert!(
+        verifying_key
+            .verify_strict(&tampered_bytes, &signature)
+            .is_err(),
+        "tampered manifest bytes should fail verification"
+    );
+
+    let mut tampered_signature = signature_bytes.clone();
+    tampered_signature[0] ^= 0xFF;
+    let tampered_array: [u8; 64] = tampered_signature.try_into().expect("signature length");
+    let forged = Signature::from_bytes(&tampered_array).expect("signature bytes");
+    assert!(
+        verifying_key
+            .verify_strict(&manifest_bytes, &forged)
+            .is_err(),
+        "tampered signature should fail verification"
+    );
 
     let err = consumer
         .ingest_chunk(last_chunk.expect("have last chunk"))

@@ -1,9 +1,11 @@
 use std::fmt;
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use blake3::Hash;
 use ed25519_dalek::{Signer, SigningKey};
 use rpp_p2p::{PipelineError, SnapshotChunk, SnapshotChunkStream, SnapshotStore};
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 /// Snapshot representation for Timetoke ledger state.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,8 +53,8 @@ pub struct TimetokeSnapshotHandle {
     pub record_count: usize,
     /// Hex encoded Timetoke commitment carried by the snapshot payload.
     pub timetoke_root: String,
-    /// Hex encoded Ed25519 signature over the manifest payload.
-    pub signature: String,
+    /// Base64 encoded Ed25519 signature over the manifest payload.
+    pub signature: Option<String>,
 }
 
 /// Produces snapshot streams for Timetoke records and exposes the payload to the
@@ -92,17 +94,24 @@ impl TimetokeSnapshotProducer {
             .map_err(|err| TimetokeSnapshotError::Encoding(err.to_string()))?;
         let signature = self.signing_key.sign(&payload);
         let signature_bytes = signature.to_bytes();
-        let root = self.store.insert(payload, signature_bytes.to_vec());
+        let signature_base64 = BASE64.encode(signature_bytes);
+        let root = self.store.insert(payload, Some(signature_base64.clone()));
         let stream = self
             .store
             .stream(&root)
             .map_err(TimetokeSnapshotError::from)?;
+        info!(
+            target: "consensus",
+            root = %root.to_hex(),
+            records = snapshot.records.len(),
+            "published timetoke snapshot manifest with signature"
+        );
         Ok(TimetokeSnapshotHandle {
             root,
             total_chunks: stream.total(),
             record_count: snapshot.records.len(),
             timetoke_root: snapshot.timetoke_root,
-            signature: hex::encode(signature_bytes),
+            signature: Some(signature_base64),
         })
     }
 

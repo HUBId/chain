@@ -70,7 +70,7 @@ serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = "=1.0.145"
 prometheus-client = "0.23"
 thiserror = "=2.0.12"
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "time", "sync"] }
 toml = { version = "=0.8.12", path = "../../third_party/toml/0.8.12" }
 tracing = "=0.1.41"
 blake3 = "=1.8.2"
@@ -78,6 +78,7 @@ blake2 = "=0.10.6"
 rand = { version = "=0.8.5", features = ["std"] }
 schnorrkel = "0.11"
 ed25519-dalek = "=2.1.1"
+rpp-pruning = { path = "../pruning" }
 
 [dev-dependencies]
 tempfile = "3.10"

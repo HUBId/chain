@@ -15,6 +15,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::watch;
+use tracing::debug;
 
 use crate::topics::GossipTopic;
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
@@ -1015,7 +1016,7 @@ type ChunkOverride =
 #[derive(Debug, Clone)]
 pub struct StoredSnapshot {
     payload: Arc<[u8]>,
-    signature: Arc<[u8]>,
+    signature: Option<Arc<str>>,
 }
 
 pub struct SnapshotStore {
@@ -1047,13 +1048,13 @@ impl SnapshotStore {
         }
     }
 
-    pub fn insert(&mut self, payload: Vec<u8>, signature: Vec<u8>) -> Hash {
+    pub fn insert(&mut self, payload: Vec<u8>, signature: Option<String>) -> Hash {
         let root = blake3::hash(&payload);
         self.snapshots.insert(
             root,
             StoredSnapshot {
                 payload: Arc::from(payload),
-                signature: Arc::from(signature),
+                signature: signature.map(|value| Arc::<str>::from(value.into())),
             },
         );
         root
@@ -1087,11 +1088,14 @@ impl SnapshotStore {
         SnapshotChunkStream::chunk_for(*root, &snapshot.payload, self.chunk_size, index)
     }
 
-    pub fn signature(&self, root: &Hash) -> Result<Arc<[u8]>, PipelineError> {
+    pub fn signature(&self, root: &Hash) -> Result<Option<Arc<str>>, PipelineError> {
         let snapshot = self
             .snapshots
             .get(root)
             .ok_or(PipelineError::SnapshotNotFound)?;
+        if snapshot.signature.is_none() {
+            debug!(root = %root.to_hex(), "snapshot signature not available");
+        }
         Ok(snapshot.signature.clone())
     }
 }

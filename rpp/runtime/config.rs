@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::convert::TryInto;
 use std::fs;
 use std::io::ErrorKind;
 use std::net::SocketAddr;
@@ -29,6 +30,8 @@ use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
 use crate::runtime::RuntimeMode;
 use crate::types::Stake;
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use hex;
 
 const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
 const MALACHITE_CONFIG_VERSION_REQ: &str = ">=1.0.0, <2.0.0";
@@ -1366,6 +1369,8 @@ pub struct NodeConfig {
     pub proof_cache_dir: PathBuf,
     #[serde(default = "default_consensus_pipeline_path")]
     pub consensus_pipeline_path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timetoke_snapshot_key_path: Option<PathBuf>,
     pub block_time_ms: u64,
     pub max_block_transactions: usize,
     #[serde(default = "default_max_block_identity_registrations")]
@@ -1586,6 +1591,18 @@ impl NodeConfig {
         if let Some(parent) = self.consensus_pipeline_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        if let Some(path) = self.timetoke_snapshot_key_path.as_ref() {
+            let resolved = if path.is_relative() {
+                self.data_dir.join(path)
+            } else {
+                path.clone()
+            };
+            if let Some(parent) = resolved.parent() {
+                if !parent.as_os_str().is_empty() {
+                    fs::create_dir_all(parent)?;
+                }
+            }
+        }
         if let Some(parent) = self.network.p2p.peerstore_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1623,6 +1640,61 @@ impl NodeConfig {
 
     pub fn timetoke_rewards_governance(&self) -> TimetokeRewardGovernance {
         self.governance.timetoke_rewards_governance()
+    }
+
+    pub fn timetoke_snapshot_signing_key(&self) -> ChainResult<Option<SigningKey>> {
+        let Some(path) = self.timetoke_snapshot_key_path.as_ref() else {
+            return Ok(None);
+        };
+        if path.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        let resolved = if path.is_relative() {
+            self.data_dir.join(path)
+        } else {
+            path.clone()
+        };
+        let raw = fs::read_to_string(&resolved).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to read timetoke snapshot signing key from {}: {err}",
+                resolved.display()
+            ))
+        })?;
+        let stored: SnapshotSigningKeyFile = toml::from_str(&raw).map_err(|err| {
+            ChainError::Config(format!(
+                "failed to decode timetoke snapshot signing key: {err}"
+            ))
+        })?;
+        let secret_bytes = hex::decode(&stored.secret_key).map_err(|err| {
+            ChainError::Config(format!(
+                "invalid timetoke snapshot signing key encoding: {err}"
+            ))
+        })?;
+        let secret: [u8; 32] = secret_bytes.try_into().map_err(|_| {
+            ChainError::Config("timetoke snapshot signing key must be 32 bytes".into())
+        })?;
+        let signing = SigningKey::from_bytes(&secret);
+        if let Some(public_hex) = stored.public_key.as_deref() {
+            let public_bytes = hex::decode(public_hex).map_err(|err| {
+                ChainError::Config(format!(
+                    "invalid timetoke snapshot signing public key encoding: {err}"
+                ))
+            })?;
+            let public: [u8; 32] = public_bytes.try_into().map_err(|_| {
+                ChainError::Config("timetoke snapshot signing public key must be 32 bytes".into())
+            })?;
+            let expected = VerifyingKey::from_bytes(&public).map_err(|err| {
+                ChainError::Config(format!(
+                    "invalid timetoke snapshot signing public key bytes: {err}"
+                ))
+            })?;
+            if expected != signing.verifying_key() {
+                return Err(ChainError::Config(
+                    "timetoke snapshot signing keypair mismatch".into(),
+                ));
+            }
+        }
+        Ok(Some(signing))
     }
 
     pub fn load_or_generate_vrf_keypair(&self) -> ChainResult<VrfKeypair> {
@@ -1698,6 +1770,7 @@ impl NodeConfig {
         self.admission_reconciler.validate()?;
         self.snapshot_validator.validate()?;
         self.governance.validate()?;
+        let _ = self.timetoke_snapshot_signing_key()?;
         Ok(())
     }
 }
@@ -1717,6 +1790,7 @@ impl Default for NodeConfig {
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
+            timetoke_snapshot_key_path: None,
             block_time_ms: 5_000,
             max_block_transactions: 512,
             max_block_identity_registrations: default_max_block_identity_registrations(),
@@ -1737,6 +1811,13 @@ impl Default for NodeConfig {
             governance: GovernanceConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct SnapshotSigningKeyFile {
+    secret_key: String,
+    #[allow(dead_code)]
+    public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

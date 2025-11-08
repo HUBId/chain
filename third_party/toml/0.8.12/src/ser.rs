@@ -890,7 +890,8 @@ mod internal {
         where
             T: serde_core::ser::Serialize,
         {
-            serde_core::ser::SerializeMap::serialize_key(&mut self.inner, input).map_err(Error::wrap)
+            serde_core::ser::SerializeMap::serialize_key(&mut self.inner, input)
+                .map_err(Error::wrap)
         }
 
         fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
@@ -1071,7 +1072,8 @@ mod internal {
         where
             T: serde_core::ser::Serialize,
         {
-            serde_core::ser::SerializeMap::serialize_key(&mut self.inner, input).map_err(Error::wrap)
+            serde_core::ser::SerializeMap::serialize_key(&mut self.inner, input)
+                .map_err(Error::wrap)
         }
 
         fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
