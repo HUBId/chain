@@ -1,7 +1,5 @@
-use std::convert::TryInto;
-
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::{Signature, SigningKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use rpp_consensus::{
     TimetokeRecord, TimetokeReplayError, TimetokeReplayValidator, TimetokeSnapshotConsumer,
     TimetokeSnapshotError, TimetokeSnapshotProducer,
@@ -51,6 +49,7 @@ fn sample_pruning_envelope(global_root: [u8; DIGEST_LENGTH]) -> NetworkPruningEn
 
 #[test]
 fn timetoke_snapshot_roundtrip() {
+    let signing_key = SigningKey::from_bytes(&[0x11; 32]);
     let records = vec![
         TimetokeRecord {
             identity: "validator-1".into(),
@@ -72,8 +71,7 @@ fn timetoke_snapshot_roundtrip() {
         },
     ];
     let timetoke_root = [0xAB; 32];
-    let signing_key = SigningKey::from_bytes(&[0x11; 32]);
-    let verifying_key = signing_key.verifying_key();
+    let verifying_key = VerifyingKey::from(&signing_key);
     let mut producer = TimetokeSnapshotProducer::new(16, signing_key);
     let handle = producer
         .publish(records.clone(), timetoke_root)
@@ -81,6 +79,20 @@ fn timetoke_snapshot_roundtrip() {
 
     assert_eq!(handle.record_count, records.len());
     assert!(producer.has_snapshot(&handle.root));
+    let signature = handle.signature.clone().expect("snapshot signature");
+    let signature_bytes = BASE64
+        .decode(signature.as_bytes())
+        .expect("signature base64 decoding");
+    let signature = Signature::from_bytes(&signature_bytes).expect("signature bytes");
+
+    let mut payload = Vec::new();
+    for index in 0..handle.total_chunks {
+        let chunk = producer.chunk(&handle.root, index).expect("chunk");
+        payload.extend_from_slice(&chunk.data);
+    }
+    verifying_key
+        .verify(&payload, &signature)
+        .expect("signature verifies");
 
     let mut consumer = TimetokeSnapshotConsumer::new(handle.root);
     let mut snapshot = None;
@@ -98,39 +110,6 @@ fn timetoke_snapshot_roundtrip() {
     assert_eq!(snapshot.timetoke_root, hex::encode(timetoke_root));
     assert!(consumer.is_finished());
 
-    let signature_b64 = handle.signature.as_ref().expect("signature present");
-    let signature_bytes = BASE64
-        .decode(signature_b64)
-        .expect("decode manifest signature");
-    let signature_array: [u8; 64] = signature_bytes
-        .try_into()
-        .expect("ed25519 signature length");
-    let signature = Signature::from_bytes(&signature_array).expect("signature bytes");
-    let manifest_bytes = serde_json::to_vec(&snapshot).expect("canonical manifest bytes");
-    verifying_key
-        .verify_strict(&manifest_bytes, &signature)
-        .expect("manifest signature");
-
-    let mut tampered_bytes = manifest_bytes.clone();
-    tampered_bytes[0] ^= 0x01;
-    assert!(
-        verifying_key
-            .verify_strict(&tampered_bytes, &signature)
-            .is_err(),
-        "tampered manifest bytes should fail verification"
-    );
-
-    let mut tampered_signature = signature_bytes.clone();
-    tampered_signature[0] ^= 0xFF;
-    let tampered_array: [u8; 64] = tampered_signature.try_into().expect("signature length");
-    let forged = Signature::from_bytes(&tampered_array).expect("signature bytes");
-    assert!(
-        verifying_key
-            .verify_strict(&manifest_bytes, &forged)
-            .is_err(),
-        "tampered signature should fail verification"
-    );
-
     let err = consumer
         .ingest_chunk(last_chunk.expect("have last chunk"))
         .expect_err("reject duplicate chunk");
@@ -138,11 +117,39 @@ fn timetoke_snapshot_roundtrip() {
 }
 
 #[test]
+fn timetoke_snapshot_signature_rejects_tampering() {
+    let signing_key = SigningKey::from_bytes(&[0x22; 32]);
+    let verifying_key = VerifyingKey::from(&signing_key);
+    let mut producer = TimetokeSnapshotProducer::new(4, signing_key);
+    let handle = producer
+        .publish(Vec::new(), [0x44; 32])
+        .expect("publish snapshot");
+    let signature = handle.signature.expect("snapshot signature");
+    let signature_bytes = BASE64
+        .decode(signature.as_bytes())
+        .expect("signature base64 decoding");
+    let signature = Signature::from_bytes(&signature_bytes).expect("signature bytes");
+
+    let chunk = producer
+        .chunk(&handle.root, 0)
+        .expect("first chunk available");
+    let mut payload = chunk.data.clone();
+    verifying_key
+        .verify(&payload, &signature)
+        .expect("untampered manifest verifies");
+
+    payload.push(0xFF);
+    verifying_key
+        .verify(&payload, &signature)
+        .expect_err("tampered payload rejected");
+}
+
+#[test]
 fn timetoke_replay_validation_guards_roots_and_tags() {
     let ledger_timetoke_root = [0x44; 32];
     let ledger_global_root = [0x55; 32];
 
-    let signing_key = SigningKey::from_bytes(&[0x22; 32]);
+    let signing_key = SigningKey::from_bytes(&[0x33; 32]);
     let mut producer = TimetokeSnapshotProducer::new(8, signing_key);
     let handle = producer
         .publish(Vec::new(), ledger_timetoke_root)

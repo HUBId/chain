@@ -91,15 +91,19 @@ async fn snapshot_validator_reports_checksum_mismatch() -> Result<()> {
         fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
             .await
             .with_context(|| format!("write manifest to {}", manifest_path.display()))?;
-        let sig_name = manifest_path
+
+        let mut signature_path = manifest_path.clone();
+        let mut sig_name = manifest_path
             .file_name()
-            .and_then(|value| value.to_str())
-            .ok_or_else(|| anyhow!("manifest filename is not valid UTF-8"))?;
-        let sig_path = manifest_path.with_file_name(format!("{sig_name}.sig"));
-        let signature = BASE64.encode([0u8; 64]);
-        fs::write(&sig_path, signature.as_bytes())
+            .expect("manifest file name")
+            .to_os_string();
+        sig_name.push(".sig");
+        signature_path.set_file_name(sig_name);
+        let signature_bytes = [0x42u8; 64];
+        let signature_base64 = BASE64.encode(signature_bytes);
+        fs::write(&signature_path, format!("{signature_base64}\n"))
             .await
-            .with_context(|| format!("write manifest signature to {}", sig_path.display()))?;
+            .with_context(|| format!("write manifest signature to {}", signature_path.display()))?;
 
         // Wait for the validator to observe the clean manifest at least once.
         sleep(Duration::from_secs(2)).await;

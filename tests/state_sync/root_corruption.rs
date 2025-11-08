@@ -4,7 +4,6 @@ use std::fs;
 use std::sync::Arc;
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::SigningKey;
 use parking_lot::RwLock;
 use rpp_chain::runtime::node::StateSyncSessionCache;
 use rpp_p2p::SnapshotStore;
@@ -30,7 +29,7 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
     let expected_root = blake3::hash(valid_payload);
 
     let mut store = SnapshotStore::new(chunk_size);
-    store.insert(valid_payload.to_vec(), Some(BASE64.encode([0u8; 64])));
+    store.insert(valid_payload.to_vec(), None);
     let cache = StateSyncSessionCache::verified_for_tests(
         expected_root,
         chunk_size,
@@ -70,72 +69,145 @@ fn corrupted_snapshot_payload_yields_explicit_failure() {
 }
 
 #[test]
-fn legacy_snapshot_without_signature_streams_payload() {
+fn state_sync_serves_legacy_snapshot_without_signature() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
+
     let chunk_size = fixture.chunk_size();
-
-    let payload = b"legacy-manifest".to_vec();
+    let total_chunks = fixture.chunk_count();
     assert!(
-        payload.len() < chunk_size,
-        "payload should fit in a single chunk"
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
     );
-    let expected_root = blake3::hash(&payload);
 
+    let payload = b"legacy-state-sync-snapshot";
+    let expected_root = blake3::hash(payload);
+
+    let store = SnapshotStore::new(chunk_size);
     let cache = StateSyncSessionCache::verified_for_tests(
         expected_root,
         chunk_size,
-        1,
-        Arc::new(RwLock::new(SnapshotStore::new(chunk_size))),
+        total_chunks,
+        Arc::new(RwLock::new(store)),
     );
     handle.install_state_sync_session_cache_for_tests(cache);
-    handle.configure_state_sync_session_cache(Some(chunk_size + 1), None, None);
-    handle.configure_state_sync_session_cache(Some(chunk_size), Some(1), Some(expected_root));
 
-    let manifest_path = fixture.snapshot_dir().join("legacy-manifest.json");
-    fs::write(&manifest_path, &payload).expect("write legacy manifest");
+    let bogus_root = blake3::hash(b"bogus-state-sync-root");
+    handle.configure_state_sync_session_cache(None, None, Some(bogus_root));
+    handle.configure_state_sync_session_cache(
+        Some(chunk_size),
+        Some(total_chunks),
+        Some(expected_root),
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
+    let payload_path = snapshot_dir.join("legacy-snapshot.bin");
+    fs::write(&payload_path, payload).expect("write snapshot payload");
+
+    let mut signature_path = payload_path.clone();
+    let mut sig_name = payload_path
+        .file_name()
+        .expect("payload file name")
+        .to_os_string();
+    sig_name.push(".sig");
+    signature_path.set_file_name(sig_name);
+    if signature_path.exists() {
+        fs::remove_file(&signature_path).expect("remove pre-existing signature");
+    }
 
     let chunk = handle
         .state_sync_session_chunk(0)
-        .expect("stream chunk without signature");
-    assert_eq!(chunk.data, payload);
-    assert_eq!(chunk.total, 1);
+        .expect("chunk served without signature");
+    assert_eq!(chunk.root, expected_root);
+    assert_eq!(chunk.index, 0);
+    let expected_total = if payload.is_empty() {
+        0
+    } else {
+        ((payload.len() - 1) / chunk_size + 1) as u64
+    };
+    assert_eq!(chunk.total, expected_total);
+    let expected_chunk = payload[..payload.len().min(chunk_size)].to_vec();
+    assert_eq!(chunk.data, expected_chunk);
+
+    let snapshot_cache = handle.state_sync_session_snapshot();
+    let store = snapshot_cache.snapshot_store.expect("store cached");
+    let signature = store
+        .read()
+        .signature(&expected_root)
+        .expect("signature lookup succeeds");
+    assert!(
+        signature.is_none(),
+        "legacy snapshot should not produce a signature"
+    );
 }
 
 #[test]
-fn snapshot_with_signature_is_served() {
+fn state_sync_normalizes_snapshot_signature_files() {
     let fixture = StateSyncFixture::new();
     let handle = fixture.handle();
+
     let chunk_size = fixture.chunk_size();
-
-    let payload = b"signed-manifest".to_vec();
+    let total_chunks = fixture.chunk_count();
     assert!(
-        payload.len() < chunk_size,
-        "payload should fit in a single chunk"
+        total_chunks > 0,
+        "state sync fixture must produce at least one chunk"
     );
-    let expected_root = blake3::hash(&payload);
 
+    let payload = b"signed-state-sync-snapshot";
+    let expected_root = blake3::hash(payload);
+
+    let store = SnapshotStore::new(chunk_size);
     let cache = StateSyncSessionCache::verified_for_tests(
         expected_root,
         chunk_size,
-        1,
-        Arc::new(RwLock::new(SnapshotStore::new(chunk_size))),
+        total_chunks,
+        Arc::new(RwLock::new(store)),
     );
     handle.install_state_sync_session_cache_for_tests(cache);
-    handle.configure_state_sync_session_cache(Some(chunk_size + 1), None, None);
-    handle.configure_state_sync_session_cache(Some(chunk_size), Some(1), Some(expected_root));
 
-    let manifest_path = fixture.snapshot_dir().join("signed-manifest.json");
-    fs::write(&manifest_path, &payload).expect("write signed manifest");
-    let signature_path = manifest_path.with_extension("json.sig");
-    let signing_key = SigningKey::from_bytes(&[0xAA; 32]);
-    let signature = signing_key.sign(&payload);
-    fs::write(&signature_path, BASE64.encode(signature.to_bytes()))
-        .expect("write manifest signature");
+    let bogus_root = blake3::hash(b"bogus-state-sync-root");
+    handle.configure_state_sync_session_cache(None, None, Some(bogus_root));
+    handle.configure_state_sync_session_cache(
+        Some(chunk_size),
+        Some(total_chunks),
+        Some(expected_root),
+    );
+
+    let snapshot_dir = fixture.snapshot_dir();
+    fs::create_dir_all(snapshot_dir).expect("snapshot directory");
+    let payload_path = snapshot_dir.join("signed-snapshot.bin");
+    fs::write(&payload_path, payload).expect("write snapshot payload");
+
+    let mut signature_path = payload_path.clone();
+    let mut sig_name = payload_path
+        .file_name()
+        .expect("payload file name")
+        .to_os_string();
+    sig_name.push(".sig");
+    signature_path.set_file_name(sig_name);
+    let signature_bytes = [0xA5u8; 64];
+    let signature_base64 = BASE64.encode(signature_bytes);
+    fs::write(&signature_path, format!("{signature_base64}\n"))
+        .expect("write snapshot signature payload");
 
     let chunk = handle
         .state_sync_session_chunk(0)
-        .expect("stream chunk with signature");
-    assert_eq!(chunk.data, payload);
-    assert_eq!(chunk.total, 1);
+        .expect("chunk served with signature");
+    assert_eq!(chunk.root, expected_root);
+    assert_eq!(chunk.index, 0);
+    let expected_total = if payload.is_empty() {
+        0
+    } else {
+        ((payload.len() - 1) / chunk_size + 1) as u64
+    };
+    assert_eq!(chunk.total, expected_total);
+
+    let snapshot_cache = handle.state_sync_session_snapshot();
+    let store = snapshot_cache.snapshot_store.expect("store cached");
+    let signature = store
+        .read()
+        .signature(&expected_root)
+        .expect("signature lookup succeeds");
+    assert_eq!(signature.as_deref(), Some(signature_base64.as_str()));
 }

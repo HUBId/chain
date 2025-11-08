@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use hex;
 use http::Uri;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,9 @@ use rpp_p2p::{
     GossipTopic, ReputationHeuristics, TierLevel, TopicPermission, WitnessChannelConfig,
     WitnessPipelineConfig,
 };
+
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use rand::rngs::OsRng;
 
 #[cfg(feature = "vendor_electrs")]
 use rpp_wallet::config::ElectrsConfig;
@@ -30,8 +34,6 @@ use crate::ledger::DEFAULT_EPOCH_LENGTH;
 use crate::reputation::{ReputationParams, ReputationWeights, TierThresholds, TimetokeParams};
 use crate::runtime::RuntimeMode;
 use crate::types::Stake;
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use hex;
 
 const QUEUE_WEIGHT_SUM_TOLERANCE: f64 = 1e-6;
 const MALACHITE_CONFIG_VERSION_REQ: &str = ">=1.0.0, <2.0.0";
@@ -1365,12 +1367,12 @@ pub struct NodeConfig {
     pub secrets: SecretsConfig,
     #[serde(default = "default_snapshot_dir")]
     pub snapshot_dir: PathBuf,
+    #[serde(default = "default_timetoke_snapshot_key_path")]
+    pub timetoke_snapshot_key_path: PathBuf,
     #[serde(default = "default_proof_cache_dir")]
     pub proof_cache_dir: PathBuf,
     #[serde(default = "default_consensus_pipeline_path")]
     pub consensus_pipeline_path: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timetoke_snapshot_key_path: Option<PathBuf>,
     pub block_time_ms: u64,
     pub max_block_transactions: usize,
     #[serde(default = "default_max_block_identity_registrations")]
@@ -1427,6 +1429,10 @@ fn default_proof_cache_dir() -> PathBuf {
 
 fn default_p2p_key_path() -> PathBuf {
     PathBuf::from("./keys/p2p.toml")
+}
+
+fn default_timetoke_snapshot_key_path() -> PathBuf {
+    PathBuf::from("./keys/timetoke_snapshot.toml")
 }
 
 fn default_peerstore_path() -> PathBuf {
@@ -1586,22 +1592,15 @@ impl NodeConfig {
             fs::create_dir_all(parent)?;
         }
         self.secrets.ensure_directories(&self.vrf_key_path)?;
+        if let Some(parent) = self.timetoke_snapshot_key_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
         fs::create_dir_all(&self.snapshot_dir)?;
         fs::create_dir_all(&self.proof_cache_dir)?;
         if let Some(parent) = self.consensus_pipeline_path.parent() {
             fs::create_dir_all(parent)?;
-        }
-        if let Some(path) = self.timetoke_snapshot_key_path.as_ref() {
-            let resolved = if path.is_relative() {
-                self.data_dir.join(path)
-            } else {
-                path.clone()
-            };
-            if let Some(parent) = resolved.parent() {
-                if !parent.as_os_str().is_empty() {
-                    fs::create_dir_all(parent)?;
-                }
-            }
         }
         if let Some(parent) = self.network.p2p.peerstore_path.parent() {
             fs::create_dir_all(parent)?;
@@ -1642,64 +1641,39 @@ impl NodeConfig {
         self.governance.timetoke_rewards_governance()
     }
 
-    pub fn timetoke_snapshot_signing_key(&self) -> ChainResult<Option<SigningKey>> {
-        let Some(path) = self.timetoke_snapshot_key_path.as_ref() else {
-            return Ok(None);
-        };
-        if path.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        let resolved = if path.is_relative() {
-            self.data_dir.join(path)
-        } else {
-            path.clone()
-        };
-        let raw = fs::read_to_string(&resolved).map_err(|err| {
-            ChainError::Config(format!(
-                "failed to read timetoke snapshot signing key from {}: {err}",
-                resolved.display()
-            ))
-        })?;
-        let stored: SnapshotSigningKeyFile = toml::from_str(&raw).map_err(|err| {
-            ChainError::Config(format!(
-                "failed to decode timetoke snapshot signing key: {err}"
-            ))
-        })?;
-        let secret_bytes = hex::decode(&stored.secret_key).map_err(|err| {
-            ChainError::Config(format!(
-                "invalid timetoke snapshot signing key encoding: {err}"
-            ))
-        })?;
-        let secret: [u8; 32] = secret_bytes.try_into().map_err(|_| {
-            ChainError::Config("timetoke snapshot signing key must be 32 bytes".into())
-        })?;
-        let signing = SigningKey::from_bytes(&secret);
-        if let Some(public_hex) = stored.public_key.as_deref() {
-            let public_bytes = hex::decode(public_hex).map_err(|err| {
-                ChainError::Config(format!(
-                    "invalid timetoke snapshot signing public key encoding: {err}"
-                ))
-            })?;
-            let public: [u8; 32] = public_bytes.try_into().map_err(|_| {
-                ChainError::Config("timetoke snapshot signing public key must be 32 bytes".into())
-            })?;
-            let expected = VerifyingKey::from_bytes(&public).map_err(|err| {
-                ChainError::Config(format!(
-                    "invalid timetoke snapshot signing public key bytes: {err}"
-                ))
-            })?;
-            if expected != signing.verifying_key() {
-                return Err(ChainError::Config(
-                    "timetoke snapshot signing keypair mismatch".into(),
-                ));
-            }
-        }
-        Ok(Some(signing))
-    }
-
     pub fn load_or_generate_vrf_keypair(&self) -> ChainResult<VrfKeypair> {
         self.secrets
             .load_or_generate_vrf_keypair(&self.vrf_key_path)
+    }
+
+    pub fn load_timetoke_snapshot_signing_key(&self) -> ChainResult<SigningKey> {
+        read_signing_key(&self.timetoke_snapshot_key_path)
+            .map_err(|err| ChainError::Config(format!("timetoke snapshot signing key: {err}")))
+    }
+
+    pub fn load_or_generate_timetoke_snapshot_signing_key(&self) -> ChainResult<SigningKey> {
+        if self.timetoke_snapshot_key_path.exists() {
+            return self.load_timetoke_snapshot_signing_key();
+        }
+        let mut rng = OsRng;
+        let signing = SigningKey::generate(&mut rng);
+        let verifying = signing.verifying_key();
+        let stored = StoredSigningKey {
+            secret_key: hex::encode(signing.to_bytes()),
+            public_key: Some(hex::encode(verifying.to_bytes())),
+        };
+        let encoded = toml::to_string(&stored).map_err(|err| {
+            ChainError::Config(format!(
+                "unable to encode timetoke snapshot signing key: {err}"
+            ))
+        })?;
+        if let Some(parent) = self.timetoke_snapshot_key_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)?;
+            }
+        }
+        fs::write(&self.timetoke_snapshot_key_path, encoded)?;
+        Ok(signing)
     }
 
     pub fn validate(&self) -> ChainResult<()> {
@@ -1770,9 +1744,42 @@ impl NodeConfig {
         self.admission_reconciler.validate()?;
         self.snapshot_validator.validate()?;
         self.governance.validate()?;
-        let _ = self.timetoke_snapshot_signing_key()?;
         Ok(())
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct StoredSigningKey {
+    secret_key: String,
+    #[allow(dead_code)]
+    public_key: Option<String>,
+}
+
+fn read_signing_key(path: &Path) -> Result<SigningKey, String> {
+    let raw = fs::read_to_string(path)
+        .map_err(|err| format!("unable to read signing key from {}: {err}", path.display()))?;
+    let stored: StoredSigningKey = toml::from_str(&raw)
+        .map_err(|err| format!("failed to decode signing key {}: {err}", path.display()))?;
+    let secret_bytes = hex::decode(&stored.secret_key)
+        .map_err(|err| format!("invalid signing key encoding: {err}"))?;
+    let secret: [u8; 32] = secret_bytes
+        .try_into()
+        .map_err(|_| "signing key must be 32 bytes".to_string())?;
+    let signing = SigningKey::from_bytes(&secret)
+        .map_err(|err| format!("invalid signing key bytes: {err}"))?;
+    if let Some(public_hex) = stored.public_key.as_deref() {
+        let public_bytes = hex::decode(public_hex)
+            .map_err(|err| format!("invalid signing public key encoding: {err}"))?;
+        let public: [u8; 32] = public_bytes
+            .try_into()
+            .map_err(|_| "public key must be 32 bytes".to_string())?;
+        let expected = VerifyingKey::from_bytes(&public)
+            .map_err(|err| format!("invalid signing public key bytes: {err}"))?;
+        if expected != signing.verifying_key() {
+            return Err("signing keypair mismatch between secret and public key".into());
+        }
+    }
+    Ok(signing)
 }
 
 impl Default for NodeConfig {
@@ -1790,7 +1797,6 @@ impl Default for NodeConfig {
             snapshot_dir: default_snapshot_dir(),
             proof_cache_dir: default_proof_cache_dir(),
             consensus_pipeline_path: default_consensus_pipeline_path(),
-            timetoke_snapshot_key_path: None,
             block_time_ms: 5_000,
             max_block_transactions: 512,
             max_block_identity_registrations: default_max_block_identity_registrations(),
@@ -1811,13 +1817,6 @@ impl Default for NodeConfig {
             governance: GovernanceConfig::default(),
         }
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct SnapshotSigningKeyFile {
-    secret_key: String,
-    #[allow(dead_code)]
-    public_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -59,15 +59,10 @@ pub struct TimetokeSnapshotHandle {
 
 /// Produces snapshot streams for Timetoke records and exposes the payload to the
 /// libp2p snapshot protocol.
+#[derive(Debug)]
 pub struct TimetokeSnapshotProducer {
     store: SnapshotStore,
     signing_key: SigningKey,
-}
-
-impl fmt::Debug for TimetokeSnapshotProducer {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TimetokeSnapshotProducer").finish()
-    }
 }
 
 impl TimetokeSnapshotProducer {
@@ -96,16 +91,16 @@ impl TimetokeSnapshotProducer {
         let signature_bytes = signature.to_bytes();
         let signature_base64 = BASE64.encode(signature_bytes);
         let root = self.store.insert(payload, Some(signature_base64.clone()));
+        info!(
+            target: "consensus.timetoke",
+            root = %root.to_hex(),
+            records = snapshot.records.len(),
+            "signed Timetoke snapshot manifest"
+        );
         let stream = self
             .store
             .stream(&root)
             .map_err(TimetokeSnapshotError::from)?;
-        info!(
-            target: "consensus",
-            root = %root.to_hex(),
-            records = snapshot.records.len(),
-            "published timetoke snapshot manifest with signature"
-        );
         Ok(TimetokeSnapshotHandle {
             root,
             total_chunks: stream.total(),

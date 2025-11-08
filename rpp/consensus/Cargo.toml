@@ -34,6 +34,8 @@ blake3 = "=1.8.2"
 ed25519-dalek = "=2.1.1"
 base64 = "=0.21.7"
 libp2p = { path = "../../vendor/libp2p/libp2p", default-features = false }
+base64 = "=0.21.7"
+ed25519-dalek = "=2.1.1"
 prover-backend-interface = { path = "../zk/backend-interface" }
 prover_stwo_backend = { workspace = true, optional = true }
 rpp-crypto-vrf = { path = "../crypto-vrf" }

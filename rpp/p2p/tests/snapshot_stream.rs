@@ -1,7 +1,6 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use rand::rngs::OsRng;
 use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
@@ -414,7 +413,7 @@ fn sample_plan(root_hex: String) -> NetworkStateSyncPlan {
 async fn snapshot_stream_pause_and_resume() {
     let mut store = SnapshotStore::new(8);
     let payload = b"abcdefgh".to_vec();
-    let root = store.insert(payload, Some(BASE64.encode([0u8; 64])));
+    let root = store.insert(payload, None);
     let root_hex = hex::encode(root.as_bytes());
     let plan = sample_plan(root_hex.clone());
     let provider = MockSnapshotProvider::new(plan.clone(), store, root);
@@ -567,7 +566,7 @@ async fn snapshot_stream_pause_and_resume() {
 async fn snapshot_resume_rejects_invalid_offsets() {
     let mut store = SnapshotStore::new(8);
     let payload = b"abcdefgh".to_vec();
-    let root = store.insert(payload, Some(BASE64.encode([0u8; 64])));
+    let root = store.insert(payload, None);
     let root_hex = hex::encode(root.as_bytes());
     let plan = sample_plan(root_hex.clone());
     let provider = MockSnapshotProvider::new(plan.clone(), store, root);

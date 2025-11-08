@@ -25,7 +25,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::Keypair;
+use ed25519_dalek::{Keypair, SigningKey};
 use malachite::Natural;
 use parking_lot::{Mutex as ParkingMutex, RwLock};
 use tokio::sync::mpsc::error::TrySendError;
@@ -1067,6 +1067,7 @@ pub(crate) struct NodeInner {
     queue_weights: RwLock<QueueWeightsConfig>,
     keypair: Keypair,
     vrf_keypair: VrfKeypair,
+    timetoke_snapshot_signing_key: SigningKey,
     p2p_identity: Arc<NodeIdentity>,
     address: Address,
     storage: Storage,
@@ -2011,6 +2012,8 @@ impl Node {
         config.ensure_directories()?;
         let keypair = load_or_generate_keypair(&config.key_path)?;
         let vrf_keypair = config.load_or_generate_vrf_keypair()?;
+        let timetoke_snapshot_signing_key =
+            config.load_or_generate_timetoke_snapshot_signing_key()?;
         let p2p_identity = Arc::new(
             NodeIdentity::load_or_generate(&config.p2p_key_path)
                 .map_err(|err| ChainError::Config(format!("unable to load p2p identity: {err}")))?,
@@ -2188,6 +2191,7 @@ impl Node {
             queue_weights: RwLock::new(queue_weights),
             keypair,
             vrf_keypair,
+            timetoke_snapshot_signing_key,
             p2p_identity,
             address,
             storage,
@@ -4550,8 +4554,9 @@ impl NodeInner {
                 let payload_path = entry.path();
                 let payload = fs::read(&payload_path)?;
                 if &blake3::hash(&payload) == root {
-                    let sig_name = format!("{}{}", entry.file_name().to_string_lossy(), ".sig");
                     let mut signature_path = payload_path.clone();
+                    let mut sig_name = entry.file_name();
+                    sig_name.push(".sig");
                     signature_path.set_file_name(sig_name);
                     if !signature_path.exists() {
                         let mut warned = self.legacy_snapshot_warnings.lock();

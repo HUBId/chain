@@ -15,7 +15,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::watch;
-use tracing::debug;
 
 use crate::topics::GossipTopic;
 use rpp_pruning::{COMMITMENT_TAG, DIGEST_LENGTH, DOMAIN_TAG_LENGTH};
@@ -1050,13 +1049,11 @@ impl SnapshotStore {
 
     pub fn insert(&mut self, payload: Vec<u8>, signature: Option<String>) -> Hash {
         let root = blake3::hash(&payload);
-        self.snapshots.insert(
-            root,
-            StoredSnapshot {
-                payload: Arc::from(payload),
-                signature: signature.map(|value| Arc::<str>::from(value.into())),
-            },
-        );
+        let stored = StoredSnapshot {
+            payload: Arc::from(payload),
+            signature: signature.map(|value| Arc::<str>::from(value.into())),
+        };
+        self.snapshots.insert(root, stored);
         root
     }
 
