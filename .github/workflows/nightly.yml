@@ -49,6 +49,10 @@ jobs:
       SNAPSHOT_MANIFEST_PATH: ${{ secrets.SNAPSHOT_MANIFEST_PATH }}
       SNAPSHOT_MANIFEST_JSON: ${{ secrets.SNAPSHOT_MANIFEST_JSON }}
       SNAPSHOT_VALIDATOR_CONFIG: ${{ secrets.SNAPSHOT_VALIDATOR_CONFIG }}
+      SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
+      SNAPSHOT_CHUNK_ROOT: ${{ secrets.SNAPSHOT_CHUNK_ROOT }}
+      SNAPSHOT_MANIFEST_SIGNATURE_PATH: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE_PATH }}
+      SNAPSHOT_MANIFEST_SIGNATURE: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -69,12 +73,60 @@ jobs:
             --config "${CONFIG_PATH}" \
             --output snapshot-health-report.json \
             --rpp-node-bin target/release/rpp-node
+      - name: Verify snapshot manifest signature
+        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && env.SNAPSHOT_CHUNK_ROOT != '' && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
+        run: |
+          set -euo pipefail
+          key_path="$(mktemp)"
+          printf '%s' "$SNAPSHOT_MANIFEST_PUBKEY_HEX" >"$key_path"
+          manifest_payload="${SNAPSHOT_MANIFEST_JSON:-}"
+          manifest_path="${SNAPSHOT_MANIFEST_PATH:-}"
+          cleanup_manifest=0
+          if [[ -n "$manifest_payload" ]]; then
+            manifest_path="$(mktemp)"
+            printf '%s' "$manifest_payload" >"$manifest_path"
+            cleanup_manifest=1
+            if [[ -n "${SNAPSHOT_MANIFEST_SIGNATURE:-}" ]]; then
+              printf '%s' "$SNAPSHOT_MANIFEST_SIGNATURE" >"${manifest_path}.sig"
+            fi
+          fi
+          if [[ -z "$manifest_path" ]]; then
+            echo "::error::No snapshot manifest payload provided" >&2
+            exit 1
+          fi
+          if [[ ! -f "$manifest_path" ]]; then
+            echo "::error::Snapshot manifest $manifest_path is not accessible" >&2
+            exit 1
+          fi
+          signature_path="${SNAPSHOT_MANIFEST_SIGNATURE_PATH:-${manifest_path}.sig}"
+          if [[ ! -f "$signature_path" ]]; then
+            echo "::error::Snapshot manifest signature not found at $signature_path" >&2
+            exit 1
+          fi
+          report_path="snapshot-manifest-verify.json"
+          cargo run --locked --package snapshot-verify -- \
+            --manifest "$manifest_path" \
+            --signature "$signature_path" \
+            --public-key "$key_path" \
+            --chunk-root "$SNAPSHOT_CHUNK_ROOT" \
+            --output "$report_path"
+          rm -f "$key_path"
+          if [[ $cleanup_manifest -eq 1 ]]; then
+            rm -f "$manifest_path" "${manifest_path}.sig"
+          fi
 
       - name: Upload snapshot health report
         uses: actions/upload-artifact@v4
         with:
           name: snapshot-health-report
           path: snapshot-health-report.json
+
+      - name: Upload snapshot manifest verification report
+        if: ${{ env.SNAPSHOT_MANIFEST_PUBKEY_HEX != '' && env.SNAPSHOT_CHUNK_ROOT != '' && (env.SNAPSHOT_MANIFEST_PATH != '' || env.SNAPSHOT_MANIFEST_JSON != '') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-manifest-verify
+          path: snapshot-manifest-verify.json
 
   phase3-evidence:
     name: Phase 3 evidence bundle
