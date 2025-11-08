@@ -70,6 +70,18 @@ non-zero if a session stalls, reports an error string, or exceeds the manifest
 totals. Attach the generated report to the incident timeline so it can be
 compared with the nightly artifact.【F:xtask/src/main.rs†L214-L596】
 
+### Snapshot verifier evidence
+
+Vor jeder Freigabe: Führe `cargo xtask snapshot-verifier` aus, um einen
+synthetischen Smoke-Test zu erzeugen und `snapshot-verify-report.json`
+(`target/snapshot-verifier-smoke/`) als Referenzartefakt zu speichern. Für
+produktive Bundles sorgt `scripts/build_release.sh` dafür, dass jedes Manifest
+ein `*-verify.json` sowie das aggregierte
+`dist/artifacts/<target>/snapshot-verify-report.json(.sha256)` enthält. Der
+Release-Workflow veröffentlicht zusätzlich das Artefakt
+`snapshot-verifier-<target>` und trägt den SHA256-Hash in den Release Notes ein
+– prüfe diesen Hash, bevor der Failover abgeschlossen wird.【F:xtask/src/main.rs†L220-L318】【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L150-L233】
+
 ## Step 1 – Verify control-plane health
 
 1. List active sessions:

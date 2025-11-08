@@ -27,24 +27,27 @@ After submitting a PR, we'll run all the tests and verify your code meets our su
     ./scripts/test.sh --backend rpp-stark --unit --integration
     cargo test --test storage_snapshot
     cargo xtask test-observability
+    cargo xtask snapshot-verifier
+    cargo xtask test-worm-export
     cargo run -p simnet -- --scenario tools/simnet/scenarios/gossip_backpressure.ron
     cargo build --bin rpp-node
     scripts/run_node_mode.sh
     scripts/run_wallet_mode.sh
     scripts/run_hybrid_mode.sh
 
-These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`, `observability-snapshot`, `simnet-admission`, `runtime-smoke`, `Nightly Simulation Freshness`). The test harness applies `RUSTFLAGS=-D warnings`, selects the correct feature flags, and switches to the pinned nightly toolchain automatically when the STWO backend is involved, so local iterations match CI results.【F:.github/workflows/release.yml†L82-L103】【F:scripts/test.sh†L4-L210】【F:tests/storage_snapshot.rs†L1-L73】【F:tests/observability/snapshot_timetoke_metrics.rs†L1-L219】【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L16】
+These steps correspond to the required GitHub checks (`fmt`, `clippy`, `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`, `observability-snapshot`, `snapshot-verifier`, `worm-export-smoke`, `simnet-admission`, `runtime-smoke`, `Nightly Simulation Freshness`). The test harness applies `RUSTFLAGS=-D warnings`, selects the correct feature flags, and switches to the pinned nightly toolchain automatically when the STWO backend is involved, so local iterations match CI results.【F:.github/workflows/release.yml†L82-L103】【F:scripts/test.sh†L4-L210】【F:tests/storage_snapshot.rs†L1-L73】【F:tests/observability/snapshot_timetoke_metrics.rs†L1-L219】【F:.github/workflows/ci.yml†L360-L397】【F:tools/simnet/scenarios/gossip_backpressure.ron†L1-L16】
 
 Running `cargo doc --no-deps` is still encouraged before landing user-facing API changes to catch documentation regressions early.
 
 **Maintainer note.** Whenever a workflow file is renamed or a new CI job is
 introduced, confirm that branch protection still enforces the `fmt`, `clippy`,
 `tests-default`, `tests-stwo`, `tests-rpp-stark`, `snapshot-cli`,
-`observability-snapshot`, `simnet-admission`, `runtime-smoke`, and `Nightly
-Simulation Freshness` checks on `<PRIMARY_BRANCH_OR_COMMIT>`. Navigate to
-`Settings → Branches → Branch protection rules` in the GitHub UI or run the `gh
-api repos/:owner/:repo/branches/<PRIMARY_BRANCH_OR_COMMIT>/protection` query to
-verify the status-check list before merging follow-up changes.
+`observability-snapshot`, `snapshot-verifier`, `worm-export-smoke`,
+`simnet-admission`, `runtime-smoke`, and `Nightly Simulation Freshness` checks
+on `<PRIMARY_BRANCH_OR_COMMIT>`. Navigate to `Settings → Branches → Branch
+protection rules` in the GitHub UI or run the
+`gh api repos/:owner/:repo/branches/<PRIMARY_BRANCH_OR_COMMIT>/protection`
+query to verify the status-check list before merging follow-up changes.
 
 ### Nightly simulation freshness gate
 

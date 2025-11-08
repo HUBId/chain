@@ -6,44 +6,52 @@ milestone.
 
 ## Snapshot provenance
 
-- [ ] **Manifest signature validated.** Run `snapshot-verify` against each
-      pruning snapshot bundle and record the resulting JSON report. The command
-      requires the detached signature, the manifest path, the `chunks/`
-      directory, and the Ed25519 verifying key in hex/base64 form:
-      ```bash
-      cargo run --locked --package snapshot-verify -- \
-        --manifest dist/artifacts/<target>/snapshots/manifest/chunks.json \
-        --signature dist/artifacts/<target>/snapshots/manifest/chunks.json.sig \
-        --public-key ~/keys/snapshot-manifest.hex \
-        --chunk-root dist/artifacts/<target>/snapshots/chunks \
-        --output dist/artifacts/<target>/snapshots/manifest/chunks-verify.json
-      ```
-      Archive the generated `*-verify.json` report together with the release or
-      nightly artefacts so auditors can confirm the validation timestamp and the
-      signature fingerprint.
-- [ ] **CI report linked.** The release and nightly pipelines publish
-      `snapshot-manifest-verify.json` when the CLI runs in CI. Link the relevant
-      workflow run (and the uploaded report) to the acceptance record for traceability.
-- [ ] **Nightly chunk staging configured.** Nightly verification runners either
-      mount the pruning snapshot chunks under `SNAPSHOT_CHUNK_ROOT` or provide a
-      `SNAPSHOT_CHUNK_ARCHIVE_URL` secret that points at a tarball/zip containing
-      the manifest’s `chunks/` hierarchy. Set `SNAPSHOT_CHUNK_ROOT_SUBDIR` when
-      the archive needs an additional path segment so the CI job can extract the
-      payload and hand the correct directory to `snapshot-verify`.
+- [ ] **Aggregated verifier report vorhanden.** Führe `scripts/build_release.sh`
+      mit gesetztem `SNAPSHOT_MANIFEST_PUBKEY_HEX` für jedes Release-Target aus
+      (oder verweise auf den Release-Workflow `Build <target>`). Der Lauf erzeugt
+      pro Manifest `*-verify.json` sowie das Bündel
+      `snapshot-verify-report.json` und `snapshot-verify-report.json.sha256`
+      unter `dist/artifacts/<target>/`. Hinterlege die JSON- und SHA256-Datei als
+      Pflichtartefakte und archiviere die Einzelberichte für spätere Audits.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L122-L209】
+- [ ] **SHA256 im Freigabeprotokoll festgehalten.** Die Release Notes enthalten
+      den Abschnitt „Snapshot verifier attestation“ mit den Hashes aus den
+      `.sha256`-Dateien. Vergleiche mindestens einen Wert lokal via
+      `sha256sum dist/artifacts/<target>/snapshot-verify-report.json` und
+      dokumentiere den Abgleich im Freigabeprotokoll.【F:.github/workflows/release.yml†L210-L233】
+- [ ] **CI/Nightly-Referenzen verlinkt.** Verweise auf den CI-Job
+      `snapshot-verifier`, der das synthetische Prüfbündel unter
+      `target/snapshot-verifier-smoke/` erzeugt, sowie auf die Release-Artefakte
+      `snapshot-verifier-<target>` im Actions-Tab. So lässt sich das Ergebnis
+      reproduzieren, ohne die produktiven Artefakte neu zu signieren.【F:.github/workflows/ci.yml†L369-L397】【F:.github/workflows/release.yml†L150-L209】
+
+## WORM export audit trail
+
+- [ ] **Nightly smoke erfolgreich.** Der Nightly-Job `worm-export` führt
+      `cargo xtask test-worm-export` gegen den Append-only-Stub aus, erzeugt die
+      exportierten JSON-Objekte plus `worm-export-summary.json` und lädt das
+      Artefakt `worm-export-smoke` hoch. Verlinke den Lauf und prüfe, dass die
+      Summary `signature_valid=true` meldet.【F:.github/workflows/nightly.yml†L10-L24】【F:xtask/src/main.rs†L120-L318】
+- [ ] **Evidence-Bundle aktualisiert.** Bestätige, dass
+      `cargo xtask collect-phase3-evidence` die WORM-Logs (`target/worm-export-smoke`)
+      samt Signaturen ins Bundle kopiert und die Manifestdatei die Quellen
+      aufführt. Dokumentiere Speicherort und Prüfsumme im Freigabeprotokoll.【F:xtask/src/main.rs†L1516-L1584】【F:xtask/src/main.rs†L1606-L1644】
 
 ## Exit-Kriterien
 
 Phase A ist abgeschlossen, sobald beide Kontrollkästchen oben mit Artefakten
 unterlegt sind **und** die folgenden Bedingungen erfüllt werden:
 
-- ✅ **Exit-Code 0:** Jeder `snapshot-verify` Lauf beendet sich mit Exit-Code 0.
-  Ein Exit-Code 2 signalisiert eine ungültige Signatur, Exit-Code 3 weist auf
-  fehlende oder manipulierte Segmente hin, und Exit-Code 1 markiert einen
-  I/O-/Decode-Fehler. Alle Fehlerzustände müssen analysiert und behoben sein
-  (z. B. erneute Artefakterstellung), bevor die Phase freigegeben wird.
-- ✅ **Berichte versioniert:** Die JSON-Reports liegen im Artefakt-Storage oder
-  Repository (z. B. `dist/artifacts/<target>/snapshots/manifest/chunks-verify.json`) und
-  sind im Freigabeprotokoll verlinkt.
+- ✅ **Snapshot-Verifier grün:** Sowohl `snapshot-verify-report.json` meldet
+  `"all_passed": true` als auch alle Einzelreports zeigen `signature_valid=true`
+  ohne fehlende Segmente. Auftretende Fehlerzustände (Exit-Code 2/3 oder
+  `status=false`) sind vor Freigabe zu beheben.
+- ✅ **Berichte versioniert:** Die JSON-Reports und `.sha256`-Dateien liegen im
+  Artefakt-Storage oder Repository (z. B.
+  `dist/artifacts/<target>/snapshot-verify-report.json`) und sind im
+  Freigabeprotokoll verlinkt.
+- ✅ **WORM-Smoke dokumentiert:** Das Nightly-Artefakt
+  `worm-export-smoke` enthält das signierte Export-Objekt sowie die Summary
+  (`signature_valid=true`) und ist in der Acceptance-Dokumentation referenziert.
 
 Erst wenn alle Bedingungen erfüllt sind und die Prüflinks zugänglich bleiben,
 ist die Phase offiziell abgeschlossen.

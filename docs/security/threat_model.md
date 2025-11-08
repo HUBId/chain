@@ -5,6 +5,22 @@ resumable state transfers, and admission policy changes. It also calls out the
 security work that remains open so auditors can trace coverage gaps back to the
 engineering backlog.
 
+**Last review:** 18 July 2026 — Reviewer:innen: A. Ortega, M. Chen, L. Banerjee.
+
+### Phase A Review Summary
+
+- Release-Builds erzeugen `snapshot-verify-report.json` inklusive SHA256-Hash,
+  und das CI-Gate `snapshot-verifier` bewahrt eine reproduzierbare Smoke-Prüfung
+  auf. Auditor:innen können jede Manifestprüfung über den Hash in den Release
+  Notes nachvollziehen.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/ci.yml†L369-L397】
+- `cargo xtask test-worm-export` läuft in CI und Nightly, exportiert signierte
+  Audit-Einträge in einen WORM-Stub und schreibt `worm-export-summary.json`
+  inklusive Signaturprüfung und Retention-Metadaten. Die Ergebnisse landen im
+  Evidence-Bundle (`collect-phase3-evidence`) sowie als Actions-Artefakte.【F:xtask/src/main.rs†L120-L318】【F:.github/workflows/nightly.yml†L10-L24】
+- Offene Risiken: externe Snapshot-Verifikation für produktive Bundles bleibt
+  ein separates Follow-up; WORM-Replikation auf produktive Object-Stores benötigt
+  weiterhin Compliance-Sign-off (siehe Risk Register unten).
+
 ## Snapshot persistence controls
 - **Disk-backed session metadata:** The runtime persists every active snapshot
   session to `<snapshot_dir>/snapshot_sessions.json`. The `SnapshotSessionStore`
@@ -44,8 +60,9 @@ engineering backlog.
   tracked as follow-up work.
 - **Dual approvals for policy changes:** The admission audit log records a single
   actor. Automated enforcement of dual signatures remains outstanding.
-- **WORM export of audit logs:** Audit files are append-only locally, but the
-  platform does not yet replicate them into immutable storage.
+- **WORM export of audit logs:** CI/Nightly export signierte Audit-Events in den
+  WORM-Stub, aber die produktive Replikation in immutable Object-Stores wartet
+  weiterhin auf Compliance-Sign-off.
 
 ## Follow-ups
 - [ENG-921 — Snapshot replay hardening](../status/weekly.md#snapshot-replay-hardening)

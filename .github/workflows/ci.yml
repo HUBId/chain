@@ -385,6 +385,27 @@ PY
         run: |
           set -euo pipefail
           cargo xtask test-worm-export
+      - name: Upload WORM smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: worm-export-smoke
+          path: target/worm-export-smoke
+
+  snapshot-verifier:
+    name: Snapshot verifier smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Generate snapshot verifier bundle
+        run: |
+          set -euo pipefail
+          cargo xtask snapshot-verifier
+      - name: Upload snapshot verifier artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-verifier-smoke
+          path: target/snapshot-verifier-smoke
 
   integration-workflows:
     name: Integration workflows (${{ matrix.name }})

@@ -7,12 +7,17 @@ edition = "2021"
 anyhow = "1.0"
 base64 = "=0.22.1"
 blake3 = "=1.8.2"
+ed25519-dalek = { version = "=2.1.1", features = ["rand_core"] }
 flate2 = { version = "=1.0.34", default-features = false, features = ["rust_backend"] }
+hex = "=0.4.3"
+rand = { version = "=0.8.5", features = ["std"] }
 reqwest = { version = "=0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rpp-p2p = { path = "../rpp/p2p" }
+sha2 = "=0.10.9"
 serde = { version = "=1.0.225", features = ["derive"] }
 serde_json = { workspace = true }
 tempfile = "=3.23.0"
 time = { version = "=0.3.36", features = ["formatting", "macros", "parsing"] }
-toml = "=0.9.6"
+toml = "=0.8.23"
 tar = "=0.4.42"
 walkdir = "=2.5.0"

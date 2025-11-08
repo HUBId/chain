@@ -217,6 +217,41 @@ in den [Release-Notizen](docs/release_notes.md); ziehe die Tabelle bei Audits od
 Rollback-Plänen hinzu, um sicherzustellen, dass Operator:innen identische Proof-Artefakte
 ausrollen.【F:docs/release_notes.md†L1-L160】
 
+### Snapshot verifier workflow
+
+Nutze zwei Pfade, um Snapshot-Bundles vor der Freigabe zu prüfen:
+
+1. **CI/Smoke-Run:** `cargo xtask snapshot-verifier` erzeugt ein synthetisches
+   Bundle unter `target/snapshot-verifier-smoke/`, signiert das Manifest und
+   führt `snapshot-verify` samt Aggregationsreport aus. Der Job `snapshot-verifier`
+   im CI spiegelt denselben Ablauf und lädt das Artefakt (`snapshot-verify-report.json` +
+   `.sha256`) hoch, damit Reviewer:innen den Gate-Status nachvollziehen können.【F:xtask/src/main.rs†L220-L318】【F:.github/workflows/ci.yml†L369-L397】
+2. **Produktives Release:** Beim Verpacken laufen `scripts/build_release.sh` und der
+   Release-Workflow `Build <target>` automatisch `snapshot-verify` für jedes reale
+   Manifest. Stelle den Verifierschlüssel via `SNAPSHOT_MANIFEST_PUBKEY_HEX` bereit und
+   finde die Reports anschließend unter `dist/artifacts/<target>/snapshot-verify-report.json`
+   inklusive `.sha256`. Vergleiche den Hash (`sha256sum .../snapshot-verify-report.json`)
+   mit dem Eintrag im Release-Notes-Abschnitt „Snapshot verifier attestation“.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L150-L233】
+
+Bewahre die Einzelreports (`*-verify.json`) gemeinsam mit dem Aggregat auf, damit
+Auditor:innen das Ergebnis pro Manifest nachvollziehen können.
+
+### WORM export validation
+
+Der Audit-Log-Export lässt sich lokal und in CI verifizieren:
+
+- `cargo xtask test-worm-export` erzeugt unter `target/worm-export-smoke/`
+  einen signierten Audit-Eintrag (`worm/*.json`), die Retention-Metadaten und die
+  Summary `worm-export-summary.json`. Die Summary bestätigt, dass jede Signatur
+  mit dem erzeugten Key-Set überprüft wurde (`signature_valid=true`).【F:xtask/src/main.rs†L120-L318】
+- CI (`worm-export-smoke`) und Nightly (`worm-export`) veröffentlichen das
+  Artefakt `worm-export-smoke` mitsamt Summary, damit Auditor:innen Signaturen,
+  Retention-Fenster und erzeugte JSON-Objekte prüfen können.【F:.github/workflows/ci.yml†L360-L387】【F:.github/workflows/nightly.yml†L10-L24】
+
+Vor Produktionsexports: Stimme die endgültigen WORM-Endpoints mit Security &
+Compliance ab und dokumentiere die Objekt-Storage-Konfiguration in den
+Freigabeunterlagen.
+
 ### Phase 2 consensus proof validation checks
 
 Phase 2 verlangt nachvollziehbare Belege, dass manipulierte VRF-/Quorum-Daten an

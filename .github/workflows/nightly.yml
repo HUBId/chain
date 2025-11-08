@@ -21,6 +21,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo xtask test-worm-export
+      - name: Upload WORM export smoke artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: worm-export-smoke
+          path: target/worm-export-smoke
 
   timetoke-slo-report:
     name: Timetoke replay SLO report
