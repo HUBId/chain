@@ -126,6 +126,18 @@ fn run_integration_workflows() -> Result<()> {
     apply_feature_flags(&mut command);
     run_command(command, "integration workflows")?;
 
+    let mut lifecycle = Command::new("cargo");
+    lifecycle
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("node_lifecycle");
+    apply_feature_flags(&mut lifecycle);
+    run_command(lifecycle, "node lifecycle workflows")?;
+
     let mut restart = Command::new("cargo");
     restart
         .current_dir(&root)
