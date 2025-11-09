@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
-use std::fmt::Write as FmtWrite;
+use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -3293,16 +3293,22 @@ fn format_optional_datetime(value: Option<OffsetDateTime>) -> Option<String> {
     value.and_then(|dt| dt.format(&Rfc3339).ok())
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+struct EvidenceFileEntry {
+    path: String,
+    sha256: String,
+}
+
+#[derive(Serialize, Deserialize)]
 struct EvidenceCategoryManifest {
     name: String,
     description: String,
-    files: Vec<String>,
+    files: Vec<EvidenceFileEntry>,
     missing: Vec<String>,
     warnings: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct EvidenceManifest {
     generated_at: String,
     bundle: String,
@@ -4152,6 +4158,7 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     categories.push(bundle_worm_exports(&workspace, &staging_dir)?);
     categories.push(bundle_snapshot_signatures(&workspace, &staging_dir)?);
     categories.push(bundle_checksum_reports(&workspace, &staging_dir)?);
+    categories.push(bundle_chaos_reports(&workspace, &staging_dir)?);
     categories.push(bundle_ci_job_logs(&workspace, &staging_dir)?);
 
     let bundle_name = format!("phase3-evidence-{timestamp}.tar.gz");
@@ -4166,10 +4173,14 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     let manifest_path = staging_dir.join("manifest.json");
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
 
+    validate_phase3_manifest(&workspace, &staging_dir, &manifest_path)?;
+    let manifest_sha256 = compute_sha256(&manifest_path)?;
+
     create_tarball(&staging_dir, &bundle_path)?;
 
     println!("phase3 evidence bundle created: {}", bundle_path.display());
     println!("manifest: {}", manifest_path.display());
+    println!("manifest sha256: {manifest_sha256}");
 
     Ok(())
 }
@@ -4181,6 +4192,64 @@ fn create_tarball(source_dir: &Path, output: &Path) -> Result<()> {
     builder.append_dir_all("phase3-evidence", source_dir)?;
     let encoder = builder.into_inner()?;
     encoder.finish()?;
+    Ok(())
+}
+
+fn validate_phase3_manifest(workspace: &Path, staging_dir: &Path, manifest_path: &Path) -> Result<()> {
+    let schema_path = workspace.join("docs/governance/phase3_evidence_manifest.schema.json");
+    if !schema_path.exists() {
+        bail!(
+            "phase3 evidence manifest schema {} not found; ensure repository documentation is up to date",
+            schema_path.display()
+        );
+    }
+
+    let schema_file = File::open(&schema_path)
+        .with_context(|| format!("open phase3 evidence schema {}", schema_path.display()))?;
+    let schema_json: JsonValue = serde_json::from_reader(schema_file)
+        .with_context(|| format!("parse phase3 evidence schema {}", schema_path.display()))?;
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft7)
+        .compile(&schema_json)
+        .context("compile phase3 evidence manifest schema")?;
+
+    let manifest_bytes = fs::read(manifest_path)
+        .with_context(|| format!("read manifest {}", manifest_path.display()))?;
+    let manifest_json: JsonValue = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("parse manifest {}", manifest_path.display()))?;
+    if let Err(errors) = compiled.validate(&manifest_json) {
+        let mut details = String::from("phase3 evidence manifest schema validation failed:");
+        for error in errors {
+            write!(&mut details, "\n  - {error}")?;
+        }
+        bail!(details);
+    }
+
+    let manifest: EvidenceManifest = serde_json::from_slice(&manifest_bytes)
+        .with_context(|| format!("deserialize manifest {}", manifest_path.display()))?;
+    for category in &manifest.categories {
+        for file_entry in &category.files {
+            let candidate = staging_dir.join(&file_entry.path);
+            if !candidate.exists() {
+                bail!(
+                    "phase3 evidence manifest references missing file '{}' (category '{}')",
+                    file_entry.path,
+                    category.name
+                );
+            }
+            let actual = compute_sha256(&candidate)?;
+            if actual != file_entry.sha256 {
+                bail!(
+                    "phase3 evidence manifest checksum mismatch for '{}' (category '{}'): expected {}, computed {}",
+                    file_entry.path,
+                    category.name,
+                    file_entry.sha256,
+                    actual
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -4241,8 +4310,12 @@ fn bundle_snapshot_dashboards(
             .missing
             .push("docs/dashboards exports containing snapshot or timetoke metrics".to_string());
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4281,8 +4354,12 @@ fn bundle_alert_rules(workspace: &Path, staging: &Path) -> Result<EvidenceCatego
             .missing
             .push("docs/observability/alerts/*.yaml".to_string());
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4336,8 +4413,12 @@ fn bundle_audit_logs(workspace: &Path, staging: &Path) -> Result<EvidenceCategor
             .missing
             .push("docs/observability/examples/*audit*.jsonl".to_string());
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4380,8 +4461,12 @@ fn bundle_policy_backups(workspace: &Path, staging: &Path) -> Result<EvidenceCat
             .missing
             .push("admission policy backup archives (*.json, *.tar.gz)".to_string());
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4433,8 +4518,12 @@ fn bundle_snapshot_signatures(
                 .to_string(),
         );
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4480,8 +4569,12 @@ fn bundle_worm_exports(workspace: &Path, staging: &Path) -> Result<EvidenceCateg
                 .to_string(),
         );
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4523,8 +4616,73 @@ fn bundle_checksum_reports(workspace: &Path, staging: &Path) -> Result<EvidenceC
             .missing
             .push("Checksum validation outputs (*.log, *.json, *.md)".to_string());
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    Ok(category)
+}
+
+fn bundle_chaos_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Chaos drill reports".to_string(),
+        description: "Partition and chaos drill summaries documenting recovery thresholds.".to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = vec![
+        workspace.join("target/simnet"),
+        workspace.join("target/compliance/chaos"),
+        workspace.join("logs"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let file_name = entry
+                .file_name()
+                .to_str()
+                .map(|name| name.to_ascii_lowercase())
+                .unwrap_or_default();
+            let ext = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.to_ascii_lowercase())
+                .unwrap_or_default();
+            let is_report = file_name.contains("snapshot_partition_report")
+                || (file_name.contains("chaos") && file_name.contains("report"));
+            let allowed_ext = matches!(ext.as_str(), "json" | "jsonl" | "log" | "txt" | "png");
+            if !(is_report && allowed_ext) {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "chaos-reports", path)?;
+            category.files.push(recorded);
+        }
+    }
+    let partition_report = workspace.join("snapshot_partition_report.json");
+    if partition_report.exists() {
+        let recorded = copy_into_category(workspace, staging, "chaos-reports", &partition_report)?;
+        category.files.push(recorded);
+    }
+    if category.files.is_empty() {
+        category.missing.push(
+            "Chaos drill reports (e.g. snapshot_partition_report.json from nightly snapshot-partition run)"
+                .to_string(),
+        );
+    }
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4563,8 +4721,12 @@ fn bundle_ci_job_logs(workspace: &Path, staging: &Path) -> Result<EvidenceCatego
             .missing
             .push("logs capturing CI or nightly runs (*.log, *.json)".to_string());
     }
-    category.files.sort();
-    category.files.dedup();
+    category
+        .files
+        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category
+        .files
+        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4573,7 +4735,7 @@ fn copy_into_category(
     staging: &Path,
     category: &str,
     source: &Path,
-) -> Result<String> {
+) -> Result<EvidenceFileEntry> {
     let relative = source
         .strip_prefix(workspace)
         .unwrap_or(source)
@@ -4583,11 +4745,30 @@ fn copy_into_category(
         fs::create_dir_all(parent)?;
     }
     fs::copy(source, &dest)?;
-    Ok(format!("{category}/{}", relative_display_path(&relative)))
+    let path = format!("{category}/{}", relative_display_path(&relative));
+    let sha256 = compute_sha256(&dest)?;
+    Ok(EvidenceFileEntry { path, sha256 })
 }
 
 fn relative_display_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn compute_sha256(path: &Path) -> Result<String> {
+    let mut file = File::open(path)
+        .with_context(|| format!("open file for checksum {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("read file for checksum {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn main() -> Result<()> {

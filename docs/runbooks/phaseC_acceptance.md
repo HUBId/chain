@@ -25,13 +25,27 @@ Reports, Tickets, Runbooks) dokumentiert sein.
 ### Evidence Bundle Integrity
 
 - [ ] **Manifest vollständig.** `phase3-evidence-<timestamp>/manifest.json`
-      weist keine offenen `missing`-Einträge auf; `verify.log` bestätigt, dass
-      Hash- und Signaturprüfungen erfolgreich waren. Verlinke den passenden
-      Abschnitt im [Evidence Bundle Index](../governance/evidence_bundle_index.md).
+      weist keine offenen `missing`-Einträge auf und führt für jede Datei einen
+      `sha256`-Eintrag (`files[*].sha256`). Nach dem Lauf von
+      `cargo xtask collect-phase3-evidence` ist die Manifest-Prüfsumme (Konsole)
+      zu notieren und mit dem `manifest.json` im Bundle abzugleichen.
+      Verlinke den passenden Abschnitt im
+      [Evidence Bundle Index](../governance/evidence_bundle_index.md).
+- [ ] **Integritätsscan bestanden.** `cargo xtask collect-phase3-evidence`
+      validiert `manifest.json` gegen
+      `docs/governance/phase3_evidence_manifest.schema.json` und vergleicht die
+      `sha256`-Hashes mit den kopierten Dateien. Abweichungen führen zu einem
+      Abbruch mit Fehlermeldung – der Lauf darf nur mit "phase3 evidence bundle
+      created" und angezeigter Manifest-Prüfsumme enden.
 - [ ] **Nightly-Reproduktion bestanden.** Ein manueller Lauf von
       `cargo xtask collect-phase3-evidence --output-dir <tmp>` spiegelt den
       Nightly-Inhalt; Abweichungen wurden im Incident-Log referenziert und
       geschlossen.
+- [ ] **Phase‑C-Artefakte enthalten.** Der WORM-Retention-Report liegt unter
+      `worm-export/.../worm-retention-report.json`, die Snapshot-Manifestsignaturen
+      unter `snapshot-signatures/`, und Chaos- bzw. Partition-Reports unter
+      `chaos-reports/` innerhalb des Bundles vor. Fehlende Artefakte sind zu
+      dokumentieren und nachzuliefern.
 
 ### Snapshot Chaos / Partition Drill
 
@@ -42,7 +56,9 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       vor.
 - [ ] **Observability-Abgleich.** Prometheus/Grafana-Panels (`snapshot_stream_lag_seconds`,
       `snapshot_chunk_checksum_failures_total`) wurden für den Drill exportiert
-      und mit dem Report abgeglichen.
+      und mit dem Report abgeglichen. Der Report wird automatisch als
+      `chaos-reports/snapshot_partition_report.json` ins Phase‑C-Bundle kopiert;
+      prüfe bei manuellen Läufen die hinterlegte Prüfsumme im Manifest.
 
 ## Exit Criteria
 
