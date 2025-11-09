@@ -41,6 +41,10 @@ milestone.
       `SnapshotVerifierFailure` (siehe [`alerts/compliance_controls.yaml`](../observability/alerts/compliance_controls.yaml))
       auslösen; dokumentiere im Übergabeprotokoll, dass der Alarm grün bleibt
       und verlinke ggf. den Grafana-Panel-Screenshot.
+- [ ] **Incident-Response-Referenz aktualisiert.** Verweise im Übergabedokument
+      auf das Incident-Runbook ([Snapshot-Verifier schlägt fehl](./incident_response.md#snapshot-verifier-schlägt-fehl)), damit
+      Auditor:innen die Eskalations- und Artefaktsammlung für Fehlerszenarien
+      nachvollziehen können.
 
 ## WORM export audit trail
 
@@ -65,6 +69,9 @@ milestone.
       der Alert `WormExportNightlyFailure` (siehe [`alerts/compliance_controls.yaml`](../observability/alerts/compliance_controls.yaml))
       in Grafana/Alertmanager grün bleibt. Hänge bei Abweichungen das Nightly-Log
       sowie die Alert-Timeline an das Protokoll.
+- [ ] **Incident-Runbook referenziert.** Ergänze in den Freigabeunterlagen den
+      Hinweis auf den Abschnitt [„WORM-Export fehlerhaft“](./incident_response.md#worm-export-fehlerhaft), sodass On-Call-Teams
+      die Eskalationskette und Artefaktliste unmittelbar finden.
 
 ## Exit-Kriterien
 
