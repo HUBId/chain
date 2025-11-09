@@ -85,9 +85,22 @@ fn run_pruning_validation() -> Result<()> {
 }
 
 fn run_unit_suites() -> Result<()> {
+    let root = workspace_root();
+
+    let mut library = Command::new("cargo");
+    library
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--lib");
+    apply_feature_flags(&mut library);
+    run_command(library, "rpp-chain library tests")?;
+
     let mut command = Command::new("cargo");
     command
-        .current_dir(workspace_root())
+        .current_dir(&root)
         .arg("test")
         .arg("-p")
         .arg("rpp-chain")
