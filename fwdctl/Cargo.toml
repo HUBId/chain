@@ -32,10 +32,12 @@ hex.workspace = true
 log.workspace = true
 nonzero_ext.workspace = true
 # Regular dependencies
+axum = { version = "=0.6.20" }
 csv = "=1.4.0"
 indicatif = "=0.18.1"
 askama = "=0.14.0"
 num-format = "=0.4.4"
+tokio = { version = "=1.48.0", features = ["rt-multi-thread"] }
 
 [features]
 ethhash = ["firewood/ethhash"]
