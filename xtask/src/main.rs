@@ -108,7 +108,38 @@ fn run_unit_suites() -> Result<()> {
         .arg("--test")
         .arg("unit");
     apply_feature_flags(&mut command);
-    run_command(command, "unit test suite")
+    run_command(command, "unit test suite")?;
+
+    run_rpp_fail_matrix_tests()
+}
+
+fn run_rpp_fail_matrix_tests() -> Result<()> {
+    let root = workspace_root();
+
+    let mut default = Command::new("cargo");
+    default
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("rpp_fail_matrix");
+    apply_feature_flags(&mut default);
+    run_command(default, "rpp-stark fail-matrix (default)")?;
+
+    let mut backend = Command::new("cargo");
+    backend
+        .current_dir(&root)
+        .arg("test")
+        .arg("-p")
+        .arg("rpp-chain")
+        .arg("--locked")
+        .arg("--test")
+        .arg("rpp_fail_matrix");
+    apply_feature_flags(&mut backend);
+    backend.arg("--features").arg("backend-rpp-stark");
+    run_command(backend, "rpp-stark fail-matrix (backend)")
 }
 
 fn run_integration_workflows() -> Result<()> {
