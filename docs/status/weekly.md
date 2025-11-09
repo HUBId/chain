@@ -45,15 +45,16 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
   Audit-Log `admission-reconciliation` bestätigt Status "success" und verweist
   auf das evidenzierte Nightly-Report-Artefakt.【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
 
-### Snapshot/Timetoke SLO (14d)
+### Snapshot & Timetoke SLO (14d)
 
 | Kennzahl | Wert | Status | Quelle |
 | --- | --- | --- | --- |
 | Snapshot-Health: verifizierte Sessions (Minimum/14 Tage) | 4/4 Sessions | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
 | Snapshot-Health: Abweichungen (Summe/14 Tage) | 0 | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
 | Timetoke-Erfolgsquote (Minimum/14 Tage) | 99,4 % | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
-| Timetoke-Latenz p95 (Maximum/14 Tage) | 29 100 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
-| Timetoke-Latenz p99 (Maximum/14 Tage) | 58 400 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Timetoke-Latenz p95 (Maximum/14 Tage) | 28 900 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Timetoke-Latenz p99 (Maximum/14 Tage) | 57 100 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Timetoke-Retries (Tage mit Ampel 🟡) | 3 | 🟡 Hinweis | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
 
 ## Replay Defense Telemetry
 
