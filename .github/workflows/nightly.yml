@@ -769,6 +769,43 @@ EOF
           name: simnet-regression-nightly
           path: simnet-regression.tar.gz
 
+  snapshot-partition:
+    name: Snapshot partition recovery audit
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=0"
+      SNAPSHOT_PARTITION_MAX_RESUME_MINUTES: "2"
+      SNAPSHOT_PARTITION_MAX_CHUNK_RETRIES: "25"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Execute snapshot partition scenario
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/snapshot-partition-nightly
+          cargo run --locked --package simnet -- \
+            --scenario tools/simnet/scenarios/snapshot_partition.ron \
+            --artifacts-dir target/simnet/snapshot-partition-nightly
+
+      - name: Generate snapshot partition report
+        run: |
+          set -euo pipefail
+          python3 scripts/snapshot_partition_report.py \
+            --summary target/simnet/snapshot-partition-nightly/summaries/snapshot_partition.json \
+            --output snapshot_partition_report.json \
+            --max-resume-minutes "${SNAPSHOT_PARTITION_MAX_RESUME_MINUTES}" \
+            --max-chunk-retries "${SNAPSHOT_PARTITION_MAX_CHUNK_RETRIES}"
+
+      - name: Upload snapshot partition report
+        uses: actions/upload-artifact@v4
+        with:
+          name: snapshot_partition_report.json
+          path: snapshot_partition_report.json
+
   nightly-status:
     name: Publish nightly CI status snapshot
     needs:
