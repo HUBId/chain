@@ -36,6 +36,9 @@ use time::macros::format_description;
 use time::{Duration as TimeDuration, OffsetDateTime};
 use walkdir::WalkDir;
 
+mod telemetry;
+use telemetry::MetricsReporter;
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -3559,17 +3562,37 @@ fn worm_retention_check(args: &[String]) -> Result<()> {
         }
     }
 
-    let outcome = execute_worm_retention_check(&workspace, &search_roots, &output_path)?;
-    println!(
-        "worm retention report written to {}",
-        outcome.report_path.display()
-    );
-    if outcome.report.summaries.is_empty() {
-        println!(
-            "⚠️ no WORM export summaries located under the configured roots; report generated"
-        );
+    let mut metrics = MetricsReporter::from_env("nightly.worm_retention", "compliance-nightly")?;
+    let result = execute_worm_retention_check(&workspace, &search_roots, &output_path);
+
+    match result {
+        Ok(outcome) => {
+            let success = !outcome.has_failures();
+            metrics.record_worm_retention(success);
+            metrics.flush();
+
+            println!(
+                "worm retention report written to {}",
+                outcome.report_path.display()
+            );
+            if outcome.report.summaries.is_empty() {
+                println!(
+                    "⚠️ no WORM export summaries located under the configured roots; report generated"
+                );
+            }
+
+            if success {
+                Ok(())
+            } else {
+                outcome.ensure_success()
+            }
+        }
+        Err(error) => {
+            metrics.record_worm_retention(false);
+            metrics.flush();
+            Err(error)
+        }
     }
-    outcome.ensure_success()
 }
 
 fn execute_worm_retention_check(
@@ -4195,7 +4218,11 @@ fn create_tarball(source_dir: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn validate_phase3_manifest(workspace: &Path, staging_dir: &Path, manifest_path: &Path) -> Result<()> {
+fn validate_phase3_manifest(
+    workspace: &Path,
+    staging_dir: &Path,
+    manifest_path: &Path,
+) -> Result<()> {
     let schema_path = workspace.join("docs/governance/phase3_evidence_manifest.schema.json");
     if !schema_path.exists() {
         bail!(
@@ -4310,12 +4337,8 @@ fn bundle_snapshot_dashboards(
             .missing
             .push("docs/dashboards exports containing snapshot or timetoke metrics".to_string());
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4354,12 +4377,8 @@ fn bundle_alert_rules(workspace: &Path, staging: &Path) -> Result<EvidenceCatego
             .missing
             .push("docs/observability/alerts/*.yaml".to_string());
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4413,12 +4432,8 @@ fn bundle_audit_logs(workspace: &Path, staging: &Path) -> Result<EvidenceCategor
             .missing
             .push("docs/observability/examples/*audit*.jsonl".to_string());
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4461,12 +4476,8 @@ fn bundle_policy_backups(workspace: &Path, staging: &Path) -> Result<EvidenceCat
             .missing
             .push("admission policy backup archives (*.json, *.tar.gz)".to_string());
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4518,12 +4529,8 @@ fn bundle_snapshot_signatures(
                 .to_string(),
         );
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4569,12 +4576,8 @@ fn bundle_worm_exports(workspace: &Path, staging: &Path) -> Result<EvidenceCateg
                 .to_string(),
         );
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4616,19 +4619,16 @@ fn bundle_checksum_reports(workspace: &Path, staging: &Path) -> Result<EvidenceC
             .missing
             .push("Checksum validation outputs (*.log, *.json, *.md)".to_string());
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
 fn bundle_chaos_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
     let mut category = EvidenceCategoryManifest {
         name: "Chaos drill reports".to_string(),
-        description: "Partition and chaos drill summaries documenting recovery thresholds.".to_string(),
+        description: "Partition and chaos drill summaries documenting recovery thresholds."
+            .to_string(),
         files: Vec::new(),
         missing: Vec::new(),
         warnings: Vec::new(),
@@ -4677,12 +4677,8 @@ fn bundle_chaos_reports(workspace: &Path, staging: &Path) -> Result<EvidenceCate
                 .to_string(),
         );
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4721,12 +4717,8 @@ fn bundle_ci_job_logs(workspace: &Path, staging: &Path) -> Result<EvidenceCatego
             .missing
             .push("logs capturing CI or nightly runs (*.log, *.json)".to_string());
     }
-    category
-        .files
-        .sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
-    category
-        .files
-        .dedup_by(|lhs, rhs| lhs.path == rhs.path);
+    category.files.sort_by(|lhs, rhs| lhs.path.cmp(&rhs.path));
+    category.files.dedup_by(|lhs, rhs| lhs.path == rhs.path);
     Ok(category)
 }
 
@@ -4755,8 +4747,8 @@ fn relative_display_path(path: &Path) -> String {
 }
 
 fn compute_sha256(path: &Path) -> Result<String> {
-    let mut file = File::open(path)
-        .with_context(|| format!("open file for checksum {}", path.display()))?;
+    let mut file =
+        File::open(path).with_context(|| format!("open file for checksum {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {

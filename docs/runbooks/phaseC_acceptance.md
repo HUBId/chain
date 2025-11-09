@@ -17,6 +17,12 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       auf das Incident-Playbook
       ([„WORM-Retention-Check schlägt fehl“](./incident_response.md#worm-retention-check-schlägt-fehl))
       müssen beigefügt sein.
+- [ ] **Telemetry-Panel grün.** Dashboard
+      [`Compliance Overview`](../dashboards/compliance_overview.json) zeigt
+      `increase(worm_retention_checks_total[24h]) ≥ 1` und
+      `increase(worm_retention_failures_total[24h]) = 0`. Bei Abweichungen liegt
+      ein Pager-Eintrag (Alert „WormRetentionNightlyFailure“ bzw.
+      „WormRetentionNightlyMissing“) samt Incident-Referenz vor.
 - [ ] **Bucket- und Schlüssel-Review abgeschlossen.** Storage Engineering hat
       die betroffenen WORM-Buckets (Region, Lifecycle-Policy, KMS-Key) gegen die
       Vorgaben im [WORM-Runbook](./worm_export.md) geprüft und etwaige Changes
@@ -59,6 +65,12 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       und mit dem Report abgeglichen. Der Report wird automatisch als
       `chaos-reports/snapshot_partition_report.json` ins Phase‑C-Bundle kopiert;
       prüfe bei manuellen Läufen die hinterlegte Prüfsumme im Manifest.
+- [ ] **Chaos-Metriken sichtbar.** Dashboard
+      [`Snapshot Resilience`](../dashboards/snapshot_resilience.json) zeigt
+      `increase(snapshot_chaos_runs_total[7d]) ≥ 1` sowie
+      `increase(snapshot_chaos_failures_total[7d]) = 0`. Alerts
+      „SnapshotChaosNightlyFailure“/„SnapshotChaosNightlyMissing“ sind entweder
+      geschlossen oder mit Incident-Verweis dokumentiert.
 
 ## Exit Criteria
 

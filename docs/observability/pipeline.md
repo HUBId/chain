@@ -55,11 +55,41 @@ endpoint is enabled.
 | --- | --- | --- | --- |
 | `snapshot_verify_failures_total` | Counter (u64) | `manifest` (relative path), `exit_code` (`signature_invalid`, `chunk_mismatch`, `fatal`) | Counts snapshot verifier failures during `scripts/build_release.sh` runs. The counter increments before the CLI exits so even fatal errors (missing manifests, malformed signatures) are captured. |
 | `worm_export_failures_total` | Counter (u64) | `reason` (`create_dir`, `write_body`, `serialize_index`, …) | Totals WORM export stub errors observed by the nightly `worm-export` job. Labels summarise the failing stage (directory creation, payload write, index rotation) to aid triage without exploding cardinality. |
+| `worm_retention_checks_total` | Counter (u64) | _none_ | Incremented by `cargo xtask worm-retention-check` every time the nightly compliance pipeline inspects WORM export artefacts. Serves as the heartbeat for the retention verification job. |
+| `worm_retention_failures_total` | Counter (u64) | _none_ | Recorded when the retention check surfaces stale, unsigned, or orphaned audit entries. Alerts fire immediately so the compliance rotation can react before the next archive window. |
+| `snapshot_chaos_runs_total` | Counter (u64) | _none_ | Bumped by `scripts/snapshot_partition_report.py` once the snapshot partition chaos drill finishes aggregating metrics. Allows dashboards to confirm the nightly drill executed. |
+| `snapshot_chaos_failures_total` | Counter (u64) | _none_ | Incremented when the chaos drill breaches the configured resume-latency or chunk-retry thresholds. Used by alerts and dashboards to page on-call during resilience regressions. |
 
 The corresponding alert rules are defined in
 [`docs/observability/alerts/compliance_controls.yaml`](alerts/compliance_controls.yaml)
 so any increase automatically pages the release/compliance rotation and links to
-the Phase‑A runbook checklist.
+the Phase‑A runbook checklist. Additional rules cover missing retention or
+chaos drill runs (no increase in the counters over a 36‑hour window) and
+critical failures (non-zero `*_failures_total` within the last day).
+
+Nightly automation exports these counters whenever at least one of the
+`OBSERVABILITY_METRICS_*` environment variables is present. Set
+`OBSERVABILITY_METRICS_OTLP_ENDPOINT` (and optional
+`OBSERVABILITY_METRICS_AUTH_TOKEN`/`OBSERVABILITY_METRICS_HEADERS`) to push the
+counters to an OTLP collector, or provide `OBSERVABILITY_METRICS_PROM_PATH` to
+write a Prometheus textfile for a node exporter to scrape. Example GitHub
+Actions snippet:
+
+```yaml
+env:
+  OBSERVABILITY_METRICS_OTLP_ENDPOINT: ${{ secrets.OBSERVABILITY_METRICS_OTLP_ENDPOINT }}
+  OBSERVABILITY_METRICS_AUTH_TOKEN: ${{ secrets.OBSERVABILITY_METRICS_AUTH_TOKEN }}
+  OBSERVABILITY_METRICS_PROM_PATH: target/metrics/worm_retention.prom
+  OBSERVABILITY_METRICS_SCOPE: nightly.worm_retention
+  OBSERVABILITY_METRICS_JOB: worm-retention
+```
+
+Import the Grafana dashboards in
+[`docs/dashboards/compliance_overview.json`](../dashboards/compliance_overview.json)
+and [`docs/dashboards/snapshot_resilience.json`](../dashboards/snapshot_resilience.json)
+to visualise these counters alongside their trends. Panel thresholds highlight
+missing runs (counter increase = 0) and failure spikes (failure counter > 0)
+immediately after a nightly job completes.
 
 Continuous integration executes `cargo xtask test-observability`, which runs
 `tests/observability/snapshot_timetoke_metrics.rs` to drive a two-node snapshot

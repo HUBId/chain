@@ -40,6 +40,15 @@ jobs:
           cargo xtask test-worm-export
           cargo test --test compliance --features integration -- worm_export_failure_emits_metric_and_log
       - name: Verify WORM retention windows
+        env:
+          OBSERVABILITY_METRICS_OTLP_ENDPOINT: ${{ secrets.OBSERVABILITY_METRICS_OTLP_ENDPOINT }}
+          OBSERVABILITY_METRICS_AUTH_TOKEN: ${{ secrets.OBSERVABILITY_METRICS_AUTH_TOKEN }}
+          OBSERVABILITY_METRICS_HEADERS: ${{ secrets.OBSERVABILITY_METRICS_HEADERS }}
+          OBSERVABILITY_METRICS_PROM_PATH: target/metrics/worm_retention.prom
+          OBSERVABILITY_METRICS_SERVICE_NAME: compliance-nightly
+          OBSERVABILITY_METRICS_SERVICE_INSTANCE: nightly-${{ github.run_id }}
+          OBSERVABILITY_METRICS_SCOPE: nightly.worm_retention
+          OBSERVABILITY_METRICS_JOB: worm-retention
         run: |
           set -euo pipefail
           cargo xtask worm-retention-check
@@ -792,6 +801,15 @@ EOF
             --artifacts-dir target/simnet/snapshot-partition-nightly
 
       - name: Generate snapshot partition report
+        env:
+          OBSERVABILITY_METRICS_OTLP_ENDPOINT: ${{ secrets.OBSERVABILITY_METRICS_OTLP_ENDPOINT }}
+          OBSERVABILITY_METRICS_AUTH_TOKEN: ${{ secrets.OBSERVABILITY_METRICS_AUTH_TOKEN }}
+          OBSERVABILITY_METRICS_HEADERS: ${{ secrets.OBSERVABILITY_METRICS_HEADERS }}
+          OBSERVABILITY_METRICS_PROM_PATH: target/metrics/snapshot_partition.prom
+          OBSERVABILITY_METRICS_SERVICE_NAME: compliance-nightly
+          OBSERVABILITY_METRICS_SERVICE_INSTANCE: nightly-${{ github.run_id }}
+          OBSERVABILITY_METRICS_SCOPE: nightly.snapshot_chaos
+          OBSERVABILITY_METRICS_JOB: snapshot-chaos
         run: |
           set -euo pipefail
           python3 scripts/snapshot_partition_report.py \

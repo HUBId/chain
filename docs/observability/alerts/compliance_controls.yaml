@@ -34,3 +34,54 @@ spec:
               past hour. Review the nightly worm-export run, confirm retention metadata,
               and unblock the compliance pipeline before the next scheduled window.
             runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseA_acceptance.md
+        - alert: WormRetentionNightlyFailure
+          expr: increase(worm_retention_failures_total[1d]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: compliance
+          annotations:
+            summary: Nightly worm-retention verification detected a failure
+            description: |
+              The worm-retention checker reported stale, unsigned, or orphaned entries
+              within the last 24 hours. Inspect the generated report and incident log,
+              then rerun the check once the artefacts are corrected.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseC_acceptance.md#worm-retention-integrity
+        - alert: WormRetentionNightlyMissing
+          expr: increase(worm_retention_checks_total[36h]) < 1
+          for: 10m
+          labels:
+            severity: warning
+            service: compliance
+          annotations:
+            summary: Worm-retention verification has not executed in the last 36 hours
+            description: |
+              No worm-retention verification run has incremented the nightly counter in the
+              past 36 hours. Confirm that the nightly workflow executed and that telemetry
+              export credentials are valid.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseC_acceptance.md#worm-retention-integrity
+        - alert: SnapshotChaosNightlyFailure
+          expr: increase(snapshot_chaos_failures_total[1d]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: compliance
+          annotations:
+            summary: Snapshot chaos drill breached recovery thresholds
+            description: |
+              The snapshot partition chaos drill exceeded the configured resume latency or
+              chunk retry ceilings within the last 24 hours. Review the report and associated
+              dashboard panels to coordinate remediation before the next resilience window.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseC_acceptance.md#snapshot-chaos--partition-drill
+        - alert: SnapshotChaosNightlyMissing
+          expr: increase(snapshot_chaos_runs_total[36h]) < 1
+          for: 10m
+          labels:
+            severity: warning
+            service: compliance
+          annotations:
+            summary: Snapshot chaos drill has not reported a successful run in 36 hours
+            description: |
+              The snapshot chaos automation did not increment its run counter during the last 36 hours.
+              Ensure the nightly workflow completed and telemetry export configuration is still valid.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseC_acceptance.md#snapshot-chaos--partition-drill
