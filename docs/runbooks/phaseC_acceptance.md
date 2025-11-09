@@ -85,6 +85,11 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       (Snapshot-Sessions vollständig verifiziert, Erfolgsquote ≥ 99 %, Latenzen
       innerhalb der definierten p50/p95/p99-Ziele). Abweichungen müssen über das
       Incident-Log adressiert und erneut über den Export bestätigt werden.
+- [x] **Replay-Defense-Telemetrie geprüft.** `timetoke_replay_success_rate` und
+      `timetoke_replay_stalled_final{threshold}` werden über Dashboard/Report
+      abgerufen; `rpp-node snapshot replay status` bestätigt die finalen Kennzahlen
+      (Erfolgsrate, Stalled-Detector). Nachweis im Incident-/Audit-Log, Stand
+      2026‑08‑19.
 
 ## Exit Criteria
 
