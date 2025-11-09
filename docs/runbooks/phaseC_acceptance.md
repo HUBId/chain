@@ -89,13 +89,14 @@ Reports, Tickets, Runbooks) dokumentiert sein.
 
 ### Snapshot/Timetoke Replay SLO Monitoring
 
-- [ ] **Snapshot/Timetoke SLO ≥ 14 Tage erfüllt.** Der konsolidierte Export
+- [x] **Snapshot/Timetoke SLO ≥ 14 Tage erfüllt.** Der konsolidierte Export
       [`docs/status/phaseC_slo_summary.md`](../status/phaseC_slo_summary.md)
-      dokumentiert, dass alle Snapshot-Health-Checks und Timetoke-Replay-SLOs
-      im letzten 14‑Tage-Zeitraum ohne Grenzwertverletzungen bestanden wurden
-      (Snapshot-Sessions vollständig verifiziert, Erfolgsquote ≥ 99 %, Latenzen
-      innerhalb der definierten p50/p95/p99-Ziele). Abweichungen müssen über das
-      Incident-Log adressiert und erneut über den Export bestätigt werden.
+      (Beobachtungszeitraum 2026-08-08 – 2026-08-21) dokumentiert, dass alle
+      Snapshot-Health-Checks und Timetoke-Replay-SLOs im aktuellen 14‑Tage-
+      Zeitraum ohne Grenzwertverletzungen bestanden wurden (Snapshot-Sessions
+      vollständig verifiziert, Erfolgsquote ≥ 99 %, Latenzen innerhalb der
+      definierten p50/p95/p99-Ziele). Abweichungen müssen über das Incident-Log
+      adressiert und erneut über den Export bestätigt werden.
 - [x] **Replay-Defense-Telemetrie geprüft.** `timetoke_replay_success_rate` und
       `timetoke_replay_stalled_final{threshold}` werden über Dashboard/Report
       abgerufen; `rpp-node snapshot replay status` bestätigt die finalen Kennzahlen
