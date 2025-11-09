@@ -26,10 +26,11 @@ versionierten Artefakte aus dem `staging-soak`-Job, ergänzende Dashboards oder 
 Phase B gilt als erfolgreich abgeschlossen, wenn alle Artefakte oben verlinkt sind und
 zusätzlich folgende Bedingungen erfüllt werden:
 
-- ✅ **14 Tage grün.** Der `staging-soak`-Workflow (siehe
-  [`.github/workflows/nightly.yml`](../../.github/workflows/nightly.yml)) liefert mindestens
-  14 aufeinanderfolgende Summary-Dateien mit `"ok": true`. Dokumentiere den Zeitraum sowie
-  die Artefaktpfade im Acceptance-Protokoll.
+- ✅ **Nightly-Gate 14 Tage grün.** Der Gate `staging-soak` im Nightly-Workflow
+  [`.github/workflows/nightly.yml`](../../.github/workflows/nightly.yml) muss 14
+  aufeinanderfolgende Läufe ohne SLO-Verletzungen liefern – `summary.json` meldet
+  `"ok": true` und `staging_soak_report.json` bestätigt Snapshot-/Timetoke-SLO-Compliance.
+  Dokumentiere Zeitraum, Artefaktpfade und Report-Link im Acceptance-Protokoll.
 - ✅ **Keine SLO-Verletzungen.** In den 14 Tagen dürfen weder Snapshot-Anomalien noch
   Timetoke-SLO- oder Admission-Drifts auftreten. Etwaige Alerts müssen innerhalb des Zeitraums
   geschlossen sein.
