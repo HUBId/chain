@@ -30,11 +30,14 @@ milestone.
       Reviewer:innen die lokale Prüfung nachverfolgen können. Für Trockenübungen
       steht das [Phase‑A Operator Lab](../training/phaseA_operator_lab.md) mit
       Smoke-Fixtures bereit.【F:rpp/node/src/main.rs†L140-L227】【F:rpp/node/tests/snapshot_verify.rs†L1-L123】
-- [ ] **SHA256 im Freigabeprotokoll festgehalten.** Die Release Notes enthalten
-      den Abschnitt „Snapshot verifier attestation“ mit den Hashes aus den
-      `.sha256`-Dateien. Vergleiche mindestens einen Wert lokal via
-      `sha256sum dist/artifacts/<target>/snapshot-verify-report.json` und
-      dokumentiere den Abgleich im Freigabeprotokoll.【F:.github/workflows/release.yml†L332-L353】
+- [ ] **Snapshot-Verifier-Hash/Signatur festgehalten.** Die Release Notes
+      enthalten das Pflichtfeld „Snapshot Verifier Hash/Signatur“ (Platzhalter
+      aus `scripts/prepare_changelog.sh`) mit dem vom Release-Workflow
+      berechneten SHA256-Hash und – falls vorhanden – der Cosign-Signatur.
+      Vergleiche mindestens einen Wert lokal via
+      `sha256sum dist/artifacts/<target>/snapshot-verify-report.json`, bestätige
+      die Signatur anhand des Release-Assets und dokumentiere den Abgleich im
+      Freigabeprotokoll.【F:scripts/prepare_changelog.sh†L103-L112】【F:.github/workflows/release.yml†L330-L389】
 - [ ] **CI/Nightly-Referenzen verlinkt.** Verweise auf den CI-Job
       `snapshot-verifier`, der das synthetische Prüfbündel unter
       `target/snapshot-verifier-smoke/` erzeugt, sowie auf die Release-Artefakte

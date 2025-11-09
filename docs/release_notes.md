@@ -4,6 +4,15 @@ This document records release-specific proof metadata for the Malachite Phase 
 
 ## Unreleased
 
+### Snapshot Verifier Hash/Signatur (Pflichtfeld)
+
+Trage beim Release-Build die vom Workflow befüllten Werte ein, damit Auditor:innen
+den veröffentlichten Report eindeutig prüfen können. Die Platzhalter werden vom
+Release-Skript ersetzt und dürfen nicht leer bleiben:
+
+- SHA256: `SNAPSHOT_VERIFIER_SHA256_PLACEHOLDER`
+- Signatur: `SNAPSHOT_VERIFIER_SIGNATURE_PLACEHOLDER`
+
 ### Highlights
 - Simnet regression harness runs the Phase 2 VRF/quorum stress, snapshot rebuild, and gossip backpressure scenarios in sequence and publishes aggregate HTML/JSON reports for CI and nightly jobs.
 - VRF/quorum observability playbook defines actionable alert thresholds, escalation paths, and references the new dashboards for on-call teams.

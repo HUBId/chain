@@ -118,3 +118,13 @@ for heading in "Features" "Fixes" "Breaking" "Security" "Upgrade"; do
     exit 1
   fi
 done
+
+cat >>"$OUTPUT" <<'EOF'
+
+## 🔏 Snapshot Verifier Nachweise
+
+**Snapshot Verifier Hash/Signatur**
+
+- SHA256: `SNAPSHOT_VERIFIER_SHA256_PLACEHOLDER`
+- Signatur: `SNAPSHOT_VERIFIER_SIGNATURE_PLACEHOLDER`
+EOF

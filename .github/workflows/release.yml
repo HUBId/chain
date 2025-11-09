@@ -322,13 +322,57 @@ jobs:
           mkdir -p dist
           cp "$ref_report" dist/snapshot-verify-report.json
           echo "report_path=dist/snapshot-verify-report.json" >> "$GITHUB_OUTPUT"
+          echo "sha256=$ref_hash" >> "$GITHUB_OUTPUT"
           has_signature=false
+          signature_value=""
           if [[ -f "${ref_report}.sig" ]]; then
             cp "${ref_report}.sig" dist/snapshot-verify-report.json.sig
             echo "signature_path=dist/snapshot-verify-report.json.sig" >> "$GITHUB_OUTPUT"
             has_signature=true
+            signature_value="$(tr -d '\n\r' < "${ref_report}.sig")"
           fi
+          echo "signature_value=${signature_value}" >> "$GITHUB_OUTPUT"
           echo "has_signature=${has_signature}" >> "$GITHUB_OUTPUT"
+      - name: Populate snapshot verifier hash/signature field
+        shell: bash
+        env:
+          SNAPSHOT_SHA: ${{ steps.snapshot_asset.outputs.sha256 }}
+          SNAPSHOT_SIG: ${{ steps.snapshot_asset.outputs.signature_value }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SNAPSHOT_SHA}" ]]; then
+            echo "::error::snapshot verifier hash missing from release asset preparation" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+import os
+import pathlib
+import sys
+
+path = pathlib.Path("dist/release-notes.md")
+if not path.exists():
+    print("::error::release notes template missing", file=sys.stderr)
+    sys.exit(1)
+
+text = path.read_text()
+sha = os.environ["SNAPSHOT_SHA"]
+sig = os.environ.get("SNAPSHOT_SIG", "")
+if not sig:
+    sig = "n/a (kein Signatur-Asset verfügbar)"
+
+placeholders = {
+    "SNAPSHOT_VERIFIER_SHA256_PLACEHOLDER": sha,
+    "SNAPSHOT_VERIFIER_SIGNATURE_PLACEHOLDER": sig,
+}
+
+for marker, value in placeholders.items():
+    if marker not in text:
+        print(f"::error::placeholder {marker} missing from release notes", file=sys.stderr)
+        sys.exit(1)
+    text = text.replace(marker, value, 1)
+
+path.write_text(text)
+PY
       - name: Reference snapshot verifier reports in release notes
         shell: bash
         run: |
