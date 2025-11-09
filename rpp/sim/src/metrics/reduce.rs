@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::collector::{FaultRecord, MeshChangeRecord};
+use super::collector::{FaultRecord, MeshChangeRecord, SlowPeerRecord};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PropagationPercentiles {
@@ -22,6 +22,12 @@ pub struct SimulationSummary {
     pub faults: Vec<FaultRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<RecoveryMetrics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bandwidth: Option<BandwidthMetrics>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gossip_backpressure: Option<GossipBackpressureMetrics>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slow_peer_records: Vec<SlowPeerRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comparison: Option<ComparisonReport>,
 }
@@ -42,6 +48,22 @@ pub struct RecoveryMetrics {
     pub max_resume_latency_ms: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mean_resume_latency_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct BandwidthMetrics {
+    pub throttled_peers: usize,
+    pub slow_peer_events: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct GossipBackpressureMetrics {
+    pub events: usize,
+    pub unique_peers: usize,
+    pub queue_full_messages: usize,
+    pub publish_failures: usize,
+    pub forward_failures: usize,
+    pub timeout_failures: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -173,6 +195,9 @@ mod tests {
             mesh_changes: vec![],
             faults: vec![],
             recovery: None,
+            bandwidth: None,
+            gossip_backpressure: None,
+            slow_peer_records: Vec::new(),
             comparison: None,
         };
         let multi = SimulationSummary {
@@ -187,6 +212,9 @@ mod tests {
             mesh_changes: vec![],
             faults: vec![],
             recovery: None,
+            bandwidth: None,
+            gossip_backpressure: None,
+            slow_peer_records: Vec::new(),
             comparison: None,
         };
 

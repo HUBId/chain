@@ -1,11 +1,15 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
+use rpp_p2p::vendor::gossipsub::types::FailedMessages;
 use rpp_p2p::vendor::PeerId;
 use serde::{Deserialize, Serialize};
 
-use crate::metrics::reduce::{calculate_percentiles, RecoveryMetrics, SimulationSummary};
+use crate::metrics::reduce::{
+    calculate_percentiles, BandwidthMetrics, GossipBackpressureMetrics, RecoveryMetrics,
+    SimulationSummary,
+};
 
 #[derive(Debug, Clone)]
 pub enum SimEvent {
@@ -31,6 +35,12 @@ pub enum SimEvent {
     Fault {
         kind: FaultEvent,
         detail: Option<String>,
+        timestamp: Instant,
+    },
+    SlowPeer {
+        peer_id: PeerId,
+        slow_peer: PeerId,
+        failed_messages: FailedMessages,
         timestamp: Instant,
     },
 }
@@ -59,6 +69,17 @@ pub struct FaultRecord {
     pub timestamp_ms: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SlowPeerRecord {
+    pub node: String,
+    pub peer: String,
+    pub publish_failed: usize,
+    pub forward_failed: usize,
+    pub queue_full: usize,
+    pub timeout: usize,
+    pub timestamp_ms: f64,
+}
+
 pub struct Collector {
     start: Instant,
     publications: HashMap<String, Instant>,
@@ -71,6 +92,12 @@ pub struct Collector {
     faults: Vec<FaultRecord>,
     pending_partition_end: Option<Instant>,
     resume_latencies_ms: Vec<f64>,
+    slow_peer_records: Vec<SlowPeerRecord>,
+    slow_peer_unique: HashSet<String>,
+    slow_peer_publish_failures: usize,
+    slow_peer_forward_failures: usize,
+    slow_peer_queue_full: usize,
+    slow_peer_timeouts: usize,
 }
 
 impl Collector {
@@ -87,6 +114,12 @@ impl Collector {
             faults: Vec::new(),
             pending_partition_end: None,
             resume_latencies_ms: Vec::new(),
+            slow_peer_records: Vec::new(),
+            slow_peer_unique: HashSet::new(),
+            slow_peer_publish_failures: 0,
+            slow_peer_forward_failures: 0,
+            slow_peer_queue_full: 0,
+            slow_peer_timeouts: 0,
         }
     }
 
@@ -158,6 +191,35 @@ impl Collector {
                     timestamp_ms,
                 });
             }
+            SimEvent::SlowPeer {
+                peer_id,
+                slow_peer,
+                failed_messages,
+                timestamp,
+            } => {
+                let timestamp_ms = timestamp.duration_since(self.start).as_secs_f64() * 1_000.0;
+                let queue_full = failed_messages.total_queue_full();
+                self.slow_peer_publish_failures = self
+                    .slow_peer_publish_failures
+                    .saturating_add(failed_messages.publish);
+                self.slow_peer_forward_failures = self
+                    .slow_peer_forward_failures
+                    .saturating_add(failed_messages.forward);
+                self.slow_peer_queue_full = self.slow_peer_queue_full.saturating_add(queue_full);
+                self.slow_peer_timeouts = self
+                    .slow_peer_timeouts
+                    .saturating_add(failed_messages.timeout);
+                self.slow_peer_unique.insert(slow_peer.to_string());
+                self.slow_peer_records.push(SlowPeerRecord {
+                    node: peer_id.to_string(),
+                    peer: slow_peer.to_string(),
+                    publish_failed: failed_messages.publish,
+                    forward_failed: failed_messages.forward,
+                    queue_full,
+                    timeout: failed_messages.timeout,
+                    timestamp_ms,
+                });
+            }
         }
     }
 
@@ -190,6 +252,28 @@ impl Collector {
         } else {
             None
         };
+        let bandwidth = if self.slow_peer_records.is_empty() {
+            None
+        } else {
+            Some(BandwidthMetrics {
+                throttled_peers: self.slow_peer_unique.len(),
+                slow_peer_events: self.slow_peer_records.len(),
+            })
+        };
+
+        let gossip_backpressure = if self.slow_peer_records.is_empty() {
+            None
+        } else {
+            Some(GossipBackpressureMetrics {
+                events: self.slow_peer_records.len(),
+                unique_peers: self.slow_peer_unique.len(),
+                queue_full_messages: self.slow_peer_queue_full,
+                publish_failures: self.slow_peer_publish_failures,
+                forward_failures: self.slow_peer_forward_failures,
+                timeout_failures: self.slow_peer_timeouts,
+            })
+        };
+
         SimulationSummary {
             total_publishes: self.total_publishes,
             total_receives: self.total_receives,
@@ -199,6 +283,9 @@ impl Collector {
             mesh_changes: self.mesh_changes,
             faults: self.faults,
             recovery,
+            bandwidth,
+            gossip_backpressure,
+            slow_peer_records: self.slow_peer_records,
             comparison: None,
         }
     }

@@ -42,6 +42,22 @@ def render_network_report(path: Path, summary: Dict[str, Any]) -> str:
         if mean_resume is not None:
             lines.append(f"  mean_resume_ms: {mean_resume:.2f}")
 
+    bandwidth = summary.get("bandwidth") or {}
+    if bandwidth:
+        lines.append(
+            "  bandwidth_throttling: "
+            f"peers={bandwidth.get('throttled_peers', 0)}, "
+            f"events={bandwidth.get('slow_peer_events', 0)}"
+        )
+
+    backpressure = summary.get("gossip_backpressure") or {}
+    if backpressure:
+        lines.append(
+            "  gossip_backpressure: "
+            f"events={backpressure.get('events', 0)}, "
+            f"queue_full={backpressure.get('queue_full_messages', 0)}"
+        )
+
     comparison = summary.get("comparison")
     if comparison:
         deltas = comparison.get("deltas", {})
@@ -172,6 +188,20 @@ def main(argv: List[str]) -> int:
         if max_resume is not None and max_resume > args.max_resume_latency:
             failures.append(
                 f"{path} recovery max resume {max_resume:.2f}ms exceeds threshold {args.max_resume_latency:.2f}ms"
+            )
+        if recovery and not (recovery.get("resume_latencies_ms") or []):
+            failures.append(f"{path} expected peer recovery resume events but none were recorded")
+
+        bandwidth = summary.get("bandwidth") or {}
+        if bandwidth and bandwidth.get("throttled_peers", 0) == 0:
+            failures.append(
+                f"{path} reported bandwidth throttling metrics without throttled peers"
+            )
+
+        backpressure = summary.get("gossip_backpressure") or {}
+        if backpressure and backpressure.get("queue_full_messages", 0) == 0:
+            failures.append(
+                f"{path} reported gossip backpressure metrics without queue exhaustion"
             )
 
     if failures:
