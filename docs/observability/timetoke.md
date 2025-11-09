@@ -19,12 +19,25 @@ The SLO windows align with the weekly acceptance cadence. Operators should verif
 
 ### Final replay metrics
 
-Operators consume the replay counters above through two derived, “final” gauges that appear in dashboards, reports, and CLI summaries:
+Operators consume the replay counters above through two derived, “final” gauges that appear in dashboards, reports, and CLI summaries. They consolidate the raw counters and stall detectors into auditing-friendly views and ship with metadata labels (`threshold`, `window`) so dashboards can render the raw timestamps and the derived final state side by side:
 
-- **Replay success rate (`timetoke_replay_success_rate`).** A rolling ratio of `success_total` vs. `failure_total` normalised to `0.0 – 1.0`. The nightly report multiplies this value by 100 to express the 7‑Tage-Erfolgsquote. Alert thresholds mirror the ≥ 99 % SLO, and the CLI renders both the percentage and the raw counter deltas so auditors can reconcile local PromQL queries.
-- **Replay stalled detector (`timetoke_replay_stalled_final{threshold}`).** This gauge aggregates the warning/critical states into a single flag per threshold. It remains `0` while replay succeeds within the respective 60 s / 120 s windows and flips to `1` once the underlying `timetoke_replay_stalled{threshold}` signals a breach. Dashboards label the metric “Replay stalled (final)” to distinguish it from the per-attempt timestamps.
+- **Replay success rate (`timetoke_replay_success_rate`).** A rolling ratio of `success_total` vs. `failure_total` normalised to `0.0 – 1.0`. The nightly report multiplies this value by 100 to express the 7‑Tage-Erfolgsquote. Alert thresholds mirror the ≥ 99 % SLO, and the CLI renders both the percentage and the raw counter deltas so auditors can reconcile local PromQL queries. The gauge is computed server side via:
 
-The gauges ship with metadata labels (`threshold`, `window`) so that dashboards can render both the raw timestamps and the derived final state side by side.
+  ```promql
+  clamp_max(
+    sum(increase(timetoke_replay_success_total[7d])) /
+    clamp_min(sum(increase(timetoke_replay_success_total[7d])) + sum(increase(timetoke_replay_failure_total[7d])), 1),
+    1
+  )
+  ```
+
+- **Replay stalled detector (`timetoke_replay_stalled_final{threshold}`).** Aggregates the warning/critical states into a single flag per threshold. It remains `0` while replay succeeds within the respective 60 s / 120 s windows and flips to `1` once the underlying `timetoke_replay_stalled{threshold}` signals a breach. Dashboards label the metric “Replay stalled (final)” to distinguish it from the per-attempt timestamps. The helper derives from the exporter by taking the max over the window:
+
+  ```promql
+  max_over_time(timetoke_replay_stalled{threshold="warning"}[1m])
+  ```
+
+  (swap `threshold` to `critical` for the 120 s window). In alerts and runbooks reference the *final* gauge so responders immediately see whether the stall is still active.
 
 ## Scheduled report
 
@@ -62,16 +75,28 @@ The report wrapper issues the following PromQL queries:
 - `histogram_quantile(0.95, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))`
 - `histogram_quantile(0.99, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))`
 
-Reuse these snippets in Grafana dashboard panels or when cross-checking the CLI output with live Prometheus. When latency SLOs regress, correlate the histogram buckets with the `timetoke_replay_duration_ms_count` increase to ensure the exporter is healthy.
+Reuse these snippets in Grafana dashboard panels or when cross-checking the CLI output with live Prometheus. When latency SLOs regress, correlate the histogram buckets with the `timetoke_replay_duration_ms_count` increase to ensure the exporter is healthy. The derived gauges above use the same counter windows, so you can recompute them manually for postmortem evidence:
+
+```promql
+timetoke_replay_success_rate
+timetoke_replay_stalled_final{threshold}
+```
 
 ## CLI quick check
 
-Validators expose the aggregated replay telemetry via `GET /observability/timetoke/replay`. The `rpp-node snapshot replay status` helper wraps the call, prints counters and percentiles, and exits with a warning whenever the 99 % success-rate or 60 s / 120 s latency targets are violated:
+Validators expose the aggregated replay telemetry via `GET /observability/timetoke/replay`. The `rpp-node snapshot replay status` helper wraps the call, prints counters and percentiles, and exits with a non-zero status whenever the 99 % success-rate, the 60 s / 120 s stall thresholds, or the documented latency targets are violated:
 
 ```bash
 rpp-node snapshot replay status \
   --config /etc/rpp/validator.toml \
-  --rpc-url https://validator.example.net:7070
+  --rpc-url https://validator.example.net:7070 \
+  --format table
 ```
 
-The command is safe to run during incidents, surfaces the `timetoke_replay_*` gauges inline, and guides responders straight to the Timetoke failover runbook when thresholds trip. Its output groups the final replay metrics up front—`Replay success rate: 99.7 % (success=12345, failure=32)` followed by `Replay stalled (warning|critical): 0`—before listing the percentile latencies and raw counters. A trailing summary echoes whether each SLO remains compliant so that responders can paste a single block into the incident log.
+Key behaviour:
+
+- **Final replay metrics first.** The command renders `Replay success rate: 99.7 % (success=12345, failure=32)` and `Replay stalled (warning|critical): 0` before listing percentile latencies so responders can stop once the final gauges are green.
+- **Context for auditors.** The raw counter deltas, Prometheus window (`window=7d`), and stall thresholds are echoed inline to reconcile dashboards with the CLI output.
+- **Fail-fast exit codes.** `0` for healthy runs, `10` when the success rate drops below 99 %, `20`/`21` for warning/critical stall detections, and `30` when latency percentiles violate their SLOs.
+
+During incidents paste the command output into the log and escalate via the [Timetoke failover runbook](../runbooks/timetoke_failover.md) if any exit code other than `0` is returned. The helper is safe to run repeatedly; it issues a single RPC call and does not mutate validator state.

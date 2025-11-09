@@ -58,11 +58,11 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
 
 ## Replay Defense Telemetry
 
-- **Letzte Prüfung:** 2026-08-19 10:30 UTC (Nightly + manueller CLI-Check)
+- **Letzte Prüfung:** 2026-08-26 11:05 UTC (Nightly + manueller CLI-Check)
 - `timetoke_replay_success_rate` ➜ 99,7 % (7‑Tage-Betrachtung, ✅ innerhalb SLO)
 - `timetoke_replay_stalled_final{threshold="warning"}` ➜ 0 · `threshold="critical"` ➜ 0 (keine Stall-Events)
-- CLI `rpp-node snapshot replay status` bestätigt Erfolgsrate, Stall-Detector und Latenzen; Ausgabe im Incident-/Audit-Log
-  abgelegt.【F:docs/observability/timetoke.md†L1-L120】【F:docs/runbooks/timetoke_failover.md†L1-L120】
+- CLI [`rpp-node snapshot replay status`](../observability/timetoke.md#cli-quick-check) bestätigt Erfolgsrate, Stall-Detector,
+  Latenzen und Exit-Codes; Ausgabe im Incident-/Audit-Log abgelegt.【F:docs/observability/timetoke.md†L90-L158】【F:docs/runbooks/timetoke_failover.md†L1-L120】【F:docs/status/weekly.md†L1-L120】
 
 ## Phase 1 abgeschlossen (Kalenderwoche 37/2025)
 

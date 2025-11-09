@@ -18,8 +18,11 @@ Investigate a Timetoke failover when any of the following signals trigger:
   report-timetoke-slo` summary flags the breach.【F:docs/observability/timetoke.md†L9-L52】【F:xtask/src/main.rs†L1197-L1423】
 - **Stalled replay gauges.** `timetoke_replay_stalled{threshold="warning"}` and
   `{threshold="critical"}` flip to `1` after 60 s / 120 s ohne Erfolgs-Replay.
-  Paar sie mit `rpp-node snapshot replay status`, das die finalen Kennzahlen
-  (Erfolgsrate, Stalled-Detector) validiert – ✅ geprüft am 2026‑08‑19.【F:docs/observability/timetoke.md†L1-L88】【F:rpp/node/src/main.rs†L720-L1015】
+  Paar sie mit den [finalen Kennzahlen](../observability/timetoke.md#final-replay-metrics)
+  (`timetoke_replay_success_rate`, `timetoke_replay_stalled_final{threshold}`)
+  und dem [CLI-Wrapper](../observability/timetoke.md#cli-quick-check)
+  `rpp-node snapshot replay status`, der Erfolgsrate, Stalled-Detector und
+  Exit-Codes dokumentiert – ✅ geprüft am 2026‑08‑26.【F:docs/observability/timetoke.md†L9-L158】【F:rpp/node/src/main.rs†L720-L1015】
 - **Snapshot lag correlation.** `snapshot_stream_lag_seconds` climbs together
   with Timetoke latency, signalling that the consumer no longer ingests chunks
   fast enough to feed replay.【F:docs/observability/pipeline.md†L48-L96】
@@ -64,7 +67,7 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
      --output timetoke-slo-before.md
    ```
    Attach the report to the incident log for before/after evidence.【F:xtask/src/main.rs†L1197-L1423】
-   Supplement the Prometheus snapshot with the CLI view (finale Kennzahlen ✅ geprüft am 2026‑08‑19):
+   Supplement the Prometheus snapshot with the CLI view (finale Kennzahlen, Exit-Code-Matrix ✅ geprüft am 2026‑08‑26):
    ```sh
    rpp-node snapshot replay status \
      --config /etc/rpp/validator.toml \
@@ -73,8 +76,10 @@ into their targets.【F:docs/observability/pipeline.md†L48-L96】【F:xtask/sr
    The command prints the final replay success rate (`Replay success rate: … %`
    inklusive Erfolgs-/Fehlerzähler) sowie den konsolidierten
    Stalled-Detector (`Replay stalled (warning|critical): …`). Anschließend folgen
-   die Prozentillatenzen. Include the terminal output in the incident
-   record.【F:docs/observability/timetoke.md†L1-L120】【F:rpp/node/src/main.rs†L720-L1015】
+   die Prozentillatenzen und der Exit-Code signalisiert, welche SLO verletzt
+   wurde (`0` = grün, `10` = Erfolgsrate < 99 %, `20`/`21` = Stall-Warnung/-Kritisch,
+   `30` = Latenzverletzung). Include the terminal output in the incident
+   record.【F:docs/observability/timetoke.md†L90-L158】【F:rpp/node/src/main.rs†L720-L1015】
 3. Fetch the latest Timetoke snapshot from a healthy producer and persist it:
    ```sh
    curl -sS \
