@@ -1,0 +1,55 @@
+# Render this manifest with `envsubst < node-deployment.yaml | kubectl apply -f -`
+# after exporting the variables referenced below to match your environment.
+# Example:
+#   export NODE_APP_PORT=8080 NODE_CPU_REQUEST=250m NODE_MEMORY_REQUEST=256Mi \
+#          NODE_CPU_LIMIT=500m NODE_MEMORY_LIMIT=512Mi \
+#          NODE_LIVENESS_INITIAL_DELAY=10 NODE_LIVENESS_PERIOD=10 NODE_LIVENESS_FAILURE_THRESHOLD=3 \
+#          NODE_READINESS_INITIAL_DELAY=5 NODE_READINESS_PERIOD=5 NODE_READINESS_FAILURE_THRESHOLD=3
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: node
+  labels:
+    app: node
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: node
+  template:
+    metadata:
+      labels:
+        app: node
+    spec:
+      containers:
+        - name: node
+          image: rpp/node:latest
+          ports:
+            - name: http
+              containerPort: ${NODE_APP_PORT} # Export NODE_APP_PORT and run `envsubst` before applying.
+          env:
+            - name: NODE_APP_PORT
+              value: "${NODE_APP_PORT}" # Propagates the rendered port to the container.
+          # Override NODE_CPU_REQUEST, NODE_MEMORY_REQUEST, NODE_CPU_LIMIT, and NODE_MEMORY_LIMIT
+          # to match cluster capacity before applying the manifest.
+          resources:
+            requests:
+              cpu: ${NODE_CPU_REQUEST}
+              memory: ${NODE_MEMORY_REQUEST}
+            limits:
+              cpu: ${NODE_CPU_LIMIT}
+              memory: ${NODE_MEMORY_LIMIT}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: ${NODE_LIVENESS_INITIAL_DELAY} # Tune based on cold start time before substituting.
+            periodSeconds: ${NODE_LIVENESS_PERIOD} # Increase for less frequent probing.
+            failureThreshold: ${NODE_LIVENESS_FAILURE_THRESHOLD} # Raise if startup spikes cause false positives.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: ${NODE_READINESS_INITIAL_DELAY} # Delay should cover dependency warm-up.
+            periodSeconds: ${NODE_READINESS_PERIOD} # Adjust for acceptable lag in service discovery.
+            failureThreshold: ${NODE_READINESS_FAILURE_THRESHOLD} # Increase if transient network issues are expected.
