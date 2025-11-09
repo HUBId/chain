@@ -205,3 +205,117 @@ Typische Signale sind rote Nightly-Checks (`worm-export-smoke`) oder der Alert
   `worm_export_failures_total` in Prometheus/Grafana.
 - Erfasse jede manuelle Stop/Start-Aktion des Validators (z. B.
   `systemctl stop|start rpp-node`) mit Timestamp im Incident-Log.
+
+## Phase‑C Kontrollen
+
+Die folgenden Kontrollen stammen aus Phase C und adressieren Langzeit-
+Retention, Evidenzintegrität sowie den Chaos-Drill für Snapshot-Partitionen.
+Jede Kontrolle besitzt eine eigene Eskalationskette und nutzt Nightly-
+Artefakte für die Erstdiagnose.
+
+### WORM-Retention-Check schlägt fehl
+
+**Eskalationskette & Ansprechpartner:innen**
+
+1. **Compliance On-Call** (`#compliance-oc`, Telefon `+49 30 9876 5432`) –
+   übernimmt das Incident-Ticket, sperrt Freigaben und fordert das Nightly-
+   Artefakt `worm_retention_report.json` an.
+2. **Storage Engineering** (Lead: Jin Park, jin.park@example.com) – prüft
+   Retention-Metadaten, Signaturen und prüft das zugrunde liegende Bucket-
+   Setup gegen die [WORM-Export-Dokumentation](./worm_export.md).
+3. **Security Duty** (sec-duties@example.com) – bewertet Manipulations-
+   verdacht und initiiert forensische Sicherungen des Audit-Pfads.
+
+### First Action Checklist
+
+- [ ] Lade das Nightly-Artefakt `worm-export-smoke` herunter und
+      verlinke `worm_retention_report.json` sowie das zugehörige `manifest.json`
+      aus dem Evidence-Bundle (`phase3-evidence-<timestamp>`).
+- [ ] Vergleiche im Report die Felder `stale_entries`, `unsigned_entries` und
+      `retention_violations` mit den Nightly-Schwellenwerten; dokumentiere die
+      Abweichungen im Incident-Log und referenziere die betroffenen Summaries.
+- [ ] Führe `cargo xtask worm-retention-check --report <pfad>` erneut aus, um
+      lokale Gegenproben zu erhalten, und hänge den CLI-Output an die
+      Incident-Dokumentation.
+
+**Investigation & Artefakte**
+
+- Korrelieren `worm_retention_report.json` mit `worm-export-summary.json`
+  (Nightly `worm-export-smoke`), um festzustellen, welche Signaturen oder
+  Retention-Fenster betroffen sind.
+- Nutze `journalctl -u rpp-node --grep "worm export"` und die Admission-
+  Backups, um Lücken in den Audit-Streams zu identifizieren.
+- Bei wiederholten Abweichungen eskaliere an Governance/GRC und dokumentiere
+  Korrekturmaßnahmen in der [Compliance Overview](../governance/compliance_overview.md).
+
+### Evidence-Bundle-Verifizierung fehlgeschlagen
+
+**Eskalationskette & Ansprechpartner:innen**
+
+1. **Compliance On-Call** (`#compliance-oc`) – koordiniert das Review des
+   Nightly-Artefakts `phase3-evidence-<timestamp>` und informiert Audit.
+2. **Release Engineering Lead** (Mara Schulz, mara.schulz@example.com) –
+   prüft das Sammelskript (`cargo xtask collect-phase3-evidence`) auf fehlende
+   Quellen oder Validierungsfehler.
+3. **Security Duty** – bewertet Integritätsverletzungen am Evidence-Bundle
+   (fehlende Signaturen, Manipulationshinweise) und sperrt ggf. weitere
+   Bundles.
+
+### First Action Checklist
+
+- [ ] Öffne das Nightly-Bundle `phase3-evidence-<timestamp>` und kontrolliere
+      `manifest.json` auf fehlende Einträge (`missing`-Abschnitt) sowie die
+      Prüfsummen der Kategorien „WORM export evidence“ und „Snapshot reports“.
+- [ ] Wiederhole `cargo xtask collect-phase3-evidence --output-dir <tmp>` lokal,
+      um Validierungs-Logs (`verify.log`) zu erhalten, und vergleiche die
+      erzeugte Struktur mit dem Nightly-Artefakt.
+- [ ] Sichere `verify.log`, `manifest.json` und betroffene Belegdateien im
+      Incident-Log und verlinke den passenden Abschnitt im
+      [Evidence Bundle Index](../governance/evidence_bundle_index.md).
+
+**Investigation & Artefakte**
+
+- Prüfe im Manifest die Referenzen auf `worm_retention_report.json` und
+  `snapshot-verify-report.json`, um fehlende oder ungültige Prüfsummen
+  einzugrenzen.
+- Nutze `cargo xtask verify-report --report <pfad>` und `sha256sum` für
+  Snapshot-Reports, sowie `jq '.entries[]' worm_retention_report.json` für
+  WORM-Deltas, um Abweichungen zu bestätigen.
+- Bei systematischen Fehlern im Sammelskript eröffne ein Engineering-Ticket
+  und dokumentiere Hotfixes/Workarounds im Evidence-Bundle-Manifest.
+
+### Snapshot-Chaos-Run / Partition Drill fehlgeschlagen
+
+**Eskalationskette & Ansprechpartner:innen**
+
+1. **Release On-Call** (`#releng-oncall`, Telefon `+49 30 1234 5678`) –
+   stoppt abhängige Release-Jobs und fordert das Nightly-Artefakt
+   `snapshot_partition_report.json` an.
+2. **Network Operations** – analysiert Partitionierung, Peer-Verfügbarkeit und
+   Streaming-Lag anhand der Report-Deltas und startet Recovery-Maßnahmen.
+3. **Compliance Liaison** (Ishan Patel, ishpatel@example.com) – stellt sicher,
+   dass der Drill im Phase‑C-Evidence-Log dokumentiert und an Auditor:innen
+   kommuniziert wird.
+
+### First Action Checklist
+
+- [ ] Lade das Nightly-Artefakt `snapshot-partition` und sichere
+      `snapshot_partition_report.json` inkl. grafischer Anhänge (`timeline.png`,
+      falls vorhanden) im Incident-Log.
+- [ ] Prüfe im Report die Felder `resume_latency_seconds` und
+      `retry_chunks` gegenüber den Phase‑C-Grenzwerten (SLO ≤ 120 s Resume,
+      ≤ 25 Retries) und notiere Abweichungen.
+- [ ] Führe `cargo xtask snapshot-health --report <pfad>` oder
+      `rpp-node validator snapshot status` gegen das betroffene Cluster aus,
+      um den aktuellen Stream-Lag zu bestätigen.
+
+**Investigation & Artefakte**
+
+- Vergleiche `snapshot_partition_report.json` mit dem Prometheus-Export
+  (`snapshot_stream_lag_seconds`, `snapshot_chunk_checksum_failures_total`)
+  und dokumentiere Graphen im Incident-Log.
+- Korrelieren Partition-Deltas mit Peer-Logs (`journalctl -u rpp-node -t
+  snapshot_validator`), um fehlerhafte Peers oder Netzpfade zu identifizieren.
+- Verweise auf das [Snapshot-Failover-Runbook](./network_snapshot_failover.md)
+  für Recovery-Schritte und hänge das Ergebnis (z. B. `resume_success=true`)
+  dem Phase‑C-Evidence-Archiv an.
