@@ -300,6 +300,35 @@ jobs:
             ./scripts/provenance_attest.sh --artifact "$file" --target "$target" --subject "$subject"
           done
           cosign sign-blob --yes --output-signature dist/SHA256SUMS.txt.sig --output-certificate dist/SHA256SUMS.txt.pem dist/SHA256SUMS.txt
+      - name: Prepare snapshot verifier release asset
+        id: snapshot_asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find dist/artifacts -name 'snapshot-verify-report.json' -print | sort)
+          if [[ ${#reports[@]} -eq 0 ]]; then
+            echo "::error::snapshot-verify-report.json missing from release artifacts" >&2
+            exit 1
+          fi
+          ref_report="${reports[0]}"
+          ref_hash="$(sha256sum "$ref_report" | awk '{print $1}')"
+          for report in "${reports[@]}"; do
+            hash="$(sha256sum "$report" | awk '{print $1}')"
+            if [[ "$hash" != "$ref_hash" ]]; then
+              echo "::error::snapshot verifier reports differ across targets: $report" >&2
+              exit 1
+            fi
+          done
+          mkdir -p dist
+          cp "$ref_report" dist/snapshot-verify-report.json
+          echo "report_path=dist/snapshot-verify-report.json" >> "$GITHUB_OUTPUT"
+          has_signature=false
+          if [[ -f "${ref_report}.sig" ]]; then
+            cp "${ref_report}.sig" dist/snapshot-verify-report.json.sig
+            echo "signature_path=dist/snapshot-verify-report.json.sig" >> "$GITHUB_OUTPUT"
+            has_signature=true
+          fi
+          echo "has_signature=${has_signature}" >> "$GITHUB_OUTPUT"
       - name: Reference snapshot verifier reports in release notes
         shell: bash
         run: |
@@ -345,6 +374,7 @@ Each JSON summary enumerates the manifest identifier, Firewood state root, and c
 EOF
           } >> dist/release-notes.md
       - name: Publish GitHub release
+        id: publish_release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
@@ -361,5 +391,25 @@ EOF
             dist/plonky3-setup-hashes.json.intoto.jsonl.sig
             dist/plonky3-setup-hashes.json.intoto.jsonl.pem
             dist/artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload snapshot verifier report asset
+        if: steps.publish_release.outputs.upload_url != ''
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.publish_release.outputs.upload_url }}
+          asset_path: ${{ steps.snapshot_asset.outputs.report_path }}
+          asset_name: snapshot-verify-report.json
+          asset_content_type: application/json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload snapshot verifier signature asset
+        if: steps.snapshot_asset.outputs.has_signature == 'true' && steps.publish_release.outputs.upload_url != ''
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.publish_release.outputs.upload_url }}
+          asset_path: ${{ steps.snapshot_asset.outputs.signature_path }}
+          asset_name: snapshot-verify-report.json.sig
+          asset_content_type: application/octet-stream
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

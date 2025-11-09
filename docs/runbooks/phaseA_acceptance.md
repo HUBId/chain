@@ -13,7 +13,10 @@ milestone.
       `snapshot-verify-report.json` und `snapshot-verify-report.json.sha256`
       unter `dist/artifacts/<target>/`. Hinterlege die JSON- und SHA256-Datei als
       Pflichtartefakte, archiviere die Einzelberichte für spätere Audits und
-      verweise im Evidence-Bundle auf den [`Evidence Bundle Index`](../governance/evidence_bundle_index.md).【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L122-L209】【F:docs/governance/evidence_bundle_index.md†L9-L49】
+      verweise im Evidence-Bundle auf den [`Evidence Bundle Index`](../governance/evidence_bundle_index.md). Zusätzlich prüfen,
+      dass der GitHub-Release die Assets `snapshot-verify-report.json` und
+      `snapshot-verify-report.json.sig` auflistet; dokumentiere den Asset-Link
+      zusammen mit Hash und Signatur im Freigabeprotokoll.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L303-L411】【F:docs/governance/evidence_bundle_index.md†L9-L49】
       Validiere den JSON-Inhalt zusätzlich lokal via
       `cargo xtask verify-report --report dist/artifacts/<target>/snapshot-verify-report.json`
       – das Kommando prüft sowohl die Aggregation als auch Einzelreports gegen
@@ -29,7 +32,7 @@ milestone.
       den Abschnitt „Snapshot verifier attestation“ mit den Hashes aus den
       `.sha256`-Dateien. Vergleiche mindestens einen Wert lokal via
       `sha256sum dist/artifacts/<target>/snapshot-verify-report.json` und
-      dokumentiere den Abgleich im Freigabeprotokoll.【F:.github/workflows/release.yml†L210-L233】
+      dokumentiere den Abgleich im Freigabeprotokoll.【F:.github/workflows/release.yml†L332-L353】
 - [ ] **CI/Nightly-Referenzen verlinkt.** Verweise auf den CI-Job
       `snapshot-verifier`, der das synthetische Prüfbündel unter
       `target/snapshot-verifier-smoke/` erzeugt, sowie auf die Release-Artefakte
