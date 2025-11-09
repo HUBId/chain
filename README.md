@@ -162,6 +162,39 @@ Validator and hybrid modes require the STWO prover backend and abort during
 startup when the corresponding feature (`prover-stwo` or `prover-stwo-simd`) is
 missing.
 
+## Docker smoke test
+
+The repository ships a `docker-compose.yml` that wires the node, validator UI,
+simnet orchestrator, and the Firewood CLI. Copy the sample environment and spin
+up the stack in detached mode:
+
+```sh
+cp .env.example .env
+docker compose up -d
+```
+
+The compose definitions enable container health checks by default. Probe the
+exposed endpoints once the build completes:
+
+```sh
+# Node RPC health【F:rpp/node/Dockerfile†L86-L124】
+curl -f http://127.0.0.1:${RPP_NODE_RPC_PORT}/health/ready
+
+# Simnet orchestrator health server (enabled via SIMNET_HEALTH_ADDR)【F:tools/simnet/README.docker.md†L42-L57】
+curl -f http://127.0.0.1:${SIMNET_HEALTH_PORT}/health/live
+
+# Validator UI healthz endpoint served by NGINX【F:validator-ui/README.md†L20-L33】
+curl -f http://127.0.0.1:${VALIDATOR_UI_PORT}/healthz
+
+# Optional Firewood CLI health server (requires the tooling profile)【F:fwdctl/README.md†L27-L40】
+docker compose --profile tooling up -d fwdctl
+curl -f http://127.0.0.1:${FWDCTL_HEALTH_PORT}/health/ready
+```
+
+Shut everything down with `docker compose down` after the smoke test. The
+`tooling` profile keeps the `fwdctl` loop out of the default stack while still
+providing an always-on health endpoint for ad-hoc Firewood experiments.
+
 The Plonky3 backend now mirrors the STWO production pipeline. Build or check
 the crate with `--features backend-plonky3` (optionally paired with `dev`) to
 exercise the vendor prover end-to-end. Compile-time guards still refuse to pair
