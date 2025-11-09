@@ -35,39 +35,41 @@ specifications ship with the repository for easy reference.【F:docs/README.md�
 
 ## Proof of Lottery (POL)
 
-Die RPP Blockchain verwendet kein Proof of Stake (PoS) und kein Proof of Work (PoW).
-Stattdessen basiert ihr Konsens- und Belohnungssystem auf einem neuartigen Mechanismus namens Proof of Lottery (POL).
+Die RPP Blockchain nutzt kein Proof of Stake (PoS) und kein Proof of Work (PoW).
+Stattdessen basiert ihr Konsens- und Belohnungsmechanismus auf einem eigenen Verfahren namens Proof of Lottery (POL).
 
-Proof of Lottery (POL) beschreibt die Art, wie in der RPP Blockchain Validatoren und Teilnehmer über eine verifizierbare Zufallsauswahl (VRF) in Kombination mit BFT-Finalität, Reputation, Zero-Knowledge Sovereign Identity (ZSI), TimeToken und dem internen Coin-Reward-Verteilungsprozess bestimmt werden.
+Proof of Lottery (POL) beschreibt das Zusammenspiel aus
 
-In jeder Konsens-Runde (BFT-Round) werden Knoten über die VRF-Selektion zufällig bestimmt, um am Block-Finalisierungsprozess teilzunehmen.
-Diese Auswahl ist überprüfbar, transparent und nicht kapitalgebunden.
-Der Block-Reward (Coin-Reward) wird anschließend im BFT-Konsens zufällig und fair unter den korrekt teilnehmenden Nodes verteilt.
+Verifiable Random Function (VRF),
 
-Das Zusammenspiel aus
+Reputation System (RPP RS),
 
-Reputation System (RPP RS) – bewertet kontinuierliche, ehrliche Teilnahme,
+Zero-Knowledge Sovereign Identity (ZSI),
 
-TimeToken – belegt die Betriebszeit (Uptime) und aktive Beteiligung,
+TimeToken,
 
-ZSI – stellt sybil-resistente Identität sicher,
+Tier-System, und
 
-VRF – liefert den verifizierbaren Zufall für die Auswahl, und
+dem Random-BFT-basierten Coin-Reward-Prozess.
 
-BFT CoinReward-Verteilung – sorgt für die gleichmäßige Belohnung der Beteiligten,
+In jeder Konsensrunde bestimmt die VRF-basierte Zufallsauswahl die Knoten, die am BFT-Prozess teilnehmen dürfen.
+Diese Auswahl ist überprüfbar, manipulationssicher und unabhängig von Kapital oder Rechenleistung.
+Die im BFT-Komitee korrekt teilnehmenden Nodes erhalten anschließend den Coin-Reward, der im Random-BFT-Verfahren verteilt wird.
 
-bildet gemeinsam den Mechanismus des Proof of Lottery.
+Das Reputation System (RPP RS) bewertet kontinuierlich das Verhalten und die Zuverlässigkeit eines Knotens.
+Der TimeToken dokumentiert dessen Betriebszeit und aktive Teilnahme.
+ZSI sorgt für eindeutige, sybil-resistente Identitäten.
+Das Tier-System ordnet Nodes anhand ihrer Reputation und Aktivität in unterschiedliche Vertrauens- und Gewichtungsebenen ein, die wiederum ihre Wahrscheinlichkeit für die VRF-Auswahl beeinflussen.
 
-POL ist damit ein reputations-, identitäts- und zufallsbasiertes Auswahlverfahren, das
-– ohne Mining, ohne Stake, ohne Energieverbrauch –
-eine faire, überprüfbare und finalisierende Blockerzeugung ermöglicht.
+Dadurch ergibt sich ein dynamisches, mehrstufiges Netzwerkmodell:
 
-Alle für POL relevanten Komponenten sind in der RPP-Blockchain bereits integriert:
-die VRF-Selektion im Konsensmodul,
-das RPP Reputation System (RPP RS),
-die TimeToken-Logik für Uptime-Proofs,
-das ZSI-System für Identität,
-sowie der Random-BFT-Konsens zur Finalität.
+Höhere Tiers stehen für stabile, verifizierte und zuverlässige Nodes mit nachweisbarer Teilnahmehistorie.
+
+Niedrigere Tiers sind neuere oder weniger aktive Nodes, die dennoch in der Lotterie vertreten sind, aber mit geringerer Auswahlwahrscheinlichkeit.
+
+Dieses Zusammenspiel aus Zufall (VRF), Vertrauen (Reputation/ZSI), Kontinuität (TimeToken) und Stufung (Tier-System) bildet den Mechanismus von Proof of Lottery (POL).
+Er sorgt für faire, überprüfbare und dezentrale Validator-Auswahl –
+ohne Mining, ohne Stake, und ohne Energieverschwendung.
 
 ## Repository layout
 
