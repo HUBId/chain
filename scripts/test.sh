@@ -21,7 +21,7 @@ Test selection:
   --integration             Run integration tests (`cargo test --tests`)
   --doc                     Run documentation tests
   --all                     Run all test suites (default if none selected)
-  --backend <name>          Run the suites for a specific backend (default|stwo|plonky3|rpp-stark)
+  --backend <name>          Run the suites for a specific backend (default|stwo|plonky3|rpp-stark|prod-stwo-rpp-stark)
                             (defaults to default, stwo, and rpp-stark)
 
 Build options:
@@ -42,6 +42,7 @@ Backends:
   plonky3    Force the `backend-plonky3` feature only (experimental matrix)
   prod-stwo-plonky3  Force `prod,prover-stwo,backend-plonky3` with `--no-default-features`
   rpp-stark  Force the `backend-rpp-stark` feature
+  prod-stwo-rpp-stark  Force `prod,prover-stwo,backend-rpp-stark` with `--no-default-features`
 USAGE
 }
 
@@ -137,7 +138,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       case "$2" in
-        default|stwo|plonky3|prod-stwo-plonky3|rpp-stark)
+        default|stwo|plonky3|prod-stwo-plonky3|rpp-stark|prod-stwo-rpp-stark)
           BACKENDS+=("$2")
           ;;
         *)
@@ -284,6 +285,9 @@ run_suite() {
     rpp-stark)
       backend_args=("--features" "backend-rpp-stark")
       ;;
+    prod-stwo-rpp-stark)
+      backend_args=("--no-default-features" "--features" "prod,prover-stwo,backend-rpp-stark")
+      ;;
     *)
       echo "error: unsupported backend '$backend'" >&2
       exit 1
@@ -339,6 +343,9 @@ run_integration_focus_tests() {
       ;;
     rpp-stark)
       backend_args=("--features" "backend-rpp-stark")
+      ;;
+    prod-stwo-rpp-stark)
+      backend_args=("--no-default-features" "--features" "prod,prover-stwo,backend-rpp-stark")
       ;;
     *)
       echo "error: unsupported backend '$backend'" >&2
