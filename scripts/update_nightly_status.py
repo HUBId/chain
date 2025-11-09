@@ -10,7 +10,8 @@ import pathlib
 import re
 import subprocess
 import sys
-from typing import Dict, Iterable, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 JOB_LABELS: Dict[str, str] = {
     "snapshot-verifier": "Snapshot verifier smoke test",
@@ -29,6 +30,19 @@ EMOJI_BY_CONCLUSION = {
 
 class NightlyStatusError(RuntimeError):
     """Raised if the status summary cannot be produced."""
+
+
+@dataclass
+class ControlStatus:
+    """Represents the rendered status for a compliance control."""
+
+    name: str
+    source: str
+    timestamp: str
+    icon: str
+    label: str
+    details: str
+    notes: List[str]
 
 
 def gh_api(path: str, *, params: Optional[Dict[str, str]] = None) -> dict:
@@ -150,30 +164,288 @@ def build_summary(workflow_run: dict, jobs: Iterable[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_iso_timestamp(value: Optional[str]) -> str:
+    if not value:
+        return "n/a"
+    candidate = value.strip()
+    if not candidate:
+        return "n/a"
+    try:
+        timestamp = dt.datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError:
+        return candidate
+    return timestamp.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_file_timestamp(path: pathlib.Path) -> str:
+    try:
+        mtime = path.stat().st_mtime
+    except (FileNotFoundError, OSError):
+        return "n/a"
+    timestamp = dt.datetime.utcfromtimestamp(mtime)
+    return timestamp.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _load_json(path: pathlib.Path) -> dict:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raise
+    except OSError as exc:  # pragma: no cover - I/O errors bubble up
+        raise NightlyStatusError(f"Konnte {path} nicht lesen: {exc}") from exc
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise NightlyStatusError(f"Ungültiges JSON in {path}: {exc}") from exc
+
+
+def _format_ms(value: Optional[float | int]) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if abs(numeric) >= 1000.0:
+        return f"{numeric / 1000.0:.2f}s"
+    return f"{numeric:.0f}ms"
+
+
+def summarise_retention(report_path: Optional[pathlib.Path]) -> ControlStatus:
+    name = "WORM-Retention"
+    source = "worm-retention-report.json"
+    if report_path is None or not report_path.exists():
+        notes = [
+            "⚠️ WORM-Retention: Report fehlt – Nightly-Artefakt prüfen und bei Bedarf `cargo xtask worm-retention-check` manuell neu ausführen."
+        ]
+        return ControlStatus(
+            name=name,
+            source=source,
+            timestamp="n/a",
+            icon="⚠️",
+            label="Fehlt",
+            details="Report nicht gefunden – Artefakt `worm-retention-report.json` prüfen.",
+            notes=notes,
+        )
+
+    data = _load_json(report_path)
+    generated_at = _format_iso_timestamp(data.get("generated_at"))
+    summaries: Sequence[dict[str, Any]] = data.get("summaries") or []
+    total_summaries = len(summaries)
+    stale = len(data.get("stale_entries") or [])
+    orphaned = len(data.get("orphaned_entries") or [])
+    unsigned = len(data.get("unsigned_records") or [])
+
+    warnings: List[str] = list(data.get("warnings") or [])
+    for summary in summaries:
+        summary_path = summary.get("summary_path") or "(unbekannt)"
+        for warning in summary.get("warnings") or []:
+            warnings.append(f"{summary_path}: {warning}")
+        metadata = summary.get("retention_metadata") or {}
+        for warning in metadata.get("warnings") or []:
+            warnings.append(f"{summary_path} (metadata): {warning}")
+        if not summary.get("entries"):
+            warnings.append(f"{summary_path}: keine exportierten Einträge gefunden")
+
+    notes = [f"⚠️ WORM-Retention: {warning}" for warning in warnings]
+    issues = []
+    if stale:
+        issues.append(f"{stale} abgelaufene Einträge")
+    if orphaned:
+        issues.append(f"{orphaned} verwaiste Audit-/Export-Paare")
+    if unsigned:
+        issues.append(f"{unsigned} unsignierte Logeinträge")
+    if total_summaries == 0:
+        notes.append(
+            "⚠️ WORM-Retention: Es wurden keine Summaries gefunden – Artefakt `worm-export-smoke` prüfen."
+        )
+
+    if issues:
+        icon = "❌"
+        label = "Fehler"
+        detail = ", ".join(issues)
+    elif warnings:
+        icon = "⚠️"
+        label = "Warnung"
+        detail = f"{total_summaries} Summaries, {len(warnings)} Warnungen"
+    else:
+        icon = "✅"
+        label = "OK"
+        detail = f"{total_summaries} Summaries ohne Befund"
+
+    return ControlStatus(
+        name=name,
+        source=source,
+        timestamp=generated_at,
+        icon=icon,
+        label=label,
+        details=detail,
+        notes=notes,
+    )
+
+
+def summarise_snapshot_partition(report_path: Optional[pathlib.Path]) -> ControlStatus:
+    name = "Snapshot Partition Drill"
+    source = "snapshot_partition_report.json"
+    if report_path is None or not report_path.exists():
+        notes = [
+            "⚠️ Snapshot Partition Drill: Report fehlt – Actions-Artefakt `snapshot_partition_report.json` prüfen und Chaos-Test bei Bedarf erneut ausführen."
+        ]
+        return ControlStatus(
+            name=name,
+            source=source,
+            timestamp="n/a",
+            icon="⚠️",
+            label="Fehlt",
+            details="Report nicht gefunden – Chaos-Artefakt überprüfen.",
+            notes=notes,
+        )
+
+    data = _load_json(report_path)
+    thresholds = data.get("thresholds") or {}
+    recovery = data.get("recovery") or {}
+    propagation = data.get("propagation_ms") or {}
+
+    max_resume = recovery.get("max_resume_latency_ms")
+    mean_resume = recovery.get("mean_resume_latency_ms")
+    resume_events = recovery.get("resume_events")
+    chunk_retries = data.get("chunk_retries")
+    threshold_resume = thresholds.get("max_resume_latency_ms")
+    threshold_chunk = thresholds.get("max_chunk_retries")
+
+    issues = []
+    notes: List[str] = []
+
+    if (
+        max_resume is not None
+        and threshold_resume is not None
+        and float(max_resume) > float(threshold_resume)
+    ):
+        issues.append(
+            "Resume-Latenz überschreitet Grenzwert"
+        )
+    if (
+        chunk_retries is not None
+        and threshold_chunk is not None
+        and int(chunk_retries) > int(threshold_chunk)
+    ):
+        issues.append("Chunk-Retries überschreiten Grenzwert")
+
+    if resume_events in (0, None):
+        notes.append(
+            "⚠️ Snapshot Partition Drill: Keine Resume-Ereignisse im Report – Datenlage prüfen."
+        )
+
+    if propagation.get("p95") is None:
+        notes.append(
+            "⚠️ Snapshot Partition Drill: Propagation-P95 fehlt im Report."
+        )
+
+    icon: str
+    label: str
+    if issues:
+        icon = "❌"
+        label = "Fehler"
+    elif notes:
+        icon = "⚠️"
+        label = "Warnung"
+    else:
+        icon = "✅"
+        label = "OK"
+
+    details_parts = [
+        f"p95 Propagation {_format_ms(propagation.get('p95'))}",
+        f"Resume max {_format_ms(max_resume)} (Limit {_format_ms(threshold_resume)})",
+        f"Chunk retries {chunk_retries if chunk_retries is not None else 'n/a'} (Limit {threshold_chunk if threshold_chunk is not None else 'n/a'})",
+    ]
+    if mean_resume is not None:
+        details_parts.append(f"Resume Ø {_format_ms(mean_resume)}")
+
+    timestamp = data.get("generated_at")
+    if timestamp:
+        rendered_timestamp = _format_iso_timestamp(timestamp)
+    else:
+        rendered_timestamp = _format_file_timestamp(report_path)
+
+    return ControlStatus(
+        name=name,
+        source=source,
+        timestamp=rendered_timestamp,
+        icon=icon,
+        label=label,
+        details=", ".join(details_parts),
+        notes=notes,
+    )
+
+
+def build_phasec_status(
+    retention_report: Optional[pathlib.Path],
+    chaos_report: Optional[pathlib.Path],
+) -> str:
+    statuses = [
+        summarise_retention(retention_report),
+        summarise_snapshot_partition(chaos_report),
+    ]
+    generated_at = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    lines = [
+        f"### Phase‑C Kontrollen — {generated_at}",
+        "",
+        "| Kontrolle | Quelle | Stand | Ergebnis | Details |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for status in statuses:
+        lines.append(
+            "| {name} | `{source}` | {timestamp} | {icon} {label} | {details} |".format(
+                name=status.name,
+                source=status.source,
+                timestamp=status.timestamp or "n/a",
+                icon=status.icon,
+                label=status.label,
+                details=status.details,
+            )
+        )
+
+    notes: List[str] = []
+    for status in statuses:
+        notes.extend(status.notes)
+    if notes:
+        lines.extend(["", "#### Hinweise", "", *notes])
+
+    return "\n".join(lines)
+
+
 def write_status_file(path: pathlib.Path, content: str) -> None:
     path.write_text(content + "\n", encoding="utf-8")
 
 
-def update_weekly_report(weekly_path: pathlib.Path, summary: str) -> None:
-    pattern = re.compile(r"<!-- nightly-status:start -->.*?<!-- nightly-status:end -->", re.S)
+def _replace_marker(text: str, marker: str, payload: str, path: pathlib.Path) -> str:
+    pattern = re.compile(rf"<!-- {marker}:start -->.*?<!-- {marker}:end -->", re.S)
     replacement = (
-        "<!-- nightly-status:start -->\n"
-        f"{summary}\n"
-        "<!-- nightly-status:end -->"
+        f"<!-- {marker}:start -->\n"
+        f"{payload}\n"
+        f"<!-- {marker}:end -->"
     )
-    text = weekly_path.read_text(encoding="utf-8")
-    if "<!-- nightly-status:start -->" not in text:
+    if f"<!-- {marker}:start -->" not in text:
         raise NightlyStatusError(
-            f"Marker <!-- nightly-status:start --> nicht in {weekly_path} gefunden"
+            f"Marker <!-- {marker}:start --> nicht in {path} gefunden"
         )
     new_text, count = pattern.subn(replacement, text)
     if count == 0:
         raise NightlyStatusError(
-            f"Konnte Abschnitt zwischen nightly-status-Markern in {weekly_path} nicht ersetzen"
+            f"Konnte Abschnitt zwischen {marker}-Markern in {path} nicht ersetzen"
         )
-    if not new_text.endswith("\n"):
-        new_text += "\n"
-    weekly_path.write_text(new_text, encoding="utf-8")
+    return new_text
+
+
+def update_weekly_report(
+    weekly_path: pathlib.Path, summary: str, phasec_block: str
+) -> None:
+    text = weekly_path.read_text(encoding="utf-8")
+    text = _replace_marker(text, "nightly-status", summary, weekly_path)
+    text = _replace_marker(text, "phasec-status", phasec_block, weekly_path)
+    if not text.endswith("\n"):
+        text += "\n"
+    weekly_path.write_text(text, encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
@@ -208,6 +480,21 @@ def parse_args() -> argparse.Namespace:
         help="Pfad zur Weekly-Statusdatei, die aktualisiert werden soll",
     )
     parser.add_argument(
+        "--phasec-status-file",
+        default="phaseC_status.md",
+        help="Pfad für den generierten Phase‑C-Statusblock",
+    )
+    parser.add_argument(
+        "--retention-report",
+        default=None,
+        help="Pfad zur worm-retention-report.json (optional)",
+    )
+    parser.add_argument(
+        "--chaos-report",
+        default=None,
+        help="Pfad zur snapshot_partition_report.json (optional)",
+    )
+    parser.add_argument(
         "--skip-weekly",
         action="store_true",
         help="Weekly-Report nicht aktualisieren, nur Statusdatei schreiben",
@@ -224,12 +511,18 @@ def main() -> int:
     workflow_run, jobs = collect_jobs(args.repo, args.workflow, args.branch)
     summary = build_summary(workflow_run, jobs)
 
+    retention_report = pathlib.Path(args.retention_report).resolve() if args.retention_report else None
+    chaos_report = pathlib.Path(args.chaos_report).resolve() if args.chaos_report else None
+    phasec_block = build_phasec_status(retention_report, chaos_report)
+
     status_path = pathlib.Path(args.status_file)
     write_status_file(status_path, summary)
+    phasec_path = pathlib.Path(args.phasec_status_file)
+    write_status_file(phasec_path, phasec_block)
 
     if not args.skip_weekly:
         weekly_path = pathlib.Path(args.weekly)
-        update_weekly_report(weekly_path, summary)
+        update_weekly_report(weekly_path, summary, phasec_block)
 
     return 0
 

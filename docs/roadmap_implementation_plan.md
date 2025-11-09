@@ -63,6 +63,13 @@ und Chaos-Test-Auswertung; die Playbook-Reviews sind Teil des Sign-offs.
 Der wöchentliche Statusbericht verlinkt die neuen Artefakte und festigt den
 Phase‑C-Fortschritt in den Compliance-Logs.【F:docs/status/weekly.md†L1-L200】
 
+Der Nightly-Workflow erstellt zusätzlich den Markdown-Block `phaseC_status.md`,
+der die jüngsten `worm-retention-report.json`- und
+`snapshot_partition_report.json`-Ergebnisse aggregiert und in den Weekly-Report
+einspeist. Fehlende Artefakte oder Warnungen werden dort als ⚠️/❌ markiert,
+wodurch Storage und Operations offene Checks direkt sehen und die betroffenen
+Nightly-Artefakte nachziehen können.【F:.github/workflows/nightly.yml†L1-L200】【F:scripts/update_nightly_status.py†L1-L360】【F:docs/status/weekly.md†L1-L40】【F:phaseC_status.md†L1-L3】
+
 ## Phase 2 abgeschlossen (Stand: 2026-04-15)
 
 Phase 2 ist offiziell abgeschlossen. Die erweiterten Proof-Pfade (ENG‑742/ENG‑743) laufen stabil in STWO und Plonky3, die dreistufige Test-Suite (`unit-suites`, `integration-workflows`, `simnet-smoke`) ist als Pflichtgate aktiv, und neue Observability-Artefakte (Dashboards, Alerts, Runbooks) sichern VRF-/Quorum-Metriken für Audits und Betrieb.

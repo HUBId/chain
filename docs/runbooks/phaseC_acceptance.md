@@ -51,7 +51,11 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       `worm-export/.../worm-retention-report.json`, die Snapshot-Manifestsignaturen
       unter `snapshot-signatures/`, und Chaos- bzw. Partition-Reports unter
       `chaos-reports/` innerhalb des Bundles vor. Fehlende Artefakte sind zu
-      dokumentieren und nachzuliefern.
+      dokumentieren und nachzuliefern. Konsolidierter Status: Abschnitt
+      „Phase‑C Kontrollen (Nightly)“ im Weekly-Report prüfen; ⚠️/❌ markierte
+      Zeilen erfordern eine Nachlieferung (erneuter `cargo xtask
+      worm-retention-check` bzw. Chaos-Drill) bevor der Check als bestanden
+      gilt.【F:docs/status/weekly.md†L1-L50】【F:scripts/update_nightly_status.py†L1-L360】
 
 ### Snapshot Chaos / Partition Drill
 
