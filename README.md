@@ -35,41 +35,57 @@ specifications ship with the repository for easy reference.【F:docs/README.md�
 
 ## Proof of Lottery (POL)
 
-Die RPP Blockchain nutzt kein Proof of Stake (PoS) und kein Proof of Work (PoW).
-Stattdessen basiert ihr Konsens- und Belohnungsmechanismus auf einem eigenen Verfahren namens Proof of Lottery (POL).
+The RPP Blockchain introduces a novel consensus and participation mechanism called Proof of Lottery (POL).
+Unlike Proof of Work (PoW) or Proof of Stake (PoS), POL does not depend on computational effort or capital weight.
+Instead, it is built on verifiable randomness, reputation, and identity integrity.
 
-Proof of Lottery (POL) beschreibt das Zusammenspiel aus
+### Overview
 
-Verifiable Random Function (VRF),
+Proof of Lottery defines how validator participation and reward eligibility are determined in the RPP Blockchain.
+Each consensus round begins with a [verifiable random selection (VRF)](./docs/poseidon_vrf.md) that draws participants from the network based on their reputation score.
+This reputation score is derived from two measurable components:
 
-Reputation System (RPP RS),
+- [TimeToken](./docs/consensus/timetoke.md) – representing continuous uptime and verifiable node availability, accumulated through periodic uptime proofs.
+- [Tier System](./docs/network/admission.md) – defining dynamic reputation levels that reflect long-term reliability, contribution, and honesty.
 
-Zero-Knowledge Sovereign Identity (ZSI),
+Together, these form the [RPP Reputation System (RPP-RS)](./docs/consensus/uptime_proofs.md#reputation-integration), which quantifies trust and network participation without any capital staking or mining.
 
-TimeToken,
+### Core Principles
 
-Tier-System, und
+**Verifiable Randomness (VRF):**
+Each node participates in a lottery using a [verifiable random function (VRF)](./docs/poseidon_vrf.md).
+The output determines whether it is selected for the current consensus round.
+The probability of selection is weighted by the node’s reputation tier and [TimeToken](./docs/consensus/timetoke.md) balance.
 
-dem Random-BFT-basierten Coin-Reward-Prozess.
+**Sybil Resistance (ZSI):**
+The [Zero-Knowledge Sovereign Identity (ZSI)](./docs/wallet/zsi.md) framework ensures that each participant represents a unique, verifiable entity without exposing personal data.
+This guarantees that reputation cannot be multiplied through multiple pseudonymous nodes.
 
-In jeder Konsensrunde bestimmt die VRF-basierte Zufallsauswahl die Knoten, die am BFT-Prozess teilnehmen dürfen.
-Diese Auswahl ist überprüfbar, manipulationssicher und unabhängig von Kapital oder Rechenleistung.
-Die im BFT-Komitee korrekt teilnehmenden Nodes erhalten anschließend den Coin-Reward, der im Random-BFT-Verfahren verteilt wird.
+**Reputation-Weighted Fairness:**
+Every node has a chance to be selected, but higher reputation tiers — earned through consistent uptime and correct participation — have proportionally higher selection probability.
+This creates a fair and self-balancing ecosystem where reliability, not wealth or computing power, drives influence.
 
-Das Reputation System (RPP RS) bewertet kontinuierlich das Verhalten und die Zuverlässigkeit eines Knotens.
-Der TimeToken dokumentiert dessen Betriebszeit und aktive Teilnahme.
-ZSI sorgt für eindeutige, sybil-resistente Identitäten.
-Das Tier-System ordnet Nodes anhand ihrer Reputation und Aktivität in unterschiedliche Vertrauens- und Gewichtungsebenen ein, die wiederum ihre Wahrscheinlichkeit für die VRF-Auswahl beeinflussen.
+**Energy-Efficient Finality:**
+Once a validator set is selected through the lottery, consensus proceeds via the [BFT](./docs/consensus/malachite.md) layer.
+Blocks reach instant finality without resource-intensive work or stake validation.
 
-Dadurch ergibt sich ein dynamisches, mehrstufiges Netzwerkmodell:
+**Reward Distribution:**
+Rewards are distributed among participants of each finalized round based on successful validation and uptime proofs.
+The reward mechanism is directly tied to verifiable participation, ensuring long-term network stability.
 
-Höhere Tiers stehen für stabile, verifizierte und zuverlässige Nodes mit nachweisbarer Teilnahmehistorie.
+### Design Outcome
 
-Niedrigere Tiers sind neuere oder weniger aktive Nodes, die dennoch in der Lotterie vertreten sind, aber mit geringerer Auswahlwahrscheinlichkeit.
+POL achieves the same core goals as traditional consensus systems — fairness, security, and decentralization — while eliminating capital bias and energy waste.
+It enables verifiable participation driven by contribution and reputation rather than wealth or computational power.
 
-Dieses Zusammenspiel aus Zufall (VRF), Vertrauen (Reputation/ZSI), Kontinuität (TimeToken) und Stufung (Tier-System) bildet den Mechanismus von Proof of Lottery (POL).
-Er sorgt für faire, überprüfbare und dezentrale Validator-Auswahl –
-ohne Mining, ohne Stake, und ohne Energieverschwendung.
+In summary:
+
+Proof of Lottery (POL) = Verifiable Random Selection ([VRF](./docs/poseidon_vrf.md))
+weighted by Reputation ([TimeToken](./docs/consensus/timetoke.md) + [Tier System](./docs/network/admission.md))
+secured through [ZSI](./docs/wallet/zsi.md) identity
+finalized by [BFT](./docs/consensus/malachite.md) consensus.
+
+This mechanism defines how the RPP Blockchain continuously rewards honest behavior, uptime, and contribution — providing a transparent, fair, and sustainable foundation for decentralized consensus.
 
 ## Repository layout
 
