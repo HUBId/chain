@@ -9,12 +9,13 @@ Reports, Tickets, Runbooks) dokumentiert sein.
 
 ### WORM Retention Integrity
 
-- [ ] **Nightly-Report geprüft.** Der aktuelle `worm_retention_report.json`
+- [x] **Nightly-Report geprüft.** Der aktuelle `worm_retention_report.json`
       (Actions-Artefakt `worm-export-smoke`) zeigt keine offenen
       `stale_entries`, `unsigned_entries` oder `retention_violations`.
       Abweichungen sind im Incident-Log dokumentiert und durch Gegenproben via
-      `cargo xtask worm-retention-check --report <pfad>` adressiert. Verweise
-      auf das Incident-Playbook
+      `cargo xtask worm-retention-check --report <pfad>` adressiert. Nachweis:
+      [Phase‑C WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md).
+      Verweise auf das Incident-Playbook
       ([„WORM-Retention-Check schlägt fehl“](./incident_response.md#worm-retention-check-schlägt-fehl))
       müssen beigefügt sein.
 - [ ] **Telemetry-Panel grün.** Dashboard
@@ -101,11 +102,12 @@ Reports, Tickets, Runbooks) dokumentiert sein.
 
 ## Exit Criteria
 
-- [ ] **WORM-Verifikation sign-off.** Die jüngste `worm-retention-report.json`
+- [x] **WORM-Verifikation sign-off.** Die jüngste `worm-retention-report.json`
       ist im Phase‑C-Evidence-Bundle hinterlegt und durch Storage Engineering
       per Gegenprobe (`cargo xtask worm-retention-check`) abgezeichnet. Das
       Audit-Ticket enthält den Link zum Report sowie die Bestätigung, dass alle
-      Abweichungen laut Incident-Log geschlossen wurden.
+      Abweichungen laut Incident-Log geschlossen wurden. Nachweis: [Phase‑C
+      WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md).
 - [ ] **Evidence-Bundle freigegeben.** Das aktuelle Paket
       `phase3-evidence-<timestamp>` liegt im Artefakt-Archiv, Manifest und
       Prüfsumme wurden im Audit-Ticket dokumentiert und der
