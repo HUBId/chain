@@ -43,6 +43,24 @@ with default warning/critical thresholds of 30s/120s for stream lag, 10m/20m
 zero-throughput detection, and 3+/6+ chunk failure escalations routed to the
 snapshot on-call rotation.
 
+### Release & Compliance Metrics
+
+Release builds and nightly compliance checks export dedicated failure counters so
+operational dashboards can surface regressions without sifting through CI logs.
+Both instruments are emitted through the shared metrics layer, making them
+visible to OTLP collectors as well as `/metrics` scrapes when the Prometheus
+endpoint is enabled.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `snapshot_verify_failures_total` | Counter (u64) | `manifest` (relative path), `exit_code` (`signature_invalid`, `chunk_mismatch`, `fatal`) | Counts snapshot verifier failures during `scripts/build_release.sh` runs. The counter increments before the CLI exits so even fatal errors (missing manifests, malformed signatures) are captured. |
+| `worm_export_failures_total` | Counter (u64) | `reason` (`create_dir`, `write_body`, `serialize_index`, …) | Totals WORM export stub errors observed by the nightly `worm-export` job. Labels summarise the failing stage (directory creation, payload write, index rotation) to aid triage without exploding cardinality. |
+
+The corresponding alert rules are defined in
+[`docs/observability/alerts/compliance_controls.yaml`](alerts/compliance_controls.yaml)
+so any increase automatically pages the release/compliance rotation and links to
+the Phase‑A runbook checklist.
+
 Continuous integration executes `cargo xtask test-observability`, which runs
 `tests/observability/snapshot_timetoke_metrics.rs` to drive a two-node snapshot
 and Timetoke sync via Prometheus scrapes. The test asserts that both

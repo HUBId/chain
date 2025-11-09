@@ -35,6 +35,12 @@ milestone.
       `target/snapshot-verifier-smoke/` erzeugt, sowie auf die Release-Artefakte
       `snapshot-verifier-<target>` im Actions-Tab. So lässt sich das Ergebnis
       reproduzieren, ohne die produktiven Artefakte neu zu signieren.【F:.github/workflows/ci.yml†L369-L397】【F:.github/workflows/release.yml†L150-L209】
+- [ ] **Telemetry-Gate überprüft.** Prüfe im Prometheus-/OTLP-Scrape, dass der
+      Zähler `snapshot_verify_failures_total` nach dem Release-Lauf weiterhin
+      `0` ist. Bei einem Anstieg muss der Alert
+      `SnapshotVerifierFailure` (siehe [`alerts/compliance_controls.yaml`](../observability/alerts/compliance_controls.yaml))
+      auslösen; dokumentiere im Übergabeprotokoll, dass der Alarm grün bleibt
+      und verlinke ggf. den Grafana-Panel-Screenshot.
 
 ## WORM export audit trail
 
@@ -54,6 +60,11 @@ milestone.
   Zugangsdaten und ein Retention-Fenster setzt. Der Guard schreibt einen
   Bootstrap-Fehler und erhöht die Metrik `worm_export_misconfigured_total`; prüfe
   Logs und Prometheus-Export beim Abbruch.【F:rpp/node/src/lib.rs†L520-L590】
+- [ ] **Nightly-Metriken grün.** Validere, dass der Prometheus-Zähler
+      `worm_export_failures_total` während des Nightly-Laufs nicht steigt und
+      der Alert `WormExportNightlyFailure` (siehe [`alerts/compliance_controls.yaml`](../observability/alerts/compliance_controls.yaml))
+      in Grafana/Alertmanager grün bleibt. Hänge bei Abweichungen das Nightly-Log
+      sowie die Alert-Timeline an das Protokoll.
 
 ## Exit-Kriterien
 

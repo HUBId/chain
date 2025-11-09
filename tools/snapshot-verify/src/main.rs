@@ -1,12 +1,41 @@
 use std::path::PathBuf;
 use std::process;
+use std::sync::Once;
 
 use clap::Parser;
 
 use snapshot_verify::{
-    run_verification, write_report, DataSource, Execution, ExitCode, VerificationReport,
-    VerifyArgs,
+    run_verification, write_report, DataSource, Execution, ExitCode, VerificationReport, VerifyArgs,
 };
+
+const SNAPSHOT_VERIFY_FAILURE_METRIC: &str = "snapshot_verify_failures_total";
+static SNAPSHOT_METRIC_REGISTER: Once = Once::new();
+
+fn record_snapshot_failure(exit_code: ExitCode, manifest: &PathBuf) {
+    SNAPSHOT_METRIC_REGISTER.call_once(|| {
+        metrics::describe_counter!(
+            SNAPSHOT_VERIFY_FAILURE_METRIC,
+            "Total number of snapshot verification failures observed while packaging release snapshots",
+        );
+    });
+
+    let manifest_label = manifest.display().to_string();
+    metrics::counter!(
+        SNAPSHOT_VERIFY_FAILURE_METRIC,
+        "manifest" => manifest_label,
+        "exit_code" => exit_code_label(exit_code),
+    )
+    .increment(1);
+}
+
+fn exit_code_label(exit_code: ExitCode) -> &'static str {
+    match exit_code {
+        ExitCode::Success => "success",
+        ExitCode::SignatureInvalid => "signature_invalid",
+        ExitCode::ChunkMismatch => "chunk_mismatch",
+        ExitCode::Fatal => "fatal",
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,6 +82,10 @@ fn main() {
             exit_code
         }
     };
+
+    if exit_code != ExitCode::Success {
+        record_snapshot_failure(exit_code, &args.manifest);
+    }
 
     if let Err(err) = write_report(&report, args.output.as_deref()) {
         eprintln!("error: {err:?}");
