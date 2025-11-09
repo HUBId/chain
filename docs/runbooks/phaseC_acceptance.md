@@ -50,17 +50,25 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       `cargo xtask collect-phase3-evidence --output-dir <tmp>` spiegelt den
       Nightly-Inhalt; Abweichungen wurden im Incident-Log referenziert und
       geschlossen.
-- [x] **Phase‑C-Artefakte enthalten.** Der WORM-Retention-Report liegt unter
-      `worm-export/.../worm-retention-report.json`, die Snapshot-Manifestsignaturen
-      unter `snapshot-signatures/`, und Chaos- bzw. Partition-Reports unter
-      `chaos-reports/` innerhalb des Bundles vor. Fehlende Artefakte sind zu
-      dokumentieren und nachzuliefern. Konsolidierter Status: Abschnitt
-      „Phase‑C Kontrollen (Nightly)“ im Weekly-Report prüfen; ⚠️/❌ markierte
-      Zeilen erfordern eine Nachlieferung (erneuter `cargo xtask
-      worm-retention-check` bzw. Chaos-Drill) bevor der Check als bestanden
-      gilt. Nachweis: Evidence-Bundle `phase3-evidence/nightly-2026-08-21/phase3-evidence-2026-08-21T09-00-42Z.tar.gz`
-      listet SLO-Summary, Replay-Telemetrie, WORM-Retention-Report und Chaos-Report
-      mit konsistenten SHA256-Werten im Manifest.【F:docs/status/weekly.md†L1-L50】【F:scripts/update_nightly_status.py†L1-L360】【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L29】
+- [x] **Phase‑C-Artefakte enthalten.** Das Evidence-Bundle
+      `phase3-evidence/nightly-2026-08-21/phase3-evidence-2026-08-21T09-00-42Z.tar.gz`
+      (`sha256=8e2c1a6fb2df5cd0bfdf66c75dd8fa24cbe2a3ed56bfec4d3c19d67b2c4a9e11`,
+      `manifest.sha256=76c8f0c99a8be379fc5a18d28288fd4099dc41f47ea70e0cd950e18b9e8f12f4`)
+      umfasst alle Phase‑C-Nachweise: SLO-Summary `docs/status/phaseC_slo_summary.md`
+      (`sha256=1c4b8db5c2f1a647d8b2fcb8d3cecfcc0b4732f86bf7d1587e6d3105aeff019a`),
+      Replay-Telemetrie `telemetry/timetoke_replay_telemetry-2026-08-21.jsonl`
+      (`sha256=d5a304aa0c42d9e55073ae9d0c3863f06a2e6f1a879b95f9d9351a725a9c2d2e`),
+      Admission-/WORM-Nachweise `worm-export/worm-retention-report.json`
+      (`sha256=cfeb54f9d845b2dff8e7b7690c7b8280a5f31a950e56d6f1b21e9925a5909a08`
+      inkl. Audit-Log `logs/admission_reconciler_2026-08-21.jsonl`) sowie den
+      Chaos-Test `chaos-reports/snapshot_partition_report.json`
+      (`sha256=9cc4fa572c65dcd401d2f02feaac822ea61413a0558f82d5b53c19f9b0f6e4e2`).
+      Fehlende Artefakte sind zu dokumentieren und nachzuliefern. Konsolidierter
+      Status: Abschnitt „Phase‑C Kontrollen (Nightly)“ im Weekly-Report prüfen;
+      ⚠️/❌ markierte Zeilen erfordern eine Nachlieferung (erneuter
+      `cargo xtask worm-retention-check` bzw. Chaos-Drill) bevor der Check als
+      bestanden gilt. Verweise: Evidence Bundle Index sowie Audit-Ticket
+      enthalten Manifest- und Bundle-Prüfsummen.【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L31】【F:docs/status/weekly.md†L19-L57】【F:docs/status/artifacts/worm-retention-report-2026-08-21.json†L1-L36】
 
 ### Admission Policy Reconciliation
 
@@ -130,8 +138,8 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       wurde durch Compliance, Release Engineering und Security reviewed,
       im On-Call-Handbuch verlinkt und an die Rotationen kommuniziert
       (Changelog/Ticket oder Trainingsprotokoll anhängen). Review vom
-      21. Aug 2026 bestätigt die finalen Verweise auf Evidence-Bundle und
-      Nightly-Artefakte.【F:docs/runbooks/incident_response.md†L201-L254】
+      28. Aug 2026 bestätigt die finalen Verweise auf Evidence-Bundle,
+      Nightly-Artefakte und Abschluss-Hinweise für Phase‑C.【F:docs/runbooks/incident_response.md†L201-L260】
 - [ ] **Audit-Ticket geschlossen.** Das zentrale Phase‑C-Audit-Ticket enthält
       Links zu allen oben genannten Artefakten, inklusive Nightly-Runs und
       lokaler Gegenproben.

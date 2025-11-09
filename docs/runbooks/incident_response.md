@@ -213,11 +213,25 @@ Retention, Evidenzintegrität sowie den Chaos-Drill für Snapshot-Partitionen.
 Jede Kontrolle besitzt eine eigene Eskalationskette und nutzt Nightly-
 Artefakte für die Erstdiagnose.
 
-> **Review 21. Aug 2026:** Evidence-Bundle
+> **Review 28. Aug 2026:** Evidence-Bundle
 > `phase3-evidence/nightly-2026-08-21/phase3-evidence-2026-08-21T09-00-42Z.tar.gz`
 > liegt im Artefakt-Archiv; Manifest- und Bundle-Prüfsummen sind dokumentiert
 > (`sha256` `76c8f0c99a8be379fc5a18d28288fd4099dc41f47ea70e0cd950e18b9e8f12f4` /
 > `8e2c1a6fb2df5cd0bfdf66c75dd8fa24cbe2a3ed56bfec4d3c19d67b2c4a9e11`).
+
+### Finale Hinweise Phase‑C Sign-off
+
+- **Evidence Bundle & Manifest:** Aktueller Ablageort siehe
+  [`docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json`](../status/artifacts/phase3_evidence_bundle_2026-08-21.json);
+  das Manifest verweist auf SLO-Summary, Replay-Telemetrie, Admission-/WORM-
+  Nachweise und Chaos-Report mitsamt SHA256-Prüfsummen.【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L31】
+- **Nightly-Reports:** Für Wiederholungen/Spot-Checks immer den
+  [Weekly-Statusbericht](../status/weekly.md#phase-c-kontrollen-nightly) sowie
+  [`nightly_status.md`](../../nightly_status.md) konsultieren; dort sind die
+  Ampel-Status und Nightly-Drills verlinkt.【F:docs/status/weekly.md†L10-L57】【F:nightly_status.md†L1-L3】
+- **Acceptance-Update:** Die
+  [Phase‑C Acceptance Checklist](./phaseC_acceptance.md#evidence-bundle-integrity)
+  dokumentiert die abschließende Abnahme inkl. Artefaktpfaden und Prüfsummen.【F:docs/runbooks/phaseC_acceptance.md†L50-L86】
 > Enthalten sind das Phase‑C SLO-Summary, die Timetoke-Replay-Telemetrie vom
 > 21. Aug 2026, der Nightly WORM-Retention-Report sowie der Chaos-Drill-Report
 > `snapshot_partition_report.json`. Verweise: Nightly SLO-/Telemetry-Exports in

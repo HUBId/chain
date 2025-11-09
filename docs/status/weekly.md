@@ -39,6 +39,15 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
   [`docs/status/phaseC_retention_summary.md`](phaseC_retention_summary.md); Chaos-Status
   ist im Abschnitt „Phase‑C Kontrollen (Nightly)“ oben dokumentiert.【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L31】【F:docs/status/phaseC_slo_summary.md†L1-L36】【F:docs/status/phaseC_retention_summary.md†L7-L33】【F:docs/status/weekly.md†L6-L21】
 
+## Phase C Evidence Bundle & Playbook
+
+- **Acceptance:** [Phase‑C Acceptance Checklist](../runbooks/phaseC_acceptance.md#evidence-bundle-integrity)
+  bestätigt Bundle, Manifest-Prüfsumme und Vollständigkeit der SLO-, Replay-,
+  Admission-/WORM- sowie Chaos-Nachweise.【F:docs/runbooks/phaseC_acceptance.md†L50-L86】
+- **Incident Response:** [Incident Response Playbook](../runbooks/incident_response.md#phase-c-kontrollen)
+  enthält finale Hinweise (Nightly-Referenzen, Evidence-Bundle-Link) für
+  den Abschluss der Phase‑C-Kontrollen.【F:docs/runbooks/incident_response.md†L213-L244】
+
 ## Admission & WORM Retention (Letzte Prüfung)
 
 - **Admission-Reconciler:** Nightly-Lauf `nightly-2026-08-21` meldet drei
