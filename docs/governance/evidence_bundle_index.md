@@ -4,9 +4,10 @@ Dieses Manifest dient als Inhaltsverzeichnis für das Nightly-Artefakt
 `phase3-evidence-<timestamp>.tar.gz` und zeigt, welche Nachweise für die
 Audits der Snapshot- und WORM-Kontrollen bereitstehen. Die Bundles werden
 über `cargo xtask collect-phase3-evidence` erzeugt; das Kommando sammelt
-Dashboards, Alerts, Audit-Logs, Policy-Backups sowie WORM- und
-Checksum-Reports und legt ein `manifest.json` mit den kategorisierten
-Einträgen im Ausgabeverzeichnis ab.【F:xtask/src/main.rs†L2038-L2108】
+Dashboards, Alerts, Audit-Logs, Policy-Backups sowie WORM-/Retention-
+Reports, Snapshot-Signaturen und Checksum-Reports und legt ein
+`manifest.json` mit den kategorisierten Einträgen im
+Ausgabeverzeichnis ab.【F:xtask/src/main.rs†L4090-L4364】
 
 ## Snapshot-Verifier-Nachweise
 
@@ -28,9 +29,9 @@ Einträgen im Ausgabeverzeichnis ab.【F:xtask/src/main.rs†L2038-L2108】
 
 | Artefakt | Speicherort | Beschreibung & Prüfung |
 | --- | --- | --- |
-| Export-Logs (`*.jsonl`, `*.json`, `retention.meta`) | CI-Artefakt `worm-export-smoke` (`target/worm-export-smoke/`), Nightly-Artefakt gleichen Namens sowie `logs/` im Repository. | Enthalten die protokollierten Admission-Änderungen, Retention-Metadaten und Exportpfade des Stubs. Werden von `cargo xtask test-worm-export` erzeugt und in CI/Nightly hochgeladen.【F:.github/workflows/ci.yml†L354-L387】【F:.github/workflows/nightly.yml†L10-L36】【F:xtask/src/main.rs†L640-L742】 |
-| `worm-export-summary.json` | Bestandteil des Artefakts `worm-export-smoke`. | Aggregiert die signierten Audit-Einträge, weist `signature_valid` aus und referenziert die exportierten Dateien. Bei der Evidence-Sammlung werden Summary und Logdateien in die Kategorie „WORM export evidence“ kopiert.【F:xtask/src/main.rs†L640-L742】【F:xtask/src/main.rs†L2343-L2373】 |
-| Signaturdateien (`*.sha256`, `snapshot-key.hex`) | Teil des Smoke-Artefakts `snapshot-verifier-smoke` bzw. `worm-export-smoke`. | Dokumentieren die verwendeten Schlüssel und Prüfsummen für Snapshot- und WORM-Belege. Beim Audit lokale Hashprüfung (`sha256sum`) durchführen und Schlüsselmaterial vertraulich behandeln.【F:xtask/src/main.rs†L216-L344】【F:xtask/src/main.rs†L2343-L2373】 |
+| Export-Logs (`*.jsonl`, `*.json`, `retention.meta`) | CI-Artefakt `worm-export-smoke` (`target/worm-export-smoke/`), Nightly-Artefakt gleichen Namens sowie `logs/` im Repository. | Enthalten die protokollierten Admission-Änderungen, Retention-Metadaten und Exportpfade des Stubs. Werden von `cargo xtask test-worm-export` erzeugt und in CI/Nightly hochgeladen.【F:.github/workflows/ci.yml†L354-L387】【F:.github/workflows/nightly.yml†L19-L58】【F:xtask/src/main.rs†L640-L742】 |
+| `worm-export-summary.json` | Bestandteil des Artefakts `worm-export-smoke`. | Aggregiert die signierten Audit-Einträge, weist `signature_valid` aus und referenziert die exportierten Dateien. Bei der Evidence-Sammlung werden Summary und Logdateien in die Kategorie „WORM export evidence“ kopiert.【F:xtask/src/main.rs†L640-L742】【F:xtask/src/main.rs†L3676-L3717】 |
+| `worm-retention-report.json` | `target/compliance/worm-retention/` im Evidence-Bundle sowie Nightly-Artefakt `worm-export-smoke`. | Ergebnis von `cargo xtask worm-retention-check`: fasst überprüfte Summaries, Audit-Logs, Retention-Metadaten und etwaige Verstöße zusammen. Der Nightly-Job bricht bei verwaisten oder manipulierten Einträgen ab, der Report landet in der Kategorie „WORM export evidence“.【F:xtask/src/main.rs†L3527-L3879】【F:.github/workflows/nightly.yml†L19-L58】 |
 
 **Prüfschritte:**
 1. Nightly- oder CI-Artefakt `worm-export-smoke` herunterladen und
@@ -43,6 +44,20 @@ Einträgen im Ausgabeverzeichnis ab.【F:xtask/src/main.rs†L2038-L2108】
 4. Audit-Ergebnisse im Evidence-Bundle-Manifest (`manifest.json`)
    nachführen.
 
+## Snapshot-Signaturen & Schlüssel
+
+| Artefakt | Speicherort | Beschreibung & Prüfung |
+| --- | --- | --- |
+| `snapshot-key.hex` | `target/snapshot-verifier-smoke/` bzw. Evidence-Kategorie `snapshot-signatures`. | Enthält den öffentlichen Schlüssel, mit dem `chunks.json` signiert wurde. Für Audits kann derselbe Schlüssel mit `snapshot-verify` oder `cargo xtask snapshot-verifier` genutzt werden.【F:xtask/src/main.rs†L200-L344】【F:xtask/src/main.rs†L4388-L4438】 |
+| `snapshots/manifest/*.sig` | `target/snapshot-verifier-smoke/snapshots/manifest/`. | Detached Signaturen für die Manifest-Dateien. `cargo xtask collect-phase3-evidence` kopiert sie in die Kategorie „Snapshot manifest signatures“, sodass Signaturprüfungen im Bundle nachvollziehbar bleiben.【F:xtask/src/main.rs†L200-L344】【F:xtask/src/main.rs†L4388-L4438】 |
+
+**Prüfschritte:**
+1. `snapshot-key.hex` und das passende `chunks.json.sig` aus dem Bundle
+   entnehmen.
+2. Manifest (`chunks.json`) sowie Signatur mit `snapshot-verify`
+   validieren oder lokal `cargo xtask snapshot-verifier` ausführen.
+3. Ergebnisse und Schlüsselreferenzen im Auditprotokoll festhalten.
+
 ## Pflege & Verfügbarkeit
 
 - **CI-Artefakte:** `snapshot-verifier-smoke` und `worm-export-smoke`
@@ -54,4 +69,4 @@ Einträgen im Ausgabeverzeichnis ab.【F:xtask/src/main.rs†L2038-L2108】
 - **Review-Prozess:** Vor Audits `cargo xtask collect-phase3-evidence`
   lokal ausführen oder das aktuelle Nightly-Artefakt herunterladen, um
   das `manifest.json` zu prüfen. Fehlende Einträge werden dort unter
-  `missing` aufgeführt und müssen vor dem Audit geschlossen werden.【F:xtask/src/main.rs†L2038-L2108】【F:xtask/src/main.rs†L2343-L2373】
+  `missing` aufgeführt und müssen vor dem Audit geschlossen werden.【F:xtask/src/main.rs†L4090-L4175】【F:xtask/src/main.rs†L4388-L4463】

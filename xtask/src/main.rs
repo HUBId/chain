@@ -512,6 +512,127 @@ struct WormExportSummary {
     entries: Vec<WormExportSummaryEntry>,
 }
 
+#[derive(Default, Serialize)]
+struct WormRetentionCheckReport {
+    generated_at: String,
+    scanned_roots: Vec<String>,
+    summaries: Vec<WormRetentionSummaryReport>,
+    stale_entries: Vec<WormRetentionStaleEntry>,
+    orphaned_entries: Vec<WormRetentionOrphanedEntry>,
+    unsigned_records: Vec<WormRetentionUnsignedRecord>,
+    warnings: Vec<String>,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionSummaryReport {
+    summary_path: String,
+    audit_log: String,
+    export_root: String,
+    retention: WormRetention,
+    retention_metadata: Option<WormRetentionMetadataReport>,
+    entries: Vec<WormRetentionEntryReport>,
+    retention_logs: Vec<WormRetentionLogReport>,
+    warnings: Vec<String>,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionMetadataReport {
+    path: String,
+    values: BTreeMap<String, String>,
+    valid: bool,
+    warnings: Vec<String>,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionEntryReport {
+    entry_id: u64,
+    timestamp_ms: u64,
+    export_object: String,
+    retain_until: String,
+    stale: bool,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionLogReport {
+    path: String,
+    record_count: usize,
+    unsigned_records: usize,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionStaleEntry {
+    summary_path: String,
+    entry_id: u64,
+    export_object: String,
+    retain_until: String,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionOrphanedEntry {
+    summary_path: String,
+    entry_id: u64,
+    context: String,
+}
+
+#[derive(Default, Serialize)]
+struct WormRetentionUnsignedRecord {
+    log_path: String,
+    entry_id: u64,
+    reason: String,
+}
+
+struct WormRetentionCheckOutcome {
+    report: WormRetentionCheckReport,
+    report_path: PathBuf,
+}
+
+impl WormRetentionCheckOutcome {
+    fn has_failures(&self) -> bool {
+        !(self.report.stale_entries.is_empty()
+            && self.report.orphaned_entries.is_empty()
+            && self.report.unsigned_records.is_empty())
+    }
+
+    fn failure_summary(&self) -> String {
+        let mut reasons = Vec::new();
+        if !self.report.stale_entries.is_empty() {
+            reasons.push(format!("{} stale entries", self.report.stale_entries.len()));
+        }
+        if !self.report.orphaned_entries.is_empty() {
+            reasons.push(format!(
+                "{} orphaned audit/export records",
+                self.report.orphaned_entries.len()
+            ));
+        }
+        if !self.report.unsigned_records.is_empty() {
+            reasons.push(format!(
+                "{} unsigned retention log records",
+                self.report.unsigned_records.len()
+            ));
+        }
+        reasons.join(", ")
+    }
+
+    fn ensure_success(&self) -> Result<()> {
+        if self.has_failures() {
+            bail!(
+                "worm retention check failed: {} (see {})",
+                self.failure_summary(),
+                self.report_path.display()
+            );
+        }
+        Ok(())
+    }
+}
+
+struct WormRetentionSummaryEvaluation {
+    report: WormRetentionSummaryReport,
+    stale_entries: Vec<WormRetentionStaleEntry>,
+    orphaned_entries: Vec<WormRetentionOrphanedEntry>,
+    unsigned_records: Vec<WormRetentionUnsignedRecord>,
+    warnings: Vec<String>,
+}
+
 fn initialise_policy_signer(dir: &Path) -> Result<(PolicySigner, String)> {
     fs::create_dir_all(dir)?;
     let key_path = dir.join("worm-export.toml");
@@ -2683,7 +2804,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  worm-retention-check Audit WORM retention windows, verify signatures, and surface stale entries\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
     );
 }
 
@@ -3381,6 +3502,591 @@ fn resolve_workspace_path(workspace: &Path, recorded: &str) -> PathBuf {
     }
 }
 
+fn worm_retention_check_usage() {
+    eprintln!(
+        "usage: cargo xtask worm-retention-check [--root <path>]... [--output <path>]\n\n\
+Searches for worm-export summaries, verifies signature coverage, and enforces retention windows.\n\
+The command fails when stale, orphaned, or unsigned records are detected."
+    );
+}
+
+fn worm_retention_check(args: &[String]) -> Result<()> {
+    let workspace = workspace_root();
+    let mut search_roots = vec![
+        workspace.join("target/worm-export-smoke"),
+        workspace.join("logs"),
+    ];
+    let mut output_path =
+        workspace.join("target/compliance/worm-retention/worm-retention-report.json");
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--root" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--root requires a value"))?;
+                let path = PathBuf::from(value);
+                let resolved = if path.is_absolute() {
+                    path
+                } else {
+                    workspace.join(path)
+                };
+                search_roots.push(resolved);
+            }
+            "--output" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--output requires a value"))?;
+                let path = PathBuf::from(value);
+                output_path = if path.is_absolute() {
+                    path
+                } else {
+                    workspace.join(path)
+                };
+            }
+            "--help" | "-h" => {
+                worm_retention_check_usage();
+                return Ok(());
+            }
+            other => bail!("unknown argument '{other}' for worm-retention-check"),
+        }
+    }
+
+    let outcome = execute_worm_retention_check(&workspace, &search_roots, &output_path)?;
+    println!(
+        "worm retention report written to {}",
+        outcome.report_path.display()
+    );
+    if outcome.report.summaries.is_empty() {
+        println!(
+            "⚠️ no WORM export summaries located under the configured roots; report generated"
+        );
+    }
+    outcome.ensure_success()
+}
+
+fn execute_worm_retention_check(
+    workspace: &Path,
+    search_roots: &[PathBuf],
+    output_path: &Path,
+) -> Result<WormRetentionCheckOutcome> {
+    let mut report = WormRetentionCheckReport::default();
+    report.generated_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
+    report.scanned_roots = search_roots
+        .iter()
+        .map(|path| {
+            let display = path.strip_prefix(workspace).unwrap_or(path);
+            relative_display_path(display)
+        })
+        .collect();
+
+    let mut summary_paths: Vec<PathBuf> = Vec::new();
+    for root in search_roots {
+        if !root.exists() {
+            continue;
+        }
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            if entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name == "worm-export-summary.json")
+            {
+                summary_paths.push(entry.path().to_path_buf());
+            }
+        }
+    }
+    summary_paths.sort();
+    summary_paths.dedup();
+
+    let mut aggregated_warnings = Vec::new();
+    for summary_path in summary_paths {
+        let evaluation = evaluate_worm_retention_summary(&summary_path, workspace)?;
+        aggregated_warnings.extend(evaluation.warnings.clone());
+        report
+            .stale_entries
+            .extend(evaluation.stale_entries.clone());
+        report
+            .orphaned_entries
+            .extend(evaluation.orphaned_entries.clone());
+        report
+            .unsigned_records
+            .extend(evaluation.unsigned_records.clone());
+        report.summaries.push(evaluation.report);
+    }
+
+    if report.summaries.is_empty() {
+        aggregated_warnings.push("no worm-export-summary.json files found".to_string());
+    }
+    report.warnings.extend(aggregated_warnings);
+
+    if let Some(parent) = output_path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "create worm retention report directory {}",
+                parent.display()
+            )
+        })?;
+    }
+    fs::write(output_path, serde_json::to_vec_pretty(&report)?)
+        .with_context(|| format!("write worm retention report {}", output_path.display()))?;
+
+    Ok(WormRetentionCheckOutcome {
+        report,
+        report_path: output_path.to_path_buf(),
+    })
+}
+
+fn evaluate_worm_retention_summary(
+    summary_path: &Path,
+    workspace: &Path,
+) -> Result<WormRetentionSummaryEvaluation> {
+    let contents = fs::read_to_string(summary_path)
+        .with_context(|| format!("read worm export summary {}", summary_path.display()))?;
+    let summary: WormExportSummary = serde_json::from_str(&contents)
+        .with_context(|| format!("decode worm export summary {}", summary_path.display()))?;
+
+    let summary_rel = summary_path.strip_prefix(workspace).unwrap_or(summary_path);
+    let summary_display = relative_display_path(summary_rel);
+
+    let audit_path = resolve_workspace_path(workspace, &summary.audit_log);
+    let audit_rel = audit_path.strip_prefix(workspace).unwrap_or(&audit_path);
+    let audit_display = relative_display_path(audit_rel);
+
+    let export_root = resolve_workspace_path(workspace, &summary.export_root);
+    let export_rel = export_root.strip_prefix(workspace).unwrap_or(&export_root);
+    let export_display = relative_display_path(export_rel);
+
+    let mut report = WormRetentionSummaryReport {
+        summary_path: summary_display.clone(),
+        audit_log: audit_display.clone(),
+        export_root: export_display,
+        retention: summary.retention,
+        ..Default::default()
+    };
+
+    let mut warnings = Vec::new();
+    let mut stale_entries = Vec::new();
+    let mut orphaned_entries = Vec::new();
+    let mut unsigned_records = Vec::new();
+
+    let mut trust = HashMap::new();
+    trust.insert(
+        summary.signer_key_id.clone(),
+        summary.signer_public_key_hex.clone(),
+    );
+    let trust_store = PolicyTrustStore::from_hex(trust).with_context(|| {
+        format!(
+            "construct trust store for worm export summary {}",
+            summary_path.display()
+        )
+    })?;
+    let verifier = PolicySignatureVerifier::new(trust_store);
+    let now = OffsetDateTime::now_utc();
+
+    let mut exported_entries: HashMap<u64, AdmissionPolicyLogEntry> = HashMap::new();
+    let mut entry_reports = Vec::new();
+    let mut latest_retain_until: Option<(OffsetDateTime, String)> = None;
+
+    for entry_ref in &summary.entries {
+        let export_path = resolve_workspace_path(workspace, &entry_ref.export_object);
+        if !export_path.exists() {
+            orphaned_entries.push(WormRetentionOrphanedEntry {
+                summary_path: summary_display.clone(),
+                entry_id: entry_ref.entry_id,
+                context: format!(
+                    "export object {} referenced by {} missing",
+                    entry_ref.export_object, summary_display
+                ),
+            });
+            continue;
+        }
+        let export_contents = fs::read_to_string(&export_path)
+            .with_context(|| format!("read exported worm object {}", export_path.display()))?;
+        let log_entry: AdmissionPolicyLogEntry = serde_json::from_str(&export_contents)
+            .with_context(|| format!("decode exported worm object {}", export_path.display()))?;
+        let export_rel = export_path
+            .strip_prefix(workspace)
+            .unwrap_or(export_path.as_path());
+        let export_display = relative_display_path(export_rel);
+
+        let mut verification_error: Option<String> = None;
+        match log_entry.signature.as_ref() {
+            Some(signature) => {
+                if signature.key_id != entry_ref.signature_key {
+                    verification_error = Some(format!(
+                        "expected signing key {} but observed {}",
+                        entry_ref.signature_key, signature.key_id
+                    ));
+                } else {
+                    let canonical = log_entry.canonical_bytes().map_err(|err| {
+                        anyhow!(
+                            "canonicalise exported worm entry {}: {err}",
+                            export_path.display()
+                        )
+                    })?;
+                    if let Err(err) = verifier.verify(signature, &canonical) {
+                        verification_error = Some(format!("signature verification failed: {err}"));
+                    }
+                }
+            }
+            None => {
+                verification_error = Some("missing signature".to_string());
+            }
+        }
+        if let Some(reason) = verification_error {
+            unsigned_records.push(WormRetentionUnsignedRecord {
+                log_path: export_display.clone(),
+                entry_id: log_entry.id,
+                reason,
+            });
+        }
+
+        let retain_until = summary
+            .retention
+            .retain_until_string(log_entry.timestamp_ms)
+            .with_context(|| {
+                format!("compute retain-until timestamp for entry {}", log_entry.id)
+            })?;
+        let retain_until_dt =
+            OffsetDateTime::parse(&retain_until, &Rfc3339).with_context(|| {
+                format!(
+                    "parse retain-until timestamp '{}' for entry {}",
+                    retain_until, log_entry.id
+                )
+            })?;
+        if latest_retain_until
+            .as_ref()
+            .map(|(existing, _)| retain_until_dt > *existing)
+            .unwrap_or(true)
+        {
+            latest_retain_until = Some((retain_until_dt, retain_until.clone()));
+        }
+        let stale = retain_until_dt < now;
+        if stale {
+            stale_entries.push(WormRetentionStaleEntry {
+                summary_path: summary_display.clone(),
+                entry_id: log_entry.id,
+                export_object: export_display.clone(),
+                retain_until: retain_until.clone(),
+            });
+        }
+        entry_reports.push(WormRetentionEntryReport {
+            entry_id: log_entry.id,
+            timestamp_ms: log_entry.timestamp_ms,
+            export_object: export_display,
+            retain_until,
+            stale,
+        });
+        exported_entries.insert(log_entry.id, log_entry);
+    }
+    report.entries = entry_reports;
+
+    let audit_entries = load_audit_log_entries(&audit_path).with_context(|| {
+        format!(
+            "load audit log {} referenced by summary",
+            audit_path.display()
+        )
+    })?;
+    let mut audit_ids = HashSet::new();
+    for entry in &audit_entries {
+        audit_ids.insert(entry.id);
+        let mut verification_error: Option<String> = None;
+        match entry.signature.as_ref() {
+            Some(signature) => {
+                let canonical = entry.canonical_bytes().map_err(|err| {
+                    anyhow!(
+                        "canonicalise audit log entry {} in {}: {err}",
+                        entry.id,
+                        audit_path.display()
+                    )
+                })?;
+                if let Err(err) = verifier.verify(signature, &canonical) {
+                    verification_error = Some(format!("signature verification failed: {err}"));
+                }
+            }
+            None => {
+                verification_error = Some("missing signature".to_string());
+            }
+        }
+        if let Some(reason) = verification_error {
+            unsigned_records.push(WormRetentionUnsignedRecord {
+                log_path: audit_display.clone(),
+                entry_id: entry.id,
+                reason,
+            });
+        }
+        if !exported_entries.contains_key(&entry.id) {
+            orphaned_entries.push(WormRetentionOrphanedEntry {
+                summary_path: summary_display.clone(),
+                entry_id: entry.id,
+                context: format!(
+                    "audit log {} contains entry {} without exported object",
+                    audit_display, entry.id
+                ),
+            });
+        }
+    }
+    for entry_id in exported_entries.keys() {
+        if !audit_ids.contains(entry_id) {
+            orphaned_entries.push(WormRetentionOrphanedEntry {
+                summary_path: summary_display.clone(),
+                entry_id: *entry_id,
+                context: format!("exported object missing audit entry in {}", audit_display),
+            });
+        }
+    }
+
+    if let Some(metadata) = &summary.retention_metadata {
+        let metadata_path = resolve_workspace_path(workspace, metadata);
+        if metadata_path.exists() {
+            let metadata_rel = metadata_path
+                .strip_prefix(workspace)
+                .unwrap_or(metadata_path.as_path());
+            let metadata_display = relative_display_path(metadata_rel);
+            let values = parse_retention_metadata(&metadata_path)
+                .with_context(|| format!("parse retention metadata {}", metadata_path.display()))?;
+            let mut metadata_report = WormRetentionMetadataReport {
+                path: metadata_display.clone(),
+                values: values.clone(),
+                valid: true,
+                warnings: Vec::new(),
+            };
+
+            match values
+                .get("min_days")
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                Some(value) if value == summary.retention.min_days => {}
+                _ => {
+                    metadata_report.valid = false;
+                    metadata_report.warnings.push(format!(
+                        "min_days mismatch (expected {}, recorded {:?})",
+                        summary.retention.min_days,
+                        values.get("min_days")
+                    ));
+                }
+            }
+
+            match summary.retention.max_days {
+                Some(expected) => {
+                    let recorded = values
+                        .get("max_days")
+                        .and_then(|value| value.parse::<u64>().ok());
+                    if recorded != Some(expected) {
+                        metadata_report.valid = false;
+                        metadata_report.warnings.push(format!(
+                            "max_days mismatch (expected {}, recorded {:?})",
+                            expected,
+                            values.get("max_days")
+                        ));
+                    }
+                }
+                None => {
+                    if values
+                        .get("max_days")
+                        .is_some_and(|value| !value.trim().is_empty())
+                    {
+                        metadata_report.valid = false;
+                        metadata_report
+                            .warnings
+                            .push("max_days present despite retention.max_days=None".to_string());
+                    }
+                }
+            }
+
+            let expected_mode = match summary.retention.mode {
+                WormRetentionMode::Compliance => "COMPLIANCE",
+                WormRetentionMode::Governance => "GOVERNANCE",
+            };
+            match values.get("mode") {
+                Some(mode) if mode.eq_ignore_ascii_case(expected_mode) => {}
+                Some(mode) => {
+                    metadata_report.valid = false;
+                    metadata_report.warnings.push(format!(
+                        "mode mismatch (expected {}, recorded {})",
+                        expected_mode, mode
+                    ));
+                }
+                None => {
+                    metadata_report.valid = false;
+                    metadata_report
+                        .warnings
+                        .push("mode entry missing in retention metadata".to_string());
+                }
+            }
+
+            if let Some((_, expected)) = &latest_retain_until {
+                match values.get("retain_until") {
+                    Some(recorded) if recorded == expected => {}
+                    Some(recorded) => {
+                        metadata_report.valid = false;
+                        metadata_report.warnings.push(format!(
+                            "retain_until mismatch (expected {}, recorded {})",
+                            expected, recorded
+                        ));
+                    }
+                    None => {
+                        metadata_report.valid = false;
+                        metadata_report
+                            .warnings
+                            .push("retain_until missing from retention metadata".to_string());
+                    }
+                }
+            } else {
+                metadata_report
+                    .warnings
+                    .push("no exported entries to validate retain_until window".to_string());
+            }
+
+            warnings.extend(metadata_report.warnings.clone());
+            report.retention_metadata = Some(metadata_report);
+        } else {
+            warnings.push(format!(
+                "retention metadata {} referenced by {} missing",
+                metadata, summary_display
+            ));
+        }
+    }
+
+    let retention_logs = discover_retention_logs(summary_path, &export_root)?;
+    for log_path in retention_logs {
+        let log_rel = log_path
+            .strip_prefix(workspace)
+            .unwrap_or(log_path.as_path());
+        let log_display = relative_display_path(log_rel);
+        let entries = load_audit_log_entries(&log_path)
+            .with_context(|| format!("read retention log {}", log_path.display()))?;
+        let mut unsigned_count = 0usize;
+        for entry in &entries {
+            let mut issue = None;
+            match entry.signature.as_ref() {
+                Some(signature) => {
+                    let canonical = entry.canonical_bytes().map_err(|err| {
+                        anyhow!(
+                            "canonicalise retention log entry {} in {}: {err}",
+                            entry.id,
+                            log_path.display()
+                        )
+                    })?;
+                    if let Err(err) = verifier.verify(signature, &canonical) {
+                        issue = Some(format!("signature verification failed: {err}"));
+                    }
+                }
+                None => {
+                    issue = Some("missing signature".to_string());
+                }
+            }
+            if let Some(reason) = issue {
+                unsigned_count += 1;
+                unsigned_records.push(WormRetentionUnsignedRecord {
+                    log_path: log_display.clone(),
+                    entry_id: entry.id,
+                    reason,
+                });
+            }
+        }
+        report.retention_logs.push(WormRetentionLogReport {
+            path: log_display,
+            record_count: entries.len(),
+            unsigned_records: unsigned_count,
+        });
+    }
+
+    report.warnings.extend(warnings.clone());
+    Ok(WormRetentionSummaryEvaluation {
+        report,
+        stale_entries,
+        orphaned_entries,
+        unsigned_records,
+        warnings,
+    })
+}
+
+fn discover_retention_logs(summary_path: &Path, export_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut candidates = Vec::new();
+    if let Some(parent) = summary_path.parent() {
+        if parent.exists() {
+            candidates.push(parent.to_path_buf());
+        }
+    }
+    if export_root.exists() {
+        candidates.push(export_root.to_path_buf());
+    }
+
+    let mut logs = Vec::new();
+    for root in candidates {
+        for entry in fs::read_dir(&root)
+            .with_context(|| format!("list retention directory {}", root.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let file_name = entry
+                .file_name()
+                .into_string()
+                .unwrap_or_else(|_| "".to_string())
+                .to_ascii_lowercase();
+            if !(file_name.contains("retention")
+                || file_name.contains("archive")
+                || file_name.contains("delete"))
+            {
+                continue;
+            }
+            if !matches!(
+                path.extension().and_then(|ext| ext.to_str()),
+                Some(ext) if matches!(ext, "json" | "jsonl" | "log")
+            ) {
+                continue;
+            }
+            logs.push(path);
+        }
+    }
+
+    logs.sort();
+    logs.dedup();
+    Ok(logs)
+}
+
+fn load_audit_log_entries(path: &Path) -> Result<Vec<AdmissionPolicyLogEntry>> {
+    let file = File::open(path).with_context(|| format!("open audit log {}", path.display()))?;
+    let reader = BufReader::new(file);
+    let mut entries = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry: AdmissionPolicyLogEntry = serde_json::from_str(&line)
+            .with_context(|| format!("decode audit log entry from {}", path.display()))?;
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn parse_retention_metadata(path: &Path) -> Result<BTreeMap<String, String>> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("read retention metadata {}", path.display()))?;
+    let mut values = BTreeMap::new();
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once('=') {
+            values.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+    Ok(values)
+}
+
 fn collect_phase3_evidence(args: &[String]) -> Result<()> {
     let workspace = workspace_root();
     let mut output_root = workspace.join("target/compliance/phase3");
@@ -3424,12 +4130,27 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
         println!("⚠️ no WORM export summaries found; skipping signature verification");
     }
 
+    let retention_roots = vec![
+        workspace.join("target/worm-export-smoke"),
+        workspace.join("logs"),
+        workspace.join("target/compliance/worm-retention"),
+    ];
+    let retention_output =
+        workspace.join("target/compliance/worm-retention/worm-retention-report.json");
+    let retention_outcome =
+        execute_worm_retention_check(&workspace, &retention_roots, &retention_output)?;
+    if retention_outcome.report.summaries.is_empty() {
+        println!("⚠️ worm retention check did not locate any summaries; report generated");
+    }
+    retention_outcome.ensure_success()?;
+
     let mut categories = Vec::new();
     categories.push(bundle_snapshot_dashboards(&workspace, &staging_dir)?);
     categories.push(bundle_alert_rules(&workspace, &staging_dir)?);
     categories.push(bundle_audit_logs(&workspace, &staging_dir)?);
     categories.push(bundle_policy_backups(&workspace, &staging_dir)?);
     categories.push(bundle_worm_exports(&workspace, &staging_dir)?);
+    categories.push(bundle_snapshot_signatures(&workspace, &staging_dir)?);
     categories.push(bundle_checksum_reports(&workspace, &staging_dir)?);
     categories.push(bundle_ci_job_logs(&workspace, &staging_dir)?);
 
@@ -3664,6 +4385,59 @@ fn bundle_policy_backups(workspace: &Path, staging: &Path) -> Result<EvidenceCat
     Ok(category)
 }
 
+fn bundle_snapshot_signatures(
+    workspace: &Path,
+    staging: &Path,
+) -> Result<EvidenceCategoryManifest> {
+    let mut category = EvidenceCategoryManifest {
+        name: "Snapshot manifest signatures".to_string(),
+        description: "Detached signatures and verifying keys for snapshot manifest bundles."
+            .to_string(),
+        files: Vec::new(),
+        missing: Vec::new(),
+        warnings: Vec::new(),
+    };
+    let search_roots = [
+        workspace.join("target/snapshot-verifier-smoke"),
+        workspace.join("logs"),
+    ];
+    for root in search_roots.iter().filter(|path| path.exists()) {
+        for entry in WalkDir::new(root)
+            .max_depth(6)
+            .into_iter()
+            .filter_map(|res| res.ok())
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let path = entry.path();
+            let lower = path.to_string_lossy().to_ascii_lowercase();
+            if !(lower.contains("snapshot") || lower.contains("manifest")) {
+                continue;
+            }
+            let ext = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+            let is_signature = matches!(ext, "sig" | "sha256");
+            let is_key = matches!(ext, "hex" | "pub" | "pem")
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.to_ascii_lowercase().contains("key"));
+            if !(is_signature || is_key) {
+                continue;
+            }
+            let recorded = copy_into_category(workspace, staging, "snapshot-signatures", path)?;
+            category.files.push(recorded);
+        }
+    }
+    if category.files.is_empty() {
+        category.missing.push(
+            "Snapshot manifest signatures and verifying keys (target/snapshot-verifier-smoke)"
+                .to_string(),
+        );
+    }
+    category.files.sort();
+    category.files.dedup();
+    Ok(category)
+}
+
 fn bundle_worm_exports(workspace: &Path, staging: &Path) -> Result<EvidenceCategoryManifest> {
     let mut category = EvidenceCategoryManifest {
         name: "WORM export evidence".to_string(),
@@ -3676,6 +4450,7 @@ fn bundle_worm_exports(workspace: &Path, staging: &Path) -> Result<EvidenceCateg
     let search_roots = [
         workspace.join("target/worm-export-smoke"),
         workspace.join("logs"),
+        workspace.join("target/compliance/worm-retention"),
     ];
     for root in search_roots.iter().filter(|path| path.exists()) {
         for entry in WalkDir::new(root)
@@ -3831,6 +4606,7 @@ fn main() -> Result<()> {
         "test-simnet" => run_simnet_smoke(),
         "test-consensus-manipulation" => run_consensus_manipulation_tests(),
         "test-worm-export" => run_worm_export_smoke(),
+        "worm-retention-check" => worm_retention_check(&argv),
         "test-all" => run_full_test_matrix(),
         "proof-metadata" => generate_proof_metadata(&argv),
         "plonky3-setup" => regenerate_plonky3_setup(&argv),
