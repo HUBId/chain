@@ -139,6 +139,7 @@ impl From<ArgCacheReadStrategy> for CacheReadStrategy {
 
 mod create;
 mod single;
+mod smoke;
 mod tenkrandom;
 mod zipf;
 
@@ -146,6 +147,9 @@ mod zipf;
 enum TestName {
     /// Create a database
     Create,
+
+    /// Quick smoke benchmark optimized for CI runtimes
+    Smoke,
 
     /// Insert batches of random keys
     TenKRandom,
@@ -237,7 +241,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
-        .truncate(matches!(args.test_name, TestName::Create))
+        .truncate(matches!(args.test_name, TestName::Create | TestName::Smoke))
         .manager(mgrcfg)
         .build();
 
@@ -247,6 +251,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     match args.test_name {
         TestName::Create => {
             let runner = create::Create;
+            runner.run(&db, &args)?;
+        }
+        TestName::Smoke => {
+            let runner = smoke::Smoke;
             runner.run(&db, &args)?;
         }
         TestName::TenKRandom => {

@@ -649,11 +649,15 @@ where
     NodeStore<T, S>: NodeReader,
 {
     /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
-    fn split_all_leaked_ranges<'a>(
-        &self,
-        leaked_ranges: impl IntoIterator<Item = Range<&'a LinearAddress>>,
-        progress_bar: Option<&ProgressBar>,
-    ) -> impl Iterator<Item = (LinearAddress, AreaIndex)> {
+    fn split_all_leaked_ranges<'a, R>(
+        &'a self,
+        leaked_ranges: R,
+        progress_bar: Option<&'a ProgressBar>,
+    ) -> impl Iterator<Item = (LinearAddress, AreaIndex)> + 'a
+    where
+        R: IntoIterator<Item = Range<&'a LinearAddress>>,
+        R::IntoIter: 'a,
+    {
         leaked_ranges
             .into_iter()
             .flat_map(move |range| self.split_range_into_leaked_areas(range, progress_bar))
