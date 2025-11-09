@@ -21,6 +21,14 @@ versionierten Artefakte aus dem `staging-soak`-Job, ergänzende Dashboards oder 
       enthält die aggregierten Flags (`snapshot.ok`, `timetoke.ok`, `admission.ok`, `errors`).
       Hinterlege den neuesten grün markierten Summary-Eintrag als Nachweis.
 
+### Dual-Control-Workflow
+- [ ] **Integrationstest-Logs verlinkt.** Hinterlege den Actions-Run des CI-Jobs
+      `rpc-admission-audit` inklusive Step-Logs für `cargo test -p rpp-chain --locked --test admission`,
+      damit Reviewer:innen den Durchlauf von `tests/network/admission_dual_control.rs` nachvollziehen können.【F:.github/workflows/ci.yml†L367-L376】【F:tests/network/admission_dual_control.rs†L1-L55】
+- [ ] **Audit-Einträge im Evidence-Log.** Exportiere die JSONL-Scheibe (`GET /p2p/admission/audit?limit=<n>`) direkt nach einer
+      freigegebenen Änderung und verlinke sie gemeinsam mit dem Pending-/Approve-Flow, sodass beide Freigaben und die
+      WORM-signierten Metadaten im Abnahmeprotokoll landen.【F:docs/network/admission.md†L60-L121】【F:rpp/p2p/src/policy_log.rs†L45-L194】
+
 ## Exit-Kriterien
 
 Phase B gilt als erfolgreich abgeschlossen, wenn alle Artefakte oben verlinkt sind und
