@@ -22,6 +22,14 @@ Noch keine Phase‑C-Statusdaten verfügbar. Die Datei [`phaseC_status.md`](../.
 | Timetoke-Latenz p95 (Maximum/14 Tage) | 29 100 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
 | Timetoke-Latenz p99 (Maximum/14 Tage) | 58 400 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
 
+## Replay Defense Telemetry
+
+- **Letzte Prüfung:** 2026-08-19 10:30 UTC (Nightly + manueller CLI-Check)
+- `timetoke_replay_success_rate` ➜ 99,7 % (7‑Tage-Betrachtung, ✅ innerhalb SLO)
+- `timetoke_replay_stalled_final{threshold="warning"}` ➜ 0 · `threshold="critical"` ➜ 0 (keine Stall-Events)
+- CLI `rpp-node snapshot replay status` bestätigt Erfolgsrate, Stall-Detector und Latenzen; Ausgabe im Incident-/Audit-Log
+  abgelegt.【F:docs/observability/timetoke.md†L1-L120】【F:docs/runbooks/timetoke_failover.md†L1-L120】
+
 ## Phase 1 abgeschlossen (Kalenderwoche 37/2025)
 
 **Zusammenfassung:** Die Blueprint-Phase 1 ist abgeschlossen. Die Plonky3-Strecke ist vollständig dokumentiert, Root-Guards überwachen Firewood-Snapshots und die CI-Gates spiegeln die komplette Backend-Matrix wider.

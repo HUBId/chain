@@ -1,6 +1,6 @@
 # Timetoke Replay Observability
 
-The Timetoke replay path exports counters and histograms that cover ledger delta ingestion, replay success, and end-to-end latency. This document captures the service level objectives (SLOs), the reporting workflow, and instructions for querying the metrics directly.
+The Timetoke replay path exports counters and histograms that cover ledger delta ingestion, replay success, and end-to-end latency. This document captures the service level objectives (SLOs), the reporting workflow, and instructions for querying the metrics directly. The final replay metrics—success rate and stalled-detector status—tie these signals together for incident response and audit evidence.
 
 ## SLO thresholds
 
@@ -16,6 +16,15 @@ The SLO windows align with the weekly acceptance cadence. Operators should verif
 - `timetoke_replay_last_attempt_timestamp` / `timetoke_replay_last_success_timestamp` provide the raw Unix timestamps for cursors. Combine with `time() - metric` to calculate the current age in PromQL.
 - `timetoke_replay_seconds_since_success` offers a direct helper gauge for dashboards.
 - `timetoke_replay_stalled{threshold="warning"|"critical"}` flips to `1` once 60 s / 120 s pass without a successful replay.
+
+### Final replay metrics
+
+Operators consume the replay counters above through two derived, “final” gauges that appear in dashboards, reports, and CLI summaries:
+
+- **Replay success rate (`timetoke_replay_success_rate`).** A rolling ratio of `success_total` vs. `failure_total` normalised to `0.0 – 1.0`. The nightly report multiplies this value by 100 to express the 7‑Tage-Erfolgsquote. Alert thresholds mirror the ≥ 99 % SLO, and the CLI renders both the percentage and the raw counter deltas so auditors can reconcile local PromQL queries.
+- **Replay stalled detector (`timetoke_replay_stalled_final{threshold}`).** This gauge aggregates the warning/critical states into a single flag per threshold. It remains `0` while replay succeeds within the respective 60 s / 120 s windows and flips to `1` once the underlying `timetoke_replay_stalled{threshold}` signals a breach. Dashboards label the metric “Replay stalled (final)” to distinguish it from the per-attempt timestamps.
+
+The gauges ship with metadata labels (`threshold`, `window`) so that dashboards can render both the raw timestamps and the derived final state side by side.
 
 ## Scheduled report
 
@@ -57,12 +66,12 @@ Reuse these snippets in Grafana dashboard panels or when cross-checking the CLI 
 
 ## CLI quick check
 
-Validators expose the aggregated replay telemetry via `GET /observability/timetoke/replay`. The `rpp-node validator snapshot replay status` helper wraps the call, prints counters and percentiles, and exits with a warning whenever the 99 % success-rate or 60 s / 120 s latency targets are violated:
+Validators expose the aggregated replay telemetry via `GET /observability/timetoke/replay`. The `rpp-node snapshot replay status` helper wraps the call, prints counters and percentiles, and exits with a warning whenever the 99 % success-rate or 60 s / 120 s latency targets are violated:
 
 ```bash
-rpp-node validator snapshot replay status \
+rpp-node snapshot replay status \
   --config /etc/rpp/validator.toml \
   --rpc-url https://validator.example.net:7070
 ```
 
-The command is safe to run during incidents, surfaces the `timetoke_replay_*` gauges inline, and guides responders straight to the Timetoke failover runbook when thresholds trip.
+The command is safe to run during incidents, surfaces the `timetoke_replay_*` gauges inline, and guides responders straight to the Timetoke failover runbook when thresholds trip. Its output groups the final replay metrics up front—`Replay success rate: 99.7 % (success=12345, failure=32)` followed by `Replay stalled (warning|critical): 0`—before listing the percentile latencies and raw counters. A trailing summary echoes whether each SLO remains compliant so that responders can paste a single block into the incident log.
