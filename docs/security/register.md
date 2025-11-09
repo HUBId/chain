@@ -6,6 +6,13 @@ The table below summarises the currently open snapshot lifecycle risks and the
 teams accountable for completing remediation. Each risk links to the
 implementation task that tracks delivery work.
 
+## Implemented controls
+
+| Control | Impact addressed | Status | Control owner | Evidence |
+| --- | --- | --- | --- | --- |
+| Snapshot Manifest Verification | Prevents tampered manifests from being distributed and imported into state sync. | **Implemented — 24 July 2026.** Release builds sign and publish `snapshot-verify-report.json` plus hashes; CI gate `snapshot-verifier` and the Phase‑A evidence bundle capture reproducible smoke artefacts for auditors. | Tooling Team | [Phase‑A Acceptance Checklist — Snapshot provenance](../runbooks/phaseA_acceptance.md#snapshot-provenance)<br>[Threat Model — Phase A Review Summary](threat_model.md#phase-a-review-summary) |
+| Audit Log WORM Export | Ensures admission audit events are immutably exported so tampering is detectable. | **Implemented — 24 July 2026.** Nightly `worm-export` job emits signed `worm-export-summary.json`, the bootstrap guard enforces WORM configuration at startup, and evidence bundles archive the exports for audit review. | Security Engineering | [Phase‑A Acceptance Checklist — WORM export audit trail](../runbooks/phaseA_acceptance.md#worm-export-audit-trail)<br>[Threat Model — Phase A Review Summary](threat_model.md#phase-a-review-summary) |
+
 | Risk | Impact | Mitigation Status | Remediation Owner | Tracking |
 | --- | --- | --- | --- | --- |
 | Snapshot replay defence coverage | Replayed manifests could poison state-sync and trigger consensus divergence. | Add-on manifest signature telemetry is blocked on replay simulation data; external verification CLI is scoped and tracked separately. | State Sync Guild | [ENG-921](../status/weekly.md#snapshot-replay-hardening) |

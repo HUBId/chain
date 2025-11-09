@@ -134,13 +134,20 @@ Resume-Validierung, Admission-Policy-Kontrollen und Audit-Trail-Härtung ist
 abgeschlossen. Die Ergebnisse sind im aktualisierten
 [Threat Model Addendum](../security/threat_model.md) und dem
 überarbeiteten [Security Risk Register](../security/register.md)
-mit neuen Outstanding-Maßnahmen dokumentiert.
+mit neuen Outstanding-Maßnahmen dokumentiert. Zusätzlich wurden die Controls
+„Snapshot Manifest Verification“ und „Audit Log WORM Export“ als *Implemented*
+abgeschlossen und inklusive Evidenzlinks im Register verankert.
 
 ### Highlights
 - Threat-Model-Erweiterung beschreibt Replay-Abwehr, Resume-Schutz,
   Policy-Persistenz und Audit-Trail-Mitigations mit konkreten Kontrollen.
 - Risk Register weist offene Maßnahmen inkl. Ownern und Tracking-Links aus
   und dient als Referenz für Phase‑3-Planung.
+- Snapshot-Manifest-Prüfung und WORM-Audit-Export besitzen produktive Artefakte
+  (`snapshot-verify-report.json`, `worm-export-summary.json`), die in der
+  [Phase‑A Acceptance Checklist](../runbooks/phaseA_acceptance.md) sowie im
+  [Security Risk Register](../security/register.md#implemented-controls)
+  als abgeschlossen markiert sind.
 
 ### Tracking
 <a id="snapshot-replay-hardening"></a>

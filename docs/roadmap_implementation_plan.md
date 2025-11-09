@@ -10,6 +10,13 @@ Phase A verfolgt die externe Härtung der Snapshot-Kette. Der wöchentliche St
 - `worm-export-smoke` (Nightly-Job) für Export-Summaries und Checksummen der WORM-Streams.
 - `threat-model-review` (Security-Workflow) für das Review-Protokoll und aktualisierte Threat-Model-Einträge.
 
+Die Controls **Snapshot Manifest Verification** und **Audit Log WORM Export**
+sind seit dem 24. Juli 2026 im [Security Risk Register](security/register.md#implemented-controls)
+als *Implemented* dokumentiert, inklusive Links zur Phase‑A-Checkliste und zum
+[Threat Model Addendum](security/threat_model.md#phase-a-review-summary), damit
+Audit-Stakeholder die Artefakte (`snapshot-verify-report.json`,
+`worm-export-summary.json`) unmittelbar nachvollziehen können.
+
 Die entsprechende Vorlage (`docs/status/weekly_template.md`) enthält feste Platzhalterlinks auf die Actions-Runs, damit Phase‑A-Audits jede Woche denselben Nachweisumfang erhalten.
 
 ## Phase 1 abgeschlossen (Stand: 2025-09-12)
