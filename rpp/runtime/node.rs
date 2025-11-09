@@ -352,7 +352,7 @@ pub struct MempoolStatus {
     pub queue_weights: QueueWeightsConfig,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingUptimeSummary {
     pub identity: Address,
     pub window_start: u64,
