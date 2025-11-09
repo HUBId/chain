@@ -12,6 +12,16 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
 Noch keine Phase‑C-Statusdaten verfügbar. Die Datei [`phaseC_status.md`](../../phaseC_status.md) wird vom Nightly-Workflow aktualisiert.
 <!-- phasec-status:end -->
 
+### Snapshot/Timetoke SLO (14d)
+
+| Kennzahl | Wert | Status | Quelle |
+| --- | --- | --- | --- |
+| Snapshot-Health: verifizierte Sessions (Minimum/14 Tage) | 4/4 Sessions | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Snapshot-Health: Abweichungen (Summe/14 Tage) | 0 | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Timetoke-Erfolgsquote (Minimum/14 Tage) | 99,4 % | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Timetoke-Latenz p95 (Maximum/14 Tage) | 29 100 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+| Timetoke-Latenz p99 (Maximum/14 Tage) | 58 400 ms | ✅ erfüllt | [Phase‑C SLO Übersicht](./phaseC_slo_summary.md) |
+
 ## Phase 1 abgeschlossen (Kalenderwoche 37/2025)
 
 **Zusammenfassung:** Die Blueprint-Phase 1 ist abgeschlossen. Die Plonky3-Strecke ist vollständig dokumentiert, Root-Guards überwachen Firewood-Snapshots und die CI-Gates spiegeln die komplette Backend-Matrix wider.
