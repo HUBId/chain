@@ -385,6 +385,10 @@ PY
         run: |
           set -euo pipefail
           cargo xtask test-worm-export
+      - name: Validate WORM export failure guard
+        run: |
+          set -euo pipefail
+          cargo test --test compliance --features integration -- worm_export_failure_emits_metric_and_log
       - name: Upload WORM smoke artifacts
         uses: actions/upload-artifact@v4
         with:

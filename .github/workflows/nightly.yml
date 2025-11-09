@@ -38,6 +38,7 @@ jobs:
             exit 1
           fi
           cargo xtask test-worm-export
+          cargo test --test compliance --features integration -- worm_export_failure_emits_metric_and_log
       - name: Upload WORM export smoke artifacts
         uses: actions/upload-artifact@v4
         with:
