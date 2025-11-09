@@ -52,6 +52,11 @@ jobs:
         run: |
           set -euo pipefail
           cargo xtask worm-retention-check
+      - name: Upload WORM retention report
+        uses: actions/upload-artifact@v4
+        with:
+          name: worm-retention-report.json
+          path: target/compliance/worm-retention/worm-retention-report.json
       - name: Upload WORM export smoke artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -828,6 +833,8 @@ EOF
     name: Publish nightly CI status snapshot
     needs:
       - verify-smoke-artifacts
+      - worm-export
+      - snapshot-partition
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -843,22 +850,37 @@ EOF
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Download WORM retention report
+        uses: actions/download-artifact@v4
+        with:
+          name: worm-retention-report.json
+          path: phasec-artifacts/worm
+          if-no-files-found: warn
+      - name: Download snapshot partition report
+        uses: actions/download-artifact@v4
+        with:
+          name: snapshot_partition_report.json
+          path: phasec-artifacts/chaos
+          if-no-files-found: warn
       - name: Generate nightly status summary
         run: |
           set -euo pipefail
-          python3 scripts/update_nightly_status.py
+          python3 scripts/update_nightly_status.py \
+            --retention-report phasec-artifacts/worm/worm-retention-report.json \
+            --chaos-report phasec-artifacts/chaos/snapshot_partition_report.json \
+            --phasec-status-file phaseC_status.md
       - name: Stage nightly status changes
         run: |
           set -euo pipefail
           git status --short
-          if git diff --quiet -- docs/status/weekly.md nightly_status.md; then
-            echo "Keine Änderungen an nightly_status.md oder docs/status/weekly.md"
+          if git diff --quiet -- docs/status/weekly.md nightly_status.md phaseC_status.md; then
+            echo "Keine Änderungen an nightly_status.md, phaseC_status.md oder docs/status/weekly.md"
             exit 0
           fi
           git checkout "${DEFAULT_BRANCH:-main}"
           git pull --ff-only
           git checkout -B "$STATUS_BRANCH"
-          git add nightly_status.md docs/status/weekly.md
+          git add nightly_status.md phaseC_status.md docs/status/weekly.md
       - name: Commit and push status snapshot
         if: ${{ !cancelled() }}
         run: |
