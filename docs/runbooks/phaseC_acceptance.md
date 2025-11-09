@@ -76,6 +76,16 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       „SnapshotChaosNightlyFailure“/„SnapshotChaosNightlyMissing“ sind entweder
       geschlossen oder mit Incident-Verweis dokumentiert.
 
+### Snapshot/Timetoke Replay SLO Monitoring
+
+- [ ] **Snapshot/Timetoke SLO ≥ 14 Tage erfüllt.** Der konsolidierte Export
+      [`docs/status/phaseC_slo_summary.md`](../status/phaseC_slo_summary.md)
+      dokumentiert, dass alle Snapshot-Health-Checks und Timetoke-Replay-SLOs
+      im letzten 14‑Tage-Zeitraum ohne Grenzwertverletzungen bestanden wurden
+      (Snapshot-Sessions vollständig verifiziert, Erfolgsquote ≥ 99 %, Latenzen
+      innerhalb der definierten p50/p95/p99-Ziele). Abweichungen müssen über das
+      Incident-Log adressiert und erneut über den Export bestätigt werden.
+
 ## Exit Criteria
 
 - [ ] **WORM-Verifikation sign-off.** Die jüngste `worm-retention-report.json`
