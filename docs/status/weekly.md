@@ -49,6 +49,12 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
   `snapshot-verifier-smoke` und `worm-export-smoke` bereithält, und markiert fehlende Uploads als Fehler, damit
   Nightly-Ausfälle direkt auf Artefakt-Lücken hinweisen.【F:.github/workflows/nightly.yml†L25-L69】
 
+### Trainings & Labs
+
+| Datum | Session | Teilnehmer:innen | Nachweise |
+| --- | --- | --- | --- |
+| 2026-07-24 | Phase‑A Operator Lab (Snapshot/WORM/CI-Artefakte) | Ops Enablement (3), On-Call Rotation (2) | [Trainingsskript](../training/phaseA_operator_lab.md), lokale Reports `target/snapshot-verifier-smoke/` & `target/worm-export-smoke/` (Hashes im Lab-Protokoll) |
+
 ### Ampelstatus
 - **Tests:** 🟢 – Manipulations-Suite läuft nightly.
 - **Monitoring:** 🟡 – Dashboards aktiv, Alerts in Rollout.
