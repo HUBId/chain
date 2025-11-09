@@ -110,3 +110,81 @@ Rollback vorzubereiten.
    Rollback) und hinterlege eine Kopie in der Phase‑3-Artefaktensammlung.
 3. Eskaliere an das Governance/GRC-Team, wenn wiederholt Freigaben fehlen oder
    die Audit-Log-Kette unterbrochen erscheint.
+
+## Snapshot-Verifier schlägt fehl
+
+Release-Pipelines stoppen, sobald `cargo xtask snapshot-verifier` oder der
+GitHub-Job `snapshot-verifier` Abweichungen im Aggregat-Report melden. Sammle
+unmittelbar Belege und eskaliere gemäß folgender Kette:
+
+**Eskalationskette & Ansprechpartner:innen**
+
+1. **Release On-Call** (`#releng-oncall`, Telefon `+49 30 1234 5678`) – bestätigt
+   die Fehlermeldung und blockiert weitere Promote-Jobs.
+2. **Release Engineering Lead** (Mara Schulz, mara.schulz@example.com) –
+   koordiniert Neuversuche und entscheidet über Rollback/Hotfix.
+3. **Compliance Liaison** (Ishan Patel, ishpatel@example.com) – informiert Audit
+   und prüft, ob Freigabefenster verschoben werden müssen.
+4. **Security Duty** (sec-duties@example.com) – bewertet, ob Integrität der
+   Snapshot-Artefakte kompromittiert ist und initiiert forensische Sicherung.
+
+**Sofortmaßnahmen & CLI-Kommandos**
+
+- [ ] Wiederhole die Aggregation lokal mit
+      `cargo xtask snapshot-verifier` und sichere das Verzeichnis
+      `target/snapshot-verifier-smoke/` als Zip-Anhang.
+- [ ] Prüfe den produktiven Report mit
+      `cargo xtask verify-report --report dist/artifacts/<target>/snapshot-verify-report.json`
+      gegen das Schema `docs/interfaces/snapshot_verify_report.schema.json`.
+- [ ] Führe `rpp-node validator snapshot verify --config <pfad>` gegen das
+      zuletzt veröffentlichte Bundle aus, um Chunk-Abweichungen auszuschließen.
+
+**Logs, Alerts & Artefakte**
+
+- Exportiere die CI-Logs des Jobs `snapshot-verifier` (Actions → Job → "Download
+  all logs") und hänge sie dem Incident-Log an.
+- Sichere `target/snapshot-verifier-smoke/snapshot-verify-report.json` plus
+  `.sha256`, sowie den neuesten Release-Report unter
+  `dist/artifacts/<target>/snapshot-verify-report.json`.
+- Dokumentiere Prometheus-Graph & Alert-Timeline von
+  `SnapshotVerifierFailure` (`alerts/compliance_controls.yaml`).
+- Hinterlege die CLI-Ausgaben (`stdout`/`stderr`) der oben genannten Kommandos
+  im Incident-Log und im Phase‑A/Phase‑3 Evidenzordner.
+
+## WORM-Export fehlerhaft
+
+Ein Fehler im WORM-Pfad gefährdet die revisionssichere Audit-Trail-Aufbewahrung.
+Typische Signale sind rote Nightly-Checks (`worm-export-smoke`) oder der Alert
+`WormExportNightlyFailure`. Handhabe den Vorfall nach dieser Kette:
+
+**Eskalationskette & Ansprechpartner:innen**
+
+1. **Compliance On-Call** (`#compliance-oc`, Telefon `+49 30 9876 5432`) –
+   stoppt Archiv-Freigaben und erfasst die ersten Artefakte.
+2. **Storage Engineering** (Lead: Jin Park, jin.park@example.com) – analysiert
+   Exporter-Logs und behebt Pipeline-/S3-Konfigurationsfehler.
+3. **Network Operations** (net-ops@example.com) – überprüft Admission-Backups
+   und stellt temporäre Backups bereit.
+4. **Security Duty** (sec-duties@example.com) – bewertet Auswirkungen auf die
+   Unveränderbarkeit und initiiert zusätzliche Logging/Retention-Checks.
+
+**Sofortmaßnahmen & CLI-Kommandos**
+
+- [ ] Führe `cargo xtask test-worm-export` aus und archiviere
+      `target/worm-export-smoke/` mitsamt `worm-export-summary.json`.
+- [ ] Sammle die Laufzeit-Logs aus dem Validator (`journalctl -u rpp-node --grep
+      "worm export"`) sowie das Admission-Audit via
+      `rpp-node validator admission backups download`.
+- [ ] Falls das Produktivsystem betroffen ist, pausiere Exporte kurzfristig über
+      den Betriebs-Workflow (z. B. `systemctl stop rpp-node`) nach Rücksprache mit
+      Compliance und dokumentiere Uhrzeit sowie Ticket.
+
+**Logs, Alerts & Artefakte**
+
+- Lade die Nightly-Logs/Artefakte des Jobs `worm-export-smoke` herunter.
+- Sichere die mit `test-worm-export` erzeugten Dateien (`audit.jsonl`,
+  `worm/`, `retention.meta`, `worm-export-summary.json`).
+- Dokumentiere den Alert-Verlauf `WormExportNightlyFailure` sowie die Metrik
+  `worm_export_failures_total` in Prometheus/Grafana.
+- Erfasse jede manuelle Stop/Start-Aktion des Validators (z. B.
+  `systemctl stop|start rpp-node`) mit Timestamp im Incident-Log.
