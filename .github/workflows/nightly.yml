@@ -275,6 +275,111 @@ jobs:
           name: snapshot-manifest-verify
           path: snapshot-manifest-verify.json
 
+  staging-soak:
+    name: Staging soak orchestration
+    runs-on: ubuntu-latest
+    env:
+      SNAPSHOT_RPC_URL: ${{ secrets.SNAPSHOT_RPC_URL }}
+      SNAPSHOT_RPC_TOKEN: ${{ secrets.SNAPSHOT_RPC_TOKEN }}
+      SNAPSHOT_VALIDATOR_CONFIG: ${{ secrets.SNAPSHOT_VALIDATOR_CONFIG }}
+      SNAPSHOT_MANIFEST_PATH: ${{ secrets.SNAPSHOT_MANIFEST_PATH }}
+      SNAPSHOT_MANIFEST_JSON: ${{ secrets.SNAPSHOT_MANIFEST_JSON }}
+      SNAPSHOT_MANIFEST_PUBKEY_HEX: ${{ secrets.SNAPSHOT_MANIFEST_PUBKEY_HEX }}
+      SNAPSHOT_CHUNK_ROOT: ${{ secrets.SNAPSHOT_CHUNK_ROOT }}
+      SNAPSHOT_CHUNK_ARCHIVE_URL: ${{ secrets.SNAPSHOT_CHUNK_ARCHIVE_URL }}
+      SNAPSHOT_CHUNK_ROOT_SUBDIR: ${{ secrets.SNAPSHOT_CHUNK_ROOT_SUBDIR }}
+      SNAPSHOT_MANIFEST_SIGNATURE_PATH: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE_PATH }}
+      SNAPSHOT_MANIFEST_SIGNATURE: ${{ secrets.SNAPSHOT_MANIFEST_SIGNATURE }}
+      TIMETOKE_PROMETHEUS_URL: ${{ secrets.TIMETOKE_PROMETHEUS_URL }}
+      TIMETOKE_PROMETHEUS_BEARER: ${{ secrets.TIMETOKE_PROMETHEUS_BEARER }}
+      ADMISSION_RPC_URL: ${{ secrets.ADMISSION_RPC_URL }}
+      ADMISSION_RPC_TOKEN: ${{ secrets.ADMISSION_RPC_TOKEN }}
+      ADMISSION_POLICY_PATH: ${{ secrets.ADMISSION_POLICY_PATH }}
+      ADMISSION_MAX_AUDIT_LAG_SECS: ${{ secrets.ADMISSION_MAX_AUDIT_LAG_SECS }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run staging soak orchestrator
+        id: soak
+        run: |
+          set -euo pipefail
+          mkdir -p nightly-artifacts/staging-soak
+          set +e
+          cargo xtask staging-soak --output-dir nightly-artifacts/staging-soak
+          status=$?
+          set -e
+          summary_path=$(find nightly-artifacts/staging-soak -name summary.json -print | sort | tail -n 1)
+          if [[ -n "$summary_path" ]]; then
+            echo "summary_path=$summary_path" >>"$GITHUB_OUTPUT"
+          fi
+          echo "exit_status=$status" >>"$GITHUB_OUTPUT"
+
+      - name: Upload staging soak artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-soak
+          path: nightly-artifacts/staging-soak
+          if-no-files-found: warn
+
+      - name: Evaluate staging soak summary
+        id: evaluate
+        run: |
+          set -euo pipefail
+          summary="${{ steps.soak.outputs.summary_path }}"
+          if [[ -z "$summary" || ! -f "$summary" ]]; then
+            echo "summary_path=$summary" >>"$GITHUB_OUTPUT"
+            echo "summary_missing=true" >>"$GITHUB_OUTPUT"
+            echo "overall_ok=false" >>"$GITHUB_OUTPUT"
+            echo "snapshot_ok=false" >>"$GITHUB_OUTPUT"
+            echo "timetoke_ok=false" >>"$GITHUB_OUTPUT"
+            echo "admission_ok=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          snapshot_ok=$(jq -r '.snapshot.ok' "$summary")
+          timetoke_ok=$(jq -r '.timetoke.ok' "$summary")
+          admission_ok=$(jq -r '.admission.ok' "$summary")
+          overall=$(jq -r '.ok' "$summary")
+          echo "summary_path=$summary" >>"$GITHUB_OUTPUT"
+          echo "summary_missing=false" >>"$GITHUB_OUTPUT"
+          echo "snapshot_ok=$snapshot_ok" >>"$GITHUB_OUTPUT"
+          echo "timetoke_ok=$timetoke_ok" >>"$GITHUB_OUTPUT"
+          echo "admission_ok=$admission_ok" >>"$GITHUB_OUTPUT"
+          echo "overall_ok=$overall" >>"$GITHUB_OUTPUT"
+
+      - name: Create staging soak alert issue
+        if: ${{ steps.evaluate.outputs.overall_ok != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          summary="${{ steps.evaluate.outputs.summary_path }}"
+          snapshot_ok="${{ steps.evaluate.outputs.snapshot_ok }}"
+          timetoke_ok="${{ steps.evaluate.outputs.timetoke_ok }}"
+          admission_ok="${{ steps.evaluate.outputs.admission_ok }}"
+          body=$(cat <<"EOF"
+## Staging soak regression
+
+- Snapshot health: ${snapshot_ok}
+- Timetoke SLOs: ${timetoke_ok}
+- Admission reconciliation: ${admission_ok}
+
+Summary artifact: ${summary}
+EOF
+)
+          printf "%s\n" "$body" > issue.md
+          gh issue create --title "Staging soak regression ${{ github.run_id }}" --body-file issue.md --label staging-soak
+
+      - name: Fail on staging soak regression
+        if: ${{ steps.evaluate.outputs.overall_ok != 'true' }}
+        run: |
+          echo "Staging soak checks failed" >&2
+          exit 1
+
   phase3-evidence:
     name: Phase 3 evidence bundle
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fmt::Write as FmtWrite;
 use std::fs::{self, File};
@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -23,7 +23,7 @@ use reqwest::blocking::Client as HttpClient;
 use rpp_p2p::{
     AdmissionApprovalRecord, AdmissionPolicyChange, AdmissionPolicyLog, AdmissionPolicyLogEntry,
     AdmissionPolicyLogOptions, CommandWormExporter, PolicySignatureVerifier, PolicySigner,
-    PolicyTrustStore, WormExportSettings, WormRetention, WormRetentionMode,
+    PolicyTrustStore, TierLevel, WormExportSettings, WormRetention, WormRetentionMode,
 };
 use serde::Deserialize;
 use serde::Serialize;
@@ -751,12 +751,16 @@ struct ValidatorConfigSnippet {
     snapshot_dir: Option<String>,
     #[serde(default)]
     network: Option<ValidatorNetworkSnippet>,
+    #[serde(default)]
+    admission_reconciler: Option<ValidatorAdmissionReconcilerSnippet>,
 }
 
 #[derive(Default, Deserialize)]
 struct ValidatorNetworkSnippet {
     #[serde(default)]
     rpc: Option<ValidatorRpcSnippet>,
+    #[serde(default)]
+    admission: Option<ValidatorAdmissionSnippet>,
 }
 
 #[derive(Default, Deserialize)]
@@ -765,6 +769,18 @@ struct ValidatorRpcSnippet {
     listen: Option<String>,
     #[serde(default)]
     auth_token: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct ValidatorAdmissionSnippet {
+    #[serde(default)]
+    policy_path: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+struct ValidatorAdmissionReconcilerSnippet {
+    #[serde(default)]
+    max_audit_lag_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -895,7 +911,7 @@ impl ManifestCatalog {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SnapshotHealthReport {
     generated_at: String,
     rpc_base_url: String,
@@ -903,7 +919,7 @@ struct SnapshotHealthReport {
     sessions: Vec<SnapshotSessionReport>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SnapshotSessionReport {
     session: u64,
     peer: String,
@@ -1405,6 +1421,1093 @@ fn alias_variants(value: &str) -> Vec<String> {
     variants
 }
 
+struct AdmissionReconciliationOptions {
+    config: Option<PathBuf>,
+    rpc_url: Option<String>,
+    auth_token: Option<String>,
+    policy_path: Option<PathBuf>,
+    output: Option<PathBuf>,
+    max_audit_lag_secs: Option<u64>,
+}
+
+impl Default for AdmissionReconciliationOptions {
+    fn default() -> Self {
+        Self {
+            config: None,
+            rpc_url: None,
+            auth_token: None,
+            policy_path: None,
+            output: None,
+            max_audit_lag_secs: None,
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct PolicySnapshotRecord {
+    allowlist: BTreeMap<String, TierLevel>,
+    blocklist: BTreeSet<String>,
+}
+
+impl PolicySnapshotRecord {
+    fn from_runtime(policies: AdmissionPoliciesRpcResponse) -> Self {
+        let allowlist = policies
+            .allowlist
+            .into_iter()
+            .map(|entry| (entry.peer_id, entry.tier))
+            .collect();
+        let blocklist = policies.blocklist.into_iter().collect();
+        Self {
+            allowlist,
+            blocklist,
+        }
+    }
+
+    fn from_stored(stored: StoredAccessLists) -> Self {
+        let allowlist = stored
+            .allowlist
+            .into_iter()
+            .map(|entry| (entry.peer_id, entry.tier))
+            .collect();
+        let blocklist = stored.blocklist.into_iter().collect();
+        Self {
+            allowlist,
+            blocklist,
+        }
+    }
+
+    fn diff(&self, other: &PolicySnapshotRecord) -> SnapshotDiffRecord {
+        let mut keys: BTreeSet<String> = BTreeSet::new();
+        for peer in self.allowlist.keys() {
+            keys.insert(peer.clone());
+        }
+        for peer in other.allowlist.keys() {
+            keys.insert(peer.clone());
+        }
+
+        let mut allowlist_mismatches = 0u64;
+        for peer in keys {
+            if self.allowlist.get(&peer) != other.allowlist.get(&peer) {
+                allowlist_mismatches += 1;
+            }
+        }
+
+        let blocklist_diff = self
+            .blocklist
+            .symmetric_difference(&other.blocklist)
+            .count() as u64;
+
+        SnapshotDiffRecord {
+            allowlist: allowlist_mismatches,
+            blocklist: blocklist_diff,
+        }
+    }
+}
+
+#[derive(Default, Clone, Serialize)]
+struct SnapshotDiffRecord {
+    allowlist: u64,
+    blocklist: u64,
+}
+
+impl SnapshotDiffRecord {
+    fn total(&self) -> u64 {
+        self.allowlist + self.blocklist
+    }
+}
+
+struct DiskSnapshotRecord {
+    snapshot: PolicySnapshotRecord,
+    missing: bool,
+    modified: Option<SystemTime>,
+}
+
+struct AuditSnapshotRecord {
+    snapshot: Option<PolicySnapshotRecord>,
+    last_timestamp: Option<u64>,
+    entry_count: usize,
+}
+
+#[derive(Deserialize)]
+struct AdmissionPoliciesRpcResponse {
+    allowlist: Vec<AdmissionPolicyEntry>,
+    blocklist: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AdmissionPolicyEntry {
+    peer_id: String,
+    tier: TierLevel,
+}
+
+#[derive(Deserialize)]
+struct AdmissionAuditRpcResponse {
+    offset: usize,
+    limit: usize,
+    total: usize,
+    entries: Vec<AdmissionPolicyLogEntry>,
+}
+
+#[derive(Deserialize)]
+struct StoredAccessLists {
+    #[serde(default)]
+    allowlist: Vec<StoredAllowlistEntry>,
+    #[serde(default)]
+    blocklist: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct StoredAllowlistEntry {
+    peer_id: String,
+    tier: TierLevel,
+}
+
+#[derive(Serialize)]
+struct AdmissionReconciliationReport {
+    generated_at: String,
+    rpc_base_url: String,
+    policy_path: String,
+    runtime_allowlist_total: usize,
+    runtime_blocklist_total: usize,
+    disk_allowlist_total: usize,
+    disk_blocklist_total: usize,
+    disk_missing: bool,
+    disk_diff: SnapshotDiffRecord,
+    audit_diff: Option<SnapshotDiffRecord>,
+    audit_entries: usize,
+    last_audit_timestamp: Option<u64>,
+    audit_lagged: bool,
+    drift_detected: bool,
+    issues: Vec<String>,
+}
+
+struct AdmissionReconciliationResult {
+    report: AdmissionReconciliationReport,
+}
+
+fn admission_reconciliation(args: &[String]) -> Result<AdmissionReconciliationResult> {
+    let workspace = workspace_root();
+    let mut options = AdmissionReconciliationOptions::default();
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--config requires a value"))?;
+                options.config = Some(PathBuf::from(value));
+            }
+            "--rpc-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--rpc-url requires a value"))?;
+                options.rpc_url = normalise_string(Some(value.clone()));
+            }
+            "--auth-token" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--auth-token requires a value"))?;
+                options.auth_token = normalise_string(Some(value.clone()));
+            }
+            "--policy-path" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--policy-path requires a value"))?;
+                options.policy_path = Some(PathBuf::from(value));
+            }
+            "--output" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--output requires a value"))?;
+                options.output = Some(PathBuf::from(value));
+            }
+            "--max-audit-lag-secs" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--max-audit-lag-secs requires a value"))?;
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("parse --max-audit-lag-secs value '{value}'"))?;
+                options.max_audit_lag_secs = Some(parsed);
+            }
+            "--help" | "-h" => {
+                admission_reconcile_usage();
+                return Ok(AdmissionReconciliationResult {
+                    report: AdmissionReconciliationReport {
+                        generated_at: String::new(),
+                        rpc_base_url: String::new(),
+                        policy_path: String::new(),
+                        runtime_allowlist_total: 0,
+                        runtime_blocklist_total: 0,
+                        disk_allowlist_total: 0,
+                        disk_blocklist_total: 0,
+                        disk_missing: false,
+                        disk_diff: SnapshotDiffRecord::default(),
+                        audit_diff: None,
+                        audit_entries: 0,
+                        last_audit_timestamp: None,
+                        audit_lagged: false,
+                        drift_detected: false,
+                        issues: Vec::new(),
+                    },
+                    output_path: None,
+                });
+            }
+            other => bail!("unknown argument '{other}' for admission-reconcile"),
+        }
+    }
+
+    if options.rpc_url.is_none() {
+        options.rpc_url = env::var("ADMISSION_RPC_URL")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)));
+    }
+    if options.auth_token.is_none() {
+        options.auth_token = env::var("ADMISSION_RPC_TOKEN")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)));
+    }
+    if options.policy_path.is_none() {
+        options.policy_path = env::var("ADMISSION_POLICY_PATH")
+            .ok()
+            .and_then(|value| normalise_string(Some(value)))
+            .map(PathBuf::from);
+    }
+    if options.max_audit_lag_secs.is_none() {
+        if let Ok(value) = env::var("ADMISSION_MAX_AUDIT_LAG_SECS") {
+            if let Some(trimmed) = normalise_string(Some(value)) {
+                let parsed = trimmed.parse::<u64>().with_context(|| {
+                    format!("parse ADMISSION_MAX_AUDIT_LAG_SECS value '{trimmed}' as integer")
+                })?;
+                options.max_audit_lag_secs = Some(parsed);
+            }
+        }
+    }
+
+    let resolved_config = options
+        .config
+        .map(|path| resolve_path(&workspace, path))
+        .unwrap_or_else(|| workspace.join("config/validator.toml"));
+    let config_dir = resolved_config
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| workspace.clone());
+
+    let config_snippet = load_validator_config_snippet(&resolved_config)?;
+    let base_url = resolve_admission_base_url(options.rpc_url, &config_snippet);
+    let auth_token = resolve_admission_auth(options.auth_token, &config_snippet);
+    let policy_path = resolve_policy_path(&config_dir, &config_snippet, options.policy_path);
+    let max_audit_lag = resolve_max_audit_lag_secs(options.max_audit_lag_secs, &config_snippet);
+
+    let client = HttpClient::builder()
+        .timeout(StdDuration::from_secs(30))
+        .build()
+        .context("construct admission RPC client")?;
+
+    let runtime_snapshot = fetch_admission_policies(&client, &base_url, auth_token.as_deref())?;
+    let disk_snapshot = load_admission_disk_snapshot(&policy_path)?;
+    let audit_snapshot = fetch_admission_audit(&client, &base_url, auth_token.as_deref())?;
+
+    let disk_diff = runtime_snapshot.diff(&disk_snapshot.snapshot);
+    let audit_diff = audit_snapshot
+        .snapshot
+        .as_ref()
+        .map(|snapshot| runtime_snapshot.diff(snapshot));
+
+    let audit_lagged = if let (Some(last_ts), Some(modified)) =
+        (audit_snapshot.last_timestamp, disk_snapshot.modified)
+    {
+        if let Ok(modified_ms) = modified.duration_since(UNIX_EPOCH) {
+            let modified_millis = modified_ms.as_millis() as u128;
+            let last_millis = last_ts as u128;
+            modified_millis > last_millis.saturating_add(max_audit_lag as u128)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    let drift_detected = disk_snapshot.missing
+        || disk_diff.total() > 0
+        || audit_diff
+            .as_ref()
+            .map(|diff| diff.total() > 0)
+            .unwrap_or(false)
+        || audit_lagged;
+
+    let mut issues = Vec::new();
+    if disk_snapshot.missing {
+        issues.push("admission policy file missing".to_string());
+    }
+    if disk_diff.total() > 0 {
+        issues.push(format!(
+            "disk admission snapshot diverges (allowlist {}, blocklist {})",
+            disk_diff.allowlist, disk_diff.blocklist
+        ));
+    }
+    if let Some(diff) = audit_diff.as_ref() {
+        if diff.total() > 0 {
+            issues.push(format!(
+                "audit trail snapshot diverges (allowlist {}, blocklist {})",
+                diff.allowlist, diff.blocklist
+            ));
+        }
+    }
+    if audit_lagged {
+        issues.push(format!(
+            "audit trail lags disk snapshot by more than {} seconds",
+            max_audit_lag
+        ));
+    }
+
+    let generated_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .context("format admission reconciliation timestamp")?;
+
+    let report = AdmissionReconciliationReport {
+        generated_at,
+        rpc_base_url: base_url.clone(),
+        policy_path: policy_path.display().to_string(),
+        runtime_allowlist_total: runtime_snapshot.allowlist.len(),
+        runtime_blocklist_total: runtime_snapshot.blocklist.len(),
+        disk_allowlist_total: disk_snapshot.snapshot.allowlist.len(),
+        disk_blocklist_total: disk_snapshot.snapshot.blocklist.len(),
+        disk_missing: disk_snapshot.missing,
+        disk_diff,
+        audit_diff,
+        audit_entries: audit_snapshot.entry_count,
+        last_audit_timestamp: audit_snapshot.last_timestamp,
+        audit_lagged,
+        drift_detected,
+        issues,
+    };
+
+    if let Some(path) = options.output.as_ref() {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("create output directory {}", parent.display()))?;
+            }
+        }
+        let data =
+            serde_json::to_vec_pretty(&report).context("encode admission reconciliation report")?;
+        fs::write(path, &data).with_context(|| {
+            format!(
+                "write admission reconciliation report to {}",
+                path.display()
+            )
+        })?;
+    }
+
+    println!("{}", serde_json::to_string(&report)?);
+
+    Ok(AdmissionReconciliationResult { report })
+}
+
+fn admission_reconcile_usage() {
+    eprintln!(
+        "usage: cargo xtask admission-reconcile [--config <path>] [--rpc-url <url>] [--auth-token <token>] [--policy-path <path>] [--max-audit-lag-secs <secs>] [--output <path>]\n\nChecks that the admission policy snapshot on disk, the runtime admission state, and the audit log trail are consistent."
+    );
+}
+
+fn resolve_admission_base_url(explicit: Option<String>, config: &ValidatorConfigSnippet) -> String {
+    if let Some(url) = explicit.and_then(|value| normalise_string(Some(value))) {
+        return normalise_base_url(&url);
+    }
+    if let Some(url) = env::var("ADMISSION_RPC_URL")
+        .ok()
+        .and_then(|value| normalise_string(Some(value)))
+    {
+        return normalise_base_url(&url);
+    }
+    resolve_rpc_base_url(None, config)
+}
+
+fn resolve_admission_auth(
+    explicit: Option<String>,
+    config: &ValidatorConfigSnippet,
+) -> Option<String> {
+    if let Some(token) = explicit.and_then(|value| normalise_string(Some(value))) {
+        return Some(token);
+    }
+    if let Some(token) = env::var("ADMISSION_RPC_TOKEN")
+        .ok()
+        .and_then(|value| normalise_string(Some(value)))
+    {
+        return Some(token);
+    }
+    config
+        .network
+        .as_ref()
+        .and_then(|net| net.rpc.as_ref())
+        .and_then(|rpc| rpc.auth_token.clone())
+        .and_then(|value| normalise_string(Some(value)))
+}
+
+fn resolve_policy_path(
+    config_dir: &Path,
+    config: &ValidatorConfigSnippet,
+    explicit: Option<PathBuf>,
+) -> PathBuf {
+    if let Some(path) = explicit {
+        resolve_path(config_dir, path)
+    } else if let Some(path) = config
+        .network
+        .as_ref()
+        .and_then(|net| net.admission.as_ref())
+        .and_then(|admission| admission.policy_path.as_ref())
+    {
+        resolve_relative_path(config_dir, path)
+    } else {
+        config_dir.join("data/p2p/admission_policies.json")
+    }
+}
+
+fn resolve_max_audit_lag_secs(explicit: Option<u64>, config: &ValidatorConfigSnippet) -> u64 {
+    if let Some(value) = explicit {
+        return value.max(1);
+    }
+    if let Some(value) = config
+        .admission_reconciler
+        .as_ref()
+        .and_then(|snippet| snippet.max_audit_lag_secs)
+    {
+        return value.max(1);
+    }
+    300
+}
+
+fn fetch_admission_policies(
+    client: &HttpClient,
+    base_url: &str,
+    auth_token: Option<&str>,
+) -> Result<PolicySnapshotRecord> {
+    let endpoint = format!("{}/p2p/admission/policies", base_url.trim_end_matches('/'));
+    let mut request = client.get(&endpoint);
+    if let Some(token) = auth_token {
+        request = request.bearer_auth(token);
+    }
+    let response = request
+        .send()
+        .with_context(|| format!("query admission policies from {endpoint}"))?
+        .error_for_status()
+        .with_context(|| {
+            format!("admission policies endpoint returned error status at {endpoint}")
+        })?
+        .json::<AdmissionPoliciesRpcResponse>()
+        .with_context(|| format!("decode admission policies response from {endpoint}"))?;
+    Ok(PolicySnapshotRecord::from_runtime(response))
+}
+
+fn load_admission_disk_snapshot(path: &Path) -> Result<DiskSnapshotRecord> {
+    match fs::metadata(path) {
+        Ok(metadata) => {
+            let modified = metadata.modified().ok();
+            let bytes = fs::read(path).with_context(|| {
+                format!("read admission policy snapshot from {}", path.display())
+            })?;
+            if bytes.is_empty() {
+                return Ok(DiskSnapshotRecord {
+                    snapshot: PolicySnapshotRecord::default(),
+                    missing: false,
+                    modified,
+                });
+            }
+            let stored: StoredAccessLists = serde_json::from_slice(&bytes).with_context(|| {
+                format!("parse admission policy snapshot from {}", path.display())
+            })?;
+            Ok(DiskSnapshotRecord {
+                snapshot: PolicySnapshotRecord::from_stored(stored),
+                missing: false,
+                modified,
+            })
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(DiskSnapshotRecord {
+            snapshot: PolicySnapshotRecord::default(),
+            missing: true,
+            modified: None,
+        }),
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "read admission policy snapshot metadata from {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn fetch_admission_audit(
+    client: &HttpClient,
+    base_url: &str,
+    auth_token: Option<&str>,
+) -> Result<AuditSnapshotRecord> {
+    let mut entries = Vec::new();
+    let mut offset = 0usize;
+    let mut total = None;
+    let limit = 512usize;
+
+    loop {
+        let endpoint = format!("{}/p2p/admission/audit", base_url.trim_end_matches('/'));
+        let mut request = client
+            .get(&endpoint)
+            .query(&[("offset", offset), ("limit", limit)]);
+        if let Some(token) = auth_token {
+            request = request.bearer_auth(token);
+        }
+        let response = request
+            .send()
+            .with_context(|| {
+                format!("query admission audit log from {endpoint} (offset {offset})")
+            })?
+            .error_for_status()
+            .with_context(|| {
+                format!("admission audit endpoint returned error status at {endpoint}")
+            })?
+            .json::<AdmissionAuditRpcResponse>()
+            .with_context(|| format!("decode admission audit response from {endpoint}"))?;
+        total = Some(response.total);
+        let received = response.entries.len();
+        entries.extend(response.entries);
+        offset += received;
+        if received == 0 || entries.len() >= total.unwrap_or(entries.len()) {
+            break;
+        }
+    }
+
+    if entries.is_empty() {
+        return Ok(AuditSnapshotRecord {
+            snapshot: None,
+            last_timestamp: None,
+            entry_count: 0,
+        });
+    }
+
+    let last_timestamp = entries.last().map(|entry| entry.timestamp_ms);
+    let snapshot = audit_entries_to_snapshot(&entries)?;
+    Ok(AuditSnapshotRecord {
+        snapshot: Some(snapshot),
+        last_timestamp,
+        entry_count: entries.len(),
+    })
+}
+
+fn audit_entries_to_snapshot(entries: &[AdmissionPolicyLogEntry]) -> Result<PolicySnapshotRecord> {
+    let mut allowlist: BTreeMap<String, TierLevel> = BTreeMap::new();
+    let mut blocklist: BTreeSet<String> = BTreeSet::new();
+
+    for entry in entries {
+        match &entry.change {
+            AdmissionPolicyChange::Allowlist { previous, current } => {
+                if let Some(current) = current {
+                    allowlist.insert(current.peer_id.clone(), current.tier);
+                } else if let Some(previous) = previous {
+                    allowlist.remove(&previous.peer_id);
+                }
+            }
+            AdmissionPolicyChange::Blocklist {
+                peer_id, current, ..
+            } => {
+                if *current {
+                    blocklist.insert(peer_id.clone());
+                } else {
+                    blocklist.remove(peer_id);
+                }
+            }
+            AdmissionPolicyChange::Noop => {}
+        }
+    }
+
+    Ok(PolicySnapshotRecord {
+        allowlist,
+        blocklist,
+    })
+}
+
+#[derive(Default)]
+struct StagingSoakOptions {
+    output_dir: Option<PathBuf>,
+    timestamp: Option<String>,
+    snapshot_config: Option<PathBuf>,
+    snapshot_rpc_url: Option<String>,
+    snapshot_auth_token: Option<String>,
+    snapshot_manifest: Option<PathBuf>,
+    snapshot_rpp_node_bin: Option<PathBuf>,
+    timetoke_prometheus_url: Option<String>,
+    timetoke_bearer_token: Option<String>,
+    timetoke_metrics_log: Option<PathBuf>,
+    admission_config: Option<PathBuf>,
+    admission_rpc_url: Option<String>,
+    admission_auth_token: Option<String>,
+    admission_policy_path: Option<PathBuf>,
+    admission_max_audit_lag_secs: Option<u64>,
+}
+
+#[derive(Default, Serialize)]
+struct StagingSoakSnapshotSummary {
+    report_path: Option<String>,
+    total_sessions: Option<usize>,
+    unhealthy_sessions: Option<usize>,
+    ok: bool,
+}
+
+#[derive(Serialize)]
+struct StagingSoakTimetokeSummary {
+    report_path: Option<String>,
+    source: Option<String>,
+    successes: Option<f64>,
+    failures: Option<f64>,
+    success_rate: Option<f64>,
+    success_rate_target: f64,
+    success_rate_ok: bool,
+    latency_p50_ms: Option<f64>,
+    latency_p95_ms: Option<f64>,
+    latency_p99_ms: Option<f64>,
+    latency_targets_ms: TimetokeLatencyTargets,
+    latency_ok: bool,
+    ok: bool,
+}
+
+impl Default for StagingSoakTimetokeSummary {
+    fn default() -> Self {
+        Self {
+            report_path: None,
+            source: None,
+            successes: None,
+            failures: None,
+            success_rate: None,
+            success_rate_target: TIMETOKE_SUCCESS_RATE_TARGET,
+            success_rate_ok: false,
+            latency_p50_ms: None,
+            latency_p95_ms: None,
+            latency_p99_ms: None,
+            latency_targets_ms: TimetokeLatencyTargets {
+                p50_ms: TIMETOKE_LATENCY_P50_TARGET_MS,
+                p95_ms: TIMETOKE_LATENCY_P95_TARGET_MS,
+                p99_ms: TIMETOKE_LATENCY_P99_TARGET_MS,
+            },
+            latency_ok: false,
+            ok: false,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct TimetokeLatencyTargets {
+    p50_ms: f64,
+    p95_ms: f64,
+    p99_ms: f64,
+}
+
+impl Default for TimetokeLatencyTargets {
+    fn default() -> Self {
+        Self {
+            p50_ms: TIMETOKE_LATENCY_P50_TARGET_MS,
+            p95_ms: TIMETOKE_LATENCY_P95_TARGET_MS,
+            p99_ms: TIMETOKE_LATENCY_P99_TARGET_MS,
+        }
+    }
+}
+
+#[derive(Default, Serialize)]
+struct StagingSoakAdmissionSummary {
+    report_path: Option<String>,
+    runtime_allowlist_total: Option<usize>,
+    runtime_blocklist_total: Option<usize>,
+    disk_allowlist_total: Option<usize>,
+    disk_blocklist_total: Option<usize>,
+    disk_missing: Option<bool>,
+    disk_diff_allowlist: Option<u64>,
+    disk_diff_blocklist: Option<u64>,
+    audit_diff_allowlist: Option<u64>,
+    audit_diff_blocklist: Option<u64>,
+    audit_entries: Option<usize>,
+    last_audit_timestamp: Option<u64>,
+    audit_lagged: Option<bool>,
+    drift_detected: Option<bool>,
+    ok: bool,
+    issues: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct StagingSoakSummary {
+    generated_at: String,
+    run_directory: String,
+    snapshot: StagingSoakSnapshotSummary,
+    timetoke: StagingSoakTimetokeSummary,
+    admission: StagingSoakAdmissionSummary,
+    errors: Vec<String>,
+    ok: bool,
+}
+
+fn run_staging_soak(args: &[String]) -> Result<()> {
+    let workspace = workspace_root();
+    let mut options = StagingSoakOptions::default();
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--output-dir" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--output-dir requires a value"))?;
+                options.output_dir = Some(PathBuf::from(value));
+            }
+            "--timestamp" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--timestamp requires a value"))?;
+                options.timestamp = Some(value.to_string());
+            }
+            "--snapshot-config" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--snapshot-config requires a value"))?;
+                options.snapshot_config = Some(PathBuf::from(value));
+            }
+            "--snapshot-rpc-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--snapshot-rpc-url requires a value"))?;
+                options.snapshot_rpc_url = normalise_string(Some(value.clone()));
+            }
+            "--snapshot-auth-token" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--snapshot-auth-token requires a value"))?;
+                options.snapshot_auth_token = normalise_string(Some(value.clone()));
+            }
+            "--snapshot-manifest" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--snapshot-manifest requires a value"))?;
+                options.snapshot_manifest = Some(PathBuf::from(value));
+            }
+            "--snapshot-rpp-node-bin" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--snapshot-rpp-node-bin requires a value"))?;
+                options.snapshot_rpp_node_bin = Some(PathBuf::from(value));
+            }
+            "--timetoke-prometheus-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--timetoke-prometheus-url requires a value"))?;
+                options.timetoke_prometheus_url = normalise_string(Some(value.clone()));
+            }
+            "--timetoke-bearer-token" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--timetoke-bearer-token requires a value"))?;
+                options.timetoke_bearer_token = normalise_string(Some(value.clone()));
+            }
+            "--timetoke-metrics-log" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--timetoke-metrics-log requires a value"))?;
+                options.timetoke_metrics_log = Some(PathBuf::from(value));
+            }
+            "--admission-config" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--admission-config requires a value"))?;
+                options.admission_config = Some(PathBuf::from(value));
+            }
+            "--admission-rpc-url" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--admission-rpc-url requires a value"))?;
+                options.admission_rpc_url = normalise_string(Some(value.clone()));
+            }
+            "--admission-auth-token" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--admission-auth-token requires a value"))?;
+                options.admission_auth_token = normalise_string(Some(value.clone()));
+            }
+            "--admission-policy-path" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--admission-policy-path requires a value"))?;
+                options.admission_policy_path = Some(PathBuf::from(value));
+            }
+            "--admission-max-audit-lag-secs" => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| anyhow!("--admission-max-audit-lag-secs requires a value"))?;
+                let parsed = value
+                    .parse::<u64>()
+                    .with_context(|| format!("parse --admission-max-audit-lag-secs '{value}'"))?;
+                options.admission_max_audit_lag_secs = Some(parsed);
+            }
+            "--help" | "-h" => {
+                staging_soak_usage();
+                return Ok(());
+            }
+            other => bail!("unknown argument '{other}' for staging-soak"),
+        }
+    }
+
+    let output_base = options
+        .output_dir
+        .map(|path| resolve_path(&workspace, path))
+        .unwrap_or_else(|| workspace.join("logs/staging-soak"));
+
+    let timestamp = if let Some(ts) = options.timestamp.as_ref() {
+        OffsetDateTime::parse(ts, &Rfc3339)
+            .with_context(|| format!("parse --timestamp value '{ts}'"))?
+    } else {
+        OffsetDateTime::now_utc()
+    };
+
+    let date_label = timestamp
+        .format(&format_description!("[year]-[month]-[day]"))
+        .context("format staging soak date label")?;
+    let run_label = timestamp
+        .format(&format_description!(
+            "[year][month][day]T[hour][minute][second]Z"
+        ))
+        .context("format staging soak run label")?;
+
+    let run_dir = output_base.join(&date_label).join(&run_label);
+    fs::create_dir_all(&run_dir)
+        .with_context(|| format!("create staging soak directory {}", run_dir.display()))?;
+
+    let mut summary = StagingSoakSummary {
+        generated_at: OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .context("format staging soak summary timestamp")?,
+        run_directory: relative_display(&run_dir, &workspace),
+        snapshot: StagingSoakSnapshotSummary::default(),
+        timetoke: StagingSoakTimetokeSummary::default(),
+        admission: StagingSoakAdmissionSummary::default(),
+        errors: Vec::new(),
+        ok: false,
+    };
+
+    // Snapshot health
+    let snapshot_output = run_dir.join("snapshot-health-report.json");
+    let mut snapshot_args: Vec<String> = Vec::new();
+    if let Some(path) = options.snapshot_config.as_ref() {
+        snapshot_args.push("--config".to_string());
+        snapshot_args.push(resolve_path(&workspace, path.clone()).display().to_string());
+    }
+    if let Some(url) = options.snapshot_rpc_url.as_ref() {
+        snapshot_args.push("--rpc-url".to_string());
+        snapshot_args.push(url.clone());
+    }
+    if let Some(token) = options.snapshot_auth_token.as_ref() {
+        snapshot_args.push("--auth-token".to_string());
+        snapshot_args.push(token.clone());
+    }
+    if let Some(path) = options.snapshot_manifest.as_ref() {
+        snapshot_args.push("--manifest".to_string());
+        snapshot_args.push(resolve_path(&workspace, path.clone()).display().to_string());
+    }
+    if let Some(bin) = options.snapshot_rpp_node_bin.as_ref() {
+        snapshot_args.push("--rpp-node-bin".to_string());
+        snapshot_args.push(resolve_path(&workspace, bin.clone()).display().to_string());
+    }
+    snapshot_args.push("--output".to_string());
+    snapshot_args.push(snapshot_output.display().to_string());
+
+    if let Err(err) = run_snapshot_health(&snapshot_args) {
+        summary
+            .errors
+            .push(format!("snapshot-health: {}", err.to_string()));
+    }
+    if snapshot_output.exists() {
+        match fs::read(&snapshot_output) {
+            Ok(data) => match serde_json::from_slice::<SnapshotHealthReport>(&data) {
+                Ok(report) => {
+                    let total = report.sessions.len();
+                    let unhealthy = report
+                        .sessions
+                        .iter()
+                        .filter(|session| !session.anomalies.is_empty())
+                        .count();
+                    summary.snapshot.report_path =
+                        Some(relative_display(&snapshot_output, &workspace));
+                    summary.snapshot.total_sessions = Some(total);
+                    summary.snapshot.unhealthy_sessions = Some(unhealthy);
+                    summary.snapshot.ok = unhealthy == 0;
+                }
+                Err(err) => summary
+                    .errors
+                    .push(format!("snapshot-health: decode report failed ({err})")),
+            },
+            Err(err) => summary
+                .errors
+                .push(format!("snapshot-health: read report failed ({err})")),
+        }
+    } else {
+        summary
+            .errors
+            .push("snapshot-health: report not generated".to_string());
+    }
+
+    // Timetoke SLO
+    let timetoke_output = run_dir.join("timetoke-slo-report.md");
+    let mut timetoke_args: Vec<String> = Vec::new();
+    if let Some(url) = options.timetoke_prometheus_url.as_ref() {
+        timetoke_args.push("--prometheus-url".to_string());
+        timetoke_args.push(url.clone());
+    }
+    if let Some(token) = options.timetoke_bearer_token.as_ref() {
+        timetoke_args.push("--bearer-token".to_string());
+        timetoke_args.push(token.clone());
+    }
+    if let Some(path) = options.timetoke_metrics_log.as_ref() {
+        timetoke_args.push("--metrics-log".to_string());
+        timetoke_args.push(resolve_path(&workspace, path.clone()).display().to_string());
+    }
+    timetoke_args.push("--output".to_string());
+    timetoke_args.push(timetoke_output.display().to_string());
+
+    match parse_timetoke_slo_options(&timetoke_args)? {
+        Some(opts) => match generate_timetoke_slo_summary(&opts.source) {
+            Ok(summary_data) => {
+                let report = render_timetoke_report(&summary_data);
+                if let Some(parent) = timetoke_output.parent() {
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("create Timetoke report directory {}", parent.display())
+                    })?;
+                }
+                fs::write(&timetoke_output, report.as_bytes()).with_context(|| {
+                    format!("write Timetoke SLO report to {}", timetoke_output.display())
+                })?;
+                summary.timetoke.report_path = Some(relative_display(&timetoke_output, &workspace));
+                summary.timetoke.source = Some(summary_data.source.clone());
+                summary.timetoke.successes = Some(summary_data.successes);
+                summary.timetoke.failures = Some(summary_data.failures);
+                summary.timetoke.success_rate = summary_data.success_rate();
+                summary.timetoke.latency_p50_ms = summary_data.p50_ms;
+                summary.timetoke.latency_p95_ms = summary_data.p95_ms;
+                summary.timetoke.latency_p99_ms = summary_data.p99_ms;
+                summary.timetoke.success_rate_ok = summary
+                    .timetoke
+                    .success_rate
+                    .map(|rate| rate >= TIMETOKE_SUCCESS_RATE_TARGET)
+                    .unwrap_or(false);
+                summary.timetoke.latency_ok = summary
+                    .timetoke
+                    .latency_p50_ms
+                    .map(|value| value <= TIMETOKE_LATENCY_P50_TARGET_MS)
+                    .unwrap_or(false)
+                    && summary
+                        .timetoke
+                        .latency_p95_ms
+                        .map(|value| value <= TIMETOKE_LATENCY_P95_TARGET_MS)
+                        .unwrap_or(false)
+                    && summary
+                        .timetoke
+                        .latency_p99_ms
+                        .map(|value| value <= TIMETOKE_LATENCY_P99_TARGET_MS)
+                        .unwrap_or(false);
+                summary.timetoke.ok =
+                    summary.timetoke.success_rate_ok && summary.timetoke.latency_ok;
+            }
+            Err(err) => summary.errors.push(format!("timetoke-slo: {err}")),
+        },
+        None => {
+            staging_soak_usage();
+            return Ok(());
+        }
+    }
+
+    // Admission reconciliation
+    let admission_output = run_dir.join("admission-reconciliation.json");
+    let mut admission_args: Vec<String> = Vec::new();
+    if let Some(path) = options.admission_config.as_ref() {
+        admission_args.push("--config".to_string());
+        admission_args.push(resolve_path(&workspace, path.clone()).display().to_string());
+    }
+    if let Some(url) = options.admission_rpc_url.as_ref() {
+        admission_args.push("--rpc-url".to_string());
+        admission_args.push(url.clone());
+    }
+    if let Some(token) = options.admission_auth_token.as_ref() {
+        admission_args.push("--auth-token".to_string());
+        admission_args.push(token.clone());
+    }
+    if let Some(path) = options.admission_policy_path.as_ref() {
+        admission_args.push("--policy-path".to_string());
+        admission_args.push(resolve_path(&workspace, path.clone()).display().to_string());
+    }
+    if let Some(value) = options.admission_max_audit_lag_secs.as_ref() {
+        admission_args.push("--max-audit-lag-secs".to_string());
+        admission_args.push(value.to_string());
+    }
+    admission_args.push("--output".to_string());
+    admission_args.push(admission_output.display().to_string());
+
+    match admission_reconciliation(&admission_args) {
+        Ok(result) => {
+            let report = result.report;
+            summary.admission.report_path = Some(relative_display(&admission_output, &workspace));
+            summary.admission.runtime_allowlist_total = Some(report.runtime_allowlist_total);
+            summary.admission.runtime_blocklist_total = Some(report.runtime_blocklist_total);
+            summary.admission.disk_allowlist_total = Some(report.disk_allowlist_total);
+            summary.admission.disk_blocklist_total = Some(report.disk_blocklist_total);
+            summary.admission.disk_missing = Some(report.disk_missing);
+            summary.admission.disk_diff_allowlist = Some(report.disk_diff.allowlist);
+            summary.admission.disk_diff_blocklist = Some(report.disk_diff.blocklist);
+            summary.admission.audit_diff_allowlist =
+                report.audit_diff.as_ref().map(|diff| diff.allowlist);
+            summary.admission.audit_diff_blocklist =
+                report.audit_diff.as_ref().map(|diff| diff.blocklist);
+            summary.admission.audit_entries = Some(report.audit_entries);
+            summary.admission.last_audit_timestamp = report.last_audit_timestamp;
+            summary.admission.audit_lagged = Some(report.audit_lagged);
+            summary.admission.drift_detected = Some(report.drift_detected);
+            summary.admission.issues = report.issues.clone();
+            summary.admission.ok = !report.drift_detected;
+            if report.drift_detected {
+                summary
+                    .errors
+                    .push("admission-reconcile: drift detected".to_string());
+            }
+        }
+        Err(err) => summary.errors.push(format!("admission-reconcile: {err}")),
+    }
+
+    let snapshot_ok = summary.snapshot.ok;
+    let timetoke_ok = summary.timetoke.ok;
+    let admission_ok = summary.admission.ok;
+    summary.ok = snapshot_ok && timetoke_ok && admission_ok && summary.errors.is_empty();
+
+    let summary_path = run_dir.join("summary.json");
+    let data = serde_json::to_vec_pretty(&summary).context("encode staging soak summary")?;
+    fs::write(&summary_path, &data)
+        .with_context(|| format!("write staging soak summary to {}", summary_path.display()))?;
+
+    println!(
+        "staging soak summary written to {}",
+        relative_display(&summary_path, &workspace)
+    );
+
+    if !summary.ok {
+        bail!("staging soak checks detected failures");
+    }
+
+    Ok(())
+}
+
+fn staging_soak_usage() {
+    eprintln!(
+        "usage: cargo xtask staging-soak [--output-dir <path>] [--timestamp <RFC3339>] [--snapshot-config <path>] [--snapshot-rpc-url <url>] [--snapshot-auth-token <token>] [--snapshot-manifest <path>] [--snapshot-rpp-node-bin <path>] [--timetoke-prometheus-url <url>] [--timetoke-bearer-token <token>] [--timetoke-metrics-log <path>] [--admission-config <path>] [--admission-rpc-url <url>] [--admission-auth-token <token>] [--admission-policy-path <path>] [--admission-max-audit-lag-secs <secs>] [--help]\n\nRuns the staging soak checks (snapshot health, Timetoke SLO report, and admission reconciliation) and stores timestamped artefacts."
+    );
+}
+
+fn relative_display(path: &Path, base: &Path) -> String {
+    if let Ok(stripped) = path.strip_prefix(base) {
+        stripped.display().to_string()
+    } else {
+        path.display().to_string()
+    }
+}
+
 fn load_manifest_catalog_from_path(path: &Path) -> Result<ManifestCatalog> {
     let data = fs::read_to_string(path)
         .with_context(|| format!("read manifest file {}", path.display()))?;
@@ -1580,7 +2683,7 @@ fn resolve_summary_path(
 
 fn usage() {
     eprintln!(
-        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
+        "xtask commands:\n  pruning-validation    Run pruning receipt conformance checks\n  test-unit            Execute lightweight unit test suites\n  test-integration     Execute integration workflows\n  test-observability   Run Prometheus-backed observability tests\n  test-simnet          Run the CI simnet scenarios\n  test-consensus-manipulation  Exercise consensus tamper detection tests\n  test-worm-export     Verify the WORM export pipeline against the stub backend\n  test-all             Run unit, integration, observability, and simnet scenarios\n  proof-metadata       Export circuit/proof metadata as JSON or markdown\n  plonky3-setup        Regenerate Plonky3 setup JSON descriptors\n  plonky3-verify       Validate setup artifacts against embedded hash manifests\n  report-timetoke-slo  Summarise Timetoke replay SLOs from Prometheus or log archives\n  snapshot-verifier    Generate a synthetic snapshot bundle and aggregate verifier report\n  snapshot-health      Audit snapshot streaming progress against manifest totals\n  admission-reconcile  Compare runtime admission state, disk snapshots, and audit logs\n  staging-soak         Run the daily staging soak orchestration and store artefacts\n  collect-phase3-evidence  Bundle dashboards, alerts, audit logs, policy backups, checksum reports, and CI logs\n  verify-report        Validate snapshot verifier outputs against the JSON schema",
     );
 }
 
@@ -1662,10 +2765,20 @@ struct TimetokeLogEntry {
     replay_alt_p99: Option<f64>,
 }
 
-fn report_timetoke_slo(args: &[String]) -> Result<()> {
-    let mut prometheus_url: Option<String> = None;
-    let mut bearer_token: Option<String> = None;
-    let mut metrics_log: Option<PathBuf> = None;
+#[derive(Default)]
+struct TimetokeSloSource {
+    prometheus_url: Option<String>,
+    bearer_token: Option<String>,
+    metrics_log: Option<PathBuf>,
+}
+
+struct TimetokeSloOptions {
+    source: TimetokeSloSource,
+    output: Option<PathBuf>,
+}
+
+fn parse_timetoke_slo_options(args: &[String]) -> Result<Option<TimetokeSloOptions>> {
+    let mut source = TimetokeSloSource::default();
     let mut output: Option<PathBuf> = None;
 
     let mut iter = args.iter();
@@ -1675,20 +2788,20 @@ fn report_timetoke_slo(args: &[String]) -> Result<()> {
                 let value = iter
                     .next()
                     .ok_or_else(|| anyhow!("--prometheus-url requires a value"))?;
-                prometheus_url = normalise_string(Some(value.clone()));
+                source.prometheus_url = normalise_string(Some(value.clone()));
             }
             "--bearer-token" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| anyhow!("--bearer-token requires a value"))?;
-                bearer_token = normalise_string(Some(value.clone()));
+                source.bearer_token = normalise_string(Some(value.clone()));
             }
             "--metrics-log" => {
                 let value = iter
                     .next()
                     .ok_or_else(|| anyhow!("--metrics-log requires a value"))?;
                 if let Some(path) = normalise_string(Some(value.clone())) {
-                    metrics_log = Some(PathBuf::from(path));
+                    source.metrics_log = Some(PathBuf::from(path));
                 }
             }
             "--output" => {
@@ -1699,14 +2812,14 @@ fn report_timetoke_slo(args: &[String]) -> Result<()> {
             }
             "--help" | "-h" => {
                 report_timetoke_slo_usage();
-                return Ok(());
+                return Ok(None);
             }
             other => bail!("unknown argument '{other}' for report-timetoke-slo"),
         }
     }
 
-    if prometheus_url.is_none() {
-        prometheus_url = env::var("TIMETOKE_PROMETHEUS_URL")
+    if source.prometheus_url.is_none() {
+        source.prometheus_url = env::var("TIMETOKE_PROMETHEUS_URL")
             .ok()
             .and_then(|value| normalise_string(Some(value)))
             .or_else(|| {
@@ -1715,8 +2828,8 @@ fn report_timetoke_slo(args: &[String]) -> Result<()> {
                     .and_then(|v| normalise_string(Some(v)))
             });
     }
-    if bearer_token.is_none() {
-        bearer_token = env::var("TIMETOKE_PROMETHEUS_BEARER")
+    if source.bearer_token.is_none() {
+        source.bearer_token = env::var("TIMETOKE_PROMETHEUS_BEARER")
             .ok()
             .and_then(|value| normalise_string(Some(value)))
             .or_else(|| {
@@ -1725,26 +2838,36 @@ fn report_timetoke_slo(args: &[String]) -> Result<()> {
                     .and_then(|v| normalise_string(Some(v)))
             });
     }
-    if metrics_log.is_none() {
-        metrics_log = env::var("TIMETOKE_METRICS_LOG")
+    if source.metrics_log.is_none() {
+        source.metrics_log = env::var("TIMETOKE_METRICS_LOG")
             .ok()
             .and_then(|value| normalise_string(Some(value)))
             .map(PathBuf::from);
     }
 
-    let summary = if let Some(url) = prometheus_url {
-        fetch_prometheus_summary(&url, bearer_token.as_deref())?
+    Ok(Some(TimetokeSloOptions { source, output }))
+}
+
+fn generate_timetoke_slo_summary(source: &TimetokeSloSource) -> Result<TimetokeSloSummary> {
+    if let Some(url) = source.prometheus_url.as_ref() {
+        fetch_prometheus_summary(url, source.bearer_token.as_deref())
+    } else if let Some(path) = source.metrics_log.as_ref() {
+        parse_log_summary(path)
     } else {
-        let path = metrics_log.ok_or_else(|| {
-            anyhow!("report-timetoke-slo requires either --prometheus-url or --metrics-log")
-        })?;
-        parse_log_summary(&path)?
+        bail!("report-timetoke-slo requires either --prometheus-url or --metrics-log");
+    }
+}
+
+fn report_timetoke_slo(args: &[String]) -> Result<()> {
+    let Some(options) = parse_timetoke_slo_options(args)? else {
+        return Ok(());
     };
 
+    let summary = generate_timetoke_slo_summary(&options.source)?;
     let report = render_timetoke_report(&summary);
     println!("{report}");
 
-    if let Some(path) = output {
+    if let Some(path) = options.output {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)
@@ -2168,7 +3291,10 @@ fn verify_worm_export_summary(path: &Path, workspace: &Path) -> Result<()> {
     let summary: WormExportSummary = serde_json::from_str(&contents)
         .with_context(|| format!("decode WORM export summary {}", path.display()))?;
     if summary.entries.is_empty() {
-        bail!("WORM export summary {} does not contain any entries", path.display());
+        bail!(
+            "WORM export summary {} does not contain any entries",
+            path.display()
+        );
     }
     let mut trust = HashMap::new();
     trust.insert(
@@ -2198,13 +3324,14 @@ fn verify_worm_export_summary(path: &Path, workspace: &Path) -> Result<()> {
                 path.display()
             )
         })?;
-        let log_entry: AdmissionPolicyLogEntry = serde_json::from_str(&export_raw).with_context(|| {
-            format!(
-                "decode WORM export object {} referenced by {}",
-                export_path.display(),
-                path.display()
-            )
-        })?;
+        let log_entry: AdmissionPolicyLogEntry =
+            serde_json::from_str(&export_raw).with_context(|| {
+                format!(
+                    "decode WORM export object {} referenced by {}",
+                    export_path.display(),
+                    path.display()
+                )
+            })?;
         let signature = log_entry.signature.clone().ok_or_else(|| {
             anyhow!(
                 "WORM export object {} referenced by {} is missing a signature",
@@ -2229,15 +3356,13 @@ fn verify_worm_export_summary(path: &Path, workspace: &Path) -> Result<()> {
                 path.display()
             )
         })?;
-        verifier
-            .verify(&signature, &canonical)
-            .with_context(|| {
-                format!(
-                    "verify signature for WORM export entry {} referenced by {}",
-                    entry.entry_id,
-                    path.display()
-                )
-            })?;
+        verifier.verify(&signature, &canonical).with_context(|| {
+            format!(
+                "verify signature for WORM export entry {} referenced by {}",
+                entry.entry_id,
+                path.display()
+            )
+        })?;
     }
     println!(
         "verified WORM export signatures via {} ({} entries)",
@@ -2292,15 +3417,11 @@ fn collect_phase3_evidence(args: &[String]) -> Result<()> {
 
     let snapshot_verified = verify_snapshot_verifier_checksums(&workspace)?;
     if snapshot_verified == 0 {
-        println!(
-            "⚠️ no snapshot verifier reports with SHA256 found; skipping checksum validation"
-        );
+        println!("⚠️ no snapshot verifier reports with SHA256 found; skipping checksum validation");
     }
     let worm_verified = verify_worm_export_signatures(&workspace)?;
     if worm_verified == 0 {
-        println!(
-            "⚠️ no WORM export summaries found; skipping signature verification"
-        );
+        println!("⚠️ no WORM export summaries found; skipping signature verification");
     }
 
     let mut categories = Vec::new();
@@ -2717,6 +3838,17 @@ fn main() -> Result<()> {
         "report-timetoke-slo" => report_timetoke_slo(&argv),
         "snapshot-verifier" => run_snapshot_verifier_smoke(),
         "snapshot-health" => run_snapshot_health(&argv),
+        "admission-reconcile" => {
+            let result = admission_reconciliation(&argv)?;
+            if result.report.generated_at.is_empty() {
+                Ok(())
+            } else if result.report.drift_detected {
+                bail!("admission reconciliation detected drift");
+            } else {
+                Ok(())
+            }
+        }
+        "staging-soak" => run_staging_soak(&argv),
         "collect-phase3-evidence" => collect_phase3_evidence(&argv),
         "verify-report" => verify_snapshot_verifier_report(&argv),
         "help" => {
