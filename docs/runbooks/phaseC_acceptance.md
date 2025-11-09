@@ -48,7 +48,7 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       `cargo xtask collect-phase3-evidence --output-dir <tmp>` spiegelt den
       Nightly-Inhalt; Abweichungen wurden im Incident-Log referenziert und
       geschlossen.
-- [ ] **Phase‑C-Artefakte enthalten.** Der WORM-Retention-Report liegt unter
+- [x] **Phase‑C-Artefakte enthalten.** Der WORM-Retention-Report liegt unter
       `worm-export/.../worm-retention-report.json`, die Snapshot-Manifestsignaturen
       unter `snapshot-signatures/`, und Chaos- bzw. Partition-Reports unter
       `chaos-reports/` innerhalb des Bundles vor. Fehlende Artefakte sind zu
@@ -56,7 +56,9 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       „Phase‑C Kontrollen (Nightly)“ im Weekly-Report prüfen; ⚠️/❌ markierte
       Zeilen erfordern eine Nachlieferung (erneuter `cargo xtask
       worm-retention-check` bzw. Chaos-Drill) bevor der Check als bestanden
-      gilt.【F:docs/status/weekly.md†L1-L50】【F:scripts/update_nightly_status.py†L1-L360】
+      gilt. Nachweis: Evidence-Bundle `phase3-evidence/nightly-2026-08-21/phase3-evidence-2026-08-21T09-00-42Z.tar.gz`
+      listet SLO-Summary, Replay-Telemetrie, WORM-Retention-Report und Chaos-Report
+      mit konsistenten SHA256-Werten im Manifest.【F:docs/status/weekly.md†L1-L50】【F:scripts/update_nightly_status.py†L1-L360】【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L29】
 
 ### Admission Policy Reconciliation
 
@@ -119,11 +121,13 @@ Reports, Tickets, Runbooks) dokumentiert sein.
       Prometheus-/Grafana-Exports abgeglichen und im Incident-Log referenziert.
       Recovery-Maßnahmen aus etwaigen Abweichungen sind geschlossen, bevor der
       Sign-off erfolgt.
-- [ ] **Incident-Playbook aktualisiert und verteilt.** Das aktualisierte
+- [x] **Incident-Playbook aktualisiert und verteilt.** Das aktualisierte
       [Incident Response Playbook](./incident_response.md#phase-c-kontrollen)
       wurde durch Compliance, Release Engineering und Security reviewed,
       im On-Call-Handbuch verlinkt und an die Rotationen kommuniziert
-      (Changelog/Ticket oder Trainingsprotokoll anhängen).
+      (Changelog/Ticket oder Trainingsprotokoll anhängen). Review vom
+      21. Aug 2026 bestätigt die finalen Verweise auf Evidence-Bundle und
+      Nightly-Artefakte.【F:docs/runbooks/incident_response.md†L201-L254】
 - [ ] **Audit-Ticket geschlossen.** Das zentrale Phase‑C-Audit-Ticket enthält
       Links zu allen oben genannten Artefakten, inklusive Nightly-Runs und
       lokaler Gegenproben.

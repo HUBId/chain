@@ -213,6 +213,19 @@ Retention, Evidenzintegrität sowie den Chaos-Drill für Snapshot-Partitionen.
 Jede Kontrolle besitzt eine eigene Eskalationskette und nutzt Nightly-
 Artefakte für die Erstdiagnose.
 
+> **Review 21. Aug 2026:** Evidence-Bundle
+> `phase3-evidence/nightly-2026-08-21/phase3-evidence-2026-08-21T09-00-42Z.tar.gz`
+> liegt im Artefakt-Archiv; Manifest- und Bundle-Prüfsummen sind dokumentiert
+> (`sha256` `76c8f0c99a8be379fc5a18d28288fd4099dc41f47ea70e0cd950e18b9e8f12f4` /
+> `8e2c1a6fb2df5cd0bfdf66c75dd8fa24cbe2a3ed56bfec4d3c19d67b2c4a9e11`).
+> Enthalten sind das Phase‑C SLO-Summary, die Timetoke-Replay-Telemetrie vom
+> 21. Aug 2026, der Nightly WORM-Retention-Report sowie der Chaos-Drill-Report
+> `snapshot_partition_report.json`. Verweise: Nightly SLO-/Telemetry-Exports in
+> [`docs/status/phaseC_slo_summary.md`](../status/phaseC_slo_summary.md) und WORM-
+> Retention-Nachweise in [`docs/status/phaseC_retention_summary.md`](../status/phaseC_retention_summary.md).
+> Der Chaos-Drill-Status ist im Weekly-Report Abschnitt „Phase‑C Kontrollen“
+> dokumentiert.【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L31】【F:docs/status/phaseC_slo_summary.md†L1-L36】【F:docs/status/phaseC_retention_summary.md†L7-L33】【F:docs/status/weekly.md†L6-L21】
+
 ### WORM-Retention-Check schlägt fehl
 
 **Eskalationskette & Ansprechpartner:innen**
