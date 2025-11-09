@@ -1,0 +1,18 @@
+# Render this manifest with `envsubst < node-service.yaml | kubectl apply -f -`
+# after exporting the variables referenced below to match your environment.
+# Example:
+#   export NODE_SERVICE_PORT=80 NODE_APP_PORT=8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: node
+  labels:
+    app: node
+spec:
+  type: ClusterIP
+  selector:
+    app: node
+  ports:
+    - name: http
+      port: ${NODE_SERVICE_PORT} # Set NODE_SERVICE_PORT to expose the desired cluster port.
+      targetPort: ${NODE_APP_PORT} # Match the container port from the deployment manifest.

@@ -81,3 +81,10 @@ Now for vscode, you need to configure your `rust-analyzer` in the "remote-enviro
 Then, you want to make sure that the terminal that's being used by the vscode instance (for the host system) is the same as your preferred terminal in the container to make sure that things work as expected. [Here are the docs](https://code.visualstudio.com/docs/terminal/profiles) to help you with setting up the proper profile.
 
 And that should be enough to get your started! Feel free to open an issue if you need any help debugging.
+
+## Kubernetes example manifests
+
+Operators looking for a starting point to run the `rpp/node` image on Kubernetes can use the manifests in [`deploy/k8s/`](deploy/k8s/).
+The deployment manifest demonstrates HTTP liveness and readiness probes targeting `/health/live` and `/health/ready`, along with
+placeholders for tuning ports, resources, and probe thresholds before applying them to a cluster. A companion Service manifest
+exposes the rendered HTTP port inside the cluster.
