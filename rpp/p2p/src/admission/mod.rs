@@ -1,3 +1,6 @@
+pub mod dual_control;
+pub use dual_control::{DualControlApprovalService, DualControlError, PendingPolicyChange};
+
 use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

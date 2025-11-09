@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     body::Body,
@@ -19,7 +20,7 @@ use crate::runtime::node_runtime::node::SnapshotStreamStatus;
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 use rpp_p2p::{
     AdmissionApproval, AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyLogEntry,
-    AllowlistedPeer, PolicySignature, TierLevel,
+    AllowlistedPeer, DualControlError, PendingPolicyChange, PolicySignature, TierLevel,
 };
 
 #[derive(Debug, Deserialize)]
@@ -110,7 +111,7 @@ pub struct AdmissionApprovalRequest {
     pub approver: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct UpdateAdmissionPoliciesRequest {
     #[serde(default)]
     pub allowlist: Vec<AdmissionPolicyEntry>,
@@ -121,6 +122,20 @@ pub struct UpdateAdmissionPoliciesRequest {
     pub reason: Option<String>,
     #[serde(default)]
     pub approvals: Vec<AdmissionApprovalRequest>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PendingAdmissionPolicyResponse {
+    pub id: u64,
+    pub actor: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub submitted_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApprovePendingAdmissionPoliciesRequest {
+    pub approver: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -176,6 +191,113 @@ impl From<AdmissionPolicies> for AdmissionPoliciesResponse {
             signature,
         }
     }
+}
+
+struct AdmissionPolicyChangePayload {
+    allowlist: Vec<AllowlistedPeer>,
+    blocklist: Vec<NetworkPeerId>,
+    audit: AdmissionAuditTrail,
+    high_impact: bool,
+}
+
+fn parse_admission_policy_change(
+    request: UpdateAdmissionPoliciesRequest,
+    current: &AdmissionPolicies,
+) -> Result<AdmissionPolicyChangePayload, (StatusCode, Json<ErrorResponse>)> {
+    let actor = request.actor.trim();
+    if actor.is_empty() {
+        return Err(super::super::bad_request("actor must not be empty"));
+    }
+    let actor = actor.to_string();
+
+    let reason = request
+        .reason
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+
+    let mut allowlist = Vec::with_capacity(request.allowlist.len());
+    let mut allow_seen = HashSet::new();
+    for entry in request.allowlist {
+        let peer = NetworkPeerId::from_str(&entry.peer_id).map_err(|err| {
+            super::super::bad_request(format!("invalid allowlist peer `{}`: {err}", entry.peer_id))
+        })?;
+        if !allow_seen.insert(peer.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate allowlist entry for peer `{}`",
+                entry.peer_id
+            )));
+        }
+        allowlist.push(AllowlistedPeer {
+            peer,
+            tier: entry.tier,
+        });
+    }
+
+    let mut blocklist = Vec::with_capacity(request.blocklist.len());
+    let mut block_seen = HashSet::new();
+    for value in request.blocklist {
+        let peer = NetworkPeerId::from_str(&value).map_err(|err| {
+            super::super::bad_request(format!("invalid blocklist peer `{value}`: {err}"))
+        })?;
+        if !block_seen.insert(peer.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate blocklist entry for peer `{value}`"
+            )));
+        }
+        blocklist.push(peer);
+    }
+
+    for entry in &allowlist {
+        if block_seen.contains(&entry.peer) {
+            return Err(super::super::bad_request(format!(
+                "peer `{}` cannot be in allowlist and blocklist",
+                entry.peer.to_base58()
+            )));
+        }
+    }
+
+    let mut approvals = Vec::with_capacity(request.approvals.len());
+    let mut approval_roles = HashSet::new();
+    for approval in request.approvals {
+        let role = approval.role.trim();
+        if role.is_empty() {
+            return Err(super::super::bad_request("approval role must not be empty"));
+        }
+        let approver = approval.approver.trim();
+        if approver.is_empty() {
+            return Err(super::super::bad_request(format!(
+                "approval `{role}` must include approver"
+            )));
+        }
+        let normalized = role.to_ascii_lowercase();
+        if !approval_roles.insert(normalized.clone()) {
+            return Err(super::super::bad_request(format!(
+                "duplicate approval role `{role}`"
+            )));
+        }
+        approvals.push(AdmissionApproval::new(
+            role.to_string(),
+            approver.to_string(),
+        ));
+    }
+
+    let audit = AdmissionAuditTrail::new(actor, reason.clone()).with_approvals(approvals);
+
+    let high_impact = admission_policies_changed(
+        current.allowlist(),
+        &allowlist,
+        current.blocklist(),
+        &blocklist,
+    );
+
+    Ok(AdmissionPolicyChangePayload {
+        allowlist,
+        blocklist,
+        audit,
+        high_impact,
+    })
 }
 
 fn next_session_id() -> u64 {
@@ -410,104 +532,46 @@ pub(super) async fn update_admission_policies(
     State(state): State<ApiContext>,
     Json(request): Json<UpdateAdmissionPoliciesRequest>,
 ) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let node = state.require_node()?;
-    let current = node.admission_policies();
+    #[cfg(test)]
+    if let Some(peerstore) = state.test_peerstore() {
+        let current = peerstore.admission_policies();
+        let payload = parse_admission_policy_change(request.clone(), &current)?;
+        let AdmissionPolicyChangePayload {
+            allowlist,
+            blocklist,
+            mut audit,
+            high_impact,
+        } = payload;
 
-    let actor = request.actor.trim().to_string();
-    if actor.is_empty() {
-        return Err(super::super::bad_request("actor must not be empty"));
-    }
-
-    let reason = request
-        .reason
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-
-    let mut allowlist = Vec::with_capacity(request.allowlist.len());
-    let mut allow_seen = HashSet::new();
-    for entry in request.allowlist {
-        let peer = NetworkPeerId::from_str(&entry.peer_id).map_err(|err| {
-            super::super::bad_request(format!("invalid allowlist peer `{}`: {err}", entry.peer_id))
-        })?;
-        if !allow_seen.insert(peer.clone()) {
-            return Err(super::super::bad_request(format!(
-                "duplicate allowlist entry for peer `{}`",
-                entry.peer_id
-            )));
-        }
-        allowlist.push(AllowlistedPeer {
-            peer,
-            tier: entry.tier,
-        });
-    }
-
-    let mut blocklist = Vec::with_capacity(request.blocklist.len());
-    let mut block_seen = HashSet::new();
-    for value in request.blocklist {
-        let peer = NetworkPeerId::from_str(&value).map_err(|err| {
-            super::super::bad_request(format!("invalid blocklist peer `{value}`: {err}"))
-        })?;
-        if !block_seen.insert(peer.clone()) {
-            return Err(super::super::bad_request(format!(
-                "duplicate blocklist entry for peer `{value}`"
-            )));
-        }
-        blocklist.push(peer);
-    }
-
-    for entry in &allowlist {
-        if block_seen.contains(&entry.peer) {
-            return Err(super::super::bad_request(format!(
-                "peer `{}` cannot be in allowlist and blocklist",
-                entry.peer.to_base58()
-            )));
-        }
-    }
-
-    let mut approvals = Vec::with_capacity(request.approvals.len());
-    let mut approval_roles = HashSet::new();
-    for approval in request.approvals {
-        let role = approval.role.trim();
-        if role.is_empty() {
-            return Err(super::super::bad_request("approval role must not be empty"));
-        }
-        let approver = approval.approver.trim();
-        if approver.is_empty() {
-            return Err(super::super::bad_request(format!(
-                "approval `{role}` must include approver"
-            )));
-        }
-        let normalized = role.to_ascii_lowercase();
-        if !approval_roles.insert(normalized.clone()) {
-            return Err(super::super::bad_request(format!(
-                "duplicate approval role `{role}`"
-            )));
-        }
-        approvals.push(AdmissionApproval::new(
-            role.to_string(),
-            approver.to_string(),
-        ));
-    }
-
-    let high_impact = admission_policies_changed(
-        current.allowlist(),
-        &allowlist,
-        current.blocklist(),
-        &blocklist,
-    );
-
-    if high_impact {
-        let mut missing = Vec::new();
-        for role in ["operations", "security"] {
-            if !approvals
-                .iter()
-                .any(|approval| approval.role().eq_ignore_ascii_case(role))
-            {
-                missing.push(role);
+        if high_impact {
+            let missing = audit.missing_roles(["operations", "security"]);
+            if !missing.is_empty() {
+                return Err(super::super::bad_request(format!(
+                    "missing required approvals: {}",
+                    missing.join(", ")
+                )));
             }
         }
+
+        peerstore
+            .update_admission_policies(allowlist, blocklist, audit.clone())
+            .map_err(to_http_error)?;
+        let policies = peerstore.admission_policies();
+        return Ok(Json(AdmissionPoliciesResponse::from(policies)));
+    }
+
+    let node = state.require_node()?;
+    let current = node.admission_policies();
+    let payload = parse_admission_policy_change(request, &current)?;
+    let AdmissionPolicyChangePayload {
+        allowlist,
+        blocklist,
+        mut audit,
+        high_impact,
+    } = payload;
+
+    if high_impact {
+        let missing = audit.missing_roles(["operations", "security"]);
         if !missing.is_empty() {
             return Err(super::super::bad_request(format!(
                 "missing required approvals: {}",
@@ -516,23 +580,116 @@ pub(super) async fn update_admission_policies(
         }
     }
 
-    #[cfg(test)]
-    if let Some(peerstore) = state.test_peerstore() {
-        let audit = AdmissionAuditTrail::new(actor.clone(), reason.clone())
-            .with_approvals(approvals.clone());
-        peerstore
-            .update_admission_policies(allowlist.clone(), blocklist.clone(), audit)
-            .map_err(to_http_error)?;
-        let policies = peerstore.admission_policies();
-        return Ok(Json(AdmissionPoliciesResponse::from(policies)));
-    }
-
-    let audit = AdmissionAuditTrail::new(actor, reason).with_approvals(approvals);
     node.update_admission_policies(allowlist, blocklist, audit)
         .map_err(to_http_error)?;
 
     let policies = node.admission_policies();
     Ok(Json(AdmissionPoliciesResponse::from(policies)))
+}
+
+pub(super) async fn submit_pending_admission_policies(
+    State(state): State<ApiContext>,
+    Json(request): Json<UpdateAdmissionPoliciesRequest>,
+) -> Result<Json<PendingAdmissionPolicyResponse>, (StatusCode, Json<ErrorResponse>)> {
+    #[cfg(test)]
+    if let Some(peerstore) = state.test_peerstore() {
+        let current = peerstore.admission_policies();
+        let payload = parse_admission_policy_change(request.clone(), &current)?;
+        let AdmissionPolicyChangePayload {
+            allowlist,
+            blocklist,
+            audit,
+            high_impact: _,
+        } = payload;
+        let service = state.admission_dual_control().ok_or_else(|| {
+            super::super::bad_request("admission dual control service not configured")
+        })?;
+        let pending = service
+            .submit_change(allowlist, blocklist, audit)
+            .map_err(dual_control_error_to_http)?;
+        return Ok(Json(pending_change_to_response(pending)));
+    }
+
+    let node = state.require_node()?;
+    let current = node.admission_policies();
+    let payload = parse_admission_policy_change(request, &current)?;
+    let AdmissionPolicyChangePayload {
+        allowlist,
+        blocklist,
+        audit,
+        high_impact: _,
+    } = payload;
+    let service = if let Some(service) = state.admission_dual_control() {
+        service
+    } else {
+        node.admission_dual_control()
+    };
+    let pending = service
+        .submit_change(allowlist, blocklist, audit)
+        .map_err(dual_control_error_to_http)?;
+    Ok(Json(pending_change_to_response(pending)))
+}
+
+pub(super) async fn approve_pending_admission_policies(
+    State(state): State<ApiContext>,
+    Path(id): Path<u64>,
+    Json(request): Json<ApprovePendingAdmissionPoliciesRequest>,
+) -> Result<Json<AdmissionPoliciesResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let approver = request.approver.trim();
+    if approver.is_empty() {
+        return Err(super::super::bad_request("approver must not be empty"));
+    }
+    let approval = AdmissionApproval::new("security", approver.to_string());
+
+    let service = if let Some(service) = state.admission_dual_control() {
+        service
+    } else {
+        let node = state.require_node()?;
+        node.admission_dual_control()
+    };
+
+    let policies = service
+        .approve_change(id, approval)
+        .map_err(dual_control_error_to_http)?;
+    Ok(Json(AdmissionPoliciesResponse::from(policies)))
+}
+
+fn pending_change_to_response(change: PendingPolicyChange) -> PendingAdmissionPolicyResponse {
+    let submitted_ms = change
+        .submitted_at()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    PendingAdmissionPolicyResponse {
+        id: change.id(),
+        actor: change.audit().actor().to_string(),
+        reason: change.audit().reason().map(|value| value.to_string()),
+        submitted_ms,
+    }
+}
+
+fn dual_control_error_to_http(error: DualControlError) -> (StatusCode, Json<ErrorResponse>) {
+    match error {
+        DualControlError::PendingChangeNotFound { id } => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("pending admission change {id} not found"),
+            }),
+        ),
+        DualControlError::MissingOperationsApproval => {
+            super::super::bad_request("pending change requires operations approval")
+        }
+        DualControlError::SecurityApprovalAlreadyPresent => {
+            super::super::bad_request("pending change already includes security approval")
+        }
+        DualControlError::ApprovalAlreadyProvided { role } => super::super::bad_request(format!(
+            "pending change already has approval for role `{role}`"
+        )),
+        DualControlError::UnexpectedApprovalRole { role } => super::super::bad_request(format!(
+            "pending change approvals must be issued by the security role, got `{role}`",
+        )),
+        DualControlError::Peerstore(err) => to_http_error(err),
+    }
 }
 
 pub(super) async fn admission_audit_log(

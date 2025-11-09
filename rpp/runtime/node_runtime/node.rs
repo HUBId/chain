@@ -11,14 +11,14 @@ use rpp_p2p::vendor::PeerId;
 use rpp_p2p::{
     decode_gossip_payload, decode_meta_payload, validate_block_payload, validate_vote_payload,
     AdmissionAuditTrail, AdmissionPolicies, AdmissionPolicyBackup, AdmissionPolicyLogEntry,
-    AllowlistedPeer, ConsensusPipeline, GossipBlockValidator, GossipPayloadError, GossipTopic,
-    GossipVoteValidator, HandshakePayload, LightClientHead, LightClientSync, MetaTelemetry,
-    NetworkError, NetworkEvent, NetworkFeatureAnnouncement, NetworkLightClientUpdate,
-    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncPlan, NodeIdentity,
-    Peerstore, PeerstoreError, PersistentConsensusStorage, PersistentProofStorage, PipelineError,
-    ProofMempool, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
-    RuntimeProofValidator, SeenDigestRecord, SnapshotChunk, SnapshotProviderHandle,
-    SnapshotSessionId, TierLevel, VoteOutcome,
+    AllowlistedPeer, ConsensusPipeline, DualControlApprovalService, GossipBlockValidator,
+    GossipPayloadError, GossipTopic, GossipVoteValidator, HandshakePayload, LightClientHead,
+    LightClientSync, MetaTelemetry, NetworkError, NetworkEvent, NetworkFeatureAnnouncement,
+    NetworkLightClientUpdate, NetworkMetaTelemetryReport, NetworkPeerTelemetry,
+    NetworkStateSyncPlan, NodeIdentity, Peerstore, PeerstoreError, PersistentConsensusStorage,
+    PersistentProofStorage, PipelineError, ProofMempool, ReputationBroadcast, ReputationEvent,
+    ReputationHeuristics, RuntimeProofValidator, SeenDigestRecord, SnapshotChunk,
+    SnapshotProviderHandle, SnapshotSessionId, TierLevel, VoteOutcome,
 };
 use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -1031,6 +1031,7 @@ impl NodeInner {
             config.snapshot_provider.clone(),
         )?;
         let (network, identity, peerstore) = resources.into_parts();
+        let dual_control = Arc::new(DualControlApprovalService::new(peerstore.clone()));
         let (command_tx, command_rx) = mpsc::channel(64);
         let (event_tx, _) = broadcast::channel(256);
         let metrics = Arc::new(RwLock::new(NodeMetrics::default()));
@@ -1047,6 +1048,7 @@ impl NodeInner {
             light_client_heads,
             snapshot_streams: snapshot_streams.clone(),
             peerstore: peerstore.clone(),
+            admission_dual_control: dual_control.clone(),
         };
         let local_features = config
             .identity
@@ -2182,6 +2184,7 @@ pub struct NodeHandle {
     light_client_heads: watch::Receiver<Option<LightClientHead>>,
     snapshot_streams: Arc<RwLock<HashMap<SnapshotSessionId, SnapshotStreamStatus>>>,
     peerstore: Arc<Peerstore>,
+    admission_dual_control: Arc<DualControlApprovalService>,
 }
 
 impl NodeHandle {
@@ -2220,6 +2223,10 @@ impl NodeHandle {
 
     pub fn admission_policies(&self) -> AdmissionPolicies {
         self.peerstore.admission_policies()
+    }
+
+    pub fn admission_dual_control(&self) -> Arc<DualControlApprovalService> {
+        Arc::clone(&self.admission_dual_control)
     }
 
     pub fn admission_audit_log(

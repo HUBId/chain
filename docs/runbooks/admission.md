@@ -6,30 +6,39 @@ allowlist and blocklist.
 ## Dual-approval workflow
 
 High-impact changes (any modification to the allowlist or blocklist) require
-sign-off from both the operations and security rotations. The RPC endpoint
-`POST /p2p/admission/policies` rejects requests that are missing either role and
-returns a `400` with a descriptive error string. The peerstore verifies the same
-roles before persisting the snapshot, so manual writes or legacy tooling cannot
-skip the policy guardrail.【F:rpp/rpc/src/routes/p2p.rs†L158-L263】【F:rpp/p2p/src/peerstore.rs†L1084-L1389】
+sign-off from both the operations and security rotations. Operators stage a
+change with `POST /p2p/admission/policies/pending`, which records the
+operations approval and returns a pending identifier. The dual-control service
+keeps the snapshot out of the live access lists until security confirms the
+request via `POST /p2p/admission/policies/pending/:id/approve`. Both endpoints
+validate roles and forward the final approvals to the peerstore so manual
+writes or legacy tooling cannot bypass the guardrail.【F:rpp/rpc/src/routes/p2p.rs†L470-L660】【F:rpp/p2p/src/admission/dual_control.rs†L17-L152】【F:rpp/p2p/src/peerstore.rs†L1069-L1545】
 
-Include the approvals explicitly in the payload:
+Example (operations stage the request, security approves it):
 
-```json
-{
-  "actor": "ops.oncall",
-  "reason": "rotate unhealthy validator",
-  "allowlist": [{"peer_id": "12D3KooWRpcPeer", "tier": "Tl3"}],
-  "blocklist": [],
-  "approvals": [
-    {"role": "operations", "approver": "ops.oncall"},
-    {"role": "security", "approver": "sec.oncall"}
-  ]
-}
+```sh
+curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     ${RPP_RPC_URL}/p2p/admission/policies/pending \
+     -d '{
+           "actor": "ops.oncall",
+           "reason": "rotate unhealthy validator",
+           "allowlist": [{"peer_id": "12D3KooWRpcPeer", "tier": "Tl3"}],
+           "blocklist": [],
+           "approvals": [
+             {"role": "operations", "approver": "ops.oncall"}
+           ]
+         }'
+
+curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     ${RPP_RPC_URL}/p2p/admission/policies/pending/${PENDING_ID}/approve \
+     -d '{"approver": "sec.oncall"}'
 ```
 
-If the update is rejected because a peer appears in both lists or one of the
-approval roles is missing, capture the HTTP response body in the incident log.
-Re-submit the request after fixing the payload.
+If either call rejects the payload—for example a duplicate peer or a missing
+approval—capture the HTTP response body in the incident log and re-submit after
+fixing the payload.
 
 ## Audit expectations
 
