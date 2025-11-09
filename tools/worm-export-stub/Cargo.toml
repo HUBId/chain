@@ -13,6 +13,7 @@ sha2 = { workspace = true }
 time = { version = "=0.3.36", features = ["formatting", "macros", "parsing"] }
 tokio = { version = "=1.48.0", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal"] }
 thiserror = "=2.0.12"
+metrics = { workspace = true }
 
 [dev-dependencies]
 axum = { version = "=0.8.4", default-features = false, features = ["http1", "json", "macros", "tokio"] }

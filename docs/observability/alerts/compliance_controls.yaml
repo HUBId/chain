@@ -1,0 +1,36 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: compliance-controls
+  labels:
+    role: alert-rules
+spec:
+  groups:
+    - name: compliance-controls
+      rules:
+        - alert: SnapshotVerifierFailure
+          expr: increase(snapshot_verify_failures_total[1h]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: release
+          annotations:
+            summary: Snapshot verifier failures detected in release packaging
+            description: |
+              The snapshot verifier reported at least one failure within the last hour.
+              Inspect the release job logs, the aggregated snapshot verify report, and
+              rerun the manifest validation before promoting the build.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseA_acceptance.md
+        - alert: WormExportNightlyFailure
+          expr: increase(worm_export_failures_total[1h]) > 0
+          for: 5m
+          labels:
+            severity: critical
+            service: compliance
+          annotations:
+            summary: Nightly WORM export smoke detected a failure
+            description: |
+              The append-only WORM export stub surfaced at least one failure in the
+              past hour. Review the nightly worm-export run, confirm retention metadata,
+              and unblock the compliance pipeline before the next scheduled window.
+            runbook_url: https://github.com/chainbound/chain/blob/main/docs/runbooks/phaseA_acceptance.md

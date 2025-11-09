@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use axum::body::Body;
 use axum::extract::{Path as AxumPath, State};
@@ -19,6 +19,20 @@ use tokio::fs;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
+
+const WORM_EXPORT_FAILURE_METRIC: &str = "worm_export_failures_total";
+static WORM_FAILURE_REGISTER: Once = Once::new();
+
+fn record_worm_export_failure(reason: &'static str) {
+    WORM_FAILURE_REGISTER.call_once(|| {
+        metrics::describe_counter!(
+            WORM_EXPORT_FAILURE_METRIC,
+            "Total number of WORM export stub failures observed during nightly verification",
+        );
+    });
+
+    metrics::counter!(WORM_EXPORT_FAILURE_METRIC, "reason" => reason).increment(1);
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -165,7 +179,10 @@ async fn get_object(
     AxumPath(ObjectPath { bucket, key }): AxumPath<ObjectPath>,
     State(state): State<AppState>,
 ) -> Result<Response, StubError> {
-    let normalised = normalise(&bucket, &key)?;
+    let normalised = normalise(&bucket, &key).map_err(|err| {
+        record_worm_export_failure("invalid_path");
+        err
+    })?;
     let absolute = state.root.join(&normalised.relative);
     let bytes = fs::read(&absolute).await.map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => {
@@ -204,7 +221,10 @@ async fn put_object(
     let normalised = normalise(&bucket, &key)?;
     let absolute = state.root.join(&normalised.relative);
     if let Some(parent) = absolute.parent() {
-        fs::create_dir_all(parent).await?;
+        fs::create_dir_all(parent).await.map_err(|err| {
+            record_worm_export_failure("create_dir");
+            err
+        })?;
     }
 
     let mut hasher = Sha256::new();
@@ -216,9 +236,19 @@ async fn put_object(
         .create_new(true)
         .write(true)
         .open(&absolute)
-        .await?;
-    file.write_all(&body).await?;
-    file.flush().await?;
+        .await
+        .map_err(|err| {
+            record_worm_export_failure("open_file");
+            err
+        })?;
+    file.write_all(&body).await.map_err(|err| {
+        record_worm_export_failure("write_body");
+        err
+    })?;
+    file.flush().await.map_err(|err| {
+        record_worm_export_failure("flush_body");
+        err
+    })?;
 
     let now = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -257,8 +287,12 @@ async fn put_object(
         axum::http::header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
+    let payload = serde_json::to_vec(&stored).map_err(|err| {
+        record_worm_export_failure("serialize_response");
+        err
+    })?;
     response
-        .body(Body::from(serde_json::to_vec(&stored)?))
+        .body(Body::from(payload))
         .map_err(|err| StubError::Message(format!("build response: {err}")))
 }
 
@@ -268,11 +302,20 @@ async fn persist_object(state: &AppState, object: StoredObject) -> Result<(), St
     let snapshot = index.clone();
     drop(index);
 
-    let serialized = serde_json::to_vec_pretty(&snapshot)?;
+    let serialized = serde_json::to_vec_pretty(&snapshot).map_err(|err| {
+        record_worm_export_failure("serialize_index");
+        err
+    })?;
     let tmp = state.root.join("index.json.tmp");
     let target = state.root.join("index.json");
-    fs::write(&tmp, serialized).await?;
-    fs::rename(tmp, target).await?;
+    fs::write(&tmp, &serialized).await.map_err(|err| {
+        record_worm_export_failure("write_index");
+        err
+    })?;
+    fs::rename(tmp, target).await.map_err(|err| {
+        record_worm_export_failure("rotate_index");
+        err
+    })?;
     Ok(())
 }
 
@@ -281,11 +324,17 @@ async fn load_index(root: &Path) -> Result<Index, StubError> {
     if !path.exists() {
         return Ok(Index::default());
     }
-    let bytes = fs::read(path).await?;
+    let bytes = fs::read(path).await.map_err(|err| {
+        record_worm_export_failure("read_index");
+        err
+    })?;
     if bytes.is_empty() {
         return Ok(Index::default());
     }
-    let index: Index = serde_json::from_slice(&bytes)?;
+    let index: Index = serde_json::from_slice(&bytes).map_err(|err| {
+        record_worm_export_failure("parse_index");
+        err
+    })?;
     Ok(index)
 }
 
