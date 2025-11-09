@@ -12,7 +12,8 @@ milestone.
       pro Manifest `*-verify.json` sowie das Bündel
       `snapshot-verify-report.json` und `snapshot-verify-report.json.sha256`
       unter `dist/artifacts/<target>/`. Hinterlege die JSON- und SHA256-Datei als
-      Pflichtartefakte und archiviere die Einzelberichte für spätere Audits.【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L122-L209】
+      Pflichtartefakte, archiviere die Einzelberichte für spätere Audits und
+      verweise im Evidence-Bundle auf den [`Evidence Bundle Index`](../governance/evidence_bundle_index.md).【F:scripts/build_release.sh†L273-L348】【F:.github/workflows/release.yml†L122-L209】【F:docs/governance/evidence_bundle_index.md†L9-L49】
       Validiere den JSON-Inhalt zusätzlich lokal via
       `cargo xtask verify-report --report dist/artifacts/<target>/snapshot-verify-report.json`
       – das Kommando prüft sowohl die Aggregation als auch Einzelreports gegen
@@ -44,8 +45,10 @@ milestone.
       Summary `signature_valid=true` meldet.【F:.github/workflows/nightly.yml†L10-L24】【F:xtask/src/main.rs†L120-L318】
 - [ ] **Evidence-Bundle aktualisiert.** Bestätige, dass
       `cargo xtask collect-phase3-evidence` die WORM-Logs (`target/worm-export-smoke`)
-      samt Signaturen ins Bundle kopiert und die Manifestdatei die Quellen
-      aufführt. Dokumentiere Speicherort und Prüfsumme im Freigabeprotokoll.【F:xtask/src/main.rs†L1516-L1584】【F:xtask/src/main.rs†L1606-L1644】
+      samt Signaturen ins Bundle kopiert, die Manifestdatei die Quellen
+      aufführt und der [`Evidence Bundle Index`](../governance/evidence_bundle_index.md)
+      die Pfade dokumentiert. Dokumentiere Speicherort und Prüfsumme im
+      Freigabeprotokoll.【F:xtask/src/main.rs†L1516-L1584】【F:xtask/src/main.rs†L1606-L1644】【F:docs/governance/evidence_bundle_index.md†L51-L85】
 - ✅ **Bootstrap-Guard aktiv.** Produktions-Release-Channels (`canary`/`mainnet`)
   verweigern den Start, wenn `network.admission.worm_export` keinen S3-Endpoint,
   Zugangsdaten und ein Retention-Fenster setzt. Der Guard schreibt einen
