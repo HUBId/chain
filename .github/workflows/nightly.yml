@@ -18,8 +18,25 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run WORM export smoke test
+        env:
+          WORM_EXPORT_STUB_ENDPOINT: http://127.0.0.1:9700
         run: |
           set -euo pipefail
+          cargo run -p worm-export-stub -- --listen 127.0.0.1:9700 --storage target/worm-export-stub-server &
+          stub_pid=$!
+          trap 'kill "$stub_pid"' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:9700/healthz >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "::error::WORM export stub failed to start" >&2
+            exit 1
+          fi
           cargo xtask test-worm-export
       - name: Upload WORM export smoke artifacts
         uses: actions/upload-artifact@v4

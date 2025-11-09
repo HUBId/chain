@@ -57,6 +57,46 @@ to ensure the additional transport compiles alongside the default TCP stack.
 For operational guidance on the runtime CLI—including authentication, rate limits,
 and recovery procedures—consult the [`rpp-node` operator guide](../rpp_node_operator_guide.md).
 
+## WORM-Export-Stub
+
+Der WORM-Export-Stub unter `tools/worm-export-stub/` simuliert ein S3-kompatibles
+Append-only-Backend, inklusive `GET`-Readback und einer Metadaten-Liste unter
+`/_objects`. Starte den Dienst während der lokalen Entwicklung in einem separaten
+Terminal:
+
+```bash
+cargo run -p worm-export-stub -- --listen 127.0.0.1:9700 --storage ./target/worm-export-stub
+```
+
+Die Validator-Konfiguration referenziert den Stub über den S3-Treiber mit
+Path-Style-URLs. Setze `path_style = true`, damit die Anfragen als
+`http://<host>:<port>/<bucket>/<prefix>/<objekt>` beim Stub ankommen:
+
+```toml
+[network.admission.worm_export]
+enabled = true
+required = true
+retention_days = 60
+retention_mode = "compliance"
+require_signatures = true
+
+[network.admission.worm_export.target]
+kind = "s3"
+endpoint = "http://127.0.0.1:9700"
+region = "stub-region"
+bucket = "worm-audit"
+prefix = "admission"
+access_key = "stub-access"
+secret_key = "stub-secret"
+path_style = true
+```
+
+Für die automatisierten Smoke-Tests reicht es, den Stub über die Umgebung
+`WORM_EXPORT_STUB_ENDPOINT=http://127.0.0.1:9700` zu aktivieren. `cargo xtask
+test-worm-export` streamt dadurch zusätzlich eine signierte Audit-Änderung in den
+HTTP-Stub und verifiziert per Readback sowie Metadaten-Liste, dass Retention- und
+Signaturinformationen korrekt durchgereicht werden.
+
 ## Fehlersuche
 
 | Fehlermeldung | Ursache | Lösung |

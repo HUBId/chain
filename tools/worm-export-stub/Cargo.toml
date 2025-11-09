@@ -1,0 +1,18 @@
+[package]
+name = "worm-export-stub"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "=0.8.4", default-features = false, features = ["http1", "json", "macros", "tokio"] }
+clap = { workspace = true, features = ["derive"] }
+hex = { workspace = true }
+serde = { version = "=1.0.225", features = ["derive"] }
+serde_json = "=1.0.145"
+sha2 = { workspace = true }
+time = { version = "=0.3.36", features = ["formatting", "macros", "parsing"] }
+tokio = { version = "=1.48.0", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal"] }
+thiserror = "=2.0.12"
+
+[dev-dependencies]
+axum = { version = "=0.8.4", default-features = false, features = ["http1", "json", "macros", "tokio"] }
