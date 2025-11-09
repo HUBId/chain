@@ -62,6 +62,22 @@ Reports, Tickets, Runbooks) dokumentiert sein.
 
 ## Exit Criteria
 
+- [ ] **WORM-Verifikation sign-off.** Die jüngste `worm-retention-report.json`
+      ist im Phase‑C-Evidence-Bundle hinterlegt und durch Storage Engineering
+      per Gegenprobe (`cargo xtask worm-retention-check`) abgezeichnet. Das
+      Audit-Ticket enthält den Link zum Report sowie die Bestätigung, dass alle
+      Abweichungen laut Incident-Log geschlossen wurden.
+- [ ] **Evidence-Bundle freigegeben.** Das aktuelle Paket
+      `phase3-evidence-<timestamp>` liegt im Artefakt-Archiv, Manifest und
+      Prüfsumme wurden im Audit-Ticket dokumentiert und der
+      [Evidence Bundle Index](../governance/evidence_bundle_index.md) verweist
+      auf die Phase‑C-Artefakte (`worm-export/`, `snapshot-signatures/`,
+      `chaos-reports/`).
+- [ ] **Chaos-Test-Auswertung dokumentiert.** Die Ergebnisse des jüngsten
+      `snapshot_partition_report.json` (Nightly oder manueller Drill) wurden mit
+      Prometheus-/Grafana-Exports abgeglichen und im Incident-Log referenziert.
+      Recovery-Maßnahmen aus etwaigen Abweichungen sind geschlossen, bevor der
+      Sign-off erfolgt.
 - [ ] **Incident-Playbook aktualisiert und verteilt.** Das aktualisierte
       [Incident Response Playbook](./incident_response.md#phase-c-kontrollen)
       wurde durch Compliance, Release Engineering und Security reviewed,

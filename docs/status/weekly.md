@@ -25,6 +25,29 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
 nachverfolgen. Die Operator-Dokumentation enthält detaillierte Belege für Phase‑2-Audits. Alle
 Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_acceptance.md) zusammengeführt.
 
+## Phase C Fortschritt (Kalenderwoche 31/2026)
+
+**Zusammenfassung:** Die Phase‑C-Kontrollen sind für den Sign-off vorbereitet: WORM-Retention,
+Evidence-Bundle-Integrität und Chaos-Drills liefern nachvollziehbare Artefakte, das Incident-Playbook
+ist abgestimmt und in On-Call-Dokumentationen verlinkt. Die aktualisierte
+[Phase‑C Acceptance Checklist](../runbooks/phaseC_acceptance.md) bündelt die Exit-Kriterien.
+
+### Highlights
+- **WORM-Verifikation:** Aktueller `worm-retention-report.json` im Phase‑C-Evidence-Bundle,
+  Gegenprobe durch `cargo xtask worm-retention-check` dokumentiert im Audit-Ticket; Abweichungen
+  laut Incident-Log geschlossen.【F:docs/runbooks/phaseC_acceptance.md†L60-L66】
+- **Evidence-Bundle:** `phase3-evidence-<timestamp>` enthält WORM-, Snapshot- und Chaos-Artefakte;
+  Manifest-Hash und Indexeintrag sichern Audit-Nachvollziehbarkeit.【F:docs/runbooks/phaseC_acceptance.md†L67-L72】【F:docs/governance/evidence_bundle_index.md†L1-L85】
+- **Chaos-Test-Auswertung:** `snapshot_partition_report.json` mit Grafana-/Prometheus-Exporten
+  abgeglichen, Recovery-Maßnahmen abgeschlossen und im Incident-Log referenziert.【F:docs/runbooks/phaseC_acceptance.md†L73-L77】
+- **Incident-Playbook Review:** Abschnitt "Phase‑C Kontrollen" reviewed (Compliance, Release, Security),
+  On-Call-Handbuch aktualisiert und kommuniziert.【F:docs/runbooks/phaseC_acceptance.md†L78-L82】【F:docs/runbooks/incident_response.md†L1-L200】
+
+### Artefakte & Links
+- [Evidence Bundle Index – Phase‑C-Artefakte](../governance/evidence_bundle_index.md)
+- [Nightly `worm-export-smoke` Artefakt (Actions)](../../.github/workflows/nightly.yml)
+- [Chaos Drill Report `snapshot_partition_report.json`](../runbooks/network_snapshot_failover.md)
+
 ### Highlights
 - **Circuit Enforcement:** ENG‑742/ENG‑743 ausgeliefert – STWO rechnet VRF-Transkripte
   in der Konsensschaltung neu, faltet Poseidon-Bindings und erzwingt Quoren,

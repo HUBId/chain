@@ -38,6 +38,31 @@ Die erste Tranche des End-to-End-Blueprints ist abgeschlossen. Die folgenden Arb
 Die vollständige Artefakt- und Nachweisliste für die Freigabe ist in der
 [Phase‑2 Acceptance Checklist](runbooks/phase2_acceptance.md) gebündelt.
 
+## Phase C Fortschritt (Stand: 2026-08-01)
+
+Phase C bündelt die Betriebskontrollen für Langzeit-Retention, Evidenz-
+Integrität und Chaos-Drills. Die Acceptance-Checklist erfasst jetzt die
+zusätzlichen Exit-Kriterien für WORM-Verifikation, Evidence-Bundle-Abnahme
+und Chaos-Test-Auswertung; die Playbook-Reviews sind Teil des Sign-offs.
+
+- **WORM-Retention:** Nightly-Artefakte `worm-retention-report.json` werden im
+  Phase‑C-Bundle archiviert und durch Storage Engineering via
+  `cargo xtask worm-retention-check` gegengeprüft, bevor das Audit-Ticket
+  geschlossen wird.【F:docs/runbooks/phaseC_acceptance.md†L60-L66】
+- **Evidence-Bundle:** `phase3-evidence-<timestamp>` enthält jetzt die
+  Phase‑C-Artefakte (`worm-export/`, `snapshot-signatures/`,
+  `chaos-reports/`); Manifest-Hash und Index-Eintrag sichern die
+  Nachvollziehbarkeit.【F:docs/runbooks/phaseC_acceptance.md†L67-L72】【F:docs/governance/evidence_bundle_index.md†L1-L85】
+- **Chaos-Drills:** Die jüngsten `snapshot_partition_report.json`-Ergebnisse
+  werden mit Prometheus-/Grafana-Exports abgeglichen und im Incident-Log
+  dokumentiert, bevor der Phase‑C-Sign-off erfolgt.【F:docs/runbooks/phaseC_acceptance.md†L73-L77】
+- **Incident-Playbook Review:** Der Abschnitt "Phase‑C Kontrollen" im Incident
+  Response Playbook ist durch Compliance, Release Engineering und Security
+  abgestimmt und im On-Call-Handbuch verlinkt.【F:docs/runbooks/phaseC_acceptance.md†L78-L82】【F:docs/runbooks/incident_response.md†L1-L200】
+
+Der wöchentliche Statusbericht verlinkt die neuen Artefakte und festigt den
+Phase‑C-Fortschritt in den Compliance-Logs.【F:docs/status/weekly.md†L1-L200】
+
 ## Phase 2 abgeschlossen (Stand: 2026-04-15)
 
 Phase 2 ist offiziell abgeschlossen. Die erweiterten Proof-Pfade (ENG‑742/ENG‑743) laufen stabil in STWO und Plonky3, die dreistufige Test-Suite (`unit-suites`, `integration-workflows`, `simnet-smoke`) ist als Pflichtgate aktiv, und neue Observability-Artefakte (Dashboards, Alerts, Runbooks) sichern VRF-/Quorum-Metriken für Audits und Betrieb.
