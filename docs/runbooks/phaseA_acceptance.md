@@ -38,6 +38,15 @@ milestone.
       `target/snapshot-verifier-smoke/` erzeugt, sowie auf die Release-Artefakte
       `snapshot-verifier-<target>` im Actions-Tab. So lässt sich das Ergebnis
       reproduzieren, ohne die produktiven Artefakte neu zu signieren.【F:.github/workflows/ci.yml†L369-L397】【F:.github/workflows/release.yml†L150-L209】
+- [ ] **Nightly-Artefakte abgeglichen.** Ermittle per `gh api` den letzten
+      erfolgreichen `ci.yml`-Run auf dem Review-Branch
+      (`gh api repos/<org>/<repo>/actions/workflows/ci.yml/runs -f branch=<branch> -f status=success -F per_page=1 --jq '.workflow_runs[0].id'`).
+      Liste anschließend die Artefakte auf
+      (`gh api repos/<org>/<repo>/actions/runs/<run-id>/artifacts --jq '.artifacts[].name'`)
+      und stelle sicher, dass `snapshot-verifier-smoke` und
+      `worm-export-smoke` vorhanden und nicht abgelaufen sind. Dokumentiere
+      fehlende Artefakte inklusive Job-Name im Acceptance-Protokoll und leite
+      die Eskalation über das Incident-Runbook ein.【F:.github/workflows/nightly.yml†L25-L69】【F:.github/workflows/ci.yml†L360-L397】
 - [ ] **Telemetry-Gate überprüft.** Prüfe im Prometheus-/OTLP-Scrape, dass der
       Zähler `snapshot_verify_failures_total` nach dem Release-Lauf weiterhin
       `0` ist. Bei einem Anstieg muss der Alert

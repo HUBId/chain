@@ -45,6 +45,9 @@ Nachweise sind in der [Phase‑2 Acceptance Checklist](../runbooks/phase2_accept
   mit dem Produktions-Feature-Set, wertet alle Summaries via `scripts/analyze_simnet.py` aus und stellt die Artefakte im Actions-Tab bereit.
   Abweichungen bei VRF-/Quorum-Tamper führen zu roten Nightly-Statusmeldungen, die im
   [Validierungsplan](../test_validation_strategy.md#4-cicd-integration) dokumentiert sind.【F:.github/workflows/nightly.yml†L1-L86】【F:docs/test_validation_strategy.md†L41-L83】
+- **Smoke-Artefakt-Audit:** Der Nightly-Workflow prüft nun automatisiert, ob der aktuelle `ci.yml`-Lauf die Artefakte
+  `snapshot-verifier-smoke` und `worm-export-smoke` bereithält, und markiert fehlende Uploads als Fehler, damit
+  Nightly-Ausfälle direkt auf Artefakt-Lücken hinweisen.【F:.github/workflows/nightly.yml†L25-L69】
 
 ### Ampelstatus
 - **Tests:** 🟢 – Manipulations-Suite läuft nightly.

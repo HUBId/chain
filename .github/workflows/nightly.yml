@@ -45,6 +45,59 @@ jobs:
           name: worm-export-smoke
           path: target/worm-export-smoke
 
+  verify-smoke-artifacts:
+    name: Verify CI smoke artifacts
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TARGET_BRANCH: ${{ github.ref_name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Ensure snapshot-verifier and worm-export smoke artifacts exist
+        run: |
+          set -euo pipefail
+
+          branch="${TARGET_BRANCH:-}"
+          if [[ -z "$branch" || "$branch" == "HEAD" ]]; then
+            branch="${DEFAULT_BRANCH:-main}"
+          fi
+
+          workflow_path="ci.yml"
+          runs_json=$(gh api \
+            "/repos/${REPOSITORY}/actions/workflows/${workflow_path}/runs" \
+            -f branch="$branch" \
+            -f status=success \
+            -F per_page=1)
+          run_id=$(jq -r '.workflow_runs[0].id // empty' <<<"$runs_json")
+          if [[ -z "$run_id" ]]; then
+            echo "::error::Kein erfolgreicher ci.yml-Lauf für Branch '$branch' gefunden" >&2
+            exit 1
+          fi
+
+          run_url="https://github.com/${REPOSITORY}/actions/runs/${run_id}"
+          artifacts_json=$(gh api \
+            "/repos/${REPOSITORY}/actions/runs/${run_id}/artifacts" \
+            -F per_page=100)
+
+          has_snapshot=$(jq '[.artifacts[] | select(.name=="snapshot-verifier-smoke" and (.expired != true))] | length' <<<"$artifacts_json")
+          has_worm=$(jq '[.artifacts[] | select(.name=="worm-export-smoke" and (.expired != true))] | length' <<<"$artifacts_json")
+
+          missing=()
+          if [[ "${has_snapshot}" -eq 0 ]]; then
+            missing+=("snapshot-verifier-smoke (Job snapshot-verifier)")
+          fi
+          if [[ "${has_worm}" -eq 0 ]]; then
+            missing+=("worm-export-smoke (Job worm-export-smoke)")
+          fi
+
+          if [[ ${#missing[@]} -ne 0 ]]; then
+            printf '::error::Fehlende CI-Artefakte im Lauf %s: %s\n' "$run_url" "${missing[*]}" >&2
+            exit 1
+          fi
+
+          echo "Alle erwarteten Artefakte aus ci.yml vorhanden (Run ${run_url})."
+
   timetoke-slo-report:
     name: Timetoke replay SLO report
     runs-on: ubuntu-latest
