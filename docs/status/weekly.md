@@ -21,6 +21,24 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
 - Erfolgreiche WORM-Retention-Gegenprobe dokumentiert im [Phase‑C WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md).
 <!-- phasec-status:end -->
 
+## Phase C Evidence Bundle
+
+- **Bundle:** `phase3-evidence/nightly-2026-08-21/phase3-evidence-2026-08-21T09-00-42Z.tar.gz`
+  (`sha256=8e2c1a6fb2df5cd0bfdf66c75dd8fa24cbe2a3ed56bfec4d3c19d67b2c4a9e11`,
+  `manifest.sha256=76c8f0c99a8be379fc5a18d28288fd4099dc41f47ea70e0cd950e18b9e8f12f4`).
+- **Phase‑C SLO Summary:** `docs/status/phaseC_slo_summary.md` innerhalb des Bundles
+  (`sha256=1c4b8db5c2f1a647d8b2fcb8d3cecfcc0b4732f86bf7d1587e6d3105aeff019a`).
+- **Replay-Telemetrie:** `telemetry/timetoke_replay_telemetry-2026-08-21.jsonl`
+  (`sha256=d5a304aa0c42d9e55073ae9d0c3863f06a2e6f1a879b95f9d9351a725a9c2d2e`).
+- **WORM-Retention:** `worm-export/worm-retention-report.json`
+  (`sha256=cfeb54f9d845b2dff8e7b7690c7b8280a5f31a950e56d6f1b21e9925a5909a08`).
+- **Chaos-Report:** `chaos-reports/snapshot_partition_report.json`
+  (`sha256=9cc4fa572c65dcd401d2f02feaac822ea61413a0558f82d5b53c19f9b0f6e4e2`).
+- **Referenzen:** Nightly SLO-/Replay-Auswertung siehe
+  [`docs/status/phaseC_slo_summary.md`](phaseC_slo_summary.md), WORM-Nachweis siehe
+  [`docs/status/phaseC_retention_summary.md`](phaseC_retention_summary.md); Chaos-Status
+  ist im Abschnitt „Phase‑C Kontrollen (Nightly)“ oben dokumentiert.【F:docs/status/artifacts/phase3_evidence_bundle_2026-08-21.json†L2-L31】【F:docs/status/phaseC_slo_summary.md†L1-L36】【F:docs/status/phaseC_retention_summary.md†L7-L33】【F:docs/status/weekly.md†L6-L21】
+
 ### Admission Reconciliation
 
 - **Letzte erfolgreiche Reconciliation:** 2026-08-21 00:07 UTC (`nightly-2026-08-21`).
