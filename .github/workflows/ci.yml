@@ -13,6 +13,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: plonky3-setup
       - name: Regenerate Plonky3 setup artifacts
         run: |
           set -euo pipefail
@@ -197,6 +201,118 @@ PY
           spectral lint docs/observability/alerts/*.yaml \
             -r docs/observability/alerts/.spectral.yaml
 
+  docker-images:
+    name: Build container images (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rpp-node
+            dockerfile: rpp/node/Dockerfile
+            image: rpp/node
+          - name: fwdctl
+            dockerfile: fwdctl/Dockerfile
+            image: fwdctl
+          - name: simnet
+            dockerfile: tools/simnet/Dockerfile
+            image: tools/simnet
+          - name: validator-ui
+            dockerfile: validator-ui/Dockerfile
+            image: validator-ui
+    env:
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=ref,event=pr
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+
+  smoke-test:
+    name: Docker compose smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Prepare compose environment
+        run: |
+          set -euo pipefail
+          cp .env.example .env
+          {
+            echo 'RPP_NODE_RPC_PORT=8080'
+            echo 'VALIDATOR_UI_PORT=3000'
+            echo 'VALIDATOR_UI_API_BASE_URL=http://rpp-node:8080'
+          } >>.env
+      - name: Build and start services
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          set -euo pipefail
+          if docker compose config --services | grep -qx node; then
+            docker compose up -d node validator-ui
+          else
+            docker compose up -d rpp-node validator-ui
+          fi
+      - name: Wait for node readiness endpoint
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:8080/health/ready >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Node readiness endpoint did not become healthy in time' >&2
+          exit 1
+      - name: Wait for validator UI
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Validator UI did not become ready in time' >&2
+          exit 1
+      - name: Tear down services
+        if: always()
+        run: |
+          set -euo pipefail
+          docker compose down --volumes --remove-orphans
+
   runtime-smoke:
     name: Runtime smoke health checks
     runs-on: ubuntu-latest
@@ -204,6 +320,10 @@ PY
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: runtime-smoke
       - name: Build runtime binary
         run: |
           set -euo pipefail
@@ -350,9 +470,13 @@ PY
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
             experimental: false
-    steps:
+      steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.name }}
       - name: Run unit validation suites
         run: |
           set -euo pipefail
@@ -370,6 +494,10 @@ PY
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rpc-admission-audit
       - name: Run dual-approval audit guard
         run: |
           set -euo pipefail
@@ -381,6 +509,10 @@ PY
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: worm-export
       - name: Exercise WORM export stub pipeline
         run: |
           set -euo pipefail
@@ -401,6 +533,10 @@ PY
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: snapshot-verifier
       - name: Generate snapshot verifier bundle
         run: |
           set -euo pipefail
@@ -431,9 +567,13 @@ PY
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
             experimental: false
-    steps:
+      steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.name }}
       - name: Run integration workflows
         run: |
           set -euo pipefail
@@ -465,9 +605,13 @@ PY
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
             experimental: false
-    steps:
+      steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.name }}
       - name: Run observability metrics
         run: |
           set -euo pipefail
@@ -499,9 +643,13 @@ PY
             features: "prod,prover-stwo,backend-plonky3"
             no_default_features: "1"
             experimental: false
-    steps:
+      steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.name }}
       - name: Run simnet scenario
         run: |
           set -euo pipefail
@@ -519,6 +667,10 @@ PY
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: simnet-regression
       - name: Run regression harness
         run: |
           set -euo pipefail
