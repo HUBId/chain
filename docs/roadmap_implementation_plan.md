@@ -4,7 +4,7 @@ Dieser Plan ordnet die offenen Arbeiten aus dem Blueprint in eine umsetzbare Seq
 
 ## Phase A Reporting & Evidenzlinks
 
-Phase A verfolgt die externe Härtung der Snapshot-Kette. Der wöchentliche Statusbericht referenziert jetzt die drei Kernnachweise direkt:
+Phase A verfolgt die externe Härtung der Snapshot-Kette. Der wöchentliche Statusbericht referenziert jetzt die drei Kernnachweise direkt, und die [Phase‑A Acceptance Checklist](runbooks/phaseA_acceptance.md) bündelt die verbindlichen Exit-Kriterien für Releases:
 
 - `snapshot-verify-report` (CI-Job `snapshot-verifier`) für aggregierte Manifest-Prüfungen samt Hash-Artefakten.
 - `worm-export-smoke` (Nightly-Job) für Export-Summaries und Checksummen der WORM-Streams.

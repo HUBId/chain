@@ -75,20 +75,25 @@ milestone.
 
 ## Exit-Kriterien
 
-Phase A ist abgeschlossen, sobald beide Kontrollkästchen oben mit Artefakten
-unterlegt sind **und** die folgenden Bedingungen erfüllt werden:
+Die Phase ist abgeschlossen, wenn alle Kontrollpunkte erfüllt sind und die
+nachfolgende Checkliste vollständig abgehakt ist:
 
-- ✅ **Snapshot-Verifier grün:** Sowohl `snapshot-verify-report.json` meldet
-  `"all_passed": true` als auch alle Einzelreports zeigen `signature_valid=true`
-  ohne fehlende Segmente. Auftretende Fehlerzustände (Exit-Code 2/3 oder
-  `status=false`) sind vor Freigabe zu beheben.
-- ✅ **Berichte versioniert:** Die JSON-Reports und `.sha256`-Dateien liegen im
-  Artefakt-Storage oder Repository (z. B.
-  `dist/artifacts/<target>/snapshot-verify-report.json`) und sind im
-  Freigabeprotokoll verlinkt.
-- ✅ **WORM-Smoke dokumentiert:** Das Nightly-Artefakt
-  `worm-export-smoke` enthält das signierte Export-Objekt sowie die Summary
-  (`signature_valid=true`) und ist in der Acceptance-Dokumentation referenziert.
+| Status | Kriterium | Nachweis & Links |
+| --- | --- | --- |
+| [ ] | **Verifier-Report signiert.** `"all_passed": true` im Aggregat und `signature_valid=true` in allen Einzelreports; Hashwerte im Protokoll dokumentiert. | [CI-Artefakt `snapshot-verifier`](https://github.com/<org>/<repo>/actions/runs/<snapshot-run-id>#artifact), [Workflow `ci.yml` (Job `snapshot-verifier`)](../../.github/workflows/ci.yml#L398-L412), [Evidence-Bundle-Verweis](../governance/evidence_bundle_index.md#snapshot-verifier-nachweise) |
+| [ ] | **WORM-Smoke-Test grün.** Nightly-Summary `signature_valid=true`, keine Fehlalarme (`WormExportNightlyFailure`). | [Nightly-Artefakt `worm-export-smoke`](https://github.com/<org>/<repo>/actions/runs/<worm-run-id>#artifact), [Workflow `nightly.yml` (Job `worm-export`)](../../.github/workflows/nightly.yml#L10-L46), [Runbook WORM-Export](./worm_export.md) |
+| [ ] | **Threat-Model-Review dokumentiert.** Sign-off des Security-Teams und aktualisierte Findings im Threat Model. | [Review-Artefakt `threat-model-review`](https://github.com/<org>/<repo>/actions/runs/<review-run-id>#artifact), [Threat Model Addendum](../security/threat_model.md), [Audit-Protokoll](../THREAT_MODEL.md) |
+| [ ] | **Operator-Guides aktualisiert.** Änderungen aus Phase A in Betriebshandbüchern und Onboarding-Guides nachgezogen. | [Operator Guide](../rpp_node_operator_guide.md), [Runbook `startup`](./startup.md), [Incident-Response-Checkliste](./incident_response.md) |
 
-Erst wenn alle Bedingungen erfüllt sind und die Prüflinks zugänglich bleiben,
-ist die Phase offiziell abgeschlossen.
+Vor der Freigabe müssen alle Links im Übergabeprotokoll geprüft und in den
+Release-Notes referenziert werden. Änderungen an Artefakten oder Workflows sind
+erneut gegenzuzeichnen.
+
+## Finale Abnahme
+
+| Rolle | Name | Datum | Unterschrift / Review |
+| --- | --- | --- | --- |
+| Product Owner | | | |
+| Security Lead | | | |
+| Operations Lead | | | |
+| Audit/Compliance | | | |
