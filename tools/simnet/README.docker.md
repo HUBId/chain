@@ -1,62 +1,44 @@
-# Simnet Docker Usage
+# `simnet` container
 
-This image packages the `simnet` orchestrator together with the bundled example
-scenarios so that test networks can be launched without needing the full source
-checkout inside the container.
+The `simnet` image bundles the simulation orchestrator used to exercise RPP
+nodes. It runs as a non-root user and exposes optional HTTP health probes for
+orchestrators.
 
-## Building the image
-
-From the repository root:
+## Build
 
 ```sh
-docker build -t simnet -f tools/simnet/Dockerfile .
+docker build -t simnet:local -f tools/simnet/Dockerfile .
 ```
 
-The Dockerfile follows the shared multi-stage pattern used across the project:
-Rust code is compiled in a builder stage while the runtime stage contains only
-runtime dependencies, the compiled binary, and the bundled scenarios. The
-runtime user is non-root to help harden the container by default.
+## Environment
 
-## Running scenarios
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SIMNET_HEALTH_ADDR` | `0.0.0.0:8090` | Address used by the internal health server. |
+| `SIMNET_SCENARIO` | `/simnet/scenarios/small_world_smoke.ron` | Simulation scenario to execute. |
+| `SIMNET_ARTIFACTS_DIR` | `/simnet/artifacts` | Directory for captured logs and artifacts. |
+| `SIMNET_LOG_LEVEL` | `info` | Rust log level consumed by the binary. |
+| `SIMNET_KEEP_ALIVE` | `true` | When `true`, keeps the process alive after scenarios finish. |
 
-To run one of the included scenarios:
+Refer to `.env.example` for the values consumed by `docker-compose.yml` when the
+service is launched alongside `rpp-node`.
+
+## Health
+
+When `SIMNET_HEALTH_ADDR` is set, the container serves:
+
+- `GET /health/live`
+- `GET /health/ready`
+
+## Sample run
 
 ```sh
 docker run --rm \
-  --name simnet-demo \
-  simnet \
-  --scenario /simnet/scenarios/small_world_smoke.ron
-```
-
-Mount a host directory to `/simnet/artifacts` (or use `--artifacts-dir`) when
-you want to preserve generated artifacts outside the container:
-
-```sh
-docker run --rm \
-  -v "$(pwd)/artifacts:/simnet/artifacts" \
-  simnet \
+  -p 8090:8090 \
+  -e SIMNET_HEALTH_ADDR=0.0.0.0:8090 \
+  -e SIMNET_SCENARIO=/simnet/scenarios/small_world_smoke.ron \
+  simnet:local \
   --scenario /simnet/scenarios/small_world_smoke.ron \
-  --artifacts-dir /simnet/artifacts
+  --artifacts-dir /simnet/artifacts \
+  --keep-alive
 ```
-
-## Optional health server
-
-Set `SIMNET_HEALTH_ADDR` to enable the lightweight HTTP health server while the
-orchestrator is running:
-
-```sh
-docker run --rm \
-  -e SIMNET_HEALTH_ADDR=0.0.0.0:8080 \
-  -p 8080:8080 \
-  simnet \
-  --scenario /simnet/scenarios/small_world_smoke.ron
-```
-
-When enabled, the container responds with `200 OK` on `/health/live` and
-`/health/ready` while the orchestrator is active. This is useful when the
-orchestrator is expected to supervise long-lived simulations or be managed by a
-container orchestrator that polls for liveness and readiness.
-
-For short-lived batch runs that start, execute a scenario, and exit immediately,
-the health server usually is not necessary because the container terminates
-once the workload completes.

@@ -1,90 +1,96 @@
-# Docker on Mac Compatibility
+# Container Images and Local Orchestration
 
-Note:
-Docker compatiblitiy is a work in progress. Please PR any changes here if you find a better way to do this.
+This repository ships a small set of Dockerfiles that make it easy to run the
+Rust Private Payments (RPP) node, supporting tooling, and the validator UI in
+containerized environments. All runtime images are distilled down to minimal
+Debian or Alpine layers and default to non-root users to improve the security
+posture of demo deployments.
 
-## Steps
+## Image matrix
 
-### Step 1
+| Image | Dockerfile | Runtime user | Purpose |
+| --- | --- | --- | --- |
+| `rpp-node` | [`rpp/node/Dockerfile`](rpp/node/Dockerfile) | `app` (UID auto assigned) | Runs the full RPP node binary and exposes RPC + health endpoints. |
+| `simnet` | [`tools/simnet/Dockerfile`](tools/simnet/Dockerfile) | `simnet` (UID auto assigned) | Drives lightweight network simulations against a node. |
+| `fwdctl` | [`fwdctl/Dockerfile`](fwdctl/Dockerfile) | `fwdctl` (UID 10001) | Firewood control plane CLI packaged for cron/job execution. |
+| `validator-ui` | [`validator-ui/Dockerfile`](validator-ui/Dockerfile) | `app` (nginx unprivileged) | Serves the compiled validator UI assets behind nginx. |
 
-Install docker-desktop ([guide](https://docs.docker.com/desktop/install/mac-install/))
+Each image is built from a multi-stage Dockerfile that keeps the runtime layer
+focused on the compiled artifact and the minimum utilities required for health
+checks.
 
-### Step 2
+## Building images
 
-Setup a dev-environment ([guide](https://docs.docker.com/desktop/dev-environments/set-up/#set-up-a-dev-environment))
-
-Here, you want to specifically pick a local-directory (the repo's directory)
-
-![image](https://github.com/ava-labs/chain/assets/3286504/83d6b66d-19e3-4b59-bc73-f67cf68d7329)
-
-This is best because you can still do all your `git` stuff from the host.
-
-### Step 3
-
-You will need the `Dev Containers` VSCODE extension, authored by Microsoft for this next step.
-
-Open your dev-environment with VSCODE. Until you do this, the volume might not be properly mounted. If you (dear reader) know of a better way to do this, please open a PR. VSCODE is very useful for its step-by-step debugger, but other than that, you can run whatever IDE you would like in the host environment and just open a shell in the container to run the tests.
-
-![image](https://github.com/ava-labs/chain/assets/3286504/88c981cb-42b9-4b99-acec-fbca31cca652)
-
-### Step 4
-
-Open a terminal in vscode OR exec into the container directly as follows
+All images can be built locally with stock Docker:
 
 ```sh
-# you don't need to do this if you open the terminal from vscode
-# replace `chain-app-1` with the container name reported by `docker ps` or Docker Desktop
-# for example, if `docker ps` lists `chain-app-1`, run the following command
-docker exec -it --privileged -u root chain-app-1 zsh
+docker build -t rpp-node:local -f rpp/node/Dockerfile .
+docker build -t simnet:local -f tools/simnet/Dockerfile .
+docker build -t fwdctl:local -f fwdctl/Dockerfile .
+docker build -t validator-ui:local -f validator-ui/Dockerfile .
 ```
 
-Once you're in the terminal you'll want to install the Rust toolset. You can [find instructions here](https://rustup.rs/)
+Build arguments and environment variables used during the build are documented
+next to each Dockerfile in the accompanying `README.docker.md` files.
 
-**!!! IMPORTANT !!!**
+## Smoke testing with Docker Compose
 
-Make sure you read the output of any commands that you run. `rustup` will likely ask you to `source` a file to add some tools to your `PATH`.
+A ready-to-run [`docker-compose.yml`](docker-compose.yml) orchestrates the full
+stack for local testing. To exercise the full workflow:
 
-You'll also need to install all the regular linux dependencies (if there is anything from this list that's missing, please add to this README)
+1. Copy the sample environment configuration:
+   ```sh
+   cp .env.example .env
+   ```
+2. Build and launch the stack:
+   ```sh
+   docker compose up --build
+   ```
+3. Enable optional tooling (for example the `fwdctl` service) by adding the
+   matching profile flag:
+   ```sh
+   docker compose --profile tooling up --build
+   ```
 
-```sh
-apt update
-apt install vim
-apt install build-essential
-apt install protobuf-compiler
-```
+The compose file wires up health checks between services so that dependent
+containers only start after their upstreams become ready. The sample `.env`
+values expose ports on the host, write persistent state to named volumes, and
+select the default simulation scenario.
 
-### Step 5
+When the stack is running you can verify the HTTP probes exposed by each
+container:
 
-**!!! IMPORTANT !!!**
+- `rpp-node`: `http://127.0.0.1:7070/health/live` and `/health/ready`
+- `simnet`: `http://127.0.0.1:8090/health/live` and `/health/ready`
+- `fwdctl`: `http://127.0.0.1:8081/health/ready`
+- `validator-ui`: `http://127.0.0.1:8082/healthz`
 
-You need to create a separate `CARGO_TARGET_DIR` that isn't volume mounted onto the host. `VirtioFS` (the default file-system) has some concurrency issues when dealing with sequential writes and reads to a volume that is mounted to the host. You can put a directory here for example: `/root/target`.
+## Kubernetes and advanced deployments
 
-For step-by-step debugging and development directly in the container, you will also **need to make sure that `rust-analyzer` is configured to point to the new target-directory instead of just default**.
+Operators targeting Kubernetes can start from the example manifests under
+[`deploy/k8s/`](deploy/k8s/). The deployment manifest shows how to surface the
+same HTTP liveness and readiness probes used in the compose setup, while the
+companion Service exposes the selected RPC port inside the cluster. Tailor the
+resource requests and probe thresholds to match your target environment before
+applying them.
 
-There are a couple of places where this can be setup. If you're a `zsh` user, you should add `export CARGO_TARGET_DIR=/root/target` to either `/root/.zshrc` or `/root/.bashrc`.
-After adding the line, don't forget to `source` the file to make sure your current session is updated.
+For cloud or production deployments, ensure that you propagate the environment
+variables outlined in `.env.example`, bind persistent volumes for stateful data
+(e.g. the `rpp-node` data directory), and review any secret material that should
+be injected as Kubernetes Secrets or Docker runtime secrets rather than hard
+coding them into images.
 
-### Step 6
+## Security posture
 
-Navigate to `/com.docker.devenvironments.code` and run `cargo test`. If it worked, you are most of the way there! If it did not work, there are a couple of common issues. If the code will not compile, it's possible that your target directory isn't set up properly. Check inside `/root/target` to see if there are any build artifacts. If not, you might need to call `source ~/.zshrc` again (sub in whatever your preferred shell is).
+Every runtime image adheres to the following practices:
 
-Now for vscode, you need to configure your `rust-analyzer` in the "remote-environment" (the Docker container). There are a couple of places to do this. First, you want to open `/root/.vscode-server/Machine/settings.json` and make sure that you have the following entry:
+- **Non-root default users.** Each container drops privileges to an application
+  user (`app`, `simnet`, or `fwdctl`) before executing the entrypoint.
+- **Minimal runtime layers.** Only the compiled binaries and the tooling needed
+  for health checks (such as `curl`, `wget`, or `ca-certificates`) are included.
+- **HTTP health endpoints.** Consistent health probes allow orchestrators to
+  gate traffic on readiness and watch for liveness regressions.
 
-```json
-{
-  "rust-analyzer.cargo.extraEnv": {
-    "CARGO_TARGET_DIR": "/root/target"
-  }
-}
-```
-
-Then, you want to make sure that the terminal that's being used by the vscode instance (for the host system) is the same as your preferred terminal in the container to make sure that things work as expected. [Here are the docs](https://code.visualstudio.com/docs/terminal/profiles) to help you with setting up the proper profile.
-
-And that should be enough to get your started! Feel free to open an issue if you need any help debugging.
-
-## Kubernetes example manifests
-
-Operators looking for a starting point to run the `rpp/node` image on Kubernetes can use the manifests in [`deploy/k8s/`](deploy/k8s/).
-The deployment manifest demonstrates HTTP liveness and readiness probes targeting `/health/live` and `/health/ready`, along with
-placeholders for tuning ports, resources, and probe thresholds before applying them to a cluster. A companion Service manifest
-exposes the rendered HTTP port inside the cluster.
+If additional capabilities or packages are required for your deployment, prefer
+extending the images with new layers rather than editing the base Dockerfiles so
+that local smoke tests remain aligned with production.
