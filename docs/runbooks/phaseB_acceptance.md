@@ -13,7 +13,9 @@ versionierten Artefakte aus dem `staging-soak`-Job, ergänzende Dashboards oder 
       Acceptance-Log.
 - [ ] **Timetoke-SLO-Report gesichert.** Der gleiche Lauf erzeugt `timetoke-slo-report.md`.
       Der Markdown-Report muss die Erfolgsquote sowie die Latenz-SLOs dokumentieren.
-      Verknüpfe den gültigen Report mit dem Phase‑B-Review.
+      Verknüpfe den gültigen Report mit dem Phase‑B-Review und referenziere das
+      [Timetoke-Failover-Runbook](./timetoke_failover.md) als Eskalationspfad
+      für aufgetretene Verstöße.【F:docs/runbooks/timetoke_failover.md†L1-L140】
 - [ ] **Admission-Reconciliation nachweisbar.** Der tägliche `admission-reconciliation.json`
       weist nach, dass Runtime-, Disk- und Audit-Snapshots deckungsgleich sind. Hinterlege
       den Report gemeinsam mit einer Ticket-/Alert-Referenz, falls Drift festgestellt wurde.
@@ -28,6 +30,11 @@ versionierten Artefakte aus dem `staging-soak`-Job, ergänzende Dashboards oder 
 - [ ] **Audit-Einträge im Evidence-Log.** Exportiere die JSONL-Scheibe (`GET /p2p/admission/audit?limit=<n>`) direkt nach einer
       freigegebenen Änderung und verlinke sie gemeinsam mit dem Pending-/Approve-Flow, sodass beide Freigaben und die
       WORM-signierten Metadaten im Abnahmeprotokoll landen.【F:docs/network/admission.md†L60-L121】【F:rpp/p2p/src/policy_log.rs†L45-L194】
+- [ ] **Runbooks verlinkt.** Hänge die aktualisierten
+      [Admission-First-Action-Listen](./admission.md#first-action-checklisten)
+      sowie den Incident-Pfad aus dem
+      [Incident-Response-Playbook](./incident_response.md#dual-approval-eskalationen)
+      an das Acceptance-Log, damit On-Call-Rotationen die Abläufe abrufen können.【F:docs/runbooks/admission.md†L17-L88】【F:docs/runbooks/incident_response.md†L74-L118】
 
 ## Exit-Kriterien
 
