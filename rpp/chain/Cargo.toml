@@ -181,6 +181,10 @@ name = "integration"
 path = "../../tests/integration/mod.rs"
 
 [[test]]
+name = "node_lifecycle"
+path = "../../tests/node_lifecycle.rs"
+
+[[test]]
 name = "observability_metrics"
 path = "../../tests/observability_metrics.rs"
 
