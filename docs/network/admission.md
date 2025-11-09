@@ -45,6 +45,9 @@ consecutive cycles without drift and links the reconciled snapshot digest for
 auditors.【F:logs/admission_reconciler_2026-08-21.jsonl†L1-L3】 Operators can
 correlate the telemetry with the Nightly admission bundle to confirm that the
 Policy-Drift-Check remains green.【F:logs/admission_reconciliation_audit_2026-08-21.jsonl†L1-L1】
+Das Nightly-Protokoll im Weekly-Statusbericht hält den Lauf `nightly-2026-08-21`
+als „grün“ fest und verweist auf das zugehörige Audit-Artefakt, sodass sich die
+Telemetrie direkt mit dem veröffentlichten Evidenzpfad abgleichen lässt.【F:docs/status/weekly.md†L42-L47】
 
 ## Managing admission policies
 
