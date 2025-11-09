@@ -1,0 +1,16 @@
+{
+  "name": "partitioned-flood",
+  "description": "Partitioned topology flood traffic with churn to exercise recovery and backpressure",
+  "duration_secs": 0,
+  "env": {
+    "RUST_LOG": "info"
+  },
+  "nodes": [],
+  "wallets": [],
+  "p2p": {
+    "scenario_path": "../../scenarios/partitioned_flood.toml",
+    "mode": "inprocess",
+    "summary_path": "summaries/partitioned_flood.json"
+  },
+  "consensus": null
+}

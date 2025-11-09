@@ -329,6 +329,17 @@ fn handle_gossipsub_event(
                 timestamp: Instant::now(),
             });
         }
+        gossipsub::Event::SlowPeer {
+            peer_id,
+            failed_messages,
+        } => {
+            let _ = event_tx.send(SimEvent::SlowPeer {
+                peer_id: local_peer,
+                slow_peer: peer_id,
+                failed_messages,
+                timestamp: Instant::now(),
+            });
+        }
         gossipsub::Event::GossipsubNotSupported { peer_id } => {
             debug!(target = "rpp::sim::node", %peer_id, "peer does not support gossipsub");
         }

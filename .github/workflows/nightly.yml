@@ -833,6 +833,43 @@ EOF
           name: snapshot_partition_report.json
           path: snapshot_partition_report.json
 
+  simnet-partitioned-flood:
+    name: Simnet partitioned flood (optional)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUSTFLAGS: "-C debuginfo=0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Execute partitioned flood scenario
+        run: |
+          set -euo pipefail
+          rm -rf target/simnet/partitioned-flood
+          cargo run --locked --package simnet -- \
+            --scenario tools/simnet/scenarios/partitioned_flood.ron \
+            --artifacts-dir target/simnet/partitioned-flood
+
+      - name: Analyze partitioned flood summary
+        run: |
+          set -euo pipefail
+          python3 scripts/analyze_simnet.py \
+            target/simnet/partitioned-flood/summaries/partitioned_flood.json
+
+      - name: Package partitioned flood artifacts
+        run: |
+          tar -czf simnet-partitioned-flood.tar.gz -C target/simnet partitioned-flood
+
+      - name: Upload partitioned flood results
+        uses: actions/upload-artifact@v4
+        with:
+          name: simnet-partitioned-flood
+          path: simnet-partitioned-flood.tar.gz
+
   nightly-status:
     name: Publish nightly CI status snapshot
     needs:

@@ -1,0 +1,51 @@
+[sim]
+seed = 525600
+duration_ms = 45000
+
+[topology]
+type = "small_world"
+n = 24
+k = 6
+rewire_p = 0.15
+
+[regions]
+assignments = [
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+  "A", "B", "A", "B", "A", "B",
+]
+
+[links]
+intra = { delay_ms = 24, jitter_ms = 5, loss = 0.0 }
+A-B = { delay_ms = 140, jitter_ms = 35, loss = 0.04 }
+
+[traffic.tx]
+publisher_bias = { type = "zipf", s = 1.05 }
+
+[[traffic.tx.phases]]
+name = "flood"
+duration_ms = 28000
+model = "poisson"
+lambda_per_sec = 42.0
+
+[[traffic.tx.phases]]
+name = "recovery"
+duration_ms = 17000
+model = "poisson"
+lambda_per_sec = 12.0
+
+[faults.partition]
+start_ms = 6000
+duration_ms = 9000
+group_a = "A"
+group_b = "B"
+
+[faults.churn]
+start_ms = 12000
+rate_per_min = 60.0
+restart_after_ms = 2500
+
+[metrics]
+json = "target/simnet/partitioned-flood/summaries/partitioned_flood.json"
+csv = "target/simnet/partitioned-flood/summaries/partitioned_flood.csv"

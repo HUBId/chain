@@ -78,6 +78,40 @@ pub fn export_csv<P: AsRef<Path>>(path: P, summary: &SimulationSummary) -> Resul
         }
     }
 
+    if let Some(bandwidth) = &summary.bandwidth {
+        writer.write_record(&[
+            "bandwidth_throttled_peers".to_string(),
+            bandwidth.throttled_peers.to_string(),
+        ])?;
+        writer.write_record(&[
+            "bandwidth_slow_peer_events".to_string(),
+            bandwidth.slow_peer_events.to_string(),
+        ])?;
+    }
+
+    if let Some(backpressure) = &summary.gossip_backpressure {
+        writer.write_record(&[
+            "gossip_backpressure_events".to_string(),
+            backpressure.events.to_string(),
+        ])?;
+        writer.write_record(&[
+            "gossip_backpressure_queue_full".to_string(),
+            backpressure.queue_full_messages.to_string(),
+        ])?;
+        writer.write_record(&[
+            "gossip_backpressure_publish_failures".to_string(),
+            backpressure.publish_failures.to_string(),
+        ])?;
+        writer.write_record(&[
+            "gossip_backpressure_forward_failures".to_string(),
+            backpressure.forward_failures.to_string(),
+        ])?;
+        writer.write_record(&[
+            "gossip_backpressure_timeout_failures".to_string(),
+            backpressure.timeout_failures.to_string(),
+        ])?;
+    }
+
     writer.flush()?;
     Ok(())
 }
@@ -114,6 +148,19 @@ mod tests {
                 max_resume_latency_ms: Some(1500.0),
                 mean_resume_latency_ms: Some(1500.0),
             }),
+            bandwidth: Some(super::super::reduce::BandwidthMetrics {
+                throttled_peers: 2,
+                slow_peer_events: 4,
+            }),
+            gossip_backpressure: Some(super::super::reduce::GossipBackpressureMetrics {
+                events: 4,
+                unique_peers: 2,
+                queue_full_messages: 24,
+                publish_failures: 5,
+                forward_failures: 7,
+                timeout_failures: 1,
+            }),
+            slow_peer_records: Vec::new(),
             comparison: None,
         }
     }
