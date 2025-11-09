@@ -11,6 +11,7 @@
 )]
 
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -65,7 +66,6 @@ pub struct ConfigManager {
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
-#[derive(Debug)]
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
@@ -77,6 +77,14 @@ pub(crate) struct RevisionManager {
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     metrics: StorageMetricsHandle,
+}
+
+impl fmt::Debug for RevisionManager {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RevisionManager")
+            .field("max_revisions", &self.max_revisions)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -108,21 +116,15 @@ impl RevisionManager {
     }
 
     fn proposals(&self) -> MutexGuard<'_, Vec<ProposedRevision>> {
-        self.proposals
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
+        self.proposals.lock().unwrap_or_else(|err| err.into_inner())
     }
 
     fn by_hash_read(&self) -> RwLockReadGuard<'_, HashMap<TrieHash, CommittedRevision>> {
-        self.by_hash
-            .read()
-            .unwrap_or_else(|err| err.into_inner())
+        self.by_hash.read().unwrap_or_else(|err| err.into_inner())
     }
 
     fn by_hash_write(&self) -> RwLockWriteGuard<'_, HashMap<TrieHash, CommittedRevision>> {
-        self.by_hash
-            .write()
-            .unwrap_or_else(|err| err.into_inner())
+        self.by_hash.write().unwrap_or_else(|err| err.into_inner())
     }
 
     pub fn new(

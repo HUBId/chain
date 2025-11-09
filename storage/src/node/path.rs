@@ -80,7 +80,7 @@ bitflags! {
 
 impl Path {
     /// Return an iterator over the encoded bytes
-    pub fn iter_encoded(&self) -> impl Iterator<Item = u8> {
+    pub fn iter_encoded(&self) -> impl Iterator<Item = u8> + '_ {
         let mut flags = Flags::empty();
 
         let has_odd_len = self.0.len() & 1 == 1;

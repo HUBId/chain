@@ -1,0 +1,76 @@
+name: Performance smoke benchmark
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Firewood smoke benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: smoke-benchmark
+
+      - name: Run smoke benchmark
+        env:
+          FIREWOOD_SMOKE_OUTPUT: smoke-metrics.json
+        run: |
+          set -euo pipefail
+          cargo +nightly run -p firewood-benchmark -- smoke \
+            | tee smoke-benchmark.log
+
+      - name: Summarize metrics
+        env:
+          SMOKE_THROUGHPUT_THRESHOLD: 1.0
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+metrics_path = Path('smoke-metrics.json')
+if not metrics_path.exists():
+    print('::error ::smoke-metrics.json is missing', file=sys.stderr)
+    sys.exit(1)
+
+data = json.loads(metrics_path.read_text())
+throughput = float(data.get('throughput_ops_per_sec', 0))
+threshold = float(os.environ.get('SMOKE_THROUGHPUT_THRESHOLD', '1.0'))
+print(f"Recorded throughput_ops_per_sec={throughput:.2f}")
+summary = [
+    '# Firewood smoke benchmark summary',
+    '',
+    f'* Total batches: {int(data.get("batches", 0))}',
+    f'* Batch size: {int(data.get("batch_size", 0))}',
+    f"* Throughput: {throughput:.2f} ops/sec",
+    f"* Total duration: {data.get('total_duration_ms', 0):.2f} ms",
+]
+Path('smoke-summary.md').write_text('\n'.join(summary) + '\n')
+if throughput < threshold:
+    print(
+        f"::error ::Throughput {throughput:.2f} ops/sec is below threshold {threshold:.2f}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-benchmark
+          path: |
+            smoke-benchmark.log
+            smoke-metrics.json
+            smoke-summary.md
