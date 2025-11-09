@@ -33,6 +33,42 @@ queues.【F:rpp/p2p/src/topics.rs†L6-L85】【F:rpp/runtime/node.rs†L2544-L2
 - **Operational documentation** – Operator guides, runbooks, and interface
 specifications ship with the repository for easy reference.【F:docs/README.md†L1-L18】【F:docs/interfaces/spec.md†L1-L133】
 
+## Proof of Lottery (POL)
+
+Die RPP Blockchain verwendet kein Proof of Stake (PoS) und kein Proof of Work (PoW).
+Stattdessen basiert ihr Konsens- und Belohnungssystem auf einem neuartigen Mechanismus namens Proof of Lottery (POL).
+
+Proof of Lottery (POL) beschreibt die Art, wie in der RPP Blockchain Validatoren und Teilnehmer über eine verifizierbare Zufallsauswahl (VRF) in Kombination mit BFT-Finalität, Reputation, Zero-Knowledge Sovereign Identity (ZSI), TimeToken und dem internen Coin-Reward-Verteilungsprozess bestimmt werden.
+
+In jeder Konsens-Runde (BFT-Round) werden Knoten über die VRF-Selektion zufällig bestimmt, um am Block-Finalisierungsprozess teilzunehmen.
+Diese Auswahl ist überprüfbar, transparent und nicht kapitalgebunden.
+Der Block-Reward (Coin-Reward) wird anschließend im BFT-Konsens zufällig und fair unter den korrekt teilnehmenden Nodes verteilt.
+
+Das Zusammenspiel aus
+
+Reputation System (RPP RS) – bewertet kontinuierliche, ehrliche Teilnahme,
+
+TimeToken – belegt die Betriebszeit (Uptime) und aktive Beteiligung,
+
+ZSI – stellt sybil-resistente Identität sicher,
+
+VRF – liefert den verifizierbaren Zufall für die Auswahl, und
+
+BFT CoinReward-Verteilung – sorgt für die gleichmäßige Belohnung der Beteiligten,
+
+bildet gemeinsam den Mechanismus des Proof of Lottery.
+
+POL ist damit ein reputations-, identitäts- und zufallsbasiertes Auswahlverfahren, das
+– ohne Mining, ohne Stake, ohne Energieverbrauch –
+eine faire, überprüfbare und finalisierende Blockerzeugung ermöglicht.
+
+Alle für POL relevanten Komponenten sind in der RPP-Blockchain bereits integriert:
+die VRF-Selektion im Konsensmodul,
+das RPP Reputation System (RPP RS),
+die TimeToken-Logik für Uptime-Proofs,
+das ZSI-System für Identität,
+sowie der Random-BFT-Konsens zur Finalität.
+
 ## Repository layout
 
 | Path | Description |
