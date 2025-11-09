@@ -109,6 +109,7 @@ use crate::wallet::{TrackerState, WalletTrackerHandle};
 use blake3::Hash as Blake3Hash;
 use parking_lot::{Mutex, RwLock};
 use rpp::node::VerificationErrorKind;
+use rpp_consensus::timetoke::replay::{timetoke_replay_telemetry, TimetokeReplayTelemetrySnapshot};
 use rpp_p2p::vendor::PeerId as NetworkPeerId;
 #[cfg(test)]
 use rpp_p2p::Peerstore;
@@ -1454,6 +1455,10 @@ where
         .route("/ledger/slashing", get(slashing_events))
         .route("/ledger/timetoke", get(timetoke_snapshot))
         .route("/ledger/timetoke/sync", post(sync_timetoke))
+        .route(
+            "/observability/timetoke/replay",
+            get(timetoke_replay_status),
+        )
         .route("/ledger/reputation/:address", get(reputation_audit))
         .route(
             "/observability/audits/reputation",
@@ -2544,6 +2549,12 @@ async fn sync_timetoke(
         .sync_timetoke_records(request.records)
         .map(|updated| Json(TimetokeSyncResponse { updated }))
         .map_err(to_http_error)
+}
+
+async fn timetoke_replay_status(
+    State(_state): State<ApiContext>,
+) -> Result<Json<TimetokeReplayTelemetrySnapshot>, (StatusCode, Json<ErrorResponse>)> {
+    Ok(Json(timetoke_replay_telemetry()))
 }
 
 async fn reputation_audit(

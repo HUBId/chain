@@ -11,7 +11,11 @@ The Timetoke replay path exports counters and histograms that cover ledger delta
 | Replay latency p95 (`timetoke_replay_duration_ms`) | ≤ 60 000 ms | Guards recovery and slow peers.
 | Replay latency p99 (`timetoke_replay_duration_ms`) | ≤ 120 000 ms | Caps pathological catches while still giving room for multi-epoch deltas.
 
-The SLO windows align with the weekly acceptance cadence. Operators should verify the success-rate counter monotonicity and latency histogram buckets when diagnosing replay regressions.
+The SLO windows align with the weekly acceptance cadence. Operators should verify the success-rate counter monotonicity and latency histogram buckets when diagnosing replay regressions. Replay exporters also expose stall detectors that back the alerting rules:
+
+- `timetoke_replay_last_attempt_timestamp` / `timetoke_replay_last_success_timestamp` provide the raw Unix timestamps for cursors. Combine with `time() - metric` to calculate the current age in PromQL.
+- `timetoke_replay_seconds_since_success` offers a direct helper gauge for dashboards.
+- `timetoke_replay_stalled{threshold="warning"|"critical"}` flips to `1` once 60 s / 120 s pass without a successful replay.
 
 ## Scheduled report
 
@@ -50,3 +54,15 @@ The report wrapper issues the following PromQL queries:
 - `histogram_quantile(0.99, sum(rate(timetoke_replay_duration_ms_bucket[7d])) by (le))`
 
 Reuse these snippets in Grafana dashboard panels or when cross-checking the CLI output with live Prometheus. When latency SLOs regress, correlate the histogram buckets with the `timetoke_replay_duration_ms_count` increase to ensure the exporter is healthy.
+
+## CLI quick check
+
+Validators expose the aggregated replay telemetry via `GET /observability/timetoke/replay`. The `rpp-node validator snapshot replay status` helper wraps the call, prints counters and percentiles, and exits with a warning whenever the 99 % success-rate or 60 s / 120 s latency targets are violated:
+
+```bash
+rpp-node validator snapshot replay status \
+  --config /etc/rpp/validator.toml \
+  --rpc-url https://validator.example.net:7070
+```
+
+The command is safe to run during incidents, surfaces the `timetoke_replay_*` gauges inline, and guides responders straight to the Timetoke failover runbook when thresholds trip.

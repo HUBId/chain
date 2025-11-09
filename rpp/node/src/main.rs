@@ -24,12 +24,9 @@ use rpp_p2p::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snapshot_verify::{
-    run_verification as run_snapshot_verification,
-    write_report as write_snapshot_report,
-    DataSource as SnapshotVerifySource,
-    Execution as SnapshotVerifyExecution,
-    ExitCode as SnapshotVerifyExitCode,
-    VerificationReport as SnapshotVerificationReport,
+    run_verification as run_snapshot_verification, write_report as write_snapshot_report,
+    DataSource as SnapshotVerifySource, Execution as SnapshotVerifyExecution,
+    ExitCode as SnapshotVerifyExitCode, VerificationReport as SnapshotVerificationReport,
     VerifyArgs as SnapshotVerifyArgs,
 };
 use tokio::task;
@@ -167,6 +164,8 @@ enum SnapshotCommand {
     Cancel(SnapshotCancelCommand),
     /// Verify snapshot manifests and chunks using the configured signing key
     Verify(SnapshotVerifyCommand),
+    /// Inspect Timetoke replay telemetry exported by the validator RPC
+    Replay(SnapshotReplayCommand),
 }
 
 #[derive(Args, Clone)]
@@ -191,6 +190,18 @@ enum AdmissionCommand {
     Restore(AdmissionRestoreCommand),
     /// Verify admission policy snapshot and audit log signatures via the RPC service
     Verify(AdmissionVerifyCommand),
+}
+
+#[derive(Subcommand)]
+enum SnapshotReplayCommand {
+    /// Summarise Timetoke replay telemetry and check SLO thresholds
+    Status(SnapshotReplayStatusCommand),
+}
+
+#[derive(Args, Clone)]
+struct SnapshotReplayStatusCommand {
+    #[command(flatten)]
+    connection: SnapshotConnectionArgs,
 }
 
 #[derive(Subcommand)]
@@ -610,6 +621,9 @@ async fn handle_snapshot_command(command: SnapshotCommand) -> Result<()> {
         SnapshotCommand::Resume(args) => resume_snapshot_session(args).await,
         SnapshotCommand::Cancel(args) => cancel_snapshot_session(args).await,
         SnapshotCommand::Verify(args) => verify_snapshot_manifest(args).await,
+        SnapshotCommand::Replay(args) => match args {
+            SnapshotReplayCommand::Status(status) => snapshot_replay_status(status).await,
+        },
     }
 }
 
@@ -760,6 +774,29 @@ struct SnapshotStreamStatusResponse {
     verified: Option<bool>,
     #[serde(default)]
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimetokeReplayStatusResponse {
+    success_total: u64,
+    failure_total: u64,
+    success_rate: Option<f64>,
+    latency_p50_ms: Option<u64>,
+    latency_p95_ms: Option<u64>,
+    latency_p99_ms: Option<u64>,
+    last_attempt_epoch: Option<u64>,
+    last_success_epoch: Option<u64>,
+    seconds_since_attempt: Option<u64>,
+    seconds_since_success: Option<u64>,
+    stall_warning: bool,
+    stall_critical: bool,
+    failure_breakdown: Vec<TimetokeReplayFailureBreakdown>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TimetokeReplayFailureBreakdown {
+    reason: String,
+    total: u64,
 }
 
 #[derive(Serialize)]
@@ -940,6 +977,101 @@ async fn cancel_snapshot_session(args: SnapshotCancelCommand) -> Result<()> {
     Ok(())
 }
 
+async fn snapshot_replay_status(args: SnapshotReplayStatusCommand) -> Result<()> {
+    let client = SnapshotRpcClient::new(&args.connection)?;
+    let mut builder = client
+        .client
+        .get(client.endpoint("/observability/timetoke/replay"));
+    builder = client.with_auth(builder);
+
+    let response = builder
+        .send()
+        .await
+        .context("failed to query timetoke replay telemetry")?;
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .context("failed to decode timetoke replay telemetry response")?;
+    if !status.is_success() {
+        anyhow::bail!("RPC returned {}: {}", status, body.trim());
+    }
+
+    let payload: TimetokeReplayStatusResponse =
+        serde_json::from_str(&body).context("invalid timetoke replay telemetry payload")?;
+
+    println!("Timetoke replay telemetry:");
+    println!("  success_total: {}", payload.success_total);
+    println!("  failure_total: {}", payload.failure_total);
+    match payload.success_rate {
+        Some(rate) => println!("  success_rate: {:.2}%", rate * 100.0),
+        None => println!("  success_rate: <unknown>"),
+    }
+    match payload.latency_p50_ms {
+        Some(value) => println!("  latency_p50_ms: {}", value),
+        None => println!("  latency_p50_ms: <unknown>"),
+    }
+    match payload.latency_p95_ms {
+        Some(value) => println!("  latency_p95_ms: {}", value),
+        None => println!("  latency_p95_ms: <unknown>"),
+    }
+    match payload.latency_p99_ms {
+        Some(value) => println!("  latency_p99_ms: {}", value),
+        None => println!("  latency_p99_ms: <unknown>"),
+    }
+    match payload.seconds_since_attempt {
+        Some(value) => println!("  seconds_since_attempt: {}", value),
+        None => println!("  seconds_since_attempt: <unknown>"),
+    }
+    match payload.seconds_since_success {
+        Some(value) => println!("  seconds_since_success: {}", value),
+        None => println!("  seconds_since_success: <unknown>"),
+    }
+    if !payload.failure_breakdown.is_empty() {
+        println!("  failure_breakdown:");
+        for entry in &payload.failure_breakdown {
+            println!("    - {}: {}", entry.reason, entry.total);
+        }
+    }
+
+    let mut warnings = Vec::new();
+    if let Some(rate) = payload.success_rate {
+        if rate < 0.99 {
+            warnings.push(format!(
+                "success rate {:.2}% below 99% target",
+                rate * 100.0
+            ));
+        }
+    }
+    if let Some(p95) = payload.latency_p95_ms {
+        if p95 > 60_000 {
+            warnings.push(format!("p95 latency {} ms exceeds 60_000 ms SLO", p95));
+        }
+    }
+    if let Some(p99) = payload.latency_p99_ms {
+        if p99 > 120_000 {
+            warnings.push(format!("p99 latency {} ms exceeds 120_000 ms SLO", p99));
+        }
+    }
+    if payload.stall_warning {
+        warnings.push("last successful replay older than 60 seconds".to_string());
+    }
+    if payload.stall_critical {
+        warnings.push("last successful replay older than 120 seconds".to_string());
+    }
+
+    if warnings.is_empty() {
+        println!("  slo_status: ok");
+        Ok(())
+    } else {
+        for warning in &warnings {
+            println!("WARNING: {warning}");
+        }
+        let summary = warnings.join("; ");
+        anyhow::bail!("Timetoke replay SLO violations detected: {summary}");
+    }
+}
+
 async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
     let config = load_validator_config(&args.config.config)?;
     let manifest_path = args
@@ -998,14 +1130,12 @@ async fn verify_snapshot_manifest(args: SnapshotVerifyCommand) -> Result<()> {
 }
 
 fn default_snapshot_signature_path(manifest_path: &Path) -> Result<PathBuf> {
-    let file_name = manifest_path
-        .file_name()
-        .ok_or_else(|| {
-            anyhow!(
-                "manifest {} is missing a file name",
-                manifest_path.display()
-            )
-        })?;
+    let file_name = manifest_path.file_name().ok_or_else(|| {
+        anyhow!(
+            "manifest {} is missing a file name",
+            manifest_path.display()
+        )
+    })?;
     let mut signature_name = file_name.to_os_string();
     signature_name.push(".sig");
     Ok(manifest_path.with_file_name(signature_name))

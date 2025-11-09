@@ -44,6 +44,7 @@ tracing = { version = "=0.1.41", default-features = false, features = ["std"] }
 hex = "=0.4.3"
 rpp-p2p = { path = "../p2p" }
 rpp-pruning = { path = "../pruning" }
+metrics = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.4"
