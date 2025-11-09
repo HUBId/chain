@@ -59,33 +59,47 @@ before acknowledging the request.【F:rpp/rpc/src/routes/p2p.rs†L126-L157】�
 ### Audited updates
 
 Updates must provide an `actor` string and may include a free-form `reason`.
-High-impact mutations—anything that alters the allowlist or blocklist—now
-require explicit approvals from both operations and security. The RPC handler
-rejects requests that omit either role or reuse the same approver twice and the
-peerstore double-checks the approvals before persisting the snapshot so manual
-changes cannot bypass the policy.【F:rpp/rpc/src/routes/p2p.rs†L158-L263】【F:rpp/p2p/src/peerstore.rs†L1084-L1389】
-On success the updated policies are returned so operators can verify what was
-persisted without issuing a second call.
+High-impact mutations—anything that alters the allowlist or blocklist—still
+require explicit approvals from both operations and security, but the workflow
+now stages changes through a pending queue. `POST
+/p2p/admission/policies/pending` validates the payload, records the operations
+approval, and stores the request in the dual-control service without touching
+the live access lists. Security completes the change by calling `POST
+/p2p/admission/policies/pending/:id/approve`, which attaches the second
+approval, commits the snapshot via the peerstore, and appends the audited
+entry.【F:rpp/rpc/src/routes/p2p.rs†L522-L660】【F:rpp/p2p/src/admission/dual_control.rs†L17-L152】【F:rpp/p2p/src/peerstore.rs†L1069-L1545】
+Automation that already bundles both approvals can continue to use `POST
+/p2p/admission/policies`, which enforces the same role checks in a single
+request.【F:rpp/rpc/src/routes/p2p.rs†L470-L521】
 
 ```sh
+# Stage a change with the operations approval. The response returns the
+# pending identifier used for the security hand-off.
 curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
      -H 'Content-Type: application/json' \
-     https://rpc.example.org/p2p/admission/policies \
+     https://rpc.example.org/p2p/admission/policies/pending \
      -d '{
            "actor": "ops.oncall",
            "reason": "replace unhealthy peer",
            "allowlist": [{"peer_id": "12D3KooWRpcPeer", "tier": "Tl3"}],
            "blocklist": ["12D3KooWBannedPeer"],
            "approvals": [
-             {"role": "operations", "approver": "ops.oncall"},
-             {"role": "security", "approver": "sec.oncall"}
+             {"role": "operations", "approver": "ops.oncall"}
            ]
          }'
+
+# Once security reviews the request, approve it by referencing the pending id.
+curl -X POST -H "Authorization: Bearer ${RPP_RPC_TOKEN}" \
+     -H 'Content-Type: application/json' \
+     https://rpc.example.org/p2p/admission/policies/pending/${PENDING_ID}/approve \
+     -d '{"approver": "sec.oncall"}'
 ```
 
-If the payload is invalid—for example the same peer appears twice or a required
-approval is missing—the service returns a `400` with a descriptive error string
-so auditors can capture the failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L172-L263】
+If the payload is invalid—for example the same peer appears twice or the wrong
+approval role is provided—the service returns a `400` with a descriptive error
+string so auditors can capture the failed attempt in their runbooks.【F:rpp/rpc/src/routes/p2p.rs†L470-L660】 The approval endpoint returns a `404` when the
+referenced pending request no longer exists, matching the dual-control service
+behaviour.【F:rpp/rpc/src/routes/p2p.rs†L470-L660】
 
 ### Inspecting the audit log
 
@@ -156,7 +170,10 @@ operators can audit and recover policies without crafting manual payloads.【F:r
 
 ## Tests
 
-`tests/network/admission_control.rs` exercises the new failure modes: a peer
-failing to meet its allowlist tier is rejected during the handshake, and a
+`tests/network/admission_control.rs` exercises the admission failure modes: a
+peer failing to meet its allowlist tier is rejected during the handshake, and a
 valid tier-two peer attempting to publish consensus votes hits the expected
-`TierInsufficient` error.【F:tests/network/admission_control.rs†L1-L92】
+`TierInsufficient` error.【F:tests/network/admission_control.rs†L1-L92】 The
+companion suite `tests/network/admission_dual_control.rs` covers the pending
+workflow by ensuring changes stay queued until security approves them and that
+the audit log records both approvals.【F:tests/network/admission_dual_control.rs†L1-L56】

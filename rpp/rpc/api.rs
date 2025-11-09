@@ -113,9 +113,9 @@ use rpp_p2p::vendor::PeerId as NetworkPeerId;
 #[cfg(test)]
 use rpp_p2p::Peerstore;
 use rpp_p2p::{
-    AdmissionApproval, AdmissionAuditTrail, AllowlistedPeer, LightClientHead,
-    NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk, NetworkStateSyncPlan,
-    SnapshotChunk,
+    AdmissionApproval, AdmissionAuditTrail, AllowlistedPeer, DualControlApprovalService,
+    LightClientHead, NetworkMetaTelemetryReport, NetworkPeerTelemetry, NetworkStateSyncChunk,
+    NetworkStateSyncPlan, SnapshotChunk,
 };
 use rustls::crypto::aws_lc_rs;
 use rustls::pki_types::{
@@ -128,7 +128,8 @@ use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_key
 #[path = "src/routes/mod.rs"]
 mod routes;
 pub use routes::p2p::{
-    admission_audit_log, cancel_snapshot_stream, snapshot_stream_status, start_snapshot_stream,
+    admission_audit_log, approve_pending_admission_policies, cancel_snapshot_stream,
+    snapshot_stream_status, start_snapshot_stream, submit_pending_admission_policies,
     update_admission_policies,
 };
 pub use routes::state::{rebuild_snapshots, trigger_snapshot};
@@ -362,6 +363,7 @@ pub struct ApiContext {
     wallet_runtime_active: bool,
     pruning_status: Option<watch::Receiver<Option<PruningJobStatus>>>,
     snapshot_runtime: Option<Arc<dyn SnapshotStreamRuntime>>,
+    admission_dual_control: Option<Arc<DualControlApprovalService>>,
     #[cfg(test)]
     test_peerstore: Option<Arc<Peerstore>>,
 }
@@ -393,6 +395,8 @@ impl ApiContext {
             RuntimeMetrics::noop()
         };
 
+        let admission_dual_control = node.as_ref().map(|handle| handle.admission_dual_control());
+
         Self {
             mode,
             node,
@@ -408,6 +412,7 @@ impl ApiContext {
             wallet_runtime_active,
             pruning_status,
             snapshot_runtime: None,
+            admission_dual_control,
             #[cfg(test)]
             test_peerstore: None,
         }
@@ -440,6 +445,10 @@ impl ApiContext {
 
     fn wallet_routes_enabled(&self) -> bool {
         self.wallet_runtime_active
+    }
+
+    fn admission_dual_control(&self) -> Option<Arc<DualControlApprovalService>> {
+        self.admission_dual_control.as_ref().map(Arc::clone)
     }
 
     fn node_enabled(&self) -> bool {
@@ -548,6 +557,10 @@ impl ApiContext {
     #[cfg(test)]
     pub fn with_test_peerstore(mut self, peerstore: Arc<Peerstore>) -> Self {
         self.test_peerstore = Some(peerstore);
+        self.admission_dual_control = self
+            .test_peerstore
+            .as_ref()
+            .map(|store| Arc::new(DualControlApprovalService::new(store.clone())));
         self
     }
 
@@ -1399,6 +1412,14 @@ where
         .route(
             "/p2p/admission/policies",
             get(routes::p2p::admission_policies).post(routes::p2p::update_admission_policies),
+        )
+        .route(
+            "/p2p/admission/policies/pending",
+            post(routes::p2p::submit_pending_admission_policies),
+        )
+        .route(
+            "/p2p/admission/policies/pending/:id/approve",
+            post(routes::p2p::approve_pending_admission_policies),
         )
         .route(
             "/p2p/admission/audit",

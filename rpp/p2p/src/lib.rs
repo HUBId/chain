@@ -22,7 +22,8 @@ mod worm_export;
 pub mod vendor;
 
 pub use admission::{
-    AdmissionControl, AdmissionError, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
+    AdmissionControl, AdmissionError, DualControlApprovalService, DualControlError,
+    PendingPolicyChange, ReputationBroadcast, ReputationEvent, ReputationHeuristics,
     ReputationOutcome,
 };
 pub use behaviour::snapshots::{
