@@ -9,7 +9,16 @@ Noch keine Nightly-Statusdaten verfügbar. Die Datei [`nightly_status.md`](../..
 ## Phase‑C Kontrollen (Nightly)
 
 <!-- phasec-status:start -->
-Noch keine Phase‑C-Statusdaten verfügbar. Die Datei [`phaseC_status.md`](../../phaseC_status.md) wird vom Nightly-Workflow aktualisiert.
+### Phase‑C Kontrollen — 2026-08-21 09:00 UTC
+
+| Kontrolle | Quelle | Stand | Ergebnis | Details |
+| --- | --- | --- | --- | --- |
+| WORM-Retention | [`worm-retention-report.json`](../status/phaseC_retention_summary.md) | 2026-08-21T01:34:56Z | ✅ OK | 3 Summaries, 0 Abweichungen (stale/orphaned/unsigned) |
+| Snapshot Partition Drill | `snapshot_partition_report.json` | n/a | ⚠️ Fehlt | Report nicht gefunden – Chaos-Artefakt prüfen |
+
+**Hinweise:**
+
+- Erfolgreiche WORM-Retention-Gegenprobe dokumentiert im [Phase‑C WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md).
 <!-- phasec-status:end -->
 
 ### Admission Reconciliation
@@ -64,8 +73,9 @@ ist abgestimmt und in On-Call-Dokumentationen verlinkt. Die aktualisierte
 
 ### Highlights
 - **WORM-Verifikation:** Aktueller `worm-retention-report.json` im Phase‑C-Evidence-Bundle,
-  Gegenprobe durch `cargo xtask worm-retention-check` dokumentiert im Audit-Ticket; Abweichungen
-  laut Incident-Log geschlossen.【F:docs/runbooks/phaseC_acceptance.md†L60-L66】
+  Gegenprobe durch `cargo xtask worm-retention-check` dokumentiert im Audit-Ticket; Nachweis
+  im [Phase‑C WORM-Retention Nachweis (Nightly 2026-08-21)](../status/phaseC_retention_summary.md),
+  Abweichungen laut Incident-Log geschlossen.【F:docs/runbooks/phaseC_acceptance.md†L10-L28】【F:docs/status/phaseC_retention_summary.md†L1-L47】
 - **Evidence-Bundle:** `phase3-evidence-<timestamp>` enthält WORM-, Snapshot- und Chaos-Artefakte;
   Manifest-Hash und Indexeintrag sichern Audit-Nachvollziehbarkeit.【F:docs/runbooks/phaseC_acceptance.md†L67-L72】【F:docs/governance/evidence_bundle_index.md†L1-L85】
 - **Chaos-Test-Auswertung:** `snapshot_partition_report.json` mit Grafana-/Prometheus-Exporten

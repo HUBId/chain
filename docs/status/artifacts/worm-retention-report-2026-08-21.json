@@ -1,0 +1,166 @@
+{
+  "generated_at": "2026-08-21T01:34:56Z",
+  "scanned_roots": [
+    "target/compliance/worm-export/nightly-2026-08-21",
+    "phase3-evidence/nightly-2026-08-21/worm-export"
+  ],
+  "summaries": [
+    {
+      "summary_path": "target/compliance/worm-export/nightly-2026-08-21/worm-export-summary.json",
+      "audit_log": "logs/admission_reconciler_2026-08-21.jsonl",
+      "export_root": "target/compliance/worm-export/nightly-2026-08-21/export",
+      "retention": {
+        "min_days": 365,
+        "max_days": 400,
+        "mode": "Compliance"
+      },
+      "retention_metadata": {
+        "path": "target/compliance/worm-export/nightly-2026-08-21/retention.meta",
+        "values": {
+          "bucket": "worm-audit-prod-eu",
+          "region": "eu-central-1",
+          "kms_key": "arn:aws:kms:eu-central-1:123456789012:key/phasec-worm"
+        },
+        "valid": true,
+        "warnings": []
+      },
+      "entries": [
+        {
+          "entry_id": 942301,
+          "timestamp_ms": 1787270705000,
+          "export_object": "worm-export/nightly-2026-08-21/2026-08-21T00-05-05Z.jsonl",
+          "retain_until": "2027-08-21T00:05:05Z",
+          "stale": false
+        },
+        {
+          "entry_id": 942318,
+          "timestamp_ms": 1787292305000,
+          "export_object": "worm-export/nightly-2026-08-21/2026-08-21T06-05-05Z.jsonl",
+          "retain_until": "2027-08-21T06:05:05Z",
+          "stale": false
+        },
+        {
+          "entry_id": 942359,
+          "timestamp_ms": 1787335505000,
+          "export_object": "worm-export/nightly-2026-08-21/2026-08-21T18-05-05Z.jsonl",
+          "retain_until": "2027-08-21T18:05:05Z",
+          "stale": false
+        }
+      ],
+      "retention_logs": [
+        {
+          "path": "target/compliance/worm-export/nightly-2026-08-21/retention.log",
+          "record_count": 96,
+          "unsigned_records": 0
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "summary_path": "target/compliance/worm-export/nightly-2026-08-20/worm-export-summary.json",
+      "audit_log": "logs/admission_reconciler_2026-08-20.jsonl",
+      "export_root": "target/compliance/worm-export/nightly-2026-08-20/export",
+      "retention": {
+        "min_days": 365,
+        "max_days": 400,
+        "mode": "Compliance"
+      },
+      "retention_metadata": {
+        "path": "target/compliance/worm-export/nightly-2026-08-20/retention.meta",
+        "values": {
+          "bucket": "worm-audit-prod-eu",
+          "region": "eu-central-1",
+          "kms_key": "arn:aws:kms:eu-central-1:123456789012:key/phasec-worm"
+        },
+        "valid": true,
+        "warnings": []
+      },
+      "entries": [
+        {
+          "entry_id": 941982,
+          "timestamp_ms": 1787190252000,
+          "export_object": "worm-export/nightly-2026-08-20/2026-08-20T01-44-12Z.jsonl",
+          "retain_until": "2027-08-20T01:44:12Z",
+          "stale": false
+        },
+        {
+          "entry_id": 942021,
+          "timestamp_ms": 1787233452000,
+          "export_object": "worm-export/nightly-2026-08-20/2026-08-20T13-44-12Z.jsonl",
+          "retain_until": "2027-08-20T13:44:12Z",
+          "stale": false
+        },
+        {
+          "entry_id": 942065,
+          "timestamp_ms": 1787269452000,
+          "export_object": "worm-export/nightly-2026-08-20/2026-08-20T23-44-12Z.jsonl",
+          "retain_until": "2027-08-20T23:44:12Z",
+          "stale": false
+        }
+      ],
+      "retention_logs": [
+        {
+          "path": "target/compliance/worm-export/nightly-2026-08-20/retention.log",
+          "record_count": 96,
+          "unsigned_records": 0
+        }
+      ],
+      "warnings": []
+    },
+    {
+      "summary_path": "target/compliance/worm-export/nightly-2026-08-19/worm-export-summary.json",
+      "audit_log": "logs/admission_reconciler_2026-08-19.jsonl",
+      "export_root": "target/compliance/worm-export/nightly-2026-08-19/export",
+      "retention": {
+        "min_days": 365,
+        "max_days": 400,
+        "mode": "Compliance"
+      },
+      "retention_metadata": {
+        "path": "target/compliance/worm-export/nightly-2026-08-19/retention.meta",
+        "values": {
+          "bucket": "worm-audit-prod-eu",
+          "region": "eu-central-1",
+          "kms_key": "arn:aws:kms:eu-central-1:123456789012:key/phasec-worm"
+        },
+        "valid": true,
+        "warnings": []
+      },
+      "entries": [
+        {
+          "entry_id": 941642,
+          "timestamp_ms": 1787103852000,
+          "export_object": "worm-export/nightly-2026-08-19/2026-08-19T01-44-12Z.jsonl",
+          "retain_until": "2027-08-19T01:44:12Z",
+          "stale": false
+        },
+        {
+          "entry_id": 941688,
+          "timestamp_ms": 1787147052000,
+          "export_object": "worm-export/nightly-2026-08-19/2026-08-19T13-44-12Z.jsonl",
+          "retain_until": "2027-08-19T13:44:12Z",
+          "stale": false
+        },
+        {
+          "entry_id": 941731,
+          "timestamp_ms": 1787183052000,
+          "export_object": "worm-export/nightly-2026-08-19/2026-08-19T23-44-12Z.jsonl",
+          "retain_until": "2027-08-19T23:44:12Z",
+          "stale": false
+        }
+      ],
+      "retention_logs": [
+        {
+          "path": "target/compliance/worm-export/nightly-2026-08-19/retention.log",
+          "record_count": 96,
+          "unsigned_records": 0
+        }
+      ],
+      "warnings": []
+    }
+  ],
+  "stale_entries": [],
+  "orphaned_entries": [],
+  "unsigned_records": [],
+  "warnings": []
+}
