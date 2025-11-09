@@ -16,7 +16,8 @@
 - CI-Gate `snapshot-verifier` und die Release-Artefakte `snapshot-verify-report.json(.sha256)` dokumentieren jede Manifestprüfung inklusive Hash-Nachweis in den Release Notes.【F:.github/workflows/ci.yml†L369-L397】【F:.github/workflows/release.yml†L150-L233】
 
 ### Phase 3 Evidence Bundle
-- `cargo xtask collect-phase3-evidence [--output-dir <path>]` erzeugt unter `target/compliance/phase3/<timestamp>/` eine Manifestdatei sowie das Archiv `phase3-evidence-<timestamp>.tar.gz`. Das Manifest dokumentiert pro Kategorie (Dashboards, Alerts, Audit-Logs, Policy-Backups, WORM-Exports, Checksum-Reports, CI-Logs) sowohl eingefügte Nachweise als auch fehlende Quellen.【F:xtask/src/main.rs†L1498-L1852】
+- `cargo xtask collect-phase3-evidence [--output-dir <path>]` erzeugt unter `target/compliance/phase3/<timestamp>/` eine Manifestdatei sowie das Archiv `phase3-evidence-<timestamp>.tar.gz`. Das Manifest dokumentiert pro Kategorie (Dashboards, Alerts, Audit-Logs, Policy-Backups, WORM-Exports, Checksum-Reports, CI-Logs) sowohl eingefügte Nachweise als auch fehlende Quellen.【F:xtask/src/main.rs†L2260-L2333】【F:xtask/src/main.rs†L2345-L2643】
+- Vor dem Kopieren der Snapshot-Verifier-Reports und WORM-Logs validiert das Sammelskript die zugehörigen SHA256- bzw. Signaturprüfungen und bricht bei Abweichungen ab, sodass beschädigte Artefakte nicht ins Bundle gelangen.【F:xtask/src/main.rs†L2069-L2304】
 - Der Nightly-Workflow veröffentlicht das Paket automatisch als GitHub-Actions-Artefakt (`phase3-evidence-<timestamp>`), sodass Auditor:innen die aktuelle Evidenz direkt abrufen können.【F:.github/workflows/nightly.yml†L79-L128】
 
 ## Outstanding Items
