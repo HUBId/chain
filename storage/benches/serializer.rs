@@ -5,10 +5,8 @@
     clippy::assigning_clones,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::unwrap_used,
-    reason = "Found 7 occurrences after enabling the lint."
-)]
+#![allow(clippy::unwrap_used)] // Benchmarks unwrap instrumentation failures to expose regressions early.
+#![allow(clippy::expect_used)] // Benchmarks use expect to assert profiling IO invariants during setup.
 
 use std::array::from_fn;
 use std::fs::File;
@@ -35,7 +33,7 @@ fn file_error_panic<T, U>(path: &FsPath) -> impl FnOnce(T) -> U {
 }
 
 impl Profiler for FlamegraphProfiler {
-    #[expect(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used)] // Bench harness aborts when profiling cannot start.
     fn start_profiling(&mut self, _benchmark_id: &str, _benchmark_dir: &FsPath) {
         if let Self::Init(frequency) = self {
             let guard = ProfilerGuard::new(*frequency).unwrap();
@@ -43,7 +41,7 @@ impl Profiler for FlamegraphProfiler {
         }
     }
 
-    #[expect(clippy::unwrap_used)]
+    #[allow(clippy::unwrap_used)] // Bench harness aborts when profiling artefacts cannot be written.
     fn stop_profiling(&mut self, _benchmark_id: &str, benchmark_dir: &FsPath) {
         std::fs::create_dir_all(benchmark_dir).unwrap();
         let filename = "firewood-flamegraph.svg";

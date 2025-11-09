@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let verify = get_keys_to_verify(rng, &batch, args.read_verify_percent);
 
-        #[expect(clippy::unwrap_used)]
+        #[allow(clippy::unwrap_used)] // Examples unwrap here to keep the happy-path flow concise.
         let proposal = db.propose(batch.clone()).unwrap();
         proposal.commit()?;
         verify_keys(&db, verify)?;

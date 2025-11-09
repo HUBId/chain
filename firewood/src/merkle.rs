@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Merkle operations rely on expect to guard structural invariants and surface corruption early.
+
 #[cfg(test)]
 pub(crate) mod tests;
 

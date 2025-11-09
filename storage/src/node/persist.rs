@@ -211,7 +211,8 @@ enum MaybePersisted {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to ensure persistence helpers enforce invariants in debug builds.
+#[allow(clippy::expect_used)] // Tests call expect to assert precise transition states for persisted nodes.
 mod test {
     use nonzero_ext::nonzero;
 

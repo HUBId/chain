@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Test utilities expect deterministic RNG behaviour and panic loudly when invariants break.
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

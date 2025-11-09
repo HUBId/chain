@@ -322,7 +322,8 @@ impl Proposal<'_> {
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used)] // Tests unwrap to keep fixtures compact and assertions readable.
+    #![allow(clippy::expect_used)] // Tests use expect to assert deterministic iteration invariants.
 
     use core::iter::Take;
     use std::iter::Peekable;

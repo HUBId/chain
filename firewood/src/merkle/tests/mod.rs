@@ -1,7 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(clippy::indexing_slicing, clippy::unwrap_used)]
+#![allow(clippy::indexing_slicing)] // Tests index fixture data to validate trie boundaries.
+#![allow(clippy::unwrap_used)] // Tests unwrap to fail fast when invariants are broken.
+#![allow(clippy::expect_used)] // Tests call expect to surface decode regressions immediately.
 
 #[cfg(feature = "ethhash")]
 mod ethhash;

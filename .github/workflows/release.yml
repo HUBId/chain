@@ -82,7 +82,7 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::panic -D clippy::unwrap_used -D clippy::expect_used
       - name: Install test helpers
         run: |
           cargo install --locked cargo-audit

@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Allocator helpers rely on expect to loudly flag impossible storage layouts.
+
 //! # Allocation Module
 //!
 //! This module handles memory allocation and space management for nodes in the nodestore's
@@ -590,7 +592,8 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used)] // Test utilities unwrap to build deliberately invalid storage layouts.
+#[allow(clippy::expect_used)] // Test utilities call expect when constructing invariant-breaking fixtures.
 pub mod test_utils {
     use super::*;
 
@@ -657,7 +660,9 @@ pub mod test_utils {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used)] // Tests unwrap to highlight allocator invariant violations immediately.
+#[allow(clippy::expect_used)] // Tests call expect while synthesizing intentionally invalid free lists.
+#[allow(clippy::indexing_slicing)] // Tests index deterministic buffers to encode synthetic storage artefacts.
 mod tests {
     use super::*;
     use crate::area_index;

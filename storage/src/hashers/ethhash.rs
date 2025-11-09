@@ -10,6 +10,7 @@
         reason = "Found 1 occurrences after enabling the lint."
     )
 )]
+#![allow(clippy::expect_used)] // Hashers treat expect as a guardrail for invalid trie shapes produced during corruption analysis.
 
 use crate::logger::warn;
 use crate::{

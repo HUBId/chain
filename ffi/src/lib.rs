@@ -370,7 +370,7 @@ fn propose_on_proposal(
     let guard = db
         .proposals
         .write()
-        .expect("failed to acquire write lock on proposals");
+        .map_err(|_| "failed to acquire write lock on proposals".to_string())?;
     let proposal = guard.get(&proposal_id).ok_or("proposal not found")?;
     let new_proposal = proposal.propose(batch).map_err(|e| e.to_string())?;
     drop(guard); // Drop the read lock before we get the write lock.
@@ -717,12 +717,13 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 #[expect(clippy::missing_panics_doc, reason = "panics are captured")]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle<'_>>>) -> VoidResult {
-    invoke_with_handle(db, |db| {
+    invoke_with_handle(db, |db| -> Result<(), String> {
         db.proposals
             .write()
-            .expect("proposals lock is poisoned")
+            .map_err(|_| "proposals lock is poisoned".to_string())?
             .clear();
         db.clear_cached_view();
+        Ok(())
     })
 }
 
@@ -750,7 +751,7 @@ pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used)] // Tests unwrap to validate C-FFI helpers using ergonomic assertions.
 
     use super::*;
 

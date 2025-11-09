@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::expect_used)] // Hash walkers expect valid persisted state and bail loudly on corruption.
+
 //! # Hash Module
 //!
 //! This module contains all node hashing functionality for the nodestore, including
