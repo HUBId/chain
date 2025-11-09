@@ -625,6 +625,18 @@ PY
             export XTASK_FEATURES='${{ matrix.features }}'
           fi
           cargo xtask test-integration
+      - name: Snapshot integrity regression (${{ matrix.name }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(test --locked --test root_corruption)
+          if [ -n "${{ matrix.no_default_features }}" ]; then
+            args+=(--no-default-features)
+          fi
+          if [ -n "${{ matrix.features }}" ]; then
+            args+=(--features "${{ matrix.features }}")
+          fi
+          RUST_TEST_THREADS=1 cargo "${args[@]}"
 
   observability-metrics:
     name: Observability metrics (${{ matrix.name }})
